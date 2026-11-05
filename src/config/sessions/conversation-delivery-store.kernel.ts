@@ -1,18 +1,27 @@
-import crypto from "node:crypto";
-import type { Selectable } from "kysely";
-import { executeSqliteQuerySync, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { sql, type Selectable } from "kysely";
+import {
+  createSqliteQueryCache,
+  executeSqliteQuerySync,
+  prepareSqliteQuerySync,
+} from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import { assertConversationAuthority } from "./conversation-authority.js";
 import {
-  ConversationDeliveryInputError,
+  assertConversationDeliveryInput,
+  normalizeConversationDeliveryOperationId,
+} from "./conversation-delivery-policy.js";
+import {
   ConversationDeliveryMissingError,
   type ConversationDeliveryRecord,
   type ConversationDeliveryStatus,
-  type ConversationDeliveryInput,
   type ConversationDeliveryBegin,
   type ConversationDeliveryTransition,
   type ConversationDeliveryLookup,
 } from "./conversation-delivery-store.types.js";
+import { resolveConversationInDatabase } from "./session-accessor.sqlite-conversation-read.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope-helpers.js";
 
@@ -21,18 +30,6 @@ type ConversationDeliveryRow = Selectable<
 > & {
   channel: string;
 };
-
-function normalizeOperationId(value: string): string {
-  const operationId = value.trim();
-  if (!operationId) {
-    throw new Error("Conversation delivery operation id is required");
-  }
-  return operationId;
-}
-
-function hashMessage(message: string): string {
-  return crypto.createHash("sha256").update(message).digest("hex");
-}
 
 function normalizeStatus(value: string): ConversationDeliveryStatus {
   switch (value) {
@@ -85,24 +82,7 @@ function mapRow(row: ConversationDeliveryRow): ConversationDeliveryRecord {
   };
 }
 
-function assertConversationDeliveryInput(
-  record: ConversationDeliveryRecord,
-  input: ConversationDeliveryInput,
-  messageHash = hashMessage(input.message),
-): void {
-  if (
-    record.conversationRef !== input.conversationRef ||
-    record.operationKind !== input.operationKind ||
-    record.sourceSessionKey !== (input.sourceSessionKey?.trim() || undefined) ||
-    record.messageHash !== messageHash
-  ) {
-    throw new ConversationDeliveryInputError(
-      `Conversation delivery operation was reused with different input: ${record.operationId}`,
-    );
-  }
-}
-
-function createOperationQuery(database: OpenClawAgentReadOnlyDatabase["db"]) {
+const operationQuery = createSqliteQueryCache((database: EngineConnection) => {
   const db = getSessionKysely(database);
   return prepareSqliteQuerySync<string, ConversationDeliveryRow>(database, (parameter) =>
     // Session pruning removes only session_conversations. The canonical
@@ -123,23 +103,13 @@ function createOperationQuery(database: OpenClawAgentReadOnlyDatabase["db"]) {
         parameter((operationId) => operationId),
       ),
   );
-}
-
-const operationQueryByDatabase = new WeakMap<
-  OpenClawAgentReadOnlyDatabase["db"],
-  ReturnType<typeof createOperationQuery>
->();
+});
 
 function selectOperation(
   database: OpenClawAgentReadOnlyDatabase,
   operationId: string,
 ): ConversationDeliveryRecord | undefined {
-  let query = operationQueryByDatabase.get(database.db);
-  if (!query) {
-    query = createOperationQuery(database.db);
-    operationQueryByDatabase.set(database.db, query);
-  }
-  const row = query(operationId).rows[0];
+  const row = operationQuery(database.db)(operationId).rows[0];
   return row ? mapRow(row) : undefined;
 }
 
@@ -151,7 +121,7 @@ export function readConversationDeliveryInDatabase(
     return findConversationTurnDeliveryInDatabase(database, lookup);
   }
   const { operationId, expectedInput } = lookup;
-  const record = selectOperation(database, normalizeOperationId(operationId));
+  const record = selectOperation(database, normalizeConversationDeliveryOperationId(operationId));
   if (record && expectedInput) {
     assertConversationDeliveryInput(record, expectedInput);
   }
@@ -162,9 +132,15 @@ export function beginConversationDeliveryInDatabase(
   database: OpenClawAgentReadOnlyDatabase,
   params: ConversationDeliveryBegin,
 ): { created: boolean; record: ConversationDeliveryRecord } {
-  const operationId = normalizeOperationId(params.operationId);
+  if (params.authority) {
+    assertConversationAuthority(
+      resolveConversationInDatabase(database, params.authority.conversationRef),
+      params.authority,
+    );
+  }
+  const operationId = normalizeConversationDeliveryOperationId(params.operationId);
   const sourceSessionKey = params.sourceSessionKey?.trim() || undefined;
-  const messageHash = hashMessage(params.message);
+  const messageHash = sha256Hex(params.message);
   const existing = selectOperation(database, operationId);
   if (existing) {
     assertConversationDeliveryInput(existing, params, messageHash);
@@ -212,7 +188,7 @@ export function transitionConversationDeliveryInDatabase(
       throw new Error(`session changed before captured reply persistence: ${sessionKey}`);
     }
   }
-  const operationId = normalizeOperationId(params.operationId);
+  const operationId = normalizeConversationDeliveryOperationId(params.operationId);
   const current = selectOperation(database, operationId);
   if (!current) {
     throw new ConversationDeliveryMissingError(
@@ -278,7 +254,13 @@ function findConversationTurnDeliveryInDatabase(
           eb("delivery.prepared_message_id", "=", params.replyToId),
         ]),
       )
-      .where("delivery.status", "in", ["queued", "sent", "replied"])
+      // Literal statuses let SQLite match the idx_agent_conversation_deliveries_reply predicate;
+      // a bound IN list never does. Keep the same text and order as the index WHERE clause.
+      .where(
+        "delivery.status",
+        "in",
+        (["queued", "sent", "replied"] as const).map((status) => sql.lit(status)),
+      )
       .orderBy("delivery.updated_at", "desc")
       .limit(1),
   ).rows[0];

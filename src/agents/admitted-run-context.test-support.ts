@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareGatewayContextBindingOwner } from "../plugins/runtime/gateway-context-binding-owner.js";
 import type { AdmittedRunContext, PreparedAgentRunAdmission } from "./admitted-run-context.js";
-import { createOperationalRunInstanceRef } from "./admitted-run-context.js";
+import { createOperationalRunInstanceRef } from "./operational-run-instance.js";
 
 const diagnosticFixtureContexts = new WeakSet<AdmittedRunContext>();
 
@@ -50,6 +50,7 @@ export function createTestPreparedRunAdmission(runId: string): PreparedAgentRunA
     operationalRunInstance: admitted.operationalRunInstance,
     admit: async () => admitted,
     assertSourceCurrent: () => {},
+    assertCurrent: () => {},
     close: () => {},
   });
 }

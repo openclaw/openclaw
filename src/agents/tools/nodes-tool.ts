@@ -1,10 +1,13 @@
 import crypto from "node:crypto";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import {
+  normalizeOptionalString,
+  normalizeLowercaseStringOrEmpty,
+} from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { readConnectPairingRequiredMessage } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
@@ -15,13 +18,42 @@ import {
   optionalStringEnum,
   stringEnum,
 } from "../schema/typebox.js";
-import { type AnyAgentTool, jsonResult, readToolStringParam } from "./common.js";
+import {
+  type AnyAgentTool,
+  jsonResult,
+  readFiniteNumberParam,
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+  readStringArrayParam,
+  readToolStringParam,
+} from "./common.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
-import { executeNodeCommandAction } from "./nodes-tool-commands.js";
-import { callNodesToolNodeInvoke } from "./nodes-tool-invoke.js";
+import { callNodesToolNodeInvoke, resolveNodesToolInvokeTimeouts } from "./nodes-tool-invoke.js";
 import { executeNodeMediaAction } from "./nodes-tool-media.js";
 import { resolveAgentNodeId } from "./nodes-utils.js";
+
+const BLOCKED_INVOKE_COMMANDS = new Set(["system.run", "system.run.prepare"]);
+// File-transfer policy cannot be bypassed by opting into raw media payloads.
+const MEDIA_INVOKE_ACTIONS = new Map<string, { action: string; pathPolicy?: true }>([
+  ["camera.snap", { action: "camera_snap" }],
+  ["camera.clip", { action: "camera_clip" }],
+  ["photos.latest", { action: "photos_latest" }],
+  ["screen.record", { action: "screen_record" }],
+  ["screen.snapshot", { action: "screen_snapshot" }],
+  ["file.fetch", { action: "file_fetch", pathPolicy: true }],
+  ["dir.list", { action: "dir_list", pathPolicy: true }],
+  ["dir.fetch", { action: "dir_fetch", pathPolicy: true }],
+  ["file.write", { action: "file_write", pathPolicy: true }],
+]);
+const NODE_READ_ACTION_COMMANDS = {
+  camera_list: "camera.list",
+  notifications_list: "notifications.list",
+  device_status: "device.status",
+  device_info: "device.info",
+  device_permissions: "device.permissions",
+  device_health: "device.health",
+};
 
 const NODES_TOOL_ACTIONS = [
   "status",
@@ -91,13 +123,11 @@ const NodesToolSchema = Type.Object({
     }),
   ),
   requestId: Type.Optional(Type.String()),
-  // notify
   title: Type.Optional(Type.String()),
   body: Type.Optional(Type.String()),
   sound: Type.Optional(Type.String()),
   priority: optionalStringEnum(NOTIFY_PRIORITIES),
   delivery: optionalStringEnum(NOTIFY_DELIVERIES),
-  // camera_snap / camera_clip / photos_latest / screen_snapshot
   facing: optionalStringEnum(CAMERA_FACING, {
     description: "camera_snap: front/back/both; camera_clip: front/back only.",
   }),
@@ -110,7 +140,6 @@ const NodesToolSchema = Type.Object({
         "For camera_ptz, use a camera_list devices[].id value as deviceId; it is required and must not be guessed.",
     }),
   ),
-  // camera_ptz
   ptzOperation: optionalStringEnum(CAMERA_PTZ_OPERATIONS, {
     description:
       "camera_ptz operation. Call status before any control operation. status and home accept no axes; set uses absolute axes; move uses axis deltas. Never guess unsupported axes.",
@@ -131,19 +160,15 @@ const NodesToolSchema = Type.Object({
   duration: Type.Optional(Type.String()),
   durationMs: optionalPositiveIntegerSchema({ maximum: 300_000 }),
   includeAudio: Type.Optional(Type.Boolean()),
-  // screen_record
   fps: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
   screenIndex: optionalNonNegativeIntegerSchema(),
   outPath: Type.Optional(Type.String()),
-  // location_get
   maxAgeMs: optionalNonNegativeIntegerSchema(),
   locationTimeoutMs: optionalPositiveIntegerSchema(),
   desiredAccuracy: optionalStringEnum(LOCATION_ACCURACY),
-  // notifications_action
   notificationAction: optionalStringEnum(NOTIFICATIONS_ACTIONS),
   notificationKey: Type.Optional(Type.String()),
   notificationReplyText: Type.Optional(Type.String()),
-  // which
   bins: Type.Optional(
     Type.Array(Type.String({ minLength: 1 }), {
       minItems: 1,
@@ -151,8 +176,11 @@ const NodesToolSchema = Type.Object({
       description: "which: executable names to resolve on the selected node.",
     }),
   ),
-  // invoke
-  invokeCommand: Type.Optional(Type.String()),
+  invokeCommand: Type.Optional(
+    Type.String({
+      description: "Node command to relay. fs.listDir returns sub-directories only.",
+    }),
+  ),
   invokeParamsJson: Type.Optional(Type.String()),
   invokeTimeoutMs: optionalPositiveIntegerSchema(),
 });
@@ -160,10 +188,6 @@ const NodesToolSchema = Type.Object({
 export function createNodesTool(options?: {
   agentSessionKey?: string;
   agentId?: string;
-  agentChannel?: string;
-  agentAccountId?: string;
-  currentChannelId?: string;
-  currentThreadTs?: string | number;
   config?: OpenClawConfig;
   modelHasVision?: boolean;
   allowMediaInvokeCommands?: boolean;
@@ -178,7 +202,7 @@ export function createNodesTool(options?: {
     label: "Nodes",
     name: "nodes",
     description:
-      "Paired nodes: status/list with active-computer presence; pass node to describe/control. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), camera_ptz for physical camera pan/tilt/zoom, photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke. File transfer is a separate capability.",
+      "Discover, configure, and control paired devices, including computers, phones, watches, dials, relays, and sensors. Use status to find nodes, describe to inspect advertised commands, and invoke for custom device commands. Status includes active-computer presence. Pairing lifecycle (pending/approve/reject), notify, camera_snap/camera_list/camera_clip (with audio), camera_ptz for physical camera pan/tilt/zoom, photos_latest, screen_snapshot, screen_record video, location_get, notifications_list + notifications_action (open/dismiss/reply), device_status/device_info/device_permissions/device_health, executable lookup (which + bins), generic invoke (fs.listDir returns sub-directories only). File transfer is a separate capability.",
     parameters: NodesToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -201,30 +225,22 @@ export function createNodesTool(options?: {
           }
           case "pending":
             return jsonResult(await callGatewayTool("node.pair.list", gatewayOpts, {}));
-          case "approve": {
-            const requestId = readToolStringParam(params, "requestId", {
-              required: true,
-            });
-            const scopes = await resolveNodePairApproveScopes(gatewayOpts, requestId);
-            return jsonResult(
-              await callGatewayTool(
-                "node.pair.approve",
-                gatewayOpts,
-                {
-                  requestId,
-                },
-                { scopes },
-              ),
-            );
-          }
+          case "approve":
           case "reject": {
             const requestId = readToolStringParam(params, "requestId", {
               required: true,
             });
+            const approvalOptions =
+              action === "approve"
+                ? { scopes: await resolveNodePairApproveScopes(gatewayOpts, requestId) }
+                : undefined;
             return jsonResult(
-              await callGatewayTool("node.pair.reject", gatewayOpts, {
-                requestId,
-              }),
+              await callGatewayTool(
+                `node.pair.${action}`,
+                gatewayOpts,
+                { requestId },
+                approvalOptions,
+              ),
             );
           }
           case "notify": {
@@ -273,13 +289,192 @@ export function createNodesTool(options?: {
           case "location_get":
           case "which":
           case "invoke": {
-            return await executeNodeCommandAction({
-              action,
-              input: params,
-              gatewayOpts,
-              agentSessionKey: options?.agentSessionKey,
-              allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
-            });
+            const node = readToolStringParam(params, "node", { required: true });
+            let command: string;
+            let commandParams: unknown = {};
+            let nodeId: string | undefined;
+            const rawInvoke = action === "invoke";
+            let invokeGatewayOpts = gatewayOpts;
+            let invokeTimeoutMs: number | undefined;
+            let requireObjectPayload = false;
+            switch (action) {
+              case "camera_ptz": {
+                const deviceId = readToolStringParam(params, "deviceId", { required: true });
+                const ptzOperation = normalizeLowercaseStringOrEmpty(params.ptzOperation);
+                if (
+                  ptzOperation !== "status" &&
+                  ptzOperation !== "set" &&
+                  ptzOperation !== "move" &&
+                  ptzOperation !== "home"
+                ) {
+                  throw new Error("ptzOperation must be status|set|move|home");
+                }
+                const panDegrees = readFiniteNumberParam(params, "panDegrees");
+                const tiltDegrees = readFiniteNumberParam(params, "tiltDegrees");
+                const zoomPercent = readFiniteNumberParam(params, "zoomPercent");
+                const hasAxes =
+                  panDegrees !== undefined ||
+                  tiltDegrees !== undefined ||
+                  zoomPercent !== undefined;
+                if ((ptzOperation === "status" || ptzOperation === "home") && hasAxes) {
+                  throw new Error(`${ptzOperation} does not accept axis values`);
+                }
+                if ((ptzOperation === "set" || ptzOperation === "move") && !hasAxes) {
+                  throw new Error(`${ptzOperation} requires at least one PTZ axis`);
+                }
+                const axes = { panDegrees, tiltDegrees, zoomPercent };
+                command = ptzOperation === "status" ? "camera.ptz.status" : "camera.ptz.control";
+                commandParams =
+                  ptzOperation === "status"
+                    ? { deviceId }
+                    : ptzOperation === "home"
+                      ? { deviceId, operation: "home" }
+                      : {
+                          deviceId,
+                          operation: ptzOperation,
+                          [ptzOperation === "set" ? "target" : "delta"]: axes,
+                        };
+                break;
+              }
+              case "camera_list":
+              case "notifications_list":
+              case "device_status":
+              case "device_info":
+              case "device_permissions":
+              case "device_health": {
+                command = NODE_READ_ACTION_COMMANDS[action];
+                requireObjectPayload = true;
+                break;
+              }
+              case "notifications_action": {
+                const notificationKey = readToolStringParam(params, "notificationKey", {
+                  required: true,
+                });
+                const notificationAction = normalizeLowercaseStringOrEmpty(
+                  params.notificationAction,
+                );
+                if (
+                  notificationAction !== "open" &&
+                  notificationAction !== "dismiss" &&
+                  notificationAction !== "reply"
+                ) {
+                  throw new Error("notificationAction must be open|dismiss|reply");
+                }
+                const notificationReplyText =
+                  typeof params.notificationReplyText === "string"
+                    ? params.notificationReplyText.trim()
+                    : undefined;
+                if (notificationAction === "reply" && !notificationReplyText) {
+                  throw new Error("notificationReplyText required when notificationAction=reply");
+                }
+                command = "notifications.actions";
+                commandParams = {
+                  key: notificationKey,
+                  action: notificationAction,
+                  replyText: notificationReplyText,
+                };
+                requireObjectPayload = true;
+                break;
+              }
+              case "location_get": {
+                const maxAgeMs = readNonNegativeIntegerParam(params, "maxAgeMs");
+                const desiredAccuracy =
+                  params.desiredAccuracy === "coarse" ||
+                  params.desiredAccuracy === "balanced" ||
+                  params.desiredAccuracy === "precise"
+                    ? params.desiredAccuracy
+                    : undefined;
+                const locationTimeoutMs = readPositiveIntegerParam(params, "locationTimeoutMs");
+                const timeouts = resolveNodesToolInvokeTimeouts({
+                  input: params,
+                  gatewayOpts,
+                  operationTimeoutMs: locationTimeoutMs,
+                });
+                invokeGatewayOpts = timeouts.gatewayOpts;
+                invokeTimeoutMs = timeouts.invokeTimeoutMs;
+                command = "location.get";
+                commandParams = { maxAgeMs, desiredAccuracy, timeoutMs: locationTimeoutMs };
+                break;
+              }
+              case "which": {
+                const bins = readStringArrayParam(params, "bins", { required: true });
+                command = "system.which";
+                commandParams = { bins };
+                break;
+              }
+              case "invoke": {
+                nodeId = await resolveAgentNodeId(gatewayOpts, node);
+                const invokeCommand = readToolStringParam(params, "invokeCommand", {
+                  required: true,
+                });
+                const invokeCommandNormalized = normalizeLowercaseStringOrEmpty(invokeCommand);
+                if (BLOCKED_INVOKE_COMMANDS.has(invokeCommandNormalized)) {
+                  throw new Error(
+                    `invokeCommand "${invokeCommand}" is reserved for shell execution; call the shell exec tool with { command, host: "node", node: "${nodeId}" } instead`,
+                  );
+                }
+                const dedicatedAction = MEDIA_INVOKE_ACTIONS.get(invokeCommandNormalized);
+                if (dedicatedAction?.pathPolicy) {
+                  throw new Error(
+                    `invokeCommand "${invokeCommand}" enforces a path-allowlist policy and cannot be invoked via the generic nodes.invoke surface; use the dedicated file-transfer tool "${dedicatedAction.action}"`,
+                  );
+                }
+                if (dedicatedAction && !options?.allowMediaInvokeCommands) {
+                  throw new Error(
+                    `invokeCommand "${invokeCommand}" returns media payloads and is blocked to prevent base64 context bloat; use action="${dedicatedAction.action}"`,
+                  );
+                }
+                const invokeParamsJson =
+                  typeof params.invokeParamsJson === "string" ? params.invokeParamsJson.trim() : "";
+                if (invokeParamsJson) {
+                  try {
+                    commandParams = JSON.parse(invokeParamsJson);
+                  } catch (err) {
+                    const message = formatErrorMessage(err);
+                    throw new Error(`invokeParamsJson must be valid JSON: ${message}`, {
+                      cause: err,
+                    });
+                  }
+                }
+                const timeouts = resolveNodesToolInvokeTimeouts({
+                  input: params,
+                  gatewayOpts,
+                });
+                command = invokeCommand;
+                invokeGatewayOpts = timeouts.gatewayOpts;
+                invokeTimeoutMs = timeouts.invokeTimeoutMs;
+                break;
+              }
+              default:
+                throw new Error("Unsupported node command action");
+            }
+            nodeId ??= await resolveAgentNodeId(invokeGatewayOpts, node);
+            const raw = await callNodesToolNodeInvoke<{ payload: unknown }>(
+              invokeGatewayOpts,
+              {
+                nodeId,
+                command,
+                params: commandParams,
+                ...(rawInvoke || invokeTimeoutMs !== undefined
+                  ? { timeoutMs: invokeTimeoutMs }
+                  : {}),
+                idempotencyKey: crypto.randomUUID(),
+                ...(rawInvoke && options?.agentSessionKey
+                  ? { sessionKey: options?.agentSessionKey }
+                  : {}),
+              },
+              rawInvoke ? { rawInvoke: true } : undefined,
+            );
+            if (rawInvoke) {
+              return jsonResult(raw ?? {});
+            }
+            const payload =
+              raw && typeof raw === "object" && Object.hasOwn(raw, "payload") ? raw.payload : {};
+            return jsonResult(
+              requireObjectPayload && (payload === null || typeof payload !== "object")
+                ? {}
+                : payload,
+            );
           }
           default:
             throw new Error(`Unknown action: ${action}`);

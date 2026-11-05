@@ -1,4 +1,3 @@
-// Provides canonical default config values and model/provider defaults.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   collectManifestModelIdNormalizationPolicies,
@@ -31,17 +30,15 @@ import {
 import type { ModelDefinitionConfig } from "./types.models.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
-type WarnState = { warned: boolean };
 type ProviderPolicyDefaultsOptions = {
   env?: NodeJS.ProcessEnv;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   loadManifestRegistry?: () => Pick<PluginManifestRegistry, "plugins"> | undefined;
 };
 
-const defaultWarnState: WarnState = { warned: false };
+let warnedAboutMainKey = false;
 
 export const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
-  // Anthropic (shared model runtime catalog uses "latest" ids without date suffix)
   opus: "anthropic/claude-opus-5-5",
   sonnet: "anthropic/claude-sonnet-5-5",
 
@@ -49,10 +46,9 @@ export const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   "gpt-mini": "openai/gpt-5.4-mini",
   "gpt-nano": "openai/gpt-5.4-nano",
 
-  // Google Gemini (3.x — flash-lite is GA; pro and flash are still preview)
-  gemini: "google/gemini-3.1-pro-preview",
-  "gemini-flash": "google/gemini-3-flash-preview",
-  "gemini-flash-lite": "google/gemini-3.1-flash-lite",
+  gemini: "google/gemini-4-argon",
+  "gemini-flash": "google/gemini-3.8-flash",
+  "gemini-flash-lite": "google/gemini-3.5-flash-lite",
 };
 
 const DEFAULT_MODEL_COST: ModelDefinitionConfig["cost"] = {
@@ -112,44 +108,44 @@ export function resolveNormalizedProviderModelMaxTokens(params: {
     : Math.min(DEFAULT_MODEL_MAX_TOKENS, params.contextWindow);
 }
 
-type SessionDefaultsOptions = {
-  warn?: (message: string) => void;
-  warnState?: WarnState;
-};
-
 export function applyMessageDefaults(cfg: OpenClawConfig): OpenClawConfig {
   const messages = cfg.messages;
-  if (messages?.ackReactionScope !== undefined) {
+  if (
+    messages?.ackReactionScope !== undefined &&
+    messages.queue?.allowCollaborativeSteering !== undefined
+  ) {
     return cfg;
   }
 
   return {
     ...cfg,
-    messages: { ...messages, ackReactionScope: "group-mentions" },
+    messages: {
+      ...messages,
+      ackReactionScope: messages?.ackReactionScope ?? "group-mentions",
+      queue: {
+        ...messages?.queue,
+        allowCollaborativeSteering: messages?.queue?.allowCollaborativeSteering ?? true,
+      },
+    },
   };
 }
 
-export function applySessionDefaults(
-  cfg: OpenClawConfig,
-  options: SessionDefaultsOptions = {},
-): OpenClawConfig {
+export function applySessionDefaults(cfg: OpenClawConfig): OpenClawConfig {
   const session = cfg.session;
   if (!session || session.mainKey === undefined) {
     return cfg;
   }
 
   const trimmed = session.mainKey.trim();
-  const warn = options.warn ?? console.warn;
-  const warnState = options.warnState ?? defaultWarnState;
 
   const next: OpenClawConfig = {
     ...cfg,
     session: { ...session, mainKey: "main" },
   };
 
-  if (trimmed && trimmed !== "main" && !warnState.warned) {
-    warnState.warned = true;
-    warn('session.mainKey is ignored; main session is always "main".');
+  if (trimmed && trimmed !== "main" && !warnedAboutMainKey) {
+    warnedAboutMainKey = true;
+    console.warn('session.mainKey is ignored; main session is always "main".');
   }
 
   return next;
@@ -223,10 +219,8 @@ export function applyModelDefaults(
   cfg: OpenClawConfig,
   options: ProviderPolicyDefaultsOptions = {},
 ): OpenClawConfig {
-  let mutated = false;
-  let nextCfg = cfg;
-
-  const providerConfig = nextCfg.models?.providers;
+  const providerConfig = cfg.models?.providers;
+  const nextProviders = { ...providerConfig };
   if (providerConfig) {
     const manifestRegistry = options.manifestRegistry ?? options.loadManifestRegistry?.();
     const modelIdNormalizationPolicies = manifestRegistry
@@ -237,7 +231,6 @@ export function applyModelDefaults(
       modelIdNormalizationPolicies,
       new Set(Object.keys(providerConfig).map(normalizeProviderId)),
     );
-    const nextProviders = { ...providerConfig };
     for (const [providerId, provider] of Object.entries(providerConfig)) {
       const normalizedProvider = materializeConfiguredProviderModelRows(
         normalizeProviderConfigForConfigDefaults({
@@ -254,18 +247,11 @@ export function applyModelDefaults(
       );
       const models = normalizedProvider.models;
       if (!Array.isArray(models) || models.length === 0) {
-        if (normalizedProvider !== provider) {
-          nextProviders[providerId] = normalizedProvider;
-          mutated = true;
-        }
+        nextProviders[providerId] = normalizedProvider;
         continue;
       }
       const providerApi = normalizedProvider.api;
       const providerMaxTokens = asPositiveFiniteNumber(normalizedProvider.maxTokens);
-      if (normalizedProvider !== provider) {
-        mutated = true;
-      }
-      let providerMutated = false;
       const nextModels = models.map((model) => {
         const raw = model as ModelDefinitionLike;
         const id = raw.id;
@@ -338,7 +324,6 @@ export function applyModelDefaults(
         if (!modelMutated) {
           return model;
         }
-        providerMutated = true;
         return Object.assign(
           {},
           raw,
@@ -356,153 +341,90 @@ export function applyModelDefaults(
         ) as ModelDefinitionConfig;
       });
 
-      if (providerMutated) {
-        nextProviders[providerId] = { ...normalizedProvider, models: nextModels };
-        mutated = true;
-      } else if (normalizedProvider !== provider) {
-        nextProviders[providerId] = normalizedProvider;
-      }
-    }
-
-    if (mutated) {
-      nextCfg = {
-        ...nextCfg,
-        models: {
-          ...nextCfg.models,
-          providers: nextProviders,
-        },
-      };
+      nextProviders[providerId] = { ...normalizedProvider, models: nextModels };
     }
   }
 
-  let nextAgents = nextCfg.agents;
-  const rawAgentList = nextAgents?.list;
-  if (Array.isArray(rawAgentList)) {
-    let listMutated = false;
-    const agentList = rawAgentList.map((agent) => {
-      if (!isRecord(agent)) {
-        return agent;
-      }
-      let nextAgent = agent;
-      if (Object.hasOwn(agent, "model")) {
-        const normalizedModel = normalizeAgentModelSelectionForConfig(agent.model);
-        if (normalizedModel !== agent.model) {
-          nextAgent = { ...nextAgent, model: normalizedModel as typeof agent.model };
-          listMutated = true;
+  const agents = cfg.agents ? { ...cfg.agents } : undefined;
+  if (agents?.entries) {
+    agents.entries = Object.fromEntries(
+      Object.entries(agents.entries).map(([id, agent]) => {
+        if (!isRecord(agent)) {
+          return [id, agent];
         }
-      }
-      if (isRecord(agent.models)) {
-        const normalizedModels = normalizeAgentModelMapForConfig(agent.models);
-        if (normalizedModels !== agent.models) {
-          nextAgent = { ...nextAgent, models: normalizedModels };
-          listMutated = true;
+        const nextAgent = { ...agent };
+        if (Object.hasOwn(agent, "model")) {
+          nextAgent.model = normalizeAgentModelSelectionForConfig(
+            agent.model,
+          ) as typeof agent.model;
         }
-      }
-      return nextAgent;
-    });
-    if (listMutated) {
-      nextAgents = { ...nextAgents, list: agentList };
-      mutated = true;
-    }
-  }
-
-  const existingAgent = nextAgents?.defaults;
-  if (!existingAgent) {
-    return nextAgents === nextCfg.agents ? nextCfg : { ...nextCfg, agents: nextAgents };
-  }
-
-  let nextAgent = existingAgent;
-  const normalizedModel = normalizeAgentModelSelectionForConfig(existingAgent.model);
-  if (normalizedModel !== existingAgent.model) {
-    nextAgent = { ...nextAgent, model: normalizedModel as typeof existingAgent.model };
-    mutated = true;
-  }
-
-  const rawExistingModels = existingAgent.models ?? {};
-  const existingModels = normalizeAgentModelMapForConfig(rawExistingModels);
-  if (existingModels !== rawExistingModels) {
-    mutated = true;
-  }
-  if (Object.keys(existingModels).length === 0) {
-    return mutated
-      ? {
-          ...nextCfg,
-          agents: {
-            ...nextAgents,
-            defaults: nextAgent,
-          },
+        if (isRecord(agent.models)) {
+          nextAgent.models = normalizeAgentModelMapForConfig(agent.models);
         }
-      : cfg;
-  }
-
-  const nextModels: Record<string, { alias?: string }> = {
-    ...existingModels,
-  };
-
-  for (const [alias, target] of Object.entries(DEFAULT_MODEL_ALIASES)) {
-    const entry = nextModels[target];
-    if (!entry) {
-      continue;
-    }
-    if (entry.alias !== undefined) {
-      continue;
-    }
-    const normalizedAlias = normalizeLowercaseStringOrEmpty(alias);
-    const aliasAlreadyOwned = Object.entries(nextModels).some(
-      ([modelRef, candidate]) =>
-        modelRef !== target && normalizeLowercaseStringOrEmpty(candidate.alias) === normalizedAlias,
+        return [id, nextAgent];
+      }),
     );
-    // Preserve explicit alias ownership when a newer default target is also configured.
-    if (aliasAlreadyOwned) {
-      continue;
+  }
+
+  const existingAgent = agents?.defaults;
+  if (agents && existingAgent) {
+    const nextAgent = { ...existingAgent };
+    const normalizedModel = normalizeAgentModelSelectionForConfig(existingAgent.model);
+    if (normalizedModel !== existingAgent.model) {
+      nextAgent.model = normalizedModel as typeof existingAgent.model;
     }
-    nextModels[target] = { ...entry, alias };
-    mutated = true;
-  }
-
-  if (!mutated) {
-    return cfg;
-  }
-
-  return {
-    ...nextCfg,
-    agents: {
-      ...nextAgents,
-      defaults: { ...nextAgent, models: nextModels },
-    },
-  };
-}
-
-export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
-  const agents = cfg.agents;
-  const defaults = agents?.defaults;
-  const hasMax = asFiniteNumber(defaults?.maxConcurrent) !== undefined;
-  const hasSubMax = asFiniteNumber(defaults?.subagents?.maxConcurrent) !== undefined;
-  const hasSubArchive = asFiniteNumber(defaults?.subagents?.archiveAfterMinutes) !== undefined;
-  if (hasMax && hasSubMax && hasSubArchive) {
-    return cfg;
-  }
-
-  const nextDefaults = defaults ? { ...defaults } : {};
-  if (!hasMax) {
-    nextDefaults.maxConcurrent = resolveAgentMaxConcurrent();
-  }
-
-  const nextSubagents = defaults?.subagents ? { ...defaults.subagents } : {};
-  if (!hasSubMax) {
-    nextSubagents.maxConcurrent = DEFAULT_SUBAGENT_MAX_CONCURRENT;
-  }
-  if (!hasSubArchive) {
-    nextSubagents.archiveAfterMinutes = DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES;
+    const existingModels = normalizeAgentModelMapForConfig(existingAgent.models ?? {});
+    const nextModels: Record<string, { alias?: string }> = { ...existingModels };
+    for (const [alias, target] of Object.entries(DEFAULT_MODEL_ALIASES)) {
+      const entry = nextModels[target];
+      if (!entry) {
+        continue;
+      }
+      if (entry.alias !== undefined) {
+        continue;
+      }
+      const normalizedAlias = normalizeLowercaseStringOrEmpty(alias);
+      const aliasAlreadyOwned = Object.entries(nextModels).some(
+        ([modelRef, candidate]) =>
+          modelRef !== target &&
+          normalizeLowercaseStringOrEmpty(candidate.alias) === normalizedAlias,
+      );
+      // Preserve explicit alias ownership when a newer default target is also configured.
+      if (aliasAlreadyOwned) {
+        continue;
+      }
+      nextModels[target] = { ...entry, alias };
+    }
+    if (Object.keys(existingModels).length > 0) {
+      nextAgent.models = nextModels;
+    }
+    agents.defaults = nextAgent;
   }
 
   return {
     ...cfg,
+    ...(providerConfig ? { models: { ...cfg.models, providers: nextProviders } } : {}),
+    ...(agents ? { agents } : {}),
+  };
+}
+
+export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
+  const defaults = cfg.agents?.defaults;
+  return {
+    ...cfg,
     agents: {
-      ...agents,
+      ...cfg.agents,
       defaults: {
-        ...nextDefaults,
-        subagents: nextSubagents,
+        ...defaults,
+        maxConcurrent: asFiniteNumber(defaults?.maxConcurrent) ?? resolveAgentMaxConcurrent(),
+        subagents: {
+          ...defaults?.subagents,
+          maxConcurrent:
+            asFiniteNumber(defaults?.subagents?.maxConcurrent) ?? DEFAULT_SUBAGENT_MAX_CONCURRENT,
+          archiveAfterMinutes:
+            asFiniteNumber(defaults?.subagents?.archiveAfterMinutes) ??
+            DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
+        },
       },
     },
   };
@@ -512,26 +434,21 @@ export function hasAnthropicDefaultSignal(cfg: OpenClawConfig, env: NodeJS.Proce
   if (env.ANTHROPIC_API_KEY?.trim() || env.ANTHROPIC_OAUTH_TOKEN?.trim()) {
     return true;
   }
+  const isAnthropicProvider = (provider: string) => {
+    const normalized = normalizeProviderId(provider);
+    return normalized === "anthropic" || normalized === "claude-cli";
+  };
   const profiles = cfg.auth?.profiles;
-  if (profiles) {
-    for (const profile of Object.values(profiles)) {
-      const provider = normalizeProviderId(profile?.provider);
-      if (provider === "anthropic" || provider === "claude-cli") {
-        return true;
-      }
-    }
+  if (
+    profiles &&
+    Object.values(profiles).some((profile) => isAnthropicProvider(profile?.provider))
+  ) {
+    return true;
   }
   const order = cfg.auth?.order;
-  if (!order) {
-    return false;
-  }
-  return Object.keys(order).some((provider) => {
-    const normalizedProvider = normalizeProviderId(provider);
-    if (normalizedProvider !== "anthropic" && normalizedProvider !== "claude-cli") {
-      return false;
-    }
-    return (order as Record<string, unknown>)[provider] !== undefined;
-  });
+  return Object.keys(order ?? {}).some(
+    (provider) => isAnthropicProvider(provider) && order?.[provider] !== undefined,
+  );
 }
 
 export function applyContextPruningDefaults(
@@ -556,11 +473,7 @@ export function applyContextPruningDefaults(
 
 export function applyCompactionDefaults(cfg: OpenClawConfig): OpenClawConfig {
   const defaults = cfg.agents?.defaults;
-  if (!defaults) {
-    return cfg;
-  }
-  const compaction = defaults?.compaction;
-  if (compaction?.mode) {
+  if (!defaults || defaults.compaction?.mode) {
     return cfg;
   }
 
@@ -571,7 +484,7 @@ export function applyCompactionDefaults(cfg: OpenClawConfig): OpenClawConfig {
       defaults: {
         ...defaults,
         compaction: {
-          ...compaction,
+          ...defaults.compaction,
           mode: "safeguard",
         },
       },

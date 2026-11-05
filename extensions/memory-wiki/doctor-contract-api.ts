@@ -94,7 +94,7 @@ function resolveConfiguredVaultRoots(params: {
 type WikiStateMigrationParams = Parameters<PluginDoctorStateMigration["detectLegacyState"]>[0];
 
 function unsupportedJsonWarning(filePath: string, emptySourceSync = false): string {
-  return `Memory Wiki: upgrades from pre-July-2026 JSON state are no longer migrated (${filePath}). ${emptySourceSync ? "No canonical SQLite source-sync state was found; an empty store cannot be distinguished from unmigrated state. " : "No canonical SQLite import-run record was found. "}Restore a backup produced by a July 2026 or newer release, or back up and move this retired file aside after verifying the SQLite state, then rerun openclaw doctor --fix. The file was left unchanged.`;
+  return `Memory Wiki: upgrades from pre-July-2026 JSON state are no longer migrated (${filePath}). ${emptySourceSync ? "No current SQLite source-sync state was found; an empty store cannot be distinguished from unmigrated state. " : "No current SQLite import-run record was found. "}Restore a backup produced by a July 2026 or newer release, or back up and move this retired file aside after verifying the SQLite state, then rerun openclaw doctor --fix. The file was left unchanged.`;
 }
 
 async function unsupportedSourceSyncFiles(params: WikiStateMigrationParams): Promise<string[]> {
@@ -154,6 +154,14 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "memory-wiki-compiled-cache-file-cleanup",
     label: "Memory Wiki compiled cache files",
+    collectBackupResources(params) {
+      return resolveConfiguredVaultRoots(params).flatMap((vaultRoot) =>
+        LEGACY_MEMORY_WIKI_COMPILED_CACHE_PATHS.map((relativePath) => ({
+          path: path.join(vaultRoot, relativePath),
+          kind: "file" as const,
+        })),
+      );
+    },
     async detectLegacyState(params) {
       const previews: string[] = [];
       for (const vaultRoot of resolveConfiguredVaultRoots(params)) {

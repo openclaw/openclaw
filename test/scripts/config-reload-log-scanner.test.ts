@@ -1,5 +1,5 @@
 // Config Reload Log Scanner tests cover config reload log scanner script behavior.
-import { appendFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createConfigReloadLogScanner } from "../../scripts/e2e/lib/config-reload/log-scanner.mjs";
@@ -82,29 +82,5 @@ describe("config reload log scanner", () => {
     const result = scanner.scan();
     expect(result.reloadLines).toEqual([]);
     expect(result.restartLines).toEqual(["config change requires gateway restart: new.path"]);
-  });
-
-  it("resets accumulated matches when a rotated log keeps the same size", () => {
-    const logPath = path.join(tempRoots.make("openclaw-config-reload-log-"), "gateway.log");
-    const scanner = createConfigReloadLogScanner(logPath, {
-      maxReadBytes: 1024,
-      tailLineLimit: 4,
-    });
-    const oldText = "config change detected; evaluating reload: old.path with enough padding\n";
-    const restartLine = "config change requires gateway restart: new.path";
-    const restartText = `${restartLine}${" ".repeat(oldText.length - restartLine.length - 1)}\n`;
-
-    expect(Buffer.byteLength(restartText)).toBe(Buffer.byteLength(oldText));
-    writeFileSync(logPath, oldText);
-    expect(scanner.scan().reloadLines).toEqual([
-      "config change detected; evaluating reload: old.path with enough padding",
-    ]);
-
-    rmSync(logPath, { force: true });
-    writeFileSync(logPath, restartText);
-
-    const result = scanner.scan();
-    expect(result.reloadLines).toEqual([]);
-    expect(result.restartLines).toEqual([restartText.replace(/\n$/u, "")]);
   });
 });

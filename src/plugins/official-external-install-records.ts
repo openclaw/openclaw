@@ -29,18 +29,10 @@ function resolveExactNpmPackageName(value: string): string | undefined {
 function resolveRecordedPackageNames(
   fields: ReadonlyArray<readonly [string | undefined, (value: string) => string | undefined]>,
 ): string[] | undefined {
-  const packageNames: string[] = [];
-  for (const [value, resolvePackageName] of fields) {
-    if (value === undefined) {
-      continue;
-    }
-    const packageName = resolvePackageName(value);
-    if (!packageName) {
-      return undefined;
-    }
-    packageNames.push(packageName);
-  }
-  return packageNames;
+  const packageNames = fields.flatMap(([value, resolvePackageName]) =>
+    value === undefined ? [] : [resolvePackageName(value)],
+  );
+  return packageNames.every((name): name is string => Boolean(name)) ? packageNames : undefined;
 }
 
 function resolveUnanimousRecordedNpmPackageName(record: PluginInstallRecord): string | undefined {
@@ -59,18 +51,6 @@ function hasTrustedOfficialNpmProvenance(record: PluginInstallRecord): boolean {
   return (
     record.source === "npm" && record.artifactKind === undefined && record.sourcePath === undefined
   );
-}
-
-function resolveOfficialPackageNames(params: {
-  entry: OfficialExternalPluginCatalogEntry;
-  npmSpec?: string;
-  clawhubSpec?: string;
-}): string[] {
-  return [
-    resolveClawHubSpecPackageName(params.clawhubSpec),
-    resolveNpmSpecPackageName(params.npmSpec),
-    params.entry.name,
-  ].filter((value): value is string => Boolean(value));
 }
 
 function resolveRecordedClawHubPackageNames(record: PluginInstallRecord): string[] | undefined {
@@ -102,10 +82,24 @@ export function resolveTrustedOfficialClawHubPackageName(
     return undefined;
   }
   const packageNames = resolveRecordedClawHubPackageNames(record);
-  if (!packageNames || packageNames.length === 0 || new Set(packageNames).size !== 1) {
-    return undefined;
-  }
-  return packageNames[0];
+  return packageNames && new Set(packageNames).size === 1 ? packageNames[0] : undefined;
+}
+
+/** Valid registry provenance does not grant official plugin authority. */
+export function isThirdPartyNpmInstallRecord(
+  pluginId: string,
+  packageName: string | undefined,
+  record: PluginInstallRecord,
+): boolean {
+  return Boolean(
+    packageName &&
+    !getOfficialExternalPluginCatalogEntry(pluginId) &&
+    !getOfficialExternalPluginCatalogEntryForPackage(packageName) &&
+    hasTrustedOfficialNpmProvenance(record) &&
+    resolveUnanimousRecordedNpmPackageName(record) === packageName &&
+    (record.clawhubPackage === undefined ||
+      resolveExactNpmPackageName(record.clawhubPackage) === packageName),
+  );
 }
 
 /** Binds official trust to the actual package and consistent recorded source identity. */
@@ -150,9 +144,7 @@ function hasTrustedClawHubSourceAuthority(
   officialClawHubSpec: string | undefined,
   officialExpectedIntegrity: string | undefined,
 ): boolean {
-  const hasAuthorityMetadata =
-    record.clawhubUrl !== undefined || record.clawhubChannel !== undefined;
-  if (hasAuthorityMetadata) {
+  if (record.clawhubUrl !== undefined || record.clawhubChannel !== undefined) {
     return isOfficialClawHubInstallRecord(record);
   }
   // Older official installs persisted only their catalog-backed ClawHub spec.
@@ -193,11 +185,7 @@ function resolveOfficialNpmInstallIdentity(params: {
   npmSpec: string;
   replaceNpmPackage?: true;
 }): TrustedSourceLinkedOfficialNpmInstall {
-  const canonicalPluginId = resolveOfficialExternalPluginId(params.entry);
-  const pluginId =
-    canonicalPluginId && canonicalPluginId !== params.requestPluginId
-      ? canonicalPluginId
-      : params.requestPluginId;
+  const pluginId = resolveOfficialExternalPluginId(params.entry) ?? params.requestPluginId;
   return {
     ...(params.expectedIntegrity ? { expectedIntegrity: params.expectedIntegrity } : {}),
     npmSpec: params.npmSpec,
@@ -329,7 +317,7 @@ export function resolveTrustedSourceLinkedOfficialNpmInstall(params: {
 export function resolveTrustedSourceLinkedOfficialClawHubInstall(params: {
   pluginId: string;
   record: PluginInstallRecord;
-}): { clawhubSpec?: string; npmSpec?: string } | undefined {
+}): { clawhubSpec?: string; npmSpec?: string; expectedIntegrity?: string } | undefined {
   if (params.record.source !== "clawhub") {
     return undefined;
   }
@@ -343,11 +331,11 @@ export function resolveTrustedSourceLinkedOfficialClawHubInstall(params: {
   if (!officialClawHubSpec && !officialNpmSpec) {
     return undefined;
   }
-  const officialNames = resolveOfficialPackageNames({
-    entry,
-    npmSpec: officialNpmSpec,
-    clawhubSpec: officialClawHubSpec,
-  });
+  const officialNames = [
+    resolveClawHubSpecPackageName(officialClawHubSpec),
+    resolveNpmSpecPackageName(officialNpmSpec),
+    entry.name,
+  ].filter((value): value is string => Boolean(value));
   if (officialNames.length === 0) {
     return undefined;
   }
@@ -372,5 +360,8 @@ export function resolveTrustedSourceLinkedOfficialClawHubInstall(params: {
   return {
     ...(officialClawHubSpec ? { clawhubSpec: officialClawHubSpec } : {}),
     ...(officialNpmSpec ? { npmSpec: officialNpmSpec } : {}),
+    ...(officialNpmSpec && install?.expectedIntegrity
+      ? { expectedIntegrity: install.expectedIntegrity }
+      : {}),
   };
 }

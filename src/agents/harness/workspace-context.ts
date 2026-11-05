@@ -1,6 +1,7 @@
 import path from "node:path";
 import { prepareMemorySystemPromptAddition } from "../../context-engine/delegate.js";
-import { buildBootstrapContextForFiles, resolveBootstrapFilesForRun } from "../bootstrap-files.js";
+import { resolveBootstrapFilesForRun } from "../bootstrap-files.js";
+import { buildBootstrapContextForFiles } from "../embedded-agent-helpers/bootstrap.js";
 import type { EmbeddedContextFile } from "../embedded-agent-helpers/context-file.js";
 import {
   PERSONAL_USER_CONTEXT_INSTRUCTIONS,
@@ -8,6 +9,7 @@ import {
 } from "../system-prompt-context-files.js";
 import {
   buildAgentWorkspaceInstructionSnapshot,
+  renderAgentWorkspaceInstructionSnapshot,
   selectAgentWorkspaceInstructionFiles,
 } from "./workspace-instructions.js";
 
@@ -70,13 +72,16 @@ export async function prepareAgentWorkspaceContext(
     : memoryToolRouted
       ? bootstrapFiles.filter((file) => !isRootMemoryPath(file.path, params.workspaceDir))
       : bootstrapFiles;
-  const contextFiles = buildBootstrapContextForFiles(budgetFiles, params).map((file) =>
-    projectContextFile(file, params.projectPath),
-  );
-  const instructionSnapshot = buildAgentWorkspaceInstructionSnapshot(
-    contextFiles,
-    params.workspaceDir,
-  );
+  const instructionFiles: EmbeddedContextFile[] = [];
+  const contextFiles = buildBootstrapContextForFiles(budgetFiles, params).map((file) => {
+    const projected = projectContextFile(file, params.projectPath);
+    // Select against source paths; sandbox paths do not belong to the configured workspace.
+    if (selectAgentWorkspaceInstructionFiles([file], params.workspaceDir).length > 0) {
+      instructionFiles.push(projected);
+    }
+    return projected;
+  });
+  const instructionSnapshot = renderAgentWorkspaceInstructionSnapshot(instructionFiles);
   if (instructionsOnly) {
     return {
       bootstrapFiles,
@@ -102,7 +107,7 @@ export async function prepareAgentWorkspaceContext(
       const basename = contextFileBasename(file.path);
       const nativeProjectDocument = params.nativeProjectDocBasenames
         ? params.nativeProjectDocBasenames.has(basename)
-        : selectAgentWorkspaceInstructionFiles([file], params.workspaceDir).length > 0;
+        : instructionFiles.includes(file);
       return (
         basename.length > 0 &&
         !nativeProjectDocument &&
@@ -157,7 +162,7 @@ function renderPersonaInstructions(files: readonly EmbeddedContextFile[]): strin
     return undefined;
   }
   const preamble =
-    "OpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly." +
+    "OpenClaw loaded these workspace instruction files from the active agent workspace. They are the instructions that define who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly." +
     (files.some((file) => file.personalUser === true)
       ? ` ${PERSONAL_USER_CONTEXT_INSTRUCTIONS}`
       : "");
@@ -200,9 +205,7 @@ function isRootMemoryPath(filePath: string, workspaceDir: string): boolean {
   if (!normalized) {
     return false;
   }
-  const absolutePath = path.isAbsolute(normalized)
-    ? path.resolve(normalized)
-    : path.resolve(workspaceDir, normalized);
+  const absolutePath = path.resolve(workspaceDir, normalized);
   return absolutePath === path.join(path.resolve(workspaceDir), "MEMORY.md");
 }
 

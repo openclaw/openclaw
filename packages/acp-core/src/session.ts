@@ -19,34 +19,26 @@ export type AcpSessionStore = {
   deleteSession: (sessionId: string) => boolean;
 };
 
-type InMemoryAcpSessionStore = AcpSessionStore & {
-  /** Releases every record when the registry's lifecycle owner shuts down. */
-  dispose: () => void;
-};
-
-type AcpSessionStoreOptions = {
-  maxSessions?: number;
-  idleTtlMs?: number;
-  now?: () => number;
-  /**
-   * Invoked for every session that leaves the store, whichever path removes it:
-   * explicit delete, idle reaping, capacity eviction, or dispose. Consumers that
-   * mirror session identity elsewhere use this to stay in step with the store,
-   * since eviction and reaping produce no ACP request a peer could observe.
-   */
-  onSessionRemoved?: (sessionId: string) => void;
-};
-
 const DEFAULT_MAX_SESSIONS = 5_000;
 const DEFAULT_IDLE_TTL_MS = 24 * 60 * 60 * 1_000;
 
 /** Creates the bounded in-memory ACP session registry used by local ACP runtime clients. */
 export function createInMemorySessionStore(
-  options: AcpSessionStoreOptions = {},
-): InMemoryAcpSessionStore {
+  options: {
+    maxSessions?: number;
+    /**
+     * Invoked for every session that leaves the store, whichever path removes it:
+     * explicit delete, idle reaping, capacity eviction, or dispose. Consumers that
+     * mirror session identity elsewhere use this to stay in step with the store,
+     * since eviction and reaping produce no ACP request a peer could observe.
+     */
+    onSessionRemoved?: (sessionId: string) => void;
+  } = {},
+): AcpSessionStore & {
+  /** Releases every record when the registry's lifecycle owner shuts down. */
+  dispose: () => void;
+} {
   const maxSessions = resolveIntegerOption(options.maxSessions, DEFAULT_MAX_SESSIONS, { min: 1 });
-  const idleTtlMs = resolveIntegerOption(options.idleTtlMs, DEFAULT_IDLE_TTL_MS, { min: 1_000 });
-  const now = options.now ?? Date.now;
   const onSessionRemoved = options.onSessionRemoved;
   const sessions = new Map<string, AcpSession>();
 
@@ -62,7 +54,7 @@ export function createInMemorySessionStore(
   };
 
   const reapIdleSessions = (nowMs: number) => {
-    const idleBefore = nowMs - idleTtlMs;
+    const idleBefore = nowMs - DEFAULT_IDLE_TTL_MS;
     for (const [sessionId, session] of sessions.entries()) {
       if (session.activeRunId || session.abortController) {
         continue;
@@ -93,104 +85,92 @@ export function createInMemorySessionStore(
     return removeSession(oldestSessionId);
   };
 
-  const createSession: AcpSessionStore["createSession"] = (params) => {
-    const nowMs = now();
-    const sessionId = params.sessionId ?? randomUUID();
-    const existingSession = sessions.get(sessionId);
-    if (existingSession) {
-      existingSession.sessionKey = params.sessionKey;
-      if ("ledgerSessionId" in params) {
-        existingSession.ledgerSessionId = params.ledgerSessionId;
-      }
-      existingSession.cwd = params.cwd;
-      existingSession.lastTouchedAt = nowMs;
-      return existingSession;
-    }
-    reapIdleSessions(nowMs);
-    // Active runs are never evicted to make cancellation ownership explicit; callers must
-    // clear/cancel them before the soft cap can make room.
-    if (sessions.size >= maxSessions && !evictOldestIdleSession()) {
-      throw new Error(
-        `ACP session limit reached (max ${maxSessions}). Close idle ACP clients and retry.`,
-      );
-    }
-    const session: AcpSession = {
-      sessionId,
-      sessionKey: params.sessionKey,
-      ...(params.ledgerSessionId ? { ledgerSessionId: params.ledgerSessionId } : {}),
-      cwd: params.cwd,
-      createdAt: nowMs,
-      lastTouchedAt: nowMs,
-      abortController: null,
-      activeRunId: null,
-    };
-    sessions.set(sessionId, session);
-    return session;
-  };
-
-  const getSession: AcpSessionStore["getSession"] = (sessionId) => {
-    const session = sessions.get(sessionId);
-    if (session) {
-      session.lastTouchedAt = now();
-    }
-    return session;
-  };
-
-  const setActiveRun: AcpSessionStore["setActiveRun"] = (sessionId, runId, abortController) => {
-    const session = sessions.get(sessionId);
-    if (!session) {
-      return;
-    }
-    session.activeRunId = runId;
-    session.abortController = abortController;
-    session.lastTouchedAt = now();
-  };
-
   const releaseActiveRun = (session: AcpSession) => {
     session.activeRunId = null;
     session.abortController = null;
-    session.lastTouchedAt = now();
-  };
-
-  const clearActiveRun: AcpSessionStore["clearActiveRun"] = (sessionId, expectedRunId) => {
-    const session = sessions.get(sessionId);
-    if (session && (expectedRunId === undefined || session.activeRunId === expectedRunId)) {
-      releaseActiveRun(session);
-    }
-  };
-
-  const cancelActiveRun: AcpSessionStore["cancelActiveRun"] = (sessionId, expectedRunId) => {
-    const session = sessions.get(sessionId);
-    if (
-      !session?.abortController ||
-      (expectedRunId !== undefined && session.activeRunId !== expectedRunId)
-    ) {
-      return false;
-    }
-    session.abortController.abort();
-    releaseActiveRun(session);
-    return true;
-  };
-
-  const dispose: InMemoryAcpSessionStore["dispose"] = () => {
-    for (const session of sessions.values()) {
-      session.abortController?.abort();
-    }
-    const removed = [...sessions.keys()];
-    sessions.clear();
-    for (const sessionId of removed) {
-      onSessionRemoved?.(sessionId);
-    }
+    session.lastTouchedAt = Date.now();
   };
 
   return {
-    createSession,
+    createSession(params) {
+      const nowMs = Date.now();
+      const sessionId = params.sessionId ?? randomUUID();
+      const existingSession = sessions.get(sessionId);
+      if (existingSession) {
+        existingSession.sessionKey = params.sessionKey;
+        if ("ledgerSessionId" in params) {
+          existingSession.ledgerSessionId = params.ledgerSessionId;
+        }
+        existingSession.cwd = params.cwd;
+        existingSession.lastTouchedAt = nowMs;
+        return existingSession;
+      }
+      reapIdleSessions(nowMs);
+      // Active runs are never evicted to make cancellation ownership explicit; callers must
+      // clear/cancel them before the soft cap can make room.
+      if (sessions.size >= maxSessions && !evictOldestIdleSession()) {
+        throw new Error(
+          `ACP session limit reached (max ${maxSessions}). Close idle ACP clients and retry.`,
+        );
+      }
+      const session: AcpSession = {
+        sessionId,
+        sessionKey: params.sessionKey,
+        ...(params.ledgerSessionId ? { ledgerSessionId: params.ledgerSessionId } : {}),
+        cwd: params.cwd,
+        createdAt: nowMs,
+        lastTouchedAt: nowMs,
+        abortController: null,
+        activeRunId: null,
+      };
+      sessions.set(sessionId, session);
+      return session;
+    },
     hasSession: (sessionId) => sessions.has(sessionId),
-    getSession,
-    setActiveRun,
-    clearActiveRun,
-    cancelActiveRun,
+    getSession(sessionId) {
+      const session = sessions.get(sessionId);
+      if (session) {
+        session.lastTouchedAt = Date.now();
+      }
+      return session;
+    },
+    setActiveRun(sessionId, runId, abortController) {
+      const session = sessions.get(sessionId);
+      if (!session) {
+        return;
+      }
+      session.activeRunId = runId;
+      session.abortController = abortController;
+      session.lastTouchedAt = Date.now();
+    },
+    clearActiveRun(sessionId, expectedRunId) {
+      const session = sessions.get(sessionId);
+      if (session && (expectedRunId === undefined || session.activeRunId === expectedRunId)) {
+        releaseActiveRun(session);
+      }
+    },
+    cancelActiveRun(sessionId, expectedRunId) {
+      const session = sessions.get(sessionId);
+      if (
+        !session?.abortController ||
+        (expectedRunId !== undefined && session.activeRunId !== expectedRunId)
+      ) {
+        return false;
+      }
+      session.abortController.abort();
+      releaseActiveRun(session);
+      return true;
+    },
     deleteSession: removeSession,
-    dispose,
+    dispose() {
+      for (const session of sessions.values()) {
+        session.abortController?.abort();
+      }
+      const removed = [...sessions.keys()];
+      sessions.clear();
+      for (const sessionId of removed) {
+        onSessionRemoved?.(sessionId);
+      }
+    },
   };
 }

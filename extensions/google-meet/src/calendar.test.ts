@@ -9,17 +9,10 @@ afterEach(() => {
 async function resolveCalendarMeetingUri(event: Record<string, unknown>) {
   vi.stubGlobal(
     "fetch",
-    vi.fn(
-      async () =>
-        new Response(JSON.stringify({ items: [event] }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-    ),
+    vi.fn(async () => Response.json({ items: [event] })),
   );
   const result = await listGoogleMeetCalendarEvents({
     accessToken: "test-token",
-    now: new Date("2026-04-25T09:50:00Z"),
   });
   return result.events[0]?.meetingUri;
 }

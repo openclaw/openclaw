@@ -148,9 +148,13 @@ pin_worktree_bundled_plugins_dir() {
 resolve_pr_gates_remote_mode() {
   case "${OPENCLAW_PR_GATES_REMOTE:-}" in
     "")
-      printf 'local\n'
+      if [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
+        printf 'local\n'
+      else
+        printf 'github\n'
+      fi
       ;;
-    testbox|crabbox-aws|github)
+    local|testbox|crabbox-aws|github)
       if [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
         echo "OPENCLAW_PR_GATES_REMOTE=$OPENCLAW_PR_GATES_REMOTE conflicts with OPENCLAW_TESTBOX=1; select one gate mode." >&2
         echo "Unset OPENCLAW_TESTBOX to use $OPENCLAW_PR_GATES_REMOTE gates, or unset OPENCLAW_PR_GATES_REMOTE to use completed hosted proof." >&2
@@ -159,7 +163,7 @@ resolve_pr_gates_remote_mode() {
       printf '%s\n' "$OPENCLAW_PR_GATES_REMOTE"
       ;;
     *)
-      echo "Unsupported OPENCLAW_PR_GATES_REMOTE=${OPENCLAW_PR_GATES_REMOTE} (supported: testbox, crabbox-aws, github)." >&2
+      echo "Unsupported OPENCLAW_PR_GATES_REMOTE=${OPENCLAW_PR_GATES_REMOTE} (supported: local, testbox, crabbox-aws, github)." >&2
       return 1
       ;;
   esac
@@ -193,7 +197,7 @@ run_remote_testbox_gates() {
       const { parsePositiveInt } = await import(pathToFileURL(process.argv[1] + "/lib/numeric-options.mjs").href);
       const value = process.argv[2].trim();
       if (value) {
-        try { console.log(parsePositiveInt(value, process.argv[3])); }
+        try { process.stdout.write(String(parsePositiveInt(value, process.argv[3]))); }
         catch (error) { console.error(error.message); process.exitCode = 2; }
       }
     ' "$script_parent_dir" "${!name}" "$name") || return 2
@@ -418,17 +422,21 @@ write_gates_env_stamp() {
 }
 
 # Correction publication requires the native gate owner's exact candidate
-# stamp. An explicit pending Crabbox stamp is admission to its protected-main
-# publisher, not proof; retain that separately authorized route.
+# disposition. GitHub pending is not proof: merge_verify still owns exact-head
+# auto-merge admission and enforced checks. Pending Crabbox retains its separate
+# protected-main publisher and live-admin requirements.
 require_correction_publication_gates() (
-  local pr="$1" head="$2" allow_pending="${3:-false}"
+  local pr="$1" head="$2" allow_crabbox_pending="${3:-false}"
   local PR_NUMBER="" LAST_VERIFIED_HEAD_SHA="" FULL_GATES_HEAD_SHA=""
   local GATES_MODE="" HOSTED_GATES_TARGET_HEAD_SHA="" DOCS_ONLY=""
   local REMOTE_GATES_PROVIDER="" REMOTE_GATES_RUN_ID="" REMOTE_GATES_LEASE_ID="" REMOTE_GATES_RUN_URL=""
   require_artifact .local/gates.env || return 1
   source .local/gates.env || return 1
   local qualified_head="$LAST_VERIFIED_HEAD_SHA"
-  [ "$PR_NUMBER" = "$pr" ] || return 1
+  if [ "$GATES_MODE" = github_pending ]; then
+    qualified_head="$HOSTED_GATES_TARGET_HEAD_SHA"
+  fi
+  [ "$PR_NUMBER" = "$pr" ] && [[ "$qualified_head" =~ ^[0-9a-f]{40}$ ]] || return 1
   if [ "$qualified_head" != "$head" ]; then
     # GraphQL can assign a hosted OID for the identical reviewed local tree.
     # The verified publication can precede the completed preparation stamp.
@@ -444,6 +452,7 @@ require_correction_publication_gates() (
     }
   fi
   case "$GATES_MODE" in
+    github_pending) ;; # Exact pending binding above; never promote it to success.
     full) [ "$FULL_GATES_HEAD_SHA" = "$qualified_head" ] || return 1 ;;
     docs_only|reused_docs_only) [ "$DOCS_ONLY" = true ] || return 1 ;;
     hosted_exact_or_recent_parent) [ "$HOSTED_GATES_TARGET_HEAD_SHA" = "$qualified_head" ] || return 1 ;;
@@ -459,7 +468,7 @@ require_correction_publication_gates() (
         [[ "$REMOTE_GATES_RUN_URL" == https://github.com/openclaw/openclaw/actions/runs/* ]] || return 1
       ;;
     remote_crabbox_aws_pending)
-      [ "$allow_pending" = true ] && [ "$REMOTE_GATES_PROVIDER" = aws ] || return 1
+      [ "$allow_crabbox_pending" = true ] && [ "$REMOTE_GATES_PROVIDER" = aws ] || return 1
       require_active_org_admin_for_crabbox_gate >/dev/null || return 1
       # The candidate is not hosted yet. Bind eligibility to the publication
       # lease, then let the existing publisher verify the newly hosted head.
@@ -584,6 +593,14 @@ prepare_gates() {
 
   local gates_mode="full"
   local hosted_gates_head=""
+  local gate_head="$current_head"
+  if [ "$gates_remote_mode" = github ] || [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
+    local PREP_PUBLICATION_LEASE_SHA="" PREP_PUBLICATION_HEAD_SHA=""
+    # Requalification keeps a verified GraphQL alias: hosted checks belong to
+    # its published OID, while change planning and local proof still use HEAD.
+    resolve_prep_publication_target "$pr" "$current_head" || return 1
+    gate_head="$PREP_PUBLICATION_HEAD_SHA"
+  fi
   local reuse_gates=false
   if [ "${OPENCLAW_TESTBOX:-}" != "1" ] && [ "$docs_only" = "true" ] && [ -n "$previous_last_verified_head" ] && pr_git merge-base --is-ancestor "$previous_last_verified_head" HEAD 2>/dev/null; then
     local delta_since_verified
@@ -595,8 +612,8 @@ prepare_gates() {
 
   if [ "$gates_remote_mode" = github ]; then
     gates_mode=github_pending
-    hosted_gates_head="$current_head"
-    echo "Required GitHub gates deferred for $current_head; no successful gate proof recorded."
+    hosted_gates_head="$gate_head"
+    echo "Required GitHub gates deferred for $gate_head; no successful gate proof recorded."
   elif [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
     gates_mode="hosted_exact_or_recent_parent"
     remote_gates_provider=""
@@ -606,8 +623,8 @@ prepare_gates() {
     if [ "$changelog_only" = "true" ]; then
       run_quiet_logged "git diff --check" ".local/gates-diff-check.log" pr_git diff --check "$PR_MAIN_SHA...HEAD"
     fi
-    run_hosted_prepare_gates "$pr" "$current_head" "$changelog_only" "$remote_record" || return 1
-    hosted_gates_head="$current_head"
+    run_hosted_prepare_gates "$pr" "$gate_head" "$changelog_only" "$remote_record" || return 1
+    hosted_gates_head="$gate_head"
   elif [ "$reuse_gates" = "true" ]; then
     gates_mode="reused_docs_only"
     echo "Docs/changelog-only delta since last verified head $previous_last_verified_head; reusing prior gates."
@@ -688,7 +705,7 @@ prepare_gates() {
     "$docs_only" \
     "$changelog_required" \
     "$gates_mode" \
-    "$current_head" \
+    "$gate_head" \
     "${previous_full_gates_head:-}" \
     "$hosted_gates_head" \
     "$remote_gates_provider" \

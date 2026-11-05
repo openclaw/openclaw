@@ -1,6 +1,7 @@
 import type { Socket } from "node:net";
 import { deserialize, serialize } from "node:v8";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { createBrokerReceiver, createBrokerSender, MAX_PENDING_BYTES } from "./ipc.js";
 import { SpawnBrokerError } from "./protocol.js";
 
@@ -23,6 +24,7 @@ export function createBrokerResourceSocket(
       return;
     }
     stopped = true;
+    materializeErrorStack(error);
     failure = error;
     receiver.clear();
     body = undefined;

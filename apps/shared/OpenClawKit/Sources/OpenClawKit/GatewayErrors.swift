@@ -4,11 +4,7 @@ import OpenClawProtocol
 func gatewayErrorDetails(_ error: ErrorShape?) -> [String: OpenClawProtocol.AnyCodable] {
     var details = error?.details?.value as? [String: OpenClawProtocol.AnyCodable] ?? [:]
     if let error {
-        if details["code"] == nil {
-            details["code"] = OpenClawProtocol.AnyCodable(error.code)
-        } else {
-            details["errorCode"] = OpenClawProtocol.AnyCodable(error.code)
-        }
+        details[details["code"] == nil ? "code" : "errorCode"] = OpenClawProtocol.AnyCodable(error.code)
         details["message"] = OpenClawProtocol.AnyCodable(error.message)
         if let retryable = error.retryable {
             details["retryable"] = OpenClawProtocol.AnyCodable(retryable)
@@ -88,47 +84,6 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
 
     public init(
         message: String,
-        detailCodeRaw: String?,
-        canRetryWithDeviceToken: Bool,
-        recommendedNextStepRaw: String? = nil,
-        requestId: String? = nil,
-        detailsReason: String? = nil,
-        ownerRaw: String? = nil,
-        titleOverride: String? = nil,
-        userMessageOverride: String? = nil,
-        actionLabel: String? = nil,
-        actionCommand: String? = nil,
-        docsURLString: String? = nil,
-        retryableOverride: Bool? = nil,
-        pauseReconnectOverride: Bool? = nil,
-        clientMinProtocol: Int? = nil,
-        clientMaxProtocol: Int? = nil,
-        expectedProtocol: Int? = nil,
-        minimumProbeProtocol: Int? = nil)
-    {
-        let trimmedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.message = trimmedMessage.isEmpty ? "gateway connect failed" : trimmedMessage
-        self.detailCodeRaw = detailCodeRaw?.trimmedNonEmpty
-        self.canRetryWithDeviceToken = canRetryWithDeviceToken
-        self.recommendedNextStepRaw = recommendedNextStepRaw?.trimmedNonEmpty
-        self.requestId = requestId?.trimmedNonEmpty
-        self.detailsReason = detailsReason?.trimmedNonEmpty
-        self.ownerRaw = ownerRaw?.trimmedNonEmpty
-        self.titleOverride = titleOverride?.trimmedNonEmpty
-        self.userMessageOverride = userMessageOverride?.trimmedNonEmpty
-        self.actionLabel = actionLabel?.trimmedNonEmpty
-        self.actionCommand = actionCommand?.trimmedNonEmpty
-        self.docsURLString = docsURLString?.trimmedNonEmpty
-        self.retryableOverride = retryableOverride
-        self.pauseReconnectOverride = pauseReconnectOverride
-        self.clientMinProtocol = clientMinProtocol
-        self.clientMaxProtocol = clientMaxProtocol
-        self.expectedProtocol = expectedProtocol
-        self.minimumProbeProtocol = minimumProbeProtocol
-    }
-
-    public init(
-        message: String,
         detailCode: String?,
         canRetryWithDeviceToken: Bool,
         recommendedNextStep: String? = nil,
@@ -147,25 +102,25 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
         expectedProtocol: Int? = nil,
         minimumProbeProtocol: Int? = nil)
     {
-        self.init(
-            message: message,
-            detailCodeRaw: detailCode,
-            canRetryWithDeviceToken: canRetryWithDeviceToken,
-            recommendedNextStepRaw: recommendedNextStep,
-            requestId: requestId,
-            detailsReason: detailsReason,
-            ownerRaw: ownerRaw,
-            titleOverride: titleOverride,
-            userMessageOverride: userMessageOverride,
-            actionLabel: actionLabel,
-            actionCommand: actionCommand,
-            docsURLString: docsURLString,
-            retryableOverride: retryableOverride,
-            pauseReconnectOverride: pauseReconnectOverride,
-            clientMinProtocol: clientMinProtocol,
-            clientMaxProtocol: clientMaxProtocol,
-            expectedProtocol: expectedProtocol,
-            minimumProbeProtocol: minimumProbeProtocol)
+        let trimmedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.message = trimmedMessage.isEmpty ? "gateway connect failed" : trimmedMessage
+        self.detailCodeRaw = detailCode?.trimmedNonEmpty
+        self.canRetryWithDeviceToken = canRetryWithDeviceToken
+        self.recommendedNextStepRaw = recommendedNextStep?.trimmedNonEmpty
+        self.requestId = requestId?.trimmedNonEmpty
+        self.detailsReason = detailsReason?.trimmedNonEmpty
+        self.ownerRaw = ownerRaw?.trimmedNonEmpty
+        self.titleOverride = titleOverride?.trimmedNonEmpty
+        self.userMessageOverride = userMessageOverride?.trimmedNonEmpty
+        self.actionLabel = actionLabel?.trimmedNonEmpty
+        self.actionCommand = actionCommand?.trimmedNonEmpty
+        self.docsURLString = docsURLString?.trimmedNonEmpty
+        self.retryableOverride = retryableOverride
+        self.pauseReconnectOverride = pauseReconnectOverride
+        self.clientMinProtocol = clientMinProtocol
+        self.clientMaxProtocol = clientMaxProtocol
+        self.expectedProtocol = expectedProtocol
+        self.minimumProbeProtocol = minimumProbeProtocol
     }
 
     public var detailCode: String? {
@@ -177,13 +132,11 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
     }
 
     public var detail: GatewayConnectAuthDetailCode? {
-        guard let detailCodeRaw else { return nil }
-        return GatewayConnectAuthDetailCode(rawValue: detailCodeRaw)
+        self.detailCodeRaw.flatMap(GatewayConnectAuthDetailCode.init(rawValue:))
     }
 
     public var recommendedNextStep: GatewayConnectRecoveryNextStep? {
-        guard let recommendedNextStepRaw else { return nil }
-        return GatewayConnectRecoveryNextStep(rawValue: recommendedNextStepRaw)
+        self.recommendedNextStepRaw.flatMap(GatewayConnectRecoveryNextStep.init(rawValue:))
     }
 
     public var errorDescription: String? {
@@ -238,16 +191,30 @@ public struct GatewayResponseError: LocalizedError, @unchecked Sendable {
     public let code: String
     public let message: String
     public let details: [String: AnyCodable]
+    public let retryable: Bool?
 
-    public init(method: String, code: String?, message: String?, details: [String: AnyCodable]?) {
+    public init(
+        method: String,
+        code: String?,
+        message: String?,
+        details: [String: AnyCodable]?,
+        retryable: Bool? = nil)
+    {
         self.method = method
         self.code = code?.trimmedNonEmpty ?? "GATEWAY_ERROR"
         self.message = message?.trimmedNonEmpty ?? "gateway error"
         self.details = details ?? [:]
+        self.retryable = retryable
     }
 
     public var detailsReason: String? {
         self.details["reason"]?.stringValue?.trimmedNonEmpty
+    }
+
+    /// The startup admission contract proves this exact request was not dispatched.
+    public var isRetryableStartupAdmissionRefusal: Bool {
+        self.method == "chat.send" && self.code == "UNAVAILABLE" && self.retryable == true &&
+            self.detailsReason == "startup-sidecars" && self.details["method"]?.stringValue == self.method
     }
 
     public var missingScopeDetails: GatewayMissingScopeErrorDetails? {
@@ -284,6 +251,26 @@ public struct GatewayResponseError: LocalizedError, @unchecked Sendable {
     public var errorDescription: String? {
         if self.code == "GATEWAY_ERROR" { return "\(self.method): \(self.message)" }
         return "\(self.method): [\(self.code)] \(self.message)"
+    }
+}
+
+/// The caller owns the pending turn until admission or cancellation. Each RPC keeps
+/// its ordinary deadline; only a method-bound startup refusal permits another attempt.
+public func withGatewayStartupAdmission<T>(
+    method: String,
+    isolation _: isolated (any Actor)? = #isolation,
+    operation: () async throws -> T) async throws -> T
+{
+    while true {
+        try Task.checkCancellation()
+        do {
+            return try await operation()
+        } catch let error as GatewayResponseError {
+            guard error.method == method, error.isRetryableStartupAdmissionRefusal else { throw error }
+            let hint = error.details["retryAfterMs"]?.doubleValue ?? 500
+            let delay = min(max(hint.isFinite ? hint : 500, 100), 2000)
+            try await Task.sleep(for: .milliseconds(delay))
+        }
     }
 }
 

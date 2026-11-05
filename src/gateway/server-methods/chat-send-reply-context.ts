@@ -5,7 +5,7 @@ import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-me
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sanitizeAssistantVisibleTextWithProfile } from "../../shared/text/assistant-visible-text.js";
-import { resolveAssistantIdentity } from "../assistant-identity.js";
+import { resolveAssistantIdentityName } from "../assistant-identity.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
 import {
   readSessionMessageByIdAsync,
@@ -112,7 +112,10 @@ export async function resolveChatSendReplyContext(
     // Hydrate only what webchat displays: project the stored message through the
     // same chat.history display normalization so envelope wrappers, runtime
     // context, tool payloads, and reasoning-only content stay out of the prompt.
-    const displayMessage = projectChatDisplayMessage(resolved.message);
+    const displayMessage = projectChatDisplayMessage(resolved.message, {
+      // Reply context uses the assistant identity below and discards forwarded sender labels.
+      resolveCronJobName: () => undefined,
+    });
     if (!displayMessage) {
       return fields;
     }
@@ -129,7 +132,7 @@ export async function resolveChatSendReplyContext(
     fields.ReplyToBody = truncateUtf16Safe(body, REPLY_CONTEXT_BODY_MAX_CHARS);
     fields.ReplyToSender =
       displayMessage.role === "assistant"
-        ? (await resolveAssistantIdentity({ cfg: params.cfg, agentId: params.agentId })).name
+        ? (await resolveAssistantIdentityName({ cfg: params.cfg, agentId: params.agentId })).name
         : params.userSenderLabel?.trim() || "User";
     return fields;
   } catch (err) {

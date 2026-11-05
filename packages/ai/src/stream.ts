@@ -21,54 +21,7 @@ import {
   supportsScopedAiTransportHosts,
   type AiTransportHost,
 } from "./host.js";
-import {
-  cleanupSessionResources as cleanupRegisteredSessionResources,
-  registerSessionResourceCleanupObserver,
-} from "./session-resources.js";
-
-type ActiveAiTransportHost = ReturnType<typeof getDefaultAiTransportHost>;
-type DefaultHostsBySession = Map<string | undefined, Set<ActiveAiTransportHost>>;
-
-const defaultHostSessionReferences = new Set<WeakRef<DefaultHostsBySession>>();
-const defaultHostSessionFinalizer = new FinalizationRegistry<WeakRef<DefaultHostsBySession>>(
-  (reference) => defaultHostSessionReferences.delete(reference),
-);
-
-function trackDefaultHostSessions(sessions: DefaultHostsBySession): void {
-  const reference = new WeakRef(sessions);
-  defaultHostSessionReferences.add(reference);
-  defaultHostSessionFinalizer.register(sessions, reference, reference);
-}
-
-registerSessionResourceCleanupObserver((sessionId, owner) => {
-  for (const reference of defaultHostSessionReferences) {
-    const sessions = reference.deref();
-    if (!sessions) {
-      defaultHostSessionReferences.delete(reference);
-      continue;
-    }
-    const pruneOwners = (owners: Set<ActiveAiTransportHost>) => {
-      if (owner) {
-        owners.delete(owner);
-      } else {
-        owners.clear();
-      }
-      return owners.size === 0;
-    };
-    if (sessionId) {
-      const owners = sessions.get(sessionId);
-      if (owners && pruneOwners(owners)) {
-        sessions.delete(sessionId);
-      }
-      continue;
-    }
-    for (const [ownedSessionId, owners] of sessions) {
-      if (pruneOwners(owners)) {
-        sessions.delete(ownedSessionId);
-      }
-    }
-  }
-});
+import { cleanupSessionResources as cleanupRegisteredSessionResources } from "./session-resources.js";
 
 function retainUnscopedStreamLifetime(
   stream: AssistantMessageEventStreamContract,
@@ -79,12 +32,10 @@ function retainUnscopedStreamLifetime(
     releaseLifetime = resolve;
   });
   void runWithHost(() => lifetime);
-  let released = false;
   let resultSettled = false;
   let bufferSettled = false;
   const releaseIfSettled = () => {
-    if (!released && resultSettled && bufferSettled) {
-      released = true;
+    if (resultSettled && bufferSettled) {
       releaseLifetime();
     }
   };
@@ -96,8 +47,6 @@ function retainUnscopedStreamLifetime(
   const bufferWaiters = new Set<() => void>();
   let bufferError: Error | undefined;
   let resultPromise: ReturnType<typeof result> | undefined;
-  const wrapIterationError = (error: unknown) =>
-    new Error("Stream iteration failed", { cause: error });
   const notifyBufferWaiters = () => {
     for (const resolve of bufferWaiters) {
       resolve();
@@ -112,16 +61,11 @@ function retainUnscopedStreamLifetime(
       } catch (error) {
         providerResult = Promise.reject(new Error("Stream result failed", { cause: error }));
       }
-      void providerResult.then(
-        () => {
-          resultSettled = true;
-          releaseIfSettled();
-        },
-        () => {
-          resultSettled = true;
-          releaseIfSettled();
-        },
-      );
+      const settleResult = () => {
+        resultSettled = true;
+        releaseIfSettled();
+      };
+      void providerResult.then(settleResult, settleResult);
       resultPromise = providerResult;
     }
     return resultPromise;
@@ -138,7 +82,7 @@ function retainUnscopedStreamLifetime(
         notifyBufferWaiters();
       }
     } catch (error) {
-      bufferError = wrapIterationError(error);
+      bufferError = new Error("Stream iteration failed", { cause: error });
     } finally {
       bufferSettled = true;
       notifyBufferWaiters();
@@ -195,42 +139,19 @@ function retainUnscopedStreamLifetime(
 function createRuntime(registry: ApiRegistry, transportHost?: Partial<AiTransportHost>) {
   const explicitHost =
     transportHost === undefined ? undefined : createAiTransportHost(transportHost);
-  const defaultHostsBySession = new Map<string | undefined, Set<ActiveAiTransportHost>>();
-  if (!explicitHost) {
-    trackDefaultHostSessions(defaultHostsBySession);
-  }
   const resolveRuntimeHost = () => explicitHost ?? getDefaultAiTransportHost();
-  const runWithHost = <T>(host: ActiveAiTransportHost, operation: () => T): T => {
-    // A normal runtime uses its current embedding owner, even when invoked from
-    // another runtime's callback. Do not capture the default during construction.
-    return runWithAiTransportHost(host, operation);
-  };
-  const startStream = (
-    start: () => AssistantMessageEventStreamContract,
-    sessionId?: string,
-  ): AssistantMessageEventStreamContract => {
+  const startStream = (start: () => AssistantMessageEventStreamContract) => {
     const host = resolveRuntimeHost();
-    if (!explicitHost) {
-      const hosts = defaultHostsBySession.get(sessionId) ?? new Set<ActiveAiTransportHost>();
-      hosts.add(host);
-      defaultHostsBySession.set(sessionId, hosts);
-    }
-    const runWithStreamHost = <T>(operation: () => T): T => runWithHost(host, operation);
+    const runWithStreamHost = <T>(operation: () => T): T => runWithAiTransportHost(host, operation);
     const started = runWithStreamHost(start);
     const completion = getEventStreamCompletion(started);
     const bound = bindAssistantMessageEventStream(started, runWithStreamHost);
     if (completion) {
       if (!supportsScopedAiTransportHosts()) {
         let producerSettled = false;
-        const observedCompletion = completion.then(
-          () => {
-            producerSettled = true;
-          },
-          (error: unknown) => {
-            producerSettled = true;
-            throw error;
-          },
-        );
+        const observedCompletion = completion.finally(() => {
+          producerSettled = true;
+        });
         void runWithStreamHost(() => observedCompletion);
         const result = runWithStreamHost(() => started.result());
         return bindAssistantMessageEventStream(
@@ -260,9 +181,8 @@ function createRuntime(registry: ApiRegistry, transportHost?: Partial<AiTranspor
     context: Context,
     options?: ProviderStreamOptions,
   ): AssistantMessageEventStreamContract {
-    return startStream(
-      () => resolveApiProvider(model.api).stream(model, context, options as StreamOptions),
-      options?.sessionId,
+    return startStream(() =>
+      resolveApiProvider(model.api).stream(model, context, options as StreamOptions),
     );
   }
 
@@ -279,10 +199,7 @@ function createRuntime(registry: ApiRegistry, transportHost?: Partial<AiTranspor
     context: Context,
     options?: SimpleStreamOptions,
   ): AssistantMessageEventStreamContract {
-    return startStream(
-      () => resolveApiProvider(model.api).streamSimple(model, context, options),
-      options?.sessionId,
-    );
+    return startStream(() => resolveApiProvider(model.api).streamSimple(model, context, options));
   }
 
   async function completeSimple<TApi extends Api>(
@@ -298,32 +215,13 @@ function createRuntime(registry: ApiRegistry, transportHost?: Partial<AiTranspor
       cleanupRegisteredSessionResources(sessionId);
       return;
     }
-    const usedHosts = new Set<ActiveAiTransportHost>();
-    if (!explicitHost) {
-      if (sessionId) {
-        for (const host of defaultHostsBySession.get(sessionId) ?? []) {
-          usedHosts.add(host);
-        }
-      } else {
-        for (const owners of defaultHostsBySession.values()) {
-          for (const host of owners) {
-            usedHosts.add(host);
-          }
-        }
-      }
-      usedHosts.add(getDefaultAiTransportHost());
-    }
-    const hosts = explicitHost ? [explicitHost] : [...usedHosts];
-    const errors: unknown[] = [];
-    for (const host of hosts) {
-      try {
-        runWithHost(host, () => cleanupRegisteredSessionResources(sessionId, host));
-      } catch (error) {
-        errors.push(error);
-      }
-    }
-    if (errors.length > 0) {
-      throw new AggregateError(errors, "Failed to cleanup runtime session resources");
+    const host = resolveRuntimeHost();
+    try {
+      runWithAiTransportHost(host, () => cleanupRegisteredSessionResources(sessionId, host));
+    } catch (error) {
+      throw new AggregateError([error], "Failed to cleanup runtime session resources", {
+        cause: error,
+      });
     }
   }
 

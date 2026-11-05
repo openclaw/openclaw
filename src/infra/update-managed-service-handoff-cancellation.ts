@@ -3,10 +3,8 @@ import { isDeepStrictEqual } from "node:util";
 import { executeSqliteQuerySync } from "./kysely-sync.js";
 import { managedCommandCustody } from "./update-managed-service-handoff-children.js";
 import {
-  createManagedHandoffLeaseDatabase,
   leaseQueries,
-  type LeaseRow,
-  type LeaseTable,
+  type createManagedHandoffLeaseDatabase,
   type ManagedUpdateLeaseDatabaseIdentity,
 } from "./update-managed-service-handoff-database.js";
 import type {
@@ -14,15 +12,22 @@ import type {
   ManagedHandoffParent,
 } from "./update-managed-service-handoff-lease-types.js";
 import {
+  managedHandoffOriginalGeneration,
   readManagedHandoffOriginalAdmission,
   readOriginalUpdateDependents,
   type ManagedHandoffOriginalAdmission,
 } from "./update-managed-service-handoff-original-owner.js";
 import type { createManagedHandoffProcessIdentityReader } from "./update-managed-service-handoff-process.js";
-import type { createManagedHandoffLeaseRows } from "./update-managed-service-handoff-rows.js";
+import {
+  managedHandoffLeaseRow,
+  type createManagedHandoffLeaseRows,
+} from "./update-managed-service-handoff-rows.js";
 import { parseManagedHandoffLeasePayload } from "./update-managed-service-handoff-schema.js";
 
-type CancellationDependencies = {
+type CancellationDependencies = Pick<
+  ReturnType<typeof createManagedHandoffLeaseRows>,
+  "row" | "handle" | "descendants" | "updateRow" | "deleteRow"
+> & {
   existingIdentity?: ManagedUpdateLeaseDatabaseIdentity;
   originalUpdateAdmissions: WeakMap<ManagedHandoffLease, ManagedHandoffOriginalAdmission>;
   withDatabase: ReturnType<typeof createManagedHandoffLeaseDatabase>;
@@ -31,15 +36,6 @@ type CancellationDependencies = {
   storedCurrent: (lease: ManagedHandoffParent, db: HandoffDatabase) => boolean;
   childAliases: (key: string, db: HandoffDatabase) => string[];
   canRelease: (lease: ManagedHandoffLease) => boolean;
-  row: ReturnType<typeof createManagedHandoffLeaseRows>["row"];
-  handle: (root: string, value: LeaseRow) => ManagedHandoffLease;
-  updateRow: (
-    db: HandoffDatabase,
-    lease: ManagedHandoffLease,
-    values: Pick<LeaseTable, "payload_json" | "updated_at"> &
-      Partial<Pick<LeaseTable, "install_root">>,
-  ) => boolean;
-  deleteRow: (db: HandoffDatabase, root: string, value: LeaseRow) => boolean;
   processState: ReturnType<typeof createManagedHandoffProcessIdentityReader>["processState"];
 };
 
@@ -55,6 +51,7 @@ export function createManagedHandoffCancellation(deps: CancellationDependencies)
     canRelease,
     row,
     handle,
+    descendants,
     updateRow,
     deleteRow,
     processState,
@@ -68,7 +65,7 @@ export function createManagedHandoffCancellation(deps: CancellationDependencies)
       release: (paired?: ManagedHandoffLease[]) => boolean;
     }
   >();
-  function cancelUpdate(original: ManagedHandoffLease, requestedRetained?: ManagedHandoffLease) {
+  function cancelUpdate(original: ManagedHandoffLease, retained?: ManagedHandoffLease) {
     const admission = readManagedHandoffOriginalAdmission(
       original,
       originalUpdateAdmissions,
@@ -79,7 +76,6 @@ export function createManagedHandoffCancellation(deps: CancellationDependencies)
       return null;
     }
     const lease = admission.original;
-    const retained = requestedRetained;
     if (
       retained &&
       (retained.key === lease.key ||
@@ -107,17 +103,6 @@ export function createManagedHandoffCancellation(deps: CancellationDependencies)
         ? previous
         : null;
     }
-    const descendants = (db: HandoffDatabase, parent: ManagedHandoffLease) => {
-      const prefix = `${parent.key}/.openclaw-update-child-`;
-      return executeSqliteQuerySync(
-        db,
-        leaseQueries(db)
-          .selectFrom("managed_update_handoffs")
-          .select(["install_root", "owner", "payload_json", "updated_at"])
-          .where("install_root", ">=", prefix)
-          .where("install_root", "<", prefix + "\uffff"),
-      ).rows;
-    };
     const nativeCommand = (child: ManagedHandoffLease, db: HandoffDatabase) => {
       // Pending spawns still need their live root generation to publish a late PID binding.
       if (
@@ -188,12 +173,7 @@ export function createManagedHandoffCancellation(deps: CancellationDependencies)
             helper: currentRow.helper,
             executor: currentRow.executor,
             action: currentRow.action,
-            cancellation: {
-              key: currentRow.key,
-              owner: currentRow.owner,
-              payload: currentRow.payload,
-              updatedAt: currentRow.updatedAt,
-            },
+            cancellation: managedHandoffOriginalGeneration(currentRow),
           });
           if (!parseManagedHandoffLeasePayload(payload)) {
             throw new Error("Original cancellation payload is invalid");
@@ -240,12 +220,10 @@ export function createManagedHandoffCancellation(deps: CancellationDependencies)
               paired.some(
                 (item) =>
                   item.version !== 2 ||
-                  !isDeepStrictEqual(item.mutationOriginal, {
-                    key: lease.key,
-                    owner: lease.owner,
-                    payload: lease.payload,
-                    updatedAt: lease.updatedAt,
-                  }) ||
+                  !isDeepStrictEqual(
+                    item.mutationOriginal,
+                    managedHandoffOriginalGeneration(lease),
+                  ) ||
                   !canRelease(item) ||
                   !storedCurrent(item, db) ||
                   descendants(db, item).length > 0 ||
@@ -259,13 +237,7 @@ export function createManagedHandoffCancellation(deps: CancellationDependencies)
               return false;
             }
             for (const generation of [...generations, ...paired]) {
-              if (
-                !deleteRow(db, generation.key, {
-                  owner: generation.owner,
-                  payload_json: generation.payload,
-                  updated_at: generation.updatedAt,
-                })
-              ) {
+              if (!deleteRow(db, generation.key, managedHandoffLeaseRow(generation))) {
                 // Roll back the paired release rather than commit half a settlement.
                 throw new Error("Original cancellation settlement changed");
               }
@@ -278,4 +250,67 @@ export function createManagedHandoffCancellation(deps: CancellationDependencies)
     return successor;
   }
   return cancelUpdate;
+}
+
+/** A dead original can no longer join and release its cancellation. Explicit
+ * repair settles exactly what that original fenced: the generations its process
+ * transitioned, rows bound to those generations, and their descendants. */
+export function readCancelledUpdateFamily(
+  db: HandoffDatabase,
+  origin: ManagedHandoffLease,
+  deps: Pick<CancellationDependencies, "handle" | "descendants"> & {
+    childAliases: (key: string, db: HandoffDatabase) => string[];
+  },
+): ManagedHandoffLease[] {
+  const rows = executeSqliteQuerySync(
+    db,
+    leaseQueries(db)
+      .selectFrom("managed_update_handoffs")
+      .select(["install_root", "owner", "payload_json", "updated_at"]),
+  ).rows.flatMap((row) => {
+    const payload = parseManagedHandoffLeasePayload(row.payload_json);
+    return payload ? [{ row, payload }] : [];
+  });
+  // One live process transitions the original and its retained service root
+  // together; their shared process identity is the only link between them.
+  const generations = rows.flatMap(({ row, payload }) =>
+    payload.version === 4 &&
+    isDeepStrictEqual(payload.helper, origin.helper) &&
+    isDeepStrictEqual(payload.executor, origin.executor)
+      ? [deps.handle(row.install_root, row)]
+      : [],
+  );
+  const cancelled = generations.flatMap((lease) =>
+    lease.version === 4 ? [lease.cancellation] : [],
+  );
+  const dependents = rows.flatMap(({ row, payload }) =>
+    payload.version === 2 &&
+    cancelled.some((generation) => isDeepStrictEqual(payload.mutationOriginal, generation))
+      ? [deps.handle(row.install_root, row)]
+      : [],
+  );
+  const roots = [...generations, ...dependents];
+  const family = new Map(roots.map((lease) => [lease.key, lease]));
+  for (const root of roots) {
+    for (const entry of deps.descendants(db, root)) {
+      family.set(entry.install_root, deps.handle(entry.install_root, entry));
+    }
+  }
+  for (const lease of family.values()) {
+    // Only update custody has process identities this repair can prove settled;
+    // an alias outside these roots belongs to custody it cannot see.
+    if (
+      lease.version === 3 ||
+      lease.action.kind !== "update" ||
+      deps.childAliases(lease.key, db).some((key) => !family.has(key))
+    ) {
+      throw new Error(
+        `Cancelled update custody includes unsupported custody at ${lease.key}; keep the handoff database and retained artifacts.`,
+      );
+    }
+  }
+  // Key order matches SQLite's binary ordering, independent of the host locale.
+  return [...family.values()].toSorted((left, right) =>
+    left.key < right.key ? -1 : left.key > right.key ? 1 : 0,
+  );
 }

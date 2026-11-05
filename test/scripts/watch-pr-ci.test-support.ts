@@ -4,6 +4,7 @@ import { delimiter, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { withTempDir } from "../../src/test-utils/temp-dir.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
+import { createIndependentPrFixtureEnv } from "./pr-wrapper.test-support.js";
 
 export const sha = "a".repeat(40);
 
@@ -14,6 +15,7 @@ export function runWatcher(
   clock: "poll" | "wall" | { readClock: string } = "poll",
   envOverrides: NodeJS.ProcessEnv = {},
   notifierPath?: string,
+  parentEnv: NodeJS.ProcessEnv = process.env,
 ) {
   const nodeExecPath = requireNodeTool("node");
   return withTempDir("openclaw-watch-pr-ci-", async (binDir) => {
@@ -30,7 +32,7 @@ export function runWatcher(
 import { syncBuiltinESMExports } from "node:module";
 import timers from "node:timers/promises";
 if (process.argv[1] === ${JSON.stringify(fileURLToPath(new URL("../../scripts/watch-pr-ci.mts", import.meta.url)))}) {
-  process.env.NODE_OPTIONS = ${JSON.stringify(process.env.NODE_OPTIONS ?? "")};
+  process.env.NODE_OPTIONS = ${JSON.stringify(parentEnv.NODE_OPTIONS ?? "")};
   const now = ${typeof clock === "object" ? `() => Number(readFileSync(${JSON.stringify(clock.readClock)}, "utf8"))` : clock === "wall" ? "Date.now" : "() => 0"};
   const nextTurn = timers.setImmediate;
   let waitedMs = 0;
@@ -72,10 +74,10 @@ if (process.argv[1] === ${JSON.stringify(fileURLToPath(new URL("../../scripts/wa
           {
             encoding: "utf8",
             env: {
-              ...process.env,
+              ...createIndependentPrFixtureEnv(parentEnv),
               ...envOverrides,
-              NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(clockPath).href}`,
-              PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+              NODE_OPTIONS: `${parentEnv.NODE_OPTIONS ?? ""} --import=${pathToFileURL(clockPath).href}`,
+              PATH: `${binDir}${delimiter}${parentEnv.PATH ?? ""}`,
             },
           },
           (error, stdout, stderr) => {

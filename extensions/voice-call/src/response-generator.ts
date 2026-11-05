@@ -1,25 +1,18 @@
-/**
- * Voice call response generator - uses the embedded OpenClaw agent for tool support.
- * Routes voice responses through the same agent infrastructure as messaging.
- */
-
 import crypto from "node:crypto";
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
-import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyModelOverrideWithAuthProfileCompatibility,
   ModelSelectionLockedError,
+  prepareAuthProfileProvider,
   resolvePersistedSessionRuntimeId,
 } from "openclaw/plugin-sdk/model-session-runtime";
 import { isValidAgentHarnessSessionStoreEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
-  asOptionalRecord,
-  filterStringEntries,
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { OpenClawPluginApi } from "../api.js";
 import { resolveVoiceCallSessionKey, type VoiceCallConfig } from "./config.js";
 import { resolveCallAgentId } from "./resolve-call-agent-id.js";
@@ -28,9 +21,7 @@ import { resolveVoiceResponseModel } from "./response-model.js";
 type VoiceResponseParams = {
   voiceConfig: VoiceCallConfig;
   coreConfig: OpenClawConfig;
-  /** Injected host agent runtime */
   agentRuntime: OpenClawPluginApi["runtime"]["agent"];
-  /** Call ID for session tracking */
   callId: string;
   /** Persisted call session key */
   sessionKey?: string;
@@ -39,19 +30,12 @@ type VoiceResponseParams = {
   /** Caller ownership prepared by the call boundary. */
   senderIsOwner: boolean | undefined;
   /** Agent frozen on the call record. */
-  agentId?: string;
+  agentId: string;
   /** Audible call transcript, used only for bounded first-turn opening context. */
   transcript: Array<{ speaker: "user" | "bot"; text: string }>;
   userMessage: string;
   /** Delivers completed reply blocks while post-turn work is still running. */
   onEarlyText?: (text: string) => Promise<boolean>;
-};
-
-type VoiceResponseResult = {
-  text: string | null;
-  /** Whether the complete response was handed to the transport before compaction. */
-  deliveredEarly: boolean;
-  error?: string;
 };
 
 type VoiceResponsePayload = {
@@ -76,10 +60,9 @@ const VOICE_OPENING_CONTEXT_HEADER = "[Audible call-opening context]";
 const VOICE_OPENING_CONTEXT_FOOTER = "[End audible call-opening context]";
 const VOICE_OPENING_TRUNCATION_MARKER = " [truncated]";
 
-function buildVoiceTurnPrompt(params: {
-  transcript: Array<{ speaker: "user" | "bot"; text: string }>;
-  userMessage: string;
-}): string {
+function buildVoiceTurnPrompt(
+  params: Pick<VoiceResponseParams, "transcript" | "userMessage">,
+): string {
   const lastEntry = params.transcript.at(-1);
   const history =
     lastEntry?.speaker === "user" && lastEntry.text === params.userMessage
@@ -135,6 +118,26 @@ function normalizeSpokenText(value: string): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
+const SPOKEN_CONTROL_CHARS = new RegExp(String.raw`[\u0000-\u001f]+`, "g");
+// Consume escape pairs together so a valid escaped backslash is never repaired twice.
+const JSON_ESCAPE_SEQUENCE = new RegExp(String.raw`\\(u[0-9a-fA-F]{4}|["\\/bfnrt]|[\s\S]?)`, "g");
+const VALID_JSON_ESCAPE_BODY = new RegExp(String.raw`^(?:u[0-9a-fA-F]{4}|["\\/bfnrt])$`);
+const SPOKEN_FIELD_DECLARATIONS = new RegExp(String.raw`"spoken"\s*:`, "gi");
+const INLINE_SPOKEN_FIELD = new RegExp(String.raw`"spoken"\s*:\s*"((?:[^"\\]|\\.)*)"`, "gi");
+
+function decodeInlineSpokenSegment(rawSegment: string): string | null {
+  // Literal control characters cannot appear in JSON strings; speech folds whitespace anyway.
+  const folded = rawSegment.replace(SPOKEN_CONTROL_CHARS, " ");
+  return (
+    safeParseJson<string>(`"${folded}"`) ??
+    safeParseJson<string>(
+      `"${folded.replace(JSON_ESCAPE_SEQUENCE, (sequence, body: string) =>
+        VALID_JSON_ESCAPE_BODY.test(body) ? sequence : body,
+      )}"`,
+    )
+  );
+}
+
 function tryParseSpokenJson(text: string): string | null {
   const candidates: string[] = [];
   const trimmed = text.trim();
@@ -155,56 +158,45 @@ function tryParseSpokenJson(text: string): string | null {
   }
 
   for (const candidate of candidates) {
-    try {
-      const parsed = JSON.parse(candidate) as { spoken?: unknown };
-      if (typeof parsed?.spoken !== "string") {
-        continue;
-      }
-      return normalizeSpokenText(parsed.spoken) ?? "";
-    } catch {
-      // Continue trying other candidates.
+    const parsed = safeParseJson<{ spoken?: unknown }>(candidate);
+    if (typeof parsed?.spoken !== "string") {
+      continue;
+    }
+    return normalizeSpokenText(parsed.spoken) ?? "";
+  }
+
+  const declaredSpokenFields = (trimmed.match(SPOKEN_FIELD_DECLARATIONS) ?? []).length;
+  if (declaredSpokenFields === 0) {
+    return null;
+  }
+  const segments: string[] = [];
+  let scannedSpokenFields = 0;
+  for (const match of trimmed.matchAll(INLINE_SPOKEN_FIELD)) {
+    scannedSpokenFields += 1;
+    const decoded = decodeInlineSpokenSegment(match[1] ?? "");
+    if (decoded === null) {
+      return null;
+    }
+    const normalized = normalizeSpokenText(decoded);
+    if (normalized) {
+      segments.push(normalized);
     }
   }
-
-  const inlineSpokenMatch = trimmed.match(/"spoken"\s*:\s*"((?:[^"\\]|\\.)*)"/i);
-  if (!inlineSpokenMatch) {
-    return null;
-  }
-
-  try {
-    const decoded = JSON.parse(`"${inlineSpokenMatch[1] ?? ""}"`) as string;
-    return normalizeSpokenText(decoded) ?? "";
-  } catch {
-    return null;
-  }
+  // Never let a later valid block conceal an unscannable earlier field.
+  return scannedSpokenFields === declaredSpokenFields ? segments.join(" ") : null;
 }
 
 function isLikelyMetaReasoningParagraph(paragraph: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(paragraph);
-  if (!lower) {
-    return false;
-  }
-
-  if (lower.startsWith("thinking process")) {
-    return true;
-  }
-  if (lower.startsWith("reasoning:") || lower.startsWith("analysis:")) {
-    return true;
-  }
-  if (
-    lower.startsWith("the user ") &&
-    (lower.includes("i should") || lower.includes("i need to") || lower.includes("i will"))
-  ) {
-    return true;
-  }
-  if (
+  return (
+    lower.startsWith("thinking process") ||
+    lower.startsWith("reasoning:") ||
+    lower.startsWith("analysis:") ||
+    (lower.startsWith("the user ") &&
+      (lower.includes("i should") || lower.includes("i need to") || lower.includes("i will"))) ||
     lower.includes("this is a natural continuation of the conversation") ||
     lower.includes("keep the conversation flowing")
-  ) {
-    return true;
-  }
-
-  return false;
+  );
 }
 
 function sanitizePlainSpokenText(text: string): string | null {
@@ -239,33 +231,13 @@ function extractSpokenTextFromPayloads(payloads: VoiceResponsePayload[]): string
       continue;
     }
 
-    const structured = tryParseSpokenJson(rawText);
-    if (structured !== null) {
-      if (structured.length > 0) {
-        spokenSegments.push(structured);
-      }
-      continue;
-    }
-
-    const plain = sanitizePlainSpokenText(rawText);
-    if (plain) {
-      spokenSegments.push(plain);
+    const spoken = tryParseSpokenJson(rawText) ?? sanitizePlainSpokenText(rawText);
+    if (spoken !== null) {
+      spokenSegments.push(spoken);
     }
   }
 
   return spokenSegments.length > 0 ? spokenSegments.join(" ").trim() : null;
-}
-
-async function deliverEarlyText(
-  callback: (text: string) => Promise<boolean>,
-  text: string,
-): Promise<boolean> {
-  try {
-    return await callback(text);
-  } catch (error) {
-    console.error("[voice-call] Early TTS delivery failed:", error);
-    return false;
-  }
 }
 
 function resolveVoiceSandboxSessionKey(agentId: string, sessionKey: string): string {
@@ -276,13 +248,7 @@ function resolveVoiceSandboxSessionKey(agentId: string, sessionKey: string): str
   return `agent:${agentId}:${trimmed}`;
 }
 
-/**
- * Generate a voice response using the embedded OpenClaw agent with full tool support.
- * Uses the same agent infrastructure as messaging for consistent behavior.
- */
-export async function generateVoiceResponse(
-  params: VoiceResponseParams,
-): Promise<VoiceResponseResult> {
+export async function generateVoiceResponse(params: VoiceResponseParams) {
   const {
     voiceConfig,
     callId,
@@ -291,30 +257,20 @@ export async function generateVoiceResponse(
     senderIsOwner,
     transcript,
     userMessage,
-    coreConfig,
+    coreConfig: cfg,
     agentRuntime,
     onEarlyText,
   } = params;
 
-  if (!coreConfig) {
-    return {
-      text: null,
-      deliveredEarly: false,
-      error: "Core config unavailable for voice response",
-    };
-  }
-  const cfg = coreConfig;
-  const agentId = resolveCallAgentId({ agentId: params.agentId }, voiceConfig);
+  const agentId = resolveCallAgentId(params);
 
   const resolvedSessionKey = resolveVoiceCallSessionKey({
     config: { ...voiceConfig, agentId },
     callId,
     phone: from,
     explicitSessionKey: sessionKey,
-    coreSession: coreConfig.session,
+    coreSession: cfg.session,
   });
-  const allow = asOptionalRecord(resolveAgentConfig(cfg, agentId)?.tools)?.allow;
-  const toolsAllow = Array.isArray(allow) ? filterStringEntries(allow) : undefined;
 
   const storePath = agentRuntime.session.resolveStorePath(cfg.session?.store, { agentId });
   try {
@@ -327,21 +283,25 @@ export async function generateVoiceResponse(
         await agentRuntime.ensureAgentWorkspace({ dir: workspaceDir });
 
         const now = Date.now();
-        const existingSessionEntry = agentRuntime.session.getSessionEntry({
+        let sessionEntry = await agentRuntime.session.getSessionEntryAsync({
           storePath,
           sessionKey: resolvedSessionKey,
         });
 
-        const { provider, model } = resolveVoiceResponseModel({ voiceConfig, agentRuntime });
+        const { provider, model } = resolveVoiceResponseModel({
+          cfg,
+          agentId,
+          voiceConfig,
+          agentRuntime,
+        });
         const configuredModel = resolveDefaultModelForAgent({ cfg, agentId });
 
-        let sessionEntry = existingSessionEntry;
         if (sessionEntry?.modelSelectionLocked === true && voiceConfig.responseModel) {
           throw new ModelSelectionLockedError();
         }
         if (!sessionEntry?.sessionId || voiceConfig.responseModel) {
           sessionEntry =
-            (await agentRuntime.session.patchSessionEntry({
+            (await agentRuntime.session.prepareSessionEntryPatch({
               storePath,
               sessionKey: resolvedSessionKey,
               replaceEntry: true,
@@ -349,7 +309,7 @@ export async function generateVoiceResponse(
                 sessionId: crypto.randomUUID(),
                 updatedAt: now,
               },
-              update: (entry) => {
+              prepare: async (entry) => {
                 const next = entry.sessionId
                   ? { ...entry }
                   : {
@@ -358,10 +318,15 @@ export async function generateVoiceResponse(
                       updatedAt: now,
                     };
                 if (voiceConfig.responseModel) {
+                  const profileId = entry.authProfileOverride?.trim();
+                  const recordedProvider = profileId
+                    ? await prepareAuthProfileProvider({ agentDir, profileId })
+                    : undefined;
                   applyModelOverrideWithAuthProfileCompatibility({
                     cfg,
                     agentDir,
                     entry: next,
+                    recordedProvider,
                     currentProvider:
                       entry.providerOverride?.trim() ||
                       entry.modelProvider?.trim() ||
@@ -414,6 +379,7 @@ export async function generateVoiceResponse(
         const blockReplyPayloads: VoiceResponsePayload[] = [];
         let latestToolBoundaryMessageIndex: number | undefined;
         let blockReplyBoundariesReliable = true;
+        // Whether the complete response was handed to the transport before compaction.
         let deliveredEarly = false;
         let lastFlushedText: string | null = null;
 
@@ -450,7 +416,6 @@ export async function generateVoiceResponse(
           extraSystemPrompt,
           agentDir,
           senderIsOwner,
-          toolsAllow,
           abortSignal,
           blockReplyBreak: "text_end",
           resolveReplyDelivery: async (minimumAssistantMessageIndex = 0) =>
@@ -497,20 +462,29 @@ export async function generateVoiceResponse(
               return;
             }
             lastFlushedText = text;
-            deliveredEarly = await deliverEarlyText(onEarlyText, text);
+            try {
+              deliveredEarly = await onEarlyText(text);
+            } catch (error) {
+              console.error("[voice-call] Early TTS delivery failed:", error);
+              deliveredEarly = false;
+            }
           },
         });
 
         const text =
-          extractSpokenTextFromPayloads((result.payloads ?? []) as VoiceResponsePayload[]) ??
+          extractSpokenTextFromPayloads(result.payloads ?? []) ??
           lastFlushedText ??
           extractSpokenTextFromPayloads(blockReplyPayloads);
 
-        if (!text && result.meta?.aborted) {
-          return { text: null, deliveredEarly: false, error: "Response generation was aborted" };
+        if (!text && (text === null || result.meta?.aborted)) {
+          return {
+            text: null,
+            deliveredEarly,
+            error: "Response generation produced no output",
+          };
         }
 
-        return { text, deliveredEarly };
+        return { text: text || null, deliveredEarly };
       },
     );
   } catch (err) {

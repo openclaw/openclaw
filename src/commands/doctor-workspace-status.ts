@@ -1,9 +1,4 @@
-import { note } from "../../packages/terminal-core/src/note.js";
-import {
-  listAgentIds,
-  resolveAgentWorkspaceDir,
-  tryResolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
@@ -12,7 +7,6 @@ import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugi
 import {
   resolvePluginVersionDriftRegistryLag,
   resolvePluginVersionDriftUpdateCommand,
-  type PluginVersionDriftReport,
   type PluginVersionRestartReadiness,
 } from "../plugins/plugin-version-drift.js";
 import {
@@ -20,12 +14,8 @@ import {
   buildPluginRegistrySnapshotReport,
 } from "../plugins/status.js";
 
-type NoteWorkspaceStatusOptions = {
-  pluginVersionReadiness?: PluginVersionRestartReadiness;
-  runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
-};
-
 const WORKSPACE_STATUS_CHECK_ID = "core/doctor/workspace-status";
+const PLUGIN_DIAGNOSTICS_DOCS = "https://docs.openclaw.ai/cli/plugins/inspect-and-diagnose#doctor";
 
 type WorkspacePluginDiagnostic = ReturnType<
   typeof buildPluginRegistrySnapshotReport
@@ -60,6 +50,8 @@ function pluginVersionReadinessToHealthFindings(
       {
         checkId: WORKSPACE_STATUS_CHECK_ID,
         severity: "warning",
+        category: "fix-now",
+        docsUrl: PLUGIN_DIAGNOSTICS_DOCS,
         message: `Could not check plugin restart readiness: ${readiness.reason}`,
         path: "plugins",
         requirement: "plugin-version-restart-readiness",
@@ -70,13 +62,19 @@ function pluginVersionReadinessToHealthFindings(
   }
   const { report: drift, runningGatewayVersion } = readiness;
   if (drift.drifts.length === 0) {
-    if (!isGatewayRestartPending(drift, runningGatewayVersion)) {
+    if (
+      !runningGatewayVersion ||
+      resolveOpenClawReleaseCohortVersion(runningGatewayVersion) ===
+        resolveOpenClawReleaseCohortVersion(drift.gatewayVersion)
+    ) {
       return [];
     }
     return [
       {
         checkId: WORKSPACE_STATUS_CHECK_ID,
         severity: "warning",
+        category: "fix-now",
+        docsUrl: PLUGIN_DIAGNOSTICS_DOCS,
         message: `Active official plugins match post-restart OpenClaw ${drift.gatewayVersion}, but the running Gateway is ${runningGatewayVersion}.`,
         path: "plugins",
         requirement: "plugin-version-gateway-restart",
@@ -90,21 +88,27 @@ function pluginVersionReadinessToHealthFindings(
       return {
         checkId: WORKSPACE_STATUS_CHECK_ID,
         severity: "info",
+        category: "recommended",
+        docsUrl: PLUGIN_DIAGNOSTICS_DOCS,
         message: `Plugin ${entry.pluginId} is ${entry.installedVersion} and its registry publishes no newer release (registry version ${registryLag.registryVersion}), but a Gateway restart will load OpenClaw ${drift.gatewayVersion}.${runningGatewayVersion ? ` The running Gateway is ${runningGatewayVersion}.` : ""} No plugin update can reach ${registryLag.expectedVersion}.`,
         path: `plugins.entries.${entry.pluginId}`,
         target: entry.pluginId,
         requirement: "plugin-version-drift",
+        fixHint:
+          "No plugin repair is available. Keep the current plugin and check its official registry for a compatible release before changing versions.",
       };
     }
     const updateCommand = resolvePluginVersionDriftUpdateCommand(entry);
     const targetResolution = entry.targetResolution;
     const targetError =
-      targetResolution?.status === "unresolved"
-        ? targetResolution.error
+      entry.targetResolution?.status === "unresolved"
+        ? entry.targetResolution.error
         : "npm registry target was not resolved";
     return {
       checkId: WORKSPACE_STATUS_CHECK_ID,
       severity: "warning",
+      category: "fix-now",
+      docsUrl: PLUGIN_DIAGNOSTICS_DOCS,
       message: `Plugin ${entry.pluginId} is ${entry.installedVersion}, but a Gateway restart will load OpenClaw ${drift.gatewayVersion}.${targetResolution?.status === "resolved" ? ` The confirmed plugin target is ${targetResolution.version}.` : ""}${runningGatewayVersion ? ` The running Gateway is ${runningGatewayVersion}.` : ""}${updateCommand ? "" : ` Repair target resolution failed: ${targetError}.`}`,
       path: `plugins.entries.${entry.pluginId}`,
       target: entry.pluginId,
@@ -116,35 +120,26 @@ function pluginVersionReadinessToHealthFindings(
   });
 }
 
-function isGatewayRestartPending(
-  drift: PluginVersionDriftReport,
-  runningGatewayVersion: string | undefined,
-): runningGatewayVersion is string {
-  return Boolean(
-    runningGatewayVersion &&
-    resolveOpenClawReleaseCohortVersion(runningGatewayVersion) !==
-      resolveOpenClawReleaseCohortVersion(drift.gatewayVersion),
-  );
-}
-
-function pluginCompatibilityWarningToHealthFinding(message: string): HealthFinding {
-  return {
-    checkId: WORKSPACE_STATUS_CHECK_ID,
-    severity: "warning",
-    message,
-    path: "plugins",
-    requirement: "plugin-compatibility",
-    fixHint: "Update or replace the plugin so it no longer depends on legacy compatibility paths.",
-  };
-}
-
 function pluginDiagnosticToHealthFinding(
   diagnostic: WorkspacePluginDiagnostic,
-  message = diagnostic.message,
+  message: string,
 ): HealthFinding {
   return {
     checkId: WORKSPACE_STATUS_CHECK_ID,
     severity: diagnostic.level === "warn" ? "warning" : diagnostic.level,
+    category:
+      diagnostic.level === "error" ||
+      diagnostic.code === "configured-plugin-path-unavailable" ||
+      diagnostic.code === "configured-plugin-path-inspection-failed" ||
+      diagnostic.code === "sdk-incompatible"
+        ? "fix-now"
+        : "recommended",
+    docsUrl: PLUGIN_DIAGNOSTICS_DOCS,
+    fixHint:
+      diagnostic.fixHint ??
+      (diagnostic.level === "error"
+        ? `Run openclaw plugins inspect ${diagnostic.pluginId ?? "--all"} --runtime to inspect the failure. Restore the configured plugin path or update the plugin, then rerun openclaw doctor.`
+        : "Run openclaw plugins inspect --all to review the named configuration or compatibility notice; update the affected plugin when a compatible release is available."),
     message,
     ...(diagnostic.pluginId
       ? { path: `plugins.entries.${diagnostic.pluginId}`, target: diagnostic.pluginId }
@@ -170,16 +165,14 @@ export function collectPluginLoadHealthFindings(
     );
 }
 
-function visitWorkspacePluginStatus(
+export function collectWorkspaceStatusHealthFindings(
   cfg: OpenClawConfig,
-  options: NoteWorkspaceStatusOptions,
-  visit: (status: {
-    agentLabel: string;
-    registry: ReturnType<typeof buildPluginRegistrySnapshotReport>;
-    compatibilityWarnings: string[];
-    diagnostics: WorkspacePluginDiagnostic[];
-  }) => void,
-) {
+  options: {
+    pluginVersionReadiness?: PluginVersionRestartReadiness;
+    runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
+  } = {},
+): HealthFinding[] {
+  const workspaceFindings: HealthFinding[] = [];
   const agentIds = listAgentIds(cfg);
   const scopes = agentIds.map((agentId) => ({
     agentId,
@@ -194,14 +187,41 @@ function visitWorkspacePluginStatus(
         workspaceDir,
         report: registry,
       });
-      visit({
-        agentLabel: agentIds.length > 1 ? `Agent "${agentId}":` : "",
-        registry,
-        compatibilityWarnings,
-        diagnostics: registry.diagnostics.filter((diagnostic) =>
-          claimPluginDiagnostic(reportedPluginDiagnostics, diagnostic),
+      const agentLabel = agentIds.length > 1 ? `Agent "${agentId}":` : "";
+      const diagnostics = [
+        ...registry.diagnostics,
+        ...registry.plugins
+          .filter(
+            (plugin) =>
+              plugin.status === "error" &&
+              !registry.diagnostics.some(
+                (diagnostic) => diagnostic.pluginId === plugin.id && diagnostic.level === "error",
+              ),
+          )
+          .map((plugin): WorkspacePluginDiagnostic => ({
+            level: "error",
+            pluginId: plugin.id,
+            source: plugin.source,
+            message: plugin.error ?? `Plugin ${plugin.id} metadata inspection failed.`,
+          })),
+      ].filter((diagnostic) => claimPluginDiagnostic(reportedPluginDiagnostics, diagnostic));
+      const prefix = agentLabel ? `${agentLabel} ` : "";
+      workspaceFindings.push(
+        ...compatibilityWarnings.map((message): HealthFinding => ({
+          checkId: WORKSPACE_STATUS_CHECK_ID,
+          severity: "warning",
+          docsUrl: PLUGIN_DIAGNOSTICS_DOCS,
+          message: `${prefix}${message}`,
+          path: "plugins",
+          category: "recommended",
+          requirement: "plugin-compatibility",
+          fixHint:
+            "Update or replace the plugin so it no longer depends on legacy compatibility paths.",
+        })),
+        ...diagnostics.map((diagnostic) =>
+          pluginDiagnosticToHealthFinding(diagnostic, `${prefix}${diagnostic.message}`),
         ),
-      });
+      );
     };
     if (options.runWithPluginMetadataSnapshot) {
       options.runWithPluginMetadataSnapshot({ config: cfg, workspaceDir }, inspect);
@@ -209,163 +229,9 @@ function visitWorkspacePluginStatus(
       inspect();
     }
   }
-  return scopes;
-}
-
-export function collectWorkspaceStatusHealthFindings(
-  cfg: OpenClawConfig,
-  options: NoteWorkspaceStatusOptions = {},
-): HealthFinding[] {
-  const workspaceFindings: HealthFinding[] = [];
-  visitWorkspacePluginStatus(cfg, options, ({ agentLabel, compatibilityWarnings, diagnostics }) => {
-    const prefix = agentLabel ? `${agentLabel} ` : "";
-    workspaceFindings.push(
-      ...compatibilityWarnings.map((message) =>
-        pluginCompatibilityWarningToHealthFinding(`${prefix}${message}`),
-      ),
-      ...diagnostics.map((diagnostic) =>
-        pluginDiagnosticToHealthFinding(diagnostic, `${prefix}${diagnostic.message}`),
-      ),
-    );
-  });
 
   return [
     ...pluginVersionReadinessToHealthFindings(options.pluginVersionReadiness),
     ...workspaceFindings,
   ];
-}
-
-function notePluginVersionReadiness(readiness: PluginVersionRestartReadiness | undefined) {
-  if (!readiness) {
-    return;
-  }
-  if (readiness.status === "unresolved") {
-    const running = readiness.runningGatewayVersion
-      ? `\nRunning Gateway: OpenClaw ${readiness.runningGatewayVersion}`
-      : "";
-    note(
-      `${readiness.reason}${running}\nRepair the Gateway service installation, then rerun openclaw doctor before restarting.`,
-      "Plugin restart readiness",
-    );
-    return;
-  }
-  const drift = readiness.report;
-  if (drift.drifts.length === 0) {
-    if (!isGatewayRestartPending(drift, readiness.runningGatewayVersion)) {
-      return;
-    }
-    note(
-      [
-        `Running Gateway: OpenClaw ${readiness.runningGatewayVersion}`,
-        `Active official plugins match post-restart OpenClaw ${drift.gatewayVersion}.`,
-        `Fix: ${formatCliCommand("openclaw gateway restart")}.`,
-      ].join("\n"),
-      "Plugin restart readiness",
-    );
-    return;
-  }
-  const singleDrift = drift.drifts.length === 1 ? drift.drifts[0] : undefined;
-  const repairs = drift.drifts.map((entry) => ({
-    entry,
-    command: resolvePluginVersionDriftUpdateCommand(entry),
-  }));
-  const updateCommands = repairs
-    .map(({ command }) => command)
-    .filter((command): command is string => Boolean(command))
-    .map((command) => formatCliCommand(command));
-  const registryLagRepairs = repairs.filter(({ entry }) =>
-    Boolean(resolvePluginVersionDriftRegistryLag(entry)),
-  );
-  const unresolvedRepairs = repairs.filter(
-    ({ entry, command }) => !command && !resolvePluginVersionDriftRegistryLag(entry),
-  );
-  const lines = [
-    ...(readiness.runningGatewayVersion
-      ? [`Running Gateway: OpenClaw ${readiness.runningGatewayVersion}`]
-      : []),
-    `${drift.drifts.length} active official plugin${
-      drift.drifts.length === 1 ? "" : "s"
-    } not on post-restart OpenClaw ${drift.gatewayVersion}`,
-    ...drift.drifts.map((entry) => {
-      const sourceLabel = entry.source === "clawhub" ? "clawhub" : "npm";
-      const expectedVersion =
-        entry.targetResolution?.status === "resolved"
-          ? entry.targetResolution.version
-          : drift.gatewayVersion;
-      return `- ${entry.pluginId}: ${entry.installedVersion} (${sourceLabel}) -> expected ${expectedVersion}`;
-    }),
-    ...registryLagRepairs.map(({ entry }) => {
-      const registryLag = resolvePluginVersionDriftRegistryLag(entry);
-      return `${entry.pluginId} already holds registry version ${registryLag?.registryVersion}; no release reaches ${registryLag?.expectedVersion} yet, so no update command applies.`;
-    }),
-    ...unresolvedRepairs.map(({ entry }) => {
-      const targetResolution = entry.targetResolution;
-      const detail =
-        targetResolution?.status === "unresolved"
-          ? targetResolution.error
-          : "npm registry target was not resolved";
-      return `Repair target resolution failed for ${entry.pluginId}: ${detail}. No install command generated.`;
-    }),
-    singleDrift && updateCommands.length === 1
-      ? `Fix: ${updateCommands[0]} && ${formatCliCommand("openclaw gateway restart")}.`
-      : updateCommands.length > 0
-        ? [
-            "Fix each drifted plugin:",
-            ...updateCommands.map((command) => `- ${command}`),
-            ...(unresolvedRepairs.length === 0
-              ? [`Then run ${formatCliCommand("openclaw gateway restart")}.`]
-              : []),
-          ].join("\n")
-        : null,
-  ];
-  note(
-    lines.filter((line): line is string => Boolean(line)).join("\n"),
-    "Plugin restart readiness",
-  );
-}
-
-export function noteWorkspaceStatus(cfg: OpenClawConfig, options: NoteWorkspaceStatusOptions = {}) {
-  const defaultAgentId = tryResolveDefaultAgentId(cfg);
-  const scopes = visitWorkspacePluginStatus(
-    cfg,
-    options,
-    ({ agentLabel, registry, compatibilityWarnings, diagnostics }) => {
-      const prefix = agentLabel ? `${agentLabel}\n` : "";
-      const errored = registry.plugins
-        .filter((plugin) => plugin.status === "error")
-        .toSorted((a, b) => a.id.localeCompare(b.id));
-      if (errored.length > 0) {
-        const lines = [
-          `${prefix}Errors: ${errored.length}`,
-          `- ${errored
-            .slice(0, 10)
-            .map((plugin) => plugin.id)
-            .join("\n- ")}${errored.length > 10 ? "\n- ..." : ""}`,
-        ];
-        note(lines.join("\n"), "Plugins");
-      }
-      if (compatibilityWarnings.length > 0) {
-        note(
-          `${prefix}${compatibilityWarnings.map((line) => `- ${line}`).join("\n")}`,
-          "Plugin compatibility",
-        );
-      }
-      if (diagnostics.length > 0) {
-        const lines = diagnostics.map((diag) => {
-          const level = diag.level.toUpperCase();
-          const plugin = diag.pluginId ? ` ${diag.pluginId}` : "";
-          const source = diag.source ? ` (${diag.source})` : "";
-          return `- ${level}${plugin}: ${diag.message}${source}`;
-        });
-        note(`${prefix}${lines.join("\n")}`, "Plugin diagnostics");
-      }
-    },
-  );
-  notePluginVersionReadiness(options.pluginVersionReadiness);
-
-  return {
-    workspaceDir:
-      scopes.find((scope) => scope.agentId === defaultAgentId)?.workspaceDir ??
-      scopes[0]?.workspaceDir,
-  };
 }

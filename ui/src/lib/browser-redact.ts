@@ -1,4 +1,3 @@
-// Browser-safe redaction for tool details rendered by the Control UI.
 import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -65,14 +64,12 @@ function redactMatch({ match, groups, input, offset }: RedactMatch): string {
   return `${match.slice(0, tokenOffset)}${masked}${match.slice(tokenOffset + token.length)}`;
 }
 
-function redactUrlQueryPairs(detail: string): string {
-  return detail.replace(URL_QUERY_PAIR_RE, (match, boundary: string, key: string, value: string) =>
-    isSensitiveUrlQueryParamName(key) ? `${boundary}${key}=${redactToken(value)}` : match,
-  );
-}
-
 export function redactToolDetail(detail: string): string {
-  let redacted = redactUrlQueryPairs(detail);
+  let redacted = detail.replace(
+    URL_QUERY_PAIR_RE,
+    (match, boundary: string, key: string, value: string) =>
+      isSensitiveUrlQueryParamName(key) ? `${boundary}${key}=${redactToken(value)}` : match,
+  );
   for (const pattern of SECRET_DETAIL_PATTERNS) {
     redacted = replaceRedactPattern(redacted, pattern, redactMatch);
   }
@@ -81,5 +78,3 @@ export function redactToolDetail(detail: string): string {
     redacted,
   );
 }
-
-export const redactToolPayloadText = redactToolDetail;

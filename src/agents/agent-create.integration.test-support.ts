@@ -1,23 +1,52 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
-import {
-  readAgentDeletionRecoveryHolds,
-  reconstructAgentDeletionJournal,
-} from "../state/agent-deletion-journal-recovery.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { reconstructAgentDeletionJournal } from "../state/agent-deletion-journal-recovery.js";
+import { readAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.kernel.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import {
   openOpenClawStateDatabase,
+  closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { nodeFilePath } from "../test-utils/node-file-path.js";
-import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+
+export async function createAgentTestState(
+  label: string,
+  options: Parameters<typeof createOpenClawTestState>[0] = {},
+  beforeCleanup = () => {
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+  },
+) {
+  const state = await createOpenClawTestState({ scenario: "minimal", label, ...options });
+  onTestFinished(async () => {
+    beforeCleanup();
+    await state.cleanup();
+  });
+  const readConfig = () => fs.readFile(state.configPath, "utf8");
+  return Object.assign(state, {
+    readConfig,
+    readJsonConfig: async (): Promise<OpenClawConfig> => JSON.parse(await readConfig()),
+  });
+}
+
+export async function expectMissing(...paths: string[]) {
+  for (const file of paths) {
+    await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+}
 
 export async function prepareRecoveryHolds(
   state: OpenClawTestState,
@@ -29,17 +58,10 @@ export async function prepareRecoveryHolds(
   ],
 ) {
   for (const target of held) {
+    const key = `agent:${target.agentId}:main`;
+    const entry = { sessionId: `preserved-${target.agentId}`, updatedAt: 1 };
     runOpenClawAgentWriteTransaction(
-      (database) =>
-        writeSessionEntry(
-          database,
-          `agent:${target.agentId}:main`,
-          {
-            sessionId: `preserved-${target.agentId}`,
-            updatedAt: 1,
-          },
-          { previousEntry: null },
-        ),
+      (database) => writeSessionEntry(database, key, entry, { previousEntry: null }),
       { ...target, env: state.env },
     );
   }
@@ -54,14 +76,16 @@ export async function prepareRecoveryHolds(
   return {
     held,
     bytes: await Promise.all(held.map((target) => fs.readFile(target.path))),
+    readBytes: () => Promise.all(held.map((target) => fs.readFile(target.path))),
     readHolds: () => readAgentDeletionRecoveryHolds(openOpenClawStateDatabase({ env: state.env })),
   };
 }
 
+type PreparationPhase = "workspace" | "workspace-write" | "config";
 export function installWorkspacePreparationPause(
   workspace: string,
-  phase: "workspace" | "workspace-write" | "config",
-  pause: (phase: "workspace" | "workspace-write" | "config") => Promise<void>,
+  phase: PreparationPhase,
+  pause: (phase: PreparationPhase) => Promise<void>,
 ): () => void {
   const nativeModeEnv = captureEnv(["FS_SAFE_NATIVE_MODE"]);
   if (phase === "workspace-write") {

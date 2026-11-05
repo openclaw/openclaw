@@ -1,4 +1,5 @@
 // Voice Call tests cover twilio plugin behavior.
+import { createHmac } from "node:crypto";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -11,6 +12,7 @@ vi.mock("./shared/guarded-json-api.js", async (importOriginal) => ({
   guardedJsonApiRequest: guardedJsonApiRequestMock,
 }));
 
+import { normalizeVoiceCallConfig } from "../config.js";
 import type { WebhookContext } from "../types.js";
 import { TwilioProvider } from "./twilio.js";
 import { TwilioApiError } from "./twilio/api.js";
@@ -165,6 +167,130 @@ function configureTelephonyTwiMlFallback(params: { providerCallId: string; strea
 }
 
 describe("TwilioProvider", () => {
+  it.each(["leave-message", "hang-up"] as const)(
+    "requests asynchronous AMD for %s and parses its dedicated callback",
+    async (onMachine) => {
+      const provider = createProvider();
+      const apiRequest = createApiRequestMock(async () => ({ sid: "CA-amd", status: "queued" }));
+      (provider as unknown as { apiRequest: TwilioApiRequest }).apiRequest = apiRequest;
+      await provider.initiateCall({
+        callId: "call-amd",
+        from: "+14155550100",
+        to: "+14155550123",
+        webhookUrl: "https://example.ngrok.app/voice/webhook",
+        voicemail: normalizeVoiceCallConfig({
+          voicemail: {
+            detection: "twilio",
+            onMachine,
+            ...(onMachine === "hang-up"
+              ? {
+                  machineDetectionSpeechThresholdMs: 5500,
+                  machineDetectionSpeechEndThresholdMs: 1500,
+                  machineDetectionSilenceTimeoutMs: 8000,
+                  machineDetectionTimeoutMs: 59000,
+                }
+              : {}),
+          },
+        }).voicemail,
+      });
+      const body = new URLSearchParams(apiRequest.mock.calls[0]?.[1] as Record<string, string>);
+      expect(body.get("MachineDetection")).toBe(
+        onMachine === "leave-message" ? "DetectMessageEnd" : "Enable",
+      );
+      expect(body.get("AsyncAmd")).toBe("true");
+      expect(body.get("AsyncAmdStatusCallback")).toBe(
+        "https://example.ngrok.app/voice/webhook?callId=call-amd&type=amd",
+      );
+      expect(body.get("AsyncAmdStatusCallbackMethod")).toBe("POST");
+      expect(body.get("MachineDetectionSpeechThreshold")).toBe(
+        onMachine === "hang-up" ? "5500" : "6000",
+      );
+      expect(body.get("MachineDetectionSpeechEndThreshold")).toBe(
+        onMachine === "hang-up" ? "1500" : "1200",
+      );
+      expect(body.get("MachineDetectionSilenceTimeout")).toBe(
+        onMachine === "hang-up" ? "8000" : "5000",
+      );
+      expect(body.get("MachineDetectionTimeout")).toBe(onMachine === "hang-up" ? "59" : "30");
+      provider.setPublicUrl("https://example.ngrok.app/voice/webhook");
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        for (const answeredBy of ["machine_start", "machine_end_other"]) {
+          const callbackUrl = expectDefined(body.get("AsyncAmdStatusCallback"), "AMD callback URL");
+          const rawBody = `CallSid=CA-amd&AnsweredBy=${answeredBy}`;
+          const signature = createHmac("sha1", "secret")
+            .update(`${callbackUrl}AnsweredBy${answeredBy}CallSidCA-amd`)
+            .digest("base64");
+          const context: WebhookContext = {
+            ...createContext(rawBody, { callId: "call-amd", type: "amd" }),
+            url: callbackUrl,
+            headers: { "x-twilio-signature": signature },
+          };
+          const verification = provider.verifyWebhook(context);
+          expect(verification.ok).toBe(true);
+          const result = provider.parseWebhookEvent(context, {
+            verifiedRequestKey: verification.verifiedRequestKey,
+          });
+          expect(result.events).toMatchObject([
+            { type: "call.amd", callId: "call-amd", answeredBy },
+          ]);
+          expect(result.providerResponseBody).toBe(
+            '<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+          );
+        }
+        expect(log.mock.calls.map(([message]) => message)).toEqual([
+          expect.stringMatching(
+            /^\[voice-call\] AMD classification callId=call-amd answeredBy=machine_start at=\d+$/,
+          ),
+          expect.stringMatching(
+            /^\[voice-call\] AMD classification callId=call-amd answeredBy=machine_end_other at=\d+$/,
+          ),
+        ]);
+      } finally {
+        log.mockRestore();
+      }
+    },
+  );
+
+  it("preserves terminal status callbacks carrying AnsweredBy", () => {
+    const provider = createProvider();
+    const result = provider.parseWebhookEvent(
+      createContext("CallSid=CA-finished&CallStatus=completed&AnsweredBy=machine_end_beep", {
+        callId: "finished",
+        type: "status",
+      }),
+    );
+    expect(result.events).toMatchObject([
+      { type: "call.ended", reason: "completed", answeredBy: "machine_end_beep" },
+    ]);
+  });
+
+  it("normalizes an initial inbound request without CallStatus for manager admission", () => {
+    const provider = createProvider();
+    const result = provider.parseWebhookEvent(
+      createContext("CallSid=CA-inbound&Direction=inbound&From=%2B15550000002&To=%2B15550000000"),
+    );
+    expect(result.events).toMatchObject([
+      { type: "call.initiated", providerCallId: "CA-inbound", direction: "inbound" },
+    ]);
+    expect(provider.parseWebhookEvent(createContext("Direction=inbound")).events).toEqual([]);
+  });
+
+  it("leaves carrier voicemail with Say followed by Hangup and no speech gather", async () => {
+    const provider = createProvider();
+    const apiRequest = createApiRequestMock();
+    (provider as unknown as { apiRequest: TwilioApiRequest }).apiRequest = apiRequest;
+    await provider.playMessageAndHangup({
+      callId: "voicemail",
+      providerCallId: "CA-message",
+      text: "Call back about A&B.",
+    });
+    const [endpoint, params] = expectDefined(apiRequest.mock.calls[0], "voicemail API request");
+    expect(endpoint).toBe("/Calls/CA-message.json");
+    expect(params.Twiml).toMatch(/<Say[^>]*>Call back about A&amp;B.<\/Say>\s*<Hangup\/>/);
+    expect(params.Twiml).not.toContain("<Gather");
+  });
+
   it("redacts turnToken query params from failed verification warnings", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -360,41 +486,34 @@ describe("TwilioProvider", () => {
     expect(secondBody).not.toContain("hold-queue");
   });
 
-  it("cleans up active inbound call on completed status callback", () => {
-    const provider = createProvider();
-    const firstInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA411");
-    const completed = createContext("CallStatus=completed&Direction=inbound&CallSid=CA411", {
-      type: "status",
-    });
-    const nextInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA422");
+  it.each([
+    ["completed", "CA411", "MZ411", "CA422"],
+    ["canceled", "CA511", "MZ511", "CA522"],
+  ])(
+    "cleans up active inbound call on %s status callback",
+    (status, firstCall, stream, nextCall) => {
+      const provider = createProvider();
+      const firstInbound = createContext(
+        `CallStatus=ringing&Direction=inbound&CallSid=${firstCall}`,
+      );
+      const terminal = createContext(
+        `CallStatus=${status}&Direction=inbound&CallSid=${firstCall}`,
+        {
+          type: "status",
+        },
+      );
+      const nextInbound = createContext(`CallStatus=ringing&Direction=inbound&CallSid=${nextCall}`);
 
-    provider.parseWebhookEvent(firstInbound);
-    provider.registerCallStream("CA411", "MZ411");
-    provider.parseWebhookEvent(completed);
-    const nextResult = provider.parseWebhookEvent(nextInbound);
+      provider.parseWebhookEvent(firstInbound);
+      provider.registerCallStream(firstCall, stream);
+      provider.parseWebhookEvent(terminal);
+      const nextResult = provider.parseWebhookEvent(nextInbound);
 
-    const nextBody = requireResponseBody(nextResult.providerResponseBody);
-    expectStreamingTwiml(nextBody);
-    expect(nextBody).not.toContain("hold-queue");
-  });
-
-  it("cleans up active inbound call on canceled status callback", () => {
-    const provider = createProvider();
-    const firstInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA511");
-    const canceled = createContext("CallStatus=canceled&Direction=inbound&CallSid=CA511", {
-      type: "status",
-    });
-    const nextInbound = createContext("CallStatus=ringing&Direction=inbound&CallSid=CA522");
-
-    provider.parseWebhookEvent(firstInbound);
-    provider.registerCallStream("CA511", "MZ511");
-    provider.parseWebhookEvent(canceled);
-    const nextResult = provider.parseWebhookEvent(nextInbound);
-
-    const nextBody = requireResponseBody(nextResult.providerResponseBody);
-    expectStreamingTwiml(nextBody);
-    expect(nextBody).not.toContain("hold-queue");
-  });
+      const nextBody = requireResponseBody(nextResult.providerResponseBody);
+      expectStreamingTwiml(nextBody);
+      expect(nextBody).not.toContain("hold-queue");
+    },
+  );
 
   it("releases all provider call state on terminal callbacks and late replays", () => {
     const provider = createProvider();
@@ -589,18 +708,6 @@ describe("TwilioProvider", () => {
     expect(provider.parseWebhookEvent(createContext(body)).events).toEqual([]);
   });
 
-  it("does not coerce partial Twilio speech confidence values", () => {
-    const provider = createProvider();
-    const ctx = createContext("CallSid=CA223&Direction=inbound&SpeechResult=hello&Confidence=0.2x");
-
-    const event = provider.parseWebhookEvent(ctx).events[0];
-    const parsed = requireEvent(event, "expected speech event from Twilio webhook");
-    if (parsed.type !== "call.speech") {
-      throw new Error("expected speech event from Twilio webhook");
-    }
-    expect(parsed.confidence).toBe(0.9);
-  });
-
   it("fails when an active stream exists but telephony TTS is unavailable", async () => {
     const { provider, apiRequest } = configureTelephonyTwiMlFallback({
       providerCallId: "CA-stream",
@@ -635,31 +742,47 @@ describe("TwilioProvider", () => {
     expect(params.Twiml).toContain("<Say");
   });
 
-  it("retries TwiML fallback when Twilio briefly rejects a live-call update as not in progress", async () => {
+  it.each([
+    {
+      name: "retries TwiML fallback when Twilio briefly rejects a live-call update as not in progress",
+      providerCallId: "CA-race-play",
+      operation: "playTts",
+      run: (provider: TwilioProvider) =>
+        provider.playTts({
+          callId: "call-race-play",
+          providerCallId: "CA-race-play",
+          text: "Hello after race",
+        }),
+    },
+    {
+      name: "retries startListening when Twilio briefly rejects a live-call update as not in progress",
+      providerCallId: "CA-race-listen",
+      operation: "startListening",
+      run: (provider: TwilioProvider) =>
+        provider.startListening({
+          callId: "call-race-listen",
+          providerCallId: "CA-race-listen",
+        }),
+    },
+  ])("$name", async ({ providerCallId, operation, run }) => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const { provider, apiRequest } = configureTelephonyTwiMlFallback({
-        providerCallId: "CA-race-play",
-      });
+      const { provider, apiRequest } = configureTelephonyTwiMlFallback({ providerCallId });
       apiRequest.mockRejectedValueOnce(createTwilioCallStateRaceError()).mockResolvedValueOnce({});
 
-      const playback = provider.playTts({
-        callId: "call-race-play",
-        providerCallId: "CA-race-play",
-        text: "Hello after race",
-      });
+      const pending = run(provider);
       await Promise.resolve();
       expect(apiRequest).toHaveBeenCalledTimes(1);
 
       await vi.advanceTimersByTimeAsync(250);
-      await expect(playback).resolves.toBeUndefined();
+      await expect(pending).resolves.toBeUndefined();
 
       expect(apiRequest).toHaveBeenCalledTimes(2);
-      expectApiRequestEndpoint(apiRequest, 0, "/Calls/CA-race-play.json");
-      expectApiRequestEndpoint(apiRequest, 1, "/Calls/CA-race-play.json");
+      expectApiRequestEndpoint(apiRequest, 0, `/Calls/${providerCallId}.json`);
+      expectApiRequestEndpoint(apiRequest, 1, `/Calls/${providerCallId}.json`);
       expect(warn).toHaveBeenCalledWith(
-        "[voice-call] Twilio playTts update hit call state race (21220); retrying in 250ms",
+        `[voice-call] Twilio ${operation} update hit call state race (21220); retrying in 250ms`,
       );
     } finally {
       warn.mockRestore();
@@ -686,37 +809,6 @@ describe("TwilioProvider", () => {
     expect(params.Twiml).toContain('<Play digits="ww123#"');
     expect(params.Twiml).toContain("<Redirect");
     expect(params.Twiml).toContain("https://example.ngrok.app/voice/twilio");
-  });
-
-  it("retries startListening when Twilio briefly rejects a live-call update as not in progress", async () => {
-    vi.useFakeTimers();
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const { provider, apiRequest } = configureTelephonyTwiMlFallback({
-        providerCallId: "CA-race-listen",
-      });
-      apiRequest.mockRejectedValueOnce(createTwilioCallStateRaceError()).mockResolvedValueOnce({});
-
-      const listening = provider.startListening({
-        callId: "call-race-listen",
-        providerCallId: "CA-race-listen",
-      });
-      await Promise.resolve();
-      expect(apiRequest).toHaveBeenCalledTimes(1);
-
-      await vi.advanceTimersByTimeAsync(250);
-      await expect(listening).resolves.toBeUndefined();
-
-      expect(apiRequest).toHaveBeenCalledTimes(2);
-      expectApiRequestEndpoint(apiRequest, 0, "/Calls/CA-race-listen.json");
-      expectApiRequestEndpoint(apiRequest, 1, "/Calls/CA-race-listen.json");
-      expect(warn).toHaveBeenCalledWith(
-        "[voice-call] Twilio startListening update hit call state race (21220); retrying in 250ms",
-      );
-    } finally {
-      warn.mockRestore();
-      vi.useRealTimers();
-    }
   });
 
   it("ignores stale stream unregister requests that do not match current stream SID", () => {

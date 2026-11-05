@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 
@@ -36,9 +36,8 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 describe("Gateway allowlist command", () => {
   it("surfaces a pairing-store read failure through chat.send", { timeout: 90_000 }, async () => {
     const envSnapshot = captureEnv([...ENV_KEYS]);
-    // The native method needs its receiver when restored and called from the fault wrapper.
-    // oxlint-disable-next-line typescript/unbound-method
-    const originalPrepare = DatabaseSync.prototype.prepare;
+    const originalRead = stateReads.executeExistingOpenClawStateRead;
+    const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
     let faultArmed = false;
     let faultObserved = false;
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
@@ -107,18 +106,20 @@ describe("Gateway allowlist command", () => {
         },
       });
 
-      DatabaseSync.prototype.prepare = function prepareWithAllowlistReadFailure(sql) {
+      // Pairing reads run in a worker; inject the failure at that existing boundary.
+      read.mockImplementation(async (...args) => {
+        const request = args[1];
         if (
           faultArmed &&
-          sql.includes("channel_pairing_allow_entries") &&
-          (new Error().stack ?? "").includes("commands-allowlist")
+          request.type === "pairing.allowFrom" &&
+          request.input.channel === "telegram"
         ) {
           faultArmed = false;
           faultObserved = true;
           throw new Error("injected pairing-store read failure");
         }
-        return originalPrepare.call(this, sql);
-      };
+        return originalRead(...args);
+      });
       faultArmed = true;
 
       await gateway.client.request("chat.send", {
@@ -143,7 +144,7 @@ describe("Gateway allowlist command", () => {
       if (finalTimeout) {
         clearTimeout(finalTimeout);
       }
-      DatabaseSync.prototype.prepare = originalPrepare;
+      read.mockRestore();
       if (gateway) {
         await disconnectGatewayClient(gateway.client).catch(() => undefined);
         await gateway.server.close().catch(() => undefined);

@@ -1,8 +1,9 @@
+import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import { t } from "../../i18n/index.ts";
+import { readBlobAsDataUrl } from "../../lib/blob-data-url.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   outboxPayloadTab,
-  observeOutboxRecoveryOwner,
   readOutboxPayload,
   removeOutboxPayloads,
   writeOutboxPayload,
@@ -12,18 +13,12 @@ import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts
 import { storageTargetForGateway, type ChatComposerScope } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
-import {
-  captureDurableChatAttachments,
-  readBlobAsDataUrl,
-} from "./durable-composer-persistence.ts";
+import { captureDurableChatAttachments } from "./durable-composer-persistence.ts";
 
 type Host = ChatComposerScope & { sessionKey?: string };
 type PayloadUpdate = Pick<ChatQueueItem, "attachments" | "attachmentPayload"> & {
   attachmentStorageError?: undefined;
-} & (
-    | { sendState: "unconfirmed" | "held"; sendError: string }
-    | { sendState?: never; sendError?: never }
-  );
+};
 type PayloadResult =
   | { status: "ready"; update: PayloadUpdate }
   | { status: "failed"; reason: OutboxPayloadFailure };
@@ -35,19 +30,15 @@ export function outboxPayloadError(reason: OutboxPayloadFailure): string {
 }
 
 export function failOutboxPayload(item: ChatQueueItem, reason: OutboxPayloadFailure) {
-  const attempted =
-    (item.sendAttempts ?? 0) > 0 ||
-    item.sendRequestStartedAtMs !== undefined ||
-    item.sendState === "unconfirmed";
+  const awaitingDelivery =
+    item.sendState !== "failed" &&
+    ((item.sendAttempts ?? 0) > 0 || item.sendRequestStartedAtMs !== undefined);
   return {
     ...item,
     attachmentStorageError: reason,
+    // Missing local bytes cannot settle an earlier transport attempt or release its FIFO slot.
     sendState:
-      item.sendState === "held"
-        ? ("held" as const)
-        : attempted
-          ? ("unconfirmed" as const)
-          : ("failed" as const),
+      item.sendState === "held" || awaitingDelivery ? ("held" as const) : ("failed" as const),
     sendError: outboxPayloadError(reason),
   };
 }
@@ -66,12 +57,12 @@ export function captureOutboxPayloadOwner(
 ): () => boolean {
   const client = host.client;
   const gateway = host.settings?.gatewayUrl;
-  const recoveryScope = observeOutboxRecoveryOwner(host);
+  const recoveryScope = readOfflineStorageScope(host);
   const incognito = isIncognitoComposerScope(host, scope);
   return () =>
     host.client === client &&
     host.settings?.gatewayUrl === gateway &&
-    observeOutboxRecoveryOwner(host) === recoveryScope &&
+    readOfflineStorageScope(host) === recoveryScope &&
     isIncognitoComposerScope(host, scope) === incognito;
 }
 
@@ -91,7 +82,7 @@ async function preparePayload(
       ? { status: "failed", reason: "unavailable" }
       : { status: "ready", update: {} };
   }
-  const recoveryScope = observeOutboxRecoveryOwner(host);
+  const recoveryScope = readOfflineStorageScope(host);
   if (!recoveryScope) {
     return { status: "failed", reason: "unavailable" };
   }
@@ -162,15 +153,13 @@ async function preparePayload(
           await removeOutboxPayloads([copy.value]);
           return { status: "failed", reason: "unavailable" };
         }
-        // A duplicate tab carries the same submission, never a fresh send. It
-        // owns its copied bytes, but needs explicit review before retrying.
+        // A duplicate tab keeps the original submission ID; server admission
+        // deduplicates its retry while each tab owns its attachment bytes.
         return {
           status: "ready",
           update: {
             ...update,
             attachmentPayload: copy.value,
-            sendState: item.sendState === "held" ? "held" : "unconfirmed",
-            sendError: t("chat.sendErrors.outboxPayloadCopied"),
           },
         };
       }
@@ -212,7 +201,7 @@ export async function prepareOutboxPayload(
 ): Promise<PayloadResult> {
   const reference = item.attachmentPayload;
   const scope = payloadScope(host, item);
-  if (!reference || isIncognitoComposerScope(host, scope) || !observeOutboxRecoveryOwner(host)) {
+  if (!reference || isIncognitoComposerScope(host, scope) || !readOfflineStorageScope(host)) {
     return preparePayload(host, item, purpose);
   }
   const key = JSON.stringify([
@@ -222,7 +211,7 @@ export async function prepareOutboxPayload(
     reference.recoveryScope,
     scope,
     host.settings?.gatewayUrl,
-    observeOutboxRecoveryOwner(host),
+    readOfflineStorageScope(host),
     purpose,
     item.attachments?.map(({ mimeType, fileName, sizeBytes, origin }) => [
       mimeType,

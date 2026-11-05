@@ -1,8 +1,14 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createNativeMcpRuntime } from "./native-mcp-app.js";
+import { CodexAppServerScopedRequestRejectedError } from "./rpc-error.js";
 import { createClientHarness } from "./test-support.js";
 
 const clients: ReturnType<typeof createClientHarness>["client"][] = [];
+const responses = {
+  tool: { method: "mcpServer/tool/call", result: { content: [] } },
+  catalog: { method: "mcpServerStatus/list", result: { data: [] } },
+  resource: { method: "mcpServer/resource/read", result: { contents: [] } },
+};
 afterEach(() => {
   for (const client of clients.splice(0)) {
     client.close();
@@ -28,36 +34,26 @@ it.each([
     vi.spyOn(Math, "random").mockReturnValue(0);
     const harness = createClientHarness();
     clients.push(harness.client);
-    let ownerCurrent = true;
-    let grantCurrent = true;
+    const revocationError = new Error(`App ${revoke} revoked`);
+    const authority = { owner: true, grant: true };
+    const guard = (kind: keyof typeof authority) => () => {
+      if (!authority[kind]) {
+        throw revocationError;
+      }
+    };
     const runtime = createNativeMcpRuntime({
       client: harness.client,
       threadId: "app-thread",
       originCallId: "app-origin",
       attempt: { sessionId: "app-session", workspaceDir: "/workspace" },
-      assertCurrent: () => {
-        if (!ownerCurrent) {
-          throw new Error("App owner revoked");
-        }
-      },
+      assertCurrent: guard("owner"),
     });
     if (!runtime.readResource) {
       throw new Error("Native MCP resource reads are unavailable");
     }
     const request =
       operation === "tool"
-        ? runtime.callTool(
-            "sample",
-            "save",
-            {},
-            {
-              assertCurrent: () => {
-                if (!grantCurrent) {
-                  throw new Error("App grant revoked");
-                }
-              },
-            },
-          )
+        ? runtime.callTool("sample", "save", {}, { assertCurrent: guard("grant") })
         : operation === "catalog"
           ? runtime.getCatalog()
           : runtime.readResource("sample", "ui://sample/app.html");
@@ -71,20 +67,15 @@ it.each([
       throw new Error("The admitted App request did not reach the native transport");
     }
     const first = JSON.parse(firstWrite);
-    const method =
-      operation === "tool"
-        ? "mcpServer/tool/call"
-        : operation === "catalog"
-          ? "mcpServerStatus/list"
-          : "mcpServer/resource/read";
+    const { method, result: response } = responses[operation];
     expect(first).toMatchObject({ method, params: { threadId: "app-thread" } });
     harness.send({
       id: first.id,
       error: { code: -32001, message: "Server overloaded; retry later." },
     });
     await vi.advanceTimersByTimeAsync(0);
-    ownerCurrent = revoke !== "owner";
-    grantCurrent = revoke !== "grant";
+    authority.owner = revoke !== "owner";
+    authority.grant = revoke !== "grant";
     await vi.advanceTimersByTimeAsync(1_000);
     const writes = [...harness.writes];
     // Settle an erroneous retry too, so a regression reports the forbidden I/O
@@ -92,22 +83,16 @@ it.each([
     if (writes[1]) {
       const retry = JSON.parse(writes[1]);
       expect(retry.method).toBe(method);
-      harness.send({
-        id: retry.id,
-        result:
-          operation === "tool"
-            ? { content: [] }
-            : operation === "catalog"
-              ? { data: [] }
-              : { contents: [] },
-      });
+      harness.send({ id: retry.id, result: response });
     }
     const result = await outcome;
     expect(writes).toHaveLength(revoke === "none" ? 2 : 1);
     if (revoke === "none") {
       expect(result.error).toBeUndefined();
     } else {
-      expect(result.error).toEqual(new Error(`App ${revoke} revoked`));
+      expect(result.error).toBeInstanceOf(CodexAppServerScopedRequestRejectedError);
+      expect(result.error).toMatchObject({ message: revocationError.message });
+      expect(result.error instanceof Error ? result.error.cause : undefined).toBe(revocationError);
     }
     expect(harness.client.getCloseError()).toBeUndefined();
   },

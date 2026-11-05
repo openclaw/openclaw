@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import type { GatewayRpc } from "./gateway-bench-probes.ts";
+import { groupBy } from "./group-by.mts";
 
 export const LIVE_GATEWAY_MODEL_ID = "gpt-5.4-2026-03-05";
 export const LIVE_GATEWAY_MODEL = `openai/${LIVE_GATEWAY_MODEL_ID}`;
@@ -49,7 +50,6 @@ export function configureLiveGatewayBenchmark(
       model: { primary: LIVE_GATEWAY_MODEL },
       utilityModel: LIVE_GATEWAY_MODEL,
       thinkingDefault: "off",
-      heartbeat: { every: "0m" },
       models: {
         [LIVE_GATEWAY_MODEL]: {
           agentRuntime: { id: "openclaw" },
@@ -58,6 +58,7 @@ export function configureLiveGatewayBenchmark(
       },
     },
   };
+  config.cron = { enabled: false };
   config.tools = { deny: ["*"] };
 }
 
@@ -101,11 +102,11 @@ export function createLiveGatewayEvidence(agentIds: string[], turnsPerSession: n
   const indices = new Set<number>();
   const expectedTurns = agentIds.length * turnsPerSession;
   let invalidEvents = false;
-  const need = (condition: unknown, message: string): void => {
+  function need(condition: unknown, message: string): asserts condition {
     if (!condition) {
       throw new Error(message);
     }
-  };
+  }
   const identity = (value: unknown): value is string =>
     typeof value === "string" && value.trim().length > 0 && value.length <= 256;
 
@@ -136,13 +137,13 @@ export function createLiveGatewayEvidence(agentIds: string[], turnsPerSession: n
       );
       const result = await rpc<{
         config: {
+          cron?: { enabled?: boolean };
           agents?: {
             defaults?: {
               model?: { primary?: string };
               utilityModel?: string;
               maxConcurrent?: number;
               thinkingDefault?: string;
-              heartbeat?: { every?: string };
               models?: Record<string, { params?: { maxTokens?: number } }>;
             };
             entries?: Record<string, { model?: unknown }>;
@@ -155,12 +156,12 @@ export function createLiveGatewayEvidence(agentIds: string[], turnsPerSession: n
       const defaults = config.agents?.defaults;
       const entries = config.agents?.entries;
       need(
-        config.plugins?.entries?.["memory-core"]?.config?.dreaming?.enabled === false &&
+        config.cron?.enabled === false &&
+          config.plugins?.entries?.["memory-core"]?.config?.dreaming?.enabled === false &&
           defaults?.model?.primary === LIVE_GATEWAY_MODEL &&
           defaults.utilityModel === LIVE_GATEWAY_MODEL &&
           defaults.maxConcurrent === agentIds.length &&
           defaults.thinkingDefault === "off" &&
-          defaults.heartbeat?.every === "0m" &&
           defaults.models?.[LIVE_GATEWAY_MODEL]?.params?.maxTokens === 128 &&
           config.tools?.deny?.length === 1 &&
           config.tools.deny[0] === "*" &&
@@ -172,10 +173,6 @@ export function createLiveGatewayEvidence(agentIds: string[], turnsPerSession: n
           ),
         "Live model, roster, token cap, or fixture configuration mismatch",
       );
-      const heartbeat = await rpc<{ ok: boolean; enabled: boolean }>("set-heartbeats", {
-        enabled: false,
-      });
-      need(heartbeat.ok && !heartbeat.enabled, "Live heartbeat disable failed");
     },
     register(runId: string, sessionKey: string, index: number): string {
       const agentId = sessionKey.split(":")[1] ?? "";
@@ -212,9 +209,7 @@ export function createLiveGatewayEvidence(agentIds: string[], turnsPerSession: n
           (started.status === "accepted" || started.status === "ok"),
         "Live turn acceptance mismatch",
       );
-      if (turn) {
-        turn.accepted = true;
-      }
+      turn.accepted = true;
     },
     complete(runId: string, completed: unknown) {
       const turn = turns.get(runId);
@@ -250,11 +245,9 @@ export function createLiveGatewayEvidence(agentIds: string[], turnsPerSession: n
           reply.text.trim() === turn.expected,
         "Live terminal identity, model, or response mismatch",
       );
-      if (turn && identity(receipt.sessionId) && identity(receipt.turnId)) {
-        turn.sessionId = receipt.sessionId;
-        turn.turnId = receipt.turnId;
-        turnIds.add(receipt.turnId);
-      }
+      turn.sessionId = receipt.sessionId;
+      turn.turnId = receipt.turnId;
+      turnIds.add(receipt.turnId);
     },
     onEvent(event: { event: string; payload?: unknown }) {
       const payload = event.payload;
@@ -292,15 +285,7 @@ export function createLiveGatewayEvidence(agentIds: string[], turnsPerSession: n
         turns.size === expectedTurns && [...turns.values()].every((turn) => turn.turnId),
         "Missing verified live terminal receipts",
       );
-      const groups = new Map<string, LiveTurn[]>();
-      for (const turn of turns.values()) {
-        const group = groups.get(turn.sessionKey);
-        if (group) {
-          group.push(turn);
-        } else {
-          groups.set(turn.sessionKey, [turn]);
-        }
-      }
+      const groups = groupBy(turns.values(), (turn) => turn.sessionKey);
       need(
         groups.size === agentIds.length &&
           [...groups.values()].every((group) => group.length === turnsPerSession) &&
@@ -319,9 +304,7 @@ export function createLiveGatewayEvidence(agentIds: string[], turnsPerSession: n
           identity(history.sessionId) && !sessionIds.has(history.sessionId),
           "Live history identity mismatch",
         );
-        if (history.sessionId) {
-          sessionIds.add(history.sessionId);
-        }
+        sessionIds.add(history.sessionId);
         for (const turn of group) {
           need(turn.sessionId === history.sessionId, "Live terminal and history session differ");
           turn.historyMatches = (history.messages ?? []).filter(
@@ -363,23 +346,12 @@ export function createLiveGatewayEvidence(agentIds: string[], turnsPerSession: n
           const query = database.prepare(
             "SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq",
           );
-          const groups = new Map<string | undefined, Array<[string, LiveTurn]>>();
-          for (const [runId, turn] of turns) {
-            if (turn.agentId !== agentId) {
-              continue;
-            }
-            const group = groups.get(turn.sessionId);
-            if (group) {
-              group.push([runId, turn]);
-            } else {
-              groups.set(turn.sessionId, [[runId, turn]]);
-            }
-          }
+          const groups = groupBy(
+            [...turns].filter(([, turn]) => turn.agentId === agentId),
+            ([, turn]) => turn.sessionId,
+          );
           for (const [sessionId, group] of groups) {
             need(identity(sessionId), "Live persisted session identity missing");
-            if (!sessionId) {
-              continue;
-            }
             const rows = query.all(sessionId).map((row) => {
               if (typeof row.event_json !== "string") {
                 throw new Error("Invalid persisted transcript event");

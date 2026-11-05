@@ -307,7 +307,7 @@ final class ComputerActionExecutionQueue {
     }
 
     @discardableResult
-    private func attemptInputRelease(inputScopeId: UUID?) -> Bool {
+    fileprivate func attemptInputRelease(inputScopeId: UUID?) -> Bool {
         let released = self.onInputRelease(inputScopeId)
         if let inputScopeId {
             if released {
@@ -376,7 +376,7 @@ struct ComputerControlPermissionSnapshot: Equatable, Sendable {
     static func probe() -> Self {
         Self(
             accessibility: AXIsProcessTrusted() ? .granted : .missing,
-            postEvent: CGPreflightPostEventAccess() ? .granted : .missing,
+            postEvent: PermissionManager.screenRecordingPermissions.checkPostEventPermission() ? .granted : .missing,
             screenCapture: PermissionManager.screenRecordingPermissions.checkScreenRecordingPermission()
                 ? .granted : .missing)
     }
@@ -497,55 +497,52 @@ final class ComputerActionService {
     {
         try checkScopeAllowed()
         let scope = inputScopeId ?? self.defaultInputScopeId
+        try self.checkApprovalAllowed(params.action, inputScopeId: scope)
         return try await self.executionQueue.perform(
             params,
             lifecycleGeneration: lifecycleGeneration,
             inputScopeId: scope)
         { [weak self] params, lifecycleGeneration in
             guard let self else { throw CancellationError() }
-            return try await self.performImmediately(
+            let checkExecutionAllowed: @MainActor () throws -> Void = { [weak self] in
+                guard let self else { throw CancellationError() }
+                try self.executionQueue.checkExecutionAllowed(lifecycleGeneration: lifecycleGeneration)
+                try checkScopeAllowed()
+                try self.checkApprovalAllowed(params.action, inputScopeId: scope)
+            }
+            try checkExecutionAllowed()
+            if params.deliveryMode == .background,
+               params.windowRef == nil,
+               !params.action.isWindowScopedOnly
+            {
+                return OpenClawComputerActResult(
+                    ok: false,
+                    effect: .suspectedNoop,
+                    escalation: OpenClawComputerEscalation(
+                        recommended: "window-pixel",
+                        reasonCode: "no_window_target"))
+            }
+            if params.isWindowScopedRequest {
+                return try await self.window.perform(
+                    params,
+                    lifecycleGeneration: lifecycleGeneration,
+                    checkExecutionAllowed: checkExecutionAllowed)
+            }
+            return try await self.screen.perform(
                 params,
-                lifecycleGeneration: lifecycleGeneration,
                 inputScopeId: scope,
-                checkScopeAllowed: checkScopeAllowed)
+                checkExecutionAllowed: checkExecutionAllowed)
         }
     }
 
-    private func performImmediately(
-        _ params: OpenClawComputerActParams,
-        lifecycleGeneration: UInt64,
-        inputScopeId: UUID,
-        checkScopeAllowed: @escaping @MainActor () throws -> Void) async throws -> OpenClawComputerActResult
-    {
-        try self.executionQueue.checkExecutionAllowed(lifecycleGeneration: lifecycleGeneration)
-        try checkScopeAllowed()
-        if params.deliveryMode == .background,
-           params.windowRef == nil,
-           !params.action.isWindowScopedOnly
-        {
-            return OpenClawComputerActResult(
-                ok: false,
-                effect: .suspectedNoop,
-                escalation: OpenClawComputerEscalation(
-                    recommended: "window-pixel",
-                    reasonCode: "no_window_target"))
+    private func checkApprovalAllowed(_ action: OpenClawComputerAction, inputScopeId: UUID) throws {
+        do {
+            try ApprovalPromptState.shared.checkComputerAction(action)
+        } catch {
+            // Refusal must settle a split drag; failed releases stay with the queue's retry owner.
+            self.executionQueue.attemptInputRelease(inputScopeId: inputScopeId)
+            throw error
         }
-        let checkExecutionAllowed: @MainActor () throws -> Void = { [weak self] in
-            guard let self else { throw CancellationError() }
-            try self.executionQueue.checkExecutionAllowed(
-                lifecycleGeneration: lifecycleGeneration)
-            try checkScopeAllowed()
-        }
-        if params.isWindowScopedRequest {
-            return try await self.window.perform(
-                params,
-                lifecycleGeneration: lifecycleGeneration,
-                checkExecutionAllowed: checkExecutionAllowed)
-        }
-        return try await self.screen.perform(
-            params,
-            inputScopeId: inputScopeId,
-            checkExecutionAllowed: checkExecutionAllowed)
     }
 
     static func validateInputPermissions(_ permissions: ComputerControlPermissionSnapshot) throws {

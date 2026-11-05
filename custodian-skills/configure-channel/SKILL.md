@@ -23,7 +23,7 @@ openclaw config schema --json | jq '.properties.channels.properties.telegram'
 
 ## Mutate
 
-Confirm the intended account and access changes with the operator before writing. Preserve existing approved allowlist entries, `dmPolicy`, and `groupPolicy` unless their replacement or change is explicitly approved; never broaden access to make a probe pass.
+Confirm the intended account and access changes with the operator before writing. Preserve existing approved allowlist entries, `dmPolicy`, and `groupPolicy` unless their replacement or change is explicitly approved; never broaden access to make a check pass.
 
 Preferred shell path — token staged as an env var on the gateway process or in a `0600` file, wired as a SecretRef (Telegram example):
 

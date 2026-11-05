@@ -1,5 +1,8 @@
 import { Buffer } from "node:buffer";
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  isTranscriptOnlyOpenClawAssistantMessage,
+  type AgentMessage,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import type { SessionTranscriptMessageEntry } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -26,12 +29,7 @@ const CODEX_HISTORY_ZERO_USAGE: Usage = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-export type CodexThreadHistoryImportResult = {
-  importedMessages: number;
-  omittedMessages: number;
-};
-
-type BoundedCodexThreadHistoryProjection = CodexThreadHistoryImportResult & {
+type BoundedCodexThreadHistoryProjection = {
   responseItems: JsonValue[];
   transcriptMessages: AgentMessage[];
 };
@@ -143,7 +141,6 @@ function projectCodexThreadHistory(params: {
   turns: CodexTurn[];
   importedAt: number;
   modelProvider?: string;
-  includeErrorOnlyTurns?: boolean;
 }): ProjectedCodexHistoryMessage[] {
   const projected: ProjectedCodexHistoryMessage[] = [];
   const assistantFields = {
@@ -234,12 +231,7 @@ function projectCodexThreadHistory(params: {
           : attachCodexMirrorIdentity({ role, content: text, timestamp }, identity);
       projected.push(projectCodexHistoryMessage(message, text));
     }
-    if (
-      params.includeErrorOnlyTurns &&
-      !hasAssistantMessage &&
-      turn.status === "failed" &&
-      turn.error?.message
-    ) {
+    if (!hasAssistantMessage && turn.status === "failed" && turn.error?.message) {
       const timestamp = (turn.completedAt ?? turn.startedAt ?? threadTimestamp / 1000) * 1000;
       const text = normalizeImportedHistoryText(turn.error.message) ?? "Codex turn failed.";
       const message: AssistantMessage = attachCodexMirrorIdentity(
@@ -293,13 +285,10 @@ export function projectBoundedCodexThreadHistory(params: {
     thread: params.thread,
     turns: selectTurnsThroughBoundary(params.thread, params.throughTurnId),
     importedAt: params.importedAt,
-    includeErrorOnlyTurns: true,
     ...(params.modelProvider ? { modelProvider: params.modelProvider } : {}),
   });
   const selected = selectBoundedCodexHistoryTail(projected);
   return {
-    importedMessages: selected.length,
-    omittedMessages: projected.length - selected.length,
     // Failed assistant fragments remain visible in operator transcripts, but
     // injecting them would permanently replay incomplete model output.
     responseItems: selected
@@ -321,7 +310,11 @@ export function projectBoundedCodexVisibleSessionHistory(
 ): JsonValue[] {
   const projected: ProjectedCodexHistoryMessage[] = [];
   for (const { message } of entries) {
-    if ((message.role !== "user" && message.role !== "assistant") || !("content" in message)) {
+    if (
+      (message.role !== "user" && message.role !== "assistant") ||
+      !("content" in message) ||
+      isTranscriptOnlyOpenClawAssistantMessage(message)
+    ) {
       continue;
     }
     if (

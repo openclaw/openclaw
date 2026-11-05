@@ -1,9 +1,23 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
+import {
+  readOpenClawAgentDatabaseRegistryToken,
+  registerOpenClawAgentDatabase,
+  unregisterOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db-registry.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
   persistSessionTranscriptTurn,
+  replaceSessionEntry,
   replaceSessionEntrySync,
 } from "./session-accessor.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
@@ -11,10 +25,24 @@ import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlit
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import * as transcriptTargets from "./session-accessor.transcript-target.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
+import { readRetainedSessionEntryFacts } from "./session-entry-read-facts.js";
+import { readSessionEntriesFromStoreInWorker } from "./session-entry-read-runtime.js";
+import {
+  captureSessionStoreReadCandidates,
+  prepareSessionStoreTargetInventory,
+} from "./session-store-target-inventory.js";
+import {
+  prepareSessionStoreTargetInventoryRead,
+  withSessionStoreTarget,
+} from "./session-store-target-runtime.js";
+import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
+
+afterAll(clearRuntimeConfigSnapshot);
 
 describe("transcript turn physical identity", () => {
   const fixture = useTempSessionsFixture("openclaw-transcript-identity-");
+  beforeEach(() => setRuntimeConfigSnapshot({}));
   const sessionId = "selected-window";
   const scope = (sessionKey = "global") => ({
     agentId: "main",
@@ -30,6 +58,23 @@ describe("transcript turn physical identity", () => {
       messages: [{ message }],
       updateMode: "none",
     });
+  const resolveTarget = (target: ReturnType<typeof scope>) =>
+    transcriptTargets.resolveSessionTranscriptRuntimeTarget(target, undefined, {
+      keyFormat: "agent-qualified",
+    });
+  const retainEntry = (target: ReturnType<typeof scope>) =>
+    readSessionEntriesFromStoreInWorker({
+      agentId: "main",
+      storePath: target.storePath,
+      sessionKeys: [target.sessionKey],
+    });
+  const inventoryReader =
+    (...args: Parameters<typeof prepareSessionStoreTargetInventory>) =>
+    () =>
+      prepareSessionStoreTargetInventoryRead(prepareSessionStoreTargetInventory(...args)).withRead(
+        async (inventory) => inventory.agents[0]?.result,
+      );
+  const agents = { entries: { main: {}, other: {} } };
   const keys = () =>
     database().db.prepare("SELECT session_key FROM session_nodes ORDER BY session_key").all();
   const retainWindowOnly = () => {
@@ -39,17 +84,307 @@ describe("transcript turn physical identity", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it("writes the qualified unknown identity into its existing raw physical row", async () => {
-    const raw = "unknown";
-    replaceSessionEntrySync(scope(raw), { sessionId, updatedAt: 1 });
-    await expect(persist(`agent:main:${raw}`)).resolves.toMatchObject({ appendedCount: 1 });
-    expect(keys()).toEqual([{ session_key: raw }]);
-    expect(loadTranscriptEventsSync(scope(raw))).toContainEqual(
-      expect.objectContaining({ type: "message", message }),
-    );
-    expect(loadSessionEntryReadOnly(scope(raw))?.sessionId).toBe(sessionId);
-    expect(loadSessionEntryReadOnly(scope(`agent:main:${raw}`))).toBeUndefined();
+  it("retains locked full entry facts without announcing an unchanged entry, and publishes real changes", async () => {
+    const target = scope("agent:main:retained-turn");
+    const entry = {
+      sessionId,
+      updatedAt: 1,
+      delivery: { kind: "none" as const },
+      skillsSnapshot: { prompt: "Stable synthetic prompt", skills: [] },
+    };
+    replaceSessionEntrySync(target, entry);
+    await retainEntry(target);
+    const changes: string[] = [];
+    const stop = sessionChanges.subscribe((change) => {
+      if ("sessionKey" in change && change.sessionKey === target.sessionKey) {
+        changes.push(change.scope ?? "unspecified");
+      }
+    });
+    const retained = () =>
+      readRetainedSessionEntryFacts(
+        { agentId: "main", path: database().path },
+        { sessionKeys: [target.sessionKey], projection: "full" },
+      )?.entries[0]?.entry;
+    try {
+      await persistSessionTranscriptTurn(target, {
+        messages: [{ message }],
+        touchSessionEntry: false,
+      });
+      expect(changes).toEqual([]);
+      expect(retained()).toEqual(entry);
+      await persistSessionTranscriptTurn(target, {
+        messages: [{ message: { role: "assistant", content: "Changed entry turn" } }],
+        touchSessionEntry: true,
+      });
+      expect(changes).toEqual(["session-entry"]);
+      expect(retained()).toMatchObject({
+        sessionId,
+        skillsSnapshot: entry.skillsSnapshot,
+        updatedAt: expect.any(Number),
+      });
+      expect(retained()?.updatedAt).toBeGreaterThan(entry.updatedAt);
+    } finally {
+      stop();
+    }
   });
+
+  it("resolves the current transcript and lifecycle revision across entry writes", async () => {
+    const selected = scope("agent:main:current");
+    replaceSessionEntrySync(selected, { sessionId, updatedAt: 1, lifecycleRevision: "first" });
+    await retainEntry(selected);
+    expect(await resolveTarget(selected)).toMatchObject({
+      sessionId,
+      sessionKey: selected.sessionKey,
+      selectedLifecycleRevision: "first",
+    });
+    await replaceSessionEntry(selected, { sessionId, updatedAt: 2, lifecycleRevision: "second" });
+    expect(await resolveTarget(selected)).toMatchObject({
+      sessionId,
+      sessionKey: selected.sessionKey,
+      selectedLifecycleRevision: "second",
+    });
+  });
+
+  it("resolves a shared session ID to its transcript owner after the requested row's facts are retained", async () => {
+    const base = scope("agent:main:cron:job");
+    const run = scope(`${base.sessionKey}:run:${sessionId}`);
+    replaceSessionEntrySync(base, { sessionId, updatedAt: 1, lifecycleRevision: "base" });
+    replaceSessionEntrySync(run, { sessionId, updatedAt: 2, lifecycleRevision: "run" });
+    await retainEntry(base);
+    expect(await resolveTarget(base)).toMatchObject({
+      sessionId,
+      sessionKey: run.sessionKey,
+      selectedSessionId: sessionId,
+      selectedLifecycleRevision: "run",
+    });
+    const originalBase = loadSessionEntryReadOnly(base);
+    for (const content of ["First shared-ID turn", "Second shared-ID turn"]) {
+      await expect(
+        persistSessionTranscriptTurn(base, {
+          messages: [{ message: { role: "user", content } }],
+          updateMode: "none",
+        }),
+      ).resolves.toMatchObject({
+        messages: [{ appended: true }],
+        sessionEntry: { sessionId, lifecycleRevision: "run" },
+      });
+    }
+    expect(loadSessionEntryReadOnly(base)).toEqual(originalBase);
+    expect(
+      loadTranscriptEventsSync(run).filter((event) => isRecord(event) && event.type === "message"),
+    ).toHaveLength(2);
+  });
+
+  it("reuses a selected target until an owning registry write reassigns it", async () => {
+    const storePath = `${fixture.storePath()}.custom.json`;
+    const databasePath = `${fixture.storePath()}.custom.sqlite`;
+    openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    const reads = vi.spyOn(targetDiscoveryLane.pool, "run");
+    const select = (agentId = "main") =>
+      withSessionStoreTarget(
+        {
+          agentId,
+          storePath,
+          env: process.env,
+          candidates: captureSessionStoreReadCandidates(storePath),
+        },
+        async (target, owner) => {
+          owner.assertCurrent();
+          return target;
+        },
+      );
+    const selected = await select();
+    expect(selected.database.path).toBe(databasePath);
+    const initialReads = reads.mock.calls.length;
+    expect(initialReads).toBeGreaterThan(0);
+    expect(await select()).toBe(selected);
+    expect(reads).toHaveBeenCalledTimes(initialReads);
+    expect(Reflect.set(selected.database, "path", "changed")).toBe(false);
+    expect((await select("other")).database.path).toBe(
+      `${fixture.storePath()}.custom.other.sqlite`,
+    );
+    expect(await select()).toBe(selected);
+
+    unregisterOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    registerOpenClawAgentDatabase({ agentId: "other", path: databasePath });
+    const reassigned = await select();
+    expect(reassigned.database.path).toBe(`${fixture.storePath()}.custom.main.sqlite`);
+    expect(reads.mock.calls.length).toBeGreaterThan(initialReads);
+  });
+
+  it("reuses inventory until an in-process session write changes fixed-store visibility", async () => {
+    const storePath = `${fixture.storePath()}.shared.sqlite`;
+    replaceSessionEntrySync(
+      { agentId: "main", storePath, sessionKey: "agent:main:global" },
+      { sessionId, updatedAt: 1 },
+    );
+    const reads = vi.spyOn(targetDiscoveryLane.pool, "run");
+    const select = inventoryReader({ agents, session: { store: storePath } }, ["other"]);
+    const selected = await select();
+    expect(selected).toEqual({ available: true, targets: [] });
+    const initialReads = reads.mock.calls.length;
+    expect(initialReads).toBeGreaterThan(0);
+    expect(await select()).toBe(selected);
+    expect(reads).toHaveBeenCalledTimes(initialReads);
+    expect(selected?.available && Reflect.set(selected.targets, "0", {})).toBe(false);
+
+    replaceSessionEntrySync(
+      { agentId: "other", storePath, sessionKey: "agent:other:global" },
+      { sessionId: "other-window", updatedAt: 2 },
+    );
+    expect(await select()).toEqual({
+      available: true,
+      targets: [{ agentId: "other", storePath }],
+    });
+    expect(reads.mock.calls.length).toBeGreaterThan(initialReads);
+  });
+
+  it("reuses per-agent inventory and cleanup after ordinary session writes", async () => {
+    const storePath = fixture.storePath();
+    const env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: path.resolve(fixture.sessionsDir(), "../../.."),
+    };
+    const session = { agentId: "main", storePath, sessionKey: "agent:main:global", env };
+    replaceSessionEntrySync(session, { sessionId, updatedAt: 1 });
+    const reads = vi.spyOn(targetDiscoveryLane.pool, "run");
+    const closes = vi.spyOn(targetDiscoveryLane.pool, "closeResources");
+    const select = inventoryReader({ agents: { entries: { main: {} } } }, ["main"], env);
+    const expected = { available: true, targets: [{ agentId: "main", storePath }] };
+    expect(await select()).toEqual(expected);
+    const initialReads = reads.mock.calls.length;
+    const initialCloses = closes.mock.calls.length;
+    expect(initialReads).toBeGreaterThan(0);
+
+    replaceSessionEntrySync(session, { sessionId, updatedAt: 2 });
+    expect(await select()).toEqual(expected);
+    expect(reads).toHaveBeenCalledTimes(initialReads);
+    expect(closes).toHaveBeenCalledTimes(initialCloses);
+  });
+
+  it("refreshes family inventory after writing an already registered sibling", async () => {
+    const storePath = `${fixture.storePath()}.family.json`;
+    const request = prepareSessionStoreTargetInventory({ agents, session: { store: storePath } }, [
+      "other",
+    ]);
+    const siblingPath = `${fixture.storePath()}.family.other.sqlite`;
+    openOpenClawAgentDatabase({ agentId: "other", path: siblingPath });
+    const select = () =>
+      prepareSessionStoreTargetInventoryRead(request).withRead(
+        async (inventory) => inventory.agents[0]?.result,
+      );
+    expect(await select()).toEqual({ available: true, targets: [] });
+    const registry = readOpenClawAgentDatabaseRegistryToken();
+
+    replaceSessionEntrySync(
+      { agentId: "other", storePath: siblingPath, sessionKey: "agent:other:global" },
+      { sessionId: "other-window", updatedAt: 1 },
+    );
+    expect(readOpenClawAgentDatabaseRegistryToken()).toBe(registry);
+    expect(await select()).toEqual({
+      available: true,
+      targets: [{ agentId: "other", storePath }],
+    });
+  });
+
+  function pauseTargetSelection() {
+    const selected = createDeferred();
+    const resume = createDeferred();
+    const resolve = transcriptTargets.resolveSessionTranscriptRuntimeTarget;
+    vi.spyOn(transcriptTargets, "resolveSessionTranscriptRuntimeTarget").mockImplementationOnce(
+      async (...args) => {
+        const target = await resolve(...args);
+        selected.resolve();
+        await resume.promise;
+        return target;
+      },
+    );
+    return { selected: selected.promise, resume: resume.resolve };
+  }
+
+  it.each(["same owner", "state retirement"] as const)(
+    "keeps post-selection first registration bound to its %s",
+    async (change) => {
+      const target = { ...scope(), storePath: `${fixture.storePath()}.custom.json` };
+      const databaseOptions = toDatabaseOptions(resolveSqliteScope(target));
+      const shared = openOpenClawStateDatabase();
+      const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
+      const selected = createDeferred();
+      const resume = createDeferred();
+      let reads = 0;
+      vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
+        const reply = await run(...args);
+        if (
+          reply.ok &&
+          typeof reply.value !== "boolean" &&
+          !Array.isArray(reply.value) &&
+          reply.value.kind === "session-runtime-target"
+        ) {
+          reads++;
+          openOpenClawAgentDatabase({
+            ...databaseOptions,
+            agentId: "main",
+          });
+          if (change === "state retirement") {
+            selected.resolve();
+            await resume.promise;
+          }
+        }
+        return reply;
+      });
+      const pending = transcriptTargets.resolveSessionTranscriptRuntimeTarget(target);
+      if (change === "same owner") {
+        await expect(pending).resolves.toMatchObject(target);
+      } else {
+        try {
+          await awaitGateBeforeSettlement(
+            selected.promise,
+            pending,
+            "Transcript target read settled before its first registration",
+          );
+          // Lifecycle retirement runs outside the cold reader's writer reservation.
+          await closeOpenClawStateDatabaseByPathAsync(shared.path);
+          openOpenClawStateDatabase();
+        } finally {
+          resume.resolve();
+        }
+        await expect(pending).rejects.toMatchObject({
+          code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
+        });
+      }
+      expect(reads).toBe(1);
+    },
+  );
+
+  it.each([
+    { stored: "unknown", requested: "agent:main:unknown", mainKey: undefined },
+    { stored: "agent:main:main", requested: "agent:main:main", mainKey: "custom" },
+  ])(
+    "preserves the physical row $stored when writing $requested",
+    async ({ stored, requested, mainKey }) => {
+      setRuntimeConfigSnapshot(mainKey ? { session: { mainKey } } : {});
+      replaceSessionEntrySync(scope(stored), { sessionId, updatedAt: 1 });
+      if (mainKey) {
+        setCanonicalSqliteSessionMainKey(database(), mainKey);
+      }
+      await expect(
+        persistSessionTranscriptTurn(scope(requested), {
+          ...(mainKey ? { config: { session: { mainKey } } } : {}),
+          expectedSessionId: sessionId,
+          messages: [{ message }],
+          updateMode: "none",
+        }),
+      ).resolves.toMatchObject({ messages: [{ appended: true }] });
+      expect(keys()).toEqual([{ session_key: stored }]);
+      expect(loadTranscriptEventsSync(scope(stored))).toContainEqual(
+        expect.objectContaining({ type: "message", message }),
+      );
+      if (!mainKey) {
+        expect(loadSessionEntryReadOnly(scope(stored))?.sessionId).toBe(sessionId);
+        expect(loadSessionEntryReadOnly(scope(requested))).toBeUndefined();
+      }
+    },
+  );
 
   it.each(["entry", "retained window"])(
     "refuses a competing qualified %s before appending through the selected SID",
@@ -76,94 +411,65 @@ describe("transcript turn physical identity", () => {
     },
   );
 
-  it("keeps a fully qualified literal main key when the configured main alias changes", async () => {
-    const literal = scope("agent:main:main");
-    replaceSessionEntrySync(literal, { sessionId, updatedAt: 1 });
-    setCanonicalSqliteSessionMainKey(database(), "custom");
-    await expect(
-      persistSessionTranscriptTurn(literal, {
-        config: { session: { mainKey: "custom" } },
-        expectedSessionId: sessionId,
-        messages: [{ message }],
-        updateMode: "none",
-      }),
-    ).resolves.toMatchObject({ appendedCount: 1 });
-    expect(keys()).toEqual([{ session_key: literal.sessionKey }]);
-    expect(loadTranscriptEventsSync(literal)).toContainEqual(
-      expect.objectContaining({ type: "message", message }),
-    );
-  });
-
-  it.each([
-    { revision: "original", expected: undefined },
-    { revision: undefined, expected: undefined },
-    { revision: "original", expected: "successor" },
+  it.each<{
+    change: "revision" | "delete" | "appears" | "disappears";
+    revision?: string;
+    expected?: string;
+  }>([
+    { change: "revision", revision: "original" },
+    { change: "revision" },
+    { change: "revision", revision: "original", expected: "successor" },
+    { change: "delete" },
+    { change: "appears" },
+    { change: "disappears" },
   ])(
-    "retains the initially selected revision $revision with caller fence $expected",
-    async (row) => {
-      replaceSessionEntrySync(scope(), {
-        sessionId,
-        updatedAt: 1,
-        lifecycleRevision: row.revision,
-      });
-      const pending = persistSessionTranscriptTurn(scope("agent:main:global"), {
-        expectedSessionId: sessionId,
-        expectedLifecycleRevision: row.expected,
-        messages: [{ message }],
-        updateMode: "none",
-      });
-      // The public async entry has selected its row but has not crossed writer admission.
-      replaceSessionEntrySync(scope(), {
-        sessionId,
-        updatedAt: 2,
-        lifecycleRevision: "successor",
-      });
-      await expect(pending).resolves.toMatchObject({
-        rejectedReason: "session-rebound",
-        appendedCount: 0,
-      });
-      expect(loadSessionEntryReadOnly(scope())?.lifecycleRevision).toBe("successor");
-      expect(loadTranscriptEventsSync(scope())).toEqual([]);
-    },
-  );
-
-  it("does not downgrade a deleted persisted selection into a transcript-only append", async () => {
-    replaceSessionEntrySync(scope(), { sessionId, updatedAt: 1 });
-    const pending = persistSessionTranscriptTurn(scope("agent:main:global"), {
-      messages: [{ message }],
-      updateMode: "none",
-    });
-    retainWindowOnly();
-    await expect(pending).resolves.toMatchObject({
-      rejectedReason: "session-rebound",
-      appendedCount: 0,
-    });
-    expect(loadSessionEntryReadOnly(scope())).toBeUndefined();
-    expect(loadTranscriptEventsSync(scope())).toEqual([]);
-  });
-
-  it.each(["appears", "disappears"])(
-    "does not adopt a changed creation precondition when the original entry %s",
-    async (change) => {
-      const entry = { sessionId, updatedAt: 1 };
-      if (change === "disappears") {
+    "rejects a changed $change precondition (revision=$revision, fence=$expected)",
+    async ({ change, revision, expected }) => {
+      const entry = { sessionId, updatedAt: 1, lifecycleRevision: revision };
+      if (change !== "appears") {
         replaceSessionEntrySync(scope(), entry);
       }
-      const pending = persistSessionTranscriptTurn(scope(), {
-        expectedSessionId: sessionId,
-        initialSessionEntry: entry,
-        messages: [{ message }],
-        updateMode: "none",
-      });
-      if (change === "appears") {
-        replaceSessionEntrySync(scope(), entry);
-      } else {
-        retainWindowOnly();
+      const creation = change === "appears" || change === "disappears";
+      const selection = pauseTargetSelection();
+      const pending = persistSessionTranscriptTurn(
+        scope(creation ? "global" : "agent:main:global"),
+        {
+          ...(change === "delete" ? {} : { expectedSessionId: sessionId }),
+          ...(creation ? { initialSessionEntry: entry } : {}),
+          expectedLifecycleRevision: expected,
+          messages: [{ message }],
+          updateMode: "none",
+        },
+      );
+      try {
+        await awaitGateBeforeSettlement(
+          selection.selected,
+          pending,
+          "Transcript turn settled before selecting its target",
+        );
+        if (change === "revision") {
+          replaceSessionEntrySync(scope(), {
+            sessionId,
+            updatedAt: 2,
+            lifecycleRevision: "successor",
+          });
+        } else if (change === "appears") {
+          replaceSessionEntrySync(scope(), entry);
+        } else {
+          retainWindowOnly();
+        }
+      } finally {
+        selection.resume();
       }
       await expect(pending).resolves.toMatchObject({
         rejectedReason: "session-rebound",
-        appendedCount: 0,
+        messages: [],
       });
+      if (change === "revision") {
+        expect(loadSessionEntryReadOnly(scope())?.lifecycleRevision).toBe("successor");
+      } else if (change === "delete") {
+        expect(loadSessionEntryReadOnly(scope())).toBeUndefined();
+      }
       expect(loadTranscriptEventsSync(scope())).toEqual([]);
     },
   );
@@ -171,23 +477,17 @@ describe("transcript turn physical identity", () => {
   it("does not retarget the selected spelling even when SID and revision survive a move", async () => {
     const entry = { sessionId, updatedAt: 1, lifecycleRevision: "unchanged" };
     replaceSessionEntrySync(scope(), entry);
-    const selected = createDeferred();
-    const resume = createDeferred();
-    const resolve = transcriptTargets.resolveSessionTranscriptRuntimeTarget;
-    vi.spyOn(transcriptTargets, "resolveSessionTranscriptRuntimeTarget").mockImplementationOnce(
-      async (...args) => {
-        const target = await resolve(...args);
-        selected.resolve();
-        await resume.promise;
-        return target;
-      },
-    );
+    const selection = pauseTargetSelection();
     const outcome = persist("agent:main:global").then(
       (result) => ({ result }),
       (error: unknown) => ({ error }),
     );
     try {
-      await selected.promise;
+      await awaitGateBeforeSettlement(
+        selection.selected,
+        outcome,
+        "Transcript turn settled before selecting its target",
+      );
       await applySessionEntryCanonicalReplacements({
         agentId: "main",
         storePath: fixture.storePath(),
@@ -201,7 +501,7 @@ describe("transcript turn physical identity", () => {
         }),
       });
     } finally {
-      resume.resolve();
+      selection.resume();
       await outcome;
     }
     expect(await outcome).toMatchObject({

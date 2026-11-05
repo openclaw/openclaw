@@ -8,7 +8,7 @@ struct CommandCenterTab: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    var headerTitle: String = "OpenClaw"
+    private let headerTitle = "Overview"
     var headerSidebarAction: OpenClawSidebarHeaderAction?
     var dashboardModel: RootSidebarModel
     var openChat: () -> Void
@@ -306,14 +306,14 @@ struct CommandCenterTab: View {
                     self.gatewayFact(
                         icon: "network",
                         title: "Connection",
-                        value: self.gatewayConnectionText,
+                        value: self.gatewayDisplayState.statusPresentation.title,
                         color: self.gatewayStatusColor)
                     Divider().frame(height: 38)
                     self.gatewayFact(
                         icon: "server.rack",
                         title: "Address",
                         value: self.gatewayAddressText,
-                        color: OpenClawBrand.accentForeground)
+                        color: OpenClawBrand.accent)
                     Divider().frame(height: 38)
                     self.gatewayFact(
                         icon: "person.2.fill",
@@ -400,15 +400,18 @@ struct CommandCenterTab: View {
                                 canArchive: ChatSessionSidebarModel.canArchiveSession(
                                     session,
                                     mainSessionKey: self.appModel.mainSessionKey),
-                                actions: .gateway(
-                                    session: session,
-                                    performMutation: self.performSessionMutation,
-                                    fork: { self.forkSession(session) }))
+                                performMutation: self.performSessionMutation,
+                                fork: { self.forkSession(session) })
                         }
 
                         if self.hasMoreRecentSessions {
                             Button(action: self.openSessions) {
-                                CommandViewMoreRow()
+                                Label("View More", systemImage: "chevron.right")
+                                    .font(OpenClawType.subheadBold)
+                                    .foregroundStyle(OpenClawBrand.accent)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 10)
+                                    .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                         }
@@ -435,30 +438,9 @@ struct CommandCenterTab: View {
         GatewayStatusBuilder.build(appModel: self.appModel)
     }
 
-    private var gatewayConnectionText: String {
-        switch self.gatewayDisplayState {
-        case .connected:
-            String(localized: "Online")
-        case .connecting:
-            String(localized: "Connecting")
-        case .error:
-            String(localized: "Attention")
-        case .disconnected:
-            String(localized: "Offline")
-        }
-    }
-
     private var gatewayStatusColor: Color {
-        switch self.gatewayDisplayState {
-        case .connected:
-            OpenClawBrand.ok
-        case .connecting:
-            OpenClawBrand.accent
-        case .error:
-            OpenClawBrand.warn
-        case .disconnected:
-            .secondary
-        }
+        let state = self.gatewayDisplayState
+        return state == .disconnected ? .secondary : state.statusPresentation.tone.color
     }
 
     private var gatewayAddressText: String {
@@ -727,24 +709,34 @@ struct CommandCenterTab: View {
 enum SessionStatusScope: String, CaseIterable {
     case active
     case snoozed
+    case automations
     case archived
 
     static func available(isConnected: Bool) -> [Self] {
-        isConnected ? self.allCases : [.active, .snoozed]
+        isConnected ? self.allCases : [.active, .snoozed, .automations]
     }
 
     var title: String {
         switch self {
         case .active: String(localized: "Active")
         case .snoozed: String(localized: "Snoozed")
+        case .automations: String(localized: "Automations")
         case .archived: String(localized: "Archived")
         }
     }
 
-    func includes(_ session: OpenClawChatSessionEntry, at now: Date) -> Bool {
+    func includes(
+        _ session: OpenClawChatSessionEntry,
+        at now: Date,
+        currentSessionKey: String? = nil) -> Bool
+    {
         switch self {
-        case .active: session.archived != true && !session.isSnoozed(at: now)
+        case .active:
+            session.archived != true && !session.isSnoozed(at: now) &&
+                (session.key == currentSessionKey || !OpenClawChatSessionListVisibility.isAutomationSession(session))
         case .snoozed: session.archived != true && session.isSnoozed(at: now)
+        case .automations:
+            session.archived != true && OpenClawChatSessionListVisibility.isAutomationSession(session)
         case .archived: session.archived == true
         }
     }
@@ -947,6 +939,7 @@ struct CommandSessionsScreen: View {
             switch self.statusScope {
             case .active: return String(localized: "Loading recent sessions")
             case .snoozed: return String(localized: "Loading snoozed sessions")
+            case .automations: return String(localized: "Loading automation sessions")
             case .archived: return String(localized: "Loading archived sessions")
             }
         }
@@ -964,7 +957,12 @@ struct CommandSessionsScreen: View {
                 $0.key,
                 defaultSessionKey: self.appModel.mainSessionKey) }
             // A stale list must still obey the selected scope while its replacement loads.
-            .filter { self.statusScope.includes($0, at: self.now) }
+            .filter {
+                self.statusScope.includes(
+                    $0,
+                    at: self.now,
+                    currentSessionKey: self.appModel.chatSessionKey)
+            }
     }
 
     private var sessionSections: [CommandSessionSection] {
@@ -990,6 +988,7 @@ struct CommandSessionsScreen: View {
         switch self.statusScope {
         case .active: return String(localized: "No recent sessions")
         case .snoozed: return String(localized: "No snoozed sessions")
+        case .automations: return String(localized: "No automations")
         case .archived: return String(localized: "No archived sessions")
         }
     }
@@ -998,6 +997,7 @@ struct CommandSessionsScreen: View {
         switch self.statusScope {
         case .active: String(localized: "Start a chat and it will appear here.")
         case .snoozed: String(localized: "Snoozed sessions will appear here until they wake.")
+        case .automations: String(localized: "Automation sessions will appear here.")
         case .archived: String(localized: "Archived sessions will appear here.")
         }
     }
@@ -1006,6 +1006,7 @@ struct CommandSessionsScreen: View {
         switch self.statusScope {
         case .active: String(localized: "Recent sessions")
         case .snoozed: String(localized: "Snoozed sessions")
+        case .automations: String(localized: "Automation sessions")
         case .archived: String(localized: "Archived sessions")
         }
     }
@@ -1163,11 +1164,9 @@ struct CommandSessionsScreen: View {
             canArchive: ChatSessionSidebarModel.canArchiveSession(
                 session,
                 mainSessionKey: self.appModel.mainSessionKey),
-            actions: .gateway(
-                session: session,
-                archivesSession: { self.statusScope != .archived && session.archived != true },
-                performMutation: self.performMutation,
-                fork: { self.forkSession(session) }))
+            archivesSession: { self.statusScope != .archived && session.archived != true },
+            performMutation: self.performMutation,
+            fork: { self.forkSession(session) })
     }
 
     private func openSessionKey(_ key: String) {

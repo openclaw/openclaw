@@ -50,8 +50,5 @@ export function prefixDtmfWait(sequence: string | undefined, delayMs: number): s
     return sequence;
   }
   const waitCount = Math.ceil(delayMs / 500);
-  if (waitCount <= 0) {
-    return sequence;
-  }
   return `${"w".repeat(waitCount)}${sequence}`;
 }

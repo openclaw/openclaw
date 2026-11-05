@@ -15,7 +15,7 @@ OpenClaw Signal channel plugin.
 ## Distribution
 
 - Package: `@openclaw/signal`
-- Install route: npm or ClawHub: `clawhub:@openclaw/signal`
+- Install route: npm or ClawHub: `@openclaw/signal`
 
 ## Surface
 

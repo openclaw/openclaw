@@ -3,7 +3,7 @@ import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { CustodianAlert } from "./custodian-alert-contract.ts";
-import type { IconName } from "./icons.ts";
+import type { IconName } from "./icon-data.ts";
 import {
   resolveScopeUpgradeDismissal,
   type SidebarAttentionDismissal,
@@ -11,13 +11,8 @@ import {
 } from "./sidebar-attention-dismissals.ts";
 import type { IssueTab } from "./sidebar-issues-tabs.ts";
 
-type SidebarAttentionItemKind = Exclude<
-  SidebarAttentionKind,
-  "scopeUpgrade" | "updateAvailable" | "outbox"
->;
-
 type SidebarInboxEntryBase<
-  Category extends Exclude<IssueTab, "all">,
+  Category extends Exclude<IssueTab, "all"> | "automations",
   Severity extends "error" | "warning" | "neutral" = "error" | "warning",
 > = {
   category: Category;
@@ -28,11 +23,12 @@ type SidebarInboxEntryBase<
 
 export type SidebarAttentionItem = SidebarInboxEntryBase<"automations" | "system"> & {
   type: "attention";
-  kind: SidebarAttentionItemKind;
+  kind: Exclude<SidebarAttentionKind, "scopeUpgrade" | "updateAvailable" | "outbox">;
   icon: IconName;
   label: string;
   detail: string;
-  meta?: { context?: string; status: string; time: string };
+  meta?: { context?: string; status: string };
+  arrivedAtMs?: number;
   action:
     | { kind: "navigate"; routeId: NavigationRouteId }
     | { kind: "askCustodian"; alert: CustodianAlert };
@@ -56,7 +52,7 @@ export type SidebarInboxEntry =
       id: string;
       sessionKey: string;
       agentId?: string;
-      unconfirmed: boolean;
+      held: boolean;
       command: boolean;
     })
   | (SidebarInboxEntryBase<"system"> & { type: "update" });
@@ -79,24 +75,17 @@ export function buildScopeUpgradeInboxEntry(params: {
   };
 }
 
-export function buildUpdateInboxEntry(params: {
-  canDismiss: boolean;
-  dismissal: SidebarAttentionDismissal | null;
-  forced: boolean;
-  requiresAction: boolean;
-  severity: "error" | "warning";
-  visible: boolean;
-}): Extract<SidebarInboxEntry, { type: "update" }> | null {
-  if (!params.visible) {
-    return null;
+function inboxEntryArrivedAt(entry: SidebarInboxEntry): number | undefined {
+  switch (entry.type) {
+    case "approval":
+      return entry.approval.createdAtMs;
+    case "mention":
+      return entry.mention.createdAt;
+    case "attention":
+      return entry.arrivedAtMs;
+    default:
+      return undefined;
   }
-  return {
-    type: "update",
-    category: "system",
-    dismissal: params.canDismiss && !params.forced ? params.dismissal : null,
-    requiresAction: params.requiresAction,
-    severity: params.severity,
-  };
 }
 
 export function buildSidebarInboxEntries(params: {
@@ -127,8 +116,8 @@ export function buildSidebarInboxEntries(params: {
       requiresAction: true,
       severity: "neutral",
     }));
-  // Preserve the Inbox's action-first order while every tab reads one list.
-  return [
+  // Newest first. Live states have no arrival time, so they stay on top; ties keep action order.
+  const entries: SidebarInboxEntry[] = [
     ...approvals,
     ...(params.outbox ?? []),
     ...(params.update?.severity === "error" ? [params.update] : []),
@@ -138,10 +127,19 @@ export function buildSidebarInboxEntries(params: {
     ...warnings,
     ...mentions,
   ];
+  return entries.toSorted((left, right) => {
+    const leftAt = inboxEntryArrivedAt(left) ?? Infinity;
+    const rightAt = inboxEntryArrivedAt(right) ?? Infinity;
+    return leftAt === rightAt ? 0 : rightAt - leftAt;
+  });
 }
 
 export function sidebarInboxEntryMatchesTab(entry: SidebarInboxEntry, tab: IssueTab): boolean {
-  return tab === "all" || entry.category === tab;
+  return (
+    tab === "all" ||
+    entry.category === tab ||
+    (tab === "system" && entry.category === "automations")
+  );
 }
 
 export function sidebarInboxTabCounts(
@@ -152,7 +150,6 @@ export function sidebarInboxTabCounts(
     all: actionEntries.length,
     approvals: actionEntries.filter((entry) => entry.category === "approvals").length,
     mentions: actionEntries.filter((entry) => entry.category === "mentions").length,
-    automations: actionEntries.filter((entry) => entry.category === "automations").length,
-    system: actionEntries.filter((entry) => entry.category === "system").length,
+    system: actionEntries.filter((entry) => sidebarInboxEntryMatchesTab(entry, "system")).length,
   };
 }

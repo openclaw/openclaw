@@ -34,7 +34,6 @@ export * from "./tui-pty-harness-assertion-test-support.js";
 export { tuiFixtureReceipts } from "./tui-pty-receipts-test-support.js";
 
 const activeRuns: PtyRun[] = [];
-const OUTPUT_TIMEOUT_MS = 2_000;
 const EXIT_TIMEOUT_MS = 4_000;
 
 export async function disposeActiveTuiFixtures(): Promise<void> {
@@ -68,13 +67,15 @@ export async function startTuiFixture(
         OPENCLAW_CONFIG_PATH: configPath,
         OPENCLAW_THEME: "dark",
         OPENCLAW_TUI_PTY_LOG_PATH: logPath,
+        // This virtual terminal does not implement OSC 7501 program-status replies.
+        PI_PROGRAM_STATUS: "0",
         NO_COLOR: undefined,
         ...opts.env,
         ...startupRelease.env,
         ...reconnectRelease.env,
       },
       exitTimeoutMs: EXIT_TIMEOUT_MS,
-      outputTimeoutMs: OUTPUT_TIMEOUT_MS,
+      outputTimeoutMs: 2_000,
     },
   );
 
@@ -673,7 +674,7 @@ export async function writeTuiPtyFixtureScript(dir: string, opts: TuiStartupFixt
           config: {
             agents: {
               defaults: { model: "fixture-provider/fixture-model" },
-              entries: { main: { default: true } },
+              entries: { main: {} },
             },
             session: { scope: "per-sender", mainKey: "main" },
           },

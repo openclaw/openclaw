@@ -2,67 +2,72 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MEMORY_DREAMING_SYSTEM_EVENT_TEXT } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import {
-  clearRuntimeConfigSnapshot,
-  getRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterEach, expect, it, vi } from "vitest";
 import { registerShortTermPromotionDreaming } from "./dreaming.js";
 
-let previousConfig: ReturnType<typeof getRuntimeConfigSnapshot>;
-
-beforeEach(() => {
-  previousConfig = getRuntimeConfigSnapshot();
-  resetSystemEventsForTest();
-});
-
 afterEach(() => {
-  resetSystemEventsForTest();
-  if (previousConfig) {
-    setRuntimeConfigSnapshot(previousConfig);
-  } else {
-    clearRuntimeConfigSnapshot();
-  }
+  vi.restoreAllMocks();
 });
 
-it.each(
-  ["global", "global:heartbeat"].flatMap((sessionKey) =>
-    ["main", "research"].map((queuedAgentId) => ({ sessionKey, queuedAgentId })),
-  ),
-)(
-  "checks $sessionKey against its heartbeat owner, with an event for $queuedAgentId",
-  async ({ sessionKey, queuedAgentId }) => {
-    const config: OpenClawConfig = {
-      agents: { entries: { main: { default: true }, research: {} } },
-      session: { scope: "global" },
-      plugins: { entries: { "memory-core": { config: { dreaming: { enabled: false } } } } },
-    };
-    setRuntimeConfigSnapshot(config);
-    const on = vi.fn<OpenClawPluginApi["on"]>();
-    const api = createTestPluginApi({ id: "memory-core", config, on });
-    registerShortTermPromotionDreaming(api);
-    const registration = on.mock.calls.find(([name]) => name === "before_agent_reply");
-    expect(registration).toBeDefined();
-    const beforeReply = registration![1] as Parameters<typeof api.on<"before_agent_reply">>[1];
-    expect(
-      enqueueSystemEvent(MEMORY_DREAMING_SYSTEM_EVENT_TEXT, {
-        sessionKey: `agent:${queuedAgentId}:global`,
-        contextKey: "cron:memory-dreaming",
-      }),
-    ).toBe(true);
-
+function createHook(enabled = true) {
+  const config: OpenClawConfig = {
+    agents: { entries: { main: {}, research: {} } },
+    session: { scope: "global" },
+    plugins: {
+      entries: {
+        "memory-core": { config: { dreaming: { enabled, phases: { deep: { limit: 0 } } } } },
+      },
+    },
+  };
+  const on = vi.fn<OpenClawPluginApi["on"]>();
+  const runtime = createPluginRuntimeMock();
+  runtime.config.current = () => config;
+  const api = createTestPluginApi({ id: "memory-core", config, on, runtime });
+  const error = vi.spyOn(api.logger, "error");
+  registerShortTermPromotionDreaming(api);
+  const registration = on.mock.calls.find(([name]) => name === "before_agent_reply");
+  expect(registration).toBeDefined();
+  const beforeReply = registration![1] as Parameters<typeof api.on<"before_agent_reply">>[1];
+  return async (
+    context: Parameters<typeof beforeReply>[1],
+    cleanedBody = MEMORY_DREAMING_SYSTEM_EVENT_TEXT,
+  ) => {
     const result = await beforeReply(
-      { cleanedBody: MEMORY_DREAMING_SYSTEM_EVENT_TEXT },
-      { agentId: "research", trigger: "heartbeat", sessionKey, workspaceDir: "." },
+      { cleanedBody },
+      {
+        agentId: "main",
+        trigger: "heartbeat",
+        workspaceDir: ".",
+        ...context,
+      },
     );
+    expect(error).not.toHaveBeenCalled();
+    return result;
+  };
+}
 
-    expect(result).toEqual(
-      queuedAgentId === "research"
+const handled = { handled: true, reason: "memory-core: short-term dreaming disabled by limit" };
+it.each(["heartbeat", "cron"] as const)(
+  "handles the public %s trigger without legacy queue state",
+  async (trigger) => {
+    expect(await createHook()({ trigger, sessionKey: "agent:main:main" })).toEqual(handled);
+  },
+);
+
+it.each(["heartbeat", "cron"] as const)(
+  "preserves disabled dreaming behavior for %s",
+  async (trigger) => {
+    expect(await createHook(false)({ trigger, sessionKey: "agent:main:main" })).toEqual(
+      trigger === "cron"
         ? { handled: true, reason: "memory-core: short-term dreaming disabled" }
         : undefined,
     );
   },
 );
+
+it("requires a supported trigger and the managed dreaming token", async () => {
+  const beforeReply = createHook();
+  expect(await beforeReply({ trigger: "user" })).toBeUndefined();
+  expect(await beforeReply({ trigger: "cron" }, "ordinary reminder")).toBeUndefined();
+});

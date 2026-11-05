@@ -5,11 +5,13 @@
  * routes to interactive or non-interactive onboarding.
  */
 import path from "node:path";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
-import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
+import { resolveGatewayPort } from "../config/config.js";
+import { isConfigReadFailure } from "../config/io.invalid-config.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isValidEnvSecretRefId } from "../config/types.secrets.js";
+import { hasConfiguredSecretInput, isValidEnvSecretRefId } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { resolveProviderMatch } from "../plugins/provider-auth-choice-helpers.js";
@@ -17,7 +19,6 @@ import {
   type ProviderAuthChoiceMetadata,
   resolveManifestProviderAuthChoices,
 } from "../plugins/provider-auth-choices.js";
-import { normalizeTokenProviderInput } from "../plugins/provider-auth-input.js";
 import { resolveProviderInstallCatalogEntries } from "../plugins/provider-install-catalog.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -43,10 +44,9 @@ import type { OnboardOptions, ResetScope } from "./onboard-types.js";
 const VALID_RESET_SCOPES = new Set<ResetScope>(["config", "config+creds+sessions", "full"]);
 
 function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): boolean {
+  const reject = (message: string) => rejectOption(opts, runtime, message);
   if (opts.mode !== undefined && opts.mode !== "local" && opts.mode !== "remote") {
-    return rejectOption(
-      opts,
-      runtime,
+    return reject(
       `Invalid --mode "${String(opts.mode)}". Use "local" or "remote", or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
     );
   }
@@ -56,9 +56,7 @@ function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): bo
     opts.remotePassword !== undefined ? "--remote-password" : undefined,
   ].filter((flag): flag is string => flag !== undefined);
   if (opts.nonInteractive && (opts.mode ?? "local") === "local" && remoteOnlyFlags.length > 0) {
-    return rejectOption(
-      opts,
-      runtime,
+    return reject(
       `${remoteOnlyFlags.join(" and ")} ${remoteOnlyFlags.length === 1 ? "requires" : "require"} --mode remote in non-interactive setup.`,
     );
   }
@@ -67,11 +65,11 @@ function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): bo
     ["--remote-password", opts.remotePassword],
   ] as const) {
     if (value !== undefined && !value.trim()) {
-      return rejectOption(opts, runtime, `Invalid ${flag}: value cannot be empty.`);
+      return reject(`Invalid ${flag}: value cannot be empty.`);
     }
   }
   if (opts.remoteToken !== undefined && opts.remotePassword !== undefined) {
-    return rejectOption(opts, runtime, "Use either --remote-token or --remote-password, not both.");
+    return reject("Use either --remote-token or --remote-password, not both.");
   }
   if (opts.mode === "remote") {
     const localGatewayCredentials = [
@@ -85,11 +83,7 @@ function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): bo
     ] as const;
     for (const [flag, value, remoteFlag] of localGatewayCredentials) {
       if (value !== undefined) {
-        return rejectOption(
-          opts,
-          runtime,
-          `${flag} configures local gateway auth. Use ${remoteFlag} in remote mode.`,
-        );
+        return reject(`${flag} configures local gateway auth. Use ${remoteFlag} in remote mode.`);
       }
     }
   }
@@ -105,16 +99,12 @@ function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): bo
       }
       const envValue = process.env[envName]?.trim();
       if (!envValue) {
-        return rejectOption(
-          opts,
-          runtime,
+        return reject(
           `${flag} requires ${envName} to be set when --secret-input-mode ref is used.`,
         );
       }
       if (value.trim() !== envValue) {
-        return rejectOption(
-          opts,
-          runtime,
+        return reject(
           `${flag} does not match ${envName}. Set the environment variable to the same value or omit the flag.`,
         );
       }
@@ -126,38 +116,30 @@ function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): bo
   if (opts.gatewayTokenRefEnv !== undefined) {
     const gatewayTokenRefEnv = opts.gatewayTokenRefEnv.trim();
     if (!isValidEnvSecretRefId(gatewayTokenRefEnv)) {
-      return rejectOption(
-        opts,
-        runtime,
+      return reject(
         "Invalid --gateway-token-ref-env. Use an environment variable name like OPENCLAW_GATEWAY_TOKEN.",
       );
     }
     if (opts.gatewayToken !== undefined) {
-      return rejectOption(
-        opts,
-        runtime,
+      return reject(
         "Use either --gateway-token or --gateway-token-ref-env, not both. Prefer --gateway-token-ref-env to avoid writing plaintext tokens.",
       );
     }
     if (!process.env[gatewayTokenRefEnv]?.trim()) {
-      return rejectOption(
-        opts,
-        runtime,
+      return reject(
         `Environment variable "${gatewayTokenRefEnv}" is missing or empty. Export it first, then rerun ${formatCliCommand("openclaw onboard")}.`,
       );
     }
   }
   if (opts.nonInteractive && opts.mode === "remote" && !opts.remoteUrl?.trim()) {
-    return rejectOption(
-      opts,
-      runtime,
+    return reject(
       `Missing --remote-url for remote mode. Example: ${formatCliCommand("openclaw onboard --non-interactive --accept-risk --mode remote --remote-url ws://127.0.0.1:3000")}.`,
     );
   }
   if (opts.nonInteractive && opts.mode === "remote" && opts.remoteUrl?.trim()) {
     const remoteUrlError = validateGatewayWebSocketUrl(opts.remoteUrl);
     if (remoteUrlError) {
-      return rejectOption(opts, runtime, remoteUrlError);
+      return reject(remoteUrlError);
     }
   }
   if (
@@ -165,9 +147,7 @@ function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): bo
     (opts.flow === "import" || opts.importSource || opts.importSecrets) &&
     !opts.importFrom?.trim()
   ) {
-    return rejectOption(
-      opts,
-      runtime,
+    return reject(
       `--import-from is required for non-interactive migration import. Run ${formatCliCommand("openclaw migrate list")} to choose a provider.`,
     );
   }
@@ -178,9 +158,11 @@ async function validateResetAuthChoice(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   baseConfig: OpenClawConfig;
+  discoveryConfig: OpenClawConfig;
   workspaceDir: string;
   resetScope: ResetScope;
 }): Promise<boolean> {
+  const reject = (message: string) => rejectOption(params.opts, params.runtime, message);
   const inferredAuthChoice =
     params.opts.authChoice ||
     params.opts.mode === "remote" ||
@@ -192,9 +174,7 @@ async function validateResetAuthChoice(params: {
           env: process.env,
         });
   if (inferredAuthChoice && inferredAuthChoice.matches.length > 1) {
-    return rejectOption(
-      params.opts,
-      params.runtime,
+    return reject(
       [
         `Multiple ${params.opts.nonInteractive ? "API key" : "provider credential"} flags were provided for ${params.opts.nonInteractive ? "non-interactive" : "interactive"} setup.`,
         "Use a single provider flag or pass --auth-choice explicitly.",
@@ -211,42 +191,35 @@ async function validateResetAuthChoice(params: {
   }
   const availableChoices = new Set(
     formatAuthChoiceChoicesForCli({
-      includeSkip: true,
       config: params.baseConfig,
       workspaceDir: params.workspaceDir,
       env: process.env,
     }).split("|"),
   );
   if (!availableChoices.has(authChoice)) {
-    return rejectOption(
-      params.opts,
-      params.runtime,
+    return reject(
       `Auth choice "${authChoice}" was not matched to a provider setup flow. Run ${formatCliCommand("openclaw onboard")} to choose interactively.`,
     );
   }
+  const providerLookup = {
+    config: params.baseConfig,
+    workspaceDir: params.workspaceDir,
+    env: process.env,
+    includeUntrustedWorkspacePlugins: false,
+  };
   const providerAuthChoices: Array<ProviderAuthChoiceMetadata & { providerAliases?: string[] }> = [
-    ...resolveManifestProviderAuthChoices({
-      config: params.baseConfig,
-      workspaceDir: params.workspaceDir,
-      env: process.env,
-      includeUntrustedWorkspacePlugins: false,
-    }),
-    ...resolveProviderInstallCatalogEntries({
-      config: params.baseConfig,
-      workspaceDir: params.workspaceDir,
-      env: process.env,
-      includeUntrustedWorkspacePlugins: false,
-    }),
+    ...resolveManifestProviderAuthChoices(providerLookup),
+    ...resolveProviderInstallCatalogEntries(providerLookup),
   ];
   const isGenericProviderChoice = GENERIC_PROVIDER_AUTH_CHOICES.includes(authChoice);
-  const normalizedTokenProvider = normalizeTokenProviderInput(params.opts.tokenProvider);
+  const normalizedTokenProvider = normalizeOptionalLowercaseString(params.opts.tokenProvider);
   const inferredOptionKey = inferredAuthChoice?.matches[0]?.optionKey;
   const providerAuthChoice = isGenericProviderChoice
     ? providerAuthChoices.find((choice) => {
         const providerMatches = normalizedTokenProvider
-          ? normalizeTokenProviderInput(choice.providerId) === normalizedTokenProvider ||
+          ? normalizeOptionalLowercaseString(choice.providerId) === normalizedTokenProvider ||
             choice.providerAliases?.some(
-              (alias) => normalizeTokenProviderInput(alias) === normalizedTokenProvider,
+              (alias) => normalizeOptionalLowercaseString(alias) === normalizedTokenProvider,
             )
           : inferredOptionKey !== undefined && choice.optionKey === inferredOptionKey;
         const methodId = choice.methodId.toLowerCase();
@@ -265,9 +238,7 @@ async function validateResetAuthChoice(params: {
     !normalizedTokenProvider &&
     !inferredOptionKey
   ) {
-    return rejectOption(
-      params.opts,
-      params.runtime,
+    return reject(
       `Auth choice "${authChoice}" requires --token-provider in non-interactive setup.`,
     );
   }
@@ -276,16 +247,10 @@ async function validateResetAuthChoice(params: {
     (authChoice === "token" || authChoice === "setup-token") &&
     !params.opts.token?.trim()
   ) {
-    return rejectOption(
-      params.opts,
-      params.runtime,
-      `Auth choice "${authChoice}" requires --token in non-interactive setup.`,
-    );
+    return reject(`Auth choice "${authChoice}" requires --token in non-interactive setup.`);
   }
   if (params.opts.nonInteractive && isGenericProviderChoice && !providerAuthChoice) {
-    return rejectOption(
-      params.opts,
-      params.runtime,
+    return reject(
       `Auth choice "${authChoice}" was not matched to provider "${params.opts.tokenProvider?.trim()}".`,
     );
   }
@@ -314,50 +279,90 @@ async function validateResetAuthChoice(params: {
       CustomApiError,
       parseNonInteractiveCustomApiFlags,
       resolveCustomProviderId,
+      resolveCustomProviderNoAuth,
+      resolveNonInteractiveCustomApiModelIds,
     } = await import("./onboard-custom-config.js");
     try {
       const custom = parseNonInteractiveCustomApiFlags({
         baseUrl: params.opts.customBaseUrl,
         modelId: params.opts.customModelId,
         compatibility: params.opts.customCompatibility,
-        apiKey: undefined,
+        apiKey: params.opts.customApiKey,
+        noAuth: params.opts.customNoAuth,
         providerId: params.opts.customProviderId,
         supportsImageInput: params.opts.customImageInput,
       });
       const customProviderId = resolveCustomProviderId({
-        config: params.baseConfig,
+        config: params.discoveryConfig,
         baseUrl: custom.baseUrl,
         providerId: custom.providerId,
       }).providerId;
-      const customCredential = await resolveNonInteractiveCredential({
-        provider: customProviderId,
-        cfg: params.baseConfig,
-        flagValue: params.opts.customApiKey,
-        flagName: "--custom-api-key",
-        envVar: "CUSTOM_API_KEY",
-        runtime: params.runtime,
-        agentDir: target.agentDir,
-        workspaceDir: params.workspaceDir,
-        allowProfile: params.resetScope === "config",
-        required: false,
-        secretInputMode: params.opts.secretInputMode,
-        json: params.opts.json,
+      const configuredKey = params.discoveryConfig.models?.providers?.[customProviderId]?.apiKey;
+      const noAuth = resolveCustomProviderNoAuth({
+        ...custom,
+        config: params.discoveryConfig,
+        providerId: customProviderId,
+        apiKey: custom.apiKey ?? process.env.CUSTOM_API_KEY?.trim(),
       });
+      const customCredential = noAuth
+        ? undefined
+        : await resolveNonInteractiveCredential({
+            provider: customProviderId,
+            cfg: params.baseConfig,
+            flagValue: params.opts.customApiKey,
+            flagName: "--custom-api-key",
+            envVar: "CUSTOM_API_KEY",
+            runtime: params.runtime,
+            agentDir: target.agentDir,
+            workspaceDir: params.workspaceDir,
+            allowProfile:
+              params.resetScope === "config" && !hasConfiguredSecretInput(configuredKey),
+            required: false,
+            secretInputMode: params.opts.secretInputMode,
+            json: params.opts.json,
+          });
       if (params.opts.customApiKey?.trim() && !customCredential) {
         return false;
       }
+      if (
+        !custom.modelId &&
+        !noAuth &&
+        !customCredential &&
+        hasConfiguredSecretInput(configuredKey)
+      ) {
+        return reject(
+          "Reset would remove the configured discovery credential. Pass --custom-api-key or rerun without --reset.",
+        );
+      }
+      const modelIds = await resolveNonInteractiveCustomApiModelIds({
+        ...custom,
+        config: params.discoveryConfig,
+        noAuth,
+        apiKey: customCredential?.key,
+        agentDir: target.agentDir,
+      });
       applyCustomApiConfig({
         ...custom,
+        modelId: modelIds[0] ?? "",
         config: params.baseConfig,
-        apiKey: undefined,
+        noAuth,
+        apiKey: customCredential?.key,
       });
+      if (noAuth) {
+        params.opts.customNoAuth = true;
+      }
+      params.opts.customModelIds = modelIds;
+      params.opts.customProviderId = customProviderId;
     } catch (error) {
       const message =
         error instanceof CustomApiError &&
-        (error.code === "missing_required" || error.code === "invalid_compatibility")
+        (error.code === "missing_required" ||
+          error.code === "invalid_compatibility" ||
+          error.code === "no_auth_conflict" ||
+          error.code === "no_auth_unsupported")
           ? error.message
           : `Invalid custom provider config: ${formatErrorMessage(error)}`;
-      return rejectOption(params.opts, params.runtime, message);
+      return reject(message);
     }
   } else {
     const runtimeProvider = providerAuthChoice
@@ -384,9 +389,7 @@ async function validateResetAuthChoice(params: {
         : !runtimeMethod.runNonInteractive
           ? "non-interactive setup unsupported"
           : "reset validation unavailable";
-      return rejectOption(
-        params.opts,
-        params.runtime,
+      return reject(
         `Auth choice "${authChoice}" cannot be safely preflighted with --reset (${reason}). Choose a provider method that supports non-interactive reset validation, or run setup without --reset.`,
       );
     }
@@ -415,43 +418,6 @@ async function validateResetAuthChoice(params: {
     }
   }
   return true;
-}
-
-function validateResetMigrationImport(params: {
-  opts: OnboardOptions;
-  runtime: RuntimeEnv;
-}): boolean {
-  if (
-    !params.opts.importFrom &&
-    !params.opts.importSource &&
-    !params.opts.importSecrets &&
-    params.opts.flow !== "import"
-  ) {
-    return true;
-  }
-  return rejectOption(
-    params.opts,
-    params.runtime,
-    "Migration import cannot be combined with --reset because provider input must be planned before any state is removed. Run the import without --reset.",
-  );
-}
-
-function validateResetNonInteractiveGateway(params: {
-  opts: OnboardOptions;
-  runtime: RuntimeEnv;
-  baseConfig: OpenClawConfig;
-}): boolean {
-  if (!params.opts.nonInteractive || (params.opts.mode ?? "local") === "remote") {
-    return true;
-  }
-  return Boolean(
-    applyNonInteractiveGatewayConfig({
-      nextConfig: params.baseConfig,
-      opts: params.opts,
-      runtime: params.runtime,
-      defaultPort: resolveGatewayPort(params.baseConfig),
-    }),
-  );
 }
 
 /**
@@ -489,7 +455,6 @@ function wantsClassicInteractiveSetup(opts: OnboardOptions): boolean {
   );
 }
 
-/** Runs the onboard command after normalizing legacy flags and setup mode. */
 export async function setupWizardCommand(
   opts: OnboardOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -513,11 +478,12 @@ export async function setupWizardCommand(
     normalizedAuthChoice === opts.authChoice && flow === opts.flow
       ? opts
       : { ...opts, authChoice: normalizedAuthChoice, flow };
+  const reject = (message: string) => rejectOption(normalizedOpts, runtime, message);
   if (normalizedOpts.agentName !== undefined) {
     const { validateFirstOnboardingAgentName } = await import("./onboard-agent.js");
     const error = validateFirstOnboardingAgentName(normalizedOpts.agentName);
     if (error) {
-      rejectOption(normalizedOpts, runtime, `Invalid --agent-name: ${error}`);
+      reject(`Invalid --agent-name: ${error}`);
       return;
     }
   }
@@ -528,7 +494,7 @@ export async function setupWizardCommand(
     const { validateSetupWorkspacePath } = await import("../wizard/setup.workspace.js");
     const error = validateSetupWorkspacePath(normalizedOpts.workspace.trim());
     if (error) {
-      rejectOption(normalizedOpts, runtime, `Invalid --workspace: ${error}`);
+      reject(`Invalid --workspace: ${error}`);
       return;
     }
   }
@@ -540,25 +506,19 @@ export async function setupWizardCommand(
       normalizedOpts.flow === "import" ||
       (!normalizedOpts.nonInteractive && wantsClassicInteractiveSetup(normalizedOpts)))
   ) {
-    rejectOption(
-      normalizedOpts,
-      runtime,
+    reject(
       "--team supports local guided or non-interactive onboarding. Remove classic, remote, or import options.",
     );
     return;
   }
   if (normalizedOpts.classic && normalizedOpts.nonInteractive) {
-    rejectOption(
-      normalizedOpts,
-      runtime,
+    reject(
       "--classic cannot be combined with --non-interactive. Remove --non-interactive to open the classic wizard, or remove --classic for automated setup.",
     );
     return;
   }
   if (normalizedOpts.tui && normalizedOpts.nonInteractive) {
-    rejectOption(
-      normalizedOpts,
-      runtime,
+    reject(
       "--tui cannot be combined with --non-interactive. Remove --tui for automation, or remove --non-interactive to open the terminal hatch.",
     );
     return;
@@ -568,26 +528,20 @@ export async function setupWizardCommand(
     normalizedOpts.secretInputMode !== "plaintext" && // pragma: allowlist secret
     normalizedOpts.secretInputMode !== "ref" // pragma: allowlist secret
   ) {
-    rejectOption(
-      normalizedOpts,
-      runtime,
+    reject(
       `Invalid --secret-input-mode. Use "plaintext" or "ref", or run ${formatCliCommand("openclaw onboard")} for the interactive setup.`,
     );
     return;
   }
 
   if (normalizedOpts.resetScope && !VALID_RESET_SCOPES.has(normalizedOpts.resetScope)) {
-    rejectOption(
-      normalizedOpts,
-      runtime,
+    reject(
       `Invalid --reset-scope. Use "config", "config+creds+sessions", or "full". Run ${formatCliCommand("openclaw onboard --reset --reset-scope config")} for a config-only reset.`,
     );
     return;
   }
   if (normalizedOpts.resetScope && !normalizedOpts.reset) {
-    rejectOption(
-      normalizedOpts,
-      runtime,
+    reject(
       `--reset-scope requires --reset. Re-run with ${formatCliCommand(`openclaw onboard --reset --reset-scope ${normalizedOpts.resetScope}`)}.`,
     );
     return;
@@ -596,9 +550,7 @@ export async function setupWizardCommand(
   if (normalizedOpts.nonInteractive && normalizedOpts.acceptRisk !== true) {
     // Non-interactive setup can write credentials and daemon config without a
     // prompt, so the operator must acknowledge the security docs explicitly.
-    rejectOption(
-      normalizedOpts,
-      runtime,
+    reject(
       [
         "Non-interactive setup requires explicit risk acknowledgement.",
         "Read: https://docs.openclaw.ai/security",
@@ -611,7 +563,7 @@ export async function setupWizardCommand(
   if (!normalizedOpts.nonInteractive && !hasInteractiveOnboardingTty()) {
     // Reset is destructive, so prove the selected interactive surface can run
     // before reading or moving any operator state.
-    rejectOption(normalizedOpts, runtime, t("wizard.guided.ttyRequired"));
+    reject(t("wizard.guided.ttyRequired"));
     return;
   }
 
@@ -634,9 +586,31 @@ export async function setupWizardCommand(
 
   const runSetupAfterOptionalReset = async () => {
     if (normalizedOpts.reset) {
-      const snapshot = await readConfigFileSnapshot();
-      const baseConfig = snapshot.sourceConfig ?? (snapshot.valid ? snapshot.config : {});
+      const [{ readConfigSnapshotBeforeEngineSelection }, { resolveDatabaseFamilyEngines }] =
+        await Promise.all([
+          import("./config-preflight-snapshot.js"),
+          import("../infra/database-engine/registry.js"),
+        ]);
+      const snapshot = await readConfigSnapshotBeforeEngineSelection(process.env, {
+        isolateEnv: false,
+      });
       const resetScope: ResetScope = normalizedOpts.resetScope ?? "config+creds+sessions";
+      if (
+        isConfigReadFailure(snapshot) ||
+        snapshot.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
+      ) {
+        reject(
+          "Cannot determine the source database from an unreadable config. Repair the config before using onboard --reset. For a file-only reset without onboarding, use openclaw reset --scope config.",
+        );
+        return;
+      }
+      if (Object.values(resolveDatabaseFamilyEngines(snapshot.config)).includes("postgres")) {
+        reject(
+          "Onboarding reset retains database state and cannot discard its PostgreSQL routing. Rerun without --reset, or use openclaw database port --to sqlite before resetting.",
+        );
+        return;
+      }
+      const baseConfig = snapshot.sourceConfig ?? (snapshot.valid ? snapshot.config : {});
       // Every reset scope removes the config file. Validate setup against the
       // empty config and requested/default workspace that dispatch will see.
       const setupBaseConfig: OpenClawConfig = {};
@@ -645,29 +619,10 @@ export async function setupWizardCommand(
         normalizedOpts.workspace ?? baseConfig.agents?.defaults?.workspace;
       if (
         resetScope === "full" &&
-        normalizedOpts.workspace === undefined &&
-        snapshot.exists &&
-        !snapshot.valid &&
-        // A snapshot always carries a sourceConfig object (empty on failure), so
-        // only readError distinguishes "config could not be read" from "config
-        // parsed but configures no workspace", where the default is correct.
-        snapshot.readError !== undefined
-      ) {
-        rejectOption(
-          normalizedOpts,
-          runtime,
-          "Cannot determine the configured workspace from an unreadable config. Pass --workspace with the workspace to remove, or use a narrower --reset-scope.",
-        );
-        return;
-      }
-      if (
-        resetScope === "full" &&
         configuredWorkspace !== undefined &&
         (typeof configuredWorkspace !== "string" || !configuredWorkspace.trim())
       ) {
-        rejectOption(
-          normalizedOpts,
-          runtime,
+        reject(
           "Configured workspace is invalid. Pass --workspace with the workspace to remove, or use a narrower --reset-scope.",
         );
         return;
@@ -684,6 +639,7 @@ export async function setupWizardCommand(
           opts: normalizedOpts,
           runtime,
           baseConfig: setupBaseConfig,
+          discoveryConfig: baseConfig,
           workspaceDir: setupWorkspaceDir,
           resetScope,
         }))
@@ -691,20 +647,34 @@ export async function setupWizardCommand(
         return;
       }
       if (
-        !validateResetNonInteractiveGateway({
+        normalizedOpts.nonInteractive &&
+        (normalizedOpts.mode ?? "local") !== "remote" &&
+        !(await applyNonInteractiveGatewayConfig({
+          nextConfig: setupBaseConfig,
           opts: normalizedOpts,
           runtime,
-          baseConfig: setupBaseConfig,
-        })
+          defaultPort: resolveGatewayPort(setupBaseConfig),
+        }))
       ) {
         return;
       }
-      if (!validateResetMigrationImport({ opts: normalizedOpts, runtime })) {
+      if (
+        normalizedOpts.importFrom ||
+        normalizedOpts.importSource ||
+        normalizedOpts.importSecrets ||
+        normalizedOpts.flow === "import"
+      ) {
+        reject(
+          "Migration import cannot be combined with --reset because provider input must be planned before any state is removed. Run the import without --reset.",
+        );
         return;
       }
       // Reset is deliberately the final pre-dispatch step: no rejectable option
       // checks may run after user state has moved to Trash.
       await handleReset(resetScope, workspaceDir, runtime);
+      // Reset retains SQLite state; select it from the fresh config before setup resumes.
+      const { prepareCliDatabaseEngine } = await import("../cli/database-engine-selection.js");
+      await prepareCliDatabaseEngine(["node", "openclaw", "onboard"]);
     }
 
     await runSetup(normalizedOpts, runtime);

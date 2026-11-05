@@ -4,11 +4,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildSlackInteractiveBlocks,
   buildSlackPresentationBlocks,
-  canRenderSlackPresentation,
+  buildSlackPresentationBlocksIfComplete,
   resolveSlackBlockOffsets,
   type SlackBlock,
 } from "./blocks-render.js";
-import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 
 describe("buildSlackInteractiveBlocks", () => {
   it("preserves long legacy text, whitespace, protected entities, and surrogate pairs", () => {
@@ -79,7 +78,7 @@ describe("buildSlackInteractiveBlocks", () => {
       },
     },
   ])("does not silently truncate an oversized portable $name", ({ block }) => {
-    expect(canRenderSlackPresentation({ blocks: [block] })).toBe(false);
+    expect(buildSlackPresentationBlocksIfComplete({ blocks: [block] })).toBeUndefined();
   });
 
   it("drops Slack select options with values beyond Block Kit limits", () => {
@@ -297,6 +296,30 @@ describe("buildSlackInteractiveBlocks", () => {
 });
 
 describe("buildSlackPresentationBlocks", () => {
+  it.each(["👨‍👩‍👧‍👦", "🇦🇹", "👍🏽", "e\u0301", "\r\n"])(
+    "keeps the complete %s grapheme across native mrkdwn section boundaries",
+    (grapheme) => {
+      for (const marker of ["&amp;", "`", "```"] as const) {
+        const closing = marker === "&amp;" ? "" : marker;
+        const first = Array.from(grapheme)[0]!;
+        const prefix = "x".repeat(3_000 - marker.length - closing.length - first.length);
+        const blocks = buildSlackPresentationBlocks({
+          blocks: [{ type: "text", text: `${marker}${prefix}${grapheme}tail${closing}` }],
+        });
+        const chunks = blocks.flatMap((block) =>
+          block.type === "section" && "text" in block && block.text?.type === "mrkdwn"
+            ? [block.text.text]
+            : [],
+        );
+
+        expect(chunks, marker).toEqual([
+          `${marker}${prefix}${closing}`,
+          `${closing}${grapheme}tail${closing}`,
+        ]);
+      }
+    },
+  );
+
   it.each(["text", "context"] as const)(
     "preserves long %s presentation blocks without truncating their mrkdwn",
     (type) => {
@@ -312,7 +335,7 @@ describe("buildSlackPresentationBlocks", () => {
         return element?.type === "mrkdwn" ? [element.text] : [];
       });
 
-      expect(canRenderSlackPresentation(presentation)).toBe(true);
+      expect(buildSlackPresentationBlocksIfComplete(presentation)).toBeDefined();
       expect(chunks.join("")).toBe(text);
       expect(chunks).toHaveLength(2);
       expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
@@ -358,7 +381,7 @@ describe("buildSlackPresentationBlocks", () => {
         ],
       ]),
     };
-    expect(canRenderSlackPresentation(presentation, renderOptions)).toBe(true);
+    expect(buildSlackPresentationBlocksIfComplete(presentation, renderOptions)).toBeDefined();
     expect(buildSlackPresentationBlocks(presentation, renderOptions)).toMatchObject([
       { type: "section" },
       {
@@ -603,7 +626,7 @@ describe("buildSlackPresentationBlocks", () => {
         },
       ],
     };
-    expect(canRenderSlackPresentation(presentation, offsets)).toBe(false);
+    expect(buildSlackPresentationBlocksIfComplete(presentation, offsets)).toBeUndefined();
     expect(buildSlackPresentationBlocks(presentation, offsets)).toEqual([
       {
         type: "context",
@@ -629,7 +652,7 @@ describe("buildSlackPresentationBlocks", () => {
       blocks: [table("First", "a".repeat(45)), table("Second", "b".repeat(55))],
     };
 
-    expect(canRenderSlackPresentation(presentation)).toBe(false);
+    expect(buildSlackPresentationBlocksIfComplete(presentation)).toBeUndefined();
     expect(buildSlackPresentationBlocks(presentation)).toEqual([]);
   });
 
@@ -679,55 +702,11 @@ describe("buildSlackPresentationBlocks", () => {
     };
     const options = { dataTableCellCharacterCountOffset: offset };
 
-    expect(canRenderSlackPresentation(presentation, options)).toBe(native);
+    expect(buildSlackPresentationBlocksIfComplete(presentation, options) !== undefined).toBe(
+      native,
+    );
     expect(buildSlackPresentationBlocks(presentation, options).map((block) => block.type)).toEqual(
       native ? ["data_table", "data_table"] : [],
     );
-  });
-});
-
-describe("resolveSlackReplyBlocks", () => {
-  it("offsets legacy interactive blocks after channel and presentation controls", () => {
-    const blocks = resolveSlackReplyBlocks({
-      channelData: {
-        slack: {
-          blocks: [
-            {
-              type: "actions",
-              block_id: "openclaw_reply_buttons_1",
-              elements: [],
-            },
-          ],
-        },
-      },
-      presentation: {
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [{ label: "Stage", value: "stage" }],
-          },
-        ],
-      },
-      interactive: {
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [{ label: "Approve", value: "approve" }],
-          },
-        ],
-      },
-    });
-
-    const presentationButtonBlock = blocks?.[1] as
-      | { elements?: Array<{ action_id?: string }> }
-      | undefined;
-    const legacyButtonBlock = blocks?.[2] as
-      | { elements?: Array<{ action_id?: string }> }
-      | undefined;
-    expect(blocks?.[0]?.block_id).toBe("openclaw_reply_buttons_1");
-    expect(blocks?.[1]?.block_id).toBe("openclaw_reply_buttons_2");
-    expect(presentationButtonBlock?.elements?.[0]?.action_id).toBe("openclaw:reply_button:2:1");
-    expect(blocks?.[2]?.block_id).toBe("openclaw_reply_buttons_3");
-    expect(legacyButtonBlock?.elements?.[0]?.action_id).toBe("openclaw:reply_button:3:1");
   });
 });

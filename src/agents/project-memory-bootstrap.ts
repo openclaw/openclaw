@@ -1,3 +1,4 @@
+import { raceWithTimeout } from "@openclaw/retry";
 import {
   extractProjectKeysFromCuratedEntry,
   normalizeProjectAnnotationKey,
@@ -5,6 +6,7 @@ import {
   stripMemoryAnnotationCarriers,
 } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   isAutomaticMemoryEntryEligible,
@@ -157,6 +159,7 @@ async function prepareLegacyProjectMemoryBootstrap(
   params: { cfg: OpenClawConfig; agentId: string; activeProjectKeys: readonly string[] },
   runtime: MemoryPluginRuntime,
 ): Promise<string[]> {
+  using phases = observeDiagnosticsTimelinePhases("project-memory.legacy.manager");
   try {
     const lookup = await runtime.getMemorySearchManager({
       cfg: params.cfg,
@@ -166,10 +169,12 @@ async function prepareLegacyProjectMemoryBootstrap(
     if (!lookup.manager?.listCuratedProjectCandidates) {
       return [];
     }
+    phases.mark("project-memory.legacy.candidates");
     const results = await lookup.manager.listCuratedProjectCandidates({
       activeProjectKeys: [...params.activeProjectKeys],
       limit: 48,
     });
+    phases.mark("project-memory.legacy.render");
     const providerId = normalizePluginsConfig(params.cfg.plugins).slots.memory ?? "memory";
     return buildProjectMemoryBootstrap({
       entries: results.map((entry) => toLegacyProjectMemoryHit(entry, providerId)),
@@ -180,82 +185,134 @@ async function prepareLegacyProjectMemoryBootstrap(
   }
 }
 
-export async function prepareProjectMemoryBootstrap(params: {
+type ProjectMemoryBootstrapParams = {
   cfg: OpenClawConfig;
   agentId: string;
   activeProjectKeys: readonly string[];
   context?: MemoryCallerContext;
-}): Promise<string[]> {
+};
+
+export async function prepareProjectMemoryBootstrap(
+  params: ProjectMemoryBootstrapParams,
+): Promise<string[]> {
   if (params.activeProjectKeys.length === 0) {
     return [];
   }
+  // Bound prompt waiting; the read keeps the turn's authority and owns its late cleanup.
+  return await raceWithTimeout(
+    () => loadProjectMemoryBootstrap(params),
+    1_000,
+    () => {
+      log.warn(
+        "project memory recall skipped: 1000ms budget exceeded; continuing without project candidates",
+      );
+      return [];
+    },
+    { signal: params.context?.signal, onAbort: () => [] },
+  );
+}
+
+async function loadProjectMemoryBootstrap(params: ProjectMemoryBootstrapParams): Promise<string[]> {
+  using phases = observeDiagnosticsTimelinePhases("project-memory.select");
   // Only a native slot owner serves recall under caller authority. Classification reads
   // owners this process already loaded; legacy owners keep the loaded-runtime path.
   if (resolveLoadedMemoryProviderKind(params.cfg) !== "native") {
+    phases.mark("project-memory.legacy");
     const runtime = getMemoryRuntime();
     return runtime ? await prepareLegacyProjectMemoryBootstrap(params, runtime) : [];
   }
   let active = true;
+  const caller: MemoryCallerContext = params.context ?? {
+    authority: { kind: "host", operation: "project-memory-bootstrap" },
+    assertCurrent() {},
+  };
+  // Fails closed until the audience owner is loaded; then it checks the caller and its audience.
+  let assertCallerCurrent = (): void => {
+    throw new Error("project memory caller authority is unavailable");
+  };
   const context: MemoryCallerContext = {
-    authority: params.context?.authority ?? { kind: "host", operation: "project-memory-bootstrap" },
-    signal: params.context?.signal,
+    authority: caller.authority,
+    signal: caller.signal,
     assertCurrent() {
       if (!active) {
         throw new Error("project memory request has ended");
       }
-      params.context?.signal?.throwIfAborted();
-      params.context?.assertCurrent();
+      assertCallerCurrent();
     },
   };
   let provider: MemoryProviderHandle | null = null;
   let lines: string[] = [];
+  const selectedPluginId = normalizePluginsConfig(params.cfg.plugins).slots.memory;
   try {
-    const { getActiveMemoryProviderCore } = await import("../plugins/memory-runtime.js");
+    phases.mark("project-memory.imports");
+    const [{ getActiveMemoryProviderCore }, { assertMemoryCallerCurrent }] = await Promise.all([
+      import("../plugins/memory-runtime.js"),
+      import("../plugins/memory-audience.js"),
+    ]);
+    assertCallerCurrent = () => assertMemoryCallerCurrent(caller);
+    phases.mark("project-memory.provider");
     const lookup = await getActiveMemoryProviderCore({
       cfg: params.cfg,
       agentId: params.agentId,
       context,
     });
     provider = lookup.provider;
-    if (
-      lookup.provider?.candidates &&
+    if (!lookup.provider) {
+      log.debug(
+        `project memory recall denied by ${lookup.providerId ?? selectedPluginId ?? "selected memory plugin"}: ${lookup.error ?? "provider unavailable"}`,
+      );
+    } else if (
+      lookup.provider.candidates &&
       lookup.provider.capabilities.candidates.includes("project")
     ) {
+      phases.mark("project-memory.candidates");
       const results = await lookup.provider.candidates({
         kind: "project",
-        activeProjectKeys: [...params.activeProjectKeys],
+        // buildProjectMemoryBootstrap applies the all-of key check when the provider cannot filter.
+        ...(lookup.provider.capabilities.projectFilter
+          ? { activeProjectKeys: [...params.activeProjectKeys] }
+          : {}),
         limit: 48,
       });
+      phases.mark("project-memory.authority");
       context.assertCurrent();
+      phases.mark("project-memory.render");
       lines = buildProjectMemoryBootstrap({
         entries: results.hits,
         activeProjectKeys: params.activeProjectKeys,
       });
+    } else {
+      log.debug(
+        `project memory recall unsupported by ${lookup.providerId ?? selectedPluginId ?? "selected memory plugin"}`,
+      );
     }
-  } catch {
+  } catch (error) {
+    log.debug(
+      `project memory recall failed for ${selectedPluginId ?? "selected memory plugin"}: ${String(error)}`,
+    );
     lines = [];
   } finally {
+    phases.mark("project-memory.close");
     active = false;
     try {
       await provider?.close();
     } catch (error) {
       // Project recall is optional: a failed lease release omits recall, never the attempt.
-      log.debug(`project memory cleanup failed: ${String(error)}`);
+      log.debug(
+        `project memory cleanup failed for ${selectedPluginId ?? "selected memory plugin"}: ${String(error)}`,
+      );
       lines = [];
     }
   }
+  phases.mark("project-memory.publish");
   try {
-    // Cleanup may yield after selection; the owning run still controls release.
-    params.context?.signal?.throwIfAborted();
-    params.context?.assertCurrent();
+    // Cleanup may yield after selection; the owning run and its audience still control release.
+    assertCallerCurrent();
     return lines;
-  } catch {
+  } catch (error) {
+    log.debug(
+      `project memory recall denied after provider close for ${selectedPluginId ?? "selected memory plugin"}: ${String(error)}`,
+    );
     return [];
   }
-}
-
-export function buildProjectMemoryWriteInstruction(projectKey: string | null | undefined): string {
-  return projectKey && !/[\r\n<>]/u.test(projectKey)
-    ? `For every repository-specific memory entry you write, add <!-- project: ${projectKey} --> on the same line. Do not project-scope user-level preferences, standing intents, or facts that are not specific to this repository.`
-    : "";
 }

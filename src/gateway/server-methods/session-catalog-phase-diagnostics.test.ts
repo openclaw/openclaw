@@ -1,21 +1,25 @@
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   onInternalDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
+  type DiagnosticEventMetadata,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
 import { runWithDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import * as projectionAccess from "../session-row-projection-access.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
+import { catalogProvider as provider } from "./session-catalog.fixtures.test-support.js";
 import {
   hoisted,
-  provider,
   resetSessionCatalogTestState,
   startCall,
+  type SessionCatalogProvider,
 } from "./session-catalog.test-helpers.js";
 
 type Phase = Extract<DiagnosticEventPayload, { type: "diagnostic.phase.completed" }>;
@@ -34,22 +38,36 @@ describe("registered catalog list phase diagnostics", () => {
   let clock: number;
   let cpuMicros: number;
   let dirty: boolean;
-  let config: { agents: { list: { id: string }[] } };
+  let config: OpenClawConfig;
   let projection: ReturnType<typeof createSessionRowProjectionFixture>;
   let phases: Phase[];
   let trustedFlags: boolean[];
   let threadCpuUsage: MockInstance<typeof process.threadCpuUsage>;
-
-  const observe = () =>
-    onTrustedInternalDiagnosticEvent(
-      (event, metadata) => {
-        if (event.type === "diagnostic.phase.completed") {
-          trustedFlags.push(metadata.trusted);
-          phases.push(event);
-        }
-      },
-      { include: ["diagnostic.phase.completed"] },
+  const install = (list?: SessionCatalogProvider["list"]) => {
+    hoisted.activeRegistry.sessionCatalogs = [
+      { provider: provider(privateText, list ? { list } : {}) },
+    ];
+  };
+  const start = (trace?: typeof leaderTrace, client?: Parameters<typeof startCall>[3]) => {
+    return runWithDiagnosticTraceContext(trace, () =>
+      startCall("sessions.catalog.list", {}, config, client),
     );
+  };
+  const expectNames = (traceId: string, ...names: string[]) =>
+    expect(
+      phases.filter((event) => event.trace?.traceId === traceId).map(({ name }) => name),
+    ).toEqual(names.map((name) => `sessions.catalog.list.${name}`));
+
+  const collect = (event: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) => {
+    if (event.type === "diagnostic.phase.completed") {
+      trustedFlags.push(metadata.trusted);
+      phases.push(event);
+    }
+  };
+  const observe = (trusted = true) =>
+    trusted
+      ? onTrustedInternalDiagnosticEvent(collect, { include: ["diagnostic.phase.completed"] })
+      : onInternalDiagnosticEvent(collect);
 
   beforeEach(() => {
     resetSessionCatalogTestState();
@@ -59,7 +77,7 @@ describe("registered catalog list phase diagnostics", () => {
     dirty = false;
     phases = [];
     trustedFlags = [];
-    config = { agents: { list: [{ id: "main" }] } };
+    config = { agents: { entries: { main: {} } } };
     projection = createSessionRowProjectionFixture({ cfg: config, store: {} });
     vi.spyOn(projection, "needsSelectionPreparation").mockImplementation(() => dirty);
     vi.spyOn(projectionAccess, "requireSessionRowProjection").mockReturnValue(projection);
@@ -76,6 +94,7 @@ describe("registered catalog list phase diagnostics", () => {
     projection.dispose();
     resetDiagnosticEventsForTest();
     vi.restoreAllMocks();
+    expect(JSON.stringify(phases)).not.toContain(privateText);
   });
 
   it("separates projection and provider waits from synchronous planning and final response CPU", async () => {
@@ -101,21 +120,13 @@ describe("registered catalog list phase diagnostics", () => {
       cpuMicros += 1_000;
       return [];
     });
-    hoisted.activeRegistry.sessionCatalogs = [
-      {
-        provider: provider(privateText, {
-          list: async () => {
-            listed.resolve();
-            await listing.promise;
-            dirty = true;
-            return [host];
-          },
-        }),
-      },
-    ];
-    const call = runWithDiagnosticTraceContext(leaderTrace, () =>
-      startCall("sessions.catalog.list", {}, config),
-    );
+    install(async () => {
+      listed.resolve();
+      await listing.promise;
+      dirty = true;
+      return [host];
+    });
+    const call = start(leaderTrace);
     call.respond.mockImplementation(() => {
       clock += 3;
       cpuMicros += 2_000;
@@ -148,7 +159,6 @@ describe("registered catalog list phase diagnostics", () => {
         { name: "sessions.catalog.list.delivery", durationMs: 3, details: { threadCpuMs: 2 } },
       ]);
       expect(phases.every((phase) => phase.trace?.traceId === leaderTrace.traceId)).toBe(true);
-      expect(JSON.stringify(phases)).not.toContain(privateText);
     } finally {
       initial.resolve();
       listing.resolve();
@@ -166,17 +176,13 @@ describe("registered catalog list phase diagnostics", () => {
       await gate.promise;
       return [host];
     });
-    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider(privateText, { list }) }];
-    const client = { connId: "shared-caller" };
-    const leader = runWithDiagnosticTraceContext(leaderTrace, () =>
-      startCall("sessions.catalog.list", {}, config, client),
-    );
+    install(list);
+    const client = { connId: "shared-caller", connect: gatewayConnect([]) };
+    const leader = start(leaderTrace, client);
     const settledWork: Promise<unknown>[] = [Promise.allSettled([leader.completion])];
     try {
       await started.promise;
-      const follower = runWithDiagnosticTraceContext(followerTrace, () =>
-        startCall("sessions.catalog.list", {}, config, client),
-      );
+      const follower = start(followerTrace, client);
       settledWork.push(Promise.allSettled([follower.completion]));
       clock = 50;
       gate.resolve();
@@ -184,17 +190,8 @@ describe("registered catalog list phase diagnostics", () => {
       await waitForDiagnosticEventsDrained();
       expect(list).toHaveBeenCalledOnce();
       expect(follower.respond.mock.calls).toEqual(leader.respond.mock.calls);
-      const names = (traceId: string) =>
-        phases.filter((event) => event.trace?.traceId === traceId).map((event) => event.name);
-      expect(names(leaderTrace.traceId)).toEqual([
-        "sessions.catalog.list.planning",
-        "sessions.catalog.list.provider",
-        "sessions.catalog.list.delivery",
-      ]);
-      expect(names(followerTrace.traceId)).toEqual([
-        "sessions.catalog.list.coalesced",
-        "sessions.catalog.list.delivery",
-      ]);
+      expectNames(leaderTrace.traceId, "planning", "provider", "delivery");
+      expectNames(followerTrace.traceId, "coalesced", "delivery");
       expect(phases.find((event) => event.name.endsWith(".coalesced"))).toMatchObject({
         durationMs: 50,
         details: undefined,
@@ -205,7 +202,7 @@ describe("registered catalog list phase diagnostics", () => {
     }
   });
 
-  it("preserves a failed readiness result and omits unvisited stages", async () => {
+  it("requires session readiness only for registered catalogs", async () => {
     observe();
     const failure = new Error(privateText);
     dirty = true;
@@ -213,43 +210,37 @@ describe("registered catalog list phase diagnostics", () => {
       clock = 25;
       throw failure;
     });
-    const call = startCall("sessions.catalog.list", {}, config);
+    const empty = start();
+    await empty.completion;
+    expect(empty.respond).toHaveBeenCalledWith(true, { catalogs: [] });
+
+    install();
+    const call = start();
     await expect(call.completion).rejects.toBe(failure);
     expect(call.respond).not.toHaveBeenCalled();
     await waitForDiagnosticEventsDrained();
     expect(phases).toEqual([
       expect.objectContaining({ name: "sessions.catalog.list.projection_initial", durationMs: 25 }),
     ]);
-    expect(JSON.stringify(phases)).not.toContain(privateText);
   });
 
-  it("avoids CPU sampling without a trusted consumer", async () => {
-    onInternalDiagnosticEvent((event) => {
-      if (event.type === "diagnostic.phase.completed") {
-        phases.push(event);
+  it.each(["untrusted", "unavailable"] as const)(
+    "delivers with %s CPU sampling",
+    async (sampling) => {
+      observe(sampling !== "untrusted");
+      threadCpuUsage.mockImplementation(() => {
+        throw new Error(privateText);
+      });
+      install();
+      const call = start();
+      await call.completion;
+      await waitForDiagnosticEventsDrained();
+      expect(call.respond).toHaveBeenCalledWith(true, expect.anything());
+      expect(phases).toHaveLength(sampling === "untrusted" ? 0 : 3);
+      expect(phases.every((event) => event.details === undefined)).toBe(true);
+      if (sampling === "untrusted") {
+        expect(threadCpuUsage).not.toHaveBeenCalled();
       }
-    });
-    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider(privateText) }];
-    const call = startCall("sessions.catalog.list", {}, config);
-    await call.completion;
-    await waitForDiagnosticEventsDrained();
-    expect(call.respond).toHaveBeenCalledWith(true, expect.anything());
-    expect(threadCpuUsage).not.toHaveBeenCalled();
-    expect(phases).toEqual([]);
-  });
-
-  it("keeps elapsed observations and successful delivery when CPU sampling fails", async () => {
-    observe();
-    threadCpuUsage.mockImplementation(() => {
-      throw new Error(privateText);
-    });
-    hoisted.activeRegistry.sessionCatalogs = [{ provider: provider(privateText) }];
-    const call = startCall("sessions.catalog.list", {}, config);
-    await call.completion;
-    await waitForDiagnosticEventsDrained();
-    expect(call.respond).toHaveBeenCalledWith(true, expect.anything());
-    expect(phases).toHaveLength(3);
-    expect(phases.every((event) => event.details === undefined)).toBe(true);
-    expect(JSON.stringify(phases)).not.toContain(privateText);
-  });
+    },
+  );
 });

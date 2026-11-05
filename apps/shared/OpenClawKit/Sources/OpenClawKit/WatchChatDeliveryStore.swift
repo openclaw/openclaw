@@ -192,11 +192,7 @@ public actor OpenClawWatchChatDeliveryStore {
     }
 
     private static func json(_ value: some Encodable) throws -> String {
-        let data = try OpenClawWatchChatDeliveryCodec.canonicalData(value)
-        guard let json = String(bytes: data, encoding: .utf8) else {
-            throw OpenClawNativeStateError("Could not encode the Watch delivery record")
-        }
-        return json
+        try String(bytes: OpenClawWatchChatDeliveryCodec.canonicalData(value), encoding: .utf8)!
     }
 
     private func entry(
@@ -223,15 +219,14 @@ public actor OpenClawWatchChatDeliveryStore {
             if query.valueType(at: 1) == .null {
                 receipt = nil
             } else {
-                receipt = try JSONDecoder().decode(
+                let decoded = try JSONDecoder().decode(
                     OpenClawWatchChatDeliveryReceipt.self,
                     from: Data(query.requiredText(at: 1, field: "Watch receipt").utf8))
-                if let receipt {
-                    try OpenClawWatchChatDeliveryCodec.validateReceipt(receipt)
-                    guard receipt.context == command.context,
-                          receipt.commandId.utf8.elementsEqual(command.commandId.utf8)
-                    else { throw Self.conflict() }
-                }
+                try OpenClawWatchChatDeliveryCodec.validateReceipt(decoded)
+                guard decoded.context == command.context,
+                      decoded.commandId.utf8.elementsEqual(command.commandId.utf8)
+                else { throw Self.conflict() }
+                receipt = decoded
             }
             entries.append(Entry(command: command, receipt: receipt))
         }

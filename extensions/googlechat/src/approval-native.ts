@@ -1,10 +1,11 @@
-import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
-import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import { createApproverRestrictedNativeApprovalCapabilityAsync } from "openclaw/plugin-sdk/approval-delivery-runtime";
+import { createLazyChannelApprovalNativeRuntimeAdapterAsync } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
-  createChannelApproverDmTargetResolver,
-  createChannelNativeOriginTargetResolver,
-  createNativeApprovalChannelRouteGates,
+  createChannelApproverDmTargetResolverAsync,
+  createChannelNativeOriginTargetResolverAsync,
+  createNativeApprovalChannelRouteGatesAsync,
+  createNativeApprovalMessagingTargetResolvers,
   shouldSuppressLocalNativeExecApprovalPrompt,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import type {
@@ -40,11 +41,6 @@ type GoogleChatApprovalTarget = {
   accountId?: string | null;
   threadId?: string | number | null;
 };
-type ChannelApprovalForwardTarget = Parameters<
-  NonNullable<
-    NonNullable<ChannelApprovalCapability["delivery"]>["shouldSuppressForwardingFallback"]
-  >
->[0]["target"];
 
 const DEFAULT_APPROVAL_FORWARDING_MODE = "session";
 
@@ -62,21 +58,11 @@ function isGoogleChatApprovalTransportEnabled(params: {
   );
 }
 
-function normalizeGoogleChatForwardTarget(
-  target: Pick<ChannelApprovalForwardTarget, "channel" | "to" | "accountId" | "threadId">,
-): GoogleChatApprovalTarget | null {
-  if (normalizeLowercaseStringOrEmpty(target.channel) !== "googlechat") {
-    return null;
-  }
-  const to = normalizeGoogleChatTarget(target.to);
-  return to
-    ? {
-        to,
-        accountId: normalizeOptionalString(target.accountId),
-        threadId: target.threadId ?? null,
-      }
-    : null;
-}
+const { normalizeForwardTarget: normalizeGoogleChatForwardTarget } =
+  createNativeApprovalMessagingTargetResolvers({
+    channel: "googlechat",
+    normalizeTo: normalizeGoogleChatTarget,
+  });
 
 function resolveTurnSourceGoogleChatOriginTarget(
   request: ApprovalRequest,
@@ -96,7 +82,7 @@ function resolveTurnSourceGoogleChatOriginTarget(
   };
 }
 
-const googleChatApprovalRouteGates = createNativeApprovalChannelRouteGates({
+const googleChatApprovalRouteGates = createNativeApprovalChannelRouteGatesAsync({
   channel: "googlechat",
   defaultForwardingMode: DEFAULT_APPROVAL_FORWARDING_MODE,
   isTransportEnabled: isGoogleChatApprovalTransportEnabled,
@@ -128,14 +114,14 @@ function resolveSessionGoogleChatOriginTarget(sessionTarget: {
     : null;
 }
 
-export function shouldHandleGoogleChatNativeApprovalRequest(params: {
+export async function shouldHandleGoogleChatNativeApprovalRequest(params: {
   cfg: Parameters<typeof resolveGoogleChatAccount>[0]["cfg"];
   accountId?: string | null;
   approvalKind?: ChannelApprovalKind;
   request: ApprovalRequest;
-}): boolean {
+}): Promise<boolean> {
   return (
-    googleChatApprovalRouteGates.shouldHandleApprovalRequest(params) &&
+    (await googleChatApprovalRouteGates.shouldHandleApprovalRequest(params)) &&
     getGoogleChatApprovalApprovers(params).length > 0 &&
     Boolean(resolveTurnSourceGoogleChatOriginTarget(params.request))
   );
@@ -153,14 +139,14 @@ export function shouldSuppressLocalGoogleChatExecApprovalPrompt(params: {
   });
 }
 
-const resolveGoogleChatOriginTarget = createChannelNativeOriginTargetResolver({
+const resolveGoogleChatOriginTarget = createChannelNativeOriginTargetResolverAsync({
   channel: "googlechat",
   shouldHandleRequest: shouldHandleGoogleChatNativeApprovalRequest,
   resolveTurnSourceTarget: resolveTurnSourceGoogleChatOriginTarget,
   resolveSessionTarget: resolveSessionGoogleChatOriginTarget,
 });
 
-const resolveGoogleChatApproverDmTargets = createChannelApproverDmTargetResolver({
+const resolveGoogleChatApproverDmTargets = createChannelApproverDmTargetResolverAsync({
   shouldHandleRequest: shouldHandleGoogleChatNativeApprovalRequest,
   resolveApprovers: getGoogleChatApprovalApprovers,
   mapApprover: (approver, params) => {
@@ -175,7 +161,7 @@ const resolveGoogleChatApproverDmTargets = createChannelApproverDmTargetResolver
 });
 
 export const googleChatApprovalCapability: ChannelApprovalCapability =
-  createApproverRestrictedNativeApprovalCapability({
+  createApproverRestrictedNativeApprovalCapabilityAsync({
     channel: "googlechat",
     channelLabel: "Google Chat",
     describeExecApprovalSetup: ({ accountId }) => {
@@ -204,7 +190,7 @@ export const googleChatApprovalCapability: ChannelApprovalCapability =
         action: "approve",
         approvalKind: "plugin",
       })?.authorized ?? false,
-    isNativeDeliveryEnabled: isGoogleChatNativeApprovalClientEnabled,
+    isNativeDeliveryEnabled: async (params) => isGoogleChatNativeApprovalClientEnabled(params),
     resolveNativeDeliveryMode: () => "channel",
     requireMatchingTurnSourceChannel: true,
     resolveSuppressionAccountId: ({ target, request }) =>
@@ -212,7 +198,7 @@ export const googleChatApprovalCapability: ChannelApprovalCapability =
       normalizeOptionalString(request.request.turnSourceAccountId),
     resolveOriginTarget: resolveGoogleChatOriginTarget,
     resolveApproverDmTargets: resolveGoogleChatApproverDmTargets,
-    nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
+    nativeRuntimeAsync: createLazyChannelApprovalNativeRuntimeAdapterAsync({
       capabilityBoundary: true,
       eventKinds: ["exec", "plugin", "system-agent"],
       isConfigured: isGoogleChatNativeApprovalClientEnabled,

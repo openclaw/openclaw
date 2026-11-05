@@ -80,7 +80,7 @@ a letter or digit.
 | `storage.locations.<name>.encryption.passphrase` | When encryption is enabled | Passphrase string or [SecretRef](/gateway/secrets/secretref-contract); prefer a reference. |
 
 The filesystem provider accepts `settings: { path: "/absolute/existing/directory" }`.
-It refuses a missing root and never overwrites an existing object key. Its probe
+It refuses a missing root and never overwrites an existing object key. Its check
 reports free and total filesystem space when available.
 
 Provider settings must be finite, bounded JSON: at most 32 nesting levels, 4,096
@@ -140,14 +140,14 @@ job cannot hide an infrequent destination's last result. See
 
 ## Diagnose a location
 
-`openclaw storage list` probes configured locations. `openclaw storage test <name>`
+`openclaw storage list` checks configured locations. `openclaw storage test <name>`
 also writes a temporary `.openclaw-probe-<uuid>` object at the location root, reads and verifies it, then
 deletes it. Every storage command supports `--json`; see the
 [CLI reference](/cli/storage).
 
 | State           | Next step                                                                                                                               |
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `ok`            | The marker and encryption identity are valid, and the backend probe succeeded.                                                          |
+| `ok`            | The marker and encryption identity are valid, and the backend check succeeded.                                                          |
 | `unavailable`   | Reconnect the disk or restore access to the configured destination. Check that the CLI and Gateway see the same path and credentials.   |
 | `uninitialized` | Confirm this is the intended new destination, then run `openclaw storage init <name>`. Never initialize an unexpected empty mountpoint. |
 | `wrong-key`     | Restore the original passphrase or correct the SecretRef. Do not replace the marker to hide the mismatch.                               |

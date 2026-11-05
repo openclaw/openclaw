@@ -29,7 +29,7 @@ async function createSandboxFixture(relativePath = "report.txt") {
   await fs.writeFile(activeFile, "active-report");
   await fs.writeFile(siblingFile, "sibling-secret");
   const cfg: OpenClawConfig = {
-    agents: { list: [{ id: "main", workspace: agentWorkspaceDir }] },
+    agents: { entries: { main: { workspace: agentWorkspaceDir } } },
     tools: { fs: { workspaceOnly: true } },
   };
   return { cfg, sessionWorkspaceDir, activeFile, siblingFile };

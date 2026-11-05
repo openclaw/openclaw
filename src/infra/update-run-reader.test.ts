@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -12,7 +13,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
-import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
+import { assertSqliteSchemaContains } from "./sqlite-schema-contract.test-support.js";
 import {
   createUpdateRun,
   findActiveUpdateRun,
@@ -84,6 +85,16 @@ describe("update run history reads", () => {
     expect(fs.existsSync(filename)).toBe(false);
     expect(fs.readdirSync(options.env.OPENCLAW_STATE_DIR)).toEqual([]);
 
+    openOpenClawStateDatabase(options);
+    closeOpenClawStateDatabaseForTest();
+    const before = snapshotDatabaseFiles(filename);
+    expect(getUpdateRun(runId, options)).toBeUndefined();
+    expect(listUpdateRuns({}, options)).toEqual([]);
+    expect(findActiveUpdateRun(options)).toBeUndefined();
+    expect(await getUpdateRunAsync(runId, options)).toBeUndefined();
+    expect(await listUpdateRunsAsync({}, options)).toEqual([]);
+    expect(snapshotDatabaseFiles(filename)).toEqual(before);
+
     const initial = openOpenClawStateDatabase(options);
     const hasLedger = () =>
       initial.db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'update_runs'").get();
@@ -121,11 +132,14 @@ describe("update run history reads", () => {
     expect(listUpdateRuns({}, options)).toEqual([created]);
   });
 
-  it.each(
-    (["get", "list", "active", "get-async", "list-async", "status"] as const).flatMap((reader) =>
-      [false, true].map((retainedWal) => ({ reader, retainedWal })),
-    ),
-  )(
+  it.each([
+    ...(["get", "list", "active", "get-async", "list-async", "status"] as const).map((reader) => ({
+      reader,
+      retainedWal: true,
+    })),
+    { reader: "get", retainedWal: false },
+    { reader: "get-async", retainedWal: false },
+  ])(
     "keeps cold $reader reads artifact-preserving with retained WAL=$retainedWal",
     async ({ reader, retainedWal }) => {
       const sourceOptions = isolatedOptions();
@@ -172,7 +186,7 @@ describe("update run history reads", () => {
               : reader === "list-async"
                 ? await listUpdateRunsAsync({}, options)
                 : reader === "status"
-                  ? await getUpdateRunStatusAsync(options)
+                  ? await withArtifactPreservingStateReads(() => getUpdateRunStatusAsync(options))
                   : findActiveUpdateRun(options);
       expect(result).toEqual(
         reader === "status"
@@ -198,23 +212,6 @@ describe("update run history reads", () => {
       .run(JSON.stringify({ serviceRunning: true, inferenceProbe: "passed" }), run.runId);
 
     expect(getUpdateRun(run.runId, options)?.verification).toEqual({ serviceRunning: true });
-  });
-
-  it("leaves a cold store without the history table unchanged", async () => {
-    const options = isolatedOptions();
-    const { db } = openOpenClawStateDatabase(options);
-    expect(
-      db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'update_runs'").get(),
-    ).toBeUndefined();
-    closeOpenClawStateDatabaseForTest();
-    const filename = resolveOpenClawStateSqlitePath(options.env);
-    const before = snapshotDatabaseFiles(filename);
-    expect(getUpdateRun(randomUUID(), options)).toBeUndefined();
-    expect(listUpdateRuns({}, options)).toEqual([]);
-    expect(findActiveUpdateRun(options)).toBeUndefined();
-    expect(await getUpdateRunAsync(randomUUID(), options)).toBeUndefined();
-    expect(await listUpdateRunsAsync({}, options)).toEqual([]);
-    expect(snapshotDatabaseFiles(filename)).toEqual(before);
   });
 
   it("keeps the idle cached writer usable after history reads", () => {
@@ -256,10 +253,14 @@ describe("update run history reads", () => {
       expect(getUpdateRun(created.runId, options)).toEqual(created);
       expect(listUpdateRuns({}, options)).toEqual([created]);
       expect(findActiveUpdateRun(options)).toEqual(created);
+      expect(await getUpdateRunStatusAsync(options)).toEqual({
+        activeRun: created,
+        lastRun: created,
+      });
       for (const read of [
         () => getUpdateRunAsync(created.runId, options),
         () => listUpdateRunsAsync({}, options),
-        () => getUpdateRunStatusAsync(options),
+        () => withArtifactPreservingStateReads(() => getUpdateRunStatusAsync(options)),
       ]) {
         await expect(read()).rejects.toThrow(
           "Asynchronous shared-state reads cannot run inside a native transaction",

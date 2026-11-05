@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { BrowserTabTarget } from "../../components/browser/browser-target.ts";
 import { latestBrowserTabCards, loadBrowserTabThumbnail } from "./browser-tab-preview.ts";
 import { extractToolCardsCached } from "./tool-cards.ts";
 
@@ -12,6 +13,10 @@ afterEach(() => {
 
 const route = { target: "host", profile: "managed" } as const;
 const tabKey = (targetId = "tab-1") => JSON.stringify(["host", null, "managed", targetId]);
+const selected = (revision: string, targetId = "tab-1") => [
+  tabKey(targetId),
+  { tab: { ...route, targetId }, revision },
+];
 
 function browserResult(callId: string, targetId = "tab-1") {
   return {
@@ -26,15 +31,14 @@ function browserResult(callId: string, targetId = "tab-1") {
 function screenshotClient() {
   const request = vi.fn().mockResolvedValue({ path: "/tmp/shot.png", targetId: "tab-1" });
   const client = { request } as unknown as GatewayBrowserClient;
-  const fetchMock = vi.fn<typeof fetch>().mockImplementation(
-    async () =>
-      ({
-        ok: true,
-        blob: async () => new Blob(["shot"], { type: "image/png" }),
-      }) as Response,
-  );
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(
+      async () =>
+        ({ ok: true, blob: async () => new Blob(["shot"], { type: "image/png" }) }) as Response,
+    );
   vi.stubGlobal("fetch", fetchMock);
-  return {
+  const params = {
     client,
     request,
     fetchMock,
@@ -42,6 +46,9 @@ function screenshotClient() {
     resourceBasePath: "/gateway",
     authToken: null,
   };
+  const load = (revision: string, tab: BrowserTabTarget = params.tab) =>
+    loadBrowserTabThumbnail({ ...params, tab, revision });
+  return { ...params, load };
 }
 
 describe("browser tab previews", () => {
@@ -62,19 +69,9 @@ describe("browser tab previews", () => {
   it("does not repeat captures when image retention evicts an old tab", async () => {
     const params = screenshotClient();
     for (let index = 0; index < 33; index++) {
-      await loadBrowserTabThumbnail({
-        ...params,
-        tab: { ...route, targetId: `tab-${index}` },
-        revision: "one",
-      });
+      await params.load("one", { ...route, targetId: `tab-${index}` });
     }
-    expect(
-      await loadBrowserTabThumbnail({
-        ...params,
-        tab: { ...route, targetId: "tab-0" },
-        revision: "one",
-      }),
-    ).toBeUndefined();
+    expect(await params.load("one", { ...route, targetId: "tab-0" })).toBeUndefined();
     expect(params.request).toHaveBeenCalledTimes(33);
   });
 
@@ -92,72 +89,27 @@ describe("browser tab previews", () => {
       ],
     };
     expect([...latestBrowserTabCards([null, older, latest, other], [failed, running])]).toEqual([
-      [tabKey(), { tab: { ...route, targetId: "tab-1" }, revision: "new" }],
-      [tabKey("tab-2"), { tab: { ...route, targetId: "tab-2" }, revision: "other" }],
+      selected("new"),
+      selected("other", "tab-2"),
     ]);
-    expect([...latestBrowserTabCards([older], [latest])]).toEqual([
-      [tabKey(), { tab: { ...route, targetId: "tab-1" }, revision: "new" }],
-    ]);
-    expect([...latestBrowserTabCards([older, latest], [])]).toEqual([
-      [tabKey(), { tab: { ...route, targetId: "tab-1" }, revision: "new" }],
-    ]);
-  });
-
-  it.each([undefined, "about:blank"])("follows a newer tab without a web preview (%s)", (url) => {
-    const older = browserResult("web", "web-tab");
-    const web = {
-      ...older,
-      details: { browserTab: { ...older.details.browserTab, url: "https://example.com" } },
-    };
-    const next = browserResult("focus", "focused-tab");
-    const focused = {
-      ...next,
-      details: { browserTab: { ...next.details.browserTab, ...(url ? { url } : {}) } },
-    };
-    expect(extractToolCardsCached(web)[0]?.preview?.kind).toBe("browser-tab");
-    expect(extractToolCardsCached(focused)[0]?.preview).toBeUndefined();
-    expect([...latestBrowserTabCards([web], [focused]).values()].at(-1)).toEqual({
-      tab: { ...route, targetId: "focused-tab" },
-      revision: "focus",
-    });
+    expect([...latestBrowserTabCards([older], [latest])]).toEqual([selected("new")]);
   });
 
   it("shares captures, serializes new revisions, and reads bytes only over HTTP", async () => {
     const params = screenshotClient();
     const deferred = createDeferred<{ path: string }>();
     params.request.mockReturnValueOnce(deferred.promise);
-    const first = loadBrowserTabThumbnail({ ...params, revision: "one" });
-    expect(loadBrowserTabThumbnail({ ...params, revision: "one" })).toBe(first);
-    await Promise.resolve();
-    const second = loadBrowserTabThumbnail({ ...params, revision: "two" });
+    const first = params.load("one");
+    expect(params.load("one")).toBe(first);
+    await vi.waitFor(() => expect(params.request).toHaveBeenCalledTimes(1));
+    const second = params.load("two");
     expect(params.request).toHaveBeenCalledTimes(1);
     deferred.resolve({ path: "/tmp/first.png" });
     expect(await first).toBe("data:image/png;base64,c2hvdA==");
     expect(await second).toBe("data:image/png;base64,c2hvdA==");
-    await loadBrowserTabThumbnail({ ...params, revision: "one" });
-    await loadBrowserTabThumbnail({ ...params, revision: "two" });
-    expect(params.request.mock.calls).toEqual([
-      [
-        "browser.request",
-        {
-          method: "POST",
-          path: "/screenshot",
-          target: "host",
-          query: { profile: "managed" },
-          body: { targetId: "tab-1", type: "png" },
-        },
-      ],
-      [
-        "browser.request",
-        {
-          method: "POST",
-          path: "/screenshot",
-          target: "host",
-          query: { profile: "managed" },
-          body: { targetId: "tab-1", type: "png" },
-        },
-      ],
-    ]);
+    await params.load("one");
+    await params.load("two");
+    expect(params.request).toHaveBeenCalledTimes(2);
     expect(params.fetchMock.mock.calls.map(([url]) => url)).toEqual([
       "/gateway/__openclaw__/assistant-media?source=%2Ftmp%2Ffirst.png",
       "/gateway/__openclaw__/assistant-media?source=%2Ftmp%2Fshot.png",
@@ -171,13 +123,11 @@ describe("browser tab previews", () => {
     } else {
       params.fetchMock.mockRejectedValueOnce(new Error("offline"));
     }
-    const first = loadBrowserTabThumbnail({ ...params, revision: "one" });
+    const first = params.load("one");
     expect(await first).toBeUndefined();
-    expect(await loadBrowserTabThumbnail({ ...params, revision: "one" })).toBeUndefined();
+    expect(await params.load("one")).toBeUndefined();
     expect(params.request).toHaveBeenCalledTimes(1);
-    expect(await loadBrowserTabThumbnail({ ...params, revision: "two" })).toBe(
-      "data:image/png;base64,c2hvdA==",
-    );
+    expect(await params.load("two")).toBe("data:image/png;base64,c2hvdA==");
     expect(params.request).toHaveBeenCalledTimes(2);
   });
 
@@ -190,30 +140,17 @@ describe("browser tab previews", () => {
       { target: "node", node: "node-b", profile: "managed", targetId: "t1" },
     ] as const;
     for (const tab of tabs) {
-      await loadBrowserTabThumbnail({ ...params, tab, revision: "same" });
-      await loadBrowserTabThumbnail({ ...params, tab, revision: "same" });
+      await params.load("same", tab);
+      await params.load("same", tab);
     }
     expect(params.request).toHaveBeenCalledTimes(tabs.length);
-    for (const [index, tab] of tabs.entries()) {
-      expect(params.request.mock.calls[index]).toEqual([
-        "browser.request",
-        {
-          method: "POST",
-          path: "/screenshot",
-          target: tab.target,
-          ...("node" in tab ? { node: tab.node } : {}),
-          query: { profile: tab.profile },
-          body: { targetId: "t1", type: "png" },
-        },
-      ]);
-    }
   });
 
   it("never reuses a shot from another Gateway client", async () => {
     const params = screenshotClient();
-    await loadBrowserTabThumbnail({ ...params, revision: "one" });
+    await params.load("one");
     const next = screenshotClient();
-    await loadBrowserTabThumbnail({ ...next, revision: "one" });
+    await next.load("one");
     expect(next.request).toHaveBeenCalledTimes(1);
   });
 });

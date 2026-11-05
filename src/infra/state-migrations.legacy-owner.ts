@@ -5,7 +5,10 @@ import {
   resolveSessionStoreCompatibilityAgentId,
   tryGetLegacyDefaultAgentId,
 } from "../config/legacy.default-agent-owner.js";
-import { resolveLegacyAgentRosterOwner } from "../config/legacy.roster.js";
+import {
+  resolveLegacyAgentRosterOwner,
+  type OpenClawConfigWithLegacyRoster,
+} from "../config/legacy.roster.js";
 import { isPerAgentSessionStoreConfig } from "../config/sessions/session-store-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { LegacyStateDetection } from "./state-migrations.types.js";
@@ -19,7 +22,7 @@ export function hasCustomAgentDirOverride(env: NodeJS.ProcessEnv): boolean {
 
 export function resolveLegacyStateMigrationOwner(params: {
   cfg: OpenClawConfig;
-  locatorConfig: OpenClawConfig;
+  locatorConfig: OpenClawConfigWithLegacyRoster;
   env: NodeJS.ProcessEnv;
   homedir: () => string;
 }) {

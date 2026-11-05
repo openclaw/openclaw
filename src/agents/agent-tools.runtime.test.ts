@@ -1,7 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "../../packages/agent-core/src/internal-hooks.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import {
@@ -9,10 +14,6 @@ import {
   runWithAgentRingZeroTools,
 } from "./agent-tools.ring-zero-context.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import {
-  attachInternalToolExecutionPreparer,
-  getInternalToolExecutionPreparer,
-} from "./runtime/internal-hooks.js";
 import { stubTool } from "./test-helpers/fast-tool-stubs.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 
@@ -22,16 +23,6 @@ const emptyResult = () => ({ content: [], details: {} });
 
 function tool(execute: AnyAgentTool["execute"], name = "tool"): AnyAgentTool {
   return { ...stubTool(name), label: name, execute };
-}
-
-function deferred<T = void>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
 }
 
 async function flushMicrotasks() {
@@ -76,6 +67,55 @@ describe("wrapToolWithAbortSignal", () => {
     await aborted;
   });
 
+  it.each(["direct", "prepared"] as const)(
+    "only preserves explicit tool handoffs through %s execution",
+    async (mode) => {
+      for (const [name, args, yields] of [
+        ["plugins", { action: "reloadAndResume" }, true],
+        ["plugins", { action: "reload" }, false],
+        ["plugins", { action: "list" }, false],
+        ["github_publish", { action: "prepare_pr" }, true],
+        ["github_publish", { workspacePath: "/task" }, true],
+        ["github_publish", { action: "publish", workspacePath: "/task" }, true],
+        ["github_publish", { action: "publish" }, false],
+        ["github_publish", { action: "edit", workspacePath: "/task" }, false],
+      ] as const) {
+        const runAbort = new AbortController();
+        const result = emptyResult();
+        const execute = async () => {
+          runAbort.abort(handoffReason);
+          return result;
+        };
+        const source = tool(execute, name);
+        if (mode === "prepared") {
+          attachInternalToolExecutionPreparer(source, async ({ args: preparedArgs }) => ({
+            kind: "ready",
+            args: preparedArgs,
+            execute,
+            dispose: () => undefined,
+          }));
+        }
+        const wrapped = wrapToolWithAbortSignal(source, runAbort.signal);
+        let execution: Promise<unknown>;
+        if (mode === "prepared") {
+          const prepare = expectDefined(getInternalToolExecutionPreparer(wrapped), "preparer");
+          const prepared = await prepare({ toolCallId: "handoff", args });
+          if (prepared.kind !== "ready") {
+            throw new Error("expected ready tool execution");
+          }
+          execution = prepared.execute().finally(prepared.dispose);
+        } else {
+          execution = wrapped.execute("handoff", args);
+        }
+        if (yields) {
+          await expect(execution).resolves.toBe(result);
+        } else {
+          await expect(execution).rejects.toMatchObject(abortError);
+        }
+      }
+    },
+  );
+
   it("preserves the handoff when distinct run and per-call signals both yield", async () => {
     const runAbort = new AbortController();
     const callAbort = new AbortController();
@@ -103,14 +143,11 @@ describe("wrapToolWithAbortSignal", () => {
     expect(runAbort.signal.aborted).toBe(false);
   });
 
-  it.each([
-    { name: "a disabled handoff flag", reason: { code: "sessions_yield", turnHandoff: false } },
-    { name: "a different handoff owner", reason: { code: "different", turnHandoff: true } },
-  ])("rejects sessions_yield when its run owner aborts with $name", async ({ reason }) => {
+  it("rejects sessions_yield when its run owner aborts with a disabled handoff flag", async () => {
     const runAbort = new AbortController();
     const wrapped = wrapToolWithAbortSignal(
       tool(async () => {
-        runAbort.abort(reason);
+        runAbort.abort({ code: "sessions_yield", turnHandoff: false });
         return emptyResult();
       }, "sessions_yield"),
       runAbort.signal,

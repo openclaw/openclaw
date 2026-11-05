@@ -108,14 +108,6 @@ public struct SkillRequirements: Codable, Sendable {
         self.os = os
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case bins
-        case anyBins
-        case env
-        case config
-        case os
-    }
-
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.bins = try container.decode([String].self, forKey: .bins)

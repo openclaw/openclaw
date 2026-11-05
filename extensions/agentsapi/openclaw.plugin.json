@@ -7,6 +7,7 @@
     "onStartup": false,
     "onAgentHarnesses": ["agentsapi"]
   },
+  "doctorContract": { "configRepair": true },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -24,6 +25,24 @@
           { "type": "programmatic_tool_calling", "enabled": true }
         ],
         "description": "Native Agents API tool declarations passed unchanged to new sessions. Omit for live web search and programmatic tool calling. A supplied list replaces the defaults; the API validates tool types and options. An empty list sends no native declarations, but programmatic tool calling requires an explicit enabled: false declaration to disable it. OpenClaw functions, MCP servers, plugins, and environment-provided tools are configured separately. Restart the Gateway and reset existing sessions to adopt a changed list."
+      },
+      "forwarding": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Controls Gateway function and MCP server exposure to Agents API sessions. Disabled paths skip construction, discovery, and credential resolution. Native environment tools and file transfers are unaffected. Reset existing sessions after changing either setting.",
+        "properties": {
+          "gatewayTools": {
+            "type": "boolean",
+            "default": true,
+            "description": "Forward policy-filtered OpenClaw and plugin tools as Gateway function callbacks."
+          },
+          "mcpServers": {
+            "type": "boolean",
+            "default": true,
+            "description": "Forward configured and plugin-bundled MCP servers to the native runtime. False also excludes servers added later."
+          }
+        },
+        "default": { "gatewayTools": true, "mcpServers": true }
       },
       "plugins": {
         "type": "object",
@@ -51,6 +70,10 @@
         "enum": ["openai_hosted", "self_hosted"],
         "default": "openai_hosted",
         "description": "Execution environment for new sessions. Self-hosted uses the prepared OpenClaw workspace and requires an externally connected executor. Reset existing sessions after changing this setting."
+      },
+      "executorController": {
+        "not": {},
+        "description": "No longer supported. Retire controlled sessions with the previous OpenClaw version and original controller plugin, then remove executorController and configure an external executor lifecycle owner before upgrading."
       },
       "openai_host": {
         "type": "object",

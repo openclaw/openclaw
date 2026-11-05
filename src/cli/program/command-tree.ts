@@ -1,4 +1,3 @@
-// Commander tree traversal and mutation shared by parsing and lazy command replacement.
 import type { Command } from "commander";
 
 export function getCommandHierarchy(command: Command): Command[] {

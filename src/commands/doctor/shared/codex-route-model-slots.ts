@@ -29,6 +29,29 @@ export function visitChannelModelSlots(
   }
 }
 
+export function visitNonAgentModelSlots(
+  cfg: OpenClawConfig,
+  visit: (slot: { container: MutableRecord; key: string; path: string }) => void,
+): void {
+  visitChannelModelSlots(cfg, visit);
+  for (const [index, mapping] of (cfg.hooks?.mappings ?? []).entries()) {
+    visit({ container: mapping, key: "model", path: `hooks.mappings.${index}.model` });
+  }
+  for (const [container, key, path] of [
+    [asMutableRecord(cfg.hooks?.gmail), "model", "hooks.gmail.model"],
+    [asMutableRecord(cfg.tts), "summaryModel", "tts.summaryModel"],
+    [
+      asMutableRecord(asMutableRecord(cfg.channels?.discord)?.voice),
+      "model",
+      "channels.discord.voice.model",
+    ],
+  ] as const) {
+    if (container) {
+      visit({ container, key, path });
+    }
+  }
+}
+
 export function recordCodexModelHit(params: {
   hits: CodexRouteHit[];
   path: string;
@@ -65,10 +88,8 @@ export function collectStringModelSlot(params: {
     return;
   }
   recordCodexModelHit({
-    hits: params.hits,
-    path: params.path,
+    ...params,
     model: params.value.trim(),
-    blockedModelIdentities: params.blockedModelIdentities,
   });
 }
 
@@ -138,20 +159,10 @@ export function collectCodexRuntimeModelPolicyRefs(params: {
   }
 }
 
-export function rewriteStringModelSlot(params: {
-  hits: CodexRouteHit[];
-  container: MutableRecord | undefined;
-  key: string;
-  path: string;
-  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
-}): boolean {
-  if (typeof params.container?.[params.key] !== "string") {
-    return false;
-  }
-  return rewriteModelReferenceSlot({
-    ...params,
-    resolve: (model, path) => recordCodexModelHit({ ...params, model, path }),
-  });
+export function rewriteStringModelSlot(
+  params: Parameters<typeof rewriteModelConfigSlot>[0],
+): boolean {
+  return typeof params.container?.[params.key] === "string" && rewriteModelConfigSlot(params);
 }
 
 /** Mutates model selectors; the return value reports only primary changes for runtime-policy callers. */
@@ -209,12 +220,7 @@ export function rewriteModelConfigSlot(params: {
 }): boolean {
   return rewriteModelReferenceSlot({
     ...params,
-    resolve: (model, path) =>
-      recordCodexModelHit({
-        ...params,
-        model,
-        path,
-      }),
+    resolve: (model, path) => recordCodexModelHit({ ...params, model, path }),
   });
 }
 
@@ -229,10 +235,9 @@ export function rewriteModelsMap(params: {
   }
   for (const legacyRef of Object.keys(params.models)) {
     const canonicalModel = recordCodexModelHit({
-      hits: params.hits,
+      ...params,
       path: `${params.path}.${legacyRef}`,
       model: legacyRef,
-      blockedModelIdentities: params.blockedModelIdentities,
     });
     if (!canonicalModel) {
       continue;

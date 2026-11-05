@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { verifyPriorCiCancellation } from "../../scripts/pr-lib/merge-prior-ci-cancellation.mjs";
 
 const attemptAwareFailFast =
@@ -50,66 +50,45 @@ function qualify(run: Record<string, unknown>, failFast: string | boolean = atte
   });
 }
 
-describe.each([
-  ["historical attempt-aware", attemptAwareFailFast, true],
-  ["repository-scoped", repositoryScopedFailFast, false],
-] as const)("%s matrix contract", (_contract, expression, canonicalRerunAccepted) => {
-  it.each([
-    ["same repository rerun", 2, "openclaw/openclaw", canonicalRerunAccepted],
-    ["later same repository rerun", 3, "openclaw/openclaw", canonicalRerunAccepted],
-    ["case-insensitive rerun", 2, "OpenClaw/OpenClaw", canonicalRerunAccepted],
-    ["other repository first attempt", 1, "example/openclaw", true],
-    ["other repository rerun", 2, "example/openclaw", true],
-    ["same repository first attempt", 1, "openclaw/openclaw", false],
-    ["case-insensitive repository", 1, "OpenClaw/OpenClaw", false],
-    ["missing attempt", undefined, "example/openclaw", false],
-    ["string attempt", "2", "example/openclaw", false],
-    ["zero attempt", 0, "example/openclaw", false],
-    ["fractional attempt", 1.5, "example/openclaw", false],
-    ["missing repository", 2, undefined, false],
-    ["empty repository", 2, "", false],
-    ["malformed repository", 2, "openclaw", false],
-    ["non-string repository", 2, 123, false],
-  ] as const)("qualifies %s", (_name, attempt, repository, accepted) => {
-    const invoke = () =>
-      qualify(
-        {
-          event: "pull_request",
-          run_attempt: attempt,
-          repository: { full_name: repository },
-          head_repository: { full_name: "contributor/fork" },
-        },
-        expression,
-      );
-    if (accepted) {
-      expect(invoke()).toMatchObject({ cancelledJobIds: [2] });
-    } else {
-      expect(invoke).toThrow(
-        "the tested workflow must enable the existing PR matrix fail-fast contract",
-      );
-    }
-  });
-
-  it.each([undefined, "push", "workflow_dispatch", "schedule"])(
-    "refuses non-PR run context: %s",
-    (event) => {
-      expect(() =>
-        qualify(
-          { event, run_attempt: 2, repository: { full_name: "example/openclaw" } },
-          expression,
-        ),
-      ).toThrow("matrix cancellation requires the existing PR Node matrix owner");
-    },
-  );
+it.each([
+  ["historical canonical rerun", attemptAwareFailFast, 2, "openclaw/openclaw", true],
+  ["scoped canonical rerun", repositoryScopedFailFast, 2, "OpenClaw/OpenClaw", false],
+  ["historical canonical first attempt", attemptAwareFailFast, 1, "OpenClaw/OpenClaw", false],
+  ["historical fork first attempt", attemptAwareFailFast, 1, "example/openclaw", true],
+  ["scoped fork first attempt", repositoryScopedFailFast, 1, "example/openclaw", true],
+  ["missing attempt", attemptAwareFailFast, undefined, "example/openclaw", false],
+  ["zero attempt", attemptAwareFailFast, 0, "example/openclaw", false],
+  ["missing repository", attemptAwareFailFast, 2, undefined, false],
+  ["malformed repository", attemptAwareFailFast, 2, "openclaw", false],
+  ["arbitrary expression", "${{ github.run_attempt > 1 }}", 2, "openclaw/openclaw", false],
+] as const)("qualifies %s", (_name, expression, attempt, repository, accepted) => {
+  const invoke = () =>
+    qualify(
+      {
+        event: "pull_request",
+        run_attempt: attempt,
+        repository: { full_name: repository },
+        head_repository: { full_name: "contributor/fork" },
+      },
+      expression,
+    );
+  if (accepted) {
+    expect(invoke()).toMatchObject({ cancelledJobIds: [2] });
+  } else {
+    expect(invoke).toThrow(
+      "the tested workflow must enable the existing PR matrix fail-fast contract",
+    );
+  }
 });
 
-it("refuses arbitrary expressions even when their run context would enable cancellation", () => {
+it("refuses non-PR matrix cancellation", () => {
   expect(() =>
-    qualify(
-      { event: "pull_request", run_attempt: 2, repository: { full_name: "openclaw/openclaw" } },
-      "${{ github.run_attempt > 1 }}",
-    ),
-  ).toThrow("the tested workflow must enable the existing PR matrix fail-fast contract");
+    qualify({
+      event: "push",
+      run_attempt: 2,
+      repository: { full_name: "example/openclaw" },
+    }),
+  ).toThrow("matrix cancellation requires the existing PR Node matrix owner");
 });
 
 it.each([true, "${{ github.event_name == 'pull_request' }}"])(

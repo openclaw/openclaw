@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { projectProviderCatalogOutcomes } from "../gateway/server-methods/models-list-public-projection.js";
+import { expectDefined } from "@openclaw/normalization-core";
+import { assert, expect, it } from "vitest";
+import { projectModelServiceTiers } from "../gateway/server-methods/models-list-public-projection.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
-import { copyProviderCatalogOutcomes } from "../plugins/provider-catalog-result.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
-import { platformRoute } from "./model-auth-availability.test-support.js";
-import { resolveModelCatalogServiceTiers } from "./model-catalog-service-tiers.js";
+import { evaluate, platformRoute } from "./model-auth-availability.test-support.js";
+import { providerConfig, snapshot as makeSnapshot } from "./model-catalog-fixtures.test-support.js";
+import { createPreparedAccountCatalogAccess } from "./prepared-model-runtime.catalog-auth.js";
 
 const entry = { provider: "fixture", id: "opaque-model" };
 const route = {
@@ -26,112 +27,140 @@ const outcome: ProviderCatalogOutcome = {
   status: "ready",
   modelServiceTiers: [capability],
 };
+const profile = (profileId: string) =>
+  ({ source: "profile", profileId, identityKey: `profile:${profileId}` }) as const;
 const evaluation: ModelAuthAvailabilityEvaluation = {
   availability: true,
   routeResolution: null,
   selectedRoute: route,
   selectedProfileId: outcome.profileId,
+  selectedCredential: { ...profile("fixture:account-a"), requirement: "subscription" },
 };
-function resolve(overrides: Partial<Parameters<typeof resolveModelCatalogServiceTiers>[0]> = {}) {
-  return resolveModelCatalogServiceTiers({
+const snapshot = (providerOutcomes: ProviderCatalogOutcome[] = [outcome]) =>
+  makeSnapshot([], { providerOutcomes });
+function resolve(overrides: Partial<Parameters<typeof projectModelServiceTiers>[0]> = {}) {
+  return projectModelServiceTiers({
+    config: {},
     entry,
     evaluation,
     runtimeId: capability.runtimeId,
-    snapshot: { entries: [], routeVariants: [], providerOutcomes: [outcome] },
+    snapshot: snapshot(),
     isCurrent: () => true,
     ...overrides,
   });
 }
-describe("account-bound catalog service tiers", () => {
-  it("offers API-key Responses tiers without a catalog, scoped to the available embedded route", () => {
-    const apiEvaluation = {
-      ...evaluation,
-      selectedRoute: platformRoute,
-      selectedAuthMode: "api_key",
+const apiTiers = (selected: ModelAuthAvailabilityEvaluation) =>
+  resolve({
+    entry: { provider: "openai", id: "synthetic-api-model" },
+    evaluation: selected,
+    runtimeId: "openclaw",
+    snapshot: snapshot([]),
+  });
+it.each(["synthetic-provider-key", undefined])(
+  "offers embedded API-key tiers for provider config %j without a profile",
+  (apiKey) => {
+    const selected = evaluate({
+      cfg: providerConfig("openai", { ...platformRoute, apiKey, models: [] }),
+      env: { OPENAI_API_KEY: "synthetic-provider-key" },
+      ref: { modelId: "synthetic-api-model", runtimeId: "openclaw" },
+    });
+    expect(selected.availability).toBe(true);
+    expect(selected.selectedProfileId).toBeUndefined();
+    expect(apiTiers(selected)).toEqual(["priority", "ultrafast"]);
+  },
+);
+it.each(["literal", "ref"] as const)(
+  "evicts %s binding downgrades on record and fences stale observers",
+  (kind) => {
+    const provider = {
+      ...platformRoute,
+      apiKey:
+        kind === "ref"
+          ? { source: "env" as const, provider: "default", id: "FIXTURE_KEY_A" }
+          : "synthetic-key-a",
+      models: [],
     };
-    const params = {
-      entry: { ...entry, provider: "openai" },
-      evaluation: apiEvaluation,
+    const cfg = providerConfig("openai", provider);
+    const env = { FIXTURE_KEY_A: "synthetic-key-a", FIXTURE_KEY_B: "synthetic-key-b" };
+    const retirement = new AbortController();
+    const accountCatalog = createPreparedAccountCatalogAccess(() => true, retirement.signal, cfg);
+    const selected = () => evaluate({ cfg, env });
+    const credential = expectDefined(selected().selectedCredential, "direct credential");
+    assert(credential.source === "direct");
+    const tiers = (selectedEvaluation = selected()) => apiTiers(selectedEvaluation);
+    const observation = {
+      modelId: "synthetic-api-model",
       runtimeId: "openclaw",
-      snapshot: { entries: [], routeVariants: [] },
+      ...platformRoute,
+      requestedTier: "ultrafast",
+      responseTier: "priority",
     };
-    expect(resolve(params)).toEqual(["priority", "ultrafast"]);
-    expect(
-      resolve({
-        ...params,
-        evaluation: {
-          ...apiEvaluation,
-          selectedRoute: { ...platformRoute, requestTransportOverrides: "present" },
-        },
-      }),
-    ).toEqual(["priority", "ultrafast"]);
-    expect(resolve({ ...params, snapshot: { ...params.snapshot, refreshFailed: true } })).toEqual([
-      "priority",
-      "ultrafast",
-    ]);
-    for (const overrides of [
-      { runtimeId: "codex" },
-      { entry },
-      { evaluation: { ...apiEvaluation, selectedAuthMode: "oauth" } },
-      { evaluation: { ...apiEvaluation, availability: false } },
-      { evaluation: { ...apiEvaluation, selectedProfileId: undefined } },
-      {
-        evaluation: {
-          ...apiEvaluation,
-          selectedRoute: { ...platformRoute, api: "openai-completions" as const },
-        },
-      },
-      { isCurrent: () => false },
-    ]) {
-      expect(resolve({ ...params, ...overrides })).toBeUndefined();
+    const record = accountCatalog.prepareServiceTierObserver({ selectedCredential: credential });
+    const read = (overrides: Partial<typeof observation> = {}) =>
+      accountCatalog.readServiceTierObservations({
+        ...observation,
+        identityKey: credential.identityKey,
+        ...overrides,
+      });
+    expect(record(observation)).toBe(true);
+    expect(tiers()).toEqual(["priority", "ultrafast"]);
+    const republished = evaluate({ cfg: { ...cfg, gateway: { port: 19001 } }, env });
+    expect(republished.selectedCredential?.source).toBe("direct");
+    expect(tiers(republished)).toEqual(["priority", "ultrafast"]);
+    expect(read({ modelId: "other-model" })).toEqual([]);
+    expect(read({ baseUrl: "https://other.example/v1" })).toEqual([]);
+    accountCatalog.reconcileAuth({ version: 1, profiles: {} }, () => true);
+    expect(tiers()).toEqual(["priority", "ultrafast"]);
+    const originalBinding = structuredClone(provider.apiKey);
+    if (typeof provider.apiKey === "string") {
+      provider.apiKey = "synthetic-key-b";
+    } else {
+      provider.apiKey.id = "FIXTURE_KEY_B";
     }
+    const replacementBinding = provider.apiKey;
+    expect(record(observation)).toBe(false);
+    // Restoring the old binding must not revive an evicted observer.
+    provider.apiKey = originalBinding;
+    expect(record(observation)).toBe(false);
+    provider.apiKey = replacementBinding;
+    expect(read()).toEqual([]);
+    expect(record(observation)).toBe(false);
+    const next = selected();
+    expect(next.selectedCredential).toEqual(credential);
+    expect(credential.identityKey).toBe("direct:openai");
+    expect(tiers(next)).toEqual(["priority", "ultrafast"]);
+    const replacement = accountCatalog.prepareServiceTierObserver({
+      selectedCredential: expectDefined(next.selectedCredential, "replacement credential"),
+    });
+    expect(replacement(observation)).toBe(true);
+    retirement.abort();
+    expect(replacement(observation)).toBe(false);
+    expect(read()).toEqual([]);
+  },
+);
+it("projects only the selected account/model/runtime/route and clears unknown observations", () => {
+  const withEvaluation = (extra: Partial<ModelAuthAvailabilityEvaluation>) => ({
+    evaluation: { ...evaluation, ...extra },
   });
-  it("projects only the selected account/model/runtime/route and clears unknown observations", () => {
-    expect(resolve()).toEqual(["ultrafast"]);
-    for (const overrides of [
-      { runtimeId: "other-runtime" },
-      { entry: { ...entry, id: "another-model" } },
-      { evaluation: { ...evaluation, selectedProfileId: "fixture:account-b" } },
-      { evaluation: { ...evaluation, selectedProfileId: undefined } },
-      { evaluation: { ...evaluation, selectedRoute: undefined } },
-      { evaluation: { ...evaluation, availability: undefined } },
-      {
-        evaluation: {
-          ...evaluation,
-          selectedRoute: { ...route, baseUrl: "https://other.example/v1" },
-        },
-      },
-      { isCurrent: () => false },
-    ]) {
-      expect(resolve(overrides)).toBeUndefined();
-    }
-    for (const status of ["auth-rejected", "unavailable"] as const) {
-      expect(
-        resolve({
-          snapshot: { entries: [], routeVariants: [], providerOutcomes: [{ ...outcome, status }] },
-        }),
-      ).toBeUndefined();
-    }
-    expect(
-      resolve({
-        snapshot: {
-          entries: [],
-          routeVariants: [],
-          providerOutcomes: [outcome],
-          refreshFailed: true,
-        },
-      }),
-    ).toBeUndefined();
-  });
-  it("copies ready capability facts but keeps all account tier maps off the public outcome", () => {
-    const copied = copyProviderCatalogOutcomes({ outcomes: [outcome] });
-    expect(copied).toEqual([outcome]);
-    expect(copied[0]?.modelServiceTiers?.[0]?.serviceTiers).not.toBe(capability.serviceTiers);
-    expect(projectProviderCatalogOutcomes(copied)).toEqual([
-      { provider: entry.provider, profileId: outcome.profileId, status: "ready" },
-    ]);
-    expect(
-      copyProviderCatalogOutcomes({ outcomes: [{ ...outcome, status: "unavailable" }] })[0],
-    ).not.toHaveProperty("modelServiceTiers");
-  });
+  expect(resolve()).toEqual(["ultrafast"]);
+  for (const overrides of [
+    { runtimeId: "other-runtime" },
+    { entry: { ...entry, id: "another-model" } },
+    withEvaluation({
+      selectedProfileId: "fixture:account-b",
+      selectedCredential: profile("fixture:account-b"),
+    }),
+    withEvaluation({ selectedProfileId: undefined, selectedCredential: undefined }),
+    withEvaluation({ selectedRoute: undefined }),
+    withEvaluation({ availability: undefined }),
+    withEvaluation({
+      selectedRoute: { ...route, baseUrl: "https://other.example/v1" },
+    }),
+    { isCurrent: () => false },
+    { snapshot: snapshot([{ ...outcome, status: "auth-rejected" }]) },
+    { snapshot: snapshot([{ ...outcome, status: "unavailable" }]) },
+    { snapshot: { ...snapshot(), refreshFailed: true } },
+  ]) {
+    expect(resolve(overrides)).toBeUndefined();
+  }
 });

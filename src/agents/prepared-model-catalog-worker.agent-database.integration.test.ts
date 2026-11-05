@@ -28,7 +28,8 @@ function leaveWalMode(databasePath: string): unknown {
 describe("Gateway catalog worker agent database readers", () => {
   it("closes one agent's database readers without retiring the shared worker", async () => {
     vi.stubEnv("CODEX_HOME", makeTempDir("openclaw-worker-empty-codex-"));
-    const fixture = await createFleetFixture();
+    // Full-fleet publication also renews auth and closes readers outside this deletion scope.
+    const fixture = await createFleetFixture(undefined, false, { publication: "individual" });
     await Promise.all(
       fixture.snapshots.map((snapshot) =>
         loadPreparedModelRuntimeAuth(snapshot, { providerIds: [PROVIDER_ID] }),
@@ -46,7 +47,12 @@ describe("Gateway catalog worker agent database readers", () => {
     closeOpenClawAgentDatabasesForTest();
 
     try {
-      await closeDeletedAgentDatabases(fixture.agentIds[0]!, [deleted!]);
+      expect(() => leaveWalMode(deleted!)).toThrow(/locked/);
+      expect(() => leaveWalMode(survivor!)).toThrow(/locked/);
+      await closeDeletedAgentDatabases(fixture.agentIds[0]!, [deleted!], {
+        assertCurrentFinal() {},
+        async assertCurrentAsync() {},
+      });
 
       expect(leaveWalMode(deleted!)).toBe("delete");
       const survivorProfileId = `fleet:${fixture.agentIds[1]!}`;
@@ -75,7 +81,7 @@ describe("Gateway catalog worker agent database readers", () => {
         providerIds: [survivorProfile.provider],
       });
       expect(survivorAuth?.authStore.profiles[survivorProfileId]).toEqual(survivorProfile);
-      expect(readCatalogWorkers()).toHaveLength(1);
+      expect(readCatalogWorkers()).toEqual(catalogWorkers);
       expect(catalogWorkers[0]!.threadId).not.toBe(-1);
     } finally {
       await reviveAgentDatabases([fixture.agentIds[0]!]);

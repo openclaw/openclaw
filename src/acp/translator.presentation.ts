@@ -1,8 +1,5 @@
 import type { SessionConfigOption, SessionModeState } from "@agentclientprotocol/sdk";
-import {
-  toAcpSessionLineageMeta,
-  type AcpSessionLineageMeta,
-} from "@openclaw/acp-core/session-lineage-meta";
+import { toAcpSessionLineageMeta } from "@openclaw/acp-core/session-lineage-meta";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeFastMode,
@@ -53,25 +50,9 @@ export type GatewaySessionPresentationRow = Pick<
   | "contextTokens"
 >;
 
-type SessionPresentation = {
-  configOptions: SessionConfigOption[];
-  modes: SessionModeState;
-};
-
-type SessionMetadata = {
-  title?: string | null;
-  updatedAt?: string | null;
-  _meta?: AcpSessionLineageMeta;
-};
-
-type SessionUsageSnapshot = {
-  size: number;
-  used: number;
-};
-
-export type SessionSnapshot = SessionPresentation & {
-  metadata?: SessionMetadata;
-  usage?: SessionUsageSnapshot;
+export type SessionSnapshot = ReturnType<typeof buildSessionPresentation> & {
+  metadata?: ReturnType<typeof buildSessionMetadata>;
+  usage?: ReturnType<typeof buildSessionUsageSnapshot>;
 };
 
 function formatConfigValueName(value: string): string {
@@ -107,7 +88,7 @@ function buildSelectConfigOption(params: {
 export function buildSessionPresentation(params: {
   row?: GatewaySessionPresentationRow;
   overrides?: Partial<GatewaySessionPresentationRow>;
-}): SessionPresentation {
+}) {
   const row = {
     ...params.row,
     ...params.overrides,
@@ -193,7 +174,7 @@ export function buildSessionPresentation(params: {
 export function buildSessionMetadata(params: {
   row?: GatewaySessionPresentationRow;
   sessionKey: string;
-}): SessionMetadata {
+}) {
   const title =
     normalizeOptionalString(params.row?.derivedTitle) ||
     normalizeOptionalString(params.row?.displayName) ||
@@ -212,9 +193,7 @@ export function buildSessionMetadata(params: {
   };
 }
 
-export function buildSessionUsageSnapshot(
-  row?: GatewaySessionPresentationRow,
-): SessionUsageSnapshot | undefined {
+export function buildSessionUsageSnapshot(row?: GatewaySessionPresentationRow) {
   const totalTokens = row?.totalTokens;
   const contextTokens = row?.contextTokens;
   if (

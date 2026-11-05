@@ -34,8 +34,6 @@ const STALE_CONTEXT_WINDOW_FIXES: Record<string, { stale: number; correct: numbe
 } as const;
 const DEAD_MODEL_COMPAT_KEYS = ["nativeWebSearchTool", "requiresMistralToolIds"] as const;
 
-type ModelCompatOverrideState = { dead: number; divergent: number; matching: number };
-
 export function* providerModelEntries(providers: unknown) {
   for (const [providerId, value] of Object.entries(getRecord(providers) ?? {})) {
     const provider = getRecord(value);
@@ -143,27 +141,14 @@ export function resolveConfiguredModelCatalogOwnership(params: {
   return { catalogRow, ownsRoute: exactCatalogRoute || providerOwnedRoute };
 }
 
-function inspectModelCompatOverrides(
-  providersValue: unknown,
-  onEntry?: (params: {
-    catalogRow?: NormalizedModelCatalogRow;
-    compat: Record<string, unknown>;
-    model: Record<string, unknown>;
-    modelIndex: number;
-    provider: Record<string, unknown>;
-    providerId: string;
-    state: ModelCompatOverrideState;
-  }) => void,
-): ModelCompatOverrideState {
+function* inspectModelCompatOverrides(providersValue: unknown) {
   const providers = getRecord(providersValue);
-  const total = { dead: 0, divergent: 0, matching: 0 };
   if (!providers) {
-    return total;
+    return;
   }
   const entries = [...providerModelEntries(providers)];
-  const hasCompat = entries.some(({ model }) => Boolean(getRecord(model.compat)));
-  if (!hasCompat) {
-    return total;
+  if (!entries.some(({ model }) => getRecord(model.compat))) {
+    return;
   }
   const catalogRows = buildConfiguredProviderCatalogRows(providers);
   for (const { providerId, provider, modelIndex, model } of entries) {
@@ -172,40 +157,36 @@ function inspectModelCompatOverrides(
     if (!compat || !modelId) {
       continue;
     }
-    const state = { dead: 0, divergent: 0, matching: 0 };
-    for (const key of DEAD_MODEL_COMPAT_KEYS) {
-      if (Object.hasOwn(compat, key)) {
-        state.dead += 1;
-      }
-    }
-    const configuredRoute = {
-      api: model.api ?? provider.api,
-      baseUrl: model.baseUrl ?? provider.baseUrl,
-    };
     const catalogRow = resolveUniqueCatalogModelRoute(
       catalogRows.get(normalizedCatalogModelKey(providerId, modelId)),
-      configuredRoute,
+      { api: model.api ?? provider.api, baseUrl: model.baseUrl ?? provider.baseUrl },
     );
-    const catalogRouteMatches = catalogRow !== undefined;
-    if (catalogRouteMatches) {
+    const dead = DEAD_MODEL_COMPAT_KEYS.filter((key) => Object.hasOwn(compat, key));
+    const matching: string[] = [];
+    const divergent: string[] = [];
+    if (catalogRow) {
       const catalogCompat = catalogRow.compat ?? {};
       for (const [key, value] of Object.entries(compat)) {
         if ((DEAD_MODEL_COMPAT_KEYS as readonly string[]).includes(key)) {
           continue;
         }
-        if (isDeepStrictEqual(value, catalogCompat[key as keyof typeof catalogCompat])) {
-          state.matching += 1;
-        } else {
-          state.divergent += 1;
-        }
+        (isDeepStrictEqual(value, catalogCompat[key as keyof typeof catalogCompat])
+          ? matching
+          : divergent
+        ).push(key);
       }
     }
-    total.dead += state.dead;
-    total.divergent += state.divergent;
-    total.matching += state.matching;
-    onEntry?.({ catalogRow, compat, model, modelIndex, provider, providerId, state });
+    yield { compat, model, modelIndex, providerId, dead, matching, divergent };
   }
-  return total;
+}
+
+function hasModelCompatOverrides(providers: unknown, kind: "dead" | "matching" | "divergent") {
+  for (const entry of inspectModelCompatOverrides(providers)) {
+    if (entry[kind].length > 0) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export const MODEL_COMPAT_CATALOG_RULES: LegacyConfigRule[] = [
@@ -213,19 +194,19 @@ export const MODEL_COMPAT_CATALOG_RULES: LegacyConfigRule[] = [
     path: ["models", "providers"],
     message:
       'nativeWebSearchTool and requiresMistralToolIds are unused and retired; run "openclaw doctor --fix" to remove them.',
-    match: (value) => inspectModelCompatOverrides(value).dead > 0,
+    match: (value) => hasModelCompatOverrides(value, "dead"),
   },
   {
     path: ["models", "providers"],
     message:
       'Catalog-known model compat values are provider-owned; run "openclaw doctor --fix" to remove matching config overrides.',
-    match: (value) => inspectModelCompatOverrides(value).matching > 0,
+    match: (value) => hasModelCompatOverrides(value, "matching"),
   },
   {
     path: ["models", "providers"],
     message:
       "Catalog-known model compat differs from the provider catalog and was preserved for review. Use a distinct custom route when the endpoint really has different capabilities.",
-    match: (value) => inspectModelCompatOverrides(value).divergent > 0,
+    match: (value) => hasModelCompatOverrides(value, "divergent"),
   },
 ];
 
@@ -234,45 +215,31 @@ export function migrateModelCompatCatalogOwnership(
   changes: string[],
 ): void {
   const providers = getRecord(getRecord(raw.models)?.providers);
-  inspectModelCompatOverrides(
-    providers,
-    ({ catalogRow, compat, model, modelIndex, provider, providerId }) => {
-      const removed: string[] = [];
-      for (const key of DEAD_MODEL_COMPAT_KEYS) {
-        if (Object.hasOwn(compat, key)) {
-          delete compat[key];
-          removed.push(key);
-        }
-      }
-      if (
-        catalogRow &&
-        modelTransportRoutesMatch(catalogRow, {
-          api: model.api ?? provider.api ?? catalogRow.api,
-          baseUrl: model.baseUrl ?? provider.baseUrl ?? catalogRow.baseUrl,
-        })
-      ) {
-        const catalogCompat = catalogRow.compat ?? {};
-        for (const [key, value] of Object.entries(compat)) {
-          if (isDeepStrictEqual(value, catalogCompat[key as keyof typeof catalogCompat])) {
-            delete compat[key];
-            removed.push(key);
-          }
-        }
-      }
-      if (removed.length === 0) {
-        return;
-      }
-      if (Object.keys(compat).length === 0) {
-        delete model.compat;
-      }
-      changes.push(
-        `Removed models.providers.${providerId}.models.${modelIndex}.compat catalog/dead overrides: ${removed.toSorted().join(", ")}.`,
-      );
-    },
-  );
+  for (const {
+    compat,
+    model,
+    modelIndex,
+    providerId,
+    dead,
+    matching,
+  } of inspectModelCompatOverrides(providers)) {
+    const removed = [...dead, ...matching];
+    if (removed.length === 0) {
+      continue;
+    }
+    for (const key of removed) {
+      delete compat[key];
+    }
+    if (Object.keys(compat).length === 0) {
+      delete model.compat;
+    }
+    changes.push(
+      `Removed models.providers.${providerId}.models.${modelIndex}.compat catalog/dead overrides: ${removed.toSorted().join(", ")}.`,
+    );
+  }
 }
 
-export function resolveStaleContextWindowFix(params: {
+function resolveStaleContextWindowFix(params: {
   providerId: string;
   modelId: string;
   contextWindow: number;
@@ -288,27 +255,36 @@ export function resolveStaleContextWindowFix(params: {
   return fix && params.contextWindow === fix.stale ? fix : undefined;
 }
 
-export function hasStaleContextWindowValue(providers: unknown): boolean {
-  for (const { providerId, model } of providerModelEntries(providers)) {
+export function* staleModelContextWindows(providers: unknown) {
+  for (const entry of providerModelEntries(providers)) {
+    const { providerId, model } = entry;
     const modelId = typeof model.id === "string" ? model.id : undefined;
     const contextWindow = model.contextWindow;
     if (!modelId || typeof contextWindow !== "number" || !Number.isFinite(contextWindow)) {
       continue;
     }
-    if (resolveStaleContextWindowFix({ providerId, modelId, contextWindow })) {
-      return true;
+    const fix = resolveStaleContextWindowFix({ providerId, modelId, contextWindow });
+    if (fix) {
+      yield { ...entry, modelId, contextWindow, fix };
     }
   }
-  return false;
+}
+
+export function hasStaleContextWindowValue(providers: unknown): boolean {
+  return !staleModelContextWindows(providers).next().done;
+}
+
+export function* invalidModelThinkingFormats(providers: unknown) {
+  for (const entry of providerModelEntries(providers)) {
+    const { model } = entry;
+    const compat = getRecord(model.compat);
+    const thinkingFormat = compat?.thinkingFormat;
+    if (compat && typeof thinkingFormat === "string" && !isModelThinkingFormat(thinkingFormat)) {
+      yield { ...entry, compat, thinkingFormat };
+    }
+  }
 }
 
 export function hasInvalidThinkingFormat(providers: unknown): boolean {
-  for (const { model } of providerModelEntries(providers)) {
-    const compat = getRecord(model.compat);
-    const thinkingFormat = compat?.thinkingFormat;
-    if (typeof thinkingFormat === "string" && !isModelThinkingFormat(thinkingFormat)) {
-      return true;
-    }
-  }
-  return false;
+  return !invalidModelThinkingFormats(providers).next().done;
 }

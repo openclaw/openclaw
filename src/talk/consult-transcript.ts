@@ -1,6 +1,4 @@
 /**
- * Transcript guardrails for realtime voice agent consults.
- *
  * ASR often emits partial fragments or polite closings that should not trigger
  * an OpenClaw consult. This classifier names those skip reasons for callers.
  */
@@ -42,14 +40,12 @@ const REALTIME_VOICE_CLOSING_REMAINDER = new RegExp(
   ].join("|")})\b|[.! ,;:—–-])*$`,
 );
 
-/** Reason a transcript should be ignored before creating a consult request. */
 export type SkippableRealtimeVoiceConsultTranscriptReason =
   | "empty"
   | "incomplete-transcript"
   | "trailing-fragment"
   | "non-actionable-closing";
 
-/** Classify transcript text that is empty, incomplete, fragmented, or non-actionable. */
 export function classifySkippableRealtimeVoiceConsultTranscript(
   text: string,
 ): SkippableRealtimeVoiceConsultTranscriptReason | undefined {

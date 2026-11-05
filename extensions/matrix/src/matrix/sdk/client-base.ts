@@ -8,7 +8,10 @@ import {
   type MatrixClient as MatrixJsClient,
 } from "matrix-js-sdk/lib/matrix.js";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
-import { captureChannelReadAuthority } from "openclaw/plugin-sdk/fetch-runtime";
+import {
+  captureChannelReadAuthority,
+  withEffectAuthority,
+} from "openclaw/plugin-sdk/fetch-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
@@ -18,9 +21,8 @@ import { createMatrixJsSdkClientLogger } from "../client/logging.js";
 import type { MatrixSnapshotStateRuntime } from "../crypto-state-store.js";
 import { awaitMatrixStartupWithAbort, throwIfMatrixStartupAborted } from "../startup-abort.js";
 import type { MatrixSyncState } from "../sync-state.js";
+import { bootstrapMatrixClientCrypto } from "./client-crypto-bootstrap.js";
 import {
-  MATRIX_AUTOMATIC_REPAIR_BOOTSTRAP_OPTIONS,
-  MATRIX_INITIAL_CRYPTO_BOOTSTRAP_OPTIONS,
   resolveMatrixLocalTimeoutMs,
   type MatrixOwnDeviceInfo,
   type MatrixOwnDeviceVerificationStatus,
@@ -28,10 +30,22 @@ import {
 import { quiesceMatrixClientSync } from "./client-sync-quiesce.js";
 import { waitForMatrixInitialSyncReady } from "./client-sync-ready.js";
 import type { MatrixCryptoFacade } from "./crypto-facade.js";
+import {
+  closeMatrixCryptoStores,
+  createMatrixCryptoInitializationGate,
+  createMatrixSdkStopGate,
+  persistMatrixFinalState,
+  runMatrixClientShutdown,
+} from "./crypto-store-lifecycle.js";
+import {
+  acquireMatrixCryptoStoreOwnership,
+  type MatrixCryptoStoreOwnership,
+} from "./crypto-store-ownership.js";
 import type { MatrixDecryptBridge } from "./decrypt-bridge.js";
 import { matrixEventToRaw } from "./event-helpers.js";
 import { MatrixAuthedHttpClient } from "./http-client.js";
 import { MATRIX_IDB_PERSIST_INTERVAL_MS } from "./idb-persistence-lock.js";
+import type { MatrixSdkIndexedDbSession } from "./indexeddb-session.js";
 import { withMatrixLiveEncryptedRoom } from "./live-room-readiness.js";
 import { LogService, noop } from "./logger.js";
 import { MatrixMessageWireDispatchGuards } from "./message-wire-dispatch.js";
@@ -40,7 +54,6 @@ import { captureMatrixSendCurrentness, withoutMatrixSendCurrentness } from "./se
 import { MatrixSendScheduler } from "./send-scheduler.js";
 import { createMatrixGuardedFetch } from "./transport.js";
 import type { MatrixClientEventMap, MatrixCryptoBootstrapApi, MatrixRawEvent } from "./types.js";
-import type { MatrixVerificationSummary } from "./verification-manager.js";
 
 type MatrixCryptoRuntime = typeof import("./crypto-runtime.js");
 
@@ -57,7 +70,6 @@ export const loadMatrixCryptoRuntime = createLazyRuntimeModule(() =>
 
 export abstract class MatrixClientBase {
   abstract getUserId(): Promise<string>;
-  abstract getJoinedRooms(): Promise<string[]>;
   abstract listOwnDevices(): Promise<MatrixOwnDeviceInfo[]>;
   abstract getOwnDeviceVerificationStatus(): Promise<MatrixOwnDeviceVerificationStatus>;
   abstract getRoomStateEvent(
@@ -83,7 +95,7 @@ export abstract class MatrixClientBase {
   protected readonly encryptionEnabled: boolean;
   protected readonly password?: string;
   protected readonly syncStore?: SqliteBackedMatrixSyncStore;
-  protected readonly idbSnapshotPath?: string;
+  protected idbSnapshotPath?: string;
   protected readonly cryptoDatabasePrefix?: string;
   protected readonly stateRuntime?: MatrixSnapshotStateRuntime;
   protected bridgeRegistered = false;
@@ -103,11 +115,9 @@ export abstract class MatrixClientBase {
   protected readonly autoBootstrapCrypto: boolean;
   protected syncQuiescePromise: Promise<void> | null = null;
   protected stopPersistPromise: Promise<void> | null = null;
-  protected verificationSummaryListenerBound = false;
   protected currentSyncState: MatrixSyncState | null = null;
   protected currentSyncError: unknown = undefined;
   protected currentSyncFromCache = false;
-  protected currentSyncRevision = 0;
   protected readonly transactionScopeHomeserver: string;
   protected readonly transactionScopeAccessTokenHash: string;
   protected transactionScopeDeviceId: string | null;
@@ -120,13 +130,15 @@ export abstract class MatrixClientBase {
     requestSignal?: AbortSignal;
   }>();
   private startupPromise: Promise<void> | null = null;
-  private cryptoInitializationPromise: Promise<void> | null = null;
+  private readonly cryptoInitializationGate = createMatrixCryptoInitializationGate();
   private readonly liveRoomReadinessOperations = new Set<Promise<() => void>>();
-  private sdkStopped = false;
+  private readonly sdkStopGate = createMatrixSdkStopGate();
+  private generationTeardownComplete = false;
   private stopDiscardPromise: Promise<void> | null = null;
   private idbPersistPromise: Promise<void> | null = null;
   private idbPersistAbortController: AbortController | null = null;
-
+  private cryptoStoreOwnership: MatrixCryptoStoreOwnership | null = null;
+  private sdkIndexedDbSession: MatrixSdkIndexedDbSession | null = null;
   private readonly assertClientActive = () => {
     this.requestAbortController.signal.throwIfAborted();
   };
@@ -145,7 +157,7 @@ export abstract class MatrixClientBase {
     return withoutMatrixSendCurrentness(() =>
       this.cryptoRequestOwner.run(
         { callerAuthority: captureChannelReadAuthority(), requestSignal },
-        run,
+        () => withEffectAuthority(undefined, run),
       ),
     );
   }
@@ -196,8 +208,7 @@ export abstract class MatrixClientBase {
     this.initialSyncLimit = opts.initialSyncLimit;
     this.syncFilter = opts.syncFilter;
     this.encryptionEnabled = opts.encryption === true;
-    const { password: loginPassword } = opts;
-    this.password = loginPassword;
+    this.password = opts.password;
     this.syncStore = opts.syncStore;
     this.idbSnapshotPath = opts.idbSnapshotPath;
     this.cryptoDatabasePrefix = opts.cryptoDatabasePrefix;
@@ -238,7 +249,7 @@ export abstract class MatrixClientBase {
         this.messageWireDispatchGuards.wasCurrentnessRejected(event.getTxnId()),
       ),
       store: this.syncStore,
-      cryptoCallbacks: cryptoCallbacks as never,
+      cryptoCallbacks,
       verificationMethods: [
         VerificationMethod.Sas,
         VerificationMethod.ShowQrCode,
@@ -261,7 +272,7 @@ export abstract class MatrixClientBase {
   ): this;
   on(eventName: string, listener: (...args: unknown[]) => void): this;
   on(eventName: string, listener: (...args: unknown[]) => void): this {
-    this.emitter.on(eventName, listener as (...args: unknown[]) => void);
+    this.emitter.on(eventName, listener);
     return this;
   }
 
@@ -271,7 +282,7 @@ export abstract class MatrixClientBase {
   ): this;
   off(eventName: string, listener: (...args: unknown[]) => void): this;
   off(eventName: string, listener: (...args: unknown[]) => void): this {
-    this.emitter.off(eventName, listener as (...args: unknown[]) => void);
+    this.emitter.off(eventName, listener);
     return this;
   }
 
@@ -305,50 +316,15 @@ export abstract class MatrixClientBase {
     }
 
     this.verificationManager ??= new runtime.MatrixVerificationManager({
+      onSummaryChanged: (summary) => this.emitter.emit("verification.summary", summary),
       trustOwnDeviceAfterSas: async (deviceId: string) => {
-        const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
-        if (typeof crypto?.crossSignDevice !== "function") {
-          return;
-        }
-        await crypto.crossSignDevice(deviceId);
+        await this.client.getCrypto()?.crossSignDevice(deviceId);
       },
     });
     this.cryptoBootstrapper ??= new runtime.MatrixCryptoBootstrapper<MatrixRawEvent>({
       getUserId: () => this.getUserId(),
       getPassword: () => this.password,
-      canUnlockSecretStorage: async () => {
-        const secretStorage = (
-          this.client as {
-            secretStorage?: Partial<
-              Pick<MatrixJsClient["secretStorage"], "checkKey" | "getDefaultKeyId" | "getKey">
-            >;
-          }
-        ).secretStorage;
-        // Partial test/runtime facades can omit secretStorage; forced reset must fail closed
-        // without turning missing recovery access into a noisy caught TypeError.
-        if (
-          !secretStorage ||
-          typeof secretStorage.getDefaultKeyId !== "function" ||
-          typeof secretStorage.getKey !== "function" ||
-          typeof secretStorage.checkKey !== "function"
-        ) {
-          return false;
-        }
-        const defaultKeyId = await secretStorage.getDefaultKeyId();
-        if (!defaultKeyId) {
-          return false;
-        }
-        const keyTuple = await secretStorage.getKey(defaultKeyId);
-        const key = await this.recoveryKeyStore.getSecretStorageKeyCandidate(defaultKeyId);
-        if (!keyTuple || !key) {
-          return false;
-        }
-        const keyInfo = keyTuple[1];
-        if (!keyInfo.iv?.trim() || !keyInfo.mac?.trim()) {
-          return false;
-        }
-        return await secretStorage.checkKey(key, keyInfo);
-      },
+      canUnlockSecretStorage: async () => (await this.checkSecretStorageKey()) === true,
       getDeviceId: () => this.client.getDeviceId(),
       verificationManager: this.verificationManager,
       recoveryKeyStore: this.recoveryKeyStore,
@@ -359,17 +335,32 @@ export abstract class MatrixClientBase {
         client: this.client,
         verificationManager: this.verificationManager,
         recoveryKeyStore: this.recoveryKeyStore,
-        isRoomEncrypted: async (roomId) =>
-          (await this.getMessageWireEventType(roomId)) === "m.room.encrypted",
         downloadContent: (mxcUrl, opts) => this.downloadContent(mxcUrl, opts),
       });
     }
-    if (!this.verificationSummaryListenerBound) {
-      this.verificationSummaryListenerBound = true;
-      this.verificationManager.onSummaryChanged((summary: MatrixVerificationSummary) => {
-        this.emitter.emit("verification.summary", summary);
-      });
+  }
+
+  protected async checkSecretStorageKey(expectedKeyId?: string): Promise<boolean | undefined> {
+    const secretStorage = this.client.secretStorage;
+    const defaultKeyId = await secretStorage.getDefaultKeyId();
+    if (expectedKeyId !== undefined && defaultKeyId !== expectedKeyId) {
+      return false;
     }
+    if (!defaultKeyId) {
+      return undefined;
+    }
+    const keyTuple = await secretStorage.getKey(defaultKeyId);
+    const key = await this.recoveryKeyStore.getSecretStorageKeyCandidate(defaultKeyId);
+    if (!keyTuple || !key) {
+      return undefined;
+    }
+    const keyInfo = keyTuple[1];
+    // The SDK accepts metadata without a MAC; only authenticated metadata proves this key.
+    if (!keyInfo.iv?.trim() || !keyInfo.mac?.trim()) {
+      return undefined;
+    }
+    const valid = await secretStorage.checkKey(key, keyInfo);
+    return (await secretStorage.getDefaultKeyId()) === defaultKeyId && valid;
   }
 
   async start(opts: { abortSignal?: AbortSignal; readyTimeoutMs?: number } = {}): Promise<void> {
@@ -388,7 +379,7 @@ export abstract class MatrixClientBase {
     if (this.started) {
       return;
     }
-    if (this.sdkStopped) {
+    if (this.sdkStopGate.stopped) {
       throw new Error(
         "Matrix client has been fully stopped and cannot be restarted; acquire a new shared client generation",
       );
@@ -423,11 +414,9 @@ export abstract class MatrixClientBase {
       throwIfMatrixStartupAborted(signal);
       await this.ensureCryptoSupportInitialized();
       checkActive();
-      throwIfMatrixStartupAborted(signal);
       this.registerBridge();
       await this.withClientCryptoWork(() => this.initializeCryptoIfNeeded(signal), signal);
       checkActive();
-      throwIfMatrixStartupAborted(signal);
 
       await this.withClientCryptoWork(() =>
         this.client.startClient({
@@ -445,7 +434,6 @@ export abstract class MatrixClientBase {
         timeoutMs: opts.readyTimeoutMs,
       });
       checkActive();
-      throwIfMatrixStartupAborted(signal);
       if (this.encryptionEnabled && this.cryptoInitialized) {
         const { reconcileJoinedRoomEncryption } = await import("./joined-room-encryption.js");
         checkActive();
@@ -513,22 +501,15 @@ export abstract class MatrixClientBase {
       assertActive: () => {
         this.assertClientActive();
         opts.assertCurrent?.();
-        if (this.sdkStopped || this.syncQuiescePromise) {
+        if (this.sdkStopGate.stopped || this.syncQuiescePromise) {
           throw new Error("Matrix client is stopping; acquire a new client before sending");
         }
       },
       getSync: () => ({
         state: this.currentSyncState,
         fromCache: this.currentSyncFromCache,
-        revision: this.currentSyncRevision,
       }),
     });
-  }
-
-  hasPersistedSyncState(): boolean {
-    // Only trust restart replay when the previous process completed a final
-    // sync-store persist. A stale cursor can make Matrix re-surface old events.
-    return this.syncStore?.hasSavedSyncFromCleanShutdown() === true;
   }
 
   protected async ensureStartedForCryptoControlPlane(): Promise<void> {
@@ -536,17 +517,6 @@ export abstract class MatrixClientBase {
       return;
     }
     await this.startSyncSession({ bootstrapCrypto: false });
-  }
-
-  private stopSdkClient(): void {
-    if (this.sdkStopped) {
-      return;
-    }
-    this.currentSyncState = null;
-    this.currentSyncError = undefined;
-    this.sdkStopped = true;
-    this.client.stopClient();
-    this.started = false;
   }
 
   async quiesceSync(): Promise<void> {
@@ -574,59 +544,93 @@ export abstract class MatrixClientBase {
       .catch(noop);
   }
 
+  private async releaseCryptoStoreOwnership(): Promise<void> {
+    const ownership = this.cryptoStoreOwnership;
+    this.cryptoStoreOwnership = null;
+    await ownership?.release();
+  }
+
   private async stopClientGeneration(persist: boolean): Promise<void> {
-    try {
-      if (persist) {
-        await this.quiesceSync();
-      } else {
-        await this.quiesceSync().catch(noop);
-        this.syncStore?.discardPendingSyncCursorPersistence();
-      }
-      this.abortPendingRequests();
-      // A one-off read can still be preparing crypto when its owner closes.
-      // Join that initialization before stopping the backend it may publish.
-      await this.startupPromise?.catch(noop);
-      await this.cryptoInitializationPromise?.catch(noop);
-      await Promise.allSettled(this.liveRoomReadinessOperations);
-      clearInterval(this.idbPersistTimer ?? undefined);
-      this.idbPersistTimer = null;
-      this.idbPersistAbortController?.abort();
-      const activePeriodicPersist = this.idbPersistPromise;
-      try {
-        this.stopSdkClient();
-        this.decryptBridge?.stop();
-      } finally {
-        this.cryptoRequestOwner.disable();
-      }
-      await Promise.all([this.recoveryKeyStore.close(), activePeriodicPersist]);
-      if (persist) {
-        const runtime = loadedMatrixCryptoRuntime ?? (await loadMatrixCryptoRuntime());
-        await runtime.persistIdbToDisk({
-          snapshotPath: this.idbSnapshotPath,
-          databasePrefix: this.cryptoDatabasePrefix,
-          strict: true,
-          stateRuntime: this.stateRuntime,
-        });
-        this.syncStore?.markCleanShutdown();
-        await this.syncStore?.flush();
-      }
-    } finally {
-      await this.recoveryKeyStore.close();
-    }
+    await runMatrixClientShutdown({
+      persist,
+      quiesceSync: () => this.quiesceSync(),
+      discardSync: () => this.syncStore?.discardPendingSyncCursorPersistence(),
+      stop: async (publishFinalState) => {
+        this.abortPendingRequests();
+        // A one-off read can still be preparing crypto when its owner closes.
+        // Join that initialization before stopping the backend it may publish.
+        await this.startupPromise?.catch(noop);
+        await this.cryptoInitializationGate.pending?.catch(noop);
+        await Promise.allSettled(this.liveRoomReadinessOperations);
+        clearInterval(this.idbPersistTimer ?? undefined);
+        this.idbPersistTimer = null;
+        this.idbPersistAbortController?.abort();
+        const activePeriodicPersist = this.idbPersistPromise;
+        try {
+          this.sdkStopGate.stop(() => {
+            this.currentSyncState = null;
+            this.currentSyncError = undefined;
+            this.client.stopClient();
+            this.started = false;
+          });
+        } finally {
+          this.decryptBridge?.stop();
+          this.cryptoRequestOwner.disable();
+        }
+        // SDK stop drops its machine wrapper, but native futures retain store
+        // connections. Close their transaction admission before final export.
+        await this.sdkIndexedDbSession?.retire();
+        await Promise.all([this.recoveryKeyStore.close(), activePeriodicPersist]);
+        if (this.cryptoInitializationGate.failure) {
+          // The SDK installs its backend only after initialization resolves. A
+          // rejected initializer can leave an unreachable native store open.
+          throw new Error(
+            "Matrix crypto initialization failed; restart this process before recovery",
+            {
+              cause: this.cryptoInitializationGate.failure.error,
+            },
+          );
+        }
+        this.generationTeardownComplete = true;
+        if (publishFinalState) {
+          await persistMatrixFinalState({
+            encryptionEnabled: this.encryptionEnabled,
+            cryptoInitialized: this.cryptoInitialized,
+            ownership: this.cryptoStoreOwnership,
+            snapshotPath: this.idbSnapshotPath,
+            persistSnapshot: async () => {
+              const runtime = loadedMatrixCryptoRuntime ?? (await loadMatrixCryptoRuntime());
+              await runtime.persistIdbToDisk({
+                snapshotPath: this.idbSnapshotPath,
+                databasePrefix: this.cryptoDatabasePrefix,
+                strict: true,
+                stateRuntime: this.stateRuntime,
+              });
+            },
+            syncStore: this.syncStore,
+          });
+        }
+      },
+      closeStores: () =>
+        closeMatrixCryptoStores(
+          () => this.recoveryKeyStore.close(),
+          () => this.releaseCryptoStoreOwnership(),
+          this.generationTeardownComplete,
+        ),
+    });
   }
 
   async stopAndPersist(): Promise<void> {
-    this.stopPersistPromise ??= this.stopClientGeneration(true);
-    await this.stopPersistPromise;
+    await (this.stopPersistPromise ??= this.stopClientGeneration(true));
   }
 
   stopWithoutPersist(): Promise<void> {
-    // Memoization closes concurrent callers; durable failure still requires discard cleanup.
+    // Retry only incomplete teardown; failed publication already closed the backend.
     if (!this.stopPersistPromise) {
       this.stopPersistPromise = this.stopDiscardPromise = this.stopClientGeneration(false);
     }
     return (this.stopDiscardPromise ??= this.stopPersistPromise.catch(() =>
-      this.stopClientGeneration(false),
+      this.generationTeardownComplete ? undefined : this.stopClientGeneration(false),
     ));
   }
 
@@ -636,127 +640,112 @@ export abstract class MatrixClientBase {
     }
     throwIfMatrixStartupAborted(abortSignal);
     await this.ensureCryptoSupportInitialized();
-    const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
-    if (!crypto) {
-      return;
-    }
-    const cryptoBootstrapper = this.cryptoBootstrapper;
-    if (!cryptoBootstrapper) {
-      return;
-    }
-    const initial = await cryptoBootstrapper.bootstrap(
-      crypto,
-      MATRIX_INITIAL_CRYPTO_BOOTSTRAP_OPTIONS,
-    );
-    throwIfMatrixStartupAborted(abortSignal);
-    if (!initial.crossSigningPublished || initial.ownDeviceVerified === false) {
-      const status = await this.getOwnDeviceVerificationStatus();
-      if (status.signedByOwner) {
-        LogService.warn(
-          "MatrixClientLite",
-          "Cross-signing/bootstrap is incomplete for an already owner-signed device; skipping automatic reset and preserving the current identity. Restore the recovery key or run an explicit verification bootstrap if repair is needed.",
-        );
-      } else {
-        // Forced reset validates the active SSSS recovery key before rotating local keys.
-        // Missing or stale recovery material fails without mutating crypto state.
-        try {
-          const repaired = await cryptoBootstrapper.bootstrap(
-            crypto,
-            MATRIX_AUTOMATIC_REPAIR_BOOTSTRAP_OPTIONS,
-          );
-          throwIfMatrixStartupAborted(abortSignal);
-          if (repaired.crossSigningPublished && repaired.ownDeviceVerified !== false) {
-            LogService.info(
-              "MatrixClientLite",
-              "Cross-signing/bootstrap recovered after forced reset",
-            );
-          }
-        } catch (err) {
-          LogService.warn(
-            "MatrixClientLite",
-            "Failed to recover cross-signing/bootstrap with forced reset:",
-            err,
-          );
-        }
-      }
-    }
-    this.cryptoBootstrapped = true;
+    this.cryptoBootstrapped = await bootstrapMatrixClientCrypto({
+      crypto: this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined,
+      bootstrapper: this.cryptoBootstrapper,
+      getOwnDeviceVerificationStatus: () => this.getOwnDeviceVerificationStatus(),
+      abortSignal,
+    });
   }
 
   protected async initializeCryptoIfNeeded(abortSignal?: AbortSignal): Promise<void> {
-    if (!this.encryptionEnabled) {
+    if (
+      !this.encryptionEnabled ||
+      (this.cryptoInitialized && !this.cryptoInitializationGate.pending)
+    ) {
       return;
     }
-    if (this.cryptoInitializationPromise) {
-      await this.cryptoInitializationPromise;
-      throwIfMatrixStartupAborted(abortSignal);
-      return;
-    }
-    if (this.cryptoInitialized) {
-      return;
-    }
-    const initialization = this.initializeCrypto(
-      abortSignal
-        ? AbortSignal.any([abortSignal, this.requestAbortController.signal])
-        : this.requestAbortController.signal,
+    await this.cryptoInitializationGate.run(
+      () =>
+        this.initializeCrypto(
+          abortSignal
+            ? AbortSignal.any([abortSignal, this.requestAbortController.signal])
+            : this.requestAbortController.signal,
+        ),
+      abortSignal,
     );
-    this.cryptoInitializationPromise = initialization;
-    try {
-      await initialization;
-    } finally {
-      if (this.cryptoInitializationPromise === initialization) {
-        this.cryptoInitializationPromise = null;
-      }
-    }
   }
 
   private async initializeCrypto(abortSignal: AbortSignal): Promise<void> {
     throwIfMatrixStartupAborted(abortSignal);
-    const { persistIdbToDisk, restoreIdbFromDisk } = await loadMatrixCryptoRuntime();
-
-    // Restore persisted IndexedDB crypto store before initializing WASM crypto.
-    await restoreIdbFromDisk(this.idbSnapshotPath, this.stateRuntime);
-    throwIfMatrixStartupAborted(abortSignal);
-
-    try {
-      await this.client.initRustCrypto({
-        cryptoDatabasePrefix: this.cryptoDatabasePrefix,
-      });
-      this.cryptoInitialized = true;
-      throwIfMatrixStartupAborted(abortSignal);
-
-      // Persist the crypto store after successful init (captures fresh keys on first run).
-      await persistIdbToDisk({
-        snapshotPath: this.idbSnapshotPath,
-        databasePrefix: this.cryptoDatabasePrefix,
-        abortSignal,
+    const {
+      persistIdbToDisk,
+      restoreIdbFromDisk,
+      resolveDefaultIdbSnapshotPath,
+      beginMatrixSdkIndexedDbSession,
+    } = await loadMatrixCryptoRuntime();
+    this.idbSnapshotPath ??= resolveDefaultIdbSnapshotPath();
+    if (!this.cryptoStoreOwnership) {
+      this.cryptoStoreOwnership = await acquireMatrixCryptoStoreOwnership(this.idbSnapshotPath, {
+        signal: abortSignal,
         stateRuntime: this.stateRuntime,
       });
-      throwIfMatrixStartupAborted(abortSignal);
+    }
 
-      // Periodically persist to capture new Olm sessions and room keys.
-      this.idbPersistTimer = setInterval(() => {
-        if (this.idbPersistPromise) {
-          return;
-        }
-        const abortController = new AbortController();
-        this.idbPersistAbortController = abortController;
-        this.idbPersistPromise = persistIdbToDisk({
+    let rustCryptoInitializationStarted = false;
+    try {
+      // Restore persisted IndexedDB crypto store before initializing WASM crypto.
+      await restoreIdbFromDisk(this.idbSnapshotPath, this.stateRuntime, this.cryptoDatabasePrefix);
+      throwIfMatrixStartupAborted(abortSignal);
+      await this.cryptoStoreOwnership?.armUnsafeState();
+      throwIfMatrixStartupAborted(abortSignal);
+      this.sdkIndexedDbSession = beginMatrixSdkIndexedDbSession(this.cryptoDatabasePrefix);
+
+      try {
+        rustCryptoInitializationStarted = true;
+        await this.client.initRustCrypto({
+          cryptoDatabasePrefix: this.cryptoDatabasePrefix,
+        });
+        this.cryptoInitialized = true;
+        throwIfMatrixStartupAborted(abortSignal);
+
+        // Persist the crypto store after successful init (captures fresh keys on first run).
+        await persistIdbToDisk({
           snapshotPath: this.idbSnapshotPath,
           databasePrefix: this.cryptoDatabasePrefix,
-          abortSignal: abortController.signal,
+          abortSignal,
           stateRuntime: this.stateRuntime,
-        })
-          .catch(noop)
-          .finally(() => {
-            this.idbPersistPromise = null;
-            this.idbPersistAbortController = null;
-          });
-      }, MATRIX_IDB_PERSIST_INTERVAL_MS);
-      this.idbPersistTimer.unref?.();
-    } catch (err) {
-      throwIfMatrixStartupAborted(abortSignal);
-      LogService.warn("MatrixClientLite", "Failed to initialize rust crypto:", err);
+        });
+        throwIfMatrixStartupAborted(abortSignal);
+
+        // Periodically persist to capture new Olm sessions and room keys.
+        this.idbPersistTimer = setInterval(() => {
+          if (this.idbPersistPromise) {
+            return;
+          }
+          const abortController = new AbortController();
+          this.idbPersistAbortController = abortController;
+          this.idbPersistPromise = persistIdbToDisk({
+            snapshotPath: this.idbSnapshotPath,
+            databasePrefix: this.cryptoDatabasePrefix,
+            abortSignal: abortController.signal,
+            stateRuntime: this.stateRuntime,
+          })
+            // Persistence already reports failures; later intervals remain free to retry.
+            .catch(noop)
+            .finally(() => {
+              this.idbPersistPromise = null;
+              this.idbPersistAbortController = null;
+            });
+        }, MATRIX_IDB_PERSIST_INTERVAL_MS);
+        this.idbPersistTimer.unref?.();
+      } catch (err) {
+        if (!this.cryptoInitialized) {
+          this.cryptoInitializationGate.recordFailure(err);
+          throw err;
+        }
+        throwIfMatrixStartupAborted(abortSignal);
+        LogService.warn("MatrixClientLite", "Failed to initialize rust crypto:", err);
+      }
+    } catch (error) {
+      if (!this.cryptoInitialized && !rustCryptoInitializationStarted) {
+        try {
+          await this.cryptoStoreOwnership?.cancelUnsafeState();
+        } finally {
+          await this.releaseCryptoStoreOwnership();
+        }
+      }
+      throw error;
     }
   }
 }

@@ -2,10 +2,10 @@
 // that need node:http Agent instances.
 import type { Agent as HttpAgent, AgentOptions as HttpAgentOptions } from "node:http";
 import type { Agent as HttpsAgent, AgentOptions as HttpsAgentOptions } from "node:https";
-import { createRequire } from "node:module";
 import { isIPv6 } from "node:net";
 import { matchesNoProxy, resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
 import { resolveActiveManagedProxyTlsOptions } from "./proxy/active-managed-proxy-tls.js";
+import { loadProxyline } from "./proxyline-runtime.js";
 
 const UNSUPPORTED_PROXY_PROTOCOL_MESSAGE =
   "Unsupported proxy protocol. SOCKS and PAC proxy URLs are not supported; use an HTTP or HTTPS proxy URL.";
@@ -15,8 +15,6 @@ type ProxylineNodeAgent = import("@openclaw/proxyline").ProxylineNodeProxyAgent;
 type ProxylineTlsOptions = import("@openclaw/proxyline").ProxylineTlsOptions;
 type ProxylineProxyConnectOptions = import("@openclaw/proxyline").ProxyConnectOptions;
 type NodeProxyAgentOptions = HttpAgentOptions & HttpsAgentOptions;
-
-const require = createRequire(import.meta.url);
 
 /** Selects either ambient env proxy resolution or a caller-supplied fixed proxy URL. */
 export type CreateNodeProxyAgentOptions =
@@ -38,10 +36,8 @@ export type CreateNodeProxyAgentOptions =
 
 function proxyUrlWithDefaultScheme(proxyUrl: string, protocol: NodeProxyProtocol): URL {
   const withScheme = proxyUrl.includes("://") ? proxyUrl : `${protocol}://${proxyUrl}`;
-  let parsed: URL;
-  try {
-    parsed = new URL(withScheme);
-  } catch {
+  const parsed = URL.parse(withScheme);
+  if (!parsed) {
     // URL parse errors retain the input, which can contain proxy credentials.
     throw new Error("Invalid proxy URL. Use an HTTP or HTTPS proxy URL.");
   }
@@ -49,10 +45,6 @@ function proxyUrlWithDefaultScheme(proxyUrl: string, protocol: NodeProxyProtocol
     throw new Error(`${UNSUPPORTED_PROXY_PROTOCOL_MESSAGE} Got ${parsed.protocol}`);
   }
   return parsed;
-}
-
-function loadProxyline(): typeof import("@openclaw/proxyline") {
-  return require("@openclaw/proxyline") as typeof import("@openclaw/proxyline");
 }
 
 /** Resolves the env proxy URL that should be used for a specific Node target. */
@@ -67,10 +59,8 @@ function resolveEnvNodeProxyTarget(
   targetUrl: string | URL,
   env: NodeJS.ProcessEnv = process.env,
 ): { proxyUrl: URL; protocol: NodeProxyProtocol } | undefined {
-  let target: URL;
-  try {
-    target = new URL(targetUrl instanceof URL ? targetUrl.href : targetUrl);
-  } catch {
+  const target = URL.parse(targetUrl instanceof URL ? targetUrl.href : targetUrl);
+  if (!target) {
     return undefined;
   }
   // Normalize only this request's snapshot: WebSocket bypass uses HTTP(S)
@@ -80,14 +70,10 @@ function resolveEnvNodeProxyTarget(
   } else if (target.protocol === "wss:") {
     target.protocol = "https:";
   }
-  let protocol: NodeProxyProtocol;
-  if (target.protocol === "http:") {
-    protocol = "http";
-  } else if (target.protocol === "https:") {
-    protocol = "https";
-  } else {
+  if (target.protocol !== "http:" && target.protocol !== "https:") {
     return undefined;
   }
+  const protocol = target.protocol === "https:" ? "https" : "http";
   if (matchesNoProxy(target, env)) {
     return undefined;
   }

@@ -1,6 +1,7 @@
 import type { ChatInputRegion } from "../../app/chat-input-owner.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store-scope.ts";
 import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import {
@@ -10,17 +11,15 @@ import {
 import type { ChatComposerRecoveryOwner } from "./chat-send-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
-import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.ts";
+import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
+import { loadChatComposerState } from "./composer-draft-storage.ts";
+import { reportChatComposerDraftStorageError } from "./composer-persistence-feedback.ts";
 import {
   isIncognitoComposerScope,
   isChatComposerOwnerCurrent,
   type captureChatComposerOwner,
 } from "./composer-persistence-state.ts";
-import {
-  CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
-  loadChatComposerDraftRevision,
-  storedChatOutboxScopeKey,
-} from "./composer-persistence.ts";
+import { publishQueuedMessageEdit } from "./queued-message-edit.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 import { visiblePanesOf } from "./split-layout.ts";
 
@@ -65,6 +64,28 @@ export class ChatPaneComposerHandoff {
     this.presentations = presentations;
     this.scope = this.currentScope();
     presentations.add(this);
+  }
+
+  static retainedAttachmentIds(
+    context: ApplicationContext,
+    attachments: readonly ChatAttachment[],
+  ): ReadonlySet<string> {
+    const retained = new Set(context.chatAttachmentHandoff.retainedAttachmentIds(attachments));
+    for (const presentation of composerPresentations.get(context) ?? []) {
+      const state = presentation.host.state();
+      if (!state) {
+        continue;
+      }
+      const references = [
+        ...state.chatAttachments,
+        ...Object.values(state.chatComposerFallbackByScope).flatMap((draft) => draft.attachments),
+        ...(state.chatQueuedEdit?.attachments ?? []),
+      ];
+      for (const { id } of references) {
+        retained.add(id);
+      }
+    }
+    return retained;
   }
 
   claim(): void {
@@ -224,8 +245,10 @@ export class ChatPaneComposerHandoff {
     target.custody = this.custody;
     target.scope = target.currentScope();
     target.host.resume();
-    sourceState.requestUpdate?.();
-    targetState.requestUpdate?.();
+    publishQueuedMessageEdit(sourceState);
+    publishQueuedMessageEdit(targetState);
+    sourceState.composerDraftChanged?.();
+    targetState.composerDraftChanged?.();
   }
 }
 
@@ -249,7 +272,8 @@ export function restorePaneStagedAttachments(
   }
   const current =
     restored.draftRevision === undefined ||
-    restored.draftRevision >= loadChatComposerDraftRevision(state, state.sessionKey);
+    restored.draftRevision >=
+      loadChatComposerState(state, state.sessionKey).revisions.latestAttempt;
   if (current && restored.draftRevision !== undefined) {
     state.chatMessage = restored.message ?? "";
     state.chatMentions = restored.mentions;
@@ -271,8 +295,7 @@ export function restorePaneStagedAttachments(
   const currentFallback =
     state.chatComposerFallbackByScope[handoffKey(paneId, state, owner).scopeKey];
   if (current && currentFallback?.storageFailed) {
-    state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-    state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
+    reportChatComposerDraftStorageError(state);
   }
   releaseDisplacedChatAttachmentPayloads(
     [...displaced, ...(!current ? restored.attachments : [])],
@@ -353,25 +376,25 @@ export function replacePaneStagedAttachmentGatewayOwner(
     for (const fallback of Object.values(state.chatComposerFallbackByScope)) {
       fallback.attachments = dropAnnotations(fallback.attachments);
     }
-    state.requestUpdate?.();
+    state.composerDraftChanged?.();
   }
   context.chatAttachmentHandoff.clearPane(paneId);
   return nextOwner;
 }
 
-type StagedAttachmentPane = Element & {
-  paneId: string;
+type StagedAttachmentPane = {
+  paneId?: string;
   resumeStagedAttachments?: () => void;
 };
 
 export function resumeStagedPanes(
-  root: ParentNode,
+  panes: Iterable<StagedAttachmentPane>,
   layout: ChatSplitLayout,
   narrow: boolean,
 ): void {
   const visiblePaneIds = new Set(visiblePanesOf(layout, narrow).map((pane) => pane.id));
-  for (const pane of root.querySelectorAll<StagedAttachmentPane>("openclaw-chat-pane")) {
-    if (visiblePaneIds.has(pane.paneId)) {
+  for (const pane of panes) {
+    if (pane.paneId && visiblePaneIds.has(pane.paneId)) {
       pane.resumeStagedAttachments?.();
     }
   }

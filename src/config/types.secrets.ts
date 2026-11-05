@@ -7,6 +7,7 @@ import {
   ENV_SECRET_REF_ID_RE,
   isSecretRef,
   secretRefKey,
+  type SecretInput,
   type SecretRef,
   type SecretRefSource,
 } from "../secrets/ref-contract.js";
@@ -35,7 +36,7 @@ export type SecretInputStringResolution =
   | { status: "missing"; value: undefined; ref: null };
 type SecretDefaults = SecretsConfig["defaults"];
 
-function isLegacySecretRefWithoutProvider(
+export function isLegacySecretRefWithoutProvider(
   value: unknown,
 ): value is { source: SecretRefSource; id: string } {
   if (!isRecord(value)) {
@@ -49,6 +50,13 @@ function isLegacySecretRefWithoutProvider(
     typeof value.id === "string" &&
     value.id.trim().length > 0 &&
     value.provider === undefined
+  );
+}
+
+export function hasLegacySecretRefExtraFields(value: unknown): boolean {
+  return (
+    isLegacySecretRefWithoutProvider(value) &&
+    Object.keys(value).some((key) => key !== "source" && key !== "provider" && key !== "id")
   );
 }
 
@@ -107,12 +115,13 @@ export function parseLegacySecretRefEnvMarker(
   };
 }
 
-/** Coerce canonical and env-shorthand secret inputs into a SecretRef.
- * Retired string markers are parsed only by doctor migration above. */
+/** Parse current structured refs and supported env shorthand without legacy normalization. */
+export function parseSecretRef(value: unknown, defaults?: SecretDefaults): SecretRef | null {
+  return isSecretRef(value) ? value : parseEnvTemplateSecretRef(value, defaults?.env);
+}
+
+/** Public SDK input adapter; persisted config and state are normalized by Doctor. */
 export function coerceSecretRef(value: unknown, defaults?: SecretDefaults): SecretRef | null {
-  if (isSecretRef(value)) {
-    return value;
-  }
   if (isLegacySecretRefWithoutProvider(value)) {
     const provider = defaults?.[value.source] ?? DEFAULT_SECRET_PROVIDER_ALIAS;
     return {
@@ -121,7 +130,7 @@ export function coerceSecretRef(value: unknown, defaults?: SecretDefaults): Secr
       id: value.id,
     };
   }
-  return parseEnvTemplateSecretRef(value, defaults?.env);
+  return parseSecretRef(value, defaults);
 }
 
 /** Return whether a value contains either a literal secret string or resolvable SecretRef shape. */
@@ -135,6 +144,15 @@ export function hasConfiguredSecretInput(value: unknown, defaults?: SecretDefaul
 /** Trim a literal secret input string while leaving non-string inputs unresolved. */
 export function normalizeSecretInputString(value: unknown): string | undefined {
   return normalizeOptionalString(value);
+}
+
+/** Requires a current SecretRef or non-blank literal without materializing it. */
+export function normalizeRequiredSecretInput(value: unknown, path: string): SecretInput {
+  const input = parseSecretRef(value) ?? normalizeSecretInputString(value);
+  if (!input) {
+    throw new Error(`invalid ${path}: expected a non-empty SecretInput`);
+  }
+  return input;
 }
 
 /** Error thrown when strict secret reads encounter a configured but unresolved SecretRef. */
@@ -158,12 +176,9 @@ export function isUnresolvedSecretInputError(value: unknown): value is Unresolve
 }
 
 /** Throw when a secret field still contains an unresolved SecretRef at a read site. */
-export function assertSecretInputResolved(params: {
-  value: unknown;
-  refValue?: unknown;
-  defaults?: SecretDefaults;
-  path: string;
-}): void {
+export function assertSecretInputResolved(
+  params: Omit<Parameters<typeof resolveSecretInputString>[0], "mode">,
+): void {
   const { ref } = resolveSecretInputRef(params);
   if (!ref) {
     return;
@@ -206,12 +221,9 @@ export function resolveSecretInputString(params: {
 }
 
 /** Return a strict literal secret value, throwing if the field still points at a SecretRef. */
-export function normalizeResolvedSecretInputString(params: {
-  value: unknown;
-  refValue?: unknown;
-  defaults?: SecretDefaults;
-  path: string;
-}): string | undefined {
+export function normalizeResolvedSecretInputString(
+  params: Parameters<typeof assertSecretInputResolved>[0],
+): string | undefined {
   return resolveSecretInputString({
     ...params,
     mode: "strict",

@@ -7,8 +7,15 @@ import type {
 } from "../../audit/audit-event-types.js";
 import type { MessageReceipt, MessageReceiptSourceResult } from "../../channels/message/types.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
+import type { DeliveryPlacementEvidence } from "./delivery-placement-evidence.types.js";
 
 export type OutboundDeliveryQueuePolicy = "required" | "best_effort";
+
+export type OutboundDeliveryBatch = {
+  results: readonly OutboundDeliveryResult[];
+  payloadCount: number;
+  payloadOutcomes: readonly OutboundPayloadDeliveryOutcome[];
+};
 
 export type PlatformSendRoute = {
   replyToId?: string | null;
@@ -20,10 +27,7 @@ export type OutboundDeliveryResult = {
   outcome?: MessageReceiptSourceResult["outcome"];
   channel: ChannelId;
   messageId: string;
-  target?: {
-    kind: "chat" | "channel" | "room" | "conversation";
-    id: string;
-  };
+  target?: NonNullable<MessageReceiptSourceResult["target"]>;
   timestamp?: number;
   toJid?: string;
   pollId?: string;
@@ -69,13 +73,9 @@ export function countPhysicalOutboundSends(results: readonly OutboundDeliveryRes
       return count;
     }
     const receipt = result.receipt;
-    if (!receipt) {
-      return count + 1;
-    }
     // Parts and platform ids describe the same sends. Prefer parts so aggregate
     // receipts preserve multiplicity without counting both representations.
-    const receiptCount =
-      receipt.parts.length > 0 ? receipt.parts.length : receipt.platformMessageIds.length;
+    const receiptCount = receipt ? receipt.parts.length || receipt.platformMessageIds.length : 0;
     return count + Math.max(1, receiptCount);
   }, 0);
 }
@@ -91,8 +91,8 @@ export type OutboundPayloadDeliverySuppressionReason =
   | "adapter_returned_no_identity";
 
 /** Delivery phase where a failure occurred. */
-export type OutboundDeliveryFailureStage = "platform_send" | "queue" | "unknown";
-export type OutboundPayloadDeliveryKind = "text" | "media" | "other";
+export type OutboundDeliveryFailureStage = AuditMessageFailureStage;
+export type OutboundPayloadDeliveryKind = AuditMessageDeliveryKind;
 
 const PLATFORM_MESSAGE_NOT_DISPATCHED_ERROR_CODE = "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED";
 
@@ -132,6 +132,10 @@ export type OutboundPayloadDeliveryOutcome =
       index: number;
       status: "sent";
       results: OutboundDeliveryResult[];
+      /** Identified progress exists, but at least one physical result was discarded. */
+      incompleteReason?: "adapter_returned_no_send" | "adapter_returned_no_identity";
+      /** Immutable union of reported placement before progress reconciliation/callback mutation. */
+      reportedPlacement?: DeliveryPlacementEvidence;
       /** Effective post-hook, post-render payload kind. */
       deliveryKind?: OutboundPayloadDeliveryKind;
     }
@@ -183,6 +187,8 @@ export class OutboundDeliveryError extends Error {
       cause: unknown;
       results?: readonly OutboundDeliveryResult[];
       payloadOutcomes?: readonly OutboundPayloadDeliveryOutcome[];
+      /** Durable evidence from an earlier attempt of the same intent. */
+      sentBeforeError?: boolean;
       stage?: OutboundDeliveryFailureStage;
     },
   ) {
@@ -191,6 +197,7 @@ export class OutboundDeliveryError extends Error {
     this.results = [...(options.results ?? [])];
     this.payloadOutcomes = [...(options.payloadOutcomes ?? [])];
     this.sentBeforeError =
+      options.sentBeforeError === true ||
       this.results.length > 0 ||
       this.payloadOutcomes.some((outcome) =>
         outcome.status === "failed"

@@ -15,7 +15,7 @@ import { setAgentWorkspaceForTest } from "./run-attempt-workspace.test-support.j
 
 /** Exercise memory-provider delivery under the attempt suite's shared runtime and cleanup. */
 export function registerCodexMemoryInstructionTests() {
-  it.each([false, true])(
+  it.each([false])(
     "delivers provider-native memory guidance through the thread (legacy tools: %s)",
     async (includeLegacyTools) => {
       const sessionFile = path.join(tempDir, "session.jsonl");

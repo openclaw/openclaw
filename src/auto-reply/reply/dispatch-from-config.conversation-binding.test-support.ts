@@ -8,102 +8,73 @@ export function createDispatchConversationBindingMocks(mock: Pick<typeof vi, "fn
     AccountId?: string | null;
     MessageThreadId?: string | number | null;
     ThreadParentId?: string | null;
-    SenderId?: string | null;
-    SessionKey?: string | null;
-    ParentSessionKey?: string | null;
     OriginatingTo?: string | null;
     To?: string | null;
-    From?: string | null;
-    NativeChannelId?: string | null;
   };
   type BindingConfig = {
     channels?: Record<string, { defaultAccount?: string | null } | undefined>;
   };
+  type BindingInput = {
+    ctx: BindingMsgContext;
+    cfg: BindingConfig;
+    commandChannel?: string | null;
+    command?: { to?: string | null };
+  };
 
   const normalizeText = (value: string | number | null | undefined) =>
     typeof value === "number" ? `${value}` : (value ?? "").trim();
-  const normalizeChannel = (value: string | null | undefined) => normalizeText(value).toLowerCase();
   const resolveChannel = (ctx: BindingMsgContext, commandChannel?: string | null) =>
-    normalizeChannel(ctx.OriginatingChannel ?? commandChannel ?? ctx.Surface ?? ctx.Provider);
+    normalizeText(
+      ctx.OriginatingChannel ?? commandChannel ?? ctx.Surface ?? ctx.Provider,
+    ).toLowerCase();
   const resolveAccountId = (ctx: BindingMsgContext, cfg: BindingConfig, channel: string) =>
     normalizeText(ctx.AccountId) ||
     normalizeText(cfg.channels?.[channel]?.defaultAccount) ||
     "default";
   const resolveTarget = (channel: string, value: string | null | undefined) => {
-    const target = normalizeText(value);
-    if (!target) {
-      return undefined;
-    }
-    const channelPrefix = `${channel}:`;
-    return target.toLowerCase().startsWith(channelPrefix)
-      ? target.slice(channelPrefix.length)
+    const target = normalizeText(value) || undefined;
+    return target?.toLowerCase().startsWith(`${channel}:`)
+      ? target.slice(channel.length + 1)
       : target;
   };
-  const resolveThreadId = (ctx: BindingMsgContext) =>
-    normalizeText(ctx.MessageThreadId) || undefined;
 
-  const resolveConversationBindingContextFromMessage = mock.fn(
-    (params: { cfg: BindingConfig; ctx: BindingMsgContext }) => {
-      const channel = resolveChannel(params.ctx);
-      if (!channel) {
-        return null;
-      }
-      const threadId = resolveThreadId(params.ctx);
-      const baseConversationId =
-        resolveTarget(channel, params.ctx.OriginatingTo) ?? resolveTarget(channel, params.ctx.To);
-      const conversationId = threadId ?? baseConversationId;
-      if (!conversationId) {
-        return null;
-      }
-      const rawThreadParentId = resolveTarget(channel, params.ctx.ThreadParentId);
-      const explicitThreadParentId =
-        channel === "discord" && rawThreadParentId && !rawThreadParentId.includes(":")
-          ? `channel:${rawThreadParentId}`
-          : rawThreadParentId;
-      const parentConversationId =
-        explicitThreadParentId ??
-        (threadId && baseConversationId && baseConversationId !== threadId
-          ? baseConversationId
-          : undefined);
-      return {
-        channel,
-        accountId: resolveAccountId(params.ctx, params.cfg, channel),
-        conversationId,
-        ...(parentConversationId ? { parentConversationId } : {}),
-        ...(threadId ? { threadId } : {}),
-      };
-    },
-  );
+  const resolveConversationBindingContextFromMessage = mock.fn(({ cfg, ctx }: BindingInput) => {
+    const channel = resolveChannel(ctx);
+    const threadId = normalizeText(ctx.MessageThreadId) || undefined;
+    const baseConversationId =
+      resolveTarget(channel, ctx.OriginatingTo) ?? resolveTarget(channel, ctx.To);
+    const conversationId = threadId ?? baseConversationId;
+    if (!channel || !conversationId) {
+      return null;
+    }
+    const rawThreadParentId = resolveTarget(channel, ctx.ThreadParentId);
+    const explicitThreadParentId =
+      channel === "discord" && rawThreadParentId && !rawThreadParentId.includes(":")
+        ? `channel:${rawThreadParentId}`
+        : rawThreadParentId;
+    const parentConversationId =
+      explicitThreadParentId ??
+      (threadId && baseConversationId && baseConversationId !== threadId
+        ? baseConversationId
+        : undefined);
+    return {
+      channel,
+      accountId: resolveAccountId(ctx, cfg, channel),
+      conversationId,
+      ...(parentConversationId ? { parentConversationId } : {}),
+      ...(threadId ? { threadId } : {}),
+    };
+  });
 
   return {
-    resolveConversationBindingAccountIdFromMessage: (params: {
-      ctx: BindingMsgContext;
-      cfg: BindingConfig;
-      commandChannel?: string | null;
-    }) =>
-      resolveAccountId(params.ctx, params.cfg, resolveChannel(params.ctx, params.commandChannel)),
-    resolveConversationBindingChannelFromMessage: (
-      ctx: BindingMsgContext,
-      commandChannel?: string | null,
-    ) => resolveChannel(ctx, commandChannel),
-    resolveConversationBindingContextFromAcpCommand: (params: {
-      cfg: BindingConfig;
-      ctx: BindingMsgContext;
-      command?: { to?: string | null; senderId?: string | null };
-      sessionKey?: string | null;
-      parentSessionKey?: string | null;
-    }) =>
+    resolveConversationBindingAccountIdFromMessage: ({ ctx, cfg, commandChannel }: BindingInput) =>
+      resolveAccountId(ctx, cfg, resolveChannel(ctx, commandChannel)),
+    resolveConversationBindingChannelFromMessage: resolveChannel,
+    resolveConversationBindingContextFromAcpCommand: ({ cfg, ctx, command }: BindingInput) =>
       resolveConversationBindingContextFromMessage({
-        cfg: params.cfg,
-        ctx: {
-          ...params.ctx,
-          SenderId: params.command?.senderId ?? params.ctx.SenderId,
-          SessionKey: params.sessionKey ?? params.ctx.SessionKey,
-          ParentSessionKey: params.parentSessionKey ?? params.ctx.ParentSessionKey,
-          To: params.command?.to ?? params.ctx.To,
-        },
+        cfg,
+        ctx: { ...ctx, To: command?.to ?? ctx.To },
       }),
     resolveConversationBindingContextFromMessage,
-    resolveConversationBindingThreadIdFromMessage: (ctx: BindingMsgContext) => resolveThreadId(ctx),
   };
 }

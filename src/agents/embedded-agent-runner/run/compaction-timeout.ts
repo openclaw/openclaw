@@ -32,31 +32,27 @@ type SnapshotSelection = {
   source: "pre-compaction" | "current";
 };
 
+const CONTINUABLE_MESSAGE_ROLES = new Set([
+  "user",
+  "toolResult",
+  "branchSummary",
+  "compactionSummary",
+  "custom",
+  "bashExecution",
+]);
+
 export function canContinueFromMessage(message: AgentMessage | undefined): boolean {
   if (!message || ("excludeFromContext" in message && message.excludeFromContext === true)) {
     return false;
   }
-  switch (message.role) {
-    case "user":
-    case "toolResult":
-    case "branchSummary":
-    case "compactionSummary":
-    case "custom":
-    case "bashExecution":
-      return true;
-    default:
-      return false;
-  }
+  return CONTINUABLE_MESSAGE_ROLES.has(message.role);
 }
 
 // Drop trailing assistant/tool-call-only fragments before retrying. Those tails
 // are not safe continuation points because replay could resume after an
 // incomplete action instead of a user, tool-result, or summary boundary.
 export function trimToContinuableTail(messages: AgentMessage[]): AgentMessage[] | null {
-  let end = messages.length;
-  while (end > 0 && !canContinueFromMessage(messages[end - 1])) {
-    end -= 1;
-  }
+  const end = messages.findLastIndex(canContinueFromMessage) + 1;
   return end > 0 ? messages.slice(0, end) : null;
 }
 
