@@ -56,6 +56,34 @@
   position: relative;
 }
 
+.settings-row.templates-workspace-file--all {
+  min-height: 72px;
+  padding-block: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+.templates-workspace-file--all .settings-row__title.oc-settings-row-title {
+  line-height: 20px;
+}
+
+/* The Templates route does not load the full settings stylesheet. Reserve the
+   existing action lane here so navigation glyphs cannot collapse to zero width. */
+.templates-workspace-file .settings-row__chevron {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  opacity: 0.5;
+}
+
+.templates-workspace-file .settings-row__chevron svg {
+  width: 13px;
+  height: 13px;
+}
+
 .templates-workspace-file__title {
   display: flex;
   align-items: center;

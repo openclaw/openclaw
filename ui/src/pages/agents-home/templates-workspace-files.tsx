@@ -91,7 +91,7 @@ export function TemplateWorkspaceFiles(props: {
             )}
           </For>
           <Show when={documents().length < props.files.length}>
-            <div class="settings-row oc-settings-row templates-workspace-file">
+            <div class="settings-row oc-settings-row templates-workspace-file templates-workspace-file--all">
               <span class="plugin-capability__icon" aria-hidden="true">
                 <Icon name="folder" />
               </span>
