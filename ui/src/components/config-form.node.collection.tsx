@@ -8,7 +8,7 @@ import {
   type ConfigFormCollectionDraftCommit,
   type ConfigFormCollectionDraftProps,
 } from "./config-form-collection-draft.tsx";
-import { arrayItemSchema } from "./config-form.array-items.ts";
+import { arrayItemSchema, objectPropertyKeys } from "./config-form.array-items.ts";
 import {
   arrayConstraintCandidates,
   arrayInputConstraints,
@@ -137,7 +137,8 @@ export function ConfigObject(props: CollectionProps): JSX.Element {
   );
 
   const labeled = () => props.params.path.length !== 1 && props.params.showLabel !== false;
-  const onlyMap = () => (labeled() && object().fields.length === 0 ? object().additional : null);
+  const onlyMap = () =>
+    labeled() && objectPropertyKeys(props.params.schema).length === 0 ? object().additional : null;
   // Top-level objects, label-less contexts and in-place objects emit sibling settings rows.
   return (
     <Show when={labeled() && !props.params.inlineObject} fallback={fields()}>

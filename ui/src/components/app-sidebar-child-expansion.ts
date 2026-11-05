@@ -2,21 +2,61 @@ import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
 export type SidebarExpansionMode = "collapsed-by-user" | "expanded" | "expanded-fully";
 
+type SidebarExpansionScope = { agentId: string; connectionIdentity: unknown };
+
 /** Parent disclosure state: explicit choices plus the child identities each parent last showed. */
 export class SidebarChildExpansion {
   private readonly modes = new Map<string, SidebarExpansionMode>();
   private readonly observedChildKeys = new Map<string, readonly string[]>();
   private restoredPending = false;
+  #activeSessionKey: string | null = null;
+  readonly #revealedPaths = new Set<string>();
+  selectedRootKey: string | null = null;
 
   constructor(private readonly onChange: () => void) {}
 
   /** Opens a projection pass; a scope change drops state unless a snapshot handoff is pending. */
-  beginPass(scopeChanged: boolean): void {
+  beginPass(
+    input: SidebarExpansionScope & {
+      selectedSessionKey: string | null;
+      rows: readonly SidebarRecentSession[];
+    },
+    previous: SidebarExpansionScope | null,
+  ): void {
+    const scopeChanged =
+      previous !== null &&
+      (previous.agentId !== input.agentId ||
+        previous.connectionIdentity !== input.connectionIdentity);
+    if (scopeChanged || this.#activeSessionKey !== input.selectedSessionKey) {
+      this.#activeSessionKey = input.selectedSessionKey;
+      this.#revealedPaths.clear();
+    }
     if (scopeChanged && !this.restoredPending) {
       this.modes.clear();
       this.observedChildKeys.clear();
     }
     this.restoredPending = false;
+    const reveal = (row: SidebarRecentSession): boolean => {
+      if (row.visuallyActive) {
+        return true;
+      }
+      if (!row.children.some(reveal)) {
+        return false;
+      }
+      if (this.revealOnce("session:" + row.key) && !this.isExpanded(row.key)) {
+        this.modes.set(row.key, "expanded");
+      }
+      return true;
+    };
+    this.selectedRootKey = input.rows.find(reveal)?.key ?? null;
+  }
+
+  revealOnce(key: string): boolean {
+    if (this.#revealedPaths.has(key)) {
+      return false;
+    }
+    this.#revealedPaths.add(key);
+    return true;
   }
 
   keys(): string[] {
@@ -63,6 +103,7 @@ export class SidebarChildExpansion {
   }
 
   restore(rows: readonly { key: string; childrenDisplayMode?: SidebarExpansionMode }[]): void {
+    this.#revealedPaths.clear();
     this.modes.clear();
     this.observedChildKeys.clear();
     for (const row of rows) {

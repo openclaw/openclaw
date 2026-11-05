@@ -55,6 +55,7 @@ import { serializeSessionRow, sessionRowEncodingBytes } from "./session-row-seri
 import * as sharingPolicy from "./session-sharing-policy.js";
 import { canReceiveSessionEvent } from "./session-sharing.js";
 import { rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
+import * as display from "./session-utils-display.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import { createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
@@ -72,13 +73,16 @@ it("reads background processes once per presentation and refreshes counts after 
       using projection = await createTestProjection({ cfg: {}, modelCatalog: [] });
       await projection.ensureMaterialized();
       using reads = vi.spyOn(processes, "listRunningSessions");
+      using runStates = vi.spyOn(display, "projectGatewaySessionRunState");
       const read = () => {
         reads.mockClear();
+        runStates.mockClear();
         const presenter = prepareSessionRowPublication(projection, Date.now())().getPresentation();
         const counts = keys.map(
           (key) => presenter.snapshot({ key, agentId: "main" }).row?.backgroundProcessCount,
         );
         expect(reads.mock.calls.length).toBeLessThanOrEqual(1);
+        expect(runStates).toHaveBeenCalledTimes(keys.length);
         return counts;
       };
       expect(read()).toEqual([1, undefined]);
@@ -164,10 +168,34 @@ it("does not derive discarded diagnostics while interleaving row modes and viewe
     }
     using projection = await createTestProjection({ cfg: rolePolicyConfig(), modelCatalog: [] });
     const diagnostics = vi.spyOn(sharingPolicy, "authorizeSessionAgentRun");
+    using runStates = vi.spyOn(display, "projectGatewaySessionRunState");
     const summaryEligibility = vi.spyOn(sharingPolicy, "authorizeIncognitoSessionTarget");
+    const compareWire = (
+      client: ReturnType<typeof profileClient>,
+      options: Parameters<ReturnType<typeof prepareProjectedSessionPresentation>["snapshot"]>[1],
+    ) => {
+      const now = Date.now();
+      const read = () =>
+        prepareProjectedSessionPresentation(projection, client, now).snapshot(
+          { agentId: "main", key: "agent:main:shared" },
+          options,
+        ).row!;
+      const prepared = read();
+      const present = projection.present.bind(projection);
+      using standalone = vi
+        .spyOn(projection, "present")
+        .mockImplementation((record, opts) =>
+          present(record, { ...opts, preparedRunState: undefined }),
+        );
+      const unprepared = read();
+      expect(standalone).toHaveBeenCalledOnce();
+      expect(JSON.stringify(prepared)).toBe(JSON.stringify(unprepared));
+      expect(serializeSessionRow(prepared)).toBe(serializeSessionRow(unprepared));
+    };
     for (const rowMode of ["sidebar", "compact", "dashboard", undefined, "sidebar"] as const) {
       for (const [index, client] of clients.entries()) {
         diagnostics.mockClear();
+        runStates.mockClear();
         summaryEligibility.mockClear();
         const result = await listProjectedSessions({
           projection,
@@ -176,6 +204,7 @@ it("does not derive discarded diagnostics while interleaving row modes and viewe
           acceptsSerializedJson: true,
         });
         expect(result.count).toBe(index === 0 ? 2 : 1);
+        expect(runStates).toHaveBeenCalledTimes(result.count);
         const row = result.sessions.find((candidate) => candidate.key === "agent:main:shared")!;
         if (rowMode === "sidebar" || rowMode === "dashboard") {
           expect(diagnostics).not.toHaveBeenCalled();
@@ -191,6 +220,7 @@ it("does not derive discarded diagnostics while interleaving row modes and viewe
             index === 0 ? null : "session is shared for this connection",
           );
         }
+        compareWire(client, { rowMode, includeActivitySummary: true });
       }
     }
     for (const role of ["write", "view"] as const) {
@@ -210,6 +240,7 @@ it("does not derive discarded diagnostics while interleaving row modes and viewe
           expect(row.activitySummary).toBeUndefined();
           expect(summaryEligibility).not.toHaveBeenCalled();
         }
+        compareWire(clients[1]!, { rowMode: "compact", includeActivitySummary });
       }
     }
     setUserProfileRole(guest.id, "none");
