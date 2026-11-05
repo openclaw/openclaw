@@ -229,9 +229,10 @@ export function createBrowserTool(
       // connections deliver navigation events in whichever call's context created them, so
       // every host check for this request runs in the context this call was admitted in.
       const runInInvocation = AsyncLocalStorage.snapshot();
-      const bindToInvocation = <Args extends unknown[], Result>(
-        callback: ((...args: Args) => Result) | undefined,
-      ) => (callback ? (...args: Args) => runInInvocation(() => callback(...args)) : undefined);
+      const bindToInvocation = <Inputs extends unknown[], Result>(
+        callback: ((...inputs: Inputs) => Result) | undefined,
+      ) =>
+        callback ? (...inputs: Inputs) => runInInvocation(() => callback(...inputs)) : undefined;
       const assertInvocationCurrent = bindToInvocation(opts?.assertInvocationCurrent);
       const assertLocalLoopbackCurrent = bindToInvocation(opts?.assertLocalLoopbackCurrent);
       assertInvocationCurrent?.();
