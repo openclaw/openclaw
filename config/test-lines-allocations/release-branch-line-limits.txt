@@ -1,2 +1,3 @@
 # Release branch selection and line-limit bypass regressions; preserve main and correctness checks.
-122
+# Includes four LF lines for non-returning inherited fullscreen-test Promise executors.
+126
