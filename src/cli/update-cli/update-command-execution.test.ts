@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
+import * as gatewayLock from "../../infra/gateway-lock.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
@@ -20,6 +21,7 @@ import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import type { updateGitInstall } from "./update-command-git.js";
 import { updateStep } from "./update-command-maintenance-fixtures.test-support.js";
+import type { PackageInstallUpdateParams } from "./update-command-package.js";
 import * as readiness from "./update-command-readiness.js";
 import { registerServiceCollectionTests } from "./update-command-service-collection.test-support.js";
 import type { PreManagedServiceStop } from "./update-command-service.js";
@@ -451,6 +453,82 @@ describe("mutable update execution", () => {
           expect(execution?.result.reason).toBe("database-schema-preflight");
         }
         expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  it.each(
+    (["git", "package"] as const).flatMap((kind) =>
+      (["held", "free"] as const).map((ownership) => ({ kind, ownership })),
+    ),
+  )(
+    "settles PostgreSQL capture ownership before replacing a $kind install ($ownership)",
+    async ({ kind, ownership }) => {
+      await withTestDir({ prefix: "postgres-capture-ownership-" }, async (root) => {
+        const params = await runParams(root, kind);
+        const { env } = params.opts.run;
+        vi.stubEnv("TEST_DATABASE_DSN", "postgresql://127.0.0.1:1/update_capture");
+        await writeFixtureJson(path.join(root, "openclaw.json"), {
+          database: {
+            engine: "postgres",
+            postgres: {
+              connection: { source: "env", provider: "default", id: "TEST_DATABASE_DSN" },
+            },
+          },
+        });
+        // A Gateway the updater does not manage keeps serving and keeps state ownership.
+        mocks.maybeStopService.mockResolvedValue({
+          inspected: true,
+          runtimeInspected: true,
+          running: false,
+          stopped: false,
+          serviceEnv: env,
+          serviceUpdateVerdict: { kind: "absent" },
+        });
+        const acquire = gatewayLock.acquireGatewayLock;
+        vi.spyOn(gatewayLock, "acquireGatewayLock").mockImplementation(async (options) =>
+          ownership === "held" && options?.role === "sqlite-maintenance" ? null : acquire(options),
+        );
+        const events: string[] = [];
+        const target = { schemaVersions: { state: 15, agent: 19 } };
+        mocks.runGitUpdate.mockImplementation(
+          async (options: Parameters<typeof updateGitInstall>[0]) => {
+            await options.inspectGitTarget(target);
+            await options.beforeGitMutation(target);
+            events.push("install-replaced");
+            return { ...successfulUpdate, mode: "git" };
+          },
+        );
+        mocks.runPackageUpdate.mockImplementation(async (options: PackageInstallUpdateParams) => {
+          await options.validateCandidate(root);
+          await options.beforeActivate();
+          events.push("install-replaced");
+          return successfulUpdate;
+        });
+        const execution = await withUpdateCommandExecutor(
+          params.opts.run.runId,
+          async (executor) => {
+            mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admitExecutor) => {
+              admitExecutor(await executor.enter(root));
+            });
+            return execute(params);
+          },
+        );
+
+        if (ownership === "free") {
+          expect(events).toEqual(["install-replaced"]);
+          expect(execution, JSON.stringify(execution?.failure)).toMatchObject({
+            mutationStarted: true,
+            result: { status: "ok" },
+          });
+          return;
+        }
+        expect(events).toEqual([]);
+        expect(execution).toMatchObject({
+          mutationStarted: false,
+          result: { status: "error", reason: "database-engine-preflight" },
+        });
+        expect(execution?.failure?.detail).toContain("exclusive state ownership");
       });
     },
   );

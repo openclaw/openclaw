@@ -258,6 +258,13 @@ its matching binary for rollback rather than lowering version markers.
 
 PostgreSQL original-state captures acquire offline custody before using the exact
 database backup provider. The installed updater must contain this repair.
+
+The pre-migration database backup for PostgreSQL families needs exclusive state
+ownership, and it runs after activation replaces the install. When ownership is
+unavailable after the service stop, for example because a Gateway the updater does
+not manage is still serving, the update now refuses before activation, leaving
+the install unchanged and the Gateway running. Stop the Gateway through its service
+owner, then rerun the update. The installed updater must contain this repair.
 Update-history writes participate in PostgreSQL's generation handoff to Doctor;
 all other generation checks remain in force. Update status reads history and
 recovery outcomes through the configured database engine.
