@@ -177,5 +177,10 @@
     "knowledge_unmerge": { "profiles": ["coding"] },
     "knowledge_verify": { "profiles": ["coding"] },
     "knowledge_withdraw": { "profiles": ["coding"] }
-  }
+  },
+  "recommendedPrompts": [
+    "Help me get started with Knowledge. Check which memory provider this agent uses and whether its Knowledge store and tools are available. Explain the single memory-slot choice, private versus shared access, and a small first-use plan. Do not switch providers, change store sharing, or import anything until I approve.",
+    "Help me bootstrap Knowledge from this agent’s existing Memory using the one-time Learn from Memory Scribe workflow. First confirm the agent, private writable store, and whether to include MEMORY.md, daily notes, or grounded facts from DREAMS.md. Show me a small sample before a larger import, deduplicate against Knowledge, and preserve all original Memory files unchanged. Do not schedule ongoing runs.",
+    "Answer a question using my saved Knowledge. Ask me what I want to know, then use the scoped Knowledge tools to find relevant pages, claims, and retained evidence. Give a concise answer with inspectable citations, distinguish conflicting or superseded claims, and say when the store does not support a conclusion. Do not change any records."
+  ]
 }

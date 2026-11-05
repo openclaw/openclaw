@@ -137,5 +137,9 @@
         }
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Help me get Slack huddle participation ready. Ask which workspace, dedicated Slack user, and Chrome host to use, then check the supported caption/audio setup and explain participant consent. A bot token cannot join a huddle; do not start a login, change account state, or join a call automatically.",
+    "Help me prepare to join an active Slack huddle for notes. Ask for its channel or huddle link, confirm the dedicated user has access and participants consent, and check whether observe-only captions are available. Ask before joining; do not start a huddle, answer a ring, speak, record audio/video, or send notes automatically."
+  ]
 }

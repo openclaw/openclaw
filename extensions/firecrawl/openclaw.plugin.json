@@ -91,5 +91,9 @@
         }
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Help me get Firecrawl search and scraping ready. Check whether the plugin and credential configuration are available without displaying keys, explain the configured service route and any usage limits, and show what setup is missing. Do not create an account, approve charges, or change configuration automatically.",
+    "Help me research a question with Firecrawl. Ask for the question and allowed sites, then use supported search filters and page scraping to compare a small number of relevant sources. Return a cited synthesis, identify blocked or incomplete extractions, and stay within the usage budget I approve; do not claim to crawl or sync an entire site."
+  ]
 }

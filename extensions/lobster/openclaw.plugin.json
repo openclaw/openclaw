@@ -19,5 +19,9 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
-  }
+  },
+  "recommendedPrompts": [
+    "Help me get Lobster ready for a repeatable workflow. Ask what task I want to automate, check whether the plugin and tool are available in a supported non-sandboxed context, and identify the required existing tools. Do not install anything or relax sandbox policy automatically.",
+    "Help me design a small Lobster workflow for a task I choose. Separate read-only preparation from external effects, add explicit approval or input checkpoints, and explain how resuming avoids rerunning completed steps. Show the workflow and its tool requirements before running it; do not send, post, delete, or schedule anything."
+  ]
 }

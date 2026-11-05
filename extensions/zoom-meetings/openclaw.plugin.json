@@ -138,5 +138,9 @@
         }
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Help me get Zoom meeting participation ready through the Web App. Ask which browser host and guest name to use, choose observe-only captions or spoken participation, and explain any Chrome/audio setup and participant-consent requirements. Do not join, sign in, or change accounts automatically.",
+    "Help me prepare to take notes in a Zoom meeting. Ask for the meeting link, authorized browser host, participant consent, and desired notes, then check whether captions are supported and ask before joining. Do not create a meeting, record audio/video, or send notes automatically; explain any missing-caption limitation."
+  ]
 }

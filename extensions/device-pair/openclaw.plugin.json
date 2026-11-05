@@ -38,5 +38,9 @@
       "label": "Gateway URL",
       "help": "Public WebSocket URL used for /pair setup codes (ws/wss or http/https)."
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Help me connect a device to this OpenClaw Gateway. Ask which device and connection method I intend to use, explain the pairing steps and requested permissions, and guide me through the supported setup flow. Keep any short-lived code private and ask before issuing a code or approving a device.",
+    "Help me review any pending device-pairing requests. Explain the device identity and requested capabilities for each request I am authorized to inspect, and ask me to verify the device before making a decision. Do not approve or reject any request automatically."
+  ]
 }

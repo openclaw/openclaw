@@ -13,5 +13,9 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
-  }
+  },
+  "recommendedPrompts": [
+    "Help me preview a Hermes migration. Ask which Hermes home or active profile and OpenClaw agent to use, then run the supported dry-run and explain the proposed memory, skills, MCP, and model-configuration imports. Keep secrets redacted and do not apply changes or activate Hermes plugins, sessions, or jobs.",
+    "Help me make a selective Hermes migration plan. Ask which memories, instructions, skills, and connections I want to keep, explain conflicts and unsupported state, and give credential import its own consent decision. Preserve existing OpenClaw data and show the backup and verification plan before any import."
+  ]
 }

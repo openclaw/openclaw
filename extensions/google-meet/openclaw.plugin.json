@@ -533,5 +533,10 @@
     "secretInputs": {
       "paths": [{ "path": "realtime.providers.*.apiKey", "expected": "string" }]
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Help me get Google Meet participation ready. Ask whether I need observe-only captions or spoken participation, which account and browser host to use, and review the required Chrome, audio, or OAuth setup for that choice. Explain participant consent and proposed changes before joining a meeting or connecting accounts.",
+    "Help me prepare to take notes in a Google Meet. Ask for the meeting link, authorized browser host, participant consent, and desired notes format, then check whether observe-only captions are supported. Ask for confirmation before joining; do not speak, record audio/video, or send notes automatically, and do not promise captions if the platform does not provide them.",
+    "Help me create a Google Meet link. Ask which account and supported creation path to use, check the required OAuth or signed-in browser prerequisites, and explain the meeting access settings. Confirm the exact plan before creating the room; do not invite anyone or join the call automatically."
+  ]
 }

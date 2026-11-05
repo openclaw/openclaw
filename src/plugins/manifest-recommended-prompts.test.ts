@@ -21,6 +21,11 @@ function fixture(recommendedPrompts?: unknown) {
 }
 
 describe("manifest recommended prompts", () => {
+  it("loads authored Knowledge starters through native manifest normalization", () => {
+    const result = loadPluginManifest(path.resolve("extensions/knowledge"), false);
+    if (!result.ok) throw new Error(result.error);
+    expect(result.manifest.recommendedPrompts).toHaveLength(3);
+  });
   it("carries up to three author-written prompts through third-party cold discovery unchanged", () => {
     const prompts = [
       "  Plan  my week\nwith priorities.  ",
@@ -44,10 +49,8 @@ describe("manifest recommended prompts", () => {
     "accepts absent or empty optional metadata: $prompts",
     ({ prompts }) => {
       const result = loadPluginManifest(fixture(prompts).rootDir, false);
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.manifest.recommendedPrompts).toEqual(prompts);
-      }
+      if (!result.ok) throw new Error(result.error);
+      expect(result.manifest.recommendedPrompts).toEqual(prompts);
     },
   );
 
@@ -64,15 +67,12 @@ describe("manifest recommended prompts", () => {
       installRecords: {},
       candidates: [candidate],
     });
-    expect(registry.plugins).toEqual([
-      expect.objectContaining({ id: candidate.idHint, recommendedPrompts: undefined }),
+    expect(registry.plugins.map(({ id, recommendedPrompts }) => [id, recommendedPrompts])).toEqual([
+      [candidate.idHint, undefined],
     ]);
-    expect(registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        level: "warn",
-        message: expect.stringContaining("ignoring invalid plugin manifest recommendedPrompts"),
-      }),
-    );
-    expect(registry.diagnostics.some((diagnostic) => diagnostic.level === "error")).toBe(false);
+    const warning = expect.stringContaining("ignoring invalid plugin manifest recommendedPrompts");
+    expect(registry.diagnostics.map(({ level, message }) => [level, message])).toEqual([
+      ["warn", warning],
+    ]);
   });
 });

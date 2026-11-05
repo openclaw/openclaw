@@ -49,5 +49,9 @@
     "styles": [
       "dist/control-ui/2a51d7d8d2e4e1bad981b014f3a481b1903ec641534aca084a10c809b297abe6/index.css"
     ]
-  }
+  },
+  "recommendedPrompts": [
+    "Help me connect ChatGPT, Codex, or Claude to this Gateway through MCP Relay. Ask which app I want to connect, explain the outbound relay and its access limits, and guide me through the supported consent flow. Explain that the relay can see traffic in transit; do not enable a connection, issue a pairing code, or grant access without my approval.",
+    "Help me review the apps connected through MCP Relay. Using only metadata I am authorized to inspect, explain each grant’s owner and access level and identify anything that deserves a closer look. Do not display pairing secrets, revoke grants, or widen an app’s permissions without asking."
+  ]
 }

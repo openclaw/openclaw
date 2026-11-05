@@ -252,5 +252,9 @@
       "label": "Transcript Directory",
       "help": "Relative artifact directory under the plugin-owned per-agent transcript directory in the OpenClaw state directory. The agent id is URI-encoded; the default subdirectory is active-memory."
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Help me set up Remember across conversations for my personal agent. Check its current memory provider and recall settings, explain which private conversations can be searched, and propose the smallest change needed. Do not enable broader access or change settings until I approve.",
+    "Help me recover a decision from an earlier private conversation with this agent. Ask me what decision or project to look for, then use the available memory and private-recall tools to explain what we decided, when, and why, with the sources you can actually access. Say clearly if recall is unavailable or incomplete."
+  ]
 }

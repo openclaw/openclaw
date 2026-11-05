@@ -115,5 +115,10 @@
     }
   },
   "skills": ["./skills"],
-  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+  "configSchema": { "type": "object", "additionalProperties": false, "properties": {} },
+  "recommendedPrompts": [
+    "Help me set up Feishu/Lark for this agent. Ask which tenant and workplace tasks I need, inspect the connected app’s granted scopes when available, and propose the minimum chat, document, wiki, or Bitable access. Do not widen permissions, expose credentials, or change workplace content without approval.",
+    "Help me understand a Feishu document or wiki page. Ask me for the page link and question, use only the connected app’s granted read access, and summarize the relevant content with source references and unresolved questions. Do not edit the page, change permissions, or share it.",
+    "Help me inspect a Feishu Bitable. Ask which table and question to investigate, read its metadata and relevant records using the supported Bitable tools, and explain the fields, findings, and data-quality gaps. Keep this read-only; do not create fields or change records."
+  ]
 }

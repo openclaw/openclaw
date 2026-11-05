@@ -1261,5 +1261,9 @@
         { "path": "numbers.*.tts.providers.*.apiKey", "expected": "string" }
       ]
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Help me get Voice Call ready without placing a call. Ask which supported carrier, phone number, and owning agent to use, then review credentials, public webhook readiness, inbound allowlists, and expected charges. Use supported dry-run checks only and show proposed changes before applying them.",
+    "Help me prepare a phone call through Voice Call. Ask for the exact recipient, purpose, consent, and spending limit, then draft the call’s opening and desired outcome and check readiness without dialing. Do not place a call, enable inbound access, or incur carrier charges until I approve the exact plan."
+  ]
 }

@@ -290,5 +290,10 @@
       }
     }
   },
-  "commandAliases": [{ "name": "wiki" }]
+  "commandAliases": [{ "name": "wiki" }],
+  "recommendedPrompts": [
+    "Help me set up Memory Wiki beside my current memory provider. Ask whether I want an isolated vault or a bridge from supported memory exports, check what this provider exposes, and propose agent-scoped or shared storage. Do not switch my memory provider, enable unsafe-local access, or import files without approval.",
+    "Help me turn a small set of sources into a navigable Memory Wiki. Ask which files or supported exported artifacts to use, preview the proposed pages and provenance, and start only after I approve the scope. Preserve handwritten note blocks and verify the resulting pages and links rather than claiming a successful import from counts alone.",
+    "Help me explore a topic already in my Memory Wiki. Ask what I am researching, then search and read relevant pages, trace important claims back to their sources, and summarize agreements, contradictions, and gaps. Keep this read-only and say if the vault or its bridge inputs are unavailable."
+  ]
 }

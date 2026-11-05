@@ -164,5 +164,9 @@
         }
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Help me plan least-privilege 1Password access for this agent. Explain the official op CLI, service-account token-file requirements, and curated item registry, and distinguish that tool from SecretRef resolution. Ask which items the agent truly needs; do not enumerate vaults, retrieve values, or store credentials in chat.",
+    "Help me review the secret slugs registered for this agent in 1Password. If the curated tool is configured, list only the authorized metadata and explain the applicable approval policies; otherwise show what setup is missing. Do not retrieve secret values, change policy, or grant standing access."
+  ]
 }

@@ -42,5 +42,9 @@
     "tools": [
       "mcp_events"
     ]
-  }
+  },
+  "recommendedPrompts": [
+    "Help me get MCP Events ready for an account I choose. Check the existing MCP connection and advertised event support, then explain the supported webhook profile and HTTPS callback requirements. Show the minimum setup and security boundaries without creating a tunnel, exposing administration routes, or subscribing to events yet.",
+    "Help me design an automation for a real event advertised by one of my connected MCP accounts. Ask which account and outcome I want, inspect the event catalog and argument schema, then draft the event filter, agent instructions, and delivery choice. Keep event payloads separate from instructions and ask before creating or enabling the automation."
+  ]
 }

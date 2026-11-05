@@ -111,5 +111,9 @@
         "default": 14
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Help me decide whether to enable Logbook. Check its current state and explain the screen-capture permissions, capture defaults, retention, and which configured models would receive screenshots or derived text. Propose a setup for a device I choose, but do not enable capture, take screenshots, or change settings without my approval.",
+    "Help me draft a short standup from a day already tracked in Logbook. Ask which date and audience to use, then summarize recorded accomplishments, context switches, and unresolved work with time references. Call out capture gaps and exclude sensitive details. Do not start new capture or send the standup anywhere."
+  ]
 }

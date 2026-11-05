@@ -117,5 +117,9 @@
         }
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Help me get file transfer ready between this Gateway and one of my paired devices. Ask which device and folder I want to use, check the connection and applicable file permissions, and explain any approval needed. Do not broaden path permissions or transfer files yet.",
+    "Help me retrieve a file from a paired device. Ask which device, the exact source file or folder, and where I want the result saved. Confirm the scope and destination before transferring, preserve existing files, and report any denied paths or size limits rather than silently skipping content."
+  ]
 }

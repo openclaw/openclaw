@@ -54,5 +54,9 @@
         }
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Help me get Canvas ready to display a visual on a paired Mac. Check for an eligible connected Canvas device and explain any missing connection or hosting prerequisites. Ask which device I intend to use; do not open a panel or change its page until I confirm.",
+    "Help me turn a process or idea into a simple visual explanation for Canvas. Ask what it should explain and which connected Mac should display it, then prepare a hosted widget preview. Show me the content first and ask before presenting it on the device."
+  ]
 }

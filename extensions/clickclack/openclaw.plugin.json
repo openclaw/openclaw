@@ -27,5 +27,9 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
-  }
+  },
+  "recommendedPrompts": [
+    "Help me connect this agent to a ClickClack workspace. Ask which workspace and bot identity to use, explain the single-use setup-code flow and token scopes, and review existing account settings before proposing changes. Do not claim a setup code, connect the bot, or send messages until I approve.",
+    "Help me use ClickClack discussions for a work conversation. Ask which workspace, session, and audience I mean, check the available discussion integration, and propose a clearly named discussion and access scope. Do not create a channel, link a session, or post anything until I confirm the plan."
+  ]
 }
