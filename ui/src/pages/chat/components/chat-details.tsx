@@ -121,8 +121,11 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     manualChange = manual && (nextIntent === "open") !== opened();
     setChoice((previous) => ({ ...previous, intent: nextIntent }));
   };
-  // Reuse only a measurement of this same viewport and pane allocation.
-  const [wideEnough, setWideEnough] = createSignal<boolean>(() => {
+  // Seed once; data publications must not replace subsequently measured geometry.
+  const [wideEnough, setWideEnough] = createSignal<boolean>((previous) => {
+    if (previous !== undefined) {
+      return previous;
+    }
     const docking = props.chat?.cachedDetails?.docking;
     return docking?.layout === props.dockingLayout ? docking?.wide === true : false;
   });
