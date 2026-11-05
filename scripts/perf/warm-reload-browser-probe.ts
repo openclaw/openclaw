@@ -561,12 +561,18 @@ export function installWarmReloadBrowserProbe(
         const state = {
           composer: { x: box.x, y: box.y, width: box.width, height: box.height },
           controls: [
+            ".agent-chat__composer-lead",
             ".agent-chat__composer-trail",
             ".agent-chat__composer-controls",
             ".context-usage",
             "[data-chat-model-select]",
             "[data-chat-thinking-select]",
+            "[data-chat-permission-select]",
             ".agent-chat__composer-actions",
+            ".agent-chat__input-btn--attach",
+            ".chat-send-btn--voice",
+            ".chat-send-btn--stop",
+            ".chat-send-btn--send",
           ].flatMap((selector) => {
             const element = composer.querySelector(selector);
             const rect = element?.getBoundingClientRect();

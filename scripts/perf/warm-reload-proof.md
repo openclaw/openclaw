@@ -87,6 +87,9 @@ credentials and makes no model request. The same per-frame samples include each
 composer group's x/width and text so a late badge or effort replacement stays
 visible in the attribution data. Use `--active-targets` for active chat and omit
 it for the archived secondary; the dashboard route retains the same controls.
+Preparation opens the real model picker once to load its on-demand catalog, then
+requires the selected label, window badge, High effort and persisted composer
+snapshot before active warm captures. Merely seeing transcript rows is insufficient.
 
 For plugin-publication attribution, add `--plugin-activation`. This enables bundled
 Workboard and two isolated native modules: a neutral CSS theme with a header
