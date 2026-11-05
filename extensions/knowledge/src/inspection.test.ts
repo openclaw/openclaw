@@ -209,26 +209,17 @@ it("source view is opt-in, bounded, and refuses arbitrary paths; invalid YAML re
   const sources = checked("ontology", await inspectOntology(vault, { view: "sources" }));
   expect(sources.sources.some((s: any) => s.path === "ontology.yaml" && !s.valid)).toBeTruthy();
   expect(sources.source).toBe(undefined);
+  const sourceInput = { view: "sources" as const, sourcePath: "ontology.yaml", maxChars: 256 };
   let raw = "",
     offset = 0;
   do {
-    const page = checked(
-      "ontology",
-      await inspectOntology(vault, {
-        view: "sources",
-        sourcePath: "ontology.yaml",
-        maxChars: 256,
-        offset,
-      }),
-    );
+    const page = checked("ontology", await inspectOntology(vault, { ...sourceInput, offset }));
     expect(Buffer.from(page.source.raw, "utf8").toString("utf8")).toBe(page.source.raw);
     raw += page.source.raw;
     offset = page.nextOffset;
   } while (offset !== null);
   expect(raw).toBe(broken);
-  await expect(
-    inspectOntology(vault, { view: "sources", sourcePath: "ontology.yaml", offset: 256 }),
-  ).rejects.toThrow(/Unicode/);
+  await expect(inspectOntology(vault, { ...sourceInput, offset: 256 })).rejects.toThrow(/Unicode/);
   const diagnostics = checked(
     "ontology",
     await inspectOntology(vault, { view: "diagnostics", limit: 1 }),
