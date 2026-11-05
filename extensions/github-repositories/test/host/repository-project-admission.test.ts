@@ -5,6 +5,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../../../src/config/runtime-snapshot.js";
 import { createRepositorySources } from "../../../../src/gateway/repository-sources.js";
+import type { RepositoryWorkerProjectSnapshot } from "../../../../src/gateway/worker-environments/repository-project-source.schema.js";
 import { createRepositorySourcesFixture } from "../../../../src/gateway/worker-environments/repository-source.test-support.js";
 import {
   createPluginRegistryFixture,
@@ -15,7 +16,6 @@ import { createRepositorySourceFixture } from "../../../../src/plugins/repositor
 import { createPluginRecord } from "../../../../src/plugins/status.test-helpers.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createGitHubRepositorySource } from "../../repository-source-api.js";
-import type { RepositoryReadIdentityFacts } from "../../worker-source-identity-api.js";
 
 const mocks = vi.hoisted(() => ({
   captureAgentLifecycleBinding: vi.fn(),
@@ -68,7 +68,10 @@ const admission = {
 const initial = { ...admission, repository: { agentId: "main", url: repositoryUrl } };
 
 describe("repository project admission", () => {
-  let selection: RepositoryReadIdentityFacts;
+  let selection: Exclude<
+    RepositoryWorkerProjectSnapshot["source"]["owner"]["identity"],
+    { source: "plugin" }
+  >;
   let token: string | undefined;
   let selected: boolean;
   let repositoryId: string;

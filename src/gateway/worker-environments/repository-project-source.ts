@@ -1,5 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { nativeGitHubWorkerSourceBinding } from "../../../extensions/github-repositories/host-api.js";
 import {
   RepositoryWorkerProjectSchema,
   type RepositoryWorkerProjectSnapshot,
@@ -41,7 +40,22 @@ export function repositoryWorkerSourceBinding(source: RepositoryWorkerProjectSna
     if (source.repositorySourceId !== undefined) {
       throw new Error("Worker environment has an invalid repository preparation snapshot");
     }
-    return nativeGitHubWorkerSourceBinding(identity);
+    return {
+      sourceId: "github-repositories/repositories",
+      // The saved native format predates opaque plugin keys. Preserve the
+      // source worker's original field order without loading plugin code.
+      identityKey: JSON.stringify(
+        identity.source === "anonymous"
+          ? { source: identity.source }
+          : identity.source === "system-detected"
+            ? { source: identity.source, accountId: identity.accountId }
+            : {
+                source: identity.source,
+                accountId: identity.accountId,
+                profileId: identity.profileId,
+              },
+      ),
+    };
   }
   if (!source.repositorySourceId) {
     throw new Error("Worker environment has an invalid repository preparation snapshot");

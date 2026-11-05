@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { createRepositorySourceFixture } from "../../plugins/repository-source.test-support.js";
+import { createRepositorySources } from "../repository-sources.js";
 import { createWorkerPreparationIdentity } from "./preparation-identity.js";
 import { readWorkerPreparation } from "./preparation-identity.schema.js";
 import { PROJECT_KEY, usePreparedPoolFixture } from "./prepared-pool.test-support.js";
@@ -18,7 +20,11 @@ vi.mock("./repository-project-admission.js", () => ({
 describe("prepared project retention compatibility", () => {
   const fixture = usePreparedPoolFixture();
 
-  async function setup(native = false) {
+  async function setup(
+    native = false,
+    source?: RepositoryWorkerProjectSnapshot["source"],
+    repositorySources?: ReturnType<typeof createRepositorySources>,
+  ) {
     sourceAdmission
       .mockReset()
       .mockRejectedValue(new Error("Retention must not access the repository"));
@@ -40,6 +46,9 @@ describe("prepared project retention compatibility", () => {
         },
       },
     };
+    if (source) {
+      project.source = source;
+    }
     if (native) {
       delete project.source.repositorySourceId;
       project.source.owner.identity = { source: "anonymous" };
@@ -66,7 +75,7 @@ describe("prepared project retention compatibility", () => {
     });
     const prepareNodeArtifacts = vi.fn(async () => ({ artifacts, assertCurrent() {} }));
     const providerFor = vi.fn(() => fixture.provider);
-    const sources = createRepositorySourcesFixture(() => fixture.config);
+    const sources = repositorySources ?? createRepositorySourcesFixture(() => fixture.config);
     const owner = createWorkerProviderIntent({
       ...options,
       getRepositorySources: () => sources,
@@ -186,6 +195,68 @@ describe("prepared project retention compatibility", () => {
           profileSnapshot: preparedProfile,
         }),
       ).toThrow("not owned by this lifecycle");
+    },
+  );
+
+  it.each(["identity selection", "plugin retirement"])(
+    "retains plugin preparations independently of native GitHub selection until %s",
+    async (change) => {
+      let identityKey = "selected-reader";
+      const source = createRepositorySourceFixture({
+        id: "remote",
+        resolve: (url) => ({ url, name: "project" }),
+        prepare: async () => {
+          throw new Error("Retention must not materialize the repository");
+        },
+        worker: {
+          isIdentityCurrent: ({ agentId, identityKey: selected }) =>
+            agentId === "main" && selected === identityKey,
+          prepare: async () => {
+            throw new Error("Retention must not acquire repository access");
+          },
+          checkout: async () => {
+            throw new Error("Retention must not checkout the repository");
+          },
+        },
+      });
+      const { record, preparation, owner, prepareNodeArtifacts } = await setup(
+        false,
+        {
+          kind: "repository",
+          url: "https://git.example/team/subgroup/project",
+          repositorySourceId: source.id,
+          repositoryId: "repository_fixture",
+          owner: {
+            agent: { agentId: "main", provenance: null },
+            identity: { source: "plugin", key: identityKey },
+          },
+        },
+        createRepositorySources(fixture.abort.signal, source.registry),
+      );
+      fixture.config.plugins = {
+        entries: {
+          "github-repositories": {
+            config: { system: { kind: "oauth", profileId: `ghp_${"a".repeat(32)}` } },
+          },
+        },
+      };
+      await source.run(async () => {
+        const retained = await owner.prepareRetention(record, preparation, fixture.abort.signal);
+        expect(retained).toBeDefined();
+        expect(retained!.isCurrent()).toBe(true);
+        if (change === "identity selection") {
+          identityKey = "replacement-reader";
+        } else {
+          await source.instance.dispose();
+        }
+        expect(retained!.isCurrent()).toBe(false);
+        prepareNodeArtifacts.mockClear();
+        expect(
+          await owner.prepareRetention(record, preparation, fixture.abort.signal),
+        ).toBeUndefined();
+        expect(prepareNodeArtifacts).not.toHaveBeenCalled();
+        expect(sourceAdmission).not.toHaveBeenCalled();
+      });
     },
   );
 

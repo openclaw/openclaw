@@ -20,11 +20,11 @@ import {
   prepareGitHubReadIdentity,
   resolveConfiguredGitHubToolIdentity,
 } from "./tool-identity-api.js";
-import {
-  repositoryWorkerIdentityKey,
-  type RepositoryReadIdentityFacts,
-} from "./worker-source-identity-api.js";
 type RepositoryWorkerSource = NonNullable<RepositorySourceV1["worker"]>;
+type RepositoryReadIdentityFacts =
+  | { source: "anonymous" }
+  | { source: "system-detected"; accountId: number }
+  | { source: "system-configured" | "agent-override"; accountId: number; profileId: string };
 
 const GitObject = /^[a-f0-9]{40}$/u;
 // Commit lookup requests one changed file; trees are nonrecursive and inspect
@@ -132,7 +132,7 @@ async function prepareGitHubWorkerSource(
   let identity = await prepareIdentity(assertCaller);
   assertAdmission();
   const owner = { identity: recordedIdentity(identity.selection) };
-  if (expected && repositoryWorkerIdentityKey(owner.identity) !== expected.identityKey) {
+  if (expected && JSON.stringify(owner.identity) !== expected.identityKey) {
     sourceChanged();
   }
   const assertCurrent = () => {
@@ -354,7 +354,7 @@ async function prepareGitHubWorkerSource(
   };
   return {
     repositoryId,
-    identityKey: repositoryWorkerIdentityKey(owner.identity),
+    identityKey: JSON.stringify(owner.identity),
     private: metadata.private,
     baseCommit,
     tree,

@@ -30,5 +30,3 @@ export function githubRepositoryUrl(
 ): string {
   return `https://${host}/${repository}.git`;
 }
-
-export { nativeGitHubWorkerSourceBinding } from "./worker-source-identity-api.js";
