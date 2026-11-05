@@ -39,7 +39,7 @@ export type PluginMaintenanceOutcome = {
 };
 export type CapturedPluginMaintenanceContinuation = {
   owner: object;
-  interrupt(): Promise<void>;
+  interrupt(assertMaintenanceCurrent: () => void): Promise<void>;
   settled: Promise<void>;
   finish(
     outcome: PluginMaintenanceOutcome,
@@ -210,7 +210,7 @@ export function registerPluginMaintenanceContinuation(
           owner: operation,
           settled,
           cancel,
-          async interrupt() {
+          async interrupt(assertMaintenanceCurrent) {
             if (
               interrupted ||
               finished ||
@@ -222,7 +222,11 @@ export function registerPluginMaintenanceContinuation(
             ) {
               return;
             }
-            continuation.assertCurrent();
+            const assertInterruptCurrent = () => {
+              assertMaintenanceCurrent();
+              continuation.assertCurrent();
+            };
+            assertInterruptCurrent();
             registerReplyOperationSuccessorBarrier({
               operation,
               sessionId,
@@ -233,7 +237,7 @@ export function registerPluginMaintenanceContinuation(
             interrupted = true;
             try {
               commands.cancel(() => {
-                continuation.assertCurrent();
+                assertInterruptCurrent();
                 return true;
               });
             } finally {
@@ -245,7 +249,7 @@ export function registerPluginMaintenanceContinuation(
             await stopSession({
               source: "maintenance",
               capture: stopCapture,
-              assertCurrent: continuation.assertCurrent,
+              assertCurrent: assertInterruptCurrent,
               reason: new Error("Plugin maintenance interrupted this unfinished turn"),
             }).completed;
           },

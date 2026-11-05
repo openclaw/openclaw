@@ -1,4 +1,3 @@
-import { capturePluginMaintenanceContinuation } from "../agents/plugin-maintenance-continuation.js";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { withCoreCanvasNodeCapability } from "../canvas/constants.js";
 import { validateConfiguredBindings } from "../channels/plugins/configured-binding-registry.js";
@@ -101,7 +100,7 @@ export async function reloadGatewayPlugins(
   const lifecycle = createPluginReloadLifecycle(params.pluginLifecycle?.operationId);
   const requestedIds = new Set(params.pluginLifecycle?.pluginIds ?? []);
   const forceReload = params.pluginLifecycle?.force
-    ? createPluginForceReload(capturePluginMaintenanceContinuation)
+    ? createPluginForceReload(() => params.assertInvokerOwned?.())
     : undefined;
   const { warnings, recordWarning, recordCleanup, cleanup } = createPluginReloadDiagnostics(log);
   const replacePluginIds = resolvePluginReloadReplacementIds(

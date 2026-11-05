@@ -416,7 +416,9 @@ describe("createFollowupRunner", () => {
     const resolveGatewayContext = () => undefined;
     let retired = false;
     const pluginResolver = () => {
-      if (retired) throw new Error("Plugin execution view retired");
+      if (retired) {
+        throw new Error("Plugin execution view retired");
+      }
       return resolveGatewayContext();
     };
     bindGatewayContextResolver(pluginResolver, resolveGatewayContext);

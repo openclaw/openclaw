@@ -47,7 +47,6 @@ import {
   canRequesterAbortChatRun,
   captureChatAbortAuthority,
   getChatRunAbortAuthority,
-  resolveChatAbortTargetRejection,
   resolveChatAbortSessionRestriction,
 } from "./chat-abort-authorization.js";
 import * as exactRun from "./chat-abort-exact-run.js";
@@ -300,21 +299,8 @@ export async function handleChatAbortRequestWithLifecycle(
         resolveGatewayContext,
       })
     : () => false;
-  // Runs the command Stop sequence when no exact run source was captured.
-  const stopWithoutCapturedRun = (reason?: string, afterParent?: () => void) =>
-    stopSession({
-      source: "client-run",
-      capture: captureSessionControllerStop({}),
-      assertCurrent,
-      reason,
-      hookContext: stopHookContext,
-      afterParent,
-    }).completed;
-  const authorizeRunTarget = (
-    target: Parameters<typeof resolveChatAbortTargetRejection>[0]["target"],
-  ): boolean => {
-    const rejection = resolveChatAbortTargetRejection({
-      target,
+  const { stopWithoutCapturedRun, authorizeRunTarget } = exactRun.createExactRunStopControls({
+    authorization: {
       requester,
       requestedSessionKey: rawSessionKey,
       canonicalSessionKey: canonicalAbortSessionKey,
@@ -323,12 +309,11 @@ export async function handleChatAbortRequestWithLifecycle(
       requiredSessionId,
       discardPendingInput,
       narrow,
-    });
-    if (rejection) {
-      respondError(respond, ErrorCodes.INVALID_REQUEST, rejection);
-    }
-    return rejection === undefined;
-  };
+    },
+    assertCurrent,
+    hookContext: stopHookContext,
+    respond,
+  });
 
   // Capture the exact input once; an await must never select a successor by run ID.
   const targetMatches = capturedSources.flatMap(([, entry]) =>
@@ -574,8 +559,24 @@ export async function handleChatAbortRequestWithLifecycle(
       if (!abortSession.ok) {
         throw abortSession.error;
       }
-      await stopWithoutCapturedRun();
-      respond(true, { ok: true, aborted: false, runIds: [] });
+      const stopped = await exactRun.stopRetainedRun({
+        session: abortSession.value,
+        sessionKey: canonicalAbortSessionKey,
+        aliases: [rawSessionKey],
+        agentId: abortAgentId,
+        runId,
+        resolveGatewayContext,
+        authorizeRunTarget,
+        assertCurrent,
+        hookContext: stopHookContext,
+      });
+      if (!stopped) {
+        return;
+      }
+      if (stopped.aborted) {
+        lifecycle.onExactRunAborted?.(runId);
+      }
+      respond(true, { ok: true, aborted: stopped.aborted, runIds: stopped.aborted ? [runId] : [] });
       return;
     }
     if (!requester.isAdmin) {

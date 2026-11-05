@@ -1,7 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
-import type {
-  CapturedPluginMaintenanceContinuation,
-  PluginMaintenanceOutcome,
+import {
+  type CapturedPluginMaintenanceContinuation,
+  type PluginMaintenanceOutcome,
   capturePluginMaintenanceContinuation,
 } from "../agents/plugin-maintenance-continuation.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -12,7 +12,10 @@ import type { PluginInstanceHandle } from "../plugins/plugin-instance-scope.js";
 const log = createSubsystemLogger("gateway/plugin-maintenance");
 
 /** One reload's bounded, in-memory handoff; reservation and physical leases stay plugin-owned. */
-export function createPluginForceReload(capture: typeof capturePluginMaintenanceContinuation) {
+export function createPluginForceReload(
+  assertMaintenanceCurrent: () => void,
+  capture: typeof capturePluginMaintenanceContinuation = capturePluginMaintenanceContinuation,
+) {
   const continuations = new Map<object, CapturedPluginMaintenanceContinuation>();
   let prepared = false;
   let drainingInstances: readonly PluginInstanceHandle[] = [];
@@ -39,6 +42,7 @@ export function createPluginForceReload(capture: typeof capturePluginMaintenance
         `Preparing force reload for ${ownersOf(instances).size} retained conversation owner(s).`,
       );
       try {
+        assertMaintenanceCurrent();
         // Reservation rejects fresh acquisition. Reconcile once for work already admitted
         // before it; later unbound holders retain the ordinary bounded drain behavior.
         for (let pass = 0; pass < 2; pass++) {
@@ -47,6 +51,7 @@ export function createPluginForceReload(capture: typeof capturePluginMaintenance
               continue;
             }
             signal.throwIfAborted();
+            assertMaintenanceCurrent();
             const preparation = capture(owner);
             if (!preparation) {
               throw new Error(
@@ -54,6 +59,7 @@ export function createPluginForceReload(capture: typeof capturePluginMaintenance
               );
             }
             continuations.set(owner, await preparation);
+            assertMaintenanceCurrent();
           }
         }
         if ([...ownersOf(instances)].some((owner) => !continuations.has(owner))) {
@@ -69,6 +75,7 @@ export function createPluginForceReload(capture: typeof capturePluginMaintenance
           await delay(250, undefined, { signal });
         }
         signal.throwIfAborted();
+        assertMaintenanceCurrent();
         const remaining = ownersOf(instances);
         for (const [owner, continuation] of continuations) {
           if (!remaining.has(owner)) {
@@ -81,7 +88,10 @@ export function createPluginForceReload(capture: typeof capturePluginMaintenance
           `Interrupting ${continuations.size} retaining conversation owner(s) for maintenance.`,
         );
         await Promise.all(
-          [...continuations.values()].map((continuation) => continuation.interrupt()),
+          [...continuations.values()].map((continuation) => {
+            assertMaintenanceCurrent();
+            return continuation.interrupt(assertMaintenanceCurrent);
+          }),
         );
         // Slot-clear, an abort notification, or writer fencing is not producer settlement.
         await Promise.all([...continuations.values()].map((continuation) => continuation.settled));

@@ -135,7 +135,7 @@ it("captures the exact original native owner, fences successors, preserves FIFO,
     policy: { mode: "followup" },
   });
   cleanups.push(() => retireSessionControllerInput(queued));
-  await captured!.interrupt();
+  await captured!.interrupt(() => {});
   expect(f.operation.abortSignal.aborted).toBe(true);
   expect(queued.abortSignal.aborted).toBe(false);
   expect(queued.mailbox.entries.indexOf(queued)).toBeGreaterThanOrEqual(0);
@@ -158,7 +158,7 @@ it("keeps Stop custody after the RPC input retires and never resumes a stopped o
   const f = fixture();
   const captured = await capturePluginMaintenanceContinuation(f.operation);
   cleanups.push(() => captured?.cancel());
-  await captured!.interrupt();
+  await captured!.interrupt(() => {});
   f.operation.complete();
   retireSessionControllerInput(f.source);
   await captured!.settled;
@@ -176,7 +176,7 @@ it("keeps Stop custody after the RPC input retires and never resumes a stopped o
   const saved = await capturePluginMaintenanceContinuation(completed.operation);
   completed.operation.complete();
   retireSessionControllerInput(completed.source);
-  await saved!.interrupt();
+  await saved!.interrupt(() => {});
   await saved!.finish({ ok: true, pluginIds: ["example"] }, true, async () => {});
   expect(mocks.enqueue).not.toHaveBeenCalled();
 });
@@ -190,7 +190,7 @@ it("keeps unhealthy runtime successors fenced without waiting indefinitely for c
     physical.resolve(undefined);
     captured?.cancel();
   });
-  await captured!.interrupt();
+  await captured!.interrupt(() => {});
   f.operation.complete();
   retireSessionControllerInput(f.source);
   await captured!.finish(
@@ -224,7 +224,7 @@ it("holds a timed-out continuation until actual plugin cleanup, not bridge settl
   const captured = await capturePluginMaintenanceContinuation(f.operation);
   const physical = createDeferredCore();
   const settlePluginWork = vi.fn(() => physical.promise);
-  await captured!.interrupt();
+  await captured!.interrupt(() => {});
   f.operation.complete();
   retireSessionControllerInput(f.source);
   await captured!.settled;
@@ -254,7 +254,7 @@ it("keeps an internal turn private despite the session's recorded external route
     deliveryContext: { channel: "telegram", to: "external-recipient" },
   });
   const captured = await capturePluginMaintenanceContinuation(f.operation);
-  await captured!.interrupt();
+  await captured!.interrupt(() => {});
   f.operation.complete();
   retireSessionControllerInput(f.source);
   await captured!.finish({ ok: true, pluginIds: ["example"] }, true, async () => {});
@@ -262,4 +262,17 @@ it("keeps an internal turn private despite the session's recorded external route
   expect(mocks.enqueue.mock.calls[0]?.[1]).toMatchObject({
     deliveryContext: { channel: "webchat" },
   });
+});
+
+it("revalidates the maintenance principal before touching another requester's execution", async () => {
+  const f = fixture();
+  const captured = await capturePluginMaintenanceContinuation(f.operation);
+  const denied = () => {
+    throw new Error("maintenance administrator revoked");
+  };
+  await expect(captured!.interrupt(denied)).rejects.toThrow("maintenance administrator revoked");
+  expect(f.operation.abortSignal.aborted).toBe(false);
+  expect(f.source.abortSignal.aborted).toBe(false);
+  expect(mocks.enqueue).not.toHaveBeenCalled();
+  captured!.cancel();
 });

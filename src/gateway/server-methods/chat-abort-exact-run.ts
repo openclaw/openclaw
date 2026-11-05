@@ -1,7 +1,10 @@
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { getSessionControllerSourceIdentity } from "../../sessions/session-controller.identity.js";
+import { captureSessionControllerEffects } from "../../sessions/session-controller.lifecycle-work.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
   getRpcSourceForGateway,
   getRpcSourceIdentity,
@@ -14,7 +17,11 @@ import {
 } from "../../sessions/session-controller.stop.js";
 import { notifySessionRunStopped } from "../../sessions/session-run-stopped.js";
 import { abortChatRunById, createChatAbortSignalReason, type ChatAbortOps } from "../chat-abort.js";
+import { resolveChatAbortTargetRejection } from "./chat-abort-authorization.js";
 import { abortControlledSubagents } from "./chat-abort-descendants.js";
+import type { ChatAbortSessionSnapshot } from "./chat-aborted-partial.js";
+import { respondError } from "./response.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type ExactClientRunStopResult = {
   aborted: boolean;
@@ -149,4 +156,74 @@ export async function stopExactClientRun(params: {
     }
   }
   return result;
+}
+
+/** Stop the exact retained producer after its RPC retires, without widening to its mailbox. */
+export async function stopRetainedRun(params: {
+  session: Extract<ChatAbortSessionSnapshot, { ok: true }>["value"];
+  sessionKey: string;
+  aliases: string[];
+  agentId: string;
+  runId: string;
+  resolveGatewayContext: ReturnType<typeof getGatewayContextResolver>;
+  authorizeRunTarget: (
+    target: Parameters<typeof resolveChatAbortTargetRejection>[0]["target"],
+  ) => boolean;
+  assertCurrent: () => void;
+  hookContext: SessionStopHookContext;
+}) {
+  const { session, runId, resolveGatewayContext } = params;
+  const effects = session.entry?.sessionId
+    ? captureSessionControllerEffects({
+        target: captureSessionTarget({
+          storeScope: session.storePath,
+          sessionKey: params.sessionKey,
+          aliases: params.aliases,
+          agentId: params.agentId,
+          incarnation: session.entry.sessionId,
+        }),
+        requiredSessionId: session.entry.sessionId,
+        resolveGatewayContext,
+      }).filter((effect) => effect.run?.runId === runId && effect.run.abortAuthority)
+    : [];
+  for (const { run } of effects) {
+    if (run && !params.authorizeRunTarget({ ...run, ...run.abortAuthority })) {
+      return undefined;
+    }
+  }
+  return await stopSession({
+    source: "client-run",
+    capture: captureSessionControllerStop({ effects, resolveGatewayContext }),
+    assertCurrent: params.assertCurrent,
+    hookContext: params.hookContext,
+  }).completed;
+}
+
+/** The same exact-run authorization and command Stop policy also owns retired producers. */
+export function createExactRunStopControls(params: {
+  authorization: Omit<Parameters<typeof resolveChatAbortTargetRejection>[0], "target">;
+  assertCurrent: () => void;
+  hookContext: SessionStopHookContext;
+  respond: GatewayRequestHandlerOptions["respond"];
+}) {
+  return {
+    stopWithoutCapturedRun: (reason?: string, afterParent?: () => void) =>
+      stopSession({
+        source: "client-run",
+        capture: captureSessionControllerStop({}),
+        assertCurrent: params.assertCurrent,
+        reason,
+        hookContext: params.hookContext,
+        afterParent,
+      }).completed,
+    authorizeRunTarget: (
+      target: Parameters<typeof resolveChatAbortTargetRejection>[0]["target"],
+    ) => {
+      const rejection = resolveChatAbortTargetRejection({ ...params.authorization, target });
+      if (rejection) {
+        respondError(params.respond, ErrorCodes.INVALID_REQUEST, rejection);
+      }
+      return rejection === undefined;
+    },
+  };
 }

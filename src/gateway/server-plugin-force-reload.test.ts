@@ -35,7 +35,7 @@ it("captures reconciled exact owners before interruption and waits for physical 
     return owner === second ? Promise.resolve(b) : undefined;
   });
   b.interrupt = vi.fn(async () => interrupted.resolve());
-  const coordinator = createPluginForceReload(capture);
+  const coordinator = createPluginForceReload(() => {}, capture);
   let drained = false;
   const draining = coordinator.drain([selected], new AbortController().signal).then(() => {
     drained = true;
@@ -67,8 +67,9 @@ it("rejects unsupported work before interrupting any captured owner", async () =
     instance.retainWork("unknown", unsupported),
   ];
   const captured = continuation();
-  const coordinator = createPluginForceReload((owner) =>
-    owner === supported ? Promise.resolve(captured) : undefined,
+  const coordinator = createPluginForceReload(
+    () => {},
+    (owner) => (owner === supported ? Promise.resolve(captured) : undefined),
   );
   await expect(coordinator.drain([instance], new AbortController().signal)).rejects.toThrow(
     "no supported native conversation continuation",
@@ -84,13 +85,56 @@ it("does not force or wake a cooperative owner whose actual lease already releas
     owner = {};
   const release = instance.retainWork("prepared-generation-lease", owner);
   const captured = continuation();
-  const coordinator = createPluginForceReload(async () => {
-    release();
-    return captured;
-  });
+  const coordinator = createPluginForceReload(
+    () => {},
+    async () => {
+      release();
+      return captured;
+    },
+  );
   await coordinator.drain([instance], new AbortController().signal);
   await coordinator.finish({ ok: true, pluginIds: ["selected"] }, true);
   expect(captured.interrupt).not.toHaveBeenCalled();
   expect(captured.finish).not.toHaveBeenCalled();
   expect(captured.cancel).toHaveBeenCalledOnce();
 });
+
+it.each(["capture", "grace"] as const)(
+  "does not interrupt owners when maintenance authority is revoked during %s",
+  async (phase) => {
+    vi.useFakeTimers();
+    const instance = new PluginInstance("selected");
+    const owner = {};
+    const release = instance.retainWork("prepared-generation-lease", owner);
+    const captured = continuation();
+    let current = true;
+    const assertCurrent = () => {
+      if (!current) {
+        throw new Error("maintenance authority revoked");
+      }
+    };
+    const capture = vi.fn(async () => {
+      if (phase === "capture") {
+        current = false;
+      } else {
+        setTimeout(() => {
+          current = false;
+        }, 10);
+      }
+      return captured;
+    });
+    const coordinator = createPluginForceReload(assertCurrent, capture);
+    try {
+      const result = coordinator
+        .drain([instance], new AbortController().signal)
+        .catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(251);
+      expect(await result).toMatchObject({ message: "maintenance authority revoked" });
+      expect(captured.interrupt).not.toHaveBeenCalled();
+      expect(captured.cancel).toHaveBeenCalledOnce();
+    } finally {
+      release();
+      vi.useRealTimers();
+    }
+  },
+);
