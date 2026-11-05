@@ -406,7 +406,7 @@ struct GatewayProcessManagerTests {
         }
     }
 
-    private func withLaunchAgentEnvironment<T>(
+    func withLaunchAgentEnvironment<T>(
         mode: String = "local",
         port: Int? = nil,
         homeDirectory: URL? = nil,

@@ -190,6 +190,41 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   Tooling SHAs. Do not dispatch candidate Testbox workflow refs or borrow
   another checkout's wrapper.
 
+## Keep FRV off the idle path
+
+Optimize time to the next **passing** Full Release Validation. Remote FRV is
+usually the long pole; use its runtime for diagnosis, repairs, review, and
+focused proof. This is scheduling guidance, not a new checklist, approval step,
+or demand for certainty before dispatch. Existing release gates still apply.
+
+- **Start remote qualification promptly.** Favor starting remote FRV while
+  useful local checks run alongside it, rather than finishing those checks
+  first. If the remote run passes, that overlap saves an entire cycle; if local
+  work finds a defect, the run can be superseded through the existing recovery
+  path. Uncertainty alone is not a reason to leave remote validation idle.
+- **Repair as failures arrive.** Use the watcher to spot failures and start
+  diagnosis and fixes while other lanes drain. Prioritize known non-flake
+  failures over optional confidence checks. Use independent repair lanes when
+  helpful, and integrate fixes as they become ready rather than waiting for
+  the final diagnostic report to start work.
+- **Aim to be ready when diagnostics finish.** Ideally, fixes for the drained
+  failures are already on the branch, with focused proof and review done, by
+  drain completion. This is an overlap goal, not a deadline or another gate.
+  If a repair takes longer, keep working it; avoid filling the gap with
+  redundant checks or process overhead.
+- **Fix the whole known set before the next FRV.** Include fixes for every
+  known non-flake failure affecting the next run, whether in the candidate,
+  qualification harness, or trusted tooling. The waste to avoid is knowingly
+  launching another full cycle with failure B still unfixed after fixing A.
+  This does not mean proving there are no undiscovered failures or resolving
+  unrelated issues before running again.
+- **Use retries strategically.** An eligible targeted retry can run while
+  unrelated diagnostics continue. Use the existing
+  [retry budget](#run-identity-and-retry-budget) for flakes or repaired external
+  prerequisites and retain valid green evidence. A repeat of an unchanged
+  deterministic failure buys little; fix it instead. When a fresh parent is
+  needed, include the known fixes and get it running without optional delays.
+
 ## Deferred CI recovery
 
 Release validation does not pause CI or supporting workflows. The legacy
@@ -633,6 +668,11 @@ skipped, cancelled, or unknown required coverage still block.
 Use the maintainer [publication recovery guide](../release-openclaw-maintainer/references/publication-recovery.md)
 for publication ordering and prepared/direct recovery.
 
+- Watch every publish parent with one `pnpm release:watch --run <parent>`
+  ([contract](../../../docs/reference/RELEASING.md#watch-publication)), not a
+  hand-rolled monitor. It reports parent and child environment gates, failed
+  runs and failed `continue-on-error` jobs, and it backs off on rate limits.
+
 - `pnpm release:stable <version>` ([orchestrated stable release](../release-openclaw-maintainer/references/regular-release.md#orchestrated-stable-release))
   dispatches the parent once, approves the parent's `npm-release` gate, prints
   child-approval commands only for older tooling without `npm-publish` and
@@ -688,7 +728,11 @@ for publication ordering and prepared/direct recovery.
   plugin npm and ClawHub retain target-serialized slots and refuse before any
   new dispatch if cancellation remains unconfirmed. Legacy unidentified ClawHub
   children or live publishers also retain the dispatch guard. A parent failure
-  cancels its own waiting npm children. To clean up as a reviewer, list
+  cancels its own waiting npm children and its recorded unfinished ClawHub
+  children; it rejects a recorded child's pending gate first, because a cancel
+  request alone leaves a Plugin ClawHub New child waiting on
+  `clawhub-plugin-bootstrap`. A 403 rejection warns with the reviewer commands.
+  To clean up as a reviewer, list
   `workflow_dispatch` runs by `github-actions[bot]` created for this release,
   reject their gate, cancel:
 

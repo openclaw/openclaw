@@ -19,7 +19,8 @@ export type NativeGatewayAuthorization = {
   auth:
     | { deviceToken: string; token?: never; password?: never }
     | { token: string; deviceToken?: never; password?: never }
-    | { password: string; token?: never; deviceToken?: never };
+    | { password: string; token?: never; deviceToken?: never }
+    | { deviceToken?: never; token?: never; password?: never };
   device: NonNullable<ConnectParams["device"]>;
 };
 
@@ -48,18 +49,30 @@ type NativeAuthHost = Window & {
   };
 };
 
-function readNativeCredential(value: Record<string, unknown>): NativeGatewayAuthorization["auth"] {
+function readNativeCredential(value: unknown): NativeGatewayAuthorization["auth"] {
   // Preserve the accepted native method. In particular, role-configured Gateways
   // distinguish shared-owner token/password auth from device-token authentication.
-  if (Object.keys(value).length === 1) {
-    if (typeof value.deviceToken === "string" && value.deviceToken) {
-      return { deviceToken: value.deviceToken };
-    }
-    if (typeof value.token === "string" && value.token) {
-      return { token: value.token };
-    }
-    if (typeof value.password === "string" && value.password) {
-      return { password: value.password };
+  if (!isRecord(value)) {
+    throw new Error("The app returned an invalid Gateway credential. Reconnect in the app.");
+  }
+  const keys = Object.keys(value);
+  // Ingress-authenticated sessions sign device proof without a reusable Gateway credential.
+  if (keys.length === 0) {
+    return {};
+  }
+  if (keys.length === 1) {
+    const credential = value[keys[0]!];
+    if (typeof credential === "string" && credential) {
+      switch (keys[0]) {
+        case "deviceToken":
+          return { deviceToken: credential };
+        case "token":
+          return { token: credential };
+        case "password":
+          return { password: credential };
+        default:
+          break;
+      }
     }
   }
   throw new Error(t("runtimeErrors.nativeCredential"));
@@ -72,7 +85,6 @@ function readAuthorization(
   const result = isRecord(value) ? value : {};
   const client = isRecord(result.client) ? result.client : {};
   const device = isRecord(result.device) ? result.device : {};
-  const auth = isRecord(result.auth) ? result.auth : {};
   const id = normalizeGatewayClientId(typeof client.id === "string" ? client.id : undefined);
   const mode = normalizeGatewayClientMode(
     typeof client.mode === "string" ? client.mode : undefined,
@@ -101,7 +113,7 @@ function readAuthorization(
       ...(typeof client.instanceId === "string" ? { instanceId: client.instanceId } : {}),
     },
     scopes: result.scopes,
-    auth: readNativeCredential(auth),
+    auth: readNativeCredential(result.auth),
     device: {
       id: device.id,
       publicKey: device.publicKey,

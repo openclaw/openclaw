@@ -387,9 +387,18 @@ it.for(cases)(
           }
           await closeOpenClawStateDatabaseAsync();
           closeOpenClawStateDatabaseForTest();
-          await start();
           database = openOpenClawStateDatabase();
           placements = createWorkerSessionPlacementStore({ database });
+          const localPlacement = createDeferred();
+          cleanups.push(
+            placements.subscribeChanges((changed) => {
+              if (changed.sessionId === sessionId && placements.get(sessionId)?.state === "local") {
+                localPlacement.resolve();
+              }
+            }),
+          );
+          await start();
+          await localPlacement.promise;
         }
         if (!gateway) {
           throw new Error("Gateway fixture did not start");
