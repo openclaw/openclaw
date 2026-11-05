@@ -1082,7 +1082,7 @@ await writeFile(
           "",
           "## Per-page phases",
           "",
-          `CPU throttle: ${cpuThrottle}x (Chromium only). Long-task target: ${cpuThrottle === 1 ? 50 : 200} ms. CLS target: 0; all-shift sum also includes shifts within 500 ms of user input. Missing WebKit observer entries are unavailable, never zero. Inspector phases require a separate traced run and are elapsed wall time in WebKit, thread CPU in Chromium. Wall includes driver and assertions.`,
+          `CPU throttle: ${cpuThrottle}x (Chromium only). Long-task target: ${50 * cpuThrottle} ms. CLS target: 0; all-shift sum also includes shifts within 500 ms of user input. Missing WebKit observer entries are unavailable, never zero. Inspector phases require a separate traced run and are elapsed wall time in WebKit, thread CPU in Chromium. Wall includes driver and assertions.`,
           "",
           "Visit and departure comparisons use browser-local route readiness; content complete also waits for the fixture's full row/control counts. CPU and task collection spans both boundaries. Action comparisons above use native-input-to-commit timing.",
           "",
