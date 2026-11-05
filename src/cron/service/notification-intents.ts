@@ -16,24 +16,6 @@ export function captureCronNotificationRouting(
   return defaultAgentId === undefined ? {} : { defaultAgentId };
 }
 
-/** Capture only a needed default and keep that recipient current through native commit. */
-export function prepareCronNotificationRouting(
-  deps: { defaultAgentId?: string; resolveDefaultAgentId?: () => string | undefined },
-  needed: boolean,
-) {
-  const capture = () =>
-    captureCronNotificationRouting(deps.resolveDefaultAgentId?.(), deps.defaultAgentId);
-  const routing: CronNotificationRouting = needed ? capture() : {};
-  return {
-    routing,
-    assertCurrent() {
-      if (needed && capture().defaultAgentId !== routing.defaultAgentId) {
-        throw new Error("Cron notification default owner changed before commit");
-      }
-    },
-  };
-}
-
 export type CronNotificationJob = Pick<
   CronJob,
   "id" | "name" | "agentId" | "sessionTarget" | "sessionKey" | "wakeMode"

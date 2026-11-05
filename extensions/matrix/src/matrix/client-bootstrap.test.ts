@@ -9,12 +9,8 @@ import {
   setAcquiredMatrixClient,
 } from "./client-resolver.test-helpers.js";
 
-const {
-  getMatrixRuntimeMock,
-  acquireSharedMatrixClientMock,
-  sharedLeaseReleaseMock,
-  resolveMatrixAuthContextMock,
-} = matrixClientResolverMocks;
+const { getMatrixRuntimeMock, acquireSharedMatrixClientMock, sharedLeaseReleaseMock } =
+  matrixClientResolverMocks;
 
 const TEST_CFG = {};
 const captureAuthority = vi.hoisted(() => vi.fn<() => (() => void) | undefined>(() => undefined));
@@ -28,9 +24,9 @@ vi.mock("../runtime.js", () => ({
   getMatrixRuntime: () => getMatrixRuntimeMock(),
 }));
 
+// mock-isolation: Lease fixtures replace shared network/crypto client ownership.
 vi.mock("./client.js", () => ({
   acquireSharedMatrixClient: (...args: unknown[]) => acquireSharedMatrixClientMock(...args),
-  resolveMatrixAuthContext: resolveMatrixAuthContextMock,
 }));
 
 let resolveRuntimeMatrixClientWithReadiness: typeof import("./client-bootstrap.js").resolveRuntimeMatrixClientWithReadiness;
@@ -43,7 +39,7 @@ describe("client bootstrap", () => {
   });
 
   beforeEach(() => {
-    primeMatrixClientResolverMocks({ resolved: {} });
+    primeMatrixClientResolverMocks();
     captureAuthority.mockReturnValue(undefined);
   });
 
@@ -51,7 +47,7 @@ describe("client bootstrap", () => {
     vi.unstubAllEnvs();
   });
 
-  it("releases leased shared clients when readiness setup fails", async () => {
+  it("publishes final state when leased client readiness setup fails", async () => {
     const prepareForOneOff = vi.fn(async () => undefined);
     const sharedClient = Object.assign(createMockMatrixClient(), { prepareForOneOff });
     prepareForOneOff.mockRejectedValue(new Error("prepare failed"));
@@ -65,7 +61,7 @@ describe("client bootstrap", () => {
       }),
     ).rejects.toThrow("prepare failed");
 
-    expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "stop" });
+    expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "persist" });
   });
 
   it("starts through the shared lease and releases when startup fails", async () => {
@@ -85,7 +81,7 @@ describe("client bootstrap", () => {
       ),
     ).rejects.toThrow("start failed");
 
-    expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "stop" });
+    expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "persist" });
   });
 
   it("borrows every non-injected client from the shared owner", async () => {
@@ -97,16 +93,28 @@ describe("client bootstrap", () => {
       async (client) => {
         expect(client).toBe(sharedClient);
       },
-      "persist",
     );
 
     expect(acquireSharedMatrixClientMock).toHaveBeenCalledWith({
       cfg: TEST_CFG,
       timeoutMs: undefined,
       accountId: "default",
-      startClient: false,
       role: "transient",
     });
+    expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "persist" });
+  });
+
+  it("rejects a completed action when final crypto persistence fails", async () => {
+    setAcquiredMatrixClient(createMockMatrixClient());
+    const failure = new Error("final snapshot failed");
+    sharedLeaseReleaseMock.mockRejectedValueOnce(failure);
+
+    await expect(
+      withResolvedRuntimeMatrixClient(
+        { cfg: TEST_CFG, accountId: "default", readiness: "prepared" },
+        async () => "action completed",
+      ),
+    ).rejects.toBe(failure);
     expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "persist" });
   });
 
@@ -132,7 +140,6 @@ describe("client bootstrap", () => {
       async (client) => {
         expect(client).toBe(injected);
       },
-      "persist",
     );
 
     expect(start).toHaveBeenCalledTimes(1);
@@ -162,7 +169,6 @@ describe("client bootstrap", () => {
         current = false;
         return "must not disclose";
       },
-      "persist",
     ).then(
       () => {
         throw new Error("Revoked result escaped");

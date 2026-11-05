@@ -1,8 +1,53 @@
 import type { JSX } from "@solidjs/web";
-import { createRenderEffect, onCleanup } from "solid-js";
-import { revealInScrollRegion } from "../../../components/scroll-state.ts";
+import { createContext, For, onSettled, useContext } from "solid-js";
+import { useScrollState } from "../../../components/solid/scroll-state.ts";
+import { registerChatComposerInvocationMenu } from "./chat-picker-overlay.ts";
 
-export { handleComposerMenuKeydown } from "../../../components/composer-menu.ts";
+const ComposerMenuPointer = createContext<((event: PointerEvent) => boolean) | null>(null);
+
+/** Keep option semantics and geometry while their visual renderer loads. */
+export function ComposerMenuLoadingRows(props: {
+  rows: readonly {
+    id: string;
+    name: string;
+    description?: string;
+    select: () => void;
+    hover: () => void;
+  }[];
+  activeId: string | null | undefined;
+  preserveFocus?: boolean;
+}) {
+  const Option = renderComposerMenuOption;
+  return (
+    <div aria-busy="true">
+      <For each={props.rows} keyed={false}>
+        {(row) => (
+          <Option
+            id={row().id}
+            active={row().id === props.activeId}
+            preserveFocus={props.preserveFocus}
+            select={() => row().select()}
+            hover={() => row().hover()}
+            iconHidden={true}
+            icon={
+              <span class="skeleton" style={{ display: "block", width: "100%", height: "100%" }} />
+            }
+            name={
+              <span class="skeleton" style={{ display: "block" }}>
+                <span style={{ opacity: 0 }}>{row().name}</span>
+              </span>
+            }
+            description={
+              <span class="skeleton" style={{ display: "block" }}>
+                <span style={{ opacity: 0 }}>{row().description}</span>
+              </span>
+            }
+          />
+        )}
+      </For>
+    </div>
+  );
+}
 
 export function ComposerMenu(options: {
   id: string;
@@ -10,65 +55,42 @@ export function ComposerMenu(options: {
   class?: string;
   trackScroll?: boolean;
   activeId?: string | null;
+  getTextarea?: () => HTMLTextAreaElement | null;
   children: JSX.Element;
   revision: unknown;
 }) {
-  let region: HTMLDivElement | undefined;
-  let disposed = false;
-  const sync = () => {
-    if (!region || disposed) {
-      return;
-    }
-    const scrollable = region.scrollHeight > region.clientHeight + 1;
-    region.dataset.scrollable = String(scrollable);
-    region.dataset.atStart = String(!scrollable || region.scrollTop <= 1);
-    region.dataset.atEnd = String(
-      !scrollable || region.scrollTop + region.clientHeight >= region.scrollHeight - 1,
-    );
+  let element!: HTMLDivElement;
+  let pointerX: number | undefined;
+  let pointerY: number | undefined;
+  const pointerMoved = (event: PointerEvent) => {
+    const moved = event.clientX !== pointerX || event.clientY !== pointerY;
+    pointerX = event.clientX;
+    pointerY = event.clientY;
+    return moved;
   };
-  const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(sync);
-  onCleanup(() => {
-    disposed = true;
-    observer?.disconnect();
-    region?.removeEventListener("scroll", sync);
+  onSettled(() =>
+    options.getTextarea
+      ? registerChatComposerInvocationMenu(element, options.getTextarea)
+      : undefined,
+  );
+  const scrollRef = useScrollState(false, options.trackScroll !== false, {
+    revision: () => options.revision,
+    activeId: () => options.activeId,
   });
-  const attach = (element: HTMLDivElement) => {
-    region = element;
-    if (options.trackScroll !== false) {
-      element.addEventListener("scroll", sync);
-    }
-    observer?.observe(element);
-    queueMicrotask(sync);
-  };
-  createRenderEffect(
-    () => options.revision,
-    () => queueMicrotask(sync),
-  );
-  createRenderEffect(
-    () => options.activeId,
-    (activeId) => {
-      if (!activeId) {
-        return;
-      }
-      requestAnimationFrame(() => {
-        const active = document.getElementById(activeId);
-        if (!disposed && active && region) {
-          revealInScrollRegion(region, active);
-        }
-      });
-    },
-  );
   return (
-    <div
-      id={options.id}
-      class={`slash-menu ${options.class ?? ""}`}
-      role="listbox"
-      aria-label={options.label}
-    >
-      <div class="slash-menu__scroll" ref={attach}>
-        {options.children}
+    <ComposerMenuPointer value={pointerMoved}>
+      <div
+        ref={(node) => (element = node)}
+        id={options.id}
+        class={["slash-menu", options.class]}
+        role="listbox"
+        aria-label={options.label}
+      >
+        <div class="slash-menu__scroll" ref={scrollRef}>
+          {options.children}
+        </div>
       </div>
-    </div>
+    </ComposerMenuPointer>
   );
 }
 
@@ -83,18 +105,26 @@ export function renderComposerMenuOption(options: {
   name: JSX.Element;
   description: JSX.Element;
 }) {
+  const pointerMoved = useContext(ComposerMenuPointer);
   return (
     <div
       id={options.id}
-      class={`slash-menu-item ${options.active ? "slash-menu-item--active" : ""}`}
+      class={["slash-menu-item", { "slash-menu-item--active": options.active }]}
       role="option"
       aria-selected={options.active ? "true" : "false"}
-      onMouseDown={
-        options.preserveFocus === false ? undefined : (event: MouseEvent) => event.preventDefault()
-      }
-      onClick={options.select}
+      onMouseDown={(event: MouseEvent) => {
+        if (options.preserveFocus !== false) {
+          event.preventDefault();
+        }
+      }}
+      onClick={() => options.select()}
       onPointerMove={(event: PointerEvent) => {
-        if (!options.active && event.pointerType !== "touch") {
+        if (event.pointerType === "touch") {
+          return;
+        }
+        // Keyboard scrolling can move a new row under a stationary pointer.
+        const moved = pointerMoved?.(event) ?? true;
+        if (moved && !options.active) {
           options.hover();
         }
       }}
@@ -103,7 +133,7 @@ export function renderComposerMenuOption(options: {
         {options.icon}
       </span>
       <span class="slash-menu-copy">
-        <span class="slash-menu-name">{options.name}</span>
+        <span class="slash-menu-name">{options.name}</span>{" "}
         <span class="slash-menu-desc">{options.description}</span>
       </span>
     </div>

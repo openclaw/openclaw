@@ -77,6 +77,8 @@ const config = {
   },
   plugins: {
     enabled: true,
+    // Recall must restore its own cold history, not a background memory indexing pass.
+    slots: { memory: "none" },
     allow: ["openai"],
     entries: { openai: { enabled: true } },
   },
@@ -85,7 +87,7 @@ const config = {
 };
 
 const coldStorageMode = process.env.OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE ?? "required";
-if (coldStorageMode === "required") {
+if (coldStorageMode === "required" || coldStorageMode === "legacy") {
   config.session = {
     maintenance: {
       mode: "warn",

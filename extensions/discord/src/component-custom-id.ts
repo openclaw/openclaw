@@ -4,7 +4,7 @@ import {
   needsCustomIdFieldEscaping,
   unescapeCustomIdFieldValue,
 } from "./custom-id-codec.js";
-import { parseCustomId, type ComponentParserResult } from "./internal/discord.js";
+import { parseCustomId, type ComponentParserResult } from "./internal/components.base.js";
 
 export const DISCORD_COMPONENT_CUSTOM_ID_KEY = "occomp";
 export const DISCORD_MODAL_CUSTOM_ID_KEY = "ocmodal";

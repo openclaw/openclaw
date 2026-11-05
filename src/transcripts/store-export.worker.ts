@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { TranscriptUtterance } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import { executeSqliteQueryTakeFirstSync, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
@@ -28,7 +28,7 @@ import {
 } from "./store-sqlite.js";
 
 function* iterateArtifact(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: Extract<TranscriptExportCommand, { format: "artifact" }>["session"],
 ): Generator<string, void> {
   const head = executeSqliteQueryTakeFirstSync(
@@ -70,9 +70,14 @@ export async function streamTranscriptExportInWorker(
   const errors: unknown[] = [];
   let result: TranscriptExportResult = { ok: true };
   try {
-    db.exec("BEGIN"); // sqlite-allow-raw -- This owner pins one streamed read-only snapshot.
+    // sqlite-allow-raw -- This owner pins one streamed read-only snapshot.
+    db.exec(
+      isPostgresSqlConnection(db) ? "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY" : "BEGIN",
+    );
     assertStateReadSchema(db, input.databasePath);
-    admitSqliteSchema(db);
+    if (!isPostgresSqlConnection(db)) {
+      admitSqliteSchema(db);
+    }
     onAdmitted();
     const iterator: Generator<string | TranscriptUtterance, TranscriptExportRead | void> =
       command.format === "library"
@@ -122,7 +127,7 @@ export async function streamTranscriptExportInWorker(
         error: { type: error.type, message: error.message, maxBytes: error.maxBytes },
       };
     } else {
-      if (isSqliteCorruptionError(error)) {
+      if (!isPostgresSqlConnection(db) && isSqliteCorruptionError(error)) {
         invalidateOpenClawStateRuntimeIntegrity(db);
       }
       errors.push(error);

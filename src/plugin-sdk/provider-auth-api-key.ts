@@ -1,6 +1,3 @@
-/**
- * Public SDK subpath for API-key provider auth setup and secret input handling.
- */
 export type { OpenClawConfig } from "../config/config.js";
 export type { SecretInput } from "../config/types.secrets.js";
 

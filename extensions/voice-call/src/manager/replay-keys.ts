@@ -1,5 +1,3 @@
-// Voice Call manager helpers own bounded webhook replay identity.
-
 /** Match the existing voice-call webhook replay-cache cardinality. */
 const MAX_MANAGER_REPLAY_KEYS = 10_000;
 /** Keep typical provider replay IDs near one raw persisted-record chunk. */

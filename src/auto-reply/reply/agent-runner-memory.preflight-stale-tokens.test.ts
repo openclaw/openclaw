@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   clearMemoryPluginState,
@@ -98,7 +98,7 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
       sessionStore: { "agent:main:main": sessionEntry },
       sessionKey: "agent:main:main",
       storePath: path.join(rootDir, "sessions.json"),
-      isHeartbeat: false,
+
       abortSignal: new AbortController().signal,
     });
   }
@@ -116,7 +116,7 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
       updatedAt: Date.now(),
       totalTokens: 200_000,
       totalTokensFresh: true,
-      totalTokensVersion: 1,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     };
     await writeTestSessionStore(
       path.join(rootDir, "sessions.json"),
@@ -158,7 +158,7 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
         updatedAt: Date.now(),
         totalTokens: 200_000,
         totalTokensFresh: true,
-        totalTokensVersion: 1,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       };
       await writeTestSessionStore(storePath, "main", sessionEntry);
 
@@ -183,7 +183,7 @@ describe("runSessionCompactionIfNeeded stale totalTokens gating", () => {
         sessionStore: { main: sessionEntry },
         sessionKey: "main",
         storePath,
-        isHeartbeat: false,
+
         abortSignal: new AbortController().signal,
       });
 

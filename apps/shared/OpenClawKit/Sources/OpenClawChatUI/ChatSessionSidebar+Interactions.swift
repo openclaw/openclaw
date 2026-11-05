@@ -39,12 +39,8 @@ extension ChatSessionSidebar {
         return sections
     }
 
-    var selectedBatchRows: [OpenClawChatSessionEntry] {
-        self.visibleInteractionRows.filter { self.batch.selection.keys.contains(self.interactionIdentity($0)) }
-    }
-
-    private var visibleInteractionRows: [OpenClawChatSessionEntry] {
-        let sections = self.interactionSections().map { section in
+    func visibleInteractionRows(_ sections: [ChatSessionSidebarModel.Section]) -> [OpenClawChatSessionEntry] {
+        let sections = sections.map { section in
             guard self.showsAgentRoster,
                   let agent = self.viewModel.agentChoices.first(where: { section.id == "agent:\($0.id):recent" })
             else { return section }
@@ -61,8 +57,7 @@ extension ChatSessionSidebar {
         OpenClawChatSessionSidebarData.identity(self.batchTarget(row))
     }
 
-    private var renderedInteractionRows: [OpenClawChatSessionEntry] {
-        let roster = self.interactionSections().flatMap(\.nodes).flatMap(\.previewSessions).map(self.batchTarget)
+    func renderedInteractionRows(_ projectedRows: [OpenClawChatSessionEntry]) -> [OpenClawChatSessionEntry] {
         // Catalog rows navigate through List selection but never join the roster's batch or drag roots.
         let catalogs = self.catalogPresentation.catalogs.flatMap { catalog in
             catalog.hosts.flatMap { host in
@@ -73,7 +68,7 @@ extension ChatSessionSidebar {
                 }
             }
         }
-        return roster + catalogs
+        return projectedRows.map(self.batchTarget) + catalogs
     }
 
     func isCurrentInteractionRow(_ row: OpenClawChatSessionEntry) -> Bool {
@@ -90,19 +85,22 @@ extension ChatSessionSidebar {
         return row
     }
 
-    var batchSelectionBinding: Binding<Set<String>> {
+    func batchSelectionBinding(
+        visibleRows: [OpenClawChatSessionEntry],
+        renderedRows: [OpenClawChatSessionEntry]) -> Binding<Set<String>>
+    {
         Binding(get: {
             if self.batch.selection.active { return self.batch.selection.keys }
-            let selected = self.renderedInteractionRows.first(where: self.isCurrentInteractionRow)
+            let selected = renderedRows.first(where: self.isCurrentInteractionRow)
             return Set([selected.map(self.interactionIdentity)].compactMap(\.self))
         }, set: { proposed in
             guard !self.batch.busy else { return }
-            let roots = Set(self.visibleInteractionRows.map(self.interactionIdentity))
+            let roots = Set(visibleRows.map(self.interactionIdentity))
             // ui/src/components/app-sidebar-session-navigation.ts:481; macOS List owns
             // Cmd-toggle and Shift ranges. Filter child tags out of every batch selection.
             let multiple = !NSEvent.modifierFlags.isDisjoint(with: [.command, .shift]) || proposed.count > 1
             if let identity = self.batch.selection.update(proposed, roots: roots, multiple: multiple),
-               let row = self.renderedInteractionRows.first(where: { self.interactionIdentity($0) == identity })
+               let row = renderedRows.first(where: { self.interactionIdentity($0) == identity })
             {
                 Self.selectionBinding(model: self.viewModel).wrappedValue = .init(
                     sessionKey: row.key, agentID: row.agentId)
@@ -110,14 +108,14 @@ extension ChatSessionSidebar {
         })
     }
 
-    var batchBar: some View {
+    func batchBar(rows: [OpenClawChatSessionEntry]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             if self.batch.selection.active {
                 HStack {
-                    Text(String(format: String(localized: "%lld selected"), self.selectedBatchRows.count))
+                    Text(String(format: String(localized: "%lld selected"), rows.count))
                     Spacer()
-                    Menu(String(localized: "Actions")) { self.batchMenu }
-                        .disabled(self.batch.busy || self.selectedBatchRows.isEmpty)
+                    Menu(String(localized: "Actions")) { self.batchMenu(rows: rows) }
+                        .disabled(self.batch.busy || rows.isEmpty)
                     Button(String(localized: "Done")) { self.batch.selection = .init() }
                         .disabled(self.batch.busy)
                 }
@@ -140,8 +138,7 @@ extension ChatSessionSidebar {
             .pendingArchives.isEmpty ? 8 : 0)
     }
 
-    @ViewBuilder var batchMenu: some View {
-        let rows = self.selectedBatchRows
+    @ViewBuilder func batchMenu(rows: [OpenClawChatSessionEntry]) -> some View {
         let unread = rows.allSatisfy { $0.unread == true }
         let archived = rows.allSatisfy(\.isArchived)
         Button(unread ? String(localized: "Mark Read") : String(localized: "Mark Unread")) {
@@ -210,7 +207,6 @@ extension ChatSessionSidebar {
 
     func interact<T>(
         refresh: Bool = true,
-        refreshAcrossQueries: Bool = false,
         _ operation: @escaping @MainActor (OpenClawSessionMenuConnection) async throws -> T,
         apply: @escaping @MainActor (T) -> Void)
     {
@@ -221,16 +217,14 @@ extension ChatSessionSidebar {
         Task { @MainActor in
             defer { if scope == self.batch.scope { self.batch.running = false } }
             do {
-                guard scope == self.batch.scope else { return }
                 let result = try await operation(connection)
                 guard connection.isCurrent() else { return }
-                let currentQuery = scope == self.batch.scope
-                if currentQuery { apply(result) }
-                if refresh, currentQuery || refreshAcrossQueries {
+                apply(result)
+                if refresh {
                     self.viewModel.refreshSessions(limit: 200)
                     self.viewModel.refreshSidebarData()
                 }
-            } catch { if scope == self.batch.scope { self.batch.notices = [error.localizedDescription] } }
+            } catch { if connection.isCurrent() { self.batch.notices = [error.localizedDescription] } }
         }
     }
 
@@ -245,7 +239,7 @@ extension ChatSessionSidebar {
             return
         }
         self.batch.pendingDelete = []
-        self.interact(refreshAcrossQueries: action == .archived(true)) { connection in
+        self.interact { connection in
             let successful = await self.batch.run(action, rows: rows, mainKey: mainKey, connection: connection)
             if action == .archived(true), successful.contains(where: self.isCurrentArchiveTarget) {
                 self.viewModel.switchSession(to: self.viewModel.selectedAgentMainSessionKey)
@@ -309,10 +303,10 @@ extension ChatSessionSidebar {
             return true
         }
         guard section != "recent" || self.sessionGrouping == .category else { return false }
-        guard let held = self.visibleInteractionRows.first(where: { self.interactionIdentity($0) == item.key }),
+        let visibleRows = self.visibleInteractionRows(self.interactionSections())
+        guard let held = visibleRows.first(where: { self.interactionIdentity($0) == item.key }),
               held.sessionId == item.sessionID else { return false }
         let row = self.batchTarget(held)
-        let scope = self.batch.scope
         let patch: [String: AnyCodable]?
         switch ChatSessionSidebarBatch.drop(row, section: section, target: pinTarget.map(self.batchTarget)) {
         case .selfDrop?: return true
@@ -320,7 +314,7 @@ extension ChatSessionSidebar {
         case nil: return false
         }
         if section == "pinned", !connection.allows("config.patch", scope: "operator.admin") { return false }
-        let keys = self.visibleInteractionRows.filter { $0.pinned == true }.map(\.key) + [row.key]
+        let keys = visibleRows.filter { $0.pinned == true }.map(\.key) + [row.key]
         let owner = self.viewModel.sidebarData
         self.interact(refresh: patch != nil) { connection in
             self.batch.errors = [:]
@@ -331,14 +325,12 @@ extension ChatSessionSidebar {
                     fields: patch))
                 var receipt = try JSONDecoder().decode(OpenClawChatSessionPatchReceipt.self, from: data)
                 receipt.agentID = OpenClawChatSessionKey.agentID(from: row.key) ?? row.agentId
-                guard scope == self.batch.scope else { throw CancellationError() }
                 // Pin state is already committed even if persisting its subsequent placement fails.
                 let fields = [OpenClawChatSessionSidebarData.Field.category, .pinned]
                     .filter { patch[$0.rawValue] != nil }
                 owner?.confirmFields(receipt, target: row, fields: fields)
             }
             if section == "pinned" {
-                guard scope == self.batch.scope else { throw CancellationError() }
                 try await self.batch.movePin(
                     keys: keys,
                     key: row.key,

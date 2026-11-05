@@ -1,6 +1,7 @@
 // Tests CLI dispatch arguments and runtime selection for agent runner turns.
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import { clearCliSessionInStore } from "../../agents/cli-session-store.js";
@@ -69,6 +70,30 @@ afterEach(() => {
 });
 
 describe("runCliAgentWithLifecycle", () => {
+  it("settles workspace attribution before launching a CLI backend", async () => {
+    const entered = createDeferred();
+    const baseline = createDeferred();
+    cliDispatchState.runCliAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const pending = runCliAgentWithLifecycle({
+      runId: "cli-attribution",
+      runParams: createRunParams("cli-attribution", {
+        awaitSessionDiffBaseline: async () => {
+          entered.resolve();
+          await baseline.promise;
+        },
+      }),
+    });
+    try {
+      await awaitGateBeforeSettlement(entered.promise, pending, "CLI launched before attribution");
+      expect(cliDispatchState.runCliAgentMock).not.toHaveBeenCalled();
+      baseline.resolve();
+      await pending;
+      expect(cliDispatchState.runCliAgentMock).toHaveBeenCalledOnce();
+    } finally {
+      baseline.resolve();
+    }
+  });
+
   it("bridges completed CLI compaction lifecycles to reply callbacks", async () => {
     cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
       emitAgentEvent({
@@ -262,17 +287,7 @@ describe("runCliAgentWithLifecycle", () => {
       onAssistantText,
       onCompletedReply,
       onReasoningProgress,
-      runParams: {
-        sessionId: "session-1",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp/workspace",
-        prompt: "hello",
-        provider: "claude-cli",
-        model: "claude",
-        thinkLevel: "high",
-        timeoutMs: 1_000,
-        runId: "run-activity-suppressed",
-      },
+      runParams: createRunParams("run-activity-suppressed"),
     });
 
     // silentExpected runs suppress deliveries, but their events are still real
@@ -401,22 +416,26 @@ describe("runCliAgentWithLifecycle", () => {
 });
 
 describe("keepCliSessionBindingOnlyWhenReused", () => {
-  it("keeps the first room-event CLI binding when no binding exists yet", () => {
-    const result = {
+  function bindingResult(sessionId: string) {
+    return {
       payloads: [],
       meta: {
         durationMs: 1,
         agentMeta: {
-          sessionId: "new-cli-session",
+          sessionId,
           provider: "claude-cli",
           model: "claude-opus-4-8",
           cliSessionBinding: {
-            sessionId: "new-cli-session",
+            sessionId,
             authProfileId: "profile",
           },
         },
       },
     } satisfies EmbeddedAgentRunResult;
+  }
+
+  it("keeps the first room-event CLI binding when no binding exists yet", () => {
+    const result = bindingResult("new-cli-session");
 
     expect(keepCliSessionBindingOnlyWhenReused({ result })).toBe(result);
   });
@@ -426,21 +445,7 @@ describe("keepCliSessionBindingOnlyWhenReused", () => {
     const result = keepCliSessionBindingOnlyWhenReused({
       existingSessionId: "existing-cli-session",
       onDroppedReplacement,
-      result: {
-        payloads: [],
-        meta: {
-          durationMs: 1,
-          agentMeta: {
-            sessionId: "replacement-cli-session",
-            provider: "claude-cli",
-            model: "claude-opus-4-8",
-            cliSessionBinding: {
-              sessionId: "replacement-cli-session",
-              authProfileId: "profile",
-            },
-          },
-        },
-      } satisfies EmbeddedAgentRunResult,
+      result: bindingResult("replacement-cli-session"),
     });
 
     expect(onDroppedReplacement).toHaveBeenCalledOnce();

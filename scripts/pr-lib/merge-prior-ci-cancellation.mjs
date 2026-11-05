@@ -1,13 +1,14 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { parse } from "yaml";
-import { execPrGhJson } from "./github.mjs";
+import { execPrGhJsonAsync } from "./github.mjs";
 
 const oid = /^[0-9a-f]{40}$/;
 const positiveInteger = (value) => Number.isSafeInteger(value) && value > 0;
 const nonempty = (value) => typeof value === "string" && value.trim().length > 0;
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const badSteps = new Set(["failure", "timed_out", "action_required", "startup_failure"]);
+// Historical pre-removal receipts still require these exact monitor identities.
 const monitorNames = new Set([
   "Cancel remaining PR work after a failure",
   "Classify PR failures and cancel eligible same-repository work",
@@ -92,10 +93,10 @@ function qualifyBoundaryDeadline(context, job, seconds, cancelledAnnotationCount
 }
 
 /** A cancelled job can retain a failed execution step or an exhausted deadline. */
-export function qualifyPriorCiCancelledRoots(context) {
+export async function qualifyPriorCiCancelledRoots(context) {
   const { evidence, run, jobs, gate, requireEvidence } = context;
   const readJson = (endpoint, paginate = false) =>
-    execPrGhJson([
+    execPrGhJsonAsync([
       "api",
       "--hostname",
       "github.com",
@@ -105,105 +106,120 @@ export function qualifyPriorCiCancelledRoots(context) {
       ...(paginate ? ["--paginate", "--slurp"] : []),
     ]);
   const roots = new Map();
-  for (const job of jobs) {
-    if (
-      job === gate ||
-      job.conclusion !== "cancelled" ||
-      !Array.isArray(evidence.failures) ||
-      !evidence.failures.some((entry) => entry.jobId === job.id)
-    ) {
-      continue;
+  const value = (result) => {
+    if (result.status === "rejected") {
+      throw result.reason;
     }
-    const prefix = `https://api.github.com/repos/${evidence.repository}/check-runs/`;
-    const checkRunId = Number(
-      job.check_run_url?.startsWith(prefix) && job.check_run_url.slice(prefix.length),
-    );
-    requireEvidence(
-      positiveInteger(checkRunId),
-      "deadline root requires its canonical check-run identity",
-    );
-    const endpoint = `repos/${evidence.repository}/check-runs/${checkRunId}`;
-    const check = readJson(endpoint);
-    requireEvidence(
-      check.id === checkRunId &&
-        check.name === job.name &&
-        check.head_sha === evidence.head &&
-        check.check_suite?.id === run.check_suite_id &&
-        check.app?.id === 15368 &&
-        check.app.slug === "github-actions" &&
-        check.status === "completed" &&
-        check.conclusion === "cancelled" &&
-        check.started_at === job.started_at &&
-        check.completed_at === job.completed_at,
-      "cancelled deadline/failed-step root requires a matching live GitHub Actions check-run",
-    );
-    const attribution = evidence.failures.find((value) => value.jobId === job.id);
-    if (attribution.failedStep !== undefined) {
+    return result.value;
+  };
+  const candidates = jobs.filter(
+    (job) =>
+      job !== gate &&
+      job.conclusion === "cancelled" &&
+      Array.isArray(evidence.failures) &&
+      evidence.failures.some((entry) => entry.jobId === job.id),
+  );
+  const results = await Promise.allSettled(
+    candidates.map(async (job) => {
+      const prefix = `https://api.github.com/repos/${evidence.repository}/check-runs/`;
+      const checkRunId = Number(
+        job.check_run_url?.startsWith(prefix) && job.check_run_url.slice(prefix.length),
+      );
+      requireEvidence(
+        positiveInteger(checkRunId),
+        "deadline root requires its canonical check-run identity",
+      );
+      const endpoint = `repos/${evidence.repository}/check-runs/${checkRunId}`;
+      const attribution = evidence.failures.find((entry) => entry.jobId === job.id);
+      const [checkResult, annotationResult] = await Promise.allSettled([
+        readJson(endpoint),
+        attribution.failedStep === undefined
+          ? readJson(`${endpoint}/annotations?per_page=100`, true)
+          : Promise.resolve(undefined),
+      ]);
+      const check = value(checkResult);
+      requireEvidence(
+        check.id === checkRunId &&
+          check.name === job.name &&
+          check.head_sha === evidence.head &&
+          check.check_suite?.id === run.check_suite_id &&
+          check.app?.id === 15368 &&
+          check.app.slug === "github-actions" &&
+          check.status === "completed" &&
+          check.conclusion === "cancelled" &&
+          check.started_at === job.started_at &&
+          check.completed_at === job.completed_at,
+        "cancelled deadline/failed-step root requires a matching live GitHub Actions check-run",
+      );
+      if (attribution.failedStep !== undefined) {
+        roots.set(job.id, {
+          failedStep: qualifyFailedStep(context, attribution, job, checkRunId),
+        });
+        return;
+      }
+      const pages = value(annotationResult);
+      requireEvidence(
+        Array.isArray(pages) && pages.every(Array.isArray),
+        "deadline annotations are incomplete",
+      );
+      const annotations = pages.flat();
+      const timeout = annotations.filter(
+        (entry) =>
+          entry.annotation_level === "failure" &&
+          entry.title === "" &&
+          entry.path === ".github" &&
+          entry.start_line === 1 &&
+          /^The job has exceeded the maximum execution time of (?:\d+h)?\d+m\d+s$/u.test(
+            entry.message,
+          ),
+      );
+      const cancelled = annotations.filter(
+        (entry) =>
+          entry.annotation_level === "failure" &&
+          entry.title === "" &&
+          entry.path === ".github" &&
+          positiveInteger(entry.start_line) &&
+          entry.message === "The operation was canceled.",
+      );
+      const boundary = job.name === "check-additional-extension-package-boundary";
+      requireEvidence(
+        check.output?.annotations_count === annotations.length &&
+          timeout.length === 1 &&
+          cancelled.length <= 1 &&
+          annotations.length === 1 + cancelled.length &&
+          (boundary || (cancelled.length === 1 && /\d+h\d+m\d+s$/u.test(timeout[0].message))),
+        "deadline root requires complete matching GitHub Actions timeout annotations",
+      );
+      const parts = /(?:(\d+)h)?(\d+)m(\d+)s$/u.exec(timeout[0].message);
+      const seconds = Number(parts[1] ?? 0) * 3600 + Number(parts[2]) * 60 + Number(parts[3]);
+      requireEvidence(
+        positiveInteger(seconds) &&
+          Number(parts[2]) < 60 &&
+          Number(parts[3]) < 60 &&
+          Date.parse(job.completed_at) - Date.parse(job.started_at) >= seconds * 1000 &&
+          Array.isArray(job.steps) &&
+          job.steps.every(
+            (step) =>
+              step.status === "completed" &&
+              ["success", "skipped", "cancelled"].includes(step.conclusion),
+          ) &&
+          (boundary ||
+            (job.steps.filter((step) => step.conclusion === "cancelled").length === 1 &&
+              job.steps.some(
+                (step) => step.name === "Run Node test shard" && step.conclusion === "cancelled",
+              ))),
+        "deadline root has contradictory duration or additional failed steps",
+      );
+      const binding = boundary
+        ? qualifyBoundaryDeadline(context, job, seconds, cancelled.length)
+        : { workflowBlob: readWorkflow(context).workflowBlob };
       roots.set(job.id, {
-        failedStep: qualifyFailedStep(context, attribution, job, checkRunId),
+        deadline: { checkRunId, conclusion: job.conclusion, seconds, ...binding, annotations },
       });
-      continue;
-    }
-    const pages = readJson(`${endpoint}/annotations?per_page=100`, true);
-    requireEvidence(
-      Array.isArray(pages) && pages.every(Array.isArray),
-      "deadline annotations are incomplete",
-    );
-    const annotations = pages.flat();
-    const timeout = annotations.filter(
-      (entry) =>
-        entry.annotation_level === "failure" &&
-        entry.title === "" &&
-        entry.path === ".github" &&
-        entry.start_line === 1 &&
-        /^The job has exceeded the maximum execution time of (?:\d+h)?\d+m\d+s$/u.test(
-          entry.message,
-        ),
-    );
-    const cancelled = annotations.filter(
-      (entry) =>
-        entry.annotation_level === "failure" &&
-        entry.title === "" &&
-        entry.path === ".github" &&
-        positiveInteger(entry.start_line) &&
-        entry.message === "The operation was canceled.",
-    );
-    const boundary = job.name === "check-additional-extension-package-boundary";
-    requireEvidence(
-      check.output?.annotations_count === annotations.length &&
-        timeout.length === 1 &&
-        cancelled.length <= 1 &&
-        annotations.length === 1 + cancelled.length &&
-        (boundary || (cancelled.length === 1 && /\d+h\d+m\d+s$/u.test(timeout[0].message))),
-      "deadline root requires complete matching GitHub Actions timeout annotations",
-    );
-    const parts = /(?:(\d+)h)?(\d+)m(\d+)s$/u.exec(timeout[0].message);
-    const seconds = Number(parts[1] ?? 0) * 3600 + Number(parts[2]) * 60 + Number(parts[3]);
-    requireEvidence(
-      positiveInteger(seconds) &&
-        Number(parts[2]) < 60 &&
-        Number(parts[3]) < 60 &&
-        Date.parse(job.completed_at) - Date.parse(job.started_at) >= seconds * 1000 &&
-        Array.isArray(job.steps) &&
-        job.steps.every(
-          (step) =>
-            step.status === "completed" &&
-            ["success", "skipped", "cancelled"].includes(step.conclusion),
-        ) &&
-        (boundary ||
-          (job.steps.filter((step) => step.conclusion === "cancelled").length === 1 &&
-            job.steps.some(
-              (step) => step.name === "Run Node test shard" && step.conclusion === "cancelled",
-            ))),
-      "deadline root has contradictory duration or additional failed steps",
-    );
-    const binding = boundary
-      ? qualifyBoundaryDeadline(context, job, seconds, cancelled.length)
-      : { workflowBlob: readWorkflow(context).workflowBlob };
-    roots.set(job.id, {
-      deadline: { checkRunId, conclusion: job.conclusion, seconds, ...binding, annotations },
-    });
-  }
+    }),
+  );
+  // Join all reads before surfacing a refusal; the shared transport caps fan-out.
+  results.forEach(value);
   return roots;
 }
 
@@ -655,6 +671,7 @@ export function verifyPriorCiCancellation(context) {
     ]);
   } else {
     const owner = jobs.find((job) => job.id === cancellation.jobId);
+    // Retained pre-removal run receipts must match their historical job name exactly.
     requireEvidence(
       [undefined, "pr-fail-fast"].includes(cancellation.kind) &&
         owner?.name === "pr-fail-fast" &&

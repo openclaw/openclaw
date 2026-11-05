@@ -1,6 +1,7 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { MSTeamsConfig, OpenClawConfig } from "../runtime-api.js";
 import { msteamsSetupWizard } from "./setup-surface.js";
 
 const hasConfiguredMSTeamsCredentials = vi.hoisted(() => vi.fn());
@@ -26,34 +27,48 @@ vi.mock("./oauth.js", async (importOriginal) => {
   return { ...actual, loginMSTeamsDelegated };
 });
 
+function teamsConfig(msteams: MSTeamsConfig): OpenClawConfig {
+  return { channels: { msteams } };
+}
+
+const tokens = {
+  accessToken: "access-token",
+  refreshToken: "refresh-token",
+  expiresAt: Date.parse("2030-01-01T00:00:00.000Z"),
+  scopes: ["User.Read"],
+};
+function credentials(appId = "app-id", appPassword = "app-password") {
+  return { type: "secret", appId, appPassword, tenantId: "tenant-id" };
+}
+function createPrompter(twoConfirmations = false) {
+  const progress = { update: vi.fn(), stop: vi.fn() };
+  const confirm = twoConfirmations
+    ? vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(true)
+    : vi.fn(async () => true);
+  return {
+    progress,
+    prompter: {
+      confirm,
+      note: vi.fn(async () => {}),
+      progress: vi.fn(() => progress),
+      text: vi.fn(),
+    },
+  };
+}
 describe("msteams setup delegated auth", () => {
   beforeEach(() => {
-    hasConfiguredMSTeamsCredentials.mockReset();
-    resolveMSTeamsCredentials.mockReset();
+    hasConfiguredMSTeamsCredentials.mockReset().mockReturnValue(true);
+    resolveMSTeamsCredentials.mockReset().mockReturnValue(credentials());
     saveDelegatedTokens.mockReset().mockResolvedValue(undefined);
-    loginMSTeamsDelegated.mockReset();
+    loginMSTeamsDelegated.mockReset().mockResolvedValue(tokens);
   });
 
   it("revalidates before delegated OAuth and immediately before saving tokens", async () => {
-    const tokens = {
-      accessToken: "access-token",
-      refreshToken: "refresh-token",
-      expiresAt: Date.now() + 60_000,
-      scopes: ["User.Read"],
-    };
-    resolveMSTeamsCredentials.mockReturnValue({
-      type: "secret",
-      appId: "app-id",
-      appPassword: "app-password",
-      tenantId: "tenant-id",
-    });
-    hasConfiguredMSTeamsCredentials.mockReturnValue(true);
-    loginMSTeamsDelegated.mockResolvedValue(tokens);
     expect(oauthModuleState.loaded).toBe(false);
     const beforePersistentEffect = vi.fn(async () => {
       expect(oauthModuleState.loaded).toBe(true);
     });
-    const progress = { update: vi.fn(), stop: vi.fn() };
+    const { prompter, progress } = createPrompter(true);
     const writing = createDeferred<void>();
     const releaseWrite = createDeferred<void>();
     saveDelegatedTokens.mockImplementationOnce(async () => {
@@ -62,13 +77,8 @@ describe("msteams setup delegated auth", () => {
     });
 
     const configured = msteamsSetupWizard.finalize?.({
-      cfg: { channels: { msteams: {} } },
-      prompter: {
-        confirm: vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(true),
-        note: vi.fn(async () => {}),
-        progress: vi.fn(() => progress),
-        text: vi.fn(),
-      },
+      cfg: teamsConfig({}),
+      prompter,
       options: { beforePersistentEffect },
     } as never);
 
@@ -96,35 +106,17 @@ describe("msteams setup delegated auth", () => {
 
   it("propagates a stale inference guard instead of treating it as an OAuth failure", async () => {
     const guardError = new Error("verified inference changed");
-    resolveMSTeamsCredentials.mockReturnValue({
-      type: "secret",
-      appId: "app-id",
-      appPassword: "app-password",
-      tenantId: "tenant-id",
-    });
-    hasConfiguredMSTeamsCredentials.mockReturnValue(true);
-    loginMSTeamsDelegated.mockResolvedValue({
-      accessToken: "access-token",
-      refreshToken: "refresh-token",
-      expiresAt: Date.now() + 60_000,
-      scopes: ["User.Read"],
-    });
     const beforePersistentEffect = vi
       .fn()
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(guardError);
-    const note = vi.fn(async () => {});
-    const progress = { update: vi.fn(), stop: vi.fn() };
+    const { prompter, progress } = createPrompter(true);
+    const { note } = prompter;
 
     await expect(
       msteamsSetupWizard.finalize?.({
-        cfg: { channels: { msteams: {} } },
-        prompter: {
-          confirm: vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(true),
-          note,
-          progress: vi.fn(() => progress),
-          text: vi.fn(),
-        },
+        cfg: teamsConfig({}),
+        prompter,
         options: { beforePersistentEffect },
       } as never),
     ).rejects.toBe(guardError);
@@ -138,122 +130,50 @@ describe("msteams setup delegated auth", () => {
     );
   });
 
-  it("stores delegated auth under the resolved named account", async () => {
-    resolveMSTeamsCredentials.mockReturnValue({
-      type: "secret",
-      appId: "support-app",
-      appPassword: "support-password",
+  it.each([
+    ["support", "support", "/hooks/3979"],
+    ["default", "Default", "/hooks/3978"],
+  ] as const)("stores delegated auth under account %s", async (accountId, key, path) => {
+    const account = {
+      appId: `${accountId}-app`,
+      appPassword: `${accountId}-password`,
       tenantId: "tenant-id",
-    });
-    hasConfiguredMSTeamsCredentials.mockReturnValue(true);
-    loginMSTeamsDelegated.mockResolvedValue({
-      accessToken: "access-token",
-      refreshToken: "refresh-token",
-      expiresAt: Date.parse("2030-01-01T00:00:00.000Z"),
-      scopes: ["ChatMessage.Send"],
-    });
-    const progress = { update: vi.fn(), stop: vi.fn() };
-
+      webhook: { path },
+    };
+    resolveMSTeamsCredentials.mockReturnValue({ type: "secret", ...account });
+    loginMSTeamsDelegated.mockResolvedValue({ ...tokens, scopes: ["ChatMessage.Send"] });
+    const { prompter, progress } = createPrompter();
     const result = await msteamsSetupWizard.finalize?.({
-      cfg: {
-        channels: {
-          msteams: {
-            accounts: {
-              support: {
-                appId: "support-app",
-                appPassword: "support-password",
-                tenantId: "tenant-id",
-                webhook: { path: "/hooks/3979" },
-              },
-            },
-          },
-        },
-      },
-      accountId: "support",
-      prompter: {
-        confirm: vi.fn(async () => true),
-        note: vi.fn(async () => {}),
-        progress: vi.fn(() => progress),
-        text: vi.fn(),
-      },
+      cfg: teamsConfig({
+        ...(accountId === "default" ? { defaultAccount: key } : {}),
+        accounts: { [key]: account },
+      }),
+      accountId,
+      prompter,
     } as never);
-
-    expect(result?.cfg?.channels?.msteams?.accounts?.support).toEqual({
-      appId: "support-app",
-      appPassword: "support-password",
-      tenantId: "tenant-id",
-      webhook: { path: "/hooks/3979" },
-      delegatedAuth: { enabled: true },
-      enabled: true,
-    });
+    const configured = result?.cfg?.channels?.msteams;
+    if (accountId === "support") {
+      expect(configured?.accounts?.support).toEqual({
+        appId: "support-app",
+        appPassword: "support-password",
+        tenantId: "tenant-id",
+        webhook: { path: "/hooks/3979" },
+        delegatedAuth: { enabled: true },
+        enabled: true,
+      });
+      expect(progress.stop).toHaveBeenCalled();
+    } else {
+      expect(configured?.accounts?.Default).toMatchObject({ delegatedAuth: { enabled: true } });
+      expect(configured?.accounts).not.toHaveProperty("default");
+      expect(configured?.delegatedAuth).toBeUndefined();
+      expect(resolveMSTeamsCredentials).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ pathPrefix: "channels.msteams.accounts.Default" }),
+      );
+    }
     expect(saveDelegatedTokens).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accessToken: "access-token",
-        refreshToken: "refresh-token",
-      }),
-      "support",
-    );
-    expect(progress.stop).toHaveBeenCalled();
-  });
-
-  it("stores delegated auth under an explicit default account", async () => {
-    resolveMSTeamsCredentials.mockReturnValue({
-      type: "secret",
-      appId: "default-app",
-      appPassword: "default-password",
-      tenantId: "tenant-id",
-    });
-    hasConfiguredMSTeamsCredentials.mockReturnValue(true);
-    loginMSTeamsDelegated.mockResolvedValue({
-      accessToken: "access-token",
-      refreshToken: "refresh-token",
-      expiresAt: Date.parse("2030-01-01T00:00:00.000Z"),
-      scopes: ["ChatMessage.Send"],
-    });
-    const progress = { update: vi.fn(), stop: vi.fn() };
-
-    const result = await msteamsSetupWizard.finalize?.({
-      cfg: {
-        channels: {
-          msteams: {
-            defaultAccount: "Default",
-            accounts: {
-              Default: {
-                appId: "default-app",
-                appPassword: "default-password",
-                tenantId: "tenant-id",
-                webhook: { path: "/hooks/3978" },
-              },
-            },
-          },
-        },
-      },
-      accountId: "default",
-      prompter: {
-        confirm: vi.fn(async () => true),
-        note: vi.fn(async () => {}),
-        progress: vi.fn(() => progress),
-        text: vi.fn(),
-      },
-    } as never);
-
-    expect(result?.cfg?.channels?.msteams?.accounts?.Default).toMatchObject({
-      delegatedAuth: { enabled: true },
-    });
-    expect(result?.cfg?.channels?.msteams?.accounts).not.toHaveProperty("default");
-    expect(result?.cfg?.channels?.msteams?.delegatedAuth).toBeUndefined();
-    expect(resolveMSTeamsCredentials).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        pathPrefix: "channels.msteams.accounts.Default",
-      }),
-    );
-    expect(saveDelegatedTokens).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accessToken: "access-token",
-        refreshToken: "refresh-token",
-      }),
-      "default",
+      expect.objectContaining({ accessToken: "access-token", refreshToken: "refresh-token" }),
+      accountId,
     );
   });
 });

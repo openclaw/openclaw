@@ -2,6 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { maybeRepairPluginRegistryState } from "../commands/doctor-plugin-registry.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
@@ -9,6 +13,7 @@ import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.j
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
+import { writeFixtureJson } from "./loader-fixture-builders.test-support.js";
 import { clearPluginRegistryLoadCache, loadOpenClawPlugins } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -19,6 +24,7 @@ import {
   writePluginMetadata,
 } from "./loader.test-fixtures.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import { PluginTrustRefusalError } from "./plugin-trust.js";
 import { disposePluginRegistryInstances } from "./runtime.js";
 import { buildPluginInspectReport, buildPluginSnapshotReport } from "./status.js";
 
@@ -32,9 +38,13 @@ if (!agentMailIntegrity) {
 }
 
 afterEach(async () => {
-  await closeOpenClawStateDatabaseAsync();
-  resetPluginStateStoreForTests();
-  resetPluginLoaderTestStateForTest();
+  try {
+    await closeOpenClawStateDatabaseAsync();
+    resetPluginStateStoreForTests();
+    resetPluginLoaderTestStateForTest();
+  } finally {
+    clearRuntimeConfigSnapshot();
+  }
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
@@ -190,6 +200,28 @@ describe("recorded plugin trust diagnostics", () => {
       repairTrusted: true,
     },
     {
+      name: "consistent third-party npm install",
+      pluginId: "third-party-demo",
+      packageName: "@vendor/third-party-demo",
+      version: "1.0.0",
+      reason: "third-party-npm",
+      trusted: false,
+    },
+    {
+      name: "conflicting third-party npm identity",
+      pluginId: "third-party-demo",
+      packageName: "@vendor/third-party-demo",
+      override: { resolvedName: "@vendor/other" },
+      reason: "provenance-invalid",
+      trusted: false,
+    },
+    {
+      name: "official package recorded under another plugin id",
+      pluginId: "third-party-demo",
+      reason: "provenance-invalid",
+      trusted: false,
+    },
+    {
       name: "unendorsed AgentMail npm namesake",
       pluginId: "agentmail",
       packageName: "@agentmail/agentmail",
@@ -269,6 +301,7 @@ describe("recorded plugin trust diagnostics", () => {
             slots: { memory: "none" },
           },
         };
+        setRuntimeConfigSnapshot(config);
         const snapshot = buildPluginSnapshotReport({ config });
         const inspected = buildPluginInspectReport({
           id: plugin.id,
@@ -291,6 +324,15 @@ describe("recorded plugin trust diagnostics", () => {
           origin: "global",
         });
         expect(loaded.status).toBe("loaded");
+        if (reason === "third-party-npm") {
+          const refusal = new PluginTrustRefusalError({
+            pluginId,
+            source: plugin.file,
+            trust: loaded.trust,
+          });
+          expect(refusal.message).toContain("Reinstalling the same package will not change that");
+          expect(refusal.message).not.toContain("Reinstall from the official");
+        }
         const warnings = warn.mock.calls.filter(([message]) =>
           String(message).includes("OpenClaw can't verify where this plugin came from"),
         );
@@ -371,14 +413,11 @@ describe("recorded plugin trust diagnostics", () => {
       }),
     );
     for (const plugin of plugins) {
-      fs.writeFileSync(
-        path.join(plugin.dir, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: plugin.id,
-          configSchema: { type: "object" },
-          contracts: { tools: [plugin.id] },
-        }),
-      );
+      writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+        id: plugin.id,
+        configSchema: { type: "object" },
+        contracts: { tools: [plugin.id] },
+      });
     }
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const dispatchHookAgentTurn = vi.fn(async () => ({

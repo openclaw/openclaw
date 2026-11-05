@@ -1,8 +1,8 @@
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { CLI_HISTORY_CHANGED_BEFORE_PREPARATION } from "./cli-history-boundary.js";
-import { readActivePathEntryRelationFromProjection } from "./session-accessor.sqlite-active-events.js";
 import { validateSessionTranscriptContextInDatabase } from "./session-accessor.sqlite-model-context.js";
 import { readCurrentProjectionSnapshot } from "./session-accessor.sqlite-projection-read.js";
+import { readActivePathEntryRelationFromProjection } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
 import type {
   SessionEntryPatchCommitted,
@@ -38,11 +38,15 @@ export function readSessionEntryPatchPredicate(
   database: OpenClawAgentDatabase,
   sessionKey: string,
   predicate: SessionEntryPatchGuard["shouldCommitIf"],
+  committedTranscript?: SessionEntryPatchCommitted["transcriptPredicate"],
 ): { matches: boolean; transcriptPredicate?: SessionEntryPatchCommitted["transcriptPredicate"] } {
   if (!predicate) {
     return { matches: true };
   }
-  const watermark = readSessionTranscriptWatermarkInDatabase(database, predicate.sessionId);
+  const watermark =
+    committedTranscript?.sessionId === predicate.sessionId
+      ? committedTranscript.watermark
+      : readSessionTranscriptWatermarkInDatabase(database, predicate.sessionId);
   if (watermark.generation !== predicate.generation) {
     return { matches: false };
   }

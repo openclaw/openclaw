@@ -17,7 +17,6 @@ type SourceContract<S, T> = {
 };
 
 export type SourceProjection<S, T> = {
-  readonly equality: SourceContract<S, T>["equality"];
   readonly read: () => T;
   readonly revision: () => number;
   subscribe(this: void, listener: () => void): Dispose;
@@ -25,22 +24,53 @@ export type SourceProjection<S, T> = {
   dispose(this: void): void;
 };
 
-/** A read-through view of an owner. This never becomes an authoritative store. */
+/** Capability owners publish mutable state through the same subscription contract. */
+export function projectOwner<S extends { subscribe(notify: () => void): Dispose }, T>(
+  source: S,
+  read: (source: S) => T,
+  equality: SourceContract<S, T>["equality"] = "revision",
+): SourceProjection<S, T> {
+  return projectSource(source, {
+    read,
+    subscribe: (owner, notify) => owner.subscribe(notify),
+    equality,
+  });
+}
+
+/** Local owners publish through the same lazy projection subscription. */
+export function projectMutableSource<S, T>(source: S, read: (source: S) => T) {
+  let notify = () => {};
+  return {
+    ...projectSource(source, {
+      read,
+      subscribe: (_source, listener) => {
+        notify = listener;
+        return () => {
+          notify = () => {};
+        };
+      },
+      equality: "revision",
+    }),
+    publish: () => notify(),
+  };
+}
+
+/** Read-through owner view; only revision tracks, never the sampled owner reads or subscriptions. */
 export function projectSource<S, T>(
   initialSource: S,
   contract: SourceContract<S, T>,
 ): SourceProjection<S, T> {
   let source = initialSource;
-  let value = untrack(() => contract.read(source));
+  // Reactive primitive: untrack keeps sampled owner reads outside revision tracking.
+  const readSnapshot = () => untrack(() => contract.read(source));
+  let value = readSnapshot();
   let lastRead = value;
   let disposed = false;
   let observed = false;
-  let generation = 0;
   let connected = false;
   let disconnect: Dispose | undefined;
   const listeners = new Set<() => void>();
   const release = () => {
-    generation += 1;
     connected = false;
     const cleanup = disconnect;
     disconnect = undefined;
@@ -51,12 +81,8 @@ export function projectSource<S, T>(
   });
   const publish = () => {
     setRevision((previous) => previous + 1);
-    const current = generation;
     const snapshot = Array.from(listeners);
     for (const listener of snapshot) {
-      if (disposed || generation !== current) {
-        break;
-      }
       if (listeners.has(listener)) {
         listener();
       }
@@ -67,32 +93,18 @@ export function projectSource<S, T>(
       return;
     }
     connected = true;
-    const current = ++generation;
-    try {
-      const cleanup = contract.subscribe(source, () => {
-        if (disposed || generation !== current) {
-          return;
-        }
-        const next = untrack(() => contract.read(source));
-        const changed = contract.equality === "revision" || !contract.equality(value, next);
-        value = next;
-        lastRead = next;
-        if (changed) {
-          publish();
-        }
-      });
-      // A synchronous subscription callback can replace/dispose this projection.
-      if (disposed || generation !== current) {
-        cleanup();
-      } else {
-        disconnect = cleanup;
-        value = untrack(() => contract.read(source));
-        lastRead = value;
+    // Owners remove their listeners synchronously; detached callbacks are not replayed.
+    disconnect = contract.subscribe(source, () => {
+      const next = readSnapshot();
+      const changed = contract.equality === "revision" || !contract.equality(value, next);
+      value = next;
+      lastRead = next;
+      if (changed) {
+        publish();
       }
-    } catch (error) {
-      release();
-      throw error;
-    }
+    });
+    value = readSnapshot();
+    lastRead = value;
   };
   // A lazy, dependency-free memo gives probes a temporary lifetime and tracked
   // readers a shared lifetime. It never reruns merely because the owner publishes.
@@ -105,7 +117,7 @@ export function projectSource<S, T>(
           release();
         }
       });
-      untrack(connect);
+      connect();
       return true;
     },
     { lazy: true },
@@ -121,7 +133,7 @@ export function projectSource<S, T>(
     if (disposed) {
       return;
     }
-    setRevision(untrack(revision));
+    setRevision(revision());
     disposed = true;
     listeners.clear();
     release();
@@ -130,11 +142,10 @@ export function projectSource<S, T>(
     onCleanup(dispose);
   }
   return {
-    equality: contract.equality,
     read() {
       observe();
       if (!disposed) {
-        lastRead = untrack(() => contract.read(source));
+        lastRead = readSnapshot();
       }
       return lastRead;
     },
@@ -146,12 +157,7 @@ export function projectSource<S, T>(
       // Each subscription has its own identity, including duplicate callbacks.
       const entry = () => listener();
       listeners.add(entry);
-      try {
-        connect();
-      } catch (error) {
-        listeners.delete(entry);
-        throw error;
-      }
+      connect();
       return () => {
         listeners.delete(entry);
         if (!observed && listeners.size === 0) {
@@ -165,7 +171,7 @@ export function projectSource<S, T>(
       }
       release();
       source = next;
-      value = untrack(() => contract.read(source));
+      value = readSnapshot();
       lastRead = value;
       if (observed || listeners.size > 0) {
         connect();

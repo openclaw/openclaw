@@ -1,7 +1,7 @@
 /** Configured-service identity, distinct from local executable attestation. */
-import { createHash } from "node:crypto";
 import path from "node:path";
 import type { AgentHarnessRuntimeArtifactBinding } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexAppServerRuntimeIdentity } from "./client.js";
 import { codexAppServerStartOptionsKey } from "./config-runtime.js";
@@ -42,11 +42,11 @@ export function captureCodexConfiguredConnection(
     authToken: start.authToken,
     headers: start.headers,
   });
-  return Object.freeze({
+  return {
     kind: "configured-connection",
     transport: start.transport,
-    selectionFingerprint: createHash("sha256").update(key).digest("hex"),
-  });
+    selectionFingerprint: sha256Hex(key),
+  };
 }
 
 export function finalizeCodexConfiguredConnection(params: {
@@ -64,17 +64,15 @@ export function finalizeCodexConfiguredConnection(params: {
   }
   const descriptor: CodexConfiguredConnectionDescriptor = {
     ...after,
-    runtimeIdentityFingerprint: createHash("sha256")
-      .update(
-        JSON.stringify({
-          serverVersion,
-          userAgent: params.runtimeIdentity?.userAgent ?? null,
-          codexHome: params.runtimeIdentity?.codexHome ?? null,
-          platformFamily: params.runtimeIdentity?.platformFamily ?? null,
-          platformOs: params.runtimeIdentity?.platformOs ?? null,
-        }),
-      )
-      .digest("hex"),
+    runtimeIdentityFingerprint: sha256Hex(
+      JSON.stringify({
+        serverVersion,
+        userAgent: params.runtimeIdentity?.userAgent ?? null,
+        codexHome: params.runtimeIdentity?.codexHome ?? null,
+        platformFamily: params.runtimeIdentity?.platformFamily ?? null,
+        platformOs: params.runtimeIdentity?.platformOs ?? null,
+      }),
+    ),
   };
   return Object.freeze({
     id: encodeConnectionId(descriptor),
@@ -107,10 +105,7 @@ function encodeConnectionId(descriptor: CodexConfiguredConnectionDescriptor): st
 }
 
 function fingerprint(descriptor: CodexConfiguredConnectionDescriptor): string {
-  return createHash("sha256")
-    .update(CONNECTION_HASH_DOMAIN)
-    .update(JSON.stringify(descriptor))
-    .digest("hex");
+  return sha256Hex(`${CONNECTION_HASH_DOMAIN}${JSON.stringify(descriptor)}`);
 }
 
 function decodeConnectionId(id: string): CodexConfiguredConnectionDescriptor {

@@ -66,6 +66,9 @@ export function isBorrowedLegacyHandoffParentCurrent(
   if (process.platform === "darwin") {
     return processes.validateDarwinAncestorProcesses(parent.helper.pid, validate);
   }
-  const ancestry = inspectSelfAndAncestorPidsSync(undefined, { requireVerifiedParent: true });
+  const ancestry = inspectSelfAndAncestorPidsSync(undefined, {
+    requireVerifiedParent: true,
+    throughPid: parent.helper.pid,
+  });
   return ancestry.complete && validate(ancestry.pids, processes.isProcessIdentityCurrent);
 }

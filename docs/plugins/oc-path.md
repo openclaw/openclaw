@@ -132,7 +132,7 @@ dependency, and the per-line parse already goes through `jsonc-parser`.
 
 | Surface                        | Provided by                                             |
 | ------------------------------ | ------------------------------------------------------- |
-| `openclaw path` CLI            | `extensions/oc-path/cli-registration.ts`                |
+| `openclaw path` CLI            | `extensions/oc-path/index.ts`                           |
 | `oc://` parser / formatter     | `extensions/oc-path/src/oc-path/oc-path.ts`             |
 | Per-kind parse / emit / edit   | `extensions/oc-path/src/oc-path/{md,jsonc,jsonl,yaml}`  |
 | Universal resolve / find / set | `extensions/oc-path/src/oc-path/{resolve,find,edit}.ts` |

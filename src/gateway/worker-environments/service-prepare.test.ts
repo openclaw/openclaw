@@ -15,7 +15,7 @@ import {
   createContext,
   createOperatorClient,
 } from "../server-plugin-in-process-dispatch.test-support.js";
-import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import { readWorkerProjectPreparation } from "./preparation-identity.schema.js";
 import * as support from "./service.test-support.js";
 import * as workspaceGitBase from "./workspace-git-base.js";
 
@@ -192,7 +192,7 @@ describe("on-demand prepared worker admission", () => {
         profileSnapshot: intent.profileSnapshot,
         preparation: {
           purpose: "reserve",
-          key: intent.preparationKey!,
+          key: intent.profileSnapshot.project!.preparation!.key,
           demandAtMs: 1_000,
           expiresAtMs: 11_000,
         },
@@ -258,13 +258,12 @@ describe("on-demand prepared worker admission", () => {
         "original preparation source",
       );
       client.internal = { operatorRunAuthority: source.authority };
-      const prepareTarget = vi.fn(() => {
+      f.provider.resolvePreparationTarget = () => {
         if (revoked) {
           controller.abort(new Error("Original preparation source revoked"));
         }
         return { machineClass: "small", platform: "linux" as const, arch: "x64" as const };
-      });
-      f.provider.resolvePreparationTarget = prepareTarget;
+      };
       try {
         const request = withPluginRuntimeGatewayRequestScope(
           { context, client, isWebchatConnect: () => false },
@@ -286,7 +285,6 @@ describe("on-demand prepared worker admission", () => {
           );
           await support.waitForFast(() => expect(f.provision).toHaveBeenCalledOnce());
         }
-        expect(prepareTarget).toHaveBeenCalled();
       } finally {
         source.release();
       }

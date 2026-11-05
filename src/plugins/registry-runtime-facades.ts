@@ -41,6 +41,7 @@ export function createPluginRuntimeFacades(invokeSelectedRuntime: <T>(run: () =>
     ]),
     webSearch: createRuntimeFacade<PluginRuntime["webSearch"]>(invokeSelectedRuntime, [
       "listProviders",
+      "listProvidersAsync",
       "search",
     ]),
     tts: createRuntimeFacade<PluginRuntime["tts"]>(invokeSelectedRuntime, [

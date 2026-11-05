@@ -1,27 +1,34 @@
+import { createComponent } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import "../../../test-helpers/load-styles.ts";
-import "./browser-tab-card.tsx";
+import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
+import { BrowserTabCardHost } from "./browser-tab-card.tsx";
 
 afterEach(() => {
+  cleanupSolid();
   document.body.replaceChildren();
   vi.restoreAllMocks();
 });
 
 it("shows action icons and supports copy, external opening, and keyboard dismissal", async () => {
-  const card = document.createElement("openclaw-browser-tab-card");
   const url = "https://example.com/project";
-  card.preview = {
-    kind: "browser-tab",
-    target: "host",
-    profile: "managed",
-    targetId: "menu-tab",
-    url,
-  };
-  document.body.append(card);
-  await card.updateComplete;
+  const view = mountSolid(() =>
+    createComponent(BrowserTabCardHost, {
+      preview: {
+        kind: "browser-tab",
+        target: "host",
+        profile: "managed",
+        targetId: "menu-tab",
+        url,
+      },
+    }),
+  );
+  flush();
+  const card = view.container.querySelector<HTMLElement>("openclaw-browser-tab-card")!;
   const trigger = card.querySelector<HTMLButtonElement>(".more")!;
-  const dropdown = card.querySelector("wa-dropdown")!;
+  const dropdown = card.querySelector<HTMLElement>('[role="menu"]')!;
   const copy = card.querySelector<HTMLElement>('[value="copy-url"]')!;
   const open = card.querySelector<HTMLElement>('[value="open-new-tab"]')!;
   const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
@@ -44,17 +51,17 @@ it("shows action icons and supports copy, external opening, and keyboard dismiss
   await userEvent.keyboard("{ArrowUp}");
   await expect.poll(() => document.activeElement).toBe(copy);
   await userEvent.keyboard("{Escape}");
-  await expect.poll(() => dropdown.open).toBe(false);
+  await expect.poll(() => dropdown.matches(":popover-open")).toBe(false);
   await expect.poll(() => document.activeElement).toBe(trigger);
 
   await userEvent.keyboard("{Enter}");
   await expect.poll(() => document.activeElement).toBe(copy);
   await userEvent.keyboard("{Enter}");
   await expect.poll(() => writeText.mock.calls).toEqual([[url]]);
-  await expect.poll(() => dropdown.open).toBe(false);
+  await expect.poll(() => dropdown.matches(":popover-open")).toBe(false);
   await page.elementLocator(trigger).click();
   await page.elementLocator(open).click();
   expect(openWindow).toHaveBeenCalledExactlyOnceWith(url, "_blank", "noopener,noreferrer");
-  await expect.poll(() => dropdown.open).toBe(false);
+  await expect.poll(() => dropdown.matches(":popover-open")).toBe(false);
   await expect.poll(() => document.activeElement).toBe(trigger);
 });

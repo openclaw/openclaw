@@ -47,13 +47,17 @@ import {
   type AuditMigrationRoot,
   type LegacyAuditSourceSnapshot,
 } from "./state-migrations.audit-recovery.js";
-import { writeRecoveredSanitizedAuditArchive } from "./state-migrations.audit-sanitized.js";
+import {
+  secureAuditArchiveFile,
+  writeRecoveredSanitizedAuditArchive,
+} from "./state-migrations.audit-sanitized.js";
 import {
   moveLegacyMigrationFileNoReplace,
   recoverLegacyMigrationLinkedMove,
   LegacyMigrationMoveUnavailableError,
 } from "./state-migrations.no-replace-move.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
+import { decodeUtf8Input, Utf8InputError } from "./utf8-input.js";
 
 export { detectLegacyAuditLogs } from "./state-migrations.audit-checkpoints.js";
 
@@ -63,29 +67,6 @@ type AuditLogMigrationResult = Pick<MigrationMessages, "changes" | "warnings"> &
 
 const AUDIT_SKIP_RECOVERY_GUIDANCE =
   "Preserve the legacy source and any sanitized companion for recovery; see https://docs.openclaw.ai/cli/update/repair-and-recovery#skipped-legacy-audit-recovery. Other repairs can continue; this warning repeats until the archive is resolved.";
-
-async function secureAuditArchiveFile(params: {
-  root: AuditMigrationRoot;
-  relativePath: string;
-  label: string;
-  warnings: string[];
-}): Promise<boolean> {
-  try {
-    const opened = await params.root.openWritable(params.relativePath, {
-      writeMode: "update",
-    });
-    try {
-      await opened.handle.chmod(0o600);
-      await opened.handle.sync();
-    } finally {
-      await opened.handle.close();
-    }
-    return true;
-  } catch (error) {
-    params.warnings.push(`Failed securing ${params.label} legacy source: ${String(error)}`);
-    return false;
-  }
-}
 
 async function archiveLegacyAuditClaim(params: {
   source: LegacyAuditLogSource;
@@ -398,7 +379,7 @@ async function migrateLegacyAuditLogSource(params: {
     }
     const prepared = prepareLegacyAuditRecords(
       params.source,
-      snapshot.raw,
+      decodeUtf8Input(snapshot.rawBytes, `Legacy ${params.source.label}`),
       sourceGeneration,
       previousCheckpoint?.recordOrdinalBase ?? 0,
     );
@@ -434,6 +415,21 @@ async function migrateLegacyAuditLogSource(params: {
       }
     }
     const missing = candidateRecords.filter((record) => !existingKeys.has(record.key));
+    if (
+      previousCheckpoint &&
+      sanitizedRelativePath &&
+      !(await root.exists(sanitizedRelativePath))
+    ) {
+      // The raw prefix was verified above. Missing historical projection bytes
+      // cannot endanger rows already committed to SQLite; keep the raw evidence.
+      const alreadyImported = prepared.records.every((record) => existingKeys.has(record.key));
+      warnings.push(
+        alreadyImported
+          ? `Skipped ${params.source.label} recovery because its sanitized companion is missing and no records remain to import; left ${params.source.sourcePath} in place. ${AUDIT_SKIP_RECOVERY_GUIDANCE}`
+          : `Refused ${params.source.label} recovery because its sanitized companion is missing and the raw archive contains unimported records; left ${params.source.sourcePath} in place. Restore ${params.source.sanitizedArchivePath} from a verified backup, then rerun openclaw doctor --fix against the same state directory.`,
+      );
+      return result(alreadyImported ? "skipped" : "refused");
+    }
     // SQLite may commit before the sanitized merge/checkpoint. Keep raw-derived
     // candidates intact so retry can still prove and materialize the artifact tail.
     store.registerLegacyMany(missing);
@@ -546,7 +542,7 @@ async function migrateLegacyAuditLogSource(params: {
     }
     const scrubbedRecords = prepareLegacyAuditRecords(
       params.source,
-      scrubbedSnapshot.raw,
+      decodeUtf8Input(scrubbedSnapshot.rawBytes, `Legacy ${params.source.label}`),
       legacyAuditSourceGenerationKey(checkpointRawRelativePath),
     );
     if (!scrubbedRecords.ok) {
@@ -700,7 +696,7 @@ export async function migrateLegacyAuditLogs(params: {
             if (error instanceof LegacyMigrationMoveUnavailableError) {
               warnings.push(formatLegacyAuditMoveWarning(error, params.stateDir));
             } else {
-              hasRefusal = true;
+              hasRefusal ||= !(error instanceof Utf8InputError);
               warnings.push(`Failed migrating ${source.label}: ${String(error)}`);
             }
             blockedLogicalSources.add(source.logicalSourcePath);

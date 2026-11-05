@@ -49,7 +49,7 @@ export function resolveChannelPluginRegistration(
     : undefined;
   const loadedEntry = scopedEntry ?? getLoadedChannelPluginEntryById(resolvedId);
   if (loadedEntry) {
-    const origin = normalizeOptionalString(loadedEntry.origin) ?? undefined;
+    const origin = normalizeOptionalString(loadedEntry.origin);
     return {
       plugin: loadedEntry.plugin,
       ...(loadedEntry.resolveChannelRuntime

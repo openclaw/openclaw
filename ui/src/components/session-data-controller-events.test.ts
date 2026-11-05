@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { SessionsListResult } from "../api/types.ts";
-import { publishSidebarSessionList } from "./session-data-controller-events.ts";
+import { publishSidebarSessionList } from "./session-data-events.ts";
 
 describe("publishSidebarSessionList", () => {
   const createOwner = () => ({
@@ -11,6 +11,7 @@ describe("publishSidebarSessionList", () => {
     sessionsAgentId: null as string | null,
     sessionsLoading: false,
     sessionMutationError: null,
+    sessionListError: null,
     expandedAgentId: () => "main",
     sessionListQuery: (agentId: string) => ({ agentId }),
     requestSessionDataUpdate: () => undefined,

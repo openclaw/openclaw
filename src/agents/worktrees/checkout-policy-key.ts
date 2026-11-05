@@ -8,11 +8,16 @@ import { setWorktreePreparationTemplate } from "./preparation-timing.js";
 // Path-dependent filters and sparse configuration need a fresh checkout.
 // Hash effective checkout configuration so policy changes retire the cache.
 export async function resolveWorktreeCheckoutKey(
-  options: { destination: string; commonDir: string },
-  commit: string,
-  git: WorktreeGitPolicy,
-  commandOptions: GitCommandOptions,
+  options: {
+    destination: string;
+    commonDir: string;
+    commit: string;
+    git: WorktreeGitPolicy;
+    gitOptions: GitCommandOptions;
+  },
+  scope: "template" | "prompt" = "template",
 ): Promise<string | undefined> {
+  const { git, commit } = options;
   if (
     [
       "GIT_INDEX_FILE",
@@ -23,13 +28,15 @@ export async function resolveWorktreeCheckoutKey(
       "GIT_ATTR_SOURCE",
     ].some((key) => process.env[key])
   ) {
-    setWorktreePreparationTemplate("unavailable", { reason: "git-environment" });
+    if (scope === "template") {
+      setWorktreePreparationTemplate("unavailable", { reason: "git-environment" });
+    }
     return undefined;
   }
   const config = await git.require(
     options.destination,
     ["config", "--null", "--list"],
-    commandOptions,
+    options.gitOptions,
   );
   const checkoutConfig: string[] = [];
   for (const field of config.split("\0")) {
@@ -39,24 +46,30 @@ export async function resolveWorktreeCheckoutKey(
     if (key.startsWith("branch.")) {
       continue;
     }
+    // Installed drivers (for example Git LFS) need not apply to prompt files.
+    // Their effective attributes are checked against the selected index below.
+    if (scope === "prompt" && key.startsWith("filter.")) {
+      continue;
+    }
     if (
       /^(filter\.|includeif\.|core\.(attributesfile|worktree|sparsecheckout|splitindex)$|index\.sparse$)/u.test(
         key,
       )
     ) {
-      setWorktreePreparationTemplate("unavailable", { reason: "checkout-configuration" });
+      if (scope === "template") {
+        setWorktreePreparationTemplate("unavailable", { reason: "checkout-configuration" });
+      }
       return undefined;
     }
     checkoutConfig.push(field);
   }
   if (git.sourceOnly) {
-    // The isolated policy hides native config, but a sparse checkout can already
-    // have changed the retained index and files. Bind that worktree's config too.
+    // Native worktree config can already have changed the retained index and files.
     const fields = (
       await requireGit(
         options.destination,
         ["config", "--null", "--show-scope", "--list"],
-        commandOptions,
+        options.gitOptions,
       )
     ).split("\0");
     checkoutConfig.push(
@@ -72,14 +85,16 @@ export async function resolveWorktreeCheckoutKey(
     !git.sourceOnly &&
     (await worktreePathExists(path.join(options.commonDir, "info", "attributes")))
   ) {
-    setWorktreePreparationTemplate("unavailable", { reason: "repository-attributes" });
+    if (scope === "template") {
+      setWorktreePreparationTemplate("unavailable", { reason: "repository-attributes" });
+    }
     return undefined;
   }
   // Join both probes before returning or throwing, including cancellation, so
   // checkout cleanup cannot race an admitted Git process.
   const attributePaths = await Promise.allSettled(
     ["GIT_ATTR_GLOBAL", "GIT_ATTR_SYSTEM"].map((variable) =>
-      git.run(options.destination, ["var", variable], commandOptions),
+      git.run(options.destination, ["var", variable], options.gitOptions),
     ),
   );
   for (const probe of attributePaths) {
@@ -105,9 +120,11 @@ export async function resolveWorktreeCheckoutKey(
       (result.stdout.trim() &&
         (await worktreePathExists(normalizeGitPathForFilesystem(result.stdout.trim()))))
     ) {
-      setWorktreePreparationTemplate("unavailable", {
-        reason: result.code === 0 ? "external-attributes" : "attributes-probe-failed",
-      });
+      if (scope === "template") {
+        setWorktreePreparationTemplate("unavailable", {
+          reason: result.code === 0 ? "external-attributes" : "attributes-probe-failed",
+        });
+      }
       return undefined;
     }
   }

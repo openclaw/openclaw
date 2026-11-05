@@ -1,9 +1,7 @@
 /**
- * Gateway-host exec approval and allowlist handling.
  * Evaluates shell allowlists, auto-review, durable approvals, follow-up routing,
  * and approved command execution for gateway-backed exec calls.
  */
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
@@ -40,37 +38,40 @@ import {
   EXEC_AUTO_REVIEW_DISPATCH_IDENTITY_WARNING,
   formatExecAutoReviewAssessment,
   resolveExecAutoReviewDecision,
-  type ExecAutoReviewDecision,
 } from "../infra/exec-auto-review.js";
 import { hasPosixShellStartupBeforeInlineCommand } from "../infra/exec-wrapper-resolution.js";
 import { LruCache } from "../infra/lru-cache.js";
 import {
   prepareSystemRunMutableFileBinding,
-  revalidateSystemRunMutableFileBinding,
   type SystemRunMutableFileBinding,
 } from "../infra/system-run-approval-binding.js";
-import {
-  APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
-  type ApprovedCwdSnapshot,
-  captureApprovedCwdSnapshotSync,
-  revalidateApprovedCwdSnapshot,
-} from "../infra/system-run-cwd-binding.js";
+import { captureApprovedCwdSnapshotSync } from "../infra/system-run-cwd-binding.js";
 import {
   GatewayDrainingError,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import { markBackgrounded, tail } from "./bash-process-registry.js";
+import { markBackgrounded } from "./bash-process-registry.js";
+import {
+  resolveGatewayExecApprovalDrift,
+  revalidateGatewayExecApprovalBinding,
+} from "./bash-tools.exec-approval-binding.js";
 import {
   buildExecApprovalFollowupTarget,
   buildExecApprovalDeniedToolResult,
   buildExecAutoReviewDeniedToolResult,
-  formatExecApprovalContinuationSourceOutput,
 } from "./bash-tools.exec-approval-output.js";
 import {
   buildExecApprovalTurnSourceContext,
   registerExecApprovalRequestForHostOrThrow,
 } from "./bash-tools.exec-approval-request.js";
 import { prepareCronStandingGrantConsumption } from "./bash-tools.exec-cron-grant.js";
+import {
+  buildGatewayExecApprovalFollowupSummary,
+  buildGatewayExecAllowlistDeniedMessage,
+  publishGatewayGuardianReview,
+  buildGatewayExecApprovalDeniedToolResult,
+  resolveGatewayExecApprovalFollowupText,
+} from "./bash-tools.exec-host-gateway.output.js";
 import type {
   ProcessGatewayAllowlistParams,
   ProcessGatewayAllowlistResult,
@@ -83,16 +84,8 @@ import {
   resolveExecHostApprovalContext,
   sendExecApprovalFollowupResult,
 } from "./bash-tools.exec-host-shared.js";
-import { appendExecTimeoutRetryGuidance, normalizeNotifyOutput } from "./bash-tools.exec-output.js";
 import { createApprovalSlug, runExecProcess } from "./bash-tools.exec-runtime.js";
-import type {
-  ExecApprovalFollowupFactory,
-  ExecApprovalFollowupOutcome,
-  ExecToolApprovalReview,
-  ExecToolDetails,
-} from "./bash-tools.exec-types.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
-import type { AgentToolResult } from "./runtime/index.js";
 
 const ONE_SHOT_ALLOW_ALWAYS: AllowAlwaysPersistenceDecision = {
   kind: "one-shot",
@@ -116,271 +109,10 @@ function recordAutoReviewDenial(sessionKey: string | undefined): number {
   return count;
 }
 
-function publishGatewayGuardianReview(
-  params: ProcessGatewayAllowlistParams,
-  status: ExecToolApprovalReview["status"],
-  decision?: ExecAutoReviewDecision,
-): void {
-  if (!params.toolCallId) {
-    return;
-  }
-  const approvalReviewOutcome =
-    status === "in_progress" ? "reviewing" : status === "approved" ? "approved" : "denied";
-  const review: ExecToolApprovalReview = {
-    id: `guardian:${params.toolCallId}`,
-    label: "Guardian",
-    status,
-    ...(decision ? { riskLevel: decision.risk, rationale: decision.rationale } : {}),
-  };
-  // Preserve terminal evidence before synchronous listeners can change reviewed operands.
-  if (status !== "in_progress") {
-    params.onApprovalReview?.(review);
-  }
-  if (!params.runId) {
-    return;
-  }
-  emitAgentEvent({
-    runId: params.runId,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    stream: "tool",
-    data: {
-      phase: "review",
-      name: "exec",
-      toolCallId: params.toolCallId,
-      hideFromChannelProgress: true,
-      approvalReviewOutcome,
-      review,
-    },
-  });
-}
-
-function formatOutcomeExitLabel(outcome: { exitCode: number | null; timedOut: boolean }): string {
-  return outcome.timedOut ? "timeout" : `code ${outcome.exitCode ?? "?"}`;
-}
-
-function formatBytes(value: unknown): string | null {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return null;
-  }
-  return `${Math.max(0, Math.round(value))} bytes`;
-}
-
-function formatDiagnosticsContents(manifest: Record<string, unknown>): string[] {
-  const contents = Array.isArray(manifest.contents) ? manifest.contents : [];
-  if (contents.length === 0) {
-    return [];
-  }
-  const lines = [`Contents (${contents.length} files):`];
-  for (const entry of contents.slice(0, 12)) {
-    if (!isRecord(entry)) {
-      continue;
-    }
-    const path = typeof entry.path === "string" ? entry.path : "";
-    if (!path) {
-      continue;
-    }
-    const bytes = formatBytes(entry.bytes);
-    lines.push(`- ${bytes ? `${path} (${bytes})` : path}`);
-  }
-  if (contents.length > 12) {
-    lines.push(`- ... ${contents.length - 12} more`);
-  }
-  return lines;
-}
-
-function formatDiagnosticsPrivacy(manifest: Record<string, unknown>): string[] {
-  const privacy = isRecord(manifest.privacy) ? manifest.privacy : null;
-  if (!privacy) {
-    return [];
-  }
-  const lines = ["Privacy:"];
-  if (typeof privacy.payloadFree === "boolean") {
-    lines.push(`- payload-free: ${privacy.payloadFree ? "yes" : "no"}`);
-  }
-  if (typeof privacy.rawLogsIncluded === "boolean") {
-    lines.push(`- raw logs included: ${privacy.rawLogsIncluded ? "yes" : "no"}`);
-  }
-  const notes = Array.isArray(privacy.notes)
-    ? privacy.notes.filter((note): note is string => typeof note === "string")
-    : [];
-  for (const note of notes.slice(0, 4)) {
-    lines.push(`- ${note}`);
-  }
-  return lines.length > 1 ? lines : [];
-}
-
-function formatDiagnosticsExportSuccess(aggregated: string): string {
-  const trimmed = aggregated.trim();
-  if (!trimmed) {
-    return "Diagnostics export completed, but no JSON output was returned.";
-  }
-  try {
-    const parsed = JSON.parse(trimmed) as unknown;
-    if (!isRecord(parsed)) {
-      return trimmed;
-    }
-    const manifest = isRecord(parsed.manifest) ? parsed.manifest : {};
-    const lines = ["Diagnostics export created.", "", "Local Gateway bundle:"];
-    const bundlePath = typeof parsed.path === "string" ? parsed.path : "";
-    if (bundlePath) {
-      lines.push(`Path: ${bundlePath}`);
-    }
-    const bytes = formatBytes(parsed.bytes);
-    if (bytes) {
-      lines.push(`Size: ${bytes}`);
-    }
-    if (typeof manifest.generatedAt === "string") {
-      lines.push(`Generated at: ${manifest.generatedAt}`);
-    }
-    if (typeof manifest.openclawVersion === "string") {
-      lines.push(`OpenClaw version: ${manifest.openclawVersion}`);
-    }
-    const contents = formatDiagnosticsContents(manifest);
-    if (contents.length > 0) {
-      lines.push("", ...contents);
-    }
-    const privacy = formatDiagnosticsPrivacy(manifest);
-    if (privacy.length > 0) {
-      lines.push("", ...privacy);
-    }
-    return lines.join("\n");
-  } catch {
-    return trimmed;
-  }
-}
-
-function formatDiagnosticsExportFailure(params: {
-  outcome: { status: string; reason?: string; aggregated: string };
-  exitLabel: string;
-}): string {
-  const output = normalizeNotifyOutput(tail(params.outcome.aggregated || "", 4000));
-  const lines = [`Diagnostics export failed (${params.exitLabel}).`];
-  if (params.outcome.reason) {
-    lines.push(params.outcome.reason);
-  }
-  if (output) {
-    lines.push("", output);
-  }
-  return lines.join("\n");
-}
-
-function buildGatewayExecApprovalFollowupSummary(params: {
-  approvalId: string;
-  sessionId: string;
-  outcome: ExecApprovalFollowupOutcome;
-  trigger?: string;
-  approvalFollowupText?: string;
-}): string {
-  const exitLabel = formatOutcomeExitLabel(params.outcome);
-  let summary: string;
-  if (params.trigger === "diagnostics") {
-    const diagnosticsText =
-      params.outcome.status === "completed" && params.outcome.exitCode === 0
-        ? formatDiagnosticsExportSuccess(params.outcome.aggregated)
-        : formatDiagnosticsExportFailure({ outcome: params.outcome, exitLabel });
-    const followupText = params.approvalFollowupText?.trim();
-    const body = [diagnosticsText, followupText].filter(Boolean).join("\n\n");
-    summary = `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})\n${body}`;
-  } else {
-    const output = formatExecApprovalContinuationSourceOutput([
-      { label: "output", value: params.outcome.aggregated },
-    ]);
-    summary = output
-      ? `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})\n${output}`
-      : `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})`;
-  }
-  return appendExecTimeoutRetryGuidance(summary, params.outcome.exitReason);
-}
-
-function buildGatewayExecApprovalDeniedToolResult(params: {
-  approvalId?: string;
-  deniedReason: string;
-  command: string;
-  cwd: string;
-}): AgentToolResult<ExecToolDetails> {
-  const denialContext = params.approvalId
-    ? `gateway id=${params.approvalId}, ${params.deniedReason}`
-    : params.deniedReason;
-  const text = `Exec denied (${denialContext}): ${params.command}`;
-  return {
-    content: [{ type: "text", text }],
-    details: {
-      status: "failed",
-      exitCode: null,
-      durationMs: 0,
-      aggregated: text,
-      timedOut: params.deniedReason.includes("timeout"),
-      cwd: params.cwd,
-    },
-  };
-}
-
-async function resolveGatewayExecApprovalDrift(params: {
-  binding?: SystemRunMutableFileBinding;
-  cwdSnapshot?: ApprovedCwdSnapshot;
-  cwd: string;
-}): Promise<string | undefined> {
-  if (params.binding) {
-    const current = await revalidateSystemRunMutableFileBinding({
-      binding: params.binding,
-      cwd: params.cwd,
-    });
-    if (!current.ok) {
-      return current.message;
-    }
-  }
-  if (params.cwdSnapshot && !revalidateApprovedCwdSnapshot(params.cwdSnapshot)) {
-    return APPROVAL_CWD_DRIFT_DENIED_MESSAGE;
-  }
-  return undefined;
-}
-
-/** Rechecks a gateway approval binding at the caller's final spawn boundary. */
-async function revalidateGatewayExecApprovalBinding(params: {
-  binding?: SystemRunMutableFileBinding;
-  cwdSnapshot?: ApprovedCwdSnapshot;
-  command: string;
-  cwd: string;
-}): Promise<AgentToolResult<ExecToolDetails> | undefined> {
-  const deniedReason = await resolveGatewayExecApprovalDrift(params);
-  return deniedReason
-    ? buildGatewayExecApprovalDeniedToolResult({
-        deniedReason,
-        command: params.command,
-        cwd: params.cwd,
-      })
-    : undefined;
-}
-
-async function resolveGatewayExecApprovalFollowupText(params: {
-  approvalFollowup?: ExecApprovalFollowupFactory;
-  approvalId: string;
-  sessionId: string;
-  trigger?: string;
-  outcome: ExecApprovalFollowupOutcome;
-}): Promise<string | undefined> {
-  if (!params.approvalFollowup) {
-    return undefined;
-  }
-  try {
-    return await params.approvalFollowup({
-      approvalId: params.approvalId,
-      sessionId: params.sessionId,
-      trigger: params.trigger,
-      outcome: params.outcome,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return `Diagnostics follow-up failed: ${message}`;
-  }
-}
-
 /** Processes gateway exec policy and returns execution/approval/denial outcome. */
 export async function processGatewayAllowlist(
   params: ProcessGatewayAllowlistParams,
 ): Promise<ProcessGatewayAllowlistResult> {
-  const cleanupMs = params.cleanupMs;
   const deny = (deniedReason: string, approvalId?: string): ProcessGatewayAllowlistResult => ({
     deniedResult: buildGatewayExecApprovalDeniedToolResult({
       approvalId,
@@ -827,6 +559,7 @@ export async function processGatewayAllowlist(
         : dispatchEligibility;
   // Mutable operands and unenforceable patterns cannot authorize later cwd/env bindings.
   const approvalAllowAlwaysPersistence =
+    params.approvalTransport ||
     mutableFileApprovalRequiresOneShot ||
     (params.autoReview === true &&
       (autoReviewBlockedByShellStartup || !unpinnedEligibility.eligible)) ||
@@ -846,6 +579,14 @@ export async function processGatewayAllowlist(
       ? { unavailableDecisions: approvalUnavailableDecisions }
       : {};
   if (requiresAsk) {
+    const bindApprovalExecution = (execCommand: string | undefined) =>
+      params.approvalTransport?.bindExecution({
+        command: params.command,
+        execCommand: execCommand ?? params.command,
+        cwd: params.workdir,
+        env: params.env,
+        pty: params.pty,
+      });
     if (!mutableFileBinding) {
       return deny("SYSTEM_RUN_DENIED: mutable file approval binding is unavailable");
     }
@@ -903,13 +644,14 @@ export async function processGatewayAllowlist(
     if (canAutoReviewApprovalMiss) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
       publishGatewayGuardianReview(params, "in_progress");
-      const pendingDecision = resolveExecAutoReviewDecision(reviewer, {
+      bindApprovalExecution(approvedEnforcedCommand);
+      const reviewInput = {
         command: params.command,
         argv: autoReviewResolvedPath ? autoReviewSingleSegment?.argv : undefined,
         resolvedPath: autoReviewResolvedPath,
         cwd: params.workdir,
         envKeys: Object.keys(params.requestedEnv ?? {}).toSorted(),
-        host: "gateway",
+        host: "gateway" as const,
         reason: requiresInlineEvalApproval
           ? "strict-inline-eval"
           : hasHeredocSegment
@@ -930,7 +672,10 @@ export async function processGatewayAllowlist(
           id: params.agentId,
           sessionKey: params.sessionKey,
         },
-      });
+      } satisfies Parameters<typeof reviewer>[0];
+      const pendingDecision = params.approvalTransport
+        ? params.approvalTransport.review(reviewInput)
+        : resolveExecAutoReviewDecision(reviewer, reviewInput);
       let decision: Awaited<typeof pendingDecision>;
       try {
         // Custom reviewers may never settle; cancellation must not retain approval authority.
@@ -1025,8 +770,10 @@ export async function processGatewayAllowlist(
       return denyHeadlessApproval();
     }
 
+    bindApprovalExecution(boundApprovedCommand ?? enforcedCommand);
     const registerGatewayApproval = async (approvalId: string) =>
       await registerExecApprovalRequestForHostOrThrow({
+        approvalTransport: params.approvalTransport,
         approvalId,
         command: params.command,
         env: params.requestedEnv,
@@ -1138,7 +885,9 @@ export async function processGatewayAllowlist(
     );
     const resolveApprovalForExecution = async (onFailure: () => void | Promise<void>) => {
       const approvalOutcome = await resolveExecApprovalWaitOutcome({
+        approvalTransport: params.approvalTransport,
         approvalId,
+        expiresAtMs,
         preResolvedDecision,
         signal: params.signal,
         askFallback,
@@ -1167,7 +916,9 @@ export async function processGatewayAllowlist(
           reason: "approval-request-failed",
         });
         return {
-          deniedReason: "approval-request-failed",
+          deniedReason: params.approvalTransport
+            ? "approval-request-failed: retry from a new worker turn"
+            : "approval-request-failed",
           requestFailed: true,
           authorizationSource: "explicit-approval" as const,
           allowAlwaysDecision: undefined,
@@ -1343,11 +1094,14 @@ export async function processGatewayAllowlist(
           try {
             gatewayInvocationStarted = true;
             run = await runExecProcess({
+              approvalTransport: params.approvalTransport,
               command: params.command,
               execCommand: approvalDecision.execCommandOverride,
               workdir: params.workdir,
               env: params.env,
               secretEgressBindings: params.secretEgressBindings,
+              durable: params.durable,
+              sessionId: params.sessionId,
               githubProfileDir: params.githubProfileDir,
               pathPrepend: params.pathPrepend,
               sandbox: undefined,
@@ -1356,11 +1110,12 @@ export async function processGatewayAllowlist(
               warnings: params.warnings,
               maxOutput: params.maxOutput,
               pendingMaxOutput: params.pendingMaxOutput,
-              cleanupMs,
+              cleanupMs: params.cleanupMs,
               notifyOnExit: false,
               notifyOnExitEmptySuccess: false,
               scopeKey: params.scopeKey,
               sessionKey: params.notifySessionKey ?? params.sessionKey,
+              agentId: params.agentId,
               timeoutSec: effectiveTimeout,
               startupSignal: params.signal,
               assertCurrent,
@@ -1465,7 +1220,7 @@ export async function processGatewayAllowlist(
   }
 
   if (hasAllowlistMiss) {
-    throw new Error("exec denied: allowlist miss");
+    throw new Error(buildGatewayExecAllowlistDeniedMessage(allowlistEval));
   }
 
   await commitExecutionAuthorization({

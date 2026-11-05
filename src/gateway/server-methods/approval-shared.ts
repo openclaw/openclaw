@@ -21,6 +21,7 @@ import type { OperatorApprovalStoreGuard } from "../operator-approval-store.type
 import {
   type ApprovalRecordLookupResult,
   isApprovalRecordVisibleToClient,
+  prepareApprovalSessionAccess,
   readApprovalRequestSource,
   resolvePendingApprovalRecord,
   resolveResolvedApprovalRecord,
@@ -106,21 +107,6 @@ export function respondApprovalStorageUnavailable(params: {
     undefined,
     errorShape(ErrorCodes.UNAVAILABLE, `approval ${params.operation} unavailable`),
   );
-}
-
-export async function registerPendingApprovalRecord<TPayload>(params: {
-  manager: ExecApprovalManager<TPayload>;
-  record: ExecApprovalRecord<TPayload>;
-  timeoutMs: number;
-  respond: RespondFn;
-  context: GatewayRequestContext;
-}): Promise<{ decision: Promise<ExecApprovalDecision | null> } | undefined> {
-  try {
-    return await params.manager.register(params.record, params.timeoutMs);
-  } catch (err) {
-    respondApprovalStorageUnavailable({ ...params, operation: "request", error: err });
-    return undefined;
-  }
 }
 
 export function buildRequestedApprovalEvent<
@@ -224,6 +210,12 @@ export async function handleApprovalWaitDecision<TPayload>(params: {
   }
   const snapshot = await params.manager.getSnapshot(id, params.authority);
   params.authority?.assertCurrent();
+  using sessionAccess = await prepareApprovalSessionAccess({
+    ...params,
+    client: params.client ?? null,
+    sources: snapshot ? [readApprovalRequestSource(snapshot)] : [],
+  });
+  params.authority?.assertCurrent();
   const visible = (record: ExecApprovalRecord<TPayload>) => {
     const cfg = params.getCfg?.() ?? params.cfg;
     return (
@@ -232,6 +224,7 @@ export async function handleApprovalWaitDecision<TPayload>(params: {
         record,
         client: params.client ?? null,
         ...(cfg ? { cfg } : {}),
+        sessionAccess,
       })
     );
   };
@@ -524,15 +517,15 @@ export async function handleApprovalResolve<
       respondApprovalStorageUnavailable({ ...params, operation: "resolve", error });
     }
   };
-  const readCustody = () =>
-    params.reviewer
-      ? prepareApprovalChannelCustody({
-          cfg: params.context.getRuntimeConfig(),
-          approvalKind: params.approvalKind,
-          reviewer: params.reviewer,
-        })
-      : null;
-  const custody = readCustody();
+  using custody = params.reviewer
+    ? prepareApprovalChannelCustody({
+        cfg: params.context.getRuntimeConfig(),
+        getCfg: params.context.getRuntimeConfig,
+        assertCurrent: () => params.authority.assertCurrent(),
+        approvalKind: params.approvalKind,
+        reviewer: params.reviewer,
+      })
+    : null;
   if (params.reviewer && !custody) {
     respondUnknownOrExpiredApproval(params.respond);
     return;
@@ -580,6 +573,22 @@ export async function handleApprovalResolve<
     return;
   }
 
+  let sessionAccess: Awaited<ReturnType<typeof prepareApprovalSessionAccess>>;
+  try {
+    sessionAccess = await prepareApprovalSessionAccess({
+      client: params.client,
+      getCfg: params.context.getRuntimeConfig,
+      sources: [readApprovalRequestSource(resolved.snapshot)],
+    });
+  } catch (error) {
+    respondFailure(error);
+    return;
+  }
+  using retainedSessionAccess = sessionAccess;
+  if (!params.authority.isCurrent()) {
+    respondUnknownOrExpiredApproval(params.respond);
+    return;
+  }
   const validationError = params.validateDecision?.(resolved.snapshot);
   if (validationError) {
     params.respond(
@@ -603,7 +612,6 @@ export async function handleApprovalResolve<
     family: params.authority.guard.family,
     assertCurrent: () => {
       params.authority.assertCommitCurrent();
-      const currentCustody = readCustody();
       if (
         params.manager.getLocalSnapshot(resolved.approvalId) !== resolved.snapshot ||
         resolved.snapshot.request.sessionKey !== sourceSessionKey ||
@@ -613,10 +621,10 @@ export async function handleApprovalResolve<
           record: resolved.snapshot,
           client: params.client,
           ...(params.authority.guard.family === "native-compatibility"
-            ? { cfg: params.context.getRuntimeConfig() }
+            ? { cfg: params.context.getRuntimeConfig(), sessionAccess: retainedSessionAccess }
             : {}),
         }) ||
-        (params.reviewer && !currentCustody?.authorizes(resolved.snapshot))
+        (params.reviewer && !custody?.isCurrent(resolved.snapshot))
       ) {
         throw new Error("approval resolver authority is no longer active");
       }
@@ -664,6 +672,10 @@ export async function handleApprovalResolve<
     return;
   }
 
+  // The guarded decision is durable. Later session changes cannot undo it,
+  // and this acknowledgment discloses no approval details to reauthorize.
+  params.respond(true, { ok: true }, undefined);
+
   const resolvedEvent: ResolvedApprovalEvent<TPayload> = {
     id: resolved.approvalId,
     decision: params.decision,
@@ -679,12 +691,6 @@ export async function handleApprovalResolve<
   });
   if (params.approvalKind !== "system-agent") {
     params.context.approvalEvents?.publishResolved(params.approvalKind, resolvedEvent as never);
-  }
-
-  if (params.authority.isCurrent()) {
-    params.respond(true, { ok: true }, undefined);
-  } else {
-    respondUnknownOrExpiredApproval(params.respond);
   }
 
   const followUps = [

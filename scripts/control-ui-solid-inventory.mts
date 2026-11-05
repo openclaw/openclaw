@@ -1,13 +1,21 @@
-// Shared syntax census for the migration report and the Lit growth ratchet.
+// On-demand syntax census for the remaining Solid migration work.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { loadRatchetSources } from "./lib/shrink-ratchet.mts";
 
-const ROOTS = ["ui/src", "extensions/workboard/browser", "extensions/x/src"];
+export const PLUGIN_UI_SOURCE_ROOTS = [
+  "extensions/workboard/browser",
+  "extensions/memory-core/browser",
+  "extensions/nostr/browser",
+  "extensions/whatsapp/browser",
+  "extensions/clawrouter/src/control-ui.tsx",
+  "extensions/x/src/control-ui.tsx",
+];
+const ROOTS = ["ui/src", ...PLUGIN_UI_SOURCE_ROOTS];
 const CODE = /\.(?:[cm]?[jt]s|[jt]sx)$/u;
 const MAX_BUFFER = 256 * 1024 * 1024;
 
@@ -74,7 +82,6 @@ function emptyMetrics() {
     svgTemplates: 0,
     cssTemplates: 0,
     waTags: 0,
-    requestUpdate: 0,
     stateDecorators: 0,
     propertyDecorators: 0,
     tasks: 0,
@@ -131,33 +138,34 @@ type LitBinding = {
   property?: string;
 };
 
+export function bindingScope(node: ts.Node, tree: ts.SourceFile, functionOnly = false): ts.Node {
+  for (let scope: ts.Node | undefined = node.parent; scope; scope = scope.parent) {
+    if (
+      ts.isSourceFile(scope) ||
+      ts.isFunctionLikeDeclaration(scope) ||
+      ts.isClassStaticBlockDeclaration(scope)
+    ) {
+      return scope;
+    }
+    if (
+      !functionOnly &&
+      (ts.isBlock(scope) ||
+        ts.isModuleBlock(scope) ||
+        ts.isCaseBlock(scope) ||
+        ts.isCatchClause(scope) ||
+        ts.isForStatement(scope) ||
+        ts.isForInStatement(scope) ||
+        ts.isForOfStatement(scope))
+    ) {
+      return scope;
+    }
+  }
+  return tree;
+}
+
 // Sibling views may use the same local name for different Lit exports.
 function createLitNameResolver(tree: ts.SourceFile) {
   const scopes = new WeakMap<ts.Node, Map<string, LitBinding>>();
-  const scopeFor = (node: ts.Node, functionOnly = false): ts.Node => {
-    for (let scope: ts.Node | undefined = node.parent; scope; scope = scope.parent) {
-      if (
-        ts.isSourceFile(scope) ||
-        ts.isFunctionLikeDeclaration(scope) ||
-        ts.isClassStaticBlockDeclaration(scope)
-      ) {
-        return scope;
-      }
-      if (
-        !functionOnly &&
-        (ts.isBlock(scope) ||
-          ts.isModuleBlock(scope) ||
-          ts.isCaseBlock(scope) ||
-          ts.isCatchClause(scope) ||
-          ts.isForStatement(scope) ||
-          ts.isForInStatement(scope) ||
-          ts.isForOfStatement(scope))
-      ) {
-        return scope;
-      }
-    }
-    return tree;
-  };
   const bind = (scope: ts.Node, name: string, binding: LitBinding) => {
     let entries = scopes.get(scope);
     if (!entries) {
@@ -191,16 +199,20 @@ function createLitNameResolver(tree: ts.SourceFile) {
       const lit = isLitModule(node.moduleSpecifier);
       const clause = node.importClause;
       if (clause?.name) {
-        bind(scopeFor(node), clause.name.text, {});
+        bind(bindingScope(node, tree), clause.name.text, {});
       }
       const bindings = clause?.namedBindings;
       if (bindings && ts.isNamespaceImport(bindings)) {
-        bind(scopeFor(node), bindings.name.text, lit ? { imported: { kind: "namespace" } } : {});
+        bind(
+          bindingScope(node, tree),
+          bindings.name.text,
+          lit ? { imported: { kind: "namespace" } } : {},
+        );
       }
       if (bindings && ts.isNamedImports(bindings)) {
         for (const specifier of bindings.elements) {
           bind(
-            scopeFor(node),
+            bindingScope(node, tree),
             specifier.name.text,
             lit
               ? {
@@ -216,7 +228,7 @@ function createLitNameResolver(tree: ts.SourceFile) {
     }
     if (ts.isImportEqualsDeclaration(node)) {
       bind(
-        scopeFor(node),
+        bindingScope(node, tree),
         node.name.text,
         ts.isExternalModuleReference(node.moduleReference) &&
           isLitModule(node.moduleReference.expression)
@@ -228,7 +240,9 @@ function createLitNameResolver(tree: ts.SourceFile) {
       const isVar =
         ts.isVariableDeclarationList(node.parent) &&
         !(node.parent.flags & ts.NodeFlags.BlockScoped);
-      bindPattern(scopeFor(node, isVar), node.name, { initializer: node.initializer });
+      bindPattern(bindingScope(node, tree, isVar), node.name, {
+        initializer: node.initializer,
+      });
     }
     if (ts.isFunctionLikeDeclaration(node)) {
       for (const parameter of node.parameters) {
@@ -236,7 +250,7 @@ function createLitNameResolver(tree: ts.SourceFile) {
       }
     }
     if ((ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) && node.name) {
-      bind(scopeFor(node), node.name.text, {});
+      bind(bindingScope(node, tree), node.name.text, {});
     }
     if ((ts.isFunctionExpression(node) || ts.isClassExpression(node)) && node.name) {
       bind(node, node.name.text, {});
@@ -348,9 +362,6 @@ export function countMigrationSources(root: string, sources: ReadonlyMap<string,
         if (isLitLoad(node)) {
           metrics.litImports++;
         }
-        if (nameOf(node.expression) === "requestUpdate") {
-          metrics.requestUpdate++;
-        }
         if (
           ts.isPropertyAccessExpression(expression) &&
           nameOf(expression.expression) === "customElements" &&
@@ -433,7 +444,7 @@ export function countMigrationSources(root: string, sources: ReadonlyMap<string,
 }
 
 export function isTest(file: string) {
-  return /(?:\.(?:test|spec|fixture|test-support)\.|-test-(?:support|harness)\.)|(?:^|\/)(?:__tests__|test-helpers|fixtures|e2e)\//u.test(
+  return /(?:\.(?:test|spec|fixture|test-support|test-helpers|test-harness)\.|-test-(?:support|harness)\.)|(?:^|\/)(?:__tests__|test|test-helpers|fixtures|e2e)\//u.test(
     file,
   );
 }
@@ -522,7 +533,6 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
       "litImportFiles",
       "htmlTemplates",
       "waTags",
-      "requestUpdate",
       "stateDecorators",
       "tasks",
       "reactiveControllers",

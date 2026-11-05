@@ -1,90 +1,20 @@
 // Composes the dreaming section of doctor.memory.status from the host resolution,
 // memory-core's managed sweep and whatever the memory slot owner reports.
-import type {
-  ShortTermDreamingStats,
-  ShortTermDreamingStatsEntry,
-} from "../../memory-host-sdk/dreaming.js";
+import type { DoctorMemoryDreamingPayload } from "../../../packages/gateway-protocol/src/doctor-memory.js";
 import type {
   MemoryPluginDreamingPhaseStatus,
   MemoryPluginDreamingStatus,
 } from "../../plugins/registry-contribution-types.js";
 
-type DoctorMemoryDreamingPhasePayload = {
-  enabled: boolean;
-  cron: string;
-  managedCronPresent: boolean;
-  nextRunAtMs?: number;
-};
-
-type DoctorMemoryLightDreamingPayload = DoctorMemoryDreamingPhasePayload & {
-  lookbackDays: number;
-  limit: number;
-};
-
-type DoctorMemoryDeepDreamingPayload = DoctorMemoryDreamingPhasePayload & {
-  minScore: number;
-  minRecallCount: number;
-  minUniqueQueries: number;
-  recencyHalfLifeDays: number;
-  maxAgeDays?: number;
-  limit: number;
-};
-
-type DoctorMemoryRemDreamingPayload = DoctorMemoryDreamingPhasePayload & {
-  lookbackDays: number;
-  limit: number;
-  minPatternStrength: number;
-};
-
-export type DreamingStoreStats = Omit<ShortTermDreamingStats, "storePath" | "phaseSignalPath"> & {
-  storePath?: string;
-  phaseSignalPath?: string;
-  storeError?: string;
-};
-
-export type DoctorMemoryDreamingConfigPayload = {
-  enabled: boolean;
-  timezone?: string;
-  verboseLogging: boolean;
-  storageMode: "inline" | "separate" | "both";
-  separateReports: boolean;
-  shortTermEntries: ShortTermDreamingStatsEntry[];
-  signalEntries: ShortTermDreamingStatsEntry[];
-  promotedEntries: ShortTermDreamingStatsEntry[];
-  phases: {
-    light: DoctorMemoryLightDreamingPayload;
-    deep: DoctorMemoryDeepDreamingPayload;
-    rem: DoctorMemoryRemDreamingPayload;
-  };
-};
-
-export type DoctorMemoryDreamingPayload = DoctorMemoryDreamingConfigPayload &
-  DreamingStoreStats & {
-    /**
-     * Whether the memory slot owner reports its own dreaming as running. Kept
-     * apart from `enabled`, which stays the memory-core configuration toggle the
-     * page's switch writes.
-     */
-    reportedEnabled?: boolean;
-    /**
-     * Whether the memory slot owner reported anything at all. A provider may
-     * validly omit `enabled` and report only phases or counters; the page still
-     * has to treat the sweep as owner-run and lock the host switch.
-     */
-    reportedByProvider?: boolean;
-    /**
-     * Consolidation counters the memory slot owner reported. Kept apart from
-     * memory-core's own figures above, which stay tied to the entry lists the
-     * Advanced tab renders and acts on; overlaying them would show one owner's
-     * count beside another owner's list.
-     */
-    reportedStats?: MemoryPluginDreamingStatus["stats"];
-  };
-
 export type ManagedDreamingCronStatus = {
   managedCronPresent: boolean;
   nextRunAtMs?: number;
 };
+
+type HostDreamingPayload = Omit<
+  DoctorMemoryDreamingPayload,
+  "reportedEnabled" | "reportedByProvider" | "reportedStats"
+>;
 
 /**
  * Overlays what the slot owner reported about the run itself. Anything it
@@ -145,11 +75,13 @@ function applyReportedDreamingPhase<
 /**
  * Builds the dreaming section from the host resolution, the status of
  * memory-core's one managed sweep cron (which every host phase shares) and
- * whatever the slot owner reported. Shared by the search and no-search paths so
- * a provider is consulted regardless of search availability.
+ * whatever the slot owner reported. Reported counters arrive as `reportedStats`
+ * beside memory-core's own figures, which stay tied to the entry lists the
+ * Advanced tab renders and acts on. Shared by every status path so a provider is
+ * consulted regardless of search or provider-runtime availability.
  */
 export function composeDreamingPayload(
-  base: DoctorMemoryDreamingConfigPayload & DreamingStoreStats,
+  base: HostDreamingPayload,
   cronStatus: ManagedDreamingCronStatus,
   reported: MemoryPluginDreamingStatus | null,
 ): DoctorMemoryDreamingPayload {
@@ -170,19 +102,3 @@ export function composeDreamingPayload(
     },
   };
 }
-
-export const EMPTY_DREAMING_STORE_STATS: DreamingStoreStats = {
-  shortTermCount: 0,
-  recallSignalCount: 0,
-  dailySignalCount: 0,
-  groundedSignalCount: 0,
-  totalSignalCount: 0,
-  phaseSignalCount: 0,
-  lightPhaseHitCount: 0,
-  remPhaseHitCount: 0,
-  promotedTotal: 0,
-  promotedToday: 0,
-  shortTermEntries: [],
-  signalEntries: [],
-  promotedEntries: [],
-};

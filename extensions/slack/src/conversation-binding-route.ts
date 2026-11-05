@@ -1,13 +1,20 @@
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ConversationBindingInspection } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
 import {
   inspectRuntimeConversationBindingRoute,
   resolveConfiguredBindingRoute,
-  resolveRuntimeConversationBindingRoute,
+  type resolveRuntimeConversationBindingRoute,
   resolveRuntimeConversationBindingRouteAsync,
   type RuntimeConversationBindingRouteResult,
 } from "openclaw/plugin-sdk/conversation-binding-runtime";
+import { isSlackWorkspaceInstallation } from "./installation-identity-state.js";
 import { parseSlackTarget } from "./targets.js";
+
+export const slackConversationBindings = {
+  prepareFork: async (params) => (await import("./fork.js")).prepareSlackFork(params),
+  isCurrentConversationBindingSupported: ({ accountId }) => isSlackWorkspaceInstallation(accountId),
+} satisfies NonNullable<ChannelPlugin["conversationBindings"]>;
 
 type SlackRouteBinding = NonNullable<OpenClawConfig["bindings"]>[number];
 type SlackRouteBindingPeer = NonNullable<SlackRouteBinding["match"]["peer"]>;
@@ -45,7 +52,7 @@ export function normalizeSlackRouteBindingConfig(cfg: OpenClawConfig): OpenClawC
   if (cached && cached.bindingsRef === bindings) {
     return cached.normalizedCfg;
   }
-  if (!Array.isArray(bindings)) {
+  if (!bindings) {
     return cfg;
   }
 
@@ -90,15 +97,16 @@ type SlackConversationBindingRouteParams = {
   inspections?: Record<"base" | "thread", ConversationBindingInspection>;
 };
 
-export function resolveSlackConversationBindingRoute(params: SlackConversationBindingRouteParams) {
+export function resolveSlackConversationBindingRoute(
+  params: SlackConversationBindingRouteParams & {
+    inspections: NonNullable<SlackConversationBindingRouteParams["inspections"]>;
+  },
+) {
   const { resolveRoute } = params;
   const resolveRuntime = (
     input: Parameters<typeof resolveRuntimeConversationBindingRoute>[0],
     role: "base" | "thread",
-  ) =>
-    params.inspections
-      ? inspectRuntimeConversationBindingRoute({ ...input, inspection: params.inspections[role] })
-      : resolveRuntimeConversationBindingRoute(input);
+  ) => inspectRuntimeConversationBindingRoute({ ...input, inspection: params.inspections[role] });
   let baseRuntimeRoute: RuntimeConversationBindingRouteResult | undefined;
   const resolveBaseRoute = (
     threadInspection?: Parameters<typeof inspectRuntimeConversationBindingRoute>[0]["inspection"],

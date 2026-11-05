@@ -63,11 +63,6 @@ export type LineProbeResult = BaseProbeResult<string> & {
   quota?: LineMessageQuota;
 };
 
-type LineFlexMessagePayload = {
-  altText: string;
-  contents: unknown;
-};
-
 export type LineQuickReplyItem = {
   label: string;
   action: { type: "command"; command: string } | { type: "callback"; value: string };
@@ -112,7 +107,10 @@ export type LineTemplateMessagePayload =
 export type LineChannelData = Static<typeof lineChannelDataSchema>["line"] & {
   quickReplies?: string[];
   quickReplyItems?: LineQuickReplyItem[];
-  flexMessage?: LineFlexMessagePayload;
+  flexMessage?: {
+    altText: string;
+    contents: unknown;
+  };
   templateMessage?: LineTemplateMessagePayload;
 };
 

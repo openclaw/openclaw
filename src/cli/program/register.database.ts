@@ -1,19 +1,19 @@
 import path from "node:path";
-import type { Command } from "commander";
+import { type Command, Option } from "commander";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { formatCliJsonFailure } from "../failure-output.js";
 import { applyParentDefaultHelpAction } from "./parent-default-help.js";
 
 type DatabaseOutputOptions = { json?: boolean };
 
 function writeDatabaseError(error: unknown, json: boolean): void {
-  const message = formatErrorMessage(error);
   if (json) {
-    writeRuntimeJson(defaultRuntime, { error: message });
+    writeRuntimeJson(defaultRuntime, formatCliJsonFailure(error));
   } else {
-    defaultRuntime.error(message);
+    defaultRuntime.error(formatErrorMessage(error));
   }
   defaultRuntime.exit(1);
 }
@@ -93,8 +93,255 @@ async function runDatabaseOwnership(
 export function registerDatabaseCommand(program: Command): void {
   const database = program
     .command("database")
-    .description("Inspect database schema compatibility and shared-state write ownership")
+    .description("Inspect database compatibility, manage ownership, and port database stores")
     .addHelpText("after", `\nDocs: ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}\n`);
+
+  database
+    .command("prepare-state")
+    .description("Initialize an exact PostgreSQL shared-state target or validate its readiness")
+    .requiredOption("--expected-store-id <uuid>", "exact store ID from the existing state anchor")
+    .requiredOption("--expected-namespace <namespace>", "exact configured state namespace")
+    .option("--json", "emit machine-readable JSON", false)
+    .action(async (options) => {
+      try {
+        const { prepareDatabaseState } = await import("../../commands/database-prepare-state.js");
+        const result = await prepareDatabaseState(options);
+        if (options.json) {
+          writeRuntimeJson(defaultRuntime, result);
+        } else {
+          writeRuntimeStdout(
+            defaultRuntime,
+            `Shared state: ${result.status} (${result.namespace}).\n`,
+          );
+        }
+      } catch (error) {
+        writeDatabaseError(error, options.json === true);
+      }
+    });
+
+  const migrationCapture = database
+    .command("migration-capture")
+    .description("Preserve exact offline or externally quiesced SQLite state for migration");
+  migrationCapture
+    .command("capabilities")
+    .option("--json", "emit machine-readable JSON", false)
+    .action(() =>
+      writeRuntimeJson(defaultRuntime, {
+        schema: "openclaw.database-migration-capture.capabilities.v1",
+        protocol: 1,
+        sourceEngine: "sqlite",
+        profile: "exact-sqlite-migration",
+        restoreTarget: "empty-staging-only",
+        logicalPaths: "same-state-and-config-roots",
+        externallyQuiesced: true,
+      }),
+    );
+  migrationCapture
+    .command("create")
+    .option(
+      "--base-archive <archive>",
+      "fresh verified filesystem archive for the same stopped source (offline capture)",
+    )
+    .option(
+      "--externally-quiesced",
+      "capture from an existing host-held Gateway suspension without stopping it",
+      false,
+    )
+    .option("--request-id <id>", "request ID of the existing non-drain suspension")
+    .option("--suspension-id <id>", "existing ready suspension ID")
+    .requiredOption(
+      "--output <directory>",
+      "new private capture directory outside the source roots",
+    )
+    .option("--json", "emit machine-readable JSON", false)
+    .action(async (options) => {
+      try {
+        const { createDatabaseMigrationCapture } =
+          await import("../../commands/database-migration-capture.js");
+        const result = await createDatabaseMigrationCapture(options);
+        if (options.json) {
+          writeRuntimeJson(defaultRuntime, result);
+        } else {
+          writeRuntimeStdout(defaultRuntime, `Exact migration capture: ${result.manifestPath}\n`);
+        }
+      } catch (error) {
+        writeDatabaseError(error, options.json === true);
+      }
+    });
+  migrationCapture
+    .command("restore")
+    .argument("<capture>", "completed exact migration capture directory")
+    .requiredOption("--target <directory>", "empty private staging directory outside live state")
+    .requiredOption(
+      "--manifest-sha256 <digest>",
+      "manifest digest returned by the exact capture producer",
+    )
+    .option("--json", "emit machine-readable JSON", false)
+    .action(async (capture, options) => {
+      try {
+        const { restoreDatabaseMigrationCapture } =
+          await import("../../commands/database-migration-capture.js");
+        const result = await restoreDatabaseMigrationCapture(defaultRuntime, {
+          capture,
+          target: options.target,
+          manifestSha256: options.manifestSha256,
+        });
+        if (options.json) {
+          writeRuntimeJson(defaultRuntime, result);
+        } else {
+          writeRuntimeStdout(
+            defaultRuntime,
+            `Exact migration restored to staging: ${result.targetPath}\n`,
+          );
+        }
+      } catch (error) {
+        writeDatabaseError(error, options.json === true);
+      }
+    });
+
+  database
+    .command("port")
+    .description("Port existing database stores offline between SQLite and PostgreSQL")
+    .addOption(
+      new Option("--to <postgres|sqlite>", "destination engine").choices(["postgres", "sqlite"]),
+    )
+    .addOption(
+      new Option("--family <family>", "port one database family").choices([
+        "state",
+        "agent",
+        "workboard",
+        "logbook",
+        "team-reports",
+      ]),
+    )
+    .option("--dry-run", "inspect prerequisites without creating port artifacts", false)
+    .option("--json", "emit machine-readable JSON", false)
+    .addOption(
+      new Option("--resume <manifest>", "resume an interrupted port").conflicts([
+        "rollback",
+        "to",
+        "dryRun",
+        "family",
+      ]),
+    )
+    .addOption(
+      new Option(
+        "--rollback <manifest>",
+        "restore an interrupted port's complete original set",
+      ).conflicts(["to", "dryRun", "family"]),
+    )
+    .hook("preAction", (command) => {
+      const { to, resume, rollback } = command.opts();
+      if (!to && !resume && !rollback) {
+        command.error("Specify --to postgres|sqlite, --resume, or --rollback.");
+      }
+    })
+    .action(async (options) => {
+      try {
+        const { doctorDatabasePort } = await import("../../commands/doctor-database-port.js");
+        const result = await doctorDatabasePort(options);
+        const statistics = [
+          ...("plannerStatistics" in result ? result.plannerStatistics : []).map(
+            ({ path: storePath, result: statisticsResult }) => ({
+              label: storePath,
+              result: statisticsResult,
+            }),
+          ),
+          ...("memoryRebuilds" in result ? result.memoryRebuilds : []).flatMap((rebuild) =>
+            rebuild.plannerStatistics
+              ? [{ label: `memory ${rebuild.agentId}`, result: rebuild.plannerStatistics }]
+              : [],
+          ),
+        ];
+        for (const { label, result: statisticsResult } of statistics) {
+          if (statisticsResult.status === "warning") {
+            defaultRuntime.error(
+              `Planner statistics WARNING (${label}): ${statisticsResult.warning}`,
+            );
+          }
+        }
+        if ("memoryRebuilds" in result) {
+          for (const rebuild of result.memoryRebuilds) {
+            if (rebuild.warning) {
+              defaultRuntime.error(
+                `Memory rebuild WARNING (${rebuild.agentId}): ${rebuild.warning}`,
+              );
+            }
+          }
+        }
+        if (options.json) {
+          writeRuntimeJson(defaultRuntime, result);
+        } else {
+          writeRuntimeStdout(
+            defaultRuntime,
+            `Database port: ${result.phase} (${result.engine}${"to" in result ? ` → ${result.to}` : ""}); ${result.stores.length} database stores.\n${"remainingSqlite" in result ? `${result.remainingSqlite.length} other stores remain on SQLite.\n` : ""}${"backup" in result ? `Original backup: ${result.backup}\n${result.restart}\n` : ""}${"verification" in result ? `${result.verification}\n` : ""}`,
+          );
+          for (const { label, result: statisticsResult } of statistics) {
+            if (statisticsResult.status === "analyzed") {
+              writeRuntimeStdout(
+                defaultRuntime,
+                `Planner statistics (${label}): ANALYZE completed for ${statisticsResult.tables} tables.\n`,
+              );
+            }
+          }
+          if ("memoryRebuilds" in result) {
+            for (const rebuild of result.memoryRebuilds) {
+              writeRuntimeStdout(
+                defaultRuntime,
+                `Memory index (${rebuild.agentId}): ${rebuild.status}${rebuild.elapsedMs === undefined ? "" : ` in ${(rebuild.elapsedMs / 1000).toFixed(1)}s`}.\n`,
+              );
+            }
+          }
+        }
+      } catch (error) {
+        writeDatabaseError(error, options.json === true);
+      }
+    });
+
+  database
+    .command("restore-session-dependencies")
+    .description("Restore selected session skill and repository dependencies while offline")
+    .requiredOption("--input <directory>", "sealed dependency bundle directory")
+    .requiredOption("--sha256 <digest>", "SHA-256 of the selected request.json")
+    .option("--json", "emit machine-readable JSON", false)
+    .action(async (options) => {
+      try {
+        const { restoreSessionDependencies } =
+          await import("../../commands/database-restore-session-dependencies.js");
+        const result = await restoreSessionDependencies(options);
+        if (options.json) {
+          writeRuntimeJson(defaultRuntime, result);
+        } else {
+          writeRuntimeStdout(
+            defaultRuntime,
+            "Selected session dependencies restored; current credentials and permissions were preserved.\n",
+          );
+        }
+      } catch (error) {
+        writeDatabaseError(error, options.json === true);
+      }
+    });
+
+  database
+    .command("restore-migration-backup")
+    .description("Restore a scoped migration backup's tables and schema version while offline")
+    .argument("<backup>", "table-scoped pre-migration SQLite backup")
+    .argument("<database>", "original SQLite database; undeclared tables are preserved")
+    .option("--json", "emit machine-readable JSON", false)
+    .action(async (backupPath, sourcePath, options) => {
+      try {
+        const { restoreDoctorMigrationBackup } =
+          await import("../../commands/doctor-migration-backup-restore.js");
+        const result = await restoreDoctorMigrationBackup({ sourcePath, backupPath });
+        if (options.json) {
+          writeRuntimeJson(defaultRuntime, result);
+        } else {
+          writeRuntimeStdout(defaultRuntime, `Restored scoped migration backup: ${backupPath}\n`);
+        }
+      } catch (error) {
+        writeDatabaseError(error, options.json === true);
+      }
+    });
 
   database
     .command("preflight")

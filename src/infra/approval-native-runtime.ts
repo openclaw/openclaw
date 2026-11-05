@@ -1,8 +1,8 @@
-// Creates channel-native approval runtimes and delivery flows.
 import type {
   ChannelApprovalNativeAdapter,
   ChannelApprovalNativeAdapterAsync,
 } from "../channels/plugins/approval-native.types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { getGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
 import {
@@ -15,7 +15,7 @@ import type {
   ChannelNativeApprovalDeliveryCallbacks,
   ChannelNativeApprovalTransportSpec,
 } from "./approval-native-runtime-types.js";
-import { classifyApprovalRequestChannelRoute } from "./approval-request-account-binding.js";
+import { classifyApprovalRequestChannelRouteAsync } from "./approval-request-account-binding.js";
 import type {
   ApprovalRequestInput,
   ApprovalResolved,
@@ -102,7 +102,7 @@ export function createChannelNativeApprovalRuntimeAsync<
     TPendingContent,
     TRequest,
     TResolved
-  >,
+  > & { getRequestConfig?: (request: ApprovalRequest) => OpenClawConfig },
 ): ExecApprovalChannelRuntime<TRequest, TResolved> {
   const nowMs = adapter.nowMs ?? Date.now;
   const handledEventKinds = new Set<ChannelApprovalKind>(adapter.eventKinds ?? ["exec"]);
@@ -117,8 +117,8 @@ export function createChannelNativeApprovalRuntimeAsync<
     // SAFETY: the route coordinator receives only normalized requests from this runtime.
     shouldHandle: (request) => adapter.shouldHandle(request as NormalizedApprovalRequest<TRequest>),
     classifyRoute: (request) =>
-      classifyApprovalRequestChannelRoute({
-        cfg: adapter.cfg,
+      classifyApprovalRequestChannelRouteAsync({
+        cfg: adapter.getRequestConfig?.(request) ?? adapter.cfg,
         request,
         channel: adapter.channel ?? "",
       }),
@@ -201,7 +201,7 @@ export function createChannelNativeApprovalRuntimeAsync<
           nowMs: nowMs(),
         });
         const plannedDelivery = await resolveChannelNativeApprovalDeliveryPlan({
-          cfg: adapter.cfg,
+          cfg: adapter.getRequestConfig?.(request) ?? adapter.cfg,
           accountId: adapter.accountId,
           approvalKind,
           request,

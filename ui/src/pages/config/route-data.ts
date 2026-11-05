@@ -14,8 +14,8 @@ export const APPEARANCE_SETTINGS_TARGET_IDS = {
   textSize: "settings-appearance-text-size",
   sidebar: "settings-appearance-sidebar",
   chat: "settings-appearance-chat",
+  devices: "settings-appearance-devices",
   sessionSources: "settings-session-sources",
-  connection: "settings-appearance-connection",
 } as const;
 
 export const appearanceSettingsRouteTarget = (targetId: string) =>
@@ -34,6 +34,11 @@ export const SETTINGS_ROUTE_TARGETS = {
 export type ConfigRouteData = ReturnType<typeof configRouteData> & {
   /** Memory URL intent is applied only if a newer sidebar choice has not superseded it. */
   agentSelectionIntent?: { owner: AgentSelectionCapability; revision: number };
+};
+
+export type ConfigRouteSource = {
+  read(): ConfigRouteData | null;
+  subscribe(listener: () => void): () => void;
 };
 
 export function configTargetIdFromHash(hash: string): string | null {

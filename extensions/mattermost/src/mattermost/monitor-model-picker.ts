@@ -3,6 +3,7 @@ import {
   recordDeliveredCommandExchange,
   scopeCommandTranscriptId,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
 import type { MattermostPost } from "./client.js";
 import type {
@@ -10,14 +11,15 @@ import type {
   MattermostInteractionResponse,
 } from "./interactions.js";
 import {
-  buildMattermostAllowedModelRefs,
   parseMattermostModelPickerContext,
   renderMattermostModelsPickerView,
   renderMattermostProviderPickerView,
   resolveMattermostModelPickerCurrentModel,
 } from "./model-picker.js";
-import { authorizeMattermostCommandInvocation } from "./monitor-auth.js";
-import { buildMattermostModelPickerSelectMessageSid } from "./monitor-context.js";
+import {
+  authorizeMattermostCommandInvocation,
+  MATTERMOST_PAIRING_QUEUE_FULL_TEXT,
+} from "./monitor-auth.js";
 import { buildMattermostEventPlan } from "./monitor-event-plan.js";
 import { dispatchMattermostInteractionReply } from "./monitor-interaction-dispatch.js";
 import type { MattermostMonitorContext } from "./monitor-types.js";
@@ -79,11 +81,13 @@ export function createMattermostModelPickerInteractionHandler(
           meta: { name: params.userName },
         });
         return {
-          ephemeral_text: core.channel.pairing.buildPairingReply({
-            channel: "mattermost",
-            idLine: `Your Mattermost user id: ${params.payload.user_id}`,
-            code,
-          }),
+          ephemeral_text: code
+            ? core.channel.pairing.buildPairingReply({
+                channel: "mattermost",
+                idLine: `Your Mattermost user id: ${params.payload.user_id}`,
+                code,
+              })
+            : MATTERMOST_PAIRING_QUEUE_FULL_TEXT,
         };
       }
       const denyText =
@@ -134,11 +138,7 @@ export function createMattermostModelPickerInteractionHandler(
       `${params.payload.post_id}:${params.payload.user_id}:${pickerCommandText}:${"page" in pickerState ? pickerState.page : 1}`;
     const messageSid =
       pickerState.action === "select"
-        ? buildMattermostModelPickerSelectMessageSid({
-            postId: params.payload.post_id,
-            provider: pickerState.provider,
-            model: pickerState.model,
-          })
+        ? `interaction:${params.payload.post_id}:select:${normalizeLowercaseStringOrEmpty(pickerState.provider)}/${normalizeLowercaseStringOrEmpty(pickerState.model)}`
         : interactionId;
     const commandId =
       pickerState.action === "select"
@@ -201,7 +201,10 @@ export function createMattermostModelPickerInteractionHandler(
     }
 
     const targetModelRef = `${pickerState.provider}/${pickerState.model}`;
-    if (!buildMattermostAllowedModelRefs(data).has(targetModelRef)) {
+    if (
+      !data.providers.includes(pickerState.provider) ||
+      !data.byProvider.get(pickerState.provider)?.has(pickerState.model)
+    ) {
       return { ephemeral_text: `That model is no longer available: ${targetModelRef}` };
     }
 

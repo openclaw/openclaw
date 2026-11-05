@@ -1,4 +1,3 @@
-// Signal plugin module tracks native-reply quote authors for durable sends.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
@@ -124,10 +123,13 @@ export async function registerSignalReplyContext(params: {
   const identity = resolveSignalReplyIdentity(params);
   const author = normalizeOptionalString(params.author);
   const body = normalizeOptionalString(params.body);
-  const media = params.media?.map((entry) => ({
-    contentType: normalizeOptionalString(entry.contentType),
-    kind: entry.kind ?? undefined,
-  }));
+  const media = params.media?.map((entry) => {
+    const contentType = normalizeOptionalString(entry.contentType);
+    return {
+      ...(contentType ? { contentType } : {}),
+      ...(entry.kind != null ? { kind: entry.kind } : {}),
+    };
+  });
   const sourceTimestamp = asPositiveSafeInteger(params.sourceTimestamp) ?? Date.now();
   if (!identity || !author) {
     return;

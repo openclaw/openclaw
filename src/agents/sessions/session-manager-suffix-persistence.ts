@@ -1,15 +1,20 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  loadTranscriptSuffixEventsBoundedSync,
-  readPreviousIndexedTranscriptEventSync,
+  BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE,
+  isPendingBackgroundResultMessage,
+} from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
+import {
   readTranscriptIdentityByEventId,
-  readTranscriptMutationAtSync,
   replaceTranscriptSuffixEventsSync,
 } from "../../config/sessions/session-accessor.js";
 import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import {
+  loadTranscriptSuffixEventsBoundedSync,
+  readPreviousIndexedTranscriptEventSync,
+} from "../../config/sessions/session-accessor.sqlite-suffix-read.js";
 import type { SessionMaintenanceOperations } from "../../config/sessions/session-manager-write-contract.js";
 import type {
   SessionTranscriptMaintenanceRead,
@@ -26,7 +31,6 @@ import {
   captureOwnedTranscriptWriteAssertion,
   withOwnedSessionTranscriptWriterFence,
 } from "../../config/sessions/transcript-write-context.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { recordModelFallbackStop } from "../model-fallback-stop.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
@@ -44,7 +48,7 @@ import {
 } from "./session-persistence-operation.js";
 
 export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
-  /** @deprecated Use removeTrailingEntriesAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Await removeTrailingEntriesAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   removeTrailingEntries(
     predicate: (entry: SessionEntry) => boolean,
     options?: { preserveTrailing?: (entry: SessionEntry) => boolean },
@@ -58,11 +62,7 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
     options?: { preserveTrailing?: (entry: SessionEntry) => boolean },
   ): Promise<number> {
     return withSessionManagerWrite(this, async (admission) => {
-      if (
-        !admission ||
-        (isIncognitoSessionKey(this.persistenceTarget?.sessionKey) && "db" in admission.database)
-      ) {
-        // Incognito retains its process-held owner until the worker-owned migration activates.
+      if (!admission) {
         return runSessionPersistenceSync(this.prepareTrailingEntriesRemoval(predicate, options));
       }
       const target = this.persistenceTarget!;
@@ -191,22 +191,6 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
         throw new RangeError("Bounded transcript cleanup cannot cross the hydrated removal window");
       }
     }
-    // Fence only an actual mutation. Defensive cleanup remains a no-op when its target is absent,
-    // even if another writer advanced the durable transcript after this manager was opened.
-    if (this.persistenceTarget && this.transcriptMutationAt !== undefined) {
-      const target = this.persistenceTarget;
-      const mutationAt = yield* sessionPersistenceStep(
-        () => readTranscriptMutationAtSync(target),
-        worker
-          ? async () => (await worker.read({ operation: "version" })).version?.updatedAt
-          : undefined,
-      );
-      if (mutationAt !== this.transcriptMutationAt) {
-        throw new Error(
-          `SQLite transcript changed while preparing suffix removal for ${this.persistenceTarget.sessionId}`,
-        );
-      }
-    }
     const candidate = activeBranch[candidateRemoveStart];
     const target = this.persistenceTarget;
     const candidateSeq =
@@ -237,8 +221,7 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
     const candidatePersistedIndex = currentEntries.findIndex(
       (entry) => isRecord(entry) && entry.id === candidate?.id,
     );
-    // Custom data never participates in topology or FTS. Keep loaded payloads by reference
-    // while the storage owner carries their original bytes through the atomic suffix rewrite.
+    // Opaque custom data stays in SQLite; placement data participates in model navigation.
     const retainedCustomData = new Map<string, unknown>(
       this.boundedContextIncomplete && candidatePersistedIndex >= 0
         ? currentEntries
@@ -246,6 +229,7 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
             .flatMap((entry) =>
               isRecord(entry) &&
               entry.type === "custom" &&
+              entry.customType !== BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE &&
               typeof entry.id === "string" &&
               entry.data !== undefined
                 ? [[entry.id, entry.data] as const]
@@ -439,10 +423,18 @@ export class SessionManagerSuffixPersistence extends SessionManagerPersistence {
     prepared.clampOpaqueFileEntryIndexes();
     prepared.buildIndex();
     restoreOmittedParentAncestry(this, prepared);
-    // The predecessor may be outside a bounded window but is still the durable active leaf.
-    // Preserve its opaque identity so the serialized leaf control can restore it on a full reopen.
-    prepared.leafId = replacementParentId;
-    prepared.appendParentId = replacementParentId;
+    // Accepted results remain active through cleanup, including artifacts awaiting placement.
+    // Otherwise restore the predecessor, which may lie outside the bounded payload window.
+    const preservedResult = activeBranch
+      .slice(candidatePreservedStart)
+      .findLast(
+        (entry) =>
+          (entry.type === "custom" &&
+            entry.customType === BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE) ||
+          (entry.type === "message" && isPendingBackgroundResultMessage(entry.message)),
+      );
+    prepared.leafId = preservedResult?.id ?? replacementParentId;
+    prepared.appendParentId = prepared.leafId;
     const events = prepared.getPersistedFileEntries(prepared.appendMode);
     const suffixEvents = preparedSuffixOffset > 0 ? events.slice(preparedSuffixOffset) : events;
     const incrementalPlanningBytes = [...expectedPersistedEntries, ...suffixEvents].reduce<number>(

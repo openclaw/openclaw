@@ -1,14 +1,23 @@
-/** Original-state update captures in user-invoked cleanup. Only the update run ledger attributes a capture. */
+/** Original-state update and standalone Doctor captures in user-invoked cleanup. */
 import fs from "node:fs";
 import path from "node:path";
+import { readRootStructuredFileSync } from "@openclaw/fs-safe/json";
+import { collectStandaloneDoctorCaptures } from "../infra/doctor-capture-retention.js";
 import { hasSymbolicLinkInDirectoryPath } from "../infra/session-sqlite-migration-manifest.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { UPDATE_CAPTURE_PRIVACY_MARKER } from "../infra/update-capture-privacy-marker.js";
 import { captureScopes } from "../infra/update-recovery-backup-reader.js";
+import { isNeverActivatedFailedUpdate } from "../infra/update-run-activation.js";
 import { getUpdateRun, listUpdateRuns } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { isUpdateRecoveryPending } from "../infra/update-run-recovery-schema.js";
-import { loadUpdateRecovery } from "../infra/update-run-recovery.js";
+import { inspectUpdateRecoveries, loadUpdateRecovery } from "../infra/update-run-recovery.js";
+import { isUpdateRunVerificationConfirmed } from "../infra/update-run-verification.js";
+import {
+  parseUpdateRecoveryBackupManifest,
+  type UpdateRecoveryBackupManifest,
+} from "./backup-verify-manifest.js";
+import type { RecoveryInventoryScan } from "./recovery-inventory-scan.js";
 import type { RecoveryCleanupArtifact } from "./update-cleanup-types.js";
 
 type CaptureIdentity = { dev: bigint; ino: bigint };
@@ -16,10 +25,18 @@ type CaptureIdentity = { dev: bigint; ino: bigint };
 /** A rollback original is superseded only after a later update succeeded. */
 export function readCompletedUpdateHistory(env: NodeJS.ProcessEnv) {
   try {
-    const [latest] = listUpdateRuns({ limit: 1, succeeded: true }, { env });
+    const completed = listUpdateRuns({ limit: 100, succeeded: true }, { env });
+    const [latest] = completed;
+    const verified = completed.find(
+      (run) => run.finishedAtMs !== null && isUpdateRunVerificationConfirmed(run.verification),
+    );
     return {
       runs: listUpdateRuns({ limit: 100 }, { env }),
       latestCompletedStartedAt: latest && latest.finishedAtMs !== null ? latest.createdAtMs : 0,
+      latestVerifiedStartedAt: verified?.createdAtMs ?? 0,
+      hasPendingRecovery: inspectUpdateRecoveries({ env }).some(({ record }) =>
+        isUpdateRecoveryPending(record),
+      ),
     };
   } catch {
     // Missing/unreadable update history cannot release rollback originals.
@@ -40,6 +57,7 @@ function classifyCapture(
   directory: string,
   run: UpdateRunRecord,
   latestCompletedStartedAt: number,
+  latestVerifiedStartedAt: number,
   env: NodeJS.ProcessEnv,
 ): Pick<RecoveryCleanupArtifact, "outcome" | "reason"> {
   if (run.status === "running" || run.finishedAtMs === null) {
@@ -48,6 +66,10 @@ function classifyCapture(
   const recovery = loadUpdateRecovery(run.runId, { env });
   if (recovery && isUpdateRecoveryPending(recovery)) {
     return { outcome: "protected", reason: "pending-update-recovery" };
+  }
+  // A failure that never activated left the original state live; its copy restores nothing.
+  if (isNeverActivatedFailedUpdate(run)) {
+    return { outcome: "candidate", reason: "never-activated-update-capture" };
   }
   const sealed =
     fs.existsSync(path.join(directory, "manifest.json")) &&
@@ -64,8 +86,13 @@ function classifyCapture(
   ) {
     return { outcome: "protected", reason: "unresolved-failed-update" };
   }
-  if (!(latestCompletedStartedAt > run.finishedAtMs)) {
-    return { outcome: "protected", reason: "awaiting-later-completed-update" };
+  // An incomplete copy may still contain the only pre-failure bytes. A bare
+  // success label without Gateway verification cannot supersede that evidence.
+  if (!((sealed ? latestCompletedStartedAt : latestVerifiedStartedAt) > run.finishedAtMs)) {
+    return {
+      outcome: "protected",
+      reason: sealed ? "awaiting-later-completed-update" : "awaiting-later-verified-update",
+    };
   }
   return {
     outcome: "candidate",
@@ -77,12 +104,18 @@ function classifyCapture(
 export function collectUpdateCaptureInventory(params: {
   stateDir: string;
   env: NodeJS.ProcessEnv;
+  scan?: RecoveryInventoryScan;
+  readHistory?: boolean;
+  measureBytes?: boolean;
 }) {
   const artifacts: RecoveryCleanupArtifact[] = [];
   const identities = new Map<string, CaptureIdentity>();
   const scopes = new Set([params.stateDir, ...captureScopes(params.env).keys()]);
   for (const stateDir of scopes) {
-    const inventory = collectCaptureRootInventory({ stateDir, env: params.env });
+    if (params.scan && !params.scan.available()) {
+      break;
+    }
+    const inventory = collectCaptureRootInventory({ ...params, stateDir });
     artifacts.push(...inventory.artifacts);
     for (const [directory, identity] of inventory.identities) {
       identities.set(directory, identity);
@@ -91,7 +124,13 @@ export function collectUpdateCaptureInventory(params: {
   return { artifacts, identities };
 }
 
-function collectCaptureRootInventory(params: { stateDir: string; env: NodeJS.ProcessEnv }) {
+function collectCaptureRootInventory(params: {
+  stateDir: string;
+  env: NodeJS.ProcessEnv;
+  scan?: RecoveryInventoryScan;
+  readHistory?: boolean;
+  measureBytes?: boolean;
+}) {
   const root = resolveUpdateCaptureRoot(params.stateDir);
   const artifacts: RecoveryCleanupArtifact[] = [];
   const identities = new Map<string, CaptureIdentity>();
@@ -110,12 +149,27 @@ function collectCaptureRootInventory(params: { stateDir: string; env: NodeJS.Pro
     });
     return { artifacts, identities };
   }
-  const history = readCompletedUpdateHistory(params.env);
-  const entries = fs
-    .readdirSync(root, { withFileTypes: true })
+  const history = params.readHistory === false ? undefined : readCompletedUpdateHistory(params.env);
+  // Standalone retention reads every manifest; status first qualifies their total metadata cost.
+  const rootEntries = params.scan
+    ? [...params.scan.directory(root)]
+    : fs.readdirSync(root, { withFileTypes: true });
+  const doctorMetadataComplete =
+    !params.scan ||
+    rootEntries
+      .filter((entry) => entry.name.startsWith("doctor-"))
+      .every((entry) => params.scan!.metadata(path.join(root, entry.name, "manifest.json")));
+  const standalone =
+    params.readHistory === false || !doctorMetadataComplete || params.scan?.incomplete
+      ? new Map<string, { eligible: boolean; reason: string }>()
+      : collectStandaloneDoctorCaptures(params).captures;
+  const entries = rootEntries
     .filter((entry) => entry.name !== UPDATE_CAPTURE_PRIVACY_MARKER)
     .toSorted((a, b) => a.name.localeCompare(b.name));
   for (const entry of entries) {
+    if (params.scan && !params.scan.available()) {
+      break;
+    }
     const directory = path.join(root, entry.name);
     const item: RecoveryCleanupArtifact = {
       kind: "update-capture",
@@ -130,7 +184,12 @@ function collectCaptureRootInventory(params: { stateDir: string; env: NodeJS.Pro
       item.bytes = entry.isFile() ? fs.lstatSync(directory).size : 0;
       continue;
     }
-    item.bytes = logicalBytes(directory);
+    item.bytes =
+      params.measureBytes === false
+        ? 0
+        : params.scan
+          ? params.scan.logicalBytes(directory)
+          : logicalBytes(directory);
     // The producer names each capture by run id and marks it before staging any payload.
     if (
       !/^[a-zA-Z0-9_-]{1,128}$/u.test(entry.name) ||
@@ -140,6 +199,7 @@ function collectCaptureRootInventory(params: { stateDir: string; env: NodeJS.Pro
     ) {
       continue;
     }
+    item.captureSource = entry.name.startsWith("doctor-") ? "doctor" : "update";
     if (!history) {
       item.reason = "unreadable-update-history";
       continue;
@@ -148,18 +208,64 @@ function collectCaptureRootInventory(params: { stateDir: string; env: NodeJS.Pro
       const run =
         history.runs.find((candidate) => candidate.runId === entry.name) ??
         getUpdateRun(entry.name, { env: params.env });
-      if (!run) {
+      const doctor = standalone.get(directory);
+      if (!run && !doctor) {
+        const incomplete =
+          !fs.existsSync(path.join(directory, "manifest.json")) ||
+          fs.existsSync(path.join(directory, "manifest.json.partial"));
+        if (incomplete) {
+          item.detail =
+            "No matching run; explicit retirement requires a later verified successful update and settled recovery.";
+          // Missing history is not success. Explicit retirement needs a verified
+          // successor newer than the capture, with no recovery still pending.
+          if (
+            !history.hasPendingRecovery &&
+            history.latestVerifiedStartedAt > fs.lstatSync(directory).mtimeMs
+          ) {
+            item.reason = "superseded-unsealed-capture";
+            item.detail =
+              "Historical incomplete capture superseded by a later verified successful update. Retire only with an explicit --include-unmanifested path.";
+          }
+          continue;
+        }
+        // Sealed standalone originals remain under Doctor's retention policy.
+        if (entry.name.startsWith("doctor-")) {
+          continue;
+        }
+        if (params.scan && !params.scan.metadata(path.join(directory, "manifest.json"))) {
+          continue;
+        }
+        const manifest = readRootStructuredFileSync<UpdateRecoveryBackupManifest>({
+          rootDir: directory,
+          relativePath: "manifest.json",
+          boundaryLabel: "update capture",
+          rejectHardlinks: true,
+          maxBytes: 128 * 1024 * 1024,
+          parse: parseUpdateRecoveryBackupManifest,
+        });
+        if (manifest.ok && manifest.value.runId === entry.name) {
+          item.reason = "orphan-update-capture";
+          item.detail = `Sealed update capture created ${manifest.value.createdAt}; no matching update run. Retire only with an explicit --include-unmanifested path.`;
+        }
         continue;
       }
-      item.runs = [run.runId];
+      item.runs = [entry.name];
       Object.assign(
         item,
-        classifyCapture(directory, run, history.latestCompletedStartedAt, params.env),
+        doctor
+          ? { outcome: doctor.eligible ? "candidate" : "protected", reason: doctor.reason }
+          : classifyCapture(
+              directory,
+              run!,
+              history.latestCompletedStartedAt,
+              history.latestVerifiedStartedAt,
+              params.env,
+            ),
       );
       if (item.outcome === "candidate") {
-        item.detail = `update ${run.status}`;
+        item.detail = doctor ? "standalone Doctor capture" : `update ${run!.status}`;
         item.consequence =
-          "Permanently deletes this update's original-state capture and any recovery generations inside it.";
+          "Permanently deletes this original-state capture and any recovery generations inside it.";
         const stat = fs.lstatSync(directory, { bigint: true });
         identities.set(directory, { dev: stat.dev, ino: stat.ino });
       }
@@ -179,9 +285,11 @@ export async function retireUpdateCaptures(params: {
   selected: RecoveryCleanupArtifact[];
   identities: ReadonlyMap<string, CaptureIdentity>;
   assertCurrent: () => void;
+  onProgress?: (item: RecoveryCleanupArtifact, index: number) => void;
 }): Promise<void> {
-  for (const item of params.selected) {
+  for (const [index, item] of params.selected.entries()) {
     try {
+      params.onProgress?.(item, index);
       params.assertCurrent();
       const expected = params.identities.get(item.path);
       const current = fs.lstatSync(item.path, { bigint: true });

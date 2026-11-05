@@ -83,6 +83,18 @@ For OpenAI-compatible LAN endpoints such as LocalAI, keep the custom
 internal image endpoints remain blocked by default.
 </Warning>
 
+OpenAI-compatible image endpoints, including LiteLLM and custom endpoints under
+`models.providers.openai`, can return either `b64_json` or `data[].url`.
+OpenClaw automatically trusts image URLs at the configured provider origin.
+Other private destinations require an explicit private-network opt-in; a local
+provider does not authorize arbitrary LAN or loopback image hosts. Every redirect
+is checked, and downloads obey the operation deadline and image size cap from
+`agents.defaults.mediaMaxMb`.
+The image server must return an image `Content-Type`. Provider HTTP credentials are
+not forwarded to image URLs; provider TLS credentials stay on the provider's
+origin, including across redirects. GPT Image models return base64 directly; OpenClaw
+does not force the legacy `response_format` parameter on custom endpoints.
+
 ## Common routes
 
 | Goal                                             | Model ref                                                                                           | Auth                                           |
@@ -215,9 +227,12 @@ Not all providers support all parameters. When a fallback provider supports a
 nearby geometry option instead of the exact requested one, OpenClaw remaps to
 the closest supported size, aspect ratio, or resolution before submission.
 Unsupported output hints are dropped for providers that do not declare
-support and reported in the tool result. Tool results report the applied
-settings. `details.normalization` captures any requested-to-applied
-translation.
+support and reported in the tool result. Completed results keep request hints in
+`details.requested` and report each saved image in `details.outputs`. Dimensions
+and format come from the image bytes; quality is included only when the provider
+reports a concrete value. Missing output settings remain unknown.
+`details.normalization` describes adjustments before submission, not proof that
+the provider applied them. Completion messages include the observed output settings.
 </Note>
 
 ## Configuration
@@ -526,7 +541,8 @@ and ComfyUI support 1.
     The bundled xAI provider uses `/v1/images/generations` for prompt-only
     requests and `/v1/images/edits` when `image` or `images` is present.
 
-    - Models: `xai/grok-imagine-image`, `xai/grok-imagine-image-quality`
+    - Models: `xai/grok-imagine-image` (default), `xai/grok-imagine-image-2.0`,
+      `xai/grok-imagine-image-quality`
     - Count: up to 4
     - References: one `image` or up to three `images`
     - Aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `3:2`, `2:3`, `2:1`,

@@ -1,7 +1,10 @@
 import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
+import { withCommandProcessScope } from "../../process/exec-spawn.js";
+import { createGatewayRestartDeadline } from "../daemon-cli/restart-health-deadline.js";
 import { createUpdateProgress } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import type { UpdateCommandExecutorOptions } from "./update-command-executor-options.js";
 import {
   captureUpdateCommandExecutorAuthority,
@@ -24,7 +27,7 @@ import {
   prepareUnexpectedUpdateCommandFailure,
   withUpdateCommandTerminalResult,
 } from "./update-command-terminal.js";
-import { withUpdateFailureTriage } from "./update-command-triage.js";
+import { prepareUpdateCommandFailureTriage } from "./update-command-triage.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 
 export async function runAdmittedUpdate(
@@ -32,6 +35,7 @@ export async function runAdmittedUpdate(
   prepared: NonNullable<Awaited<ReturnType<typeof prepareUpdateCommand>>>,
   recoveryState: UpdateCommandRecoveryState,
   invocationCwd: string | undefined,
+  env: NodeJS.ProcessEnv,
   executeUpdate: (
     opts: UpdateCommandOptions,
     presentation: ReturnType<typeof createUpdateProgress>,
@@ -59,99 +63,148 @@ export async function runAdmittedUpdate(
       assertUpdatePackageActivationAdmission(root, { serviceRoot, dryRun: inputOpts.dryRun });
     };
   }
-  const run = await admitUpdateCommandRun({
-    opts: inputOpts,
-    root: resolveUpdateCommandAdmissionRoot(prepared),
-    serviceRoot,
-    invocationCwd,
-    initialization,
-    assertCurrent: assertInitializationCurrent,
-    pkgOwnership: prepared.pkgOwnership,
-    expectedForeground:
-      prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" || undefined,
-    installKind: prepared.installKind,
-  });
-  const opts = { ...inputOpts, run };
-  prepared.controlPlaneUpdateSentinelMeta = {
-    ...prepared.controlPlaneUpdateSentinelMeta,
-    runId: run.runId,
-  };
   recoveryState.triageTarget.root = prepared.discoveredRoot;
+  let admittedRun: NonNullable<UpdateCommandOptions["run"]> | undefined;
+  let deadline: ReturnType<typeof createGatewayRestartDeadline> | undefined;
   let disposePresentation: (() => void) | undefined;
   let executionStarted = false;
-  try {
-    assertInitializationCurrent?.();
-    run.executorFence = initializedFence;
-    await initialization?.registerRun(run, () => disposePresentation?.());
-    const presentation = createUpdateProgress(!opts.json, run);
-    disposePresentation = presentation.dispose;
-    const executeWith = (executor: UpdateCommandExecutor) =>
-      withUpdatePreviewSignals(opts, async () => {
-        await admitUpdateRequesterContinuation(
-          run,
-          executor,
-          resolveUpdateCommandAdmissionRoot(prepared),
-          serviceRoot,
-        );
-        const execute = () => {
-          executionStarted = true;
-          if (refusal) {
-            assertInitializationCurrent?.();
-            throw refusal;
-          }
-          return withUpdateCommandRecoveryUnwind(opts, recoveryState, () =>
-            executeUpdate(opts, presentation, executor),
-          );
-        };
-        if (inputOpts.dryRun || !prepared.controlPlaneUpdateSentinelMeta?.handoffId) {
-          return execute();
-        }
-        // The admitted helper owns native stop and recovery for this invocation.
-        // A handoff tuple alone never grants authority to an ordinary service caller.
-        const fence =
-          run.executorFence ??
-          (await executor.enter(
-            prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot,
-            {
-              preflight: true,
-              serviceRoot: prepared.servicePlan?.serviceRoot,
-            },
-          ));
-        run.executorFence = fence;
-        const runId = run.runId;
-        const assertCurrent = () => {
-          if (opts.run !== run || run.runId !== runId || run.executorFence !== fence) {
-            throw new UpdateCommandRecoveryPendingError(
-              "Managed updater lost its admitted executor.",
-            );
-          }
-          captureUpdateCommandExecutorAuthority(fence, runId);
-        };
-        return withGatewayServiceUpdateAuthority(assertCurrent, execute, {
-          originalRoot: captureUpdateCommandExecutorAuthority(fence, runId).installKey,
-        });
+  const admitAndExecute = async (
+    registerRun: (run: NonNullable<UpdateCommandOptions["run"]>) => void | Promise<void>,
+  ) => {
+    try {
+      const run = await admitUpdateCommandRun({
+        opts: inputOpts,
+        root: resolveUpdateCommandAdmissionRoot(prepared),
+        serviceRoot,
+        env,
+        initialization,
+        assertCurrent: assertInitializationCurrent,
+        expectedForeground:
+          prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" ||
+          undefined,
+        installKind: prepared.installKind,
+        onAdmitted: async (admitted) => {
+          admittedRun = admitted;
+          admitted.executorFence = initializedFence;
+          await registerRun(admitted);
+        },
       });
-    const execute = initialization
-      ? () => executeWith(initialization.executor)
-      : () =>
-          withUpdateFailureTriage({ ...opts, invocationCwd }, recoveryState.triageTarget, () =>
-            withUpdateInProgressEnv(invocationCwd, () =>
-              withUpdateCommandTerminalResult((registerRun) => {
-                registerRun(run);
-                return withUpdateCommandExecutor(run.runId, executeWith, executorOptions);
-              }, opts),
-            ),
+      deadline =
+        !inputOpts.dryRun && inputOpts.timeout !== undefined && prepared.timeoutMs !== undefined
+          ? createGatewayRestartDeadline({
+              timeoutMs: prepared.timeoutMs,
+              timeoutError: new UpdateActivationTimeoutError(
+                resolveUpdateCommandAdmissionRoot(prepared),
+                prepared.timeoutMs,
+              ),
+            })
+          : undefined;
+      run.deadline = deadline;
+      const opts = { ...inputOpts, run };
+      prepared.controlPlaneUpdateSentinelMeta = {
+        ...prepared.controlPlaneUpdateSentinelMeta,
+        runId: run.runId,
+      };
+      assertInitializationCurrent?.();
+      const presentation = createUpdateProgress(!opts.json, run);
+      disposePresentation = presentation.dispose;
+      const executeWith = (executor: UpdateCommandExecutor) =>
+        withUpdatePreviewSignals(opts, async () => {
+          await admitUpdateRequesterContinuation(
+            run,
+            executor,
+            resolveUpdateCommandAdmissionRoot(prepared),
+            serviceRoot,
           );
-    await execute();
+          if (deadline) {
+            run.executorFence = await executor.enter(resolveUpdateCommandAdmissionRoot(prepared), {
+              preflight: true,
+              serviceRoot,
+            });
+          }
+          const execute = () => {
+            executionStarted = true;
+            return withUpdateCommandRecoveryUnwind(opts, recoveryState, () =>
+              withCommandProcessScope(async () => {
+                if (refusal) {
+                  assertInitializationCurrent?.();
+                  throw refusal;
+                }
+                deadline?.signal.throwIfAborted();
+                await executeUpdate(opts, presentation, executor);
+                deadline?.signal.throwIfAborted();
+              }, deadline?.signal),
+            );
+          };
+          if (inputOpts.dryRun || !prepared.controlPlaneUpdateSentinelMeta?.handoffId) {
+            return execute();
+          }
+          // The admitted helper owns native stop and recovery for this invocation.
+          // A handoff tuple alone never grants authority to an ordinary service caller.
+          const fence =
+            run.executorFence ??
+            (await executor.enter(
+              prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot,
+              {
+                preflight: true,
+                serviceRoot: prepared.servicePlan?.serviceRoot,
+              },
+            ));
+          run.executorFence = fence;
+          const runId = run.runId;
+          const assertCurrent = () => {
+            if (opts.run !== run || run.runId !== runId || run.executorFence !== fence) {
+              throw new UpdateCommandRecoveryPendingError(
+                "Managed updater lost its admitted executor.",
+              );
+            }
+            captureUpdateCommandExecutorAuthority(fence, runId);
+          };
+          return withGatewayServiceUpdateAuthority(assertCurrent, execute, {
+            originalRoot: captureUpdateCommandExecutorAuthority(fence, runId).installKey,
+          });
+        });
+      await (initialization
+        ? executeWith(initialization.executor)
+        : withUpdateCommandExecutor(run.runId, executeWith, executorOptions));
+    } catch (error) {
+      // Execution owns recovery; only failures before execution starts are terminalized here.
+      if (!executionStarted && admittedRun) {
+        throw await prepareUnexpectedUpdateCommandFailure(error, {
+          ...inputOpts,
+          run: admittedRun,
+        });
+      }
+      throw error;
+    } finally {
+      deadline?.dispose();
+      if (!initialization) {
+        disposePresentation?.();
+      }
+    }
+  };
+  if (initialization) {
+    return admitAndExecute((run) => initialization.registerRun(run, () => disposePresentation?.()));
+  }
+  let handleFailure: Awaited<ReturnType<typeof prepareUpdateCommandFailureTriage>> | undefined;
+  try {
+    await withUpdateInProgressEnv(invocationCwd, () =>
+      withUpdateCommandTerminalResult(
+        (registerRun) =>
+          admitAndExecute(async (run) => {
+            registerRun(run);
+            handleFailure = await prepareUpdateCommandFailureTriage(
+              { ...inputOpts, invocationCwd, run },
+              recoveryState.triageTarget,
+            );
+          }),
+        inputOpts,
+      ),
+    );
   } catch (error) {
-    // Execution owns recovery; only failures before execution starts are terminalized here.
-    if (!executionStarted) {
-      throw await prepareUnexpectedUpdateCommandFailure(error, opts);
+    if (!handleFailure) {
+      throw error;
     }
-    throw error;
-  } finally {
-    if (!initialization) {
-      disposePresentation?.();
-    }
+    await handleFailure(error);
   }
 }

@@ -324,26 +324,13 @@ function isWithinCollapseWindow(operationAt: number, configAt: number): boolean 
   return delay >= 0 && delay <= COLLAPSE_MAX_DELAY_MS;
 }
 
-function appendPendingCollapse(
-  pending: readonly PendingCollapse[],
-  marker: PendingCollapse,
-): PendingCollapse[] {
-  const next = [...pending, marker];
-  // Keep the cursor bounded. A dropped marker can reveal a rare duplicate
-  // config-write row, but never hides a newer visible history entry.
-  return next.length <= MAX_PENDING_COLLAPSES ? next : next.slice(-MAX_PENDING_COLLAPSES);
-}
-
-function consumePendingCollapse(
-  pending: readonly PendingCollapse[],
-  candidate: ChangeCandidate,
-): { pending: PendingCollapse[]; suppressed: boolean } {
+function consumePendingCollapse(pending: PendingCollapse[], candidate: ChangeCandidate): boolean {
   if (
     candidate.entry.kind !== "config-write" ||
     candidate.entry.source !== "system-agent" ||
     !candidate.transition
   ) {
-    return { pending: [...pending], suppressed: false };
+    return false;
   }
   const sequence = candidate.position.sequence;
   let markerIndex = -1;
@@ -361,81 +348,10 @@ function consumePendingCollapse(
     }
   }
   if (markerIndex < 0) {
-    return { pending: [...pending], suppressed: false };
+    return false;
   }
-  return {
-    pending: pending.filter((_, index) => index !== markerIndex),
-    suppressed: true,
-  };
-}
-
-function mergeCandidates(params: {
-  systemCandidates: ChangeCandidate[];
-  configCandidates: ChangeCandidate[];
-  pendingCollapse: readonly PendingCollapse[];
-  limit: number;
-}): {
-  entries: ChangeCandidate[];
-  systemBefore?: number;
-  configBefore?: number;
-  pendingCollapse: PendingCollapse[];
-  hasBufferedSystemEntries: boolean;
-  hasBufferedConfigEntries: boolean;
-} {
-  let systemIndex = 0;
-  let configIndex = 0;
-  let systemBefore: number | undefined;
-  let configBefore: number | undefined;
-  let pendingCollapse = [...params.pendingCollapse];
-  const entries: ChangeCandidate[] = [];
-
-  while (true) {
-    const system = params.systemCandidates[systemIndex];
-    const config = params.configCandidates[configIndex];
-    const next =
-      system && config
-        ? compareCandidates(system, config) <= 0
-          ? system
-          : config
-        : (system ?? config);
-    if (!next) {
-      break;
-    }
-
-    if (next === config) {
-      const collapse = consumePendingCollapse(pendingCollapse, config);
-      pendingCollapse = collapse.pending;
-      if (collapse.suppressed) {
-        configBefore = config.position.sequence;
-        configIndex += 1;
-        continue;
-      }
-    }
-    if (entries.length >= params.limit) {
-      break;
-    }
-
-    entries.push(next);
-    if (next === system) {
-      systemBefore = system.position.sequence;
-      systemIndex += 1;
-      if (system.pendingCollapse) {
-        pendingCollapse = appendPendingCollapse(pendingCollapse, system.pendingCollapse);
-      }
-    } else {
-      configBefore = config!.position.sequence;
-      configIndex += 1;
-    }
-  }
-
-  return {
-    entries,
-    systemBefore,
-    configBefore,
-    pendingCollapse,
-    hasBufferedSystemEntries: systemIndex < params.systemCandidates.length,
-    hasBufferedConfigEntries: configIndex < params.configCandidates.length,
-  };
+  pending.splice(markerIndex, 1);
+  return true;
 }
 
 async function initialBefore<T>(latest: AuditStore<T>["latest"]): Promise<number> {
@@ -445,25 +361,16 @@ async function initialBefore<T>(latest: AuditStore<T>["latest"]): Promise<number
 
 export async function listSystemChanges(
   params: SystemChangesListParams,
-  options: {
-    env?: NodeJS.ProcessEnv;
-    systemStore?: AuditStore<SystemAgentAuditEntry>;
-    configStore?: AuditStore<ConfigAuditRecord>;
-  } = {},
 ): Promise<SystemChangesListResult> {
-  const env = options.env ?? process.env;
-  const systemStore =
-    options.systemStore ??
-    createSqliteAuditRecordReader<SystemAgentAuditEntry>({
-      scope: SYSTEM_AGENT_AUDIT_SCOPE,
-      env,
-    });
-  const configStore =
-    options.configStore ??
-    createSqliteAuditRecordReader<ConfigAuditRecord>({
-      scope: CONFIG_AUDIT_SCOPE,
-      env,
-    });
+  const env = process.env;
+  const systemStore: AuditStore<SystemAgentAuditEntry> = createSqliteAuditRecordReader({
+    scope: SYSTEM_AGENT_AUDIT_SCOPE,
+    env,
+  });
+  const configStore: AuditStore<ConfigAuditRecord> = createSqliteAuditRecordReader({
+    scope: CONFIG_AUDIT_SCOPE,
+    env,
+  });
   const cursor = params.beforeCursor
     ? decodeCursor(params.beforeCursor)
     : {
@@ -512,23 +419,64 @@ export async function listSystemChanges(
       operation.entry.changedPaths = [...write.entry.changedPaths];
     }
   }
-  const merged = mergeCandidates({
-    systemCandidates,
-    configCandidates,
-    pendingCollapse: cursor.pendingCollapse ?? [],
-    limit,
-  });
+  let systemIndex = 0;
+  let configIndex = 0;
+  let systemBefore: number | undefined;
+  let configBefore: number | undefined;
+  const collapseMarkers = [...(cursor.pendingCollapse ?? [])];
+  const entries: ChangeCandidate[] = [];
+
+  while (true) {
+    const system = systemCandidates[systemIndex];
+    const config = configCandidates[configIndex];
+    const next =
+      system && config
+        ? compareCandidates(system, config) <= 0
+          ? system
+          : config
+        : (system ?? config);
+    if (!next) {
+      break;
+    }
+
+    if (next === config && consumePendingCollapse(collapseMarkers, config)) {
+      configBefore = config.position.sequence;
+      configIndex += 1;
+      continue;
+    }
+    if (entries.length >= limit) {
+      break;
+    }
+
+    entries.push(next);
+    if (next === system) {
+      systemBefore = system.position.sequence;
+      systemIndex += 1;
+      if (system.pendingCollapse) {
+        collapseMarkers.push(system.pendingCollapse);
+        // Dropped markers can reveal duplicate config rows, never hide newer history.
+        if (collapseMarkers.length > MAX_PENDING_COLLAPSES) {
+          collapseMarkers.shift();
+        }
+      }
+    } else {
+      configBefore = config!.position.sequence;
+      configIndex += 1;
+    }
+  }
+
+  const hasBufferedSystemEntries = systemIndex < systemCandidates.length;
+  const hasBufferedConfigEntries = configIndex < configCandidates.length;
   // Payload timestamps can move backwards, so only discard markers after every
   // remaining config record has passed the cursor and none was a partner.
-  const pendingCollapse =
-    configScan.exhausted && !merged.hasBufferedConfigEntries ? [] : merged.pendingCollapse;
+  const pendingCollapse = configScan.exhausted && !hasBufferedConfigEntries ? [] : collapseMarkers;
   const next = {
     ...cursor,
-    systemAgentBefore: merged.hasBufferedSystemEntries
-      ? (merged.systemBefore ?? cursor.systemAgentBefore)
+    systemAgentBefore: hasBufferedSystemEntries
+      ? (systemBefore ?? cursor.systemAgentBefore)
       : systemScan.nextBeforeSequence,
-    configBefore: merged.hasBufferedConfigEntries
-      ? (merged.configBefore ?? cursor.configBefore)
+    configBefore: hasBufferedConfigEntries
+      ? (configBefore ?? cursor.configBefore)
       : configScan.nextBeforeSequence,
   };
   if (pendingCollapse.length > 0) {
@@ -537,8 +485,8 @@ export async function listSystemChanges(
     delete next.pendingCollapse;
   }
   const hasMore =
-    merged.hasBufferedSystemEntries ||
-    merged.hasBufferedConfigEntries ||
+    hasBufferedSystemEntries ||
+    hasBufferedConfigEntries ||
     pendingCollapse.length > 0 ||
     !systemScan.exhausted ||
     !configScan.exhausted;
@@ -546,10 +494,8 @@ export async function listSystemChanges(
     next.systemAgentBefore !== cursor.systemAgentBefore ||
     next.configBefore !== cursor.configBefore;
   return {
-    entries: merged.entries.map((candidate) => candidate.entry),
-    ...(hasMore && (merged.entries.length > 0 || scanAdvanced)
-      ? { nextCursor: encodeCursor(next) }
-      : {}),
+    entries: entries.map((candidate) => candidate.entry),
+    ...(hasMore && (entries.length > 0 || scanAdvanced) ? { nextCursor: encodeCursor(next) } : {}),
   };
 }
 

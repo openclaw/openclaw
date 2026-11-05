@@ -3,7 +3,6 @@ import { formatTokenCount } from "../utils/token-format.js";
 import { formatContextUsageLine } from "./tui-formatters.js";
 import type { GatewayStatusSummary } from "./tui-types.js";
 
-/** Formats Gateway/session health into compact status lines for the TUI. */
 export function formatStatusSummary(summary: GatewayStatusSummary) {
   const lines = ["Gateway status"];
   if (summary.runtimeVersion) {

@@ -626,6 +626,7 @@ test("initializes unrestricted Telegram model browsing and reuses its prepared c
               models: {
                 ...cfg.models,
                 mode: "merge",
+                catalogRefresh: { enabled: false },
                 providers: {
                   ...cfg.models?.providers,
                   ollama: {

@@ -33,6 +33,8 @@ openclaw dns setup --apply
 
 Without `--domain`, OpenClaw uses `discovery.wideArea.domain` from config. Setting that domain enables wide-area discovery.
 
+The preview escapes control characters in displayed paths; the actual zone path is unchanged.
+
 Without `--apply`, the command only prints:
 
 - Resolved discovery domain and zone file path

@@ -5,7 +5,10 @@ import { withSqliteDatabaseAdmissionExchange } from "../../infra/sqlite-database
 import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
 import { exchangeSqliteDatabaseAdmissions } from "../../infra/sqlite-worker-database-admission-relay.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
-import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
+import {
+  createSqliteDatabaseAdmissionRelay,
+  createSqliteWorkerOperationAdmission,
+} from "../../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
 import { resolveQuarantineStorePath } from "../../state/openclaw-state-db.paths.js";
@@ -31,6 +34,7 @@ export async function withSqliteMutationWorkerCoordination<T>(
   operationId: number,
   run: (coordination: SqliteMutationWorkerCoordination) => Promise<T>,
   assertRequestCurrent?: () => void,
+  nativeLocations?: readonly string[],
 ): Promise<T> {
   const worker = transport.channel;
   const actorId = `${sqliteMutationWorkerThreadId(transport)}:${operationId}`;
@@ -46,6 +50,7 @@ export async function withSqliteMutationWorkerCoordination<T>(
       },
       "retained",
       assertRequestCurrent,
+      nativeLocations,
     );
   } finally {
     worker.off("error", preparingError);
@@ -60,19 +65,28 @@ export async function withSqliteWorkerLifecycleCoordination<T>(
   settleFailure: () => Promise<void>,
   mode: "retained" | "reconciliation" = "retained",
   assertRequestCurrent?: () => void,
+  nativeLocations?: readonly string[],
 ): Promise<T> {
   const identity = context.admission.identity.key;
   if (mode === "reconciliation") {
     context.admission.assertCurrent();
   }
+  let active = true;
   const admission = assertRequestCurrent
     ? createSqliteWorkerOperationAdmission(() => {
         throw new Error("SQLite mutation file admission does not grant transaction authority");
       })
-    : undefined;
+    : mode === "reconciliation"
+      ? createSqliteDatabaseAdmissionRelay(() => {
+          // Accepted lease cleanup remains valid after new read admission closes.
+          if (!active) {
+            throw new Error("SQLite reconciliation metadata outlived its operation");
+          }
+        })
+      : undefined;
   if (admission && assertRequestCurrent) {
     admission.bindDatabaseAuthority({
-      databasePath: context.admission.databasePath,
+      databasePath: context.admission.identity.canonicalPath,
       assertRequest: assertRequestCurrent,
       assertAccess() {
         context.admission.assertCurrent();
@@ -105,7 +119,9 @@ export async function withSqliteWorkerLifecycleCoordination<T>(
     });
   }
   const releaseService = admission
-    ? retainSqliteWriteAdmissionService([context.admission.databasePath], () => admission.service())
+    ? retainSqliteWriteAdmissionService(nativeLocations ?? [context.admission.databasePath], () =>
+        admission.service(),
+      )
     : undefined;
   try {
     return await run({
@@ -128,6 +144,7 @@ export async function withSqliteWorkerLifecycleCoordination<T>(
     // A refused grant retires the worker; confirmed exit must not hide the owner's refusal.
     throw admission?.failure ?? error;
   } finally {
+    active = false;
     admission?.finish();
     releaseService?.();
   }
@@ -135,7 +152,7 @@ export async function withSqliteWorkerLifecycleCoordination<T>(
 
 export async function runWithSqliteMutationWorkerCoordination<
   T,
-  Options extends OpenClawAgentDatabaseOptions,
+  Options extends Pick<OpenClawAgentDatabaseOptions, "env">,
 >(
   coordination: SqliteMutationWorkerCoordination,
   options: Options,

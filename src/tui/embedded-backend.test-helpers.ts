@@ -1,4 +1,14 @@
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import type { EmbeddedTuiBackend } from "./embedded-backend.js";
+
+export async function flushMicrotasks() {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+export function sendMainChat(backend: EmbeddedTuiBackend, message: string, runId: string) {
+  return backend.sendChat({ sessionKey: "agent:main:main", message, runId });
+}
 
 type LoadSessionEntryMockResult = {
   agentId: string;

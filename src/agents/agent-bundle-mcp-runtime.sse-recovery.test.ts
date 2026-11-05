@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
+import { snapshotMcpTools } from "./agent-bundle-mcp-recovery.test-support.js";
 import { createSessionMcpRuntime } from "./agent-bundle-mcp-runtime.js";
 import { OpenClawSSEClientTransport } from "./mcp-http-transport.js";
 
@@ -24,12 +24,17 @@ it.each([
   { status: 500, reconnects: false, failureMethod: "tools/call" },
   { status: 404, reconnects: true, failureMethod: "tools/list" },
   { status: 500, reconnects: false, failureMethod: "tools/list" },
+  { status: 200, reconnects: true, failureMethod: "endpoint" },
 ])(
-  "handles legacy SSE $failureMethod POST $status without replaying a failed tool call",
+  "recovers legacy SSE $failureMethod ($status) without replaying a failed tool call",
   async ({ status, reconnects, failureMethod }) => {
     vi.useFakeTimers();
     const encoder = new TextEncoder();
     const streams = new Map<string, ReadableStreamDefaultController<Uint8Array>>();
+    const send = (endpoint: string, message: unknown) =>
+      streams
+        .get(endpoint)
+        ?.enqueue(encoder.encode(`event: message\ndata: ${JSON.stringify(message)}\n\n`));
     const calls: string[] = [];
     const lists: string[] = [];
     let sessionCount = 0;
@@ -43,11 +48,14 @@ it.each([
             start(controller) {
               streams.set(endpoint, controller);
               onAbort = () => {
-                streams.delete(endpoint);
-                controller.error(init?.signal?.reason);
+                if (streams.delete(endpoint)) {
+                  controller.error(init?.signal?.reason);
+                }
               };
               init?.signal?.addEventListener("abort", onAbort, { once: true });
-              controller.enqueue(encoder.encode(`event: endpoint\ndata: ${endpoint}\n\n`));
+              controller.enqueue(
+                encoder.encode(`retry: 1\nevent: endpoint\ndata: ${endpoint}\n\n`),
+              );
             },
             cancel() {
               streams.delete(endpoint);
@@ -88,13 +96,7 @@ it.each([
             ? { tools: [{ name: "probe", inputSchema: { type: "object" } }] }
             : { content: [{ type: "text", text: endpoint }] };
       if (message.id !== undefined) {
-        streams
-          .get(endpoint)
-          ?.enqueue(
-            encoder.encode(
-              `event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: message.id, result })}\n\n`,
-            ),
-          );
+        send(endpoint, { jsonrpc: "2.0", id: message.id, result });
       }
       return new Response(null, { status: 202 });
     };
@@ -110,25 +112,17 @@ it.each([
       supportsParallelToolCalls: true,
     }));
     const runtime = createSessionMcpRuntime({ sessionId: "legacy", workspaceDir: "/workspace" });
-    const toolBytes = async () => {
-      const materialized = await materializeBundleMcpToolsForRun({ runtime });
-      try {
-        return JSON.stringify(
-          materialized.tools.map(({ name, description, parameters }) => ({
-            name,
-            description,
-            parameters,
-          })),
-        );
-      } finally {
-        await materialized.dispose();
-      }
-    };
+    const toolBytes = async () => (await snapshotMcpTools({ runtime })).bytes;
     try {
       expect((await runtime.getCatalog()).tools).toHaveLength(1);
       const originalTools = await toolBytes();
-      rejectNextRequest = true;
-      if (failureMethod === "tools/call") {
+      rejectNextRequest = failureMethod !== "endpoint";
+      if (failureMethod === "endpoint") {
+        const stream = streams.get("/messages/1");
+        streams.delete("/messages/1");
+        stream?.close();
+        await vi.advanceTimersByTimeAsync(1);
+      } else if (failureMethod === "tools/call") {
         await expect(runtime.callTool("legacy", "probe", { attempt: "expired" })).rejects.toThrow(
           `Error POSTing to endpoint (HTTP ${status}): Session not found`,
         );
@@ -139,13 +133,7 @@ it.each([
           expect(runtime.peekCatalog()?.diagnostics).toBeUndefined();
         }
       } else {
-        streams
-          .get("/messages/1")
-          ?.enqueue(
-            encoder.encode(
-              'event: message\ndata: {"jsonrpc":"2.0","method":"notifications/tools/list_changed"}\n\n',
-            ),
-          );
+        send("/messages/1", { jsonrpc: "2.0", method: "notifications/tools/list_changed" });
         await vi.advanceTimersByTimeAsync(0);
         const failedCatalog = await runtime.getCatalog();
         expect(failedCatalog.tools).toHaveLength(1);
@@ -155,9 +143,12 @@ it.each([
         await vi.advanceTimersByTimeAsync(5_000);
       }
 
-      await runtime.getCatalog();
-      await vi.advanceTimersByTimeAsync(0);
-      const activeEndpoint = `/messages/${reconnects ? 2 : 1}`;
+      if (failureMethod !== "endpoint") {
+        await runtime.getCatalog();
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      const expectedSessions = failureMethod === "endpoint" ? 3 : reconnects ? 2 : 1;
+      const activeEndpoint = `/messages/${expectedSessions}`;
       await expect(
         runtime.callTool("legacy", "probe", { attempt: "after" }),
       ).resolves.toMatchObject({
@@ -170,7 +161,7 @@ it.each([
       if (failureMethod === "tools/list") {
         expect(lists).toEqual(["/messages/1", "/messages/1", activeEndpoint]);
       }
-      expect(sessionCount).toBe(reconnects ? 2 : 1);
+      expect(sessionCount).toBe(expectedSessions);
       expect(await toolBytes()).toBe(originalTools);
     } finally {
       await runtime.dispose();

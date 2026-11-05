@@ -11,15 +11,13 @@ import {
   createPanelRefreshStatus,
   failPanelRefresh,
   type PanelRefreshStatus,
-} from "../../components/panel-refresh-status.ts";
+} from "../../components/panel-refresh-status-state.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { parseCustodianQuestion, type CustodianStructuredQuestion } from "./structured-question.ts";
 
 const CUSTODIAN_TRANSCRIPT_TIMEOUT_MS = 15_000;
-const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 
 export type CustodianMessage = {
   id: number;
@@ -45,16 +43,13 @@ export function createCustodianMessage(
 export function createCustodianReplyMessage(
   id: number,
   result: SystemAgentChatResult,
-): CustodianMessage | null {
+): CustodianMessage {
   const step = result.step ?? null;
   const question = step ? null : parseCustodianQuestion(result.question);
-  const silentReply = SILENT_REPLY_PATTERN.test(result.reply);
-  return silentReply && !question && !step
-    ? null
-    : {
-        ...createCustodianMessage(id, "assistant", silentReply ? "" : result.reply, question, step),
-        optionalWelcome: result.optionalWelcome === true,
-      };
+  return {
+    ...createCustodianMessage(id, "assistant", result.reply, question, step),
+    optionalWelcome: result.optionalWelcome === true,
+  };
 }
 
 export function hasUnresolvedCustodianQuestion(
@@ -123,6 +118,8 @@ export class CustodianTranscriptLoader {
     client: GatewayBrowserClient;
     epoch: number;
     promise: Promise<CustodianTranscriptResult>;
+    completion: Promise<PanelRefreshStatus>;
+    settle: () => void;
   } | null = null;
 
   constructor(
@@ -134,12 +131,8 @@ export class CustodianTranscriptLoader {
     return this.inFlight !== null;
   }
 
-  get available(): boolean {
-    const snapshot = this.getGatewaySnapshot();
-    return (
-      snapshot !== undefined &&
-      isGatewayMethodAdvertised(snapshot, "openclaw.chat.history") === true
-    );
+  get completion(): Promise<PanelRefreshStatus> | null {
+    return this.inFlight?.completion ?? null;
   }
 
   deferRecovery(): void {
@@ -187,6 +180,7 @@ export class CustodianTranscriptLoader {
   invalidate(): void {
     // Normal turns invalidate reads, but keep the intent to recover once idle.
     this.generation += 1;
+    this.inFlight?.settle();
     this.inFlight = null;
   }
 
@@ -209,7 +203,9 @@ export class CustodianTranscriptLoader {
     const generation = ++this.generation;
     this.status = beginPanelRefresh(this.status, { clearError: false });
     const promise = readCustodianTranscript(client);
-    this.inFlight = { client, epoch, promise };
+    const { promise: completion, resolve } = Promise.withResolvers<PanelRefreshStatus>();
+    const receipt = { client, epoch, promise, completion, settle: () => resolve(this.status) };
+    this.inFlight = receipt;
     this.onStatusChange();
     try {
       const result = await promise;
@@ -221,6 +217,7 @@ export class CustodianTranscriptLoader {
         : failPanelRefresh(this.status, result.error, this.getGatewaySnapshot());
       return result;
     } finally {
+      receipt.settle();
       if (this.inFlight?.promise === promise) {
         this.inFlight = null;
         this.onStatusChange();

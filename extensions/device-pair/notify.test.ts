@@ -8,7 +8,7 @@ import type {
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   openOpenClawStateDatabase,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -73,21 +73,23 @@ describe("device-pair notify persistence", () => {
   });
 
   function openStore<T>(options: OpenKeyedStoreOptions) {
-    return createPluginStateKeyedStoreForTests<T>("device-pair", {
-      ...options,
-      env: options.env ?? env,
-    });
+    return createPluginStateKeyedStoreV2ForTests<T>(
+      "device-pair",
+      { ...options, env: options.env ?? env },
+      { assertCurrent() {} },
+    );
   }
 
   function createApi(
     sendText?: ReturnType<typeof vi.fn>,
-    openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T> = openStore,
+    openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T, 2> = openStore,
   ) {
     return createTestPluginApi({
       runtime: {
         state: {
           resolveStateDir: () => stateDir,
           openKeyedStore,
+          openKeyedStoreV2: openKeyedStore,
         },
         channel: {
           outbound: {
@@ -217,81 +219,62 @@ describe("device-pair notify persistence", () => {
     };
   }
 
-  it.each([true, false])(
-    "reports live subscriber counts with count support=%s",
-    async (supportsCount) => {
-      vi.useFakeTimers();
-      vi.setSystemTime(1_000);
-      const subscriber: NotifySubscription = {
-        to: "chat-123",
-        mode: "persistent",
-        addedAtMs: 1,
-      };
-      const subscriberStore = openSubscriberStore();
-      await subscriberStore.register(notifySubscriberStoreKey(subscriber), subscriber);
-      await subscriberStore.register("expired", subscriber, { ttlMs: 1 });
-      await openStore({ namespace: "other", maxEntries: 10 }).register("sibling", subscriber);
-      vi.setSystemTime(1_001);
-      const api = createApi(undefined, <T>(options: OpenKeyedStoreOptions) => {
-        const store = openStore<T>(options);
-        if (supportsCount) {
-          return store;
-        }
-        const { count: _count, ...olderStore } = store;
-        return olderStore;
-      });
-      for (const [senderId, mode] of [
-        ["chat-123", "persistent"],
-        ["missing", "off"],
-      ]) {
-        const status = await handleNotifyCommand({
-          api,
-          ctx: { channel: "telegram", senderId },
-          action: "status",
-        });
-        expect(status.text).toContain(`Mode: ${mode}`);
-        expect(status.text).toContain("Subscribers: 1");
-        expect(status.text).toContain("Pending requests: 0");
-      }
-    },
-  );
-
-  it("counts unrelated corrupt subscriber rows but still validates the selected chat", async () => {
-    const subscriber: NotifySubscription = { to: "chat-123", mode: "once", addedAtMs: 1 };
-    const subscriberStore = openSubscriberStore();
-    await subscriberStore.register(notifySubscriberStoreKey(subscriber), subscriber);
-    await subscriberStore.register("unrelated", subscriber);
-    const { db } = openOpenClawStateDatabase({ env });
-    const corrupt = db.prepare(
-      "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
-    );
-    corrupt.run("{", "device-pair", DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE, "unrelated");
-    const command = {
-      api: createApi(),
-      ctx: { channel: "telegram", senderId: "chat-123" },
-      action: "status",
+  it("reports live subscriber counts", async () => {
+    const subscriber: NotifySubscription = {
+      to: "chat-123",
+      mode: "persistent",
+      addedAtMs: 1,
     };
-    const status = await handleNotifyCommand(command);
-    expect(status.text).toContain("Mode: once");
-    expect(status.text).toContain("Subscribers: 2");
-    const olderApi = createApi(undefined, <T>(options: OpenKeyedStoreOptions) => {
-      const { count: _count, ...store } = openStore<T>(options);
-      return store;
-    });
-    await expect(handleNotifyCommand({ ...command, api: olderApi })).rejects.toMatchObject({
-      code: "PLUGIN_STATE_CORRUPT",
-      operation: "entries",
-    });
-    corrupt.run(
-      "{",
-      "device-pair",
+    const { db } = openOpenClawStateDatabase({ env });
+    // Seed cold rows with absolute expiry; fake host time does not control the writer worker.
+    const insert = db.prepare(
+      "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at, expires_at) VALUES ('device-pair', ?, ?, ?, 1, ?)",
+    );
+    const value = JSON.stringify(subscriber);
+    insert.run(
       DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
       notifySubscriberStoreKey(subscriber),
+      value,
+      null,
     );
-    await expect(handleNotifyCommand(command)).rejects.toMatchObject({
-      code: "PLUGIN_STATE_CORRUPT",
-      operation: "lookup",
-    });
+    insert.run(DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE, "expired", value, 1);
+    insert.run("other", "sibling", value, null);
+    const api = createApi();
+    for (const [senderId, mode] of [
+      ["chat-123", "persistent"],
+      ["missing", "off"],
+    ]) {
+      const status = await notifyCommand(api, "status", { senderId });
+      expect(status.text).toContain(`Mode: ${mode}`);
+      expect(status.text).toContain("Subscribers: 1");
+      expect(status.text).toContain("Pending requests: 0");
+    }
+  });
+
+  it.each([false, true])("validates subscriber corruption (selected: %s)", async (selected) => {
+    const subscriber: NotifySubscription = { to: "chat-123", mode: "once", addedAtMs: 1 };
+    const { db } = openOpenClawStateDatabase({ env });
+    // Corruption is a cold-storage fixture, not an external update to a live cached row.
+    const insert = db.prepare(
+      "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at, expires_at) VALUES ('device-pair', ?, ?, ?, 1, NULL)",
+    );
+    insert.run(
+      DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
+      notifySubscriberStoreKey(subscriber),
+      selected ? "{" : JSON.stringify(subscriber),
+    );
+    insert.run(DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE, "unrelated", "{");
+    const api = createApi();
+    if (selected) {
+      await expect(notifyCommand(api, "status")).rejects.toMatchObject({
+        code: "PLUGIN_STATE_CORRUPT",
+        operation: "lookup",
+      });
+      return;
+    }
+    const status = await notifyCommand(api, "status");
+    expect(status.text).toContain("Mode: once");
+    expect(status.text).toContain("Subscribers: 2");
   });
 
   it("propagates count failures without retrying enumeration", async () => {
@@ -304,76 +287,70 @@ describe("device-pair notify persistence", () => {
       },
       entries,
     }));
-    await expect(
-      handleNotifyCommand({
-        api,
-        ctx: { channel: "telegram", senderId: "chat-123" },
-        action: "status",
-      }),
-    ).rejects.toBe(failure);
+    await expect(notifyCommand(api, "status")).rejects.toBe(failure);
     expect(entries).not.toHaveBeenCalled();
   });
 
-  it.each([
-    "subscriber command",
-    "subscriber command from another API",
-    "persisted seen receipt on restart",
-  ] as const)("reuses empty notifier state and observes a later %s", async (addition) => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
-    const clock = createGatewaySchedulerClock(1_000);
-    const gatewayScheduler = createTestGatewayScheduler(clock.clock);
-    let scheduler = createTestPluginServiceScheduler(gatewayScheduler);
-    const sendText = vi.fn(async () => ({ channel: "telegram", to: "chat-123" }));
-    const storage = observeNotifyStorage();
-    const api = createApi(sendText, storage.openKeyedStore);
-    const warn = vi.spyOn(api.logger, "warn");
-    const seenStore = openStore<NotifySeenRequest>({
-      namespace: DEVICE_PAIR_NOTIFY_SEEN_REQUEST_NAMESPACE,
-      maxEntries: DEVICE_PAIR_NOTIFY_SEEN_REQUEST_MAX_ENTRIES,
-      defaultTtlMs: DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS,
-    });
-    try {
-      startPairingNotifier(api, scheduler);
-      await clock.advanceBy(10_000);
-      expect(warn).not.toHaveBeenCalled();
-      await expect(Promise.all(storage.takeStoreReads())).resolves.toEqual([[], []]);
-      expect(listDevicePairingMock).not.toHaveBeenCalled();
-      await clock.advanceBy(20_000);
-      expect(storage.takeStoreReads()).toEqual([]);
-
-      const isSubscriberCommand = addition !== "persisted seen receipt on restart";
-      if (isSubscriberCommand) {
-        const writerApi =
-          addition === "subscriber command" ? api : createApi(undefined, storage.openKeyedStore);
-        await notifyCommand(writerApi, "once");
-        setPendingRequests({});
-      } else {
-        await scheduler.stop();
-        await seenStore.register(notifyRequestStoreKey("request-1"), {
-          requestId: "request-1",
-          notifiedAtMs: 1_000,
-        });
-        scheduler = createTestPluginServiceScheduler(gatewayScheduler);
+  it.each(["subscriber command from another API", "persisted seen receipt on restart"] as const)(
+    "sleeps with empty notifier state and observes a later %s",
+    async (addition) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1_000);
+      const clock = createGatewaySchedulerClock(1_000);
+      const gatewayScheduler = createTestGatewayScheduler(clock.clock);
+      let scheduler = createTestPluginServiceScheduler(gatewayScheduler);
+      const sendText = vi.fn(async () => ({ channel: "telegram", to: "chat-123" }));
+      const storage = observeNotifyStorage();
+      const api = createApi(sendText, storage.openKeyedStore);
+      const warn = vi.spyOn(api.logger, "warn");
+      const seenStore = openStore<NotifySeenRequest>({
+        namespace: DEVICE_PAIR_NOTIFY_SEEN_REQUEST_NAMESPACE,
+        maxEntries: DEVICE_PAIR_NOTIFY_SEEN_REQUEST_MAX_ENTRIES,
+        defaultTtlMs: DEVICE_PAIR_NOTIFY_MAX_SEEN_AGE_MS,
+      });
+      try {
         startPairingNotifier(api, scheduler);
-      }
+        await clock.advanceBy(10_000);
+        expect(warn).not.toHaveBeenCalled();
+        await expect(Promise.all(storage.takeStoreReads())).resolves.toEqual([[], []]);
+        expect(listDevicePairingMock).not.toHaveBeenCalled();
+        expect(gatewayScheduler.nextWakeAtMs).toBeNull();
+        await clock.advanceBy(20_000);
+        expect(storage.takeStoreReads()).toEqual([]);
+        expect(gatewayScheduler.nextWakeAtMs).toBeNull();
 
-      await clock.advanceBy(10_000);
+        const isSubscriberCommand = addition !== "persisted seen receipt on restart";
+        if (isSubscriberCommand) {
+          const writerApi = createApi(undefined, storage.openKeyedStore);
+          await notifyCommand(writerApi, "once");
+          setPendingRequests({});
+        } else {
+          await scheduler.stop();
+          await seenStore.register(notifyRequestStoreKey("request-1"), {
+            requestId: "request-1",
+            notifiedAtMs: 1_000,
+          });
+          scheduler = createTestPluginServiceScheduler(gatewayScheduler);
+          startPairingNotifier(api, scheduler);
+        }
 
-      expect(warn).not.toHaveBeenCalled();
-      expect(listDevicePairingMock).toHaveBeenCalledTimes(1);
-      expect(sendText).toHaveBeenCalledTimes(isSubscriberCommand ? 1 : 0);
-      if (isSubscriberCommand) {
-        expect(sendText).toHaveBeenCalledWith(
-          expect.objectContaining({ text: expect.stringContaining("ID: request-1") }),
-        );
-      } else {
-        await expect(seenStore.entries()).resolves.toEqual([]);
+        await clock.advanceBy(10_000);
+
+        expect(warn).not.toHaveBeenCalled();
+        expect(listDevicePairingMock).toHaveBeenCalledTimes(1);
+        expect(sendText).toHaveBeenCalledTimes(isSubscriberCommand ? 1 : 0);
+        if (isSubscriberCommand) {
+          expect(sendText).toHaveBeenCalledWith(
+            expect.objectContaining({ text: expect.stringContaining("ID: request-1") }),
+          );
+        } else {
+          await expect(seenStore.entries()).resolves.toEqual([]);
+        }
+      } finally {
+        await scheduler.stop();
       }
-    } finally {
-      await scheduler.stop();
-    }
-  });
+    },
+  );
 
   it.each([false, true])(
     "does not cache an empty read across another API's committed arm (lost reply: %s)",
@@ -516,14 +493,7 @@ describe("device-pair notify persistence", () => {
       ts: 2,
     };
     const api = createApi(sendText, storage.openKeyedStore);
-    await handleNotifyCommand({
-      api,
-      ctx: {
-        channel: "telegram",
-        senderId: "chat-123",
-      },
-      action: "on",
-    });
+    await notifyCommand(api, "on");
     listDevicePairingMock.mockResolvedValue({ pending: [firstRequest], paired: [] });
     let service = createNotifier(api);
 
@@ -573,22 +543,8 @@ describe("device-pair notify persistence", () => {
       return firstSend.promise;
     });
     const api = createApi(sendText, storage.openKeyedStore);
-    await handleNotifyCommand({
-      api,
-      ctx: { channel: "telegram", senderId: "old-chat" },
-      action: "on",
-    });
-    listDevicePairingMock.mockResolvedValue({
-      pending: [
-        {
-          requestId: "request-1",
-          deviceId: "device-1",
-          publicKey: "public-key-1",
-          ts: 2_000,
-        },
-      ],
-      paired: [],
-    });
+    await notifyCommand(api, "on", { senderId: "old-chat" });
+    setPendingRequests({});
     const service = createNotifier(api);
 
     service.start();
@@ -623,28 +579,11 @@ describe("device-pair notify persistence", () => {
     });
     const api = createApi(sendText, storage.openKeyedStore);
     api.logger.warn = storage.pollFailed;
-    await handleNotifyCommand({
-      api,
-      ctx: { channel: "telegram", senderId: "chat-123" },
-      action: "once",
-    });
-    listDevicePairingMock.mockResolvedValue({
-      pending: [
-        {
-          requestId: "request-1",
-          deviceId: "device-1",
-          publicKey: "public-key-1",
-          ts: 2_000,
-        },
-        {
-          requestId: "request-2",
-          deviceId: "device-2",
-          publicKey: "public-key-2",
-          ts: 2_001,
-        },
-      ],
-      paired: [],
-    });
+    await notifyCommand(api, "once");
+    setPendingRequests(
+      {},
+      { requestId: "request-2", deviceId: "device-2", publicKey: "public-key-2", ts: 2_001 },
+    );
     const service = createNotifier(api);
 
     try {
@@ -654,11 +593,7 @@ describe("device-pair notify persistence", () => {
       expect(sendText).toHaveBeenCalledTimes(1);
 
       vi.setSystemTime(1_000);
-      await handleNotifyCommand({
-        api,
-        ctx: { channel: "telegram", senderId: "chat-123" },
-        action: "once",
-      });
+      await notifyCommand(api, "once");
       firstSend.resolve({ channel: "telegram", to: "chat-123" });
       await storage.requestStored("request-1");
       await vi.advanceTimersByTimeAsync(0);
@@ -686,13 +621,7 @@ describe("device-pair notify persistence", () => {
     const storage = observeNotifyStorage();
     const api = createApi(sendText, storage.openKeyedStore);
     api.logger.warn = storage.pollFailed;
-    const command = {
-      api,
-      ctx: { channel: "telegram", senderId: "chat-123" },
-      action: "once" as const,
-    };
-
-    await handleNotifyCommand(command);
+    await notifyCommand(api, "once");
     const key = notifySubscriberStoreKey({ to: "chat-123" });
     const first = await openSubscriberStore().lookup(key);
     await notifyCommand(api, "once");
@@ -727,23 +656,10 @@ describe("device-pair notify persistence", () => {
     api.logger.warn = storage.pollFailed;
     const subscriber: NotifySubscription = { to: "chat-123", mode: "once", addedAtMs: 1_000 };
     await openSubscriberStore().register(notifySubscriberStoreKey(subscriber), subscriber);
-    listDevicePairingMock.mockResolvedValue({
-      pending: [
-        {
-          requestId: "request-1",
-          deviceId: "device-1",
-          publicKey: "public-key-1",
-          ts: 1_001,
-        },
-        {
-          requestId: "request-2",
-          deviceId: "device-2",
-          publicKey: "public-key-2",
-          ts: 1_002,
-        },
-      ],
-      paired: [],
-    });
+    setPendingRequests(
+      { ts: 1_001 },
+      { requestId: "request-2", deviceId: "device-2", publicKey: "public-key-2", ts: 1_002 },
+    );
     const service = createNotifier(api);
 
     try {

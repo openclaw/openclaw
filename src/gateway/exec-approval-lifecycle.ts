@@ -684,11 +684,33 @@ export abstract class ExecApprovalLifecycle<TPayload> {
     opts: {
       includeResolved?: boolean;
       authority?: ExecApprovalReadAuthority;
-      filter?: (record: ExecApprovalRecord<TPayload>) => boolean;
+      filter?: (record: ExecApprovalRecord<TPayload>) => boolean | Promise<boolean>;
     } = {},
   ): Promise<ExecApprovalIdLookupResult> {
     await this.listPendingRecords(opts.authority);
-    return this.lookupLocalApprovalId(input, opts);
+    const filter = opts.filter;
+    if (!filter) {
+      return this.lookupLocalApprovalId(input, { includeResolved: opts.includeResolved });
+    }
+    const exact = this.getLocalSnapshot(input) ?? this.getLocalSnapshot(input.trim());
+    const prefix = normalizeLowercaseStringOrEmpty(input.trim());
+    const candidates = exact
+      ? [exact]
+      : Array.from(this.pending.values(), ({ record }) => record).filter(
+          (record) => prefix && normalizeLowercaseStringOrEmpty(record.id).startsWith(prefix),
+        );
+    const allowed = await Promise.all(
+      candidates.map(async (record) =>
+        (opts.includeResolved || record.resolvedAtMs === undefined) && (await filter(record))
+          ? record
+          : undefined,
+      ),
+    );
+    opts.authority?.assertCurrent();
+    return this.lookupLocalApprovalId(input, {
+      includeResolved: opts.includeResolved,
+      filter: (record) => allowed.includes(record),
+    });
   }
 
   lookupLocalApprovalId(
@@ -717,14 +739,13 @@ export abstract class ExecApprovalLifecycle<TPayload> {
     const matches: string[] = [];
     for (const [id, record] of candidates) {
       if (
+        !normalizeLowercaseStringOrEmpty(id).startsWith(lowerPrefix) ||
         (!opts.includeResolved && record.resolvedAtMs !== undefined) ||
         opts.filter?.(record) === false
       ) {
         continue;
       }
-      if (normalizeLowercaseStringOrEmpty(id).startsWith(lowerPrefix)) {
-        matches.push(id);
-      }
+      matches.push(id);
     }
     return matches.length === 1
       ? { kind: "prefix", id: expectDefined(matches[0], "approval prefix match") }

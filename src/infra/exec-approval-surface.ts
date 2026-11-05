@@ -40,6 +40,7 @@ function hasNativeExecApprovalCapability(channel?: string): boolean {
   return Boolean(
     capability.getExecInitiatingSurfaceStateAsync ||
     capability.getExecInitiatingSurfaceState ||
+    capability.getActionAvailabilityStateAsync ||
     capability.getActionAvailabilityState,
   );
 }
@@ -47,7 +48,6 @@ function hasNativeExecApprovalCapability(channel?: string): boolean {
 export function resolveExecApprovalInitiatingSurfaceStateAsync(params: {
   channel?: string | null;
   accountId?: string | null;
-  cfg?: OpenClawConfig;
 }): Promise<ExecApprovalInitiatingSurfaceState> {
   return resolveApprovalInitiatingSurfaceStateAsync({ ...params, approvalKind: "exec" });
 }
@@ -81,13 +81,15 @@ export async function resolveApprovalInitiatingSurfaceStateAsync(params: {
     (params.approvalKind === "exec"
       ? await execHook?.({ cfg, accountId: params.accountId, action: "approve" })
       : undefined) ??
-    capability?.getActionAvailabilityState?.({
+    (await (
+      capability?.getActionAvailabilityStateAsync ?? capability?.getActionAvailabilityState
+    )?.({
       cfg,
       accountId: params.accountId,
       action: "approve",
       approvalKind: params.approvalKind,
       ...(params.request ? { request: params.request } : {}),
-    });
+    }));
   if (state) {
     return { ...state, channel, channelLabel, accountId };
   }

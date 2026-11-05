@@ -152,24 +152,6 @@ function extractCorrectionSignals(turns: TranscriptTurn[]): string[] {
     .slice(0, 2);
 }
 
-function deriveSummary(params: {
-  title: string;
-  digestStatus: "available" | "withheld";
-  assistantOpener?: string;
-  firstUserLine?: string;
-  riskReasons: string[];
-  topicLabel: string;
-}): string {
-  if (params.digestStatus === "withheld") {
-    if (params.riskReasons.length > 0) {
-      return `Sensitive ${params.topicLabel.toLowerCase()} chat withheld from durable-memory extraction because it touches ${params.riskReasons.join(", ")}.`;
-    }
-    return `Sensitive ${params.topicLabel.toLowerCase()} chat withheld from durable-memory extraction pending review.`;
-  }
-  const content = params.assistantOpener || params.firstUserLine;
-  return content ? shortenSentence(content) : params.title;
-}
-
 function normalizeRiskLevel(value: unknown): "low" | "medium" | "high" | "unknown" {
   if (value === "low" || value === "medium" || value === "high") {
     return value;
@@ -258,6 +240,16 @@ export function projectMemoryWikiImportInsight(
   const updatedAt = normalizeOptionalString(parsed.frontmatter.updatedAt);
   const title = page.title.replace(/^ChatGPT Export:\s*/i, "");
   const riskReasons = normalizeStringArray(parsed.frontmatter.riskReasons);
+  function deriveSummary(): string {
+    if (digestStatus === "withheld") {
+      if (riskReasons.length > 0) {
+        return `Sensitive ${topic.label.toLowerCase()} chat withheld from durable-memory extraction because it touches ${riskReasons.join(", ")}.`;
+      }
+      return `Sensitive ${topic.label.toLowerCase()} chat withheld from durable-memory extraction pending review.`;
+    }
+    const content = assistantOpener || firstUserLine;
+    return content ? shortenSentence(content) : title;
+  }
   return {
     pagePath: page.relativePath,
     title,
@@ -276,14 +268,7 @@ export function projectMemoryWikiImportInsight(
     ...(firstUserLine ? { firstUserLine } : {}),
     ...(lastUserLine ? { lastUserLine } : {}),
     ...(assistantOpener ? { assistantOpener } : {}),
-    summary: deriveSummary({
-      title,
-      digestStatus,
-      assistantOpener,
-      firstUserLine,
-      riskReasons,
-      topicLabel: topic.label,
-    }),
+    summary: deriveSummary(),
     candidateSignals,
     correctionSignals,
     preferenceSignals,
@@ -307,7 +292,7 @@ export function buildMemoryWikiImportInsights(input: MemoryWikiImportInsightItem
     .map(([key, clusterItems]) => {
       const updatedAt = clusterItems
         .map((item) => item.updatedAt ?? item.createdAt)
-        .find((value): value is string => typeof value === "string" && value.length > 0);
+        .find((value): value is string => value !== undefined && value.length > 0);
       return Object.assign(
         {
           key,

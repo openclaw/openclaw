@@ -3,6 +3,7 @@ import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { isOpenClawStateWriteContentionError } from "../state/openclaw-state-ownership.js";
 import { formatErrorMessage } from "./errors.js";
 import { trimLogTail } from "./restart-sentinel.js";
+import { isSqliteSchemaVersionError } from "./sqlite-user-version.js";
 import {
   PACKAGE_POST_INSTALL_DOCTOR_ADVISORY,
   normalizeUpdatePostInstallDoctorWarnings,
@@ -143,6 +144,7 @@ export async function deferPackageStateVerification(
   params: {
     root: string;
     restart?: boolean;
+    migrationRecorded?: boolean;
     results?: UpdateStepResult[];
     progress:
       | { onStepComplete?: (step: UpdateStepResult & { index: number; total: number }) => unknown }
@@ -154,7 +156,13 @@ export async function deferPackageStateVerification(
   // Snapshot discovery wraps admission errors; typed outer refusals retain their meaning.
   const cause =
     error instanceof Error && error.constructor === Error ? (error.cause ?? error) : error;
-  if (params.restart !== false || !isOpenClawStateWriteContentionError(cause)) {
+  const candidateOwnsVerification =
+    (params.migrationRecorded === true || params.restart === false) &&
+    isSqliteSchemaVersionError(cause);
+  if (
+    !candidateOwnsVerification &&
+    (params.restart !== false || !isOpenClawStateWriteContentionError(cause))
+  ) {
     throw error;
   }
   const step: UpdateStepResult = {
@@ -165,8 +173,9 @@ export async function deferPackageStateVerification(
     exitCode: null,
     advisory: {
       kind: "recoverable-maintenance",
-      message:
-        "Post-install state verification deferred: another process holds the state database and --no-restart leaves activation to the operator. Restart the Gateway through its service owner, then run openclaw update status and openclaw doctor. Keep recovery backups until verification completes.",
+      message: candidateOwnsVerification
+        ? "Post-install state verification deferred to the candidate after candidate migration; this updater cannot reopen the newer schema. Keep the installed candidate and recovery backups, and run openclaw update status and openclaw doctor after startup completes."
+        : "Post-install state verification deferred: another process holds the state database. With --no-restart, the package Gateway may restart itself after replacement. Run openclaw update status and openclaw doctor after it is ready. Keep recovery backups until verification completes.",
     },
   };
   params.results?.push(step);

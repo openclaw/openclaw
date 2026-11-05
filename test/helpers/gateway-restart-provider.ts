@@ -4,12 +4,14 @@ import { killProcessTree } from "../../src/process/kill-tree.js";
 import { getFileLockProcessStartTime } from "../../src/shared/pid-alive.js";
 import { reserveTestPortListener } from "../../src/test-utils/port-claims.js";
 import { writeOpenAiResponsesSse, writeOpenAiResponsesText } from "./openai-responses-sse.js";
-import { createDeferred } from "./promise.js";
+import { createDeferred, withinTest } from "./promise.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
 export async function startGatewayRestartProvider(signal: AbortSignal) {
   const ready = createDeferred();
   void ready.promise.catch(() => {});
+  const recoveryReleased = createDeferred();
+  let recovering = false;
   const held = new Set<number>();
   const issuedExecs = new Set<number>();
   const processes = new Map<number, number>();
@@ -51,7 +53,14 @@ export async function startGatewayRestartProvider(signal: AbortSignal) {
     const executionTool =
       Array.isArray(body.tools) &&
       body.tools.some((tool) => isRecord(tool) && tool.name === "exec");
-    if (!executionTool) {
+    const currentInput = JSON.stringify(
+      input.slice(input.findLastIndex((item) => isRecord(item) && item.role === "assistant") + 1),
+    );
+    const recoveryRequest =
+      recovering &&
+      currentInput.includes("Your previous turn was interrupted by a gateway restart");
+    const completionRequest = recovering && currentInput.includes("Exec lost (");
+    if (!executionTool && !recoveryRequest && !completionRequest) {
       const reply = "Synthetic restart handoff session";
       if (body.stream === false) {
         response.writeHead(200, { "content-type": "application/json" });
@@ -86,6 +95,21 @@ export async function startGatewayRestartProvider(signal: AbortSignal) {
       throw new Error("Execution request lost its session marker");
     }
     const index = Number(marker);
+    if (recovering) {
+      if (!recoveryRequest && !completionRequest) {
+        throw new Error("Successor execution request lost its restart recovery context");
+      }
+      await withinTest(recoveryReleased.promise, signal);
+      const kind = recoveryRequest ? "recovered" : "exec_lost";
+      writeOpenAiResponsesText(response, {
+        text: recoveryRequest
+          ? `RESTART_HANDOFF_RESUMED_${index}`
+          : `RESTART_HANDOFF_EXEC_LOST_${index}`,
+        messageId: `msg_${kind}_${index}`,
+        responseId: `resp_${kind}_${index}`,
+      });
+      return;
+    }
     const outputs = input.filter((item) => isRecord(item) && item.type === "function_call_output");
     for (const output of outputs) {
       const pid = /Command still running \(session [^,]+, pid (\d+)\)/.exec(
@@ -154,7 +178,12 @@ export async function startGatewayRestartProvider(signal: AbortSignal) {
   return {
     baseUrl: `http://127.0.0.1:${reservation.claim.port}/v1`,
     ready: ready.promise,
+    beginRecovery() {
+      recovering = true;
+    },
+    releaseRecovery: recoveryReleased.resolve,
     async close() {
+      recoveryReleased.resolve();
       await runQaGatewayFixture(
         async () => {
           for (const [pid, startedAt] of processes) {

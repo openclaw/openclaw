@@ -1,4 +1,3 @@
-/** Shared argument splitter for service command lines rendered by platform adapters. */
 type ArgSplitEscapeMode = "none" | "backslash" | "backslash-quote-only";
 type ArgSplitQuoteChar = '"' | "'";
 type ArgSplitQuoteStart = "anywhere" | "item-start";
@@ -13,7 +12,7 @@ export function splitArgsPreservingQuotes(
   },
 ): string[] {
   const args: string[] = [];
-  let current = "";
+  let current: string | null = null;
   let quoteChar: ArgSplitQuoteChar | null = null;
   const escapeMode = options?.escapeMode ?? "none";
   const quoteChars = new Set<ArgSplitQuoteChar>(options?.quoteChars ?? ['"']);
@@ -28,7 +27,7 @@ export function splitArgsPreservingQuotes(
     ) {
       // POSIX consumes every escape; Windows only consumes inserted quotes, keeping path slashes.
       if (i + 1 < value.length) {
-        current += value[i + 1];
+        current = (current ?? "") + value[i + 1];
         i++;
       }
       continue;
@@ -38,22 +37,22 @@ export function splitArgsPreservingQuotes(
         quoteChar = null;
         continue;
       }
-      const canOpenQuote = quoteStart === "anywhere" || current.length === 0;
-      if (!quoteChar && canOpenQuote) {
+      if (!quoteChar && (quoteStart === "anywhere" || !current)) {
         quoteChar = char as ArgSplitQuoteChar;
+        current ??= "";
         continue;
       }
     }
     if (!quoteChar && /\s/.test(char)) {
-      if (current) {
+      if (current !== null) {
         args.push(current);
-        current = "";
+        current = null;
       }
       continue;
     }
-    current += char;
+    current = (current ?? "") + char;
   }
-  if (current) {
+  if (current !== null) {
     args.push(current);
   }
   return args;

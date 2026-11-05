@@ -45,16 +45,11 @@ export type CloseParams = SessionEntryCurrentPreparation & {
   /** Gates new cleanup claims, without revoking an already admitted close. */
   isCurrent?: () => boolean;
   closeTab?: CloseTab;
-  closeDurableTab?: (
-    tab: DurableTab,
-    options: { closeIfCurrent: CloseIfCurrent },
-  ) => Promise<CloseTrackedCdpTargetResult>;
   getResolvedBrowserConfig?: () =>
     | ResolvedBrowserConfig
     | null
     | Promise<ResolvedBrowserConfig | null>;
   onWarn?: (message: string) => void;
-  onDebug?: (message: string) => void;
 };
 
 const deferredTabDiagnosticsSymbol = Symbol.for(
@@ -97,10 +92,6 @@ function reportDeferredTab(params: CloseParams, tab: DurableTab, reason: string)
   const message = `deferred tracked browser tab ${tab.nativeTargetId}: ${reason}`;
   if (recordDeferredTabDiagnostic(tab, reason)) {
     params.onWarn?.(message);
-    return;
-  }
-  if (params.onDebug) {
-    params.onDebug(message);
     return;
   }
   log.debug(message);
@@ -204,13 +195,17 @@ async function closeCurrentDurableTab(
   getResolvedBrowserConfig?: CloseParams["getResolvedBrowserConfig"],
 ): Promise<DurableCleanupResult> {
   // Empty session cleanup must not initialize Browser control or its CDP graph.
-  const [{ getRuntimeConfig }, { resolveCdpControlPolicy }, { closeTrackedCdpTarget }, config] =
-    await Promise.all([
-      import("openclaw/plugin-sdk/runtime-config-snapshot"),
-      import("./cdp-reachability-policy.js"),
-      import("./cdp.helpers.js"),
-      import("./config.js"),
-    ]);
+  const [
+    { readRuntimeConfig: getRuntimeConfig },
+    { resolveCdpControlPolicy },
+    { closeTrackedCdpTarget },
+    config,
+  ] = await Promise.all([
+    import("openclaw/plugin-sdk/runtime-config-snapshot"),
+    import("./cdp-reachability-policy.js"),
+    import("./cdp.helpers.js"),
+    import("./config.js"),
+  ]);
   let resolved = await getResolvedBrowserConfig?.();
   if (!resolved) {
     const cfg = getRuntimeConfig();
@@ -281,9 +276,7 @@ export async function closeDurableTab(
     )) ?? { status: "cancelled" };
   let outcome: DurableCleanupResult;
   try {
-    if (params.closeDurableTab) {
-      outcome = await params.closeDurableTab(tab, { closeIfCurrent });
-    } else if (params.closeTab) {
+    if (params.closeTab) {
       const closeTab = params.closeTab;
       outcome = await closeIfCurrent(async () => {
         await closeTab({

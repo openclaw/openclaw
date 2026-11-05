@@ -2,11 +2,10 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { INTERNAL_WAKE_TRANSCRIPT_PROMPTS } from "../auto-reply/heartbeat.js";
-import { HEARTBEAT_TOKEN, isSilentReplyPayloadText } from "../auto-reply/tokens.js";
+import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import { normalizeAgentPlanSteps } from "../channels/streaming.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { redactToolPayloadText } from "../logging/redact.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
@@ -75,30 +74,25 @@ function syncAssistantBuffer(state: SessionActivityNoteState, at = Date.now()): 
   if (!state.assistantBufferDirty) {
     return;
   }
-  state.assistantBuffer = assembleAssistantBuffer(
-    state.assistantRawBuffer,
-    ASSISTANT_BUFFER_MAX_CHARS,
-  );
+  const buffer = assembleAssistantBuffer(state.assistantRawBuffer, ASSISTANT_BUFFER_MAX_CHARS);
+  // A retained V8 slice otherwise keeps the complete assistant snapshot alive.
+  state.assistantBuffer = Buffer.from(buffer, "utf16le").toString("utf16le");
+  state.assistantRawBuffer = "";
   state.assistantBufferDirty = false;
   state.lastAssistantBufferAt = at;
 }
 
 function keepUtf16SafeTail(value: string, maxChars: number): string {
-  if (value.length <= maxChars) {
-    return value;
-  }
-  let start = value.length - maxChars;
+  let start = Math.max(0, value.length - maxChars);
   const lead = value.charCodeAt(start);
-  if (lead >= 0xdc00 && lead <= 0xdfff) {
+  if (start > 0 && lead >= 0xdc00 && lead <= 0xdfff) {
     start += 1;
   }
   return value.slice(start);
 }
 
 function sanitizeActivityText(value: string, maxChars: number): string {
-  const normalized = redactToolPayloadText(stripInternalRuntimeContext(value))
-    .replace(/\s+/gu, " ")
-    .trim();
+  const normalized = stripInternalRuntimeContext(value).replace(/\s+/gu, " ").trim();
   return truncateUtf16Safe(normalized, maxChars);
 }
 
@@ -125,7 +119,7 @@ function summarizeToolArgs(args: unknown): string {
   ]) {
     const value = record[key];
     if (typeof value === "string") {
-      summary[key] = redactToolPayloadText(value);
+      summary[key] = value;
     } else if (typeof value === "number" || typeof value === "boolean") {
       summary[key] = value;
     }
@@ -182,7 +176,6 @@ export function flushSessionActivityAssistantNote(
 ): void {
   // Consumers force the latest cumulative snapshot; periodic assembly only keeps live state warm.
   syncAssistantBuffer(state);
-  // Redact assembled prose so split secrets match and raw fragments do not count as notes.
   if (!state.assistantBuffer || state.assistantBuffer.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN)) {
     return;
   }
@@ -192,7 +185,7 @@ export function flushSessionActivityAssistantNote(
     !visible ||
     visible === HEARTBEAT_TOKEN ||
     Object.values(INTERNAL_WAKE_TRANSCRIPT_PROMPTS).some((prompt) => visible === prompt) ||
-    isSilentReplyPayloadText(visible)
+    state.terminalReply?.disposition === "silent"
   ) {
     return;
   }
@@ -298,7 +291,6 @@ export function noteSessionActivityEvent(
           state.assistantBuffer + delta,
           ASSISTANT_BUFFER_MAX_CHARS,
         );
-        state.assistantRawBuffer = state.assistantBuffer;
         state.lastAssistantBufferAt = event.ts;
         return;
       } else {

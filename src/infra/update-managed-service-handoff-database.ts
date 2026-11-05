@@ -8,7 +8,7 @@ import { root as openLockRoot, type Root } from "@openclaw/fs-safe/root";
 import { sql } from "kysely";
 import { z } from "zod";
 import { formatCliCommand } from "../cli/command-format.js";
-import { ensureColumn } from "../state/openclaw-state-db-schema-helpers.js";
+import { ensureColumn, tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
 import { hasErrnoCode } from "./errno.js";
@@ -19,6 +19,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
+import { packageUpdateRefusal } from "./package-update-refusal.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import {
   isSqliteLockError,
@@ -46,7 +47,7 @@ export type LeaseTable = LeaseRow & { install_root: string; recovery_json?: stri
 export const leaseQueries = (db: HandoffDatabase) =>
   getNodeSqliteKysely<{ managed_update_handoffs: LeaseTable }>(db);
 
-const HANDOFF_BUSY_TIMEOUT_MS = 5_000;
+export const HANDOFF_BUSY_TIMEOUT_MS = 5_000;
 const writeAdmissions = new AsyncLocalStorage<{
   owner: string;
   deadline: number;
@@ -56,6 +57,7 @@ const writeAdmissions = new AsyncLocalStorage<{
 
 type HandoffDatabaseOwner = {
   <T>(write: boolean, operation: (db: HandoffDatabase) => T): T;
+  readonly databasePath: string;
   forExisting(identity: ManagedUpdateLeaseDatabaseIdentity): HandoffDatabaseOwner;
   retainReadConnection(this: void): { [Symbol.dispose](): void };
   transact<T>(db: HandoffDatabase, operation: () => T, options: SqliteTransactionOptions): T;
@@ -70,7 +72,8 @@ function assertRecordedDatabasePath(
   existingIdentity?: ManagedUpdateLeaseDatabaseIdentity,
 ): void {
   if (existingIdentity && databasePath !== existingIdentity.databasePath) {
-    throw new Error(
+    throw packageUpdateRefusal(
+      "managed-handoff-lease-identity-changed",
       identityChangedMessage(databasePath, [
         `path (recorded ${existingIdentity.databasePath}; current ${databasePath})`,
       ]),
@@ -107,7 +110,12 @@ export async function prepareManagedHandoffLeaseDatabase(
   if (existingIdentity) {
     assertManagedUpdateLeaseDatabaseIdentity(existingIdentity);
   }
-  return createManagedHandoffLeaseDatabase(databasePath, existingIdentity, lockRoot);
+  // Canonicalize unbound admissions before original acquisition reenters its writer.
+  // Keep earned pins exact and leave unsafe database leaves for no-follow recovery.
+  const canonicalPath = existingIdentity
+    ? databasePath
+    : path.join(lockRoot.rootReal, path.basename(databasePath));
+  return createManagedHandoffLeaseDatabase(canonicalPath, existingIdentity, lockRoot);
 }
 
 /** Bootstrap owned storage and capture the identity used by later no-repair operations. */
@@ -169,6 +177,9 @@ export function readManagedHandoffRepairMetadata(
 }
 
 function initializeLeaseSchema(db: HandoffDatabase): void {
+  if (tableExists(db, "managed_update_handoffs")) {
+    return;
+  }
   executeSqliteQuerySync(
     db,
     leaseQueries(db)
@@ -350,7 +361,10 @@ export function captureManagedUpdateLeaseDatabaseIdentity(
       );
     }
     if (changes.length) {
-      throw new Error(identityChangedMessage(databasePath, changes));
+      throw packageUpdateRefusal(
+        "managed-handoff-lease-identity-changed",
+        identityChangedMessage(databasePath, changes),
+      );
     }
   }
   return Object.freeze({
@@ -373,6 +387,10 @@ export function createManagedHandoffLeaseDatabase(
   writeLockRoot?: Root,
 ): HandoffDatabaseOwner {
   assertRecordedDatabasePath(databasePath, existingIdentity);
+  const admissionPath = path.join(
+    writeLockRoot?.rootReal ?? path.dirname(databasePath),
+    path.basename(databasePath),
+  );
   const assertCurrent = () => {
     if (existingIdentity) {
       assertManagedUpdateLeaseDatabaseIdentity(existingIdentity);
@@ -416,17 +434,14 @@ export function createManagedHandoffLeaseDatabase(
       return;
     }
     const current = writeAdmissions.getStore();
-    const admission = current?.databasePath === target ? current : undefined;
-    const release = acquireFileLockSyncWithRetry(
-      target,
-      writeLockRoot || admission
-        ? {
-            lockRoot: writeLockRoot ?? admission?.lockRoot,
-            reentrantOwner: admission?.owner,
-            timeoutMs: HANDOFF_BUSY_TIMEOUT_MS,
-          }
-        : undefined,
-    );
+    const admission =
+      current && path.relative(current.databasePath, admissionPath) === "" ? current : undefined;
+    const release = acquireFileLockSyncWithRetry(target, {
+      lockRoot: admission?.lockRoot ?? writeLockRoot,
+      reentrantOwner: admission?.owner,
+      timeoutMs: HANDOFF_BUSY_TIMEOUT_MS,
+      phase: "managed-handoff:store-repair",
+    });
     try {
       if (!observeUnadoptable(target)) {
         return;
@@ -530,12 +545,12 @@ export function createManagedHandoffLeaseDatabase(
     assertCurrent();
     const inherited = writeAdmissions.getStore();
     const admission =
-      inherited?.databasePath === databasePath
+      inherited && path.relative(inherited.databasePath, admissionPath) === ""
         ? inherited
         : {
             owner: randomUUID(),
             deadline: performance.now() + HANDOFF_BUSY_TIMEOUT_MS,
-            databasePath,
+            databasePath: admissionPath,
             lockRoot: writeLockRoot,
           };
     if (!writeLockRoot && !existingIdentity) {
@@ -545,15 +560,18 @@ export function createManagedHandoffLeaseDatabase(
     // Wait before pinning a SHARED snapshot, which would block the current writer's commit.
     // Direct Windows initializers share this lock: fs-safe briefly publishes two links.
     const release = acquireFileLockSyncWithRetry(databasePath, {
-      lockRoot: writeLockRoot ?? admission.lockRoot,
+      // Reentrant acquisition belongs to the original Root as well as its logical owner.
+      lockRoot: admission.lockRoot ?? writeLockRoot,
       reentrantOwner: admission.owner,
       timeoutMs: remaining(),
+      phase: "managed-handoff:writer-admission",
     });
     return runWithSqliteCleanup({ release }, "Managed handoff writer admission", () =>
       writeAdmissions.run(admission, () => accessDatabase(write, operation, remaining())),
     );
   }
   return Object.assign(withDatabase, {
+    databasePath,
     forExisting(identity: ManagedUpdateLeaseDatabaseIdentity) {
       return createManagedHandoffLeaseDatabase(identity.databasePath, identity, writeLockRoot);
     },

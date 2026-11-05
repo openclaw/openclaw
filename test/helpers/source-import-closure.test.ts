@@ -12,13 +12,13 @@ beforeAll(() => {
   fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "source-import-closure-"));
   fixturePath = path.relative(repoRoot, fixtureRoot);
   const files = {
-    "tsx-entry.ts": 'import { view } from "./view.tsx"; export { view };',
-    "view.tsx": 'import "./forbidden.js"; export const view = <span />;',
     "raw.ts": 'import html from "./page.html?raw"; export { html };',
     "missing.ts": 'import html from "./missing.html?raw"; export { html };',
     "raw-value.ts": 'import "./forbidden.ts?raw=1";',
     "raw-empty-value.ts": 'import "./forbidden.ts?raw=";',
     "backedge.ts": 'import "./page.html?raw"; import "./forbidden.js";',
+    "jsx-entry.ts": 'import "./view.tsx";',
+    "view.tsx": 'import "./forbidden.js"; export const view = <div />;',
     "page.html": '<script type="module">import "./forbidden.js";</script>',
     "forbidden.ts": "export const value = 1;",
   };
@@ -49,6 +49,17 @@ it("still follows source backedges alongside Vite raw imports", () => {
   ).toEqual([`${fixturePath}/backedge.ts -> ${fixturePath}/forbidden.ts`]);
 });
 
+it("follows a TSX source backedge without requiring JSX in the repository config", () => {
+  expect(
+    findSourceImportBackedges(`${fixturePath}/jsx-entry.ts`, [`${fixturePath}/forbidden.ts`]),
+  ).toEqual([
+    `${fixturePath}/jsx-entry.ts -> ${fixturePath}/view.tsx -> ${fixturePath}/forbidden.ts`,
+  ]);
+  expect(
+    findSourceImportBackedges(`${fixturePath}/view.tsx`, [`${fixturePath}/forbidden.ts`]),
+  ).toEqual([`${fixturePath}/view.tsx -> ${fixturePath}/forbidden.ts`]);
+});
+
 it.each(["raw-value", "raw-empty-value"])(
   "follows executable imports whose raw parameter has a value (%s)",
   (name) => {
@@ -57,14 +68,3 @@ it.each(["raw-value", "raw-empty-value"])(
     ).toEqual([`${fixturePath}/${name}.ts -> ${fixturePath}/forbidden.ts`]);
   },
 );
-
-it("follows TSX source dependencies and entrypoints", () => {
-  expect(
-    findSourceImportBackedges(`${fixturePath}/tsx-entry.ts`, [`${fixturePath}/forbidden.ts`]),
-  ).toEqual([
-    `${fixturePath}/tsx-entry.ts -> ${fixturePath}/view.tsx -> ${fixturePath}/forbidden.ts`,
-  ]);
-  expect(
-    findSourceImportBackedges(`${fixturePath}/view.tsx`, [`${fixturePath}/forbidden.ts`]),
-  ).toEqual([`${fixturePath}/view.tsx -> ${fixturePath}/forbidden.ts`]);
-});

@@ -13,6 +13,13 @@ The agent gets **one tool** for browser automation:
 
 How it maps:
 
+- On Playwright-backed profiles, `browser open` honors `timeoutMs` for opening
+  navigation, capped at 120 seconds, with a 30-second default. If the load event times
+  out after a page commits, `open` returns the usable tab after navigation safety
+  checks; it may still be loading. Use `snapshot` or `act` with `kind: "wait"` to
+  inspect or wait for the content you need. Uncommitted or blocked pages still
+  fail and are cleaned up. Cancelling an in-progress open closes its newly created
+  tab without waiting for the navigation timeout; existing tabs remain open.
 - `browser snapshot` returns a stable UI tree (AI or ARIA).
 - Snapshot `query` keeps lines containing **all** whitespace-separated query tokens, ignoring case. Matching lines retain element refs; the result reports the match count and respects `maxChars`. It searches the returned snapshot, so increase the snapshot scope if the source was truncated.
 - `browser requests` reads the collected network log. Optional `filter` matches a substring in the URL or resource type; `limit` keeps the most recent entries (default 50). Results report `total` matching collected requests and `returned` entries; the output budget may reduce that count further. `clear=true` clears the entire collected log after reading, including entries omitted by filtering or limits.
@@ -28,6 +35,8 @@ How it maps:
   When a captured control disappears, its bound ref fails. Take a new snapshot
   before retrying the action.
 - `browser screenshot` captures pixels (full page, element, or labeled refs).
+  Attached-browser workspace artifacts keep the normalized image's extension;
+  a PNG request can produce a `.jpg` artifact when normalization converts it to JPEG.
 - If a screenshot times out while the browser is still capturing or restoring
   page settings, further screenshots, resizing, and device changes on that tab
   return a recovery error. Retry after the capture finishes. If it stays stuck,

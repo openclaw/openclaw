@@ -16,11 +16,13 @@ import {
   resolvePluginRuntimeArtifactPreference,
 } from "./plugin-runtime-artifact-selection.js";
 import { getPluginSetupModuleLoader } from "./plugin-setup-module.js";
+import { pluginProviderAuthUnavailable } from "./provider-auth-scope.js";
 import { buildEffectiveManifestProviderConfig } from "./provider-catalog.js";
 import type {
   ProviderDiscoveryPlan,
   ResolveRuntimePluginDiscoveryProvidersParams,
 } from "./provider-discovery.js";
+import { getProviderOwnerIndex } from "./provider-owner-index.js";
 import { resolveDiscoveredProviderPluginIds } from "./providers.js";
 import { resolvePluginProvidersCore } from "./providers.runtime.js";
 import { loadValidatedPublicSurfaceModule } from "./public-surface-loader.js";
@@ -187,6 +189,7 @@ function prepareManifestCatalogDiscovery(
     }
     // Static rows and runtime coverage must come from the same effective catalog.
     const plan = planEffectiveModelCatalogRows({ registry: { plugins: [plugin] }, config });
+    const authScopes = getProviderOwnerIndex({ plugins: [plugin], diagnostics: [] }).authScopes;
     for (const entry of plan.entries) {
       if (entry.discovery === "runtime" || entry.discovery === "refreshable") {
         runtimeManifestCatalogPluginIds.add(plugin.id);
@@ -199,8 +202,13 @@ function prepareManifestCatalogDiscovery(
       if (!providerConfig) {
         continue;
       }
+      const authScope = authScopes.get(entry.provider);
+      if (authScope === "conflict") {
+        throw pluginProviderAuthUnavailable(entry.provider, "conflicting static credential owners");
+      }
       providers.push({
         id: entry.provider,
+        authScope: authScope ?? "agent",
         pluginId: plugin.id,
         label: entry.provider,
         auth: [],

@@ -129,7 +129,7 @@ export async function createNativeRuntime(
       Object.freeze(model.thinkingLevelMap);
     }
     Object.freeze(model);
-    models.set(ref, { model, credential, headers: Object.freeze(headers) });
+    models.set(ref, { model, credential, headers });
     for (const [name, value] of Object.entries(headers)) {
       if (!value) {
         continue;
@@ -250,6 +250,7 @@ export async function createNativeRuntime(
           stop: options?.stop,
           serviceTier: options?.serviceTier,
           cacheRetention: options?.cacheRetention,
+          promptCacheTtl: options?.promptCacheTtl,
           timeoutMs: options?.timeoutMs,
           maxRetryDelayMs: options?.maxRetryDelayMs,
           onActiveResponse: options?.onActiveResponse,
@@ -282,9 +283,6 @@ export async function createNativeRuntime(
             }
           },
         });
-        assertActive();
-        await assertWorkspace(workspace);
-        await assertWorkspace(assignedWorkspace);
         assertActive();
         return result;
       } finally {

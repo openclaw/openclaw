@@ -5,7 +5,6 @@ import {
   escapeHeavyResolved,
   expectExactResolvedAcknowledgement,
   expectOmittedResolvedAcknowledgement,
-  expectedResolvedOmission,
 } from "./sessions-tool.test-helpers.js";
 
 const gatewayMocks = vi.hoisted(() => ({ callGateway: vi.fn() }));
@@ -14,28 +13,21 @@ vi.mock("../../gateway/call.js", async (importOriginal) => ({
   callGateway: gatewayMocks.callGateway,
 }));
 
-beforeEach(() => {
-  gatewayMocks.callGateway.mockReset();
-});
+beforeEach(() => gatewayMocks.callGateway.mockReset());
 
-function createTool() {
+function createTool(options: Partial<Parameters<typeof createSessionsTool>[0]> = {}) {
   return createSessionsTool({
     agentSessionKey: "agent:main:main",
     config: {},
     hasInProcessGatewayContext: () => true,
+    ...options,
   });
 }
 
 describe("sessions tool responses", () => {
   it("clears its model override when patch requests the default model", async () => {
     const callGateway = vi.fn().mockResolvedValue({});
-    const tool = createSessionsTool({
-      agentSessionKey: "agent:main:main",
-      config: {},
-      callGateway,
-    });
-
-    await tool.execute("reset-model", { action: "patch", model: "default" });
+    await createTool({ callGateway }).execute("reset-model", { action: "patch", model: "default" });
 
     expect(callGateway).toHaveBeenCalledWith({
       method: "sessions.patch",
@@ -46,6 +38,8 @@ describe("sessions tool responses", () => {
   it("routes group actions to existing gateway methods", async () => {
     gatewayMocks.callGateway.mockImplementation(async (request) => request);
     const tool = createTool();
+    const rejects = (params: Record<string, unknown>, message: string) =>
+      expect(tool.execute("invalid", params)).rejects.toThrow(message);
 
     await tool.execute("list", { action: "group_list" });
     await tool.execute("set", { action: "group_set", names: ["Now", "Later"] });
@@ -58,26 +52,23 @@ describe("sessions tool responses", () => {
       [{ method: "sessions.groups.rename", params: { name: "Now", to: "Next" } }],
       [{ method: "sessions.groups.delete", params: { name: "Later" } }],
     ]);
-    await expect(tool.execute("set-missing", { action: "group_set" })).rejects.toThrow(
-      "names required",
-    );
-    await expect(
-      tool.execute("set-invalid", { action: "group_set", names: ["Now", null] }),
-    ).rejects.toThrow("names[1] required");
+    await rejects({ action: "group_set" }, "names required");
+    await rejects({ action: "group_set", names: ["Now", null] }, "names[1] required");
     expect(gatewayMocks.callGateway).toHaveBeenCalledTimes(4);
   });
 
-  it("preserves long resolved identifiers and complete catalogs exactly when they fit", async () => {
+  it.each([
+    { name: "fitting", resolved: adversarialResolved, omitted: false },
+    { name: "oversized", resolved: escapeHeavyResolved, omitted: true },
+  ])("bounds $name resolved metadata", async ({ resolved, omitted }) => {
     gatewayMocks.callGateway.mockResolvedValue({
       ok: true,
       path: `/sessions/${"p".repeat(10_000)}`,
       key: "agent:main:main",
       entry: { skillsSnapshot: "s".repeat(47_469) },
-      resolved: adversarialResolved,
+      resolved,
     });
-    const tool = createTool();
-
-    const result = await tool.execute("patch-adversarial-model-thinking", {
+    const result = await createTool().execute("patch-model-thinking", {
       action: "patch",
       model: "openai/luna",
       thinkingLevel: "med",
@@ -88,31 +79,10 @@ describe("sessions tool responses", () => {
       sessionKey: "agent:main:main",
       updated: ["model", "thinkingLevel"],
     });
-    expectExactResolvedAcknowledgement(result, adversarialResolved);
-  });
-
-  it("omits oversized resolved metadata instead of changing authoritative identifiers", async () => {
-    gatewayMocks.callGateway.mockResolvedValue({
-      ok: true,
-      path: `/sessions/${"p".repeat(10_000)}`,
-      key: "agent:main:main",
-      entry: { skillsSnapshot: "s".repeat(47_469) },
-      resolved: escapeHeavyResolved,
-    });
-    const tool = createTool();
-
-    const result = await tool.execute("patch-oversized-model-thinking", {
-      action: "patch",
-      model: "openai/luna",
-      thinkingLevel: "med",
-    });
-
-    expect(result.details).toMatchObject({
-      status: "updated",
-      sessionKey: "agent:main:main",
-      updated: ["model", "thinkingLevel"],
-      resolvedOmitted: expectedResolvedOmission,
-    });
-    expectOmittedResolvedAcknowledgement(result);
+    if (omitted) {
+      expectOmittedResolvedAcknowledgement(result);
+    } else {
+      expectExactResolvedAcknowledgement(result, resolved);
+    }
   });
 });

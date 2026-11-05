@@ -42,8 +42,11 @@ struct OpenClawNativeStateAdmissionTests {
                 uid: getuid())
             defer { try? FileManager.default.removeItem(at: ownerURL) }
             try self.writeOwner(ownerURL, role: deniedRole)
-            #expect(throws: OpenClawNativeStateError.self) {
-                try OpenClawNativeStateSQLite(databaseURL: source)
+            do {
+                _ = try OpenClawNativeStateSQLite(databaseURL: source)
+                Issue.record("maintenance unexpectedly permitted native access")
+            } catch let error as OpenClawNativeStateError {
+                #expect(error.code == .busy)
             }
             #expect(!FileManager.default.fileExists(atPath: parent.path))
 

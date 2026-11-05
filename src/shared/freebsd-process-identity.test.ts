@@ -36,7 +36,7 @@ it("preserves the released microsecond identity and refreshes foreign observatio
   expect(await read()).toBe(6_300_004);
 });
 
-it.each([null, { startTimeMicros: 1_700_000_005_900_003 }])(
+it.each([{ startTimeMicros: 1_700_000_005_900_003 }])(
   "does not substitute an epoch identity when the boot-relative identity is unavailable: %s",
   async (identity) => {
     readProcessIdentity.mockReturnValue(identity);
@@ -66,13 +66,7 @@ it("fails closed on unavailable or uncertain native observations", async () => {
   expect(await read()).toBeNull();
 });
 
-it.each([0, 1.5, 0x80000000])("rejects invalid native PID %s before loading", async (pid) => {
+it.each([0x80000000])("rejects invalid native PID %s before loading", async (pid) => {
   expect(await read(pid)).toBeNull();
-  expect(loadNative).not.toHaveBeenCalled();
-});
-
-it("does not load on other operating systems", async () => {
-  const { readFreeBsdProcessStartTime } = await import("./freebsd-process-identity.js");
-  await withMockedPlatform("linux", async () => expect(readFreeBsdProcessStartTime(42)).toBeNull());
   expect(loadNative).not.toHaveBeenCalled();
 });

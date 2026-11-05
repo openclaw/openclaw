@@ -23,8 +23,5 @@ export function prepareCliReplyPayload(
   if (assistantMessageIndex !== undefined) {
     setReplyPayloadMetadata(reply, { assistantMessageIndex });
   }
-  if (parsed.isSilent) {
-    setReplyPayloadMetadata(reply, { silentReply: true });
-  }
   return reply;
 }

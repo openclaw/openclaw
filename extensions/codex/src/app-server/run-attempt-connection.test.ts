@@ -33,37 +33,65 @@ import {
 } from "./shared-client.js";
 import { withCodexThreadLifecycleBinding } from "./thread-lifecycle-adoption.js";
 
+type ConnectionInput = Parameters<typeof prepareCodexAttemptConnection>[0];
+
+async function prepareConnection(
+  params: ConnectionInput["params"],
+  options: ConnectionInput["options"] = { bindingStore: testCodexAppServerBindingStore },
+) {
+  const connection = await prepareCodexAttemptConnection({ params, options });
+  return {
+    connection,
+    [Symbol.dispose]: () => connection.releaseBindingAuthority(),
+  };
+}
+
 setupRunAttemptTestHooks();
 
 describe("prepareCodexAttemptConnection", () => {
-  it.each(["local", "websocket", "sandbox"])(
-    "requests input paths only for confirmed local attachment execution: %s",
+  it.each(["local", "websocket", "remote-root", "sandbox", "managed-sandbox"])(
+    "prepares host settings and input paths only for confirmed local execution: %s",
     async (placement) => {
       const sessionFile = path.join(tempDir, `input-${placement}.jsonl`);
       const params = createParams(sessionFile, path.join(tempDir, `input-${placement}`));
-      if (placement === "sandbox") {
-        params.sandbox = createSandboxContext({});
+      if (placement === "sandbox" || placement === "managed-sandbox") {
+        params.sandbox = {
+          ...createSandboxContext({}),
+          ...(placement === "managed-sandbox"
+            ? { workspaceSource: "managed-worktree" as const }
+            : {}),
+        };
       }
       const prepare = vi.fn(async () => "local document path");
-      params.hostCapabilities = { ...params.hostCapabilities, prepareInputAttachments: prepare };
-      const connection = await prepareCodexAttemptConnection({
-        params,
-        options: {
-          bindingStore: testCodexAppServerBindingStore,
-          pluginConfig: {
-            appServer:
-              placement === "websocket"
-                ? { transport: "websocket", url: "ws://127.0.0.1:19400" }
-                : {
-                    transport: "stdio",
-                    ...(placement === "remote-root"
-                      ? { remoteWorkspaceRoot: "/remote/workspace" }
-                      : {}),
-                  },
-          },
+      const prepareContinuationRetryCount = vi.fn();
+      params.hostCapabilities = {
+        ...params.hostCapabilities,
+        prepareInputAttachments: prepare,
+        prepareContinuationRetryCount,
+      };
+      using prepared = await prepareConnection(params, {
+        bindingStore: testCodexAppServerBindingStore,
+        pluginConfig: {
+          appServer:
+            placement === "websocket"
+              ? { transport: "websocket", url: "ws://127.0.0.1:19400" }
+              : {
+                  transport: "stdio",
+                  ...(placement === "remote-root"
+                    ? { remoteWorkspaceRoot: "/remote/workspace" }
+                    : {}),
+                },
         },
       });
+      const { connection } = prepared;
       try {
+        if (placement === "local") {
+          expect(prepareContinuationRetryCount).toHaveBeenCalledExactlyOnceWith({
+            cwd: connection.effectiveCwd,
+          });
+        } else {
+          expect(prepareContinuationRetryCount).not.toHaveBeenCalled();
+        }
         const note = await connection.prepareInputAttachments({
           maxChars: 60_000,
           assertCurrent: () => {},
@@ -76,6 +104,45 @@ describe("prepareCodexAttemptConnection", () => {
       }
     },
   );
+
+  it("releases connection preparation when host retry settings fail before execution", async () => {
+    const params = createParams(
+      path.join(tempDir, "retry-preparation-failure.jsonl"),
+      path.join(tempDir, "retry-preparation-failure"),
+    );
+    const controller = new AbortController();
+    params.abortSignal = controller.signal;
+    const prepareContinuationRetryCount = vi.fn<(workspace: { cwd: string }) => void>(() => {
+      throw new Error("retry settings unavailable");
+    });
+    params.hostCapabilities = {
+      ...params.hostCapabilities,
+      prepareContinuationRetryCount,
+    };
+    const clientFactory = vi.fn(async () => {
+      throw new Error("unexpected provider startup");
+    });
+    const listeners = getEventListeners(controller.signal, "abort").length;
+    await expect(
+      runCodexAppServerAttempt(params, {
+        bindingStore: testCodexAppServerBindingStore,
+        clientFactory,
+      }),
+    ).rejects.toThrow("retry settings unavailable");
+    expect(prepareContinuationRetryCount).toHaveBeenCalledOnce();
+    expect(clientFactory).not.toHaveBeenCalled();
+    expect(getEventListeners(controller.signal, "abort")).toHaveLength(listeners);
+    // Re-entering the same session proves preparation did not retain binding custody.
+    prepareContinuationRetryCount.mockImplementation(() => {});
+    const connection = await prepareCodexAttemptConnection({
+      params,
+      options: { bindingStore: testCodexAppServerBindingStore },
+    });
+    connection.cancellation.dispose();
+    connection.releaseModelExecution();
+    connection.releaseSandboxContext();
+    connection.releaseBindingAuthority();
+  });
 
   it.each(["remote attachment path"])(
     "stages only explicit steering inputs through the remote owner (note: %s)",
@@ -91,15 +158,13 @@ describe("prepareCodexAttemptConnection", () => {
         ...params.hostCapabilities,
         prepareInputAttachments: prepareLocal,
       };
-      const connection = await prepareCodexAttemptConnection({
-        params,
-        options: {
-          bindingStore: testCodexAppServerBindingStore,
-          pluginConfig: {
-            appServer: { transport: "stdio", remoteWorkspaceRoot: "/remote/workspace" },
-          },
+      using prepared = await prepareConnection(params, {
+        bindingStore: testCodexAppServerBindingStore,
+        pluginConfig: {
+          appServer: { transport: "stdio", remoteWorkspaceRoot: "/remote/workspace" },
         },
       });
+      const { connection } = prepared;
       const prepareRemote = vi.fn(async () => remoteNote);
       const release = registerAgentWorkspaceAccess(params.workspaceDir, {
         bridge: {
@@ -167,23 +232,21 @@ describe("prepareCodexAttemptConnection", () => {
         },
       };
       registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
-      const connection = await prepareCodexAttemptConnection({
-        params,
-        options: {
-          bindingStore: testCodexAppServerBindingStore,
-          pluginConfig: {
-            appServer:
-              connectionType === "websocket"
-                ? { transport: "websocket", url: "ws://127.0.0.1:19400" }
-                : {
-                    transport: "stdio",
-                    ...(connectionType === "stdio-proxy"
-                      ? { args: ["app-server", "proxy", "--sock", "/fixture/server.sock"] }
-                      : {}),
-                  },
-          },
+      using prepared = await prepareConnection(params, {
+        bindingStore: testCodexAppServerBindingStore,
+        pluginConfig: {
+          appServer:
+            connectionType === "websocket"
+              ? { transport: "websocket", url: "ws://127.0.0.1:19400" }
+              : {
+                  transport: "stdio",
+                  ...(connectionType === "stdio-proxy"
+                    ? { args: ["app-server", "proxy", "--sock", "/fixture/server.sock"] }
+                    : {}),
+                },
         },
       });
+      const { connection } = prepared;
       expect(connection.appServer.start.transport).toBe(
         connectionType === "websocket" ? "websocket" : "stdio",
       );
@@ -225,14 +288,15 @@ describe("prepareCodexAttemptConnection", () => {
     await bindingStore.mutate(previous, { kind: "set", binding });
     const originalHostCapabilities = params.hostCapabilities;
 
-    const connection = await prepareCodexAttemptConnection({ params, options: { bindingStore } });
+    using prepared = await prepareConnection(params, { bindingStore });
+    const { connection } = prepared;
     expect(bindingStore.read(current)).toEqual(binding);
     expect(connection.params.hostCapabilities).toBe(originalHostCapabilities);
     expect(() => connection.assertCurrent()).not.toThrow();
     await patchSessionEntry({ ...scope, update: () => ({ sessionId: "next-compaction" }) });
 
     expect(() => originalHostCapabilities.assertActive()).not.toThrow();
-    expect(() => connection.assertCurrent()).not.toThrow();
+    expect(connection.assertCurrent).toThrow("Codex session generation is no longer current");
     expect(connection.assertLegacyCurrent).toThrow("Codex session generation is no longer current");
     const effect = vi.fn();
     await expect(connection.withCurrent(effect)).rejects.toThrow(
@@ -410,7 +474,7 @@ describe("prepareCodexAttemptConnection", () => {
             }
           : {}),
       };
-      const pending = prepareCodexAttemptConnection({ params, options });
+      const pending = prepareConnection(params, options);
       if (placement !== "local" && !placement.startsWith("ordinary-")) {
         await expect(pending).rejects.toThrow("saved prompt");
         const clientFactory = vi.fn(async () => {
@@ -423,7 +487,8 @@ describe("prepareCodexAttemptConnection", () => {
         expect(createToolSurfaceAsync).not.toHaveBeenCalled();
         return;
       }
-      const connection = await pending;
+      using prepared = await pending;
+      const { connection } = prepared;
       if (placement.startsWith("ordinary-")) {
         expect(connection.appServer.start.transport).toBe(
           placement === "ordinary-unix-server" ? "unix" : "websocket",
@@ -455,10 +520,8 @@ describe("prepareCodexAttemptConnection", () => {
     });
     registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
 
-    const connection = await prepareCodexAttemptConnection({
-      params,
-      options: { bindingStore: testCodexAppServerBindingStore },
-    });
+    using prepared = await prepareConnection(params);
+    const { connection } = prepared;
 
     expect(connection.shellEnvironment).toEqual({ PREVIEW_STORE_TOKEN: "" });
     expect(connection.disableLoginShell).toBe(true);
@@ -517,10 +580,8 @@ describe("prepareCodexAttemptConnection", () => {
       }
       registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
 
-      const connection = await prepareCodexAttemptConnection({
-        params,
-        options: { bindingStore: testCodexAppServerBindingStore },
-      });
+      using prepared = await prepareConnection(params);
+      const { connection } = prepared;
 
       expect(connection.shellEnvironment).toEqual({
         ...credentialScrubEnv,
@@ -587,10 +648,8 @@ describe("prepareCodexAttemptConnection", () => {
       }
       registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
 
-      const connection = await prepareCodexAttemptConnection({
-        params,
-        options: { bindingStore: testCodexAppServerBindingStore },
-      });
+      using prepared = await prepareConnection(params);
+      const { connection } = prepared;
 
       expect(connection.attemptClientFactory).toBe(expectedFactory);
     },
@@ -627,13 +686,11 @@ describe("prepareCodexAttemptConnection", () => {
     };
     registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
 
-    const connection = await prepareCodexAttemptConnection({
-      params,
-      options: {
-        bindingStore: testCodexAppServerBindingStore,
-        pluginConfig: { appServer: { homeScope: "user" } },
-      },
+    using prepared = await prepareConnection(params, {
+      bindingStore: testCodexAppServerBindingStore,
+      pluginConfig: { appServer: { homeScope: "user" } },
     });
+    const { connection } = prepared;
     const request = vi.fn(async (_method: string, _params?: unknown) => ({
       account: { type: "chatgpt" },
     }));
@@ -686,10 +743,8 @@ describe("prepareCodexAttemptConnection", () => {
     const resolveConnection = vi.spyOn(bindingConnection, "resolveCodexBindingAppServerConnection");
     const resolveModelPolicy = vi.spyOn(appServerPolicy, "resolveCodexAppServerForModelProvider");
 
-    const connection = await prepareCodexAttemptConnection({
-      params,
-      options: { bindingStore: testCodexAppServerBindingStore },
-    });
+    using prepared = await prepareConnection(params);
+    const { connection } = prepared;
 
     expect(connection.mutable.startupBinding).toBeUndefined();
     expect(resolveConnection).toHaveBeenCalledTimes(2);
@@ -798,10 +853,8 @@ describe("prepareCodexAttemptConnection", () => {
     registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
 
     const resolveConnection = vi.spyOn(bindingConnection, "resolveCodexBindingAppServerConnection");
-    const connection = await prepareCodexAttemptConnection({
-      params,
-      options: { bindingStore: testCodexAppServerBindingStore },
-    });
+    using prepared = await prepareConnection(params);
+    const { connection } = prepared;
 
     expect(resolveConnection).toHaveBeenCalledWith(
       expect.objectContaining({ execPolicy: expect.objectContaining({ mode: "auto" }) }),
@@ -826,10 +879,8 @@ describe("prepareCodexAttemptConnection", () => {
     params.sessionRoot = workspaceDir;
     registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
 
-    const connection = await prepareCodexAttemptConnection({
-      params,
-      options: { bindingStore: testCodexAppServerBindingStore },
-    });
+    using prepared = await prepareConnection(params);
+    const { connection } = prepared;
 
     // Upstream 28f10c00b4e keeps YOLO approvals disabled despite generic tool hooks.
     expect(connection.appServer.approvalPolicy).toBe("never");
@@ -879,10 +930,8 @@ describe("prepareCodexAttemptConnection", () => {
     params.execOverrides = { ...params.execOverrides, mode: "full" };
     registerCodexTestSessionIdentity(sessionFile, params.sessionId, params.sessionKey);
 
-    const connection = await prepareCodexAttemptConnection({
-      params,
-      options: { bindingStore: testCodexAppServerBindingStore },
-    });
+    using prepared = await prepareConnection(params);
+    const { connection } = prepared;
 
     expect(connection.appServer).toMatchObject({
       sandbox: "workspace-write",
@@ -921,10 +970,8 @@ describe("prepareCodexAttemptConnection", () => {
         "resolveCodexBindingAppServerConnection",
       );
 
-      const connection = await prepareCodexAttemptConnection({
-        params,
-        options: { bindingStore: testCodexAppServerBindingStore },
-      });
+      using prepared = await prepareConnection(params);
+      const { connection } = prepared;
 
       expect(connection).toBeDefined();
       expect(resolveConnection).toHaveBeenCalledWith(

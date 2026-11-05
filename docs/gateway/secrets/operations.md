@@ -16,6 +16,20 @@ Supported and unsupported credentials are listed in [SecretRef Credential Surfac
 Runtime-minted or rotating credentials and OAuth refresh material are intentionally excluded from read-only SecretRef resolution.
 </Note>
 
+Config secret-target lookup follows config ownership. Core owns roots other than
+`channels` and `plugins`; plugin manifest secret inputs are relative to
+`plugins.entries.<plugin-id>.config`. Channel secret contracts can describe
+credentials under `channels` and their own plugin config schema, including
+contracts shared by multiple channel owners. They do not extend core config schemas.
+
+Secret-target lookup for ordinary core config paths does not discover plugin
+metadata. An explicit plugin config path tries that plugin's manifest targets,
+then its channel contract on a miss.
+Channel lookups try the channel contract first, then use broader discovery on a
+miss so external owners can extend even bundled channel IDs. Audit and
+configuration still include disabled plugins; runtime activation keeps its
+existing enablement rules.
+
 ## Required behavior and precedence
 
 - Field without a ref: unchanged.
@@ -207,6 +221,6 @@ For static credentials, runtime no longer depends on plaintext legacy auth stora
 
 ## Control UI
 
-Open **Settings → Secrets** to list, add, edit, bulk-import, or soft-delete team-scoped entries. Choose **Protected secret** for write-only values used by SecretRefs or destination-bound Gateway egress. Choose **Agent-readable environment** only when Gateway-hosted agent commands must receive plaintext and the agent may print, transmit, or persist it. Bulk Add accepts dotenv `NAME=VALUE` assignments, including quoted multiline values. **Protect credential-like names automatically** defaults credential-shaped names to protected mode.
+Open **Settings → Secrets** to list, add, edit, bulk-import, or soft-delete team-scoped entries. Only admins can manage secrets. Use **Bulk add** to import multiple entries; partial saves report how many entries were saved separately from the failure detail. Deleting an entry asks for confirmation because the stored value can’t be recovered. Choose **Protected secret** for write-only values used by SecretRefs or destination-bound Gateway egress. Choose **Agent-readable environment** only when Gateway-hosted agent commands must receive plaintext and the agent may print, transmit, or persist it. Bulk add accepts dotenv `NAME=VALUE` assignments, including quoted multiline values. **Protect names that look like API keys automatically** defaults credential-shaped names to protected mode.
 
 This store page manages values only. Configure the corresponding `store` SecretRef on a supported field through its settings form or the raw editor. Identity-scoped entries are reserved for a later release and are not exposed by this page.

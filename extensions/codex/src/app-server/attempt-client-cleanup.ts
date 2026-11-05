@@ -94,6 +94,7 @@ export async function interruptCodexTurnAndWaitBestEffort(
     threadId: string;
     turnId: string;
     timeoutMs?: number;
+    assertCurrent?: () => void;
   },
 ): Promise<boolean> {
   const timeoutMs =
@@ -103,8 +104,12 @@ export async function interruptCodexTurnAndWaitBestEffort(
   const requestParams = { threadId: params.threadId, turnId: params.turnId };
   let cancelWatch: (() => void) | undefined;
   try {
+    params.assertCurrent?.();
     if (!params.turnId) {
-      await client.request("turn/interrupt", requestParams, { timeoutMs });
+      await client.request("turn/interrupt", requestParams, {
+        timeoutMs,
+        assertCurrent: params.assertCurrent,
+      });
       return true;
     }
     const deadline = performance.now() + timeoutMs;
@@ -125,7 +130,9 @@ export async function interruptCodexTurnAndWaitBestEffort(
     }
     const requestInterrupt = async () => {
       try {
+        params.assertCurrent?.();
         await client.request("turn/interrupt", requestParams, {
+          assertCurrent: params.assertCurrent,
           timeoutMs: Math.max(1, deadline - performance.now()),
           // The client floors RPC timeouts at 100ms. The lifecycle signal owns
           // the exact remaining deadline and cancels RPCs when terminal wins.
@@ -168,10 +175,12 @@ export async function terminateCodexBackgroundTerminals(
   threadId: string,
   oneShotCliRun = false,
   waitForNativeItems?: (signal: AbortSignal) => Promise<void>,
+  assertCurrent?: () => void,
 ): Promise<void> {
   const options = {
     timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
     signal: AbortSignal.timeout(CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS),
+    assertCurrent,
   };
   try {
     // Codex returns the complete inventory when limit is omitted. Its process

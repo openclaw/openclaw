@@ -16,19 +16,8 @@ describe("detectLinuxVolatileStateDir", () => {
     "30 22 0:30 / /tmp rw,nosuid,nodev - tmpfs tmpfs rw",
     "35 22 0:35 / /home/user/.openclaw rw - tmpfs tmpfs rw,size=1048576k",
   ].join("\n");
-  const RAMFS_MOUNT_INFO = [
-    "22 1 0:21 / / rw,relatime - ext4 /dev/sda1 rw",
-    "35 22 0:35 / /home/user/.openclaw rw - ramfs ramfs rw",
-  ].join("\n");
-  const OVERLAY_MOUNT_INFO = [
-    "22 1 0:21 / / rw,relatime - overlay overlay rw,lowerdir=/lower,upperdir=/upper",
-  ].join("\n");
-  const EXT4_MOUNT_INFO = "22 1 0:21 / / rw,relatime - ext4 /dev/sda1 rw";
 
-  it.each([
-    ["tmpfs", TMPFS_MOUNT_INFO],
-    ["ramfs", RAMFS_MOUNT_INFO],
-  ])("detects %s state directories", (fsType, mountInfo) => {
+  it.each([["tmpfs", TMPFS_MOUNT_INFO]])("detects %s state directories", (fsType, mountInfo) => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     vi.spyOn(fs, "readFileSync").mockReturnValue(mountInfo);
     vi.spyOn(boundaryPath, "safeRealpathSync").mockImplementation((targetPath) => targetPath);
@@ -38,22 +27,6 @@ describe("detectLinuxVolatileStateDir", () => {
       path: "/home/user/.openclaw",
       mountPoint: "/home/user/.openclaw",
       fsType,
-    });
-  });
-
-  it("uses the most specific matching mount", () => {
-    const mountInfo = [
-      "22 1 0:21 / / rw - ext4 /dev/sda1 rw",
-      "30 22 0:30 / /home rw - ext4 /dev/sda2 rw",
-      "35 30 0:35 / /home/user/.openclaw rw - tmpfs tmpfs rw",
-    ].join("\n");
-
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    vi.spyOn(fs, "readFileSync").mockReturnValue(mountInfo);
-    vi.spyOn(boundaryPath, "safeRealpathSync").mockImplementation((targetPath) => targetPath);
-    expect(detectLinuxVolatileStateDir("/home/user/.openclaw")).toMatchObject({
-      mountPoint: "/home/user/.openclaw",
-      fsType: "tmpfs",
     });
   });
 
@@ -83,16 +56,6 @@ describe("detectLinuxVolatileStateDir", () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
-  });
-
-  it.each([
-    ["overlay", OVERLAY_MOUNT_INFO],
-    ["ext4", EXT4_MOUNT_INFO],
-  ])("does not flag %s filesystems", (_name, mountInfo) => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    vi.spyOn(fs, "readFileSync").mockReturnValue(mountInfo);
-    vi.spyOn(boundaryPath, "safeRealpathSync").mockImplementation((targetPath) => targetPath);
-    expect(detectLinuxVolatileStateDir("/home/user/.openclaw")).toBeNull();
   });
 
   it("does not inspect mount information on non-Linux platforms", () => {

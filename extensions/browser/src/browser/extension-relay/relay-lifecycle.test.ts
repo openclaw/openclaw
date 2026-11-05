@@ -76,12 +76,16 @@ function createHandle(token: string, port = RELAY_PORT): ExtensionRelayHandle {
   };
 }
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
+function mockPendingRelayStart() {
+  const startEntered = Promise.withResolvers<void>();
+  const releaseStart = Promise.withResolvers<void>();
+  const replacement = createHandle(ROTATED_TOKEN);
+  startExtensionRelayServerMock.mockImplementationOnce(async () => {
+    startEntered.resolve();
+    await releaseStart.promise;
+    return replacement;
   });
-  return { promise, resolve };
+  return { startEntered, releaseStart, replacement };
 }
 
 describe("extension relay lifecycle", () => {
@@ -97,29 +101,6 @@ describe("extension relay lifecycle", () => {
       bridge: {},
       close: vi.fn(async () => {}),
     }));
-  });
-
-  it("rebounds an existing relay when the host-local token rotates", async () => {
-    const oldRelay = createHandle(OLD_TOKEN);
-    const { profile, state } = createState(OLD_TOKEN, oldRelay);
-    expect(profile.cdpUrl).toContain(encodeURIComponent(oldRelay.internalToken));
-    expect(profile.cdpUrl).not.toContain(OLD_TOKEN);
-
-    const handle = await ensureExtensionRelayForProfile(state, profile);
-
-    expect(oldRelay.close).toHaveBeenCalledOnce();
-    expect(startExtensionRelayServerMock).toHaveBeenCalledWith({
-      port: RELAY_PORT,
-      profileName: PROFILE_NAME,
-      token: ROTATED_TOKEN,
-      allowLegacyAuth: true,
-    });
-    expect(handle.token).toBe(ROTATED_TOKEN);
-    expect(state.resolved.extensionRelayToken).toBe(ROTATED_TOKEN);
-    expect(profile.cdpUrl).toContain("replacement-internal");
-    expect(profile.cdpUrl).not.toContain(ROTATED_TOKEN);
-    expect(resolveProfile(state.resolved, PROFILE_NAME)?.cdpUrl).toContain("replacement-internal");
-    expect(state.extensionRelays?.get(PROFILE_NAME)).toBe(handle);
   });
 
   it("retains and retries the exact stale relay when its first close fails", async () => {
@@ -162,14 +143,7 @@ describe("extension relay lifecycle", () => {
   it("coalesces concurrent rebinds to one exact relay handle", async () => {
     const oldRelay = createHandle(OLD_TOKEN);
     const { profile, state } = createState(OLD_TOKEN, oldRelay);
-    const startEntered = deferred();
-    const releaseStart = deferred();
-    const replacement = createHandle(ROTATED_TOKEN);
-    startExtensionRelayServerMock.mockImplementationOnce(async () => {
-      startEntered.resolve();
-      await releaseStart.promise;
-      return replacement;
-    });
+    const { startEntered, releaseStart, replacement } = mockPendingRelayStart();
 
     const first = ensureExtensionRelayForProfile(state, profile);
     await startEntered.promise;
@@ -186,14 +160,7 @@ describe("extension relay lifecycle", () => {
     const oldRelay = createHandle(OLD_TOKEN);
     const { profile, state } = createState(OLD_TOKEN, oldRelay);
     const runtime = getOrCreateProfileRuntime(state, profile);
-    const startEntered = deferred();
-    const releaseStart = deferred();
-    const replacement = createHandle(ROTATED_TOKEN);
-    startExtensionRelayServerMock.mockImplementationOnce(async () => {
-      startEntered.resolve();
-      await releaseStart.promise;
-      return replacement;
-    });
+    const { startEntered, releaseStart, replacement } = mockPendingRelayStart();
     const firstController = new AbortController();
     const first = withProfileOperationLease({
       state,
@@ -230,14 +197,7 @@ describe("extension relay lifecycle", () => {
     const oldRelay = createHandle(OLD_TOKEN);
     const { profile, state } = createState(OLD_TOKEN, oldRelay);
     const runtime = getOrCreateProfileRuntime(state, profile);
-    const startEntered = deferred();
-    const releaseStart = deferred();
-    const replacement = createHandle(ROTATED_TOKEN);
-    startExtensionRelayServerMock.mockImplementationOnce(async () => {
-      startEntered.resolve();
-      await releaseStart.promise;
-      return replacement;
-    });
+    const { startEntered, releaseStart, replacement } = mockPendingRelayStart();
     const owner = withProfileOperationLease({
       state,
       runtime,
@@ -277,14 +237,7 @@ describe("extension relay lifecycle", () => {
     const oldRelay = createHandle(OLD_TOKEN);
     const { profile, state } = createState(OLD_TOKEN, oldRelay);
     const runtime = getOrCreateProfileRuntime(state, profile);
-    const startEntered = deferred();
-    const releaseStart = deferred();
-    const replacement = createHandle(ROTATED_TOKEN);
-    startExtensionRelayServerMock.mockImplementationOnce(async () => {
-      startEntered.resolve();
-      await releaseStart.promise;
-      return replacement;
-    });
+    const { startEntered, releaseStart, replacement } = mockPendingRelayStart();
     const pending = withProfileOperationLease({
       state,
       runtime,

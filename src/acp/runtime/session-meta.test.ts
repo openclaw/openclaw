@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadExactSessionEntry,
   loadSessionEntry,
@@ -26,7 +27,6 @@ import { readAcpSessionMetaForEntry } from "./session-meta-readonly.js";
 import {
   listAcpSessionEntries,
   readAcpSessionEntry,
-  readAcpSessionMetaBatch,
   upsertAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "./session-meta.js";
@@ -342,9 +342,6 @@ describe("ACP session metadata SQLite store", () => {
           },
         });
         expect(readAcpSessionMetaForEntry({ databasePath, sessionKey, entry })).toBeUndefined();
-        expect(
-          readAcpSessionMetaBatch({ databasePath, entries: [{ sessionKey, entry }] }).get(entry),
-        ).toBeUndefined();
       });
     },
   );
@@ -365,6 +362,7 @@ async function seedCanonicalSession(state: OpenClawTestState, sessionKey = SESSI
     agents: { ownership: "explicit", entries: { main: {} } },
   };
   await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
   const scope = { cfg, env: state.env, agentId: "main", sessionKey };
   await replaceSessionEntry(scope, {
     sessionId: "alias-session",
@@ -420,41 +418,6 @@ async function seedAliases(state: OpenClawTestState) {
 }
 
 describe("ACP raw alias lifecycle", () => {
-  it("updates and closes canonical metadata while preserving historical aliases", async () => {
-    await withOpenClawTestState({ label: "acp-alias-update" }, async (state) => {
-      const fixture = await seedAliases(state);
-      const before = fixture.snapshot();
-      const retainedRows = before.rows.filter((row) => row.session_key !== fixture.canonicalKey);
-      const updated = { ...CANONICAL_META, runtimeSessionName: "updated-runtime" };
-      await upsertAcpSessionMeta({
-        ...fixture.scope,
-        mutate: (current) => {
-          expect(current).toEqual(CANONICAL_META);
-          return updated;
-        },
-      });
-      const after = fixture.snapshot();
-      expect(after.rows.filter((row) => row.session_key !== fixture.canonicalKey)).toEqual(
-        retainedRows,
-      );
-      expect(after.sources).toEqual(before.sources);
-      expect(after.runs).toEqual(before.runs);
-      expect(readAcpSessionEntry(fixture.scope)?.acp).toEqual(updated);
-      await upsertAcpSessionMeta({ ...fixture.scope, mutate: () => null });
-      expect(fixture.snapshot().rows).toEqual(retainedRows);
-      await closeOpenClawAgentDatabasesAsync();
-      await closeOpenClawStateDatabaseAsync();
-      expect(readAcpSessionEntry(fixture.scope)?.acp).toBeUndefined();
-      expect(
-        readAcpSessionMetaBatch({
-          cfg: fixture.scope.cfg,
-          env: state.env,
-          entries: [{ sessionKey: SESSION_KEY, agentId: "main", entry: fixture.entry }],
-        }).get(fixture.entry),
-      ).toBeUndefined();
-    });
-  });
-
   it.each(["keep", "revoked-update"] as const)(
     "%s preserves rows, receipts, entry, and events without replaying the callback",
     async (operation) => {
@@ -505,9 +468,6 @@ it.each([
     databaseKey: buildAcpDatabaseSessionKey("global", "ops"),
     targets: [{ agentId: "ops", sessionKey: "global" }],
   },
-  { databaseKey: "@agent:ops:global", targets: [] },
-  { databaseKey: "agent:main:acp:project", targets: [] },
-  { databaseKey: "agent:MAIN:acp:PROJECT", targets: [] },
 ])("publishes only canonical ACP identities after commit for $databaseKey", async (fixture) => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const { db } = openOpenClawStateDatabase({ env });

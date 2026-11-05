@@ -172,7 +172,7 @@ describe("OpenAI dynamic model capabilities", () => {
       reasoning: true,
       input: ["text", "image"],
       contextWindow: 1_050_000,
-      contextTokens: 272_000,
+      contextTokens: api === "openai-chatgpt-responses" && id === "gpt-6.1-sol" ? 500_000 : 272_000,
       maxTokens: 128_000,
       cost,
       thinkingLevelMap: { off, minimal: "low", xhigh: "xhigh", max: "max" },
@@ -184,6 +184,36 @@ describe("OpenAI dynamic model capabilities", () => {
       },
     });
   });
+
+  it.each([128_000, 272_000, 700_000])(
+    "preserves GPT-6.1 Sol subscription context override %s",
+    (contextTokens) => {
+      const exact: ProviderRuntimeModel = {
+        id: "gpt-6.1-sol",
+        name: "GPT-6.1 Sol",
+        provider: "openai",
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
+        contextWindow: 1_050_000,
+        contextTokens,
+        maxTokens: 128_000,
+      };
+      const model = buildOpenAIProvider().resolveDynamicModel?.({
+        provider: "openai",
+        modelId: exact.id,
+        providerConfig: {
+          api: "openai-chatgpt-responses",
+          baseUrl: exact.baseUrl,
+          models: [],
+        },
+        modelRegistry: modelRegistry([exact]),
+      });
+      expect(model?.contextTokens).toBe(contextTokens);
+    },
+  );
 
   it.each(preferredModels)(
     "retains preferred capabilities for $id without discovery",

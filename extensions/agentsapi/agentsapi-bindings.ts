@@ -2,11 +2,7 @@ import type {
   AgentHarnessSessionDeletionMutation,
   AgentHarnessSessionDeletionParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  createNativeSessionBindingLifecycleV2,
-  isNativeSessionDeletionUnresolved,
-  wrapNativeSessionDeletionMutation,
-} from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { createNativeSessionBindingLifecycleV2 } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   bindingSchema,
@@ -29,11 +25,6 @@ export function createAgentsApiBindings(
       assertCurrent: () => void,
       agentId?: string,
     ) => Promise<void>;
-    retire: (
-      localSessionId: string,
-      binding: AgentsApiCleanupBinding,
-      assertCurrent: () => void,
-    ) => Promise<void>;
   },
 ) {
   const invalidRow = (key: string) =>
@@ -49,17 +40,6 @@ export function createAgentsApiBindings(
   const lifecycle = createNativeSessionBindingLifecycleV2(
     {
       lookup: state.lookup.bind(state),
-      assertLeaseCurrent(key, token) {
-        // Legacy SDK writers cannot publish revocation; only this final effect guard stays sync.
-        const raw = runtime.state.openSyncKeyedStore<StoredBinding>(stateOptions).lookup(key);
-        const current = readRecord(raw);
-        if (raw !== undefined && !current) {
-          throw invalidRow(key);
-        }
-        if (current?.lease?.token !== token || current.lease.expiresAt <= Date.now()) {
-          throw new Error(`Agents API binding lease lost: ${key}`);
-        }
-      },
       withCurrent(authority) {
         return runtime.state.openKeyedStoreV2<StoredBinding>(stateOptions, authority);
       },
@@ -175,7 +155,10 @@ export function createAgentsApiBindings(
                 });
                 assertMigrationCurrent();
               } else if (stored?.sessionId && stored.configFingerprint) {
-                binding = bindingSchema.parse(stored);
+                binding = {
+                  sessionId: stored.sessionId,
+                  configFingerprint: stored.configFingerprint,
+                };
               }
               return await run(binding, bind, assertLeaseCurrent);
             } finally {
@@ -208,10 +191,6 @@ export function createAgentsApiBindings(
               }
               await nativeCleanup.settle(localSessionId, binding, assertResetCurrent, agentId);
               assertResetCurrent();
-              if (binding.executor) {
-                await nativeCleanup.retire(localSessionId, binding, assertResetCurrent);
-                assertResetCurrent();
-              }
             }
             await lifecycle.transact(
               localSessionId,
@@ -242,7 +221,6 @@ export function createAgentsApiBindings(
     async withSessionDeletion<T>(
       params: AgentHarnessSessionDeletionParams,
       run: (mutation: AgentHarnessSessionDeletionMutation) => Promise<T>,
-      retireAfterCommit = false,
     ): Promise<T> {
       return await lifecycle.withDeletion(
         params.sessionId,
@@ -264,38 +242,8 @@ export function createAgentsApiBindings(
             }
             await cleanup.settle(params.sessionId, binding, assertDeletionCurrent, params.agentId);
             assertDeletionCurrent();
-            if (binding.executor && !retireAfterCommit) {
-              // Give the controller a chance to stop its executor before deleting the binding.
-              await cleanup.retire(params.sessionId, binding, assertDeletionCurrent);
-              assertDeletionCurrent();
-            }
           }
-          if (!retireAfterCommit || !binding?.executor) {
-            return await run(mutation);
-          }
-          let committed = false;
-          try {
-            return await run(
-              wrapNativeSessionDeletionMutation(mutation, {
-                assertCurrent: params.assertCurrent,
-                committed: () => {
-                  committed = true;
-                },
-                rolledBack: () => {
-                  committed = false;
-                },
-              }),
-            );
-          } finally {
-            // A rejected/rolled-back cut keeps its executor. After confirmed commit
-            // the removed binding is captured here; its deleted lease cannot authorize
-            // cleanup, so only this still-active host mutation retains that custody.
-            if (committed && !isNativeSessionDeletionUnresolved(mutation)) {
-              params.assertCurrent();
-              await nativeCleanup!.retire(params.sessionId, binding, params.assertCurrent);
-              params.assertCurrent();
-            }
-          }
+          return await run(mutation);
         },
       );
     },
@@ -307,8 +255,6 @@ function nativeBinding(row: StoredBinding | undefined): AgentsApiCleanupBinding 
     ? {
         sessionId: row.sessionId,
         configFingerprint: row.configFingerprint,
-        executorControllerPluginId: row.executorControllerPluginId,
-        executor: row.executor,
       }
     : undefined;
 }

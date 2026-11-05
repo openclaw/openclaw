@@ -197,7 +197,11 @@ final class StatusMenuRenderer: NSObject {
         switch content.kind {
         case .header:
             Self.configureHostedView(
-                item, rootView: StatusMenuHeaderView(state: self.state, isSleeping: self.isSleeping))
+                item,
+                rootView: StatusMenuHeaderView(
+                    state: self.state,
+                    isSleeping: self.isSleeping,
+                    onCheckForUpdates: self.onInstallUpdate))
         case let .session(row):
             StatusMenuSessions.shared.configureSessionItem(item, row: row)
         case let .approval(request):
@@ -278,7 +282,6 @@ final class StatusMenuRenderer: NSObject {
         }
 
         self.configureNative(item, title: title, symbol: symbol, action: #selector(self.performAction(_:)))
-        item.isEnabled = action != .talkMode || voiceWakeSupported
         item.keyEquivalent = ""
 
         switch action {

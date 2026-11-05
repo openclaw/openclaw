@@ -1,4 +1,3 @@
-// Private runtime barrel for the bundled Feishu extension.
 // Keep this barrel thin and generic-only.
 
 export type {

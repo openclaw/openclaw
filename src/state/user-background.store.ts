@@ -1,13 +1,13 @@
-import type { DatabaseSync } from "node:sqlite";
 import { normalizeBackgroundPreference } from "../../packages/gateway-protocol/src/schema/background-preferences.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
-import { createOpenClawStateSchemaEnsurer } from "./openclaw-state-feature-schema.js";
+import { createOpenClawStateSchemaEnsurer } from "./openclaw-state-feature-schema-ensure.js";
 
 type BackgroundDatabase = Pick<DB, "user_background_images">;
 export const ensureUserBackgroundSchema = createOpenClawStateSchemaEnsurer({
@@ -15,7 +15,7 @@ export const ensureUserBackgroundSchema = createOpenClawStateSchemaEnsurer({
   operationLabel: "users.background.schema.ensure",
 });
 
-export function readUserBackgroundImage(db: DatabaseSync, profileId: string, assetId: string) {
+export function readUserBackgroundImage(db: EngineConnection, profileId: string, assetId: string) {
   if (!tableExists(db, "user_background_images")) {
     return undefined;
   }
@@ -30,7 +30,7 @@ export function readUserBackgroundImage(db: DatabaseSync, profileId: string, ass
 }
 
 /** Preference edits and settings previews never materialize the retained image payload. */
-export function readUserBackgroundAsset(db: DatabaseSync, profileId: string) {
+export function readUserBackgroundAsset(db: EngineConnection, profileId: string) {
   if (!tableExists(db, "user_background_images")) {
     return undefined;
   }
@@ -46,7 +46,7 @@ export function readUserBackgroundAsset(db: DatabaseSync, profileId: string) {
 
 /** The same validation runs for ordinary preference writes and atomic upload selection. */
 export function isOwnedBackgroundPreference(
-  db: DatabaseSync,
+  db: EngineConnection,
   profileId: string,
   value: unknown,
 ): boolean {
@@ -59,7 +59,7 @@ export function isOwnedBackgroundPreference(
 }
 
 export function writeUserBackgroundImage(
-  db: DatabaseSync,
+  db: EngineConnection,
   row: DB["user_background_images"],
 ): void {
   executeSqliteQuerySync(
@@ -78,7 +78,7 @@ export function writeUserBackgroundImage(
   );
 }
 
-export function deleteUserBackgroundImage(db: DatabaseSync, profileId: string): void {
+export function deleteUserBackgroundImage(db: EngineConnection, profileId: string): void {
   if (tableExists(db, "user_background_images")) {
     executeSqliteQuerySync(
       db,
@@ -91,7 +91,7 @@ export function deleteUserBackgroundImage(db: DatabaseSync, profileId: string): 
 
 /** Profile linking preserves the target upload, or transfers the source without duplicating it. */
 export function mergeUserBackgroundImages(
-  db: DatabaseSync,
+  db: EngineConnection,
   sourceId: string,
   targetId: string,
 ): void {

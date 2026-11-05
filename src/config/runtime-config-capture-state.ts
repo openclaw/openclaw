@@ -1,10 +1,14 @@
-import { freezeJsonSnapshot } from "../shared/immutable-data.js";
-import { cloneConfigWithResolutionFacts } from "./resolution-facts.js";
+import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
+import { cloneConfigWithResolutionFacts, getConfigResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
-type RuntimeConfigCapture = Readonly<{ source: OpenClawConfig; origin: OpenClawConfig }>;
+type RuntimeConfigCapture = Readonly<{
+  source: OpenClawConfig;
+  origin: OpenClawConfig;
+}>;
 
 const captures = new WeakMap<OpenClawConfig, RuntimeConfigCapture>();
+const immutableCaptures = new WeakMap<OpenClawConfig, OpenClawConfig>();
 
 export function getRuntimeConfigCapture(
   config: OpenClawConfig | undefined,
@@ -12,18 +16,53 @@ export function getRuntimeConfigCapture(
   return config ? captures.get(config) : undefined;
 }
 
+const publishedSources = new WeakMap<OpenClawConfig, OpenClawConfig>();
+
+/**
+ * Record the authored source last published with a runtime config object, without cloning it.
+ * Holders of an older generation then project their own source, not a newer one. Unlike a
+ * capture, the config stays mutable: callers that need an isolated pair still capture it.
+ */
+export function recordPublishedRuntimeConfigSource(
+  config: OpenClawConfig,
+  source: OpenClawConfig,
+): void {
+  publishedSources.set(config, source);
+}
+
+export function getPublishedRuntimeConfigSource(
+  config: OpenClawConfig | undefined,
+): OpenClawConfig | undefined {
+  return config ? publishedSources.get(config) : undefined;
+}
+
 /** Freeze a selected runtime/source pair before its publication owner yields. */
 export function captureRuntimeConfigWithSource(
   config: OpenClawConfig,
   source: OpenClawConfig,
 ): OpenClawConfig {
+  // Only a source-free immutable input has no mutable publication context to capture.
+  const reusable = config === source && isDeeplyFrozenPlainData(config);
+  const previous = reusable ? immutableCaptures.get(config) : undefined;
+  if (previous && getConfigResolutionFacts(previous) === getConfigResolutionFacts(config)) {
+    return previous;
+  }
   const clone = (value: OpenClawConfig) =>
     freezeJsonSnapshot(cloneConfigWithResolutionFacts(value));
   const captured = clone(config);
   const capturedSource = source === config ? captured : clone(source);
-  captures.set(captured, { source: capturedSource, origin: config });
+  captures.set(captured, {
+    source: capturedSource,
+    origin: config,
+  });
   if (capturedSource !== captured) {
-    captures.set(capturedSource, { source: capturedSource, origin: source });
+    captures.set(capturedSource, {
+      source: capturedSource,
+      origin: source,
+    });
+  }
+  if (reusable) {
+    immutableCaptures.set(config, captured);
   }
   return captured;
 }

@@ -24,30 +24,22 @@ export type UserBackgroundOptions = OpenClawStateDatabaseOptions & {
   signal?: AbortSignal;
 };
 
-async function readBackground(
+async function readBackground<Command extends UserBackgroundReadCommand>(
   context: OpenClawStateWorkerContext,
-  command: UserBackgroundReadCommand,
+  command: Command,
   options: UserBackgroundOptions,
 ) {
-  for (;;) {
-    options.signal?.throwIfAborted();
-    options.assertCurrent?.();
-    const isCurrent = await captureUserPreferenceRead(context.admission);
-    const reply = await executeExistingOpenClawStateRead(
-      { path: context.admission.databasePath, env: context.environment },
-      command,
-      { context, current: true, signal: options.signal },
-    );
-    options.signal?.throwIfAborted();
-    options.assertCurrent?.();
-    if (reply && (!reply.ok || reply.type !== command.type)) {
-      throw new Error(reply.ok ? "Unexpected background read reply" : reply.message);
-    }
-    // An upload/removal or profile merge cannot publish stale bytes after its commit.
-    if (isCurrent()) {
-      return { reply, isCurrent };
-    }
-  }
+  options.signal?.throwIfAborted();
+  options.assertCurrent?.();
+  const isCurrent = await captureUserPreferenceRead(context.admission);
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    command,
+    { context, current: true, signal: options.signal },
+  );
+  options.signal?.throwIfAborted();
+  options.assertCurrent?.();
+  return { reply, isCurrent };
 }
 
 export async function getUserBackground(
@@ -64,9 +56,6 @@ export async function getUserBackground(
   );
   if (!reply) {
     return { status: "no_durable_identity" };
-  }
-  if (!reply.ok || reply.type !== "userBackground.snapshot") {
-    throw new Error("Unexpected background snapshot reply");
   }
   return reply.result;
 }
@@ -89,9 +78,6 @@ export async function getUserBackgroundImage(
   if (!reply) {
     return { image: undefined, byteLength: undefined, isCurrent };
   }
-  if (!reply.ok || reply.type !== "userBackground.image") {
-    throw new Error("Unexpected background image reply");
-  }
   return { image: reply.image, byteLength: reply.byteLength, isCurrent };
 }
 
@@ -102,8 +88,6 @@ async function mutateBackground(
   options: UserBackgroundOptions,
 ): Promise<UsersBackgroundResult> {
   const context = captureOpenClawStateWorkerContext(options);
-  // Capture caller-owned CAS inputs before the first worker/decoder yield.
-  const expected = structuredClone(input);
   const { reply } = await readBackground(
     context,
     { type: "userBackground.snapshot", profileId },
@@ -112,10 +96,7 @@ async function mutateBackground(
   if (!reply) {
     return { status: "no_durable_identity" };
   }
-  if (!reply.ok || reply.type !== "userBackground.snapshot") {
-    throw new Error("Unexpected background snapshot reply");
-  }
-  if (reply.result.status !== "ok" || !reply.profileId) {
+  if (reply.result.status !== "ok") {
     return reply.result;
   }
   const image =
@@ -127,7 +108,7 @@ async function mutateBackground(
   options.assertCurrent?.();
   const finishMutation = beginUserPreferenceMutation(context.admission);
   try {
-    const mutation: UserBackgroundWriteInput = { profileId, expected, image };
+    const mutation: UserBackgroundWriteInput = { profileId, expected: input, image };
     return await runOpenClawStateWorkerOperation(
       context,
       (scope) => scope.execute({ type: "userBackground.write", input: mutation }),

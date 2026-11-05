@@ -62,9 +62,6 @@ export function resolveDeferredChannelConfigWarning(params: {
 }
 
 function formatRemovedPluginConfigWarning(pluginId: string): string {
-  if (pluginId === "skill-workshop") {
-    return 'plugin removed: skill-workshop (stale plugin config ignored; Skill Workshop is built into OpenClaw skills now. Set skills.workshop.autonomous.mode to "auto" or "off" and use openclaw skills workshop commands, then remove this plugins config entry)';
-  }
   return `plugin removed: ${pluginId} (stale config entry ignored; remove it from plugins config)`;
 }
 
@@ -76,10 +73,12 @@ function formatMissingOfficialExternalPluginWarning(
   if (!catalogEntry) {
     return null;
   }
-  const installSpec = resolveOfficialExternalPluginInstallSources(catalogEntry)[0]?.spec;
-  if (!installSpec) {
+  const installSource = resolveOfficialExternalPluginInstallSources(catalogEntry)[0];
+  if (!installSource) {
     return null;
   }
+  const installSpec =
+    installSource.source === "npm" ? `npm:${installSource.spec}` : installSource.spec;
   if (pluginId === "memory-lancedb" && opts?.selectedMissingMemorySlot) {
     return `plugin not installed: ${pluginId} — gateway will run without persistent memory until installed; install the official external plugin with: openclaw plugins install ${installSpec}`;
   }
@@ -91,8 +90,8 @@ export function validateExplicitPluginConfig(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   applyDefaults: boolean;
-  schemaValidations?: PreparedPluginSchemaValidations;
   registry: PluginManifestRegistry;
+  schemaValidations: PreparedPluginSchemaValidations;
   deferredPluginIds?: ReadonlySet<string>;
   ensureCompatPluginIds: () => ReadonlySet<string>;
   ensureOverriddenPluginIds: () => Set<string>;

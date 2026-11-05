@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
+import { resolveWorkerVisibleHistoryProjection } from "../config/sessions/session-accessor.sqlite-history-projection.worker.js";
 import { readRecentSessionTranscriptHistoryEventsFromProjection } from "../config/sessions/session-accessor.sqlite-history-query.js";
 import { readCurrentProjectionSnapshot } from "../config/sessions/session-accessor.sqlite-projection-read.js";
 import { readWithCanonicalSessionAdmission } from "../config/sessions/session-canonical-key.js";
@@ -43,7 +44,7 @@ export async function readBoundedSessionPreviewItemsAsync(
 }
 
 /** Native and worker display reads share widening, projection, and the older-page boundary. */
-export function readSessionDisplayPreviewItems(
+function readSessionDisplayPreviewItems(
   maxItems: number,
   maxChars: number,
   readPage: (
@@ -86,8 +87,10 @@ export function readSessionPreviewItemsReadOnly(
             databaseAgentId: databaseTarget.agentId,
             path: databaseTarget.path,
           },
-          (projection) =>
-            readRecentSessionTranscriptHistoryEventsFromProjection(projection, options),
+          (projection) => {
+            projection.resolveVisibleHistory = resolveWorkerVisibleHistoryProjection;
+            return readRecentSessionTranscriptHistoryEventsFromProjection(projection, options);
+          },
         );
         if (snapshot.kind === "unavailable") {
           throw new SessionTranscriptProjectionUnavailableError(target.sessionId);

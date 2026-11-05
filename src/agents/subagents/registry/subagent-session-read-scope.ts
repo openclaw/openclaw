@@ -1,9 +1,11 @@
 import { resolveControllerSessionKey } from "./subagent-registry-read-topology.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type RunIdentity = Pick<SubagentRunReadRecord, "childSessionKey" | "requesterSessionKey">;
 type LookupIdentity = RunIdentity &
-  Pick<SubagentRunReadRecord, "runId" | "swarmRunId" | "schedulerSlotId" | "controllerSessionKey">;
+  Pick<SubagentRunReadRecord, "runId" | "swarmRunId" | "schedulerSlotId" | "controllerSessionKey"> &
+  Pick<SubagentRunRecord, "requesterTurnRunId">;
 
 function buildChildren(runGroups: readonly Iterable<RunIdentity>[]) {
   const children = new Map<string, Set<string>>();
@@ -52,6 +54,7 @@ type LookupMembership = {
   runId: string;
   swarmRunId?: string;
   schedulerSlotId?: string;
+  requesterTurnRunId?: string;
   requester: string;
   child: string;
   controller: string;
@@ -67,7 +70,8 @@ type SessionBuckets = {
 /** Derived membership only; the cache's snapshot Map remains the record owner. */
 export class SubagentSessionReadLookup {
   #memberships = new Map<string, LookupMembership>();
-  #byRunId = new Map<string, Set<LookupMembership>>();
+  #byAlias = new Map<string, Set<LookupMembership>>();
+  #byRequesterTurn = new Map<string, Set<LookupMembership>>();
   #sessions?: SessionBuckets;
   #topology?: readonly Readonly<RunIdentity>[];
   #nextOrder = 0;
@@ -79,8 +83,13 @@ export class SubagentSessionReadLookup {
   }
 
   set(cacheKey: string, entry: LookupIdentity | undefined): void {
-    this.#topology = undefined;
     const previous = this.#memberships.get(cacheKey);
+    if (
+      previous?.entry.childSessionKey !== entry?.childSessionKey ||
+      previous?.entry.requesterSessionKey !== entry?.requesterSessionKey
+    ) {
+      this.#topology = undefined;
+    }
     if (!entry) {
       if (previous) {
         this.#index(previous, false);
@@ -96,6 +105,7 @@ export class SubagentSessionReadLookup {
       previous.runId === entry.runId &&
       previous.swarmRunId === entry.swarmRunId &&
       previous.schedulerSlotId === entry.schedulerSlotId &&
+      previous.requesterTurnRunId === entry.requesterTurnRunId &&
       previous.child === child &&
       previous.requester === requester &&
       previous.controller === controller
@@ -112,6 +122,7 @@ export class SubagentSessionReadLookup {
       runId: entry.runId,
       swarmRunId: entry.swarmRunId,
       schedulerSlotId: entry.schedulerSlotId,
+      requesterTurnRunId: entry.requesterTurnRunId,
       child,
       requester,
       controller,
@@ -190,7 +201,12 @@ export class SubagentSessionReadLookup {
   }
 
   selectRunIds(ids: ReadonlySet<string>, additionalCacheKeys: readonly string[] = []): string[] {
-    return this.#select(this.#byRunId, ids, additionalCacheKeys);
+    const direct = [...ids].filter((id) => id && this.#memberships.get(id)?.runId === id);
+    return this.#select(this.#byAlias, ids, [...direct, ...additionalCacheKeys]);
+  }
+
+  selectRequesterTurn(requesterTurnRunId: string): string[] {
+    return this.#select(this.#byRequesterTurn, new Set([requesterTurnRunId]));
   }
 
   selectSessions(sessionKeys: readonly string[], live: SubagentSessionReadLookup) {
@@ -291,9 +307,12 @@ export class SubagentSessionReadLookup {
   }
 
   #index(membership: LookupMembership, add = true) {
+    if (membership.requesterTurnRunId) {
+      this.#updateBucket(this.#byRequesterTurn, membership.requesterTurnRunId, membership, add);
+    }
     for (const id of [membership.runId, membership.swarmRunId, membership.schedulerSlotId]) {
-      if (id) {
-        this.#updateBucket(this.#byRunId, id, membership, add);
+      if (id && (id !== membership.cacheKey || id !== membership.runId)) {
+        this.#updateBucket(this.#byAlias, id, membership, add);
       }
     }
     this.#indexSession(membership, add);
