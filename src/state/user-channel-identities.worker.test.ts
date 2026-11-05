@@ -97,7 +97,6 @@ it.each(
   assertCheckpoint();
 });
 
-
 it("skips the write transaction when the startup policy is unchanged", () => {
   const database = openOpenClawStateDatabase(options);
   const admission = operationAdmission.createSqliteWorkerOperationAdmission((_request, grant) =>
@@ -138,7 +137,9 @@ it("skips the write transaction when the startup policy is unchanged", () => {
     expect(
       isUserChannelPolicyUnchanged(
         database.db,
-        resolveUserChannelAuthorizationPolicy({ auth: { identityScopes: ["main"] } }),
+        resolveUserChannelAuthorizationPolicy({
+          auth: { identityScopes: { main: ["operator.read"] } },
+        }),
         OWNERS_HASH,
       ),
     ).toBe(false);
