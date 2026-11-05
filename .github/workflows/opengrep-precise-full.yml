@@ -75,7 +75,7 @@ jobs:
           > .opengrep-out/precise.github.sarif
 
       - name: Upload SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
         # Never publish a partial conversion; the raw audit artifact stays intact.
         if: always() && steps.github-sarif.outcome == 'success'
         with:
