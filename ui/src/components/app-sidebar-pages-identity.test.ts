@@ -119,7 +119,7 @@ async function fixture() {
 }
 
 describe("Pages navigation identity", () => {
-  it("renders the outline Blobster for Templates in Pages and the pinned rail", async () => {
+  it("renders the approved Quiver Blobster for Templates in Pages and the pinned rail", async () => {
     const { sidebar } = await fixture();
     sidebar.enabledRouteIds = ["templates"];
     sidebar.sidebarEntries = ["route:templates"];
@@ -130,10 +130,10 @@ describe("Pages navigation identity", () => {
     );
     expect(pinned).not.toBeNull();
     for (const icon of [templates.icon, pinned!]) {
-      expect(icon.classList.contains("icon--filled")).toBe(false);
+      expect(icon.querySelectorAll('circle[fill="currentColor"]')).toHaveLength(2);
       expect(icon.getAttribute("fill")).toBe("none");
       expect(icon.getAttribute("stroke")).toBe("currentColor");
-      expect(icon.querySelector("[stroke-width]")).toBeNull();
+      expect(icon.getAttribute("viewBox")).toBe("0 0 46 45");
     }
     const navigate = vi.fn();
     sidebar.onNavigate = navigate;
