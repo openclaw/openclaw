@@ -119,9 +119,11 @@ threads; Codex's materialized 32 KiB default does not. Lightweight, ring-zero,
 message-only, and tool-disabled internal turns set the native project-document
 budget to zero instead.
 
-An inherited agent-workspace `AGENTS.md` snapshot stays fixed for its native
-thread, including when the file is edited, emptied, or removed. Start a new
-session to load the current workspace instructions.
+Inherited agent-workspace `AGENTS.md` edits take effect on the next turn, including
+when a native thread resumes. Unchanged local files reuse the workspace reader's
+cached content after checking file identity and timestamps. An empty or missing
+file, or failed workspace preparation, retains the last snapshot delivered to the
+bound native thread; transient threads do not update that fallback.
 
 This byte budget is separate from the character-based workspace bootstrap
 limits configured through `agents.defaults.bootstrapMaxChars` and
