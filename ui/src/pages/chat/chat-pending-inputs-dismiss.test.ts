@@ -163,8 +163,22 @@ const cancelledLabel = "Dismiss unsent message: Rename the staging bucket";
 
 describe("cancelled pending input dismissal", () => {
   it("keeps individual dismissal available to a writer when sending is unavailable", async () => {
-    const writer = await setup(() => dismissed([]), { canSend: false });
+    const writer = await setup(() => dismissed([]), {
+      canSend: false,
+      noticeCount: 2,
+      retained: {
+        total: page.items.length + 1,
+        items: [
+          ...page.items,
+          {
+            ...retained("user-stopped", "cancelled", "Keep my stopped request", 104),
+            cancelledByUser: true,
+          },
+        ],
+      },
+    });
     expect(writer.dismissButtons()).toHaveLength(2);
+    expect(writer.text()).toContain("Keep my stopped request");
     expect(writer.named(firstLabel)).not.toBeNull();
     expect(writer.text()).not.toContain("Dismiss all");
     const viewer = await setup(() => dismissed([]), { canDismissPendingInputs: false });

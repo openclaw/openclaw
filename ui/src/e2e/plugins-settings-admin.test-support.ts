@@ -131,7 +131,7 @@ export const config = {
     entries: {
       workboard: {
         enabled: true,
-        hooks: { allowPromptInjection: false },
+        hooks: { allowPromptModification: false },
         config: {
           workspaceLabel: "Planning",
           refreshMinutes: 15,
@@ -195,7 +195,7 @@ export const configMocks = {
                       type: "object",
                       additionalProperties: false,
                       properties: {
-                        allowPromptInjection: { type: "boolean", title: "Allow prompt changes" },
+                        allowPromptModification: { type: "boolean", title: "Allow prompt changes" },
                         allowConversationAccess: {
                           type: "boolean",
                           title: "Read conversation context",

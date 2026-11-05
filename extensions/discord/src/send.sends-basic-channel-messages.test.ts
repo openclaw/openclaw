@@ -772,30 +772,27 @@ it("fails closed when the channel belongs to a different guild", async () => {
 });
 
 it.each([
-  { pinCount: 250, pageSize: 50 },
-  { pinCount: 6, pageSize: 1 },
-])("lists all $pinCount pins across $pageSize-item pages", async ({ pinCount, pageSize }) => {
+  [250, 50, undefined, [50, 50, 50, 50, 50]],
+  [6, 1, undefined, [50, 50, 50, 50, 50, 50]],
+  [250, 50, 3, [3]],
+  [250, 50, 60, [50, 10]],
+] as const)("lists pins (%s, %s/page, limit %s)", async (pinCount, pageSize, limit, limits) => {
   const pins = Array.from({ length: pinCount }, (_, index) => ({
-    pinned_at: new Date(Date.UTC(2026, 0, 1, 0, 0, pinCount - index))
-      .toISOString()
-      .replace("Z", "000+00:00"),
+    pinned_at: new Date(pinCount - index).toISOString().replace("Z", "000+00:00"),
     message: { id: String(index + 1) },
   }));
   const loopback = await loopbackRest({
     respond: ({ path }) => {
       const url = new URL(path ?? "/", "http://localhost");
-      if (url.pathname === "/v10/channels/789/pins") {
-        return pins.slice(0, 50).map((pin) => pin.message);
-      }
       const before = url.searchParams.get("before");
       const start = before === null ? 0 : pins.findIndex((pin) => pin.pinned_at === before) + 1;
-      const items = pins.slice(start, start + pageSize);
+      const size = Math.min(pageSize, Number(url.searchParams.get("limit")));
+      const items = pins.slice(start, start + size);
       return { items, has_more: start + items.length < pins.length };
     },
   });
-
-  await expect(listPinsDiscord("789", clientOptions(loopback.rest))).resolves.toEqual(
-    pins.map((pin) => pin.message),
+  await expect(listPinsDiscord("789", clientOptions(loopback.rest), limit)).resolves.toEqual(
+    pins.slice(0, limit).map((pin) => pin.message),
   );
   expect(
     loopback.requests.map(({ method, path }) => {
@@ -808,10 +805,10 @@ it.each([
       };
     }),
   ).toEqual(
-    Array.from({ length: Math.ceil(pinCount / pageSize) }, (_, index) => ({
+    limits.map((requestLimit, index) => ({
       method: "GET",
       path: "/v10/channels/789/messages/pins",
-      limit: "50",
+      limit: String(requestLimit),
       before: index === 0 ? null : pins[index * pageSize - 1]!.pinned_at,
     })),
   );

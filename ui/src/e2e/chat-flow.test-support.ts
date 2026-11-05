@@ -175,10 +175,14 @@ export async function chatThreadDistanceFromBottom(page: Page): Promise<number> 
 }
 
 export async function waitForChatScrollIdle(page: Page): Promise<void> {
+  await waitForTranscriptScrollIdle(page.locator(".chat-pane-cache__pane--active .chat-thread"));
+}
+
+export async function waitForTranscriptScrollIdle(locator: Locator): Promise<void> {
   await expect
     .poll(
       () =>
-        page.locator(".chat-pane-cache__pane--active .chat-thread").evaluate(async (element) => {
+        locator.evaluate(async (element) => {
           const thread = element as HTMLElement;
           const readGeometry = () => [
             thread.clientHeight,

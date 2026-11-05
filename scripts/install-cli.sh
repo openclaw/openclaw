@@ -21,6 +21,10 @@ fi
 
 set -euo pipefail
 
+# Distros with user private groups (Ubuntu, Fedora) default to umask 002; the
+# installed runtime must not be group-writable or owned-path checks refuse it.
+umask go-w
+
 # BEGIN GENERATED UPDATE NETWORK BUDGET
 # Source: src/infra/update-network-budget.ts; regenerate: node scripts/generate-update-network-budget.mjs
 UPDATE_NETWORK_TIMEOUT_SECONDS=300
@@ -161,6 +165,7 @@ FAQ: https://docs.openclaw.ai/start/faq
   --npm                               Shortcut for --install-method npm
   --git, --github                     Shortcut for --install-method git
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw, or \$OPENCLAW_HOME/openclaw)
+  --no-git-update                     Skip rebasing local main (Git fetches can still occur)
   --version <ver>                     OpenClaw version (default: latest)
   --compatible-with <ver>             Refuse a CLI that cannot modify config written by <ver>
   --node-version <ver>                Node version (default: 24.22.1)

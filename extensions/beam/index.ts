@@ -12,7 +12,7 @@ export default definePluginEntry({
   register(api) {
     const store = createBeamStore(api.runtime);
     api.registerSessionCatalog(createBeamSessionCatalog(store));
-    for (const operation of ["list", "read"] as const) {
+    for (const operation of ["list", "read", "resolve", "continue"] as const) {
       api.registerGatewayMethod(
         `beam.owned.${operation}`,
         createBeamOwnedViewHandler(store, operation),

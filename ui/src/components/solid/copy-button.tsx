@@ -25,7 +25,10 @@ export function CopyButton(props: {
         let feedback!: HTMLSpanElement;
         const [outcome, setOutcome] = createSignal<string>();
         return (
-          <openclaw-tooltip prop:content={(props.iconFeedback && outcome()) || label()}>
+          <openclaw-tooltip
+            prop:content={(props.iconFeedback && outcome()) || label()}
+            prop:describe={false}
+          >
             <button
               {...props.buttonAttributes}
               class={props.bare ? "chat-copy-btn" : "btn btn--xs chat-copy-btn"}

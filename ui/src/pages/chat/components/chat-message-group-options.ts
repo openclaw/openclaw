@@ -50,7 +50,6 @@ export type RenderMessageGroupOptions = Omit<
     activityGroupKey?: string;
     bubbleActivityGroupKey?: string;
     turnRecap?: TurnRecap;
-    hideTurnRecapDuration?: boolean;
     /** Frame bodies are pre-rendered by the frame owner; ordinary groups omit them. */
     frameContent?: readonly unknown[];
     frameActionOwner?: MessageGroup["messages"][number] | null;

@@ -61,11 +61,18 @@ function runScenario(scenario: Scenario = {}) {
     mkdirSync(join(packageRoot, "dist/extensions", channel), { recursive: true });
   }
   const cli = join(bin, "openclaw");
+  const cliModule = join(bin, "openclaw.mjs");
   writeFixture(
     cli,
-    `#!/usr/bin/env node
-const fs = require("node:fs");
-const path = require("node:path");
+    `#!/bin/bash
+exec "$REAL_NODE" "$FIXTURE_CLI_MODULE" "$@"
+`,
+    true,
+  );
+  writeFixture(
+    cliModule,
+    `import fs from "node:fs";
+import path from "node:path";
 const args = process.argv.slice(2);
 const env = process.env;
 fs.appendFileSync(env.EVENTS, JSON.stringify(args) + "\\n");
@@ -114,14 +121,14 @@ function installChannelDependency() {
     join(bin, "node"),
     `#!/bin/bash
 if [ "$1" = scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs ]; then
-  exec "$REAL_NODE" "$FIXTURE_CLI" assertion "\${@:2}"
+  exec "$REAL_NODE" "$FIXTURE_CLI_MODULE" assertion "\${@:2}"
 fi
 if [ "$1" = scripts/e2e/lib/npm-onboard-channel-agent/execution-identity.mjs ]; then
   if [ "$2" = clean-home ]; then exec "$REAL_NODE" "$@"; fi
   if [ "$2" = run-id ]; then printf '%s' admitted-run-fixture; exit 0; fi
   # Projection/storage assertions have their own real SQLite support tests.
   [ "$2" = verify ] || exit 0
-  exec "$REAL_NODE" "$FIXTURE_CLI" identity "\${@:2}"
+  exec "$REAL_NODE" "$FIXTURE_CLI_MODULE" identity "\${@:2}"
 fi
 exec "$REAL_NODE" "$@"
 `,
@@ -170,6 +177,7 @@ openclaw_e2e_stop_process() {
       TMPDIR: root,
       REAL_NODE: testNodeExecPath,
       FIXTURE_CLI: cli,
+      FIXTURE_CLI_MODULE: cliModule,
       PACKAGE_ROOT: packageRoot,
       EVENTS: eventsPath,
       CONSENT: scenario.consent === false ? "0" : "1",
