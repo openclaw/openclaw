@@ -181,6 +181,7 @@ struct AgentWorkspaceDirectoryList: View {
             let known = Set(self.entries.map(\.path))
             self.entries.append(contentsOf: result.entries.filter { !known.contains($0.path) })
             self.totalEntries = result.totalentries
+            self.errorText = nil
         }
     }
 

@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { getRuntimeConfigCapture } from "../config/runtime-config-capture-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
@@ -34,7 +35,11 @@ const NATIVE_LOGIN_RECHECK_MS = 60_000;
 // A single honored response does not prove capacity recovered; retain the last downgrade for a minute.
 const SERVICE_TIER_OBSERVATION_TTL_MS = 60_000;
 function readDirectBinding(config: OpenClawConfig, provider: string) {
-  const { providerConfig, ref } = resolveProviderConfigSecretInput(config, provider);
+  const { providerConfig, ref } = resolveProviderConfigSecretInput(
+    config,
+    provider,
+    getRuntimeConfigCapture(config)?.source,
+  );
   return { apiKey: ref ?? providerConfig?.apiKey, auth: providerConfig?.auth };
 }
 type AccountCatalogCredential =
