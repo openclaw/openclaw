@@ -286,6 +286,7 @@ export class TelegramPollingSession {
       cycleAbortController.abort();
     };
     try {
+      // SAFETY: grammY types a legacy signal; init only uses aborted and abort event listeners.
       await bot.init(this.opts.abortSignal as Parameters<(typeof bot)["init"]>[0]);
     } catch (err) {
       abortMedia();
