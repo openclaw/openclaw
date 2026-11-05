@@ -31,6 +31,7 @@ import androidx.compose.ui.test.IdlingResource
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.click
@@ -97,6 +98,8 @@ class ChatCompletedWorkLayoutTest {
 
   @Volatile private var historyResponse = HISTORY
 
+  @Volatile private var questionResponse = """{"questions":[]}"""
+
   // Dispose Compose consumers before joining runtime cleanup, even on the negative baseline.
   @get:Rule
   val fixtureRules: RuleChain =
@@ -161,7 +164,7 @@ class ChatCompletedWorkLayoutTest {
             ?.jsonPrimitive
             ?.content == OTHER_SESSION -> OTHER_HISTORY
 
-        method == "question.list" -> """{"questions":[]}"""
+        method == "question.list" -> questionResponse
 
         else -> originalRequest(gatewayId, method, params)
       }
@@ -196,6 +199,39 @@ class ChatCompletedWorkLayoutTest {
           model.chatHealthOk.value && model.chatMessages.value.size == 5 && runtime.chat.pendingRunCount.value == 0
       }
     }
+  }
+
+  @Test
+  fun answeredCredentialSummaryLeavesTheDockWhilePendingQuestionRemainsUsable() {
+    val terminal = """{"id":"credential-proof","agentId":"main","sessionKey":"$SESSION","questions":[{"questionId":"token","header":"Credential request","question":"Provide a token","isSecret":true,"options":[]}],"createdAtMs":1783555003000,"expiresAtMs":9223372036854775807,"status":"pending"}"""
+    val pending = """{"id":"pending-proof","agentId":"main","sessionKey":"$SESSION","questions":[{"questionId":"review","header":"Next step","question":"Choose the next step","options":[{"label":"Inspect result"},{"label":"Finish review"}]}],"createdAtMs":1783555005000,"expiresAtMs":9223372036854775807,"status":"pending"}"""
+    questionResponse = """{"questions":[$pending]}"""
+    composeRule.runOnIdle {
+      controller.handleGatewayEvent("question.requested", terminal)
+      controller.handleGatewayEvent("question.resolved", """{"id":"credential-proof","status":"answered"}""")
+      controller.handleGatewayEvent("question.requested", pending)
+    }
+    composeRule.waitUntil {
+      composeRule.runOnIdle {
+        model.chatQuestions.value.any { it.record.id == "credential-proof" && it.record.status == "answered" } &&
+          model.chatQuestions.value.any { it.record.id == "pending-proof" && it.record.status == "pending" }
+      }
+    }
+    composeRule.onNodeWithText("Inspect result").performClick()
+    composeRule.onNodeWithText(nativeString("Submit")).assertIsEnabled()
+    val summary = composeRule.onNodeWithText("Credential request:").assertIsDisplayed()
+    val reply = composeRule.onNodeWithText(FINAL).assertIsDisplayed()
+    val worked = composeRule.onNode(hasText(nativeString("Worked for \$duration", "4s")) and hasClickAction())
+    val collapsedSummaryTop = summary.getUnclippedBoundsInRoot().top
+    val collapsedReplyTop = reply.getUnclippedBoundsInRoot().top
+    val collapsedWorkTop = worked.getUnclippedBoundsInRoot().top
+    capture("terminal-question-collapsed")
+    worked.performClick()
+    capture("terminal-question-expanded")
+    assertTrue("An answered summary belongs above its later reply, not in the composer dock", collapsedSummaryTop < collapsedReplyTop)
+    assertTrue("The summary follows earlier folded work", collapsedSummaryTop > collapsedWorkTop)
+    assertTrue(summary.getUnclippedBoundsInRoot().top < reply.getUnclippedBoundsInRoot().top)
+    composeRule.onNodeWithText(nativeString("Submit")).assertIsEnabled()
   }
 
   @Test

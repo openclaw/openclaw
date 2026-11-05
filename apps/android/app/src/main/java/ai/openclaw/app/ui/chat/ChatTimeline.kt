@@ -6,6 +6,7 @@ import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatQuestionPrompt
+import ai.openclaw.app.chat.ChatQuestionStatus
 import ai.openclaw.app.chat.ChatToolActivity
 import ai.openclaw.app.chat.OUTBOX_OWNER_CHANGED_ERROR
 import ai.openclaw.app.i18n.nativeString
@@ -50,6 +51,7 @@ internal sealed class ChatTimelineItem {
     val toolKeys: List<String> = tools.mapIndexed { index, tool -> tool.toolCallId ?: "anonymous:$index" },
     val liveTools: Map<String, ChatPendingToolCall> = emptyMap(),
     val settledToolKeys: Set<String> = emptySet(),
+    val timestampMs: Long? = null,
   ) : ChatTimelineItem()
 
   data class QuestionPrompt(
@@ -61,6 +63,7 @@ internal sealed class ChatTimelineItem {
     val durationMs: Long?,
     val expanded: Boolean,
     val outcomes: Map<WorkedToolOutcome, Int>,
+    val timestampMs: Long? = null,
   ) : ChatTimelineItem()
 
   data class TurnRecapSummary(
@@ -71,6 +74,7 @@ internal sealed class ChatTimelineItem {
     val key: String,
     val label: String,
     val body: String,
+    val timestampMs: Long? = null,
   ) : ChatTimelineItem()
 
   data class SystemDivider(
@@ -79,6 +83,7 @@ internal sealed class ChatTimelineItem {
     val label: String,
     val metric: String? = null,
     val secondary: String? = null,
+    val timestampMs: Long? = null,
   ) : ChatTimelineItem()
 
   object Thinking : ChatTimelineItem()
@@ -158,10 +163,11 @@ internal fun PreparedChatHistory.buildTimeline(
 ): ChatTimeline {
   val stream = streamingAssistantText?.trim()?.takeIf { it.isNotEmpty() }
   val latestTurnLive = pendingRunCount > 0 || pendingToolCalls.any { !it.isComplete } || stream != null
+  val (liveQuestions, terminalQuestions) = questions.partition { it.status() in setOf(ChatQuestionStatus.Pending, ChatQuestionStatus.Submitting) }
   val sourceItems =
     buildList {
       // reverseLayout: index 0 renders bottom-most; queued commands are the newest user input.
-      questions.asReversed().forEach { prompt -> add(ChatTimelineItem.QuestionPrompt(prompt)) }
+      liveQuestions.asReversed().forEach { prompt -> add(ChatTimelineItem.QuestionPrompt(prompt)) }
       outboxItems.asReversed().forEach { item -> add(ChatTimelineItem.OutboxCommand(item)) }
       recoveryOutboxItems.asReversed().forEach { item -> add(ChatTimelineItem.RecoveryOutboxCommand(item)) }
       if (recoveryOutboxItems.isNotEmpty()) add(ChatTimelineItem.OutboxRecoveryHeader(recoveryOutboxItems.size))
@@ -180,7 +186,7 @@ internal fun PreparedChatHistory.buildTimeline(
           } else {
             span.preservedRowIndexes.asReversed().forEach { add(rows[it]) }
             if (span.key in expandedWorkKeys) span.workRowIndexes.asReversed().forEach { add(rows[it]) }
-            add(ChatTimelineItem.WorkedSummary(span.key, span.durationMs, span.key in expandedWorkKeys, span.outcomes))
+            add(ChatTimelineItem.WorkedSummary(span.key, span.durationMs, span.key in expandedWorkKeys, span.outcomes, span.workRowIndexes.mapNotNull { rows[it].sourceTimestampMs() }.maxOrNull()))
           }
           rowIndex = span.start - 1
           spanIndex--
@@ -189,7 +195,7 @@ internal fun PreparedChatHistory.buildTimeline(
         }
       }
     }
-  val items = projectToolActivity(sourceItems, rows, pendingToolCalls, toolScope, toolScopesByRun)
+  val items = projectToolActivity(sourceItems, rows, pendingToolCalls, toolScope, toolScopesByRun).withTerminalQuestions(terminalQuestions)
   val latestUserIndex = items.indexOfFirst { it is ChatTimelineItem.Message && it.message.id == latestUserMessageId }.takeIf { it >= 0 }
   val latestContentIndex = 0.takeIf { items.isNotEmpty() }
   // In reverseLayout, index 0 is bottom-most. Keep the latest prompt as a stable
@@ -218,6 +224,36 @@ internal fun PreparedChatHistory.buildTimeline(
   )
 }
 
+/** Insert retained summaries after tool/work projection so disclosures cannot move them back to the dock. */
+private fun List<ChatTimelineItem>.withTerminalQuestions(questions: List<ChatQuestionPrompt>): List<ChatTimelineItem> {
+  if (questions.isEmpty()) return this
+  val terminal = questions.sortedByDescending { it.record.createdAtMs }
+  return buildList {
+    var next = 0
+    for (item in this@withTerminalQuestions) {
+      val timestamp = item.sourceTimestampMs()
+      if (timestamp != null) {
+        while (next < terminal.size && terminal[next].record.createdAtMs >= timestamp) {
+          add(ChatTimelineItem.QuestionPrompt(terminal[next++]))
+        }
+      }
+      add(item)
+    }
+    // Keep summaries even when the corresponding older history is not loaded.
+    while (next < terminal.size) add(ChatTimelineItem.QuestionPrompt(terminal[next++]))
+  }
+}
+
+private fun ChatTimelineItem.sourceTimestampMs(): Long? =
+  when (this) {
+    is ChatTimelineItem.Message -> message.timestampMs
+    is ChatTimelineItem.ToolActivity -> timestampMs
+    is ChatTimelineItem.WorkedSummary -> timestampMs
+    is ChatTimelineItem.SystemDivider -> timestampMs
+    is ChatTimelineItem.SystemNotice -> timestampMs
+    else -> null
+  }
+
 // Gateway projects sessions_send user inputs as assistant rows; they still start a new turn.
 internal fun ChatMessage.isForwardedBoundary(): Boolean =
   role.trim().equals("assistant", ignoreCase = true) &&
@@ -241,7 +277,7 @@ private fun buildTranscriptTimeline(
 
     fun flushToolActivity() {
       if (completedTools.isEmpty()) return
-      add(ChatTimelineItem.ToolActivity(checkNotNull(completedToolsKey), coalesceToolActivity(completedTools), completedToolsTurnBoundary, lastFailureMessageIndex, hasUnresolvedTools, completedToolsRunIds, toolScope, coalescedToolKeys(completedTools, checkNotNull(completedToolsKey)), settledToolKeys = settledToolKeys(completedTools, checkNotNull(completedToolsKey))))
+      add(ChatTimelineItem.ToolActivity(checkNotNull(completedToolsKey), coalesceToolActivity(completedTools), completedToolsTurnBoundary, lastFailureMessageIndex, hasUnresolvedTools, completedToolsRunIds, toolScope, coalescedToolKeys(completedTools, checkNotNull(completedToolsKey)), settledToolKeys = settledToolKeys(completedTools, checkNotNull(completedToolsKey)), timestampMs = completedTools.mapNotNull { it.timestampMs }.maxOrNull()))
       completedTools.clear()
       completedToolsKey = null
       completedToolsTurnBoundary = false
@@ -295,7 +331,7 @@ private fun buildTranscriptTimeline(
           classified?.let(::add)
         }
         if (tools.isNotEmpty()) {
-          add(ChatTimelineItem.ToolActivity(key, coalesceToolActivity(tools), pendingTurnBoundary, lastFailure, unresolvedTools, knownRunIds, toolScope, coalescedToolKeys(tools, key), settledToolKeys = settledToolKeys(tools, key)))
+          add(ChatTimelineItem.ToolActivity(key, coalesceToolActivity(tools), pendingTurnBoundary, lastFailure, unresolvedTools, knownRunIds, toolScope, coalescedToolKeys(tools, key), settledToolKeys = settledToolKeys(tools, key), timestampMs = tools.mapNotNull { it.timestampMs }.maxOrNull()))
           pendingTurnBoundary = false
         }
       }
@@ -497,6 +533,7 @@ private fun classifyTranscriptMessage(
           kind = SystemDividerKind.Compaction,
           label = nativeString("Compacted history"),
           metric = saved?.let { nativeString("saved \$count tokens", formatCompactTokenCount(it)) },
+          timestampMs = message.timestampMs,
         )
       }
 
@@ -506,6 +543,7 @@ private fun classifyTranscriptMessage(
           kind = SystemDividerKind.Reset,
           label = nativeString("Session reset"),
           secondary = nativeString("The earlier conversation was cleared."),
+          timestampMs = message.timestampMs,
         )
       }
 
@@ -539,6 +577,7 @@ private fun classifyTranscriptMessage(
       key = "system-notice:$keySuffix",
       label = label,
       body = body,
+      timestampMs = message.timestampMs,
     )
   }
 
@@ -552,6 +591,7 @@ private class TranscriptTool(
   var runId: String?,
   var pending: Boolean,
   var lastFailureMessageIndex: Int,
+  var timestampMs: Long?,
 )
 
 private class TranscriptMessageTools {
@@ -605,6 +645,7 @@ private fun projectTranscriptToolActivity(messages: List<ChatMessage>): List<Tra
           lookup[message.runId] = owner
         }
         owner.activity = mergeToolActivity(owner.activity, tool)
+        owner.timestampMs = listOfNotNull(owner.timestampMs, message.timestampMs).maxOrNull()
         // A received result settles the call even when its display text is empty.
         owner.pending = false
         if (tool.activityPrepared) {
@@ -622,7 +663,7 @@ private fun projectTranscriptToolActivity(messages: List<ChatMessage>): List<Tra
         if (!emptyOrphan) {
           val preparedStatus = tool.activity?.takeIf { it.phase == "end" }?.status
           val settled = result || tool.result != null || preparedStatus in setOf("completed", "failed", "blocked", "skipped")
-          val projection = TranscriptTool(tool, message.runId, !settled, if (tool.requiresReply) messageIndex else -1)
+          val projection = TranscriptTool(tool, message.runId, !settled, if (tool.requiresReply) messageIndex else -1, message.timestampMs)
           projected[messageIndex].displayedTools.add(projection)
           projected[messageIndex].relatedTools.add(projection)
           if (!result) tool.toolCallId?.let { calls.getOrPut(it) { mutableMapOf() }[message.runId] = projection }

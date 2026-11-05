@@ -10,6 +10,9 @@ import ai.openclaw.app.gateway.QuestionListResult
 import ai.openclaw.app.gateway.QuestionOption
 import ai.openclaw.app.gateway.QuestionRecord
 import ai.openclaw.app.gateway.QuestionSecretStore
+import ai.openclaw.app.ui.chat.buildTimeline
+import ai.openclaw.app.ui.chat.chatTimelineItemKey
+import ai.openclaw.app.ui.chat.prepareChatHistory
 import ai.openclaw.app.ui.chat.questionCountdown
 import ai.openclaw.app.ui.chat.terminalQuestionAnswer
 import kotlinx.coroutines.CompletableDeferred
@@ -413,6 +416,7 @@ class ChatQuestionTest {
       runCurrent()
 
       assertEquals(listOf("ask_done"), controller.questions.value.map { it.record.id })
+      assertRetainedSummaryIsInHistory(controller)
     }
 
   @Test
@@ -425,6 +429,7 @@ class ChatQuestionTest {
       advanceUntilIdle()
 
       assertEquals(ChatQuestionStatus.Expired, controller.onlyQuestion.status())
+      assertRetainedSummaryIsInHistory(controller)
     }
 
   @Test
@@ -1185,6 +1190,14 @@ class ChatQuestionTest {
 
       assertEquals(ChatQuestionStatus.Answered, controller.onlyQuestion.status())
     }
+
+  private fun assertRetainedSummaryIsInHistory(controller: ChatController) {
+    val newer = ChatMessage("newer", "assistant", listOf(ChatMessageContent(type = "text", text = "New reply")), 2_000)
+    val timeline =
+      prepareChatHistory(listOf(newer), "agent:main:main", "agent:main:main")
+        .buildTimeline(0, emptyList(), null, questions = controller.questions.value)
+    assertEquals(listOf("message:newer", "question:${controller.onlyQuestion.record.id}"), timeline.items.map(::chatTimelineItemKey))
+  }
 
   private fun record(
     id: String = "ask_123",
