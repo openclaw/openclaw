@@ -36,12 +36,11 @@ import {
   withCdpSocket,
   type CdpEndpointPin,
 } from "./cdp.helpers.js";
+import { fetchChromeVersion, launchChromeWithNativeIdentity } from "./chrome-identity.js";
 import {
   type ChromeCdpDiagnostic,
   diagnoseChromeCdp,
   formatChromeCdpDiagnostic,
-  type ChromeVersion,
-  readChromeVersionWithCredentialFallback,
   safeChromeCdpErrorMessage,
 } from "./chrome.diagnostics.js";
 import {
@@ -567,20 +566,6 @@ export async function isChromeReachable(
   }
 }
 
-async function fetchChromeVersion(
-  cdpUrl: string,
-  timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
-  ssrfPolicy?: SsrFPolicy,
-  signal?: AbortSignal,
-): Promise<ChromeVersion | null> {
-  try {
-    return await readChromeVersionWithCredentialFallback(cdpUrl, timeoutMs, ssrfPolicy, signal);
-  } catch {
-    signal?.throwIfAborted();
-    return null;
-  }
-}
-
 export async function getChromeWebSocketEndpoint(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
@@ -740,6 +725,7 @@ async function launchOpenClawChromeLocked(
     process.platform === "darwin" &&
     (usesOpenClawMockKeychain(userDataDir) || (profileIsNew && headlessMode.headless));
 
+  let defaultUserAgent: string | undefined;
   // Headless profiles are seeded directly; headed profiles retain Chrome's first-run bootstrap.
   const spawnOnce = async (onStderr?: (chunk: Buffer | string) => void) => {
     signal?.throwIfAborted();
@@ -767,6 +753,9 @@ async function launchOpenClawChromeLocked(
     if (spawnHeadlessMode.headless) {
       args.push("--headless=new");
       args.push("--disable-gpu");
+      if (defaultUserAgent) {
+        args.push(`--user-agent=${defaultUserAgent}`);
+      }
     }
     if (resolved.noSandbox) {
       args.push("--no-sandbox");
@@ -1075,7 +1064,17 @@ async function launchOpenClawChromeLocked(
     }
   };
 
-  return await launchOnceAndWait(true);
+  return await launchChromeWithNativeIdentity({
+    cdpUrl: profile.cdpUrl,
+    headless: headlessMode.headless,
+    extraArgs: resolved.extraArgs,
+    signal,
+    launch: async (userAgent) => {
+      defaultUserAgent = userAgent;
+      return await launchOnceAndWait(true);
+    },
+    stop: (running) => stopOpenClawChrome(running, CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS),
+  });
 }
 
 function cdpBrowserProcessId(result: unknown): number | null {

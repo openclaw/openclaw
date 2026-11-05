@@ -137,6 +137,58 @@ it("rejects an actual headed launch of an explicit headless-only executable", as
   expect(fixture.spawn).not.toHaveBeenCalled();
 });
 
+it.each([
+  { headless: true, extraArgs: [], normalize: true },
+  { headless: false, extraArgs: [], normalize: false },
+  { headless: true, extraArgs: ["--user-agent=CustomBrowser/1"], normalize: false },
+  { headless: true, extraArgs: ["--user-agent", "CustomBrowser/1"], normalize: false },
+])("preserves native version, platform, and explicit identity: %j", async (testCase) => {
+  const executablePath = path.join(fixture.root, "chrome");
+  fs.writeFileSync(executablePath, "");
+  const nativeIdentity = "Mozilla/5.0 (X11; Linux aarch64) HeadlessChrome/153.0.0.0 Safari/537.36";
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async () =>
+        new Response(JSON.stringify({ Browser: "Chrome/Test", "User-Agent": nativeIdentity })),
+    ),
+  );
+  const resolved = resolveBrowserConfig({ executablePath, ...testCase });
+  const profile = resolveProfile(resolved, "openclaw")!;
+  const userDataDir = resolveOpenClawUserDataDir(profile.name);
+  fs.mkdirSync(path.join(userDataDir, "Default"), { recursive: true });
+  fs.writeFileSync(path.join(userDataDir, "Local State"), "{}");
+  fs.writeFileSync(path.join(userDataDir, "Default", "Preferences"), "{}");
+  const processes: EventEmitter[] = [];
+  fixture.spawn.mockImplementation(() => {
+    const proc = Object.assign(new EventEmitter(), {
+      pid: 4242,
+      exitCode: null,
+      signalCode: null as NodeJS.Signals | null,
+      stderr: new EventEmitter(),
+      kill: vi.fn((signal: NodeJS.Signals) => {
+        proc.signalCode = signal;
+        proc.emit("exit", null, signal);
+        return true;
+      }),
+    });
+    processes.push(proc);
+    return proc;
+  });
+  const running = await launchOpenClawChrome(resolved, profile, {
+    env: { DISPLAY: ":99" },
+    platform: "linux",
+  });
+  const args: string[] = fixture.spawn.mock.calls.at(-1)![1];
+  expect(args.filter((arg) => arg.startsWith("--user-agent"))).toEqual(
+    testCase.normalize
+      ? ["--user-agent=Mozilla/5.0 (X11; Linux aarch64) Chrome/153.0.0.0 Safari/537.36"]
+      : testCase.extraArgs.filter((arg) => arg.startsWith("--user-agent")),
+  );
+  expect(processes).toHaveLength(testCase.normalize ? 2 : 1);
+  expect(running.proc).toBe(processes.at(-1));
+});
+
 it("refuses launch when the process listing exceeds the bounded capture", async () => {
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
   fixture.processListingBytes = 5 * 1024 * 1024;
