@@ -189,7 +189,17 @@ export async function cleanScratch(params: {
         let stat: Awaited<ReturnType<Root["stat"]>>;
         if (relativePath !== undefined) {
           // A yielded candidate may have been rewritten between maintenance passes.
-          stat = await root.stat(relativePath);
+          try {
+            stat = await root.stat(relativePath);
+          } catch (error) {
+            if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "not-found")) {
+              throw error;
+            }
+            // Removed between passes: drop the candidate and keep the cursor's
+            // directory position instead of resetting this target's scan.
+            delete cursor.pending;
+            continue;
+          }
         } else {
           const next = await cursor.entries!.next();
           if (next.done) {
