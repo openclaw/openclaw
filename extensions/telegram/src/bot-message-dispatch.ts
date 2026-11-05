@@ -316,14 +316,22 @@ export const dispatchTelegramMessage = async (
   if (statusReactionController && !isRoomEvent) {
     void statusReactionController.setThinking();
   }
+  // A flood-refused final that the delivery queue still holds is not a turn failure:
+  // recovery owns its resend, so it must not trigger the "something went wrong" fallback.
+  const isQueuedFinalRefusal = (err: unknown) =>
+    turn.finalDeliveryQueuedForRetry === true && err === turn.finalDeliveryError;
   try {
     turnDispatched = await runTelegramDispatchTurn(turn);
   } catch (err) {
-    turn.dispatchError = err;
     turn.previewLifecycle.observeFailure(
       isChannelPartialDeliveryError(err) ? err.deliveryResult : undefined,
     );
-    runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
+    if (isQueuedFinalRefusal(err)) {
+      logVerbose(`telegram: final reply queued for recovery after flood refusal: ${String(err)}`);
+    } else {
+      turn.dispatchError = err;
+      runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
+    }
   } finally {
     // Stop producers before draining drafts, finalizing accepted text, and cleaning previews.
     turn.progressCompositor.cancel();
@@ -331,11 +339,17 @@ export const dispatchTelegramMessage = async (
     try {
       await finalizePendingAnswerBlockDraft(turn);
     } catch (err) {
-      turn.dispatchError ??= err;
       turn.previewLifecycle.observeFailure(
         isChannelPartialDeliveryError(err) ? err.deliveryResult : undefined,
       );
-      runtime.error?.(danger(`telegram terminal block delivery failed: ${String(err)}`));
+      if (isQueuedFinalRefusal(err)) {
+        logVerbose(
+          `telegram: terminal block queued for recovery after flood refusal: ${String(err)}`,
+        );
+      } else {
+        turn.dispatchError ??= err;
+        runtime.error?.(danger(`telegram terminal block delivery failed: ${String(err)}`));
+      }
     }
     await cleanupDrafts(turn, isDispatchSuperseded());
   }
@@ -369,6 +383,7 @@ export const dispatchTelegramMessage = async (
     !turn.previewLifecycle.finalDelivered &&
     (terminalFailure ||
       (!turn.progressContinuationAdopted &&
+        !turn.finalDeliveryQueuedForRetry &&
         (deliverySummary.failedNonSilent > 0 ||
           (deliverySummary.skippedNonSilent > 0 && !turn.suppressSilentReplyFallback))));
   if (shouldSendFailureFallback) {
@@ -392,6 +407,7 @@ export const dispatchTelegramMessage = async (
     !deliverySummary.delivered &&
     !turn.suppressSilentReplyFallback &&
     !turn.finalDispatchClaimed &&
+    !turn.finalDeliveryQueuedForRetry &&
     turn.noVisibleReplyFallbackEligible
   ) {
     sentFallback = (await deliverFallback(turn, [{ text: EMPTY_RESPONSE_FALLBACK }], false))
@@ -412,12 +428,15 @@ export const dispatchTelegramMessage = async (
     intentionalNoResponse ||
     turn.previewLifecycle.finalDelivered ||
     turn.progressContinuationAdopted ||
+    // The delivery queue owns a flood-refused final and resends it; do not re-run the turn.
+    turn.finalDeliveryQueuedForRetry === true ||
     sentFallback;
   const hasVisibleResponse = deliverySummary.delivered || sentFallback;
   const deliveryFailureWithoutFinalResponse =
     !intentionalNoResponse &&
     !turn.previewLifecycle.finalDelivered &&
     !turn.progressContinuationAdopted &&
+    !turn.finalDeliveryQueuedForRetry &&
     (turn.previewLifecycle.finalFailed ||
       deliverySummary.skippedNonSilent > 0 ||
       deliverySummary.failedNonSilent > 0);

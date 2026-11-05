@@ -174,6 +174,8 @@ export type TelegramDispatchTurn = TelegramDispatchTurnConfig &
   TelegramReplyStateSlice & {
     finalDispatchClaimed: boolean;
     finalDeliveryError?: unknown;
+    /** The failed final stays queued and will be resent; no "please ask again" notice. */
+    finalDeliveryQueuedForRetry?: boolean;
     agentRunFailed?: boolean;
     sendPolicyDenied?: boolean;
     noVisibleReplyFallbackEligible: boolean;

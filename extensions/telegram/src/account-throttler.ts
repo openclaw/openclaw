@@ -25,6 +25,8 @@ type TelegramApiSignal = Parameters<ApiThrottlerTransformer>[3];
 // owner: every call for the token waits for the deadline, non-replaceable calls
 // (final replies, deletes, reactions) retry within this budget, and replaceable
 // calls (stream previews, typing) yield instead of queueing behind the penalty.
+// The budget is wall-clock time from the call's start: queue and transport time
+// between 429s counts, so slow flooded attempts cannot stretch it.
 const TELEGRAM_OUTBOUND_FLOOD_BUDGET_MS = 5 * 60_000;
 // Telegram 429s carry retry_after; a bare 429 gets one short fixed pause, with
 // no state carried into later responses.
@@ -158,7 +160,7 @@ function callThroughFloodGate(
     if (method === "getUpdates") {
       return prev(method, payload, signal);
     }
-    let waitedMs = 0;
+    const startedAtMs = Date.now();
     let flooded: ApiError | undefined;
     for (;;) {
       const waitMs = gate.remainingMs();
@@ -166,11 +168,10 @@ function callThroughFloodGate(
         if (replaceable) {
           return flooded ?? skippedFloodResponse(waitMs, "flood wait active");
         }
-        if (waitedMs + waitMs > TELEGRAM_OUTBOUND_FLOOD_BUDGET_MS) {
+        if (Date.now() - startedAtMs + waitMs > TELEGRAM_OUTBOUND_FLOOD_BUDGET_MS) {
           return flooded ?? skippedFloodResponse(waitMs, "flood wait exceeds delivery budget");
         }
         await sleepForFloodGate(waitMs, signal);
-        waitedMs += waitMs;
         continue;
       }
       const closeGate = (retryAfterSeconds: number | undefined) => {
