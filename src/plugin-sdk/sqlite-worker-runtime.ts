@@ -6,22 +6,18 @@ import {
   runSqliteImmediateTransactionSync as runImmediateTransaction,
   runSqliteReadSnapshotSync as runReadSnapshot,
   runSqliteSingleStatementSync as runSingleStatement,
-  type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
+import type {
+  SqliteWorkerTransactionOptions,
+  SyncReturnGuard,
+  SynchronousSqliteCallback,
+} from "../infra/sqlite-worker-transaction-types.js";
 import { ensureOpenClawAgentStandingIntentsSchema as ensureStandingIntentsSchema } from "../state/openclaw-agent-standing-intents-schema.js";
 
-type SyncReturnGuard<Result> = [Extract<Result, PromiseLike<unknown>>] extends [never]
-  ? unknown
-  : never;
-
-export type SynchronousSqliteCallback<Result> = () => Result & NoInfer<SyncReturnGuard<Result>>;
-
-export type SqliteWorkerTransactionOptions<CommitResult = void> = Omit<
-  SqliteTransactionOptions,
-  "withCommit"
-> & {
-  withCommit?: ((commit: () => void) => CommitResult) & NoInfer<SyncReturnGuard<CommitResult>>;
-};
+export type {
+  SqliteWorkerTransactionOptions,
+  SynchronousSqliteCallback,
+} from "../infra/sqlite-worker-transaction-types.js";
 
 type WorkerTransaction = <Result, CommitResult = void>(
   database: DatabaseSync | PostgresSqlConnection,

@@ -42,6 +42,7 @@ import {
 import { runSqliteReadOperationSync } from "./sqlite-schema-facts.js";
 import type { SqliteWorkerDatabaseContext } from "./sqlite-worker-database-context.js";
 import { normalizeDatabasePath } from "./sqlite-worker-identity.js";
+import type * as WorkerTransaction from "./sqlite-worker-transaction-types.js";
 
 const DEFAULT_SLOW_BUSY_WAIT_MS = 1_000;
 const DEFAULT_SLOW_TRANSACTION_HOLD_MS = 1_000;
@@ -419,10 +420,10 @@ function runSqliteTransactionSync<T>(
 }
 
 /** Settle a reservation acquired by the closed, multi-database worker fence. */
-export function runSqliteReservedTransactionSync<T>(
+export function runSqliteReservedTransactionSync<T, CommitResult = void>(
   db: DatabaseSync | PostgresSqlConnection,
-  operation: () => T,
-  options: SqliteTransactionOptions,
+  operation: WorkerTransaction.SynchronousSqliteCallback<T>,
+  options: WorkerTransaction.SqliteWorkerTransactionOptions<CommitResult>,
 ): T {
   if (isPostgresSqlConnection(db)) {
     return db.runTransaction(operation, options, false, true);
@@ -667,12 +668,12 @@ export function runSqliteSingleStatementSync<T>(
 }
 
 /** Obtain host admission before taking the writer lock; revalidate before physical commit. */
-export function runSqliteWorkerTransactionSync<T>(
+export function runSqliteWorkerTransactionSync<T, CommitResult = void>(
   context: Omit<SqliteWorkerDatabaseContext, "database"> & {
     database: DatabaseSync | PostgresSqlConnection;
   },
-  operation: () => T,
-  options?: SqliteTransactionOptions,
+  operation: WorkerTransaction.SynchronousSqliteCallback<T>,
+  options?: WorkerTransaction.SqliteWorkerTransactionOptions<CommitResult>,
 ): T {
   if (isPostgresSqlConnection(context.database)) {
     context.admit("transaction");

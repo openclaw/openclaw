@@ -25,6 +25,7 @@ import {
   takeSqliteWorkerOperationAdmissionAttachment,
 } from "./sqlite-worker-operation-admission.js";
 import { currentSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-settlement.js";
+import type { SynchronousSqliteCallback } from "./sqlite-worker-transaction-types.js";
 
 const bindings = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteSourceFenceBindings"),
@@ -129,7 +130,7 @@ function withSqliteWorkerSourceReservations<T>(operation: () => T): T {
 export async function runSqliteSourceFence<T>(
   fence: SqliteSourceFence,
   inOperation: <Result>(operation: () => Result) => Result,
-  execute: () => T,
+  execute: SynchronousSqliteCallback<T>,
 ): Promise<T> {
   const grant = inOperation(readGrant);
   if (
