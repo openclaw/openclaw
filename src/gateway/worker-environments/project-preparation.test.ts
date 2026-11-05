@@ -443,6 +443,10 @@ cat input.txt >> "$HOME/count"
     await requireGit(f.repository, ["commit", "--quiet", "-m", "bulk A"]);
     const a = await snapshot(f.repository);
     const preparedA = (await prepare(f, { project: a })).preparedWorkspace!;
+    // The copied index must match the copied files, or the next forced checkout rewrites all of them.
+    await requireGit(preparedA.workspaceDir, ["diff-files", "--quiet"]);
+    const unchangedFile = path.join(preparedA.workspaceDir, "bulk.bin");
+    const unchangedIdentity = await fs.stat(unchangedFile);
     await fs.writeFile(path.join(preparedA.workspaceDir, "build/retained"), "retained-build-A");
     await fs.writeFile(path.join(preparedA.homeDir, "cached"), "retained-home-A");
     await fs.writeFile(path.join(f.repository, "input.txt"), "changed B\n");
@@ -469,6 +473,7 @@ cat input.txt >> "$HOME/count"
     expect(preparedB.preparationKey).not.toBe(preparedA.preparationKey);
     expect(preparedB.sourceManifestRef).not.toBe(preparedA.sourceManifestRef);
     expect(await requireGit(preparedB.workspaceDir, ["rev-parse", "HEAD"])).toBe(b.baseCommit);
+    expect((await fs.stat(unchangedFile)).ino).toBe(unchangedIdentity.ino);
     expect(await readText(preparedB.workspaceDir, "input.txt")).toBe("changed B\n");
     expect(await readText(preparedB.workspaceDir, "generated")).toBe("tracked B\n");
     expect(await readText(preparedB.workspaceDir, "build/retained")).toBe("retained-build-A");

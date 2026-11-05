@@ -268,6 +268,8 @@ const runSetup = (command, workspaceDir, homeDir) => {
   if (fresh) {
     fs.mkdirSync(path.join(directory, "home"), { mode: 0o700 });
     fs.cpSync(seed, path.join(directory, "workspace"), { recursive: true, errorOnExist: true, force: false, verbatimSymlinks: true });
+    // The copy has new inodes but the seed's index. A stale index makes the next forced checkout rewrite every file.
+    git(path.join(directory, "workspace"), ["update-index", "-q", "--refresh"]);
   }
   const workspaceDir = ownedDirectory(directory, "workspace");
   const homeDir = ownedDirectory(directory, "home");
@@ -283,6 +285,8 @@ const runSetup = (command, workspaceDir, homeDir) => {
     // onCreate is not repeated for a content refresh; retain its generated artifacts.
     if (recipe.source !== "devcontainer") removeSetupOutputs(workspaceDir, previous);
     git(workspaceDir, ["fetch", "--depth=1", "--no-tags", "--no-write-fetch-head", "--update-shallow", seed, input.baseCommit]);
+    // Images captured with a stale index must not rewrite unchanged files on this forced checkout.
+    git(workspaceDir, ["update-index", "-q", "--refresh"]);
     git(workspaceDir, ["checkout", "--detach", "--force", input.baseCommit]);
   } else if (!fresh && previous.sourceManifestRef !== sourceManifestRef) {
     throw new Error("Prepared project pristine baseline changed");
