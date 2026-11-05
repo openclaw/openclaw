@@ -249,6 +249,13 @@ export function createTalkTranscriptionRelaySession(
   const emit = (event: TalkTranscriptionRelayEvent, talkEvent?: TalkEventInput) =>
     broadcastToOwner(eventOwner, event, talkEvent);
   const relayRef: { current?: TranscriptionRelaySession } = {};
+  const assertCurrent = () => {
+    const relay = relayRef.current;
+    if (!relay || transcriptionSessions.get(transcriptionSessionId) !== relay) {
+      throw new Error("Transcription Talk session is no longer active");
+    }
+    params.assertCurrent();
+  };
   const getActiveRelay = (): TranscriptionRelaySession | undefined => {
     const relay = relayRef.current;
     if (!relay || transcriptionSessions.get(relay.id) !== relay) {
@@ -286,6 +293,7 @@ export function createTalkTranscriptionRelaySession(
     }
   };
   const callbacks = {
+    assertCurrent,
     onSpeechStart: () => {
       const relay = getActiveRelay();
       if (!relay || relay.draining) {
@@ -305,7 +313,7 @@ export function createTalkTranscriptionRelaySession(
   };
   const sttSession =
     "file" in params
-      ? createTalkFileTranscriptionSession(params.file, callbacks, params.assertCurrent)
+      ? createTalkFileTranscriptionSession(params.file, callbacks, assertCurrent)
       : params.provider.createSession({
           cfg: params.context.getRuntimeConfig(),
           providerConfig: params.providerConfig,
@@ -316,7 +324,7 @@ export function createTalkTranscriptionRelaySession(
     connId: params.connId,
     sessionKey: params.sessionKey,
     context: params.context,
-    assertCurrent: params.assertCurrent,
+    assertCurrent,
     sttSession,
     talk,
     expiresAtMs,
