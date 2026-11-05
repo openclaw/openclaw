@@ -11,8 +11,9 @@ import { buildTestCtx } from "./test-ctx.js";
 const execute = vi.hoisted(() => vi.fn());
 
 // mock-isolation: Keep command dispatch and parsing real; isolate the external shell.
-vi.mock("../../agents/bash-tools.js", () => ({
+vi.mock("../../agents/bash-tools.exec-run.js", () => ({
   createExecTool: () => ({ execute }),
+  createExecToolForReply: () => ({ execute }),
 }));
 
 beforeEach(() => {
@@ -79,6 +80,7 @@ it.each([
   expect(execute).toHaveBeenCalledExactlyOnceWith(
     "chat-bash",
     expect.objectContaining({ command }),
+    undefined,
   );
   if (result.kind !== "reply" || !result.reply || Array.isArray(result.reply)) {
     throw new Error("Expected a command reply");

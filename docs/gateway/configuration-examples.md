@@ -342,7 +342,7 @@ This example leaves `agents.defaults.timeoutSeconds` unset, so each model attemp
         slack: ["U123"],
         signal: ["+15555550123"],
         imessage: ["user@example.com"],
-        webchat: ["session:demo"],
+        webchat: ["<profile-id>"], // verified Gateway profile ID
       },
     },
   },

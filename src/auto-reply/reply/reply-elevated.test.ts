@@ -12,6 +12,12 @@ const sender: MsgContext = {
 type PermissionCase = [string, string[], boolean, Partial<MsgContext>?];
 it.each<PermissionCase>([
   ["authorizes the sender", ["+15550001111"], true],
+  [
+    "keeps a wildcard as a blanket allow without sender identity",
+    ["*"],
+    true,
+    { SenderId: undefined, From: undefined, SenderE164: undefined },
+  ],
   ["does not authorize the recipient", ["+15559990000"], false],
   [
     "does not authorize a group id as sender",
