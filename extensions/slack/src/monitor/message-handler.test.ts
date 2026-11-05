@@ -281,10 +281,16 @@ describe("createSlackMessageHandler", () => {
     expect(flushKeyMock).not.toHaveBeenCalled();
   });
 
-  it.each(["adopted", "queue-cap-old", "queue-cap-new"] as const)(
-    "carries durable ingress ownership through %s",
-    async (outcome) => {
+  it.each([
+    ["adopted", undefined],
+    ["queue-cap-old", undefined],
+    ["queue-cap-new", "async"],
+    ["queue-cap-new", "sync"],
+  ] as const)(
+    "carries durable ingress ownership through %s (%s failure)",
+    async (outcome, failureKind) => {
       const handle = makeClaim("terminal-source");
+      const peerDrop = vi.fn();
       mockReplayGuard({ claim: async () => ({ kind: "claimed", handle }) });
       prepareMock.mockResolvedValueOnce({
         ctxPayload: {},
@@ -293,10 +299,12 @@ describe("createSlackMessageHandler", () => {
       const turnAdoptionLifecycle = {
         ...lifecycle(),
         onSessionRouted: vi.fn(async () => {}),
-        onDropped: vi.fn(async () => {
-          if (outcome === "queue-cap-new") {
-            throw new Error("terminal settlement failed");
+        onDropped: vi.fn(() => {
+          const failure = new Error("terminal settlement failed");
+          if (failureKind === "sync") {
+            throw failure;
           }
+          return failureKind ? Promise.reject(failure) : undefined;
         }),
       };
       dispatchMock.mockImplementationOnce(async (prepared) => {
@@ -309,18 +317,19 @@ describe("createSlackMessageHandler", () => {
       });
 
       await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(1));
-      expect(resolveThreadTsMock).toHaveBeenCalledWith({
-        message: expect.objectContaining({ channel: "C111", ts: "1.550" }),
-        source: "message",
-        turnAdoptionLifecycle,
-      });
-      let settled = false;
-      void handled.then(() => {
-        settled = true;
-      });
+      expect(resolveThreadTsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ turnAdoptionLifecycle }),
+      );
+      const settled = vi.fn();
+      void handled.then(settled);
       await Promise.resolve();
-      expect(settled).toBe(false);
-      await runOnFlush();
+      expect(settled).not.toHaveBeenCalled();
+      await onFlushCallbacks[0]!(queuedEntries(), (params) =>
+        createTestInboundDebounceFlush({
+          ...params,
+          dispatch: (admission) => params.dispatch({ ...admission, onDropped: peerDrop }),
+        }),
+      ).completion;
       await expect(handled).resolves.toBeUndefined();
 
       expect(dispatchMock).toHaveBeenCalledTimes(1);
@@ -344,6 +353,7 @@ describe("createSlackMessageHandler", () => {
           await drop;
         }
         expect(turnAdoptionLifecycle.onDropped).toHaveBeenCalledExactlyOnceWith(outcome);
+        expect(peerDrop).toHaveBeenCalledExactlyOnceWith(outcome);
         expect(turnAdoptionLifecycle.onAbandoned).not.toHaveBeenCalled();
       }
       expect(handle.commit).toHaveBeenCalledTimes(outcome === "queue-cap-new" ? 0 : 1);

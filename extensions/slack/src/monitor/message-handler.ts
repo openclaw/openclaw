@@ -318,14 +318,13 @@ export function createSlackMessageHandler(params: {
                     // source and Slack's logical message/app_mention twin guard.
                     // Commit the latter only after the durable settlement succeeds;
                     // a failed settlement must be eligible for retry.
-                    const outcomes = await Promise.allSettled([
-                      turnAdoptionLifecycle?.onDropped
-                        ? turnAdoptionLifecycle.onDropped(reason)
-                        : turnAdoptionLifecycle?.onAbandoned?.(),
-                      admissionLifecycle.onDropped
-                        ? admissionLifecycle.onDropped(reason)
-                        : admissionLifecycle.onAbandoned(),
-                    ]);
+                    const outcomes = await Promise.allSettled(
+                      [turnAdoptionLifecycle, admissionLifecycle].map(async (lifecycle) =>
+                        lifecycle?.onDropped
+                          ? lifecycle.onDropped(reason)
+                          : lifecycle?.onAbandoned?.(),
+                      ),
+                    );
                     const failure = outcomes.find((result) => result.status === "rejected");
                     if (failure?.status === "rejected") {
                       releaseClaims(failure.reason);

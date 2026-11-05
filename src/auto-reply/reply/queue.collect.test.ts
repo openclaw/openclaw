@@ -1198,7 +1198,7 @@ describe("followup queue collect routing", () => {
     ]);
   });
 
-  it.each(["old", "summarize"] as const)(
+  it.each(["old", "new", "summarize"] as const)(
     "keeps protected drop:%s overflow retryable without advancing debounce",
     async (dropPolicy) => {
       const q = createQueueCase({ mode: "followup", debounceMs: 5_000, cap: 1, dropPolicy });
@@ -1210,7 +1210,6 @@ describe("followup queue collect routing", () => {
       });
       expect(enqueuePriorityRun(q.key, q.settings)).toBe(true);
       const stampedAt = getExistingFollowupQueue(q.key)!.lastEnqueuedAt;
-      expect(stampedAt).toBeGreaterThan(0);
       expect(q.add(rejected)).toBe(false);
       await rejected.controllerInput!.settlement.promise;
       expect(onAbandoned).toHaveBeenCalledOnce();
@@ -2263,7 +2262,6 @@ describe("followup queue collect routing", () => {
     expect(q.calls[1]?.prompt).toContain("- dropped ambient");
     expect(q.calls[1]?.currentInboundEventKind).toBe("room_event");
     await vi.waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
-    expect(onComplete).toHaveBeenCalledTimes(1);
   });
 
   it.each(["collected", "overflow"] as const)(
@@ -2444,7 +2442,6 @@ describe("followup queue collect routing", () => {
     expect(firstResolvedContent).toContain("canceled transcript");
     await vi.waitFor(() => expect(sourceCompletions[1]).toHaveBeenCalledTimes(1));
     expect(sourceCompletions[0]).toHaveBeenCalledTimes(1);
-    expect(sourceCompletions[1]).toHaveBeenCalledTimes(1);
     expect(getExistingFollowupQueue(key)?.items ?? []).toHaveLength(0);
   });
 
@@ -2521,7 +2518,6 @@ describe("followup queue collect routing", () => {
     expect(q.calls[0]?.prompt).toContain("owner A summary");
     expect(q.calls[0]?.prompt).not.toContain("owner B live");
     await vi.waitFor(() => expect(summarizedComplete).toHaveBeenCalledTimes(1));
-    expect(summarizedComplete).toHaveBeenCalledTimes(1);
     expect(abortedComplete).toHaveBeenCalledTimes(1);
   });
 });

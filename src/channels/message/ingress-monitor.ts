@@ -56,10 +56,10 @@ export const CHANNEL_INGRESS_RETENTION_DEFAULTS = Object.freeze({
  * Channel code keeps transport inspection, payload shape, and delivery policy.
  */
 export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetadata = unknown>(
-  options: CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata>,
+  params: CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMetadata>,
 ) {
   // Deferred pumps can be woken outside the creating plugin's runtime scope.
-  options = wrapCurrentPluginInstance(options);
+  const options = wrapCurrentPluginInstance(params);
   const now = options.now ?? Date.now;
   const waitForDeliveryIdleBeforeRepump = options.waitForDeliveryIdleBeforeRepump ?? false;
   const retention =
