@@ -1,7 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { signDevicePayload } from "../infra/device-identity.js";
-import { decideBrowserPairRequest } from "../infra/device-pairing-browser-code.js";
+import {
+  collectBrowserPairRequest,
+  decideBrowserPairRequest,
+} from "../infra/device-pairing-browser-code.js";
 import { withDevicePairingLock } from "../infra/device-pairing-lock.js";
 import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
 import { buildBrowserPairPayload, type BrowserPairAction } from "../shared/browser-pair.js";
@@ -265,6 +268,20 @@ describe("browser device-code pairing", () => {
     }
     expect(readFinalEffect(requestId)).toEqual(before);
     expect(await getPairedDevice(browser.identity.deviceId)).toBeNull();
+  });
+
+  it("does not hand over an approved token once the request expires while collect waits", async () => {
+    const browser = newBrowser();
+    const { requestId, code } = await start(browser);
+    expect((await decide(code, requestId)).ok).toBe(true);
+    const expiresAtMs = Date.now() + 60_000;
+    setExpiry(requestId, expiresAtMs);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(expiresAtMs - 1);
+    // The request runs out after collect read its clock, while it waits for the lock.
+    const assertCurrent = () => void clock.mockReturnValue(expiresAtMs);
+    const input = { requestId, deviceId: browser.identity.deviceId, publicKey: browser.publicKey };
+    const collected = collectBrowserPairRequest({ ...input, assertCurrent });
+    expect(await collected.finally(() => clock.mockRestore())).toEqual({ status: "expired" });
   });
 
   it("reports a host rejection to the browser and spends the code", async () => {

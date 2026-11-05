@@ -226,6 +226,7 @@ export function collectBrowserPairRequestInWorker(
     deviceToken: token.token,
     role: OPERATOR_ROLE,
     scopes: token.scopes,
+    expiresAtMs: row.expires_at_ms,
   };
 }
 

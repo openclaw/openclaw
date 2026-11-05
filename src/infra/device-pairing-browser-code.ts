@@ -54,10 +54,17 @@ export async function collectBrowserPairRequest(
   params: BrowserPairAuthority & { requestId: string; deviceId: string; publicKey: string },
 ) {
   const { context, assertCurrent, ...input } = params;
-  return await executeDevicePairingMutation(
+  const collected = await executeDevicePairingMutation(
     { type: "devicePairing.collectBrowserRequest", input: { ...input, nowMs: Date.now() } },
     { context, assertCurrent },
   );
+  if (collected.status !== "approved") {
+    return collected;
+  }
+  // The clock above was read before waiting for the lock and worker; the deadline
+  // bounds handing the token over, so check it again before it leaves.
+  const { expiresAtMs, ...approved } = collected;
+  return expiresAtMs <= Date.now() ? { status: "expired" as const } : approved;
 }
 
 export async function inspectBrowserPairRequest(params: BrowserPairAuthority & { code: string }) {
