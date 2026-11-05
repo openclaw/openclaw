@@ -337,7 +337,12 @@ final class NodeAppModel {
     private(set) var isDesktopObserveAvailable: Bool = false
 
     // Privileged requests must notice authority loss even if UI observation coalesces a reconnect.
-    private(set) var operatorAuthorityGeneration: UInt64 = 0
+    private(set) var operatorAuthorityGeneration: UInt64 = 0 {
+        didSet {
+            self.unreadIconBadge.invalidate()
+            self.unreadBadgeRoute = nil
+        }
+    }
     private(set) var hasOperatorAdminScope: Bool = false {
         didSet {
             if oldValue != self.hasOperatorAdminScope { self.operatorAuthorityGeneration &+= 1 }
@@ -469,6 +474,16 @@ final class NodeAppModel {
     private let nodeGateway = GatewayNodeSession()
     // Secondary "operator" connection: used for chat/talk/config/voicewake requests.
     private let operatorGateway = GatewayNodeSession()
+    @ObservationIgnored private let unreadIconBadge = UnreadAppIconBadge { count in
+        do {
+            try await UNUserNotificationCenter.current().setBadgeCount(count)
+        } catch {
+            GatewayDiagnostics.log("App-icon badge update failed")
+            throw error
+        }
+    }
+    @ObservationIgnored private var unreadBadgeRoute: GatewayNodeSessionRoute?
+    @ObservationIgnored private var unreadBadgeScope: UnreadAppIconBadge.Scope?
     private var nodeGatewayTask: Task<Void, Never>?
     @ObservationIgnored private var nodeHostStatsTask: Task<Void, Never>?
     private var operatorGatewayTask: Task<Void, Never>?
@@ -666,7 +681,10 @@ final class NodeAppModel {
             outboxGatewayID: outboxGatewayID,
             mediaArtifactLoader: IOSMediaArtifactLoader(connectionProvider: connectionProvider),
             sourceResourceLoader: IOSSourceResourceLoader(
-                gateway: self.operatorSession, connectionProvider: connectionProvider))
+                gateway: self.operatorSession, connectionProvider: connectionProvider),
+            onSessionMutation: { [weak self] in
+                Task { @MainActor in await self?.refreshUnreadBadge() }
+            })
     }
 
     /// Gateway identity the transcript cache is scoped to: the active
@@ -974,6 +992,9 @@ final class NodeAppModel {
         didSet {
             if oldValue?.controlUIInputs != self.activeGatewayConnectConfig?.controlUIInputs {
                 self.operatorAuthorityGeneration &+= 1
+                self.unreadIconBadge.reset()
+                self.unreadBadgeScope = nil
+                self.unreadBadgeRoute = nil
             }
         }
     }
@@ -1190,6 +1211,7 @@ final class NodeAppModel {
             self.talkMode.resumeAfterBackground(wasKeptActive: keptActive)
             Task { [weak self] in
                 await self?.resumePendingForegroundNodeActionsIfNeeded(trigger: "scene_active")
+                await self?.refreshUnreadBadge()
             }
             if self.reconnectAfterBackgroundArmed {
                 self.reconnectAfterBackgroundArmed = false
@@ -1753,6 +1775,11 @@ final class NodeAppModel {
             // already-connected app; the protocol directs clients to re-read via
             // config.get, which the guarded branding refresh already does.
             await self.refreshBrandingFromGateway(shouldApply: shouldContinue)
+            if shouldContinue() { Task { [weak self] in await self?.refreshUnreadBadge() } }
+        case "sessions.list.changed", "sessions.changed", "session.message", "chat":
+            if evt.event != "chat" || payload.dictionaryValue?["state"]?.stringValue == "final" {
+                Task { [weak self] in await self?.refreshUnreadBadge() }
+            }
         case "voicewake.changed":
             struct Payload: Decodable { var triggers: [String] }
             guard let decoded = try? GatewayPayloadDecoding.decode(payload, as: Payload.self) else { return }
@@ -3351,6 +3378,8 @@ extension NodeAppModel {
             return
         }
 
+        self.unreadBadgeRoute = nil
+        self.unreadBadgeScope = nil
         self.gatewayRouteGeneration &+= 1
         self.stopNodeHostStatsPublisher()
         self.activeGatewayConnectConfig = nextConfig
@@ -3537,6 +3566,9 @@ extension NodeAppModel {
         disablePersistedAutoConnect: Bool,
         invalidateConnectAttempts: Bool)
     {
+        self.unreadIconBadge.reset()
+        self.unreadBadgeRoute = nil
+        self.unreadBadgeScope = nil
         invalidateExecApprovalSurfacesForGatewayChange()
         if invalidateConnectAttempts {
             self.invalidateGatewayConnectAttempts()
@@ -3735,6 +3767,11 @@ extension NodeAppModel {
 
     func applyOperatorGatewayConnectionProblem(_ problem: GatewayConnectionProblem) {
         guard !self.isLocalGatewayFixtureEnabled else { return }
+        if problem.needsPairingApproval || problem.pauseReconnect {
+            self.unreadIconBadge.reset()
+            self.unreadBadgeScope = nil
+            self.unreadBadgeRoute = nil
+        }
         let problem = GatewayConnectionIssue.addingEndpointGuidance(
             to: problem,
             host: self.activeGatewayConnectConfig?.url.host)
@@ -4122,6 +4159,8 @@ extension NodeAppModel {
         guard shouldContinue() else { return }
         await self.startVoiceWakeSync(shouldContinue: shouldContinue)
         guard shouldContinue() else { return }
+        await self.refreshUnreadBadge()
+        guard shouldContinue() else { return }
         self.startGatewayHealthMonitor()
     }
 
@@ -4346,6 +4385,8 @@ extension NodeAppModel {
     }
 
     func invalidateOperatorTalkRoute() {
+        self.unreadIconBadge.invalidate()
+        self.unreadBadgeRoute = nil
         self.operatorTalkConnectionGeneration &+= 1
         self.operatorTalkHydrationGeneration = nil
         // A socket replacement invalidates Talk, not gateway identity hydration. The
@@ -7167,6 +7208,8 @@ extension NodeAppModel {
         let result = await performBackgroundAliveBeaconIfNeeded(
             wakeId: wakeId,
             trigger: .silentPush)
+        // A recent/no-op node beacon must not suppress an operator unread refresh.
+        await self.refreshUnreadBadgeAfterWake()
         let outcomeMessage =
             "Silent push outcome wakeId=\(wakeId) "
                 + "applied=\(result.applied) "
@@ -7190,6 +7233,7 @@ extension NodeAppModel {
         let result = await performBackgroundAliveBeaconIfNeeded(
             wakeId: wakeId,
             trigger: normalizedTrigger)
+        await self.refreshUnreadBadgeAfterWake()
         let outcomeMessage =
             "Background refresh wake outcome wakeId=\(wakeId) "
                 + "applied=\(result.applied) "
@@ -8860,6 +8904,92 @@ extension NodeAppModel {
 }
 
 extension NodeAppModel {
+    /// Every count comes from this operator's complete authorized roster, not the sidebar page.
+    func refreshUnreadBadge() async {
+        self.unreadIconBadge.invalidate()
+        guard !self.isLocalGatewayFixtureEnabled, self.operatorConnected,
+              let route = await self.operatorGateway.currentRoute()
+        else { return }
+        let generation = self.gatewayRouteGeneration
+        let authorityGeneration = self.operatorAuthorityGeneration
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        guard settings.badgeSetting == .enabled,
+              authorityGeneration == self.operatorAuthorityGeneration,
+              generation == self.gatewayRouteGeneration,
+              await self.operatorGateway.currentRoute() == route
+        else { return }
+        do {
+            if self.unreadBadgeRoute != route {
+                let identity = try await self.fetchPushRelayGatewayIdentity(ifCurrentRoute: route)
+                let binding = await self.operatorGateway.authBinding(ifCurrentRoute: route)
+                let access = await self.operatorGateway.currentReactionAccess(ifCurrentRoute: route)
+                guard authorityGeneration == self.operatorAuthorityGeneration,
+                      generation == self.gatewayRouteGeneration,
+                      await self.operatorGateway.currentRoute() == route,
+                      let binding, let access, access.role == "operator",
+                      let principalID = access.userID.map({ "profile:" + $0 })
+                        ?? binding.deviceId.map({ "device:" + $0 })
+                else { return }
+                self.unreadBadgeScope = UnreadAppIconBadge.Scope(
+                    gatewayDeviceID: identity.deviceId,
+                    principalID: principalID,
+                    credentialFingerprint: binding.credentialFingerprint)
+                self.unreadBadgeRoute = route
+            }
+            guard let scope = self.unreadBadgeScope else { return }
+            await self.unreadIconBadge.refresh(scope: scope) { [weak self] in
+                guard let self, authorityGeneration == self.operatorAuthorityGeneration,
+                      generation == self.gatewayRouteGeneration
+                else { throw CancellationError() }
+                struct UnreadRoster: Decodable { let totalCount: Int }
+                do {
+                    let data = try await self.operatorGateway.request(
+                        method: "sessions.list",
+                        paramsJSON: #"{"unreadOnly":true,"excludeSubagents":true,"archived":false,"limit":1}"#,
+                        timeoutSeconds: 8,
+                        ifCurrentRoute: route)
+                    guard authorityGeneration == self.operatorAuthorityGeneration,
+                          generation == self.gatewayRouteGeneration,
+                          await self.operatorGateway.currentRoute() == route
+                    else { throw CancellationError() }
+                    return try JSONDecoder().decode(UnreadRoster.self, from: data).totalCount
+                } catch {
+                    if let error = error as? GatewayResponseError, error.isAuthorizationFailure,
+                       generation == self.gatewayRouteGeneration,
+                       await self.operatorGateway.currentRoute() == route
+                    {
+                        self.unreadIconBadge.reset()
+                    }
+                    self.pushWakeLogger.debug("Unread badge snapshot unavailable")
+                    throw error
+                }
+            }
+        } catch {
+            if let error = error as? GatewayResponseError, error.isAuthorizationFailure,
+               generation == self.gatewayRouteGeneration,
+               await self.operatorGateway.currentRoute() == route
+            {
+                self.unreadIconBadge.reset()
+            }
+            self.pushWakeLogger.debug("Unread badge refresh deferred")
+        }
+    }
+
+    private func refreshUnreadBadgeAfterWake() async {
+        guard !self.isLocalGatewayFixtureEnabled, self.gatewayAutoReconnectEnabled,
+              self.activeGatewayConnectConfig != nil, !Task.isCancelled
+        else { return }
+        let generation = self.gatewayConnectGeneration
+        if self.isBackgrounded {
+            self.grantBackgroundReconnectLease(seconds: 30, reason: "unread_badge")
+        }
+        self.ensureOperatorReconnectLoopIfNeeded()
+        guard await self.waitForGatewayConnection(timeoutMs: 8000, pollMs: 250, owner: .operator),
+              generation == self.gatewayConnectGeneration, !Task.isCancelled
+        else { return }
+        await self.refreshUnreadBadge()
+    }
+
     private func refreshWakeWordsFromGateway(
         shouldApply: @escaping @MainActor @Sendable () -> Bool = { true }) async
     {

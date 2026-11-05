@@ -26,6 +26,7 @@ import {
   normalizeSessionSearchText,
 } from "../shared/session-search-text.js";
 import type { SessionActivityPulse, SessionOwnerFacetIdentity } from "../shared/session-types.js";
+import { deriveSessionUnread } from "../shared/session-unread.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
 import { readPreparedGatewayModelCatalogMetadata } from "./server-model-catalog-view.js";
 import {
@@ -436,6 +437,9 @@ export function filterSessionEntries(
   for (const pair of candidateEntries) {
     const key = pair[0];
     const entry = pair[1];
+    if (opts.unreadOnly && !deriveSessionUnread(entry)) {
+      continue;
+    }
     if (
       opts.requireLastInteraction === true &&
       (!isFinitePositiveTimestamp(entry.lastInteractionAt) ||

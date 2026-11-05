@@ -33,6 +33,8 @@ export const SessionsListParamsSchema = closedObject({
   ),
   /** Select sessions with current direct running or queued work before pagination. */
   activeOnly: Type.Optional(Type.Boolean()),
+  /** Select canonical unread sessions before totals and pagination, including manual unread. */
+  unreadOnly: Type.Optional(Type.Boolean()),
   /** Require a real user/channel interaction; excludes synthetic isolated heartbeat rows. */
   requireLastInteraction: Type.Optional(Type.Boolean()),
   sortBy: Type.Optional(stringLiteralUnion(["updatedAt", "lastInteractionAt", "activity"])),
