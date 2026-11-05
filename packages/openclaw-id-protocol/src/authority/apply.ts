@@ -67,7 +67,7 @@ export async function submitStatement(
 ): Promise<AuthorityResult> {
   const parsed = parseStatement(input);
   if (!parsed.ok) {
-    return refuse(state, "malformed", parsed.detail);
+    return refuse(state, parsed.code, parsed.detail);
   }
   const statement = parsed.statement;
   switch (statement.type) {
@@ -368,7 +368,7 @@ export async function registerInvite(
 ): Promise<AuthorityResult> {
   const parsed = parseStatement(input, "InviteCap");
   if (!parsed.ok) {
-    return refuse(state, "malformed", parsed.detail);
+    return refuse(state, parsed.code, parsed.detail);
   }
   if (context.channel === "mailbox") {
     return refuse(state, "not_direct", "invites are registered directly at the Gateway");
@@ -449,7 +449,7 @@ export async function submitRedemption(
 ): Promise<AuthorityResult> {
   const parsed = parseStatement(input, "InviteRedemption");
   if (!parsed.ok) {
-    return refuse(state, "malformed", parsed.detail);
+    return refuse(state, parsed.code, parsed.detail);
   }
   const invite = state.invites[parsed.statement.body.invite_id];
   if (!invite) {
