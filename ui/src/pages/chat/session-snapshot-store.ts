@@ -87,7 +87,7 @@ function readSharedPrewarm(
 export function waitForPrewarmedChatSnapshot(
   cacheKey: string,
   sidebar: Promise<SidebarSnapshotModel | null>,
-): Promise<SidebarSnapshotModel | null | undefined> | undefined {
+): Promise<{ sidebar: SidebarSnapshotModel | null; details: boolean } | undefined> | undefined {
   const entry = peekPrewarmedChatSnapshot();
   if (entry?.cacheKey !== cacheKey || entry.cancelled) {
     return undefined;
@@ -95,7 +95,10 @@ export function waitForPrewarmedChatSnapshot(
   // Only this pane waits: an unavailable cache must never hold first mount indefinitely.
   let timeout: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
-    Promise.all([entry.ready, sidebar]).then(([, model]) => model),
+    Promise.all([entry.ready, sidebar]).then(([, model]) => ({
+      sidebar: model,
+      details: Boolean(entry.prepared?.snapshot?.details),
+    })),
     new Promise<undefined>((resolve) => {
       timeout = setTimeout(() => resolve(undefined), 100);
     }),

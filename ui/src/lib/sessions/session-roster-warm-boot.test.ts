@@ -63,7 +63,6 @@ afterEach(() => {
   activeCapabilities.clear();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  vi.useRealTimers();
 });
 
 function harness(

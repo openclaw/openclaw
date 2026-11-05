@@ -142,16 +142,21 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       const reveal = () => {
         if (!disposed) setReady(true);
       };
-      void Promise.all([
-        preloadChatDetails(),
-        pendingSnapshot.then(async (model) => {
-          if (model) {
+      void pendingSnapshot
+        .then(async (snapshot) => {
+          if (!snapshot) return;
+          const { sidebar, details } = snapshot;
+          const modules: Array<Promise<unknown> | undefined> = [
+            details ? preloadChatDetails() : undefined,
+          ];
+          if (sidebar) {
             const { preloadSidebarSnapshot } =
               await import("../../components/app-sidebar-owner.tsx");
-            await preloadSidebarSnapshot(model);
+            modules.push(preloadSidebarSnapshot(sidebar));
           }
-        }),
-      ]).then(reveal, reveal);
+          await Promise.all(modules);
+        })
+        .then(reveal, reveal);
     } else {
       setReady(true);
     }
