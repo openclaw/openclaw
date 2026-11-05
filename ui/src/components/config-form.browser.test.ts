@@ -164,26 +164,26 @@ describe("config form renderer", () => {
       vi.unstubAllGlobals();
     });
     const properties = Object.fromEntries(
-      Array.from({ length: 8 }, (_, index) => [
+      Array.from({ length: 16 }, (_, index) => [
         `part${index}`,
         object({ field: { type: "string", title: `Field ${index}` } }),
       ]),
     );
     const value = Object.fromEntries(
-      Array.from({ length: 8 }, (_, index) => [`part${index}`, { field: `Value ${index}` }]),
+      Array.from({ length: 16 }, (_, index) => [`part${index}`, { field: `Value ${index}` }]),
     );
     const props = { schema: object(properties), value, progressive: true };
     renderRaw(props);
     expect(all("input.settings-input")).toHaveLength(0);
     expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
     yields.shift()!();
-    await waitForSolid(() => expect(all("input.settings-input")).toHaveLength(1));
+    await waitForSolid(() => expect(all("input.settings-input")).toHaveLength(7));
     const first = query("input.settings-input", HTMLInputElement);
     first.focus();
     edit(first, "Editing the first field");
     first.setSelectionRange(2, 8);
 
-    for (let count = 2; count <= 8; count++) {
+    for (const count of [14, 16]) {
       yields.shift()!();
       await waitForSolid(() => expect(all("input.settings-input")).toHaveLength(count));
     }
@@ -192,14 +192,14 @@ describe("config form renderer", () => {
     expect(document.activeElement).toBe(first);
     expect(first.value).toBe("Editing the first field");
     expect([first.selectionStart, first.selectionEnd]).toEqual([2, 8]);
-    expect(container.textContent).toContain("Field 7");
+    expect(container.textContent).toContain("Field 15");
 
     renderRaw({
       ...props,
-      schema: object({ ...properties, part8: object({ field: { type: "string" } }) }),
-      value: { ...value, part8: { field: "Added after completion" } },
+      schema: object({ ...properties, part16: object({ field: { type: "string" } }) }),
+      value: { ...value, part16: { field: "Added after completion" } },
     });
-    expect(all("input.settings-input")).toHaveLength(9);
+    expect(all("input.settings-input")).toHaveLength(17);
     expect(query("input.settings-input", HTMLInputElement)).toBe(first);
     expect(first.value).toBe("Editing the first field");
     expect([first.selectionStart, first.selectionEnd]).toEqual([2, 8]);

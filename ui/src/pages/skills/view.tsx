@@ -164,14 +164,21 @@ export function Skills(props: SkillsProps) {
 
 function SkillsInventory(props: { groups: SkillGroup[]; view: SkillsProps }) {
   const skills = createMemo(() => props.groups.flatMap((group) => group.skills));
-  const visible = createProgressiveList(skills, { initial: 20, batch: 200 });
+  const visible = createProgressiveList(skills, { initial: 1, batch: 500 });
   const groups = createMemo(() => {
     let remaining = visible.items().length;
     // Reveal one grouped prefix so adding earlier rows never moves a later heading.
     return props.groups.flatMap((group) => {
       const count = Math.min(remaining, group.skills.length);
       remaining -= count;
-      return count > 0 ? [{ group, skills: group.skills.slice(0, count) }] : [];
+      return count > 0
+        ? [
+            {
+              group,
+              skills: count === group.skills.length ? group.skills : group.skills.slice(0, count),
+            },
+          ]
+        : [];
     });
   });
   return (
@@ -194,6 +201,7 @@ function SkillGroupView(props: {
   busy: boolean;
   view: SkillsProps;
 }) {
+  const skills = createMemo(() => props.skills);
   return (
     <details class="settings-section skills-group" aria-busy={props.busy ? "true" : "false"} open>
       <summary class="settings-section__header skills-group__summary">
@@ -205,7 +213,7 @@ function SkillGroupView(props: {
         </span>
       </summary>
       <div class="settings-group">
-        <For each={props.skills} keyed={(skill) => skill.skillKey}>
+        <For each={skills()} keyed={(skill) => skill.skillKey}>
           {(skill) => <SkillRow skill={skill()} view={props.view} />}
         </For>
       </div>
@@ -264,7 +272,7 @@ function SkillsToolbar(props: {
 }
 
 function SkillRow(props: { skill: SkillStatusEntry; view: SkillsProps }) {
-  const verdict = createMemo(() => verdictForSkill(props.skill, props.view.state.clawhubVerdicts));
+  const verdict = () => verdictForSkill(props.skill, props.view.state.clawhubVerdicts);
   const status = () => {
     latest(props.view.readClawHubVerdicts);
     return verdictStatus(verdict(), isPending(props.view.readClawHubVerdicts));

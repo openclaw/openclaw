@@ -383,7 +383,7 @@ export function ConfigForm(props: ConfigFormProps): SolidJSX.Element {
 function ConfigSections(props: { sections: Section[]; form: ConfigFormProps }): SolidJSX.Element {
   const visible = createProgressiveList(() => props.sections, {
     initial: 0,
-    batch: 1,
+    batch: 7,
     enabled: () => props.form.progressive === true,
   });
   return (
