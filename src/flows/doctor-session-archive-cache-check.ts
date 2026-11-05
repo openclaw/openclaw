@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { root } from "@openclaw/fs-safe";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { resolveExistingPreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
 const CHECK_ID = "core/doctor/session-archive-read-cache";
@@ -10,7 +10,11 @@ const CACHE_FILE =
   /^[a-f0-9]{32}-\d+-\d+\.jsonl(?:\.\d+\.[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.tmp)?$/;
 
 function inspectCache() {
-  const directory = path.join(resolvePreferredOpenClawTmpDir(), "session-archive-read-cache");
+  const tmp = resolveExistingPreferredOpenClawTmpDir();
+  if (!tmp) {
+    return undefined;
+  }
+  const directory = path.join(tmp, "session-archive-read-cache");
   const stat = fs.lstatSync(directory, { throwIfNoEntry: false });
   if (!stat) {
     return { directory, stat, bytes: 0, files: [], remaining: 0 };
@@ -47,7 +51,7 @@ export const sessionArchiveCacheCheck: HealthCheck = {
   async detect() {
     try {
       const cache = inspectCache();
-      return cache.stat
+      return cache?.stat
         ? [
             {
               checkId: CHECK_ID,
@@ -71,7 +75,7 @@ export const sessionArchiveCacheCheck: HealthCheck = {
     }
     try {
       const cache = inspectCache();
-      if (!cache.stat) {
+      if (!cache?.stat) {
         return { changes };
       }
       const assertCurrent = () => {

@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { resolveExistingPreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
 
 const check = CORE_HEALTH_CHECKS.find(
@@ -11,7 +11,7 @@ const check = CORE_HEALTH_CHECKS.find(
 
 vi.mock("../infra/tmp-openclaw-dir.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/tmp-openclaw-dir.js")>()),
-  resolvePreferredOpenClawTmpDir: vi.fn(),
+  resolveExistingPreferredOpenClawTmpDir: vi.fn(),
 }));
 const ctx = { mode: "fix" as const, cfg: {}, runtime: { log() {}, error() {}, exit() {} } };
 const name = "0123456789abcdef0123456789abcdef-10-1700000000000.jsonl";
@@ -20,7 +20,7 @@ let cache: string;
 beforeEach(async () => {
   root = await fs.mkdtemp(path.join(tmpdir(), "archive-cache-"));
   cache = path.join(root, "session-archive-read-cache");
-  vi.mocked(resolvePreferredOpenClawTmpDir).mockReturnValue(root);
+  vi.mocked(resolveExistingPreferredOpenClawTmpDir).mockReturnValue(root);
   await fs.mkdir(cache);
   await fs.writeFile(path.join(cache, name), "plaintext");
 });
