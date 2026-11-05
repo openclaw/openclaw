@@ -164,8 +164,6 @@ export function createDuplicateParagraphProjector(protectCode = true): TextProje
         normalizedLength += normalized.length;
       }
     }
-    const duplicate = Boolean(paragraph) && equal && normalizedLength === lastNormalized?.length;
-    const collapsed = hasDuplicate || duplicate;
     let refreshOwnership = false;
     if (protectCode) {
       // Inline code is compared byte-for-byte; block and nonlocal Markdown
@@ -181,6 +179,10 @@ export function createDuplicateParagraphProjector(protectCode = true): TextProje
       ) {
         ownership = findCodeOwnership(input.text);
         refreshOwnership = true;
+        // A link title closing can reclassify earlier code in this paragraph.
+        const normalized = normalizeDuplicateParagraph(paragraph);
+        equal = lastNormalized?.startsWith(normalized) === true;
+        normalizedLength = normalized.length;
       }
       codeProtectionRequired ||=
         ownership?.unresolvedImageCodeStart !== undefined ||
@@ -189,6 +191,8 @@ export function createDuplicateParagraphProjector(protectCode = true): TextProje
         !canReuseMarkdownOwnership("", probe.replaceAll("`", ""));
       codeProbeTail = probe.slice(-3);
     }
+    const duplicate = Boolean(paragraph) && equal && normalizedLength === lastNormalized?.length;
+    const collapsed = hasDuplicate || duplicate;
     let delta = input.delta;
     if (refreshOwnership || (codeProtectionRequired && nonlocalMarkersSeen && backticksSeen)) {
       const projected = collapseDuplicateParagraphs(
