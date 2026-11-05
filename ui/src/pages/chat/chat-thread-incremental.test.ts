@@ -577,3 +577,96 @@ describe("older-page prepend reuse", () => {
     },
   );
 });
+
+it("reuses persisted preparation at stream onset without reusing live placement", () => {
+  resetChatThreadState();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(100_000);
+  const preparation = vi.spyOn(threadItems, "buildMessageItems");
+  try {
+    const { props: fixtureProps } = fixture();
+    const props = { ...fixtureProps, stream: "", showReasoning: true };
+    buildCachedChatItems(props);
+    for (const update of [
+      { stream: "Needle first answer" },
+      {
+        stream: "Needle first answer",
+        reasoning: {
+          runId: "active-run",
+          items: [{ itemId: "thinking", text: "Planning", startedAt: 41 }],
+        },
+      },
+      { stream: "Needle changed answer", toolMessages: [] },
+    ]) {
+      preparation.mockClear();
+      const next = { ...props, ...update };
+      const cached = buildCachedChatItems(next);
+      expect(
+        preparation.mock.calls.some(([source]) => source.length === props.messages.length),
+      ).toBe(false);
+      expect(cached).toEqual(buildChatItems(next));
+    }
+  } finally {
+    clock.mockRestore();
+    preparation.mockRestore();
+    resetChatThreadState();
+  }
+});
+
+it("invalidates persisted preparation for history, search, tools, locale and commentary owner", () => {
+  resetChatThreadState();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(100_000);
+  try {
+    const { props } = fixture();
+    const variants: Partial<BuildChatItemsProps>[] = [
+      { searchOpen: true, searchQuery: "Unrelated" },
+      { showToolCalls: false },
+      { locale: "de" },
+      { messages: [...props.messages, message("new", "assistant", 60, "New answer")] },
+      { persistCommentary: false, runId: "different-run" },
+      {},
+    ];
+    buildCachedChatItems(props);
+    for (const variant of variants) {
+      const next = { ...props, ...variant };
+      expect(buildCachedChatItems(next)).toEqual(buildChatItems(next));
+    }
+  } finally {
+    clock.mockRestore();
+    resetChatThreadState();
+  }
+});
+
+it("keeps retained history immutable as live canvas ownership comes and goes", () => {
+  resetChatThreadState();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(100_000);
+  try {
+    const { props } = fixture();
+    deepFreeze(props.messages);
+    const initial = buildCachedChatItems(props);
+    const before = structuredClone(initial);
+    const canvas = message(
+      "live-canvas",
+      "toolResult",
+      42,
+      JSON.stringify({
+        kind: "canvas",
+        view: {
+          backend: "canvas",
+          id: "cv_live",
+          url: "/__openclaw__/canvas/documents/cv_live/index.html",
+          title: "Live canvas",
+        },
+        presentation: { target: "assistant_message" },
+      }),
+      { runId: "active-run", toolCallId: "live-canvas" },
+    );
+    for (const toolMessages of [[...props.toolMessages, canvas], props.toolMessages]) {
+      const next = { ...props, toolMessages, stream: 'Ready [embed ref="cv_live" /]' };
+      expect(buildCachedChatItems(next)).toEqual(buildChatItems(next));
+      expect(initial).toEqual(before);
+    }
+  } finally {
+    clock.mockRestore();
+    resetChatThreadState();
+  }
+});

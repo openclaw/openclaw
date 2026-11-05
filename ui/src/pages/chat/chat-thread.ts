@@ -20,6 +20,7 @@ import { activeChatReasoning } from "./chat-reasoning.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
 import { collectOwnedCanvasPreviews, stripOwnedCanvasShortcodes } from "./chat-thread-canvas.ts";
 import type { ChatItemsFacts } from "./chat-thread-facts.ts";
+import type { ChatHistoryCache } from "./chat-thread-history.ts";
 import type { ChatInputOrderState } from "./chat-thread-inputs.ts";
 import { sanitizeStreamText } from "./chat-thread-items.ts";
 import type { PrependFacts } from "./chat-thread-prepend.ts";
@@ -35,6 +36,7 @@ type CachedChatItems = {
     prefix: string | null;
     ownedCanvas: ReturnType<typeof collectOwnedCanvasPreviews>;
   } | null;
+  history: ChatHistoryCache;
   /** Facts of the history behind items. */
   facts?: PrependFacts;
 };
@@ -450,6 +452,7 @@ export function buildCachedChatItems(
     input: null,
     items: [],
     liveStream: null,
+    history: {},
   });
   // Keep stream-only updates off the loaded-history path; structural changes
   // still use the full builder.
@@ -491,8 +494,11 @@ export function buildCachedChatItems(
       ]
     : stabilizeChatItems(
         cached.items,
-        buildChatItems(input, projections.inputOrder, "transcript", facts),
+        buildChatItems(input, projections.inputOrder, "transcript", facts, cached.history),
       );
+  if (prepended) {
+    cached.history.current = undefined;
+  }
   cached.facts = prepended?.facts ?? facts;
   // A rebuild can retain every row and the array. Consumers still need to
   // observe the structural pass; text-only slot replacements do not advance it.
