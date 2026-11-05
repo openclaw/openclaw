@@ -36,13 +36,16 @@ export function readErrorDisplayOverride(error: unknown, fallback = ""): string 
   }
   const missingScope = readMissingScopeError(error);
   if (missingScope) {
+    const scope = missingScope.missingScope;
     const access =
-      new Map([
-        ["operator.read", "read access"],
-        ["operator.write", "write access"],
-        ["operator.admin", "admin access"],
-      ]).get(missingScope.missingScope) ?? "the required access";
-    return `Couldn’t complete this request. Ask an admin to grant ${access}.`;
+      scope === "operator.read"
+        ? "read"
+        : scope === "operator.write"
+          ? "write"
+          : scope === "operator.admin"
+            ? "admin"
+            : "the required";
+    return `Couldn’t complete this request. Ask an admin to grant ${access} access.`;
   }
   if (isProgrammingError(error)) {
     reportProgrammingError(error);

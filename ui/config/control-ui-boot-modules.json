@@ -180,6 +180,7 @@
   "packages/normalization-core/src/stable-stringify.ts",
   "packages/normalization-core/src/string-coerce.ts",
   "packages/normalization-core/src/string-normalization.ts",
+  "packages/normalization-core/src/stringified-error.ts",
   "packages/normalization-core/src/utf16-slice.ts",
   "packages/normalization-core/src/uuid.ts",
   "packages/plugin-package-contract/src/catalog-route.ts",
