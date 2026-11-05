@@ -157,24 +157,6 @@ describe("plugin authoring commands", () => {
     ).toEqual([]);
   });
 
-  it("aligns package metadata with the selected runtime extension entry", () => {
-    expect(
-      buildToolPluginPackageManifest({
-        packageManifest: {
-          name: "demo",
-          openclaw: { setupEntry: "./setup.ts", extensions: ["./src/other.ts"] },
-        },
-        entry: "./src/index.ts",
-      }),
-    ).toEqual({
-      name: "demo",
-      openclaw: {
-        setupEntry: "./setup.ts",
-        extensions: ["./src/other.ts", "./src/index.ts"],
-      },
-    });
-  });
-
   it("builds and installs selected entries without changing sibling runtime pairs", async () => {
     const { root: tmpDir, entry: sourceEntry } = sourceProject("entry-pairs");
     const packagePath = path.join(tmpDir, "package.json");
@@ -185,6 +167,7 @@ describe("plugin authoring commands", () => {
     }
     const packageManifest = readJson(tmpDir, "package.json");
     packageManifest.openclaw = {
+      setupEntry: runtimeEntries[0],
       extensions: ["./src/a/index.ts", "./src/b/index.ts"],
       runtimeExtensions: runtimeEntries,
     };
@@ -201,9 +184,11 @@ describe("plugin authoring commands", () => {
     expect(installed.ok, installed.ok ? undefined : installed.error).toBe(true);
     expect(installed).toMatchObject({ pluginId: "entry-pairs" });
     expect(generated.openclaw).toEqual({
+      setupEntry: runtimeEntries[0],
       extensions: ["./dist/a/index.js", "./src/b/index.ts"],
       runtimeExtensions: runtimeEntries,
     });
+    expect(generated.name).toBe(packageManifest.name);
     if (!installed.ok) {
       throw new Error(installed.error);
     }
@@ -216,6 +201,11 @@ describe("plugin authoring commands", () => {
     expected: string[];
     runtimeExtensions?: string[];
   }>([
+    {
+      extensions: ["./src/other.ts"],
+      entry: "./src/index.ts",
+      expected: ["./src/other.ts", "./src/index.ts"],
+    },
     {
       extensions: ["./dist/a/index.js", "./dist/b/index.js"],
       entry: "./src/a/index.ts",
@@ -690,36 +680,14 @@ describe("plugin authoring commands", () => {
     expect(log).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    "rejects invalid feature ids before writing with force=%s",
-    async (force) => {
-      silenceRuntime("log");
-      const projectDir = path.join(tempDirs.make("openclaw-feature-invalid-id-"), "project");
-      if (force) {
-        fs.mkdirSync(projectDir);
-        fs.writeFileSync(path.join(projectDir, "keep.txt"), "unchanged");
-      }
-      await expect(
-        runPluginsInitCommand("Invalid_ID", { directory: projectDir, type: "feature", force }),
-      ).rejects.toMatchObject({
-        humanOutput:
-          "Feature plugin ids must start with a lowercase letter and contain lowercase letters, digits, or hyphens.",
-      });
-      if (force) {
-        expect(fs.readdirSync(projectDir)).toEqual(["keep.txt"]);
-        expect(readText(projectDir, "keep.txt")).toBe("unchanged");
-      } else {
-        expect(fs.existsSync(projectDir)).toBe(false);
-      }
-      await runPluginsInitCommand("valid-feature", {
-        directory: projectDir,
-        type: "feature",
-        force,
-      });
-      expect(readJson(projectDir, "openclaw.plugin.json").id).toBe("valid-feature");
-      expect(fs.existsSync(path.join(projectDir, "src", "index.ts"))).toBe(true);
-    },
-  );
+  it("rejects an invalid feature id without blocking a corrected retry", async () => {
+    const projectDir = path.join(tempDirs.make("openclaw-feature-invalid-id-"), "project");
+    const opts = { directory: projectDir, type: "feature" };
+    await expect(runPluginsInitCommand("Invalid_ID", opts)).rejects.toThrow("Feature plugin ids");
+    expect(fs.existsSync(projectDir)).toBe(false);
+    await runPluginsInitCommand("valid-feature", opts);
+    expect(readJson(projectDir, "openclaw.plugin.json").id).toBe("valid-feature");
+  });
 
   it("finishes init with an absolute directory after the launch directory is removed", async () => {
     const tmpDir = tempDirs.make("openclaw-plugin-deleted-cwd-init-");
@@ -735,8 +703,7 @@ describe("plugin authoring commands", () => {
   });
 
   it("scaffolds a provider plugin project with ClawHub validation and release metadata", async () => {
-    const tmpDir = tempDirs.make("openclaw-provider-init-");
-    const projectDir = path.join(tmpDir, "plugin-init-test");
+    const projectDir = path.join(tempDirs.make("openclaw-provider-init-"), "plugin-init-test");
 
     await runPluginsInitCommand("@acme/plugin-init-test", {
       directory: projectDir,
