@@ -1,9 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import type {
-  RealtimeVoiceAgentConsultRunner,
-  RealtimeVoiceBridgeCreateRequest,
-} from "../../../talk/provider-types.js";
+import type { RealtimeVoiceBridgeCreateRequest } from "../../../talk/provider-contexts.js";
+import type { RealtimeVoiceAgentConsultRunner } from "../../../talk/provider-types.js";
 import { controlBridge, controlContext } from "../client-gateway-control.test-support.js";
 import { useRelayFixtures } from "./fixture.test-support.js";
 import { createIdleRelayProvider } from "./index.test-support.js";
