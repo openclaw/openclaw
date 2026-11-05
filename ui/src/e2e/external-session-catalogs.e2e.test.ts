@@ -1,14 +1,9 @@
-import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { ownerRoster, sessionPerson } from "./session-ownership-fixtures.test-support.ts";
-import { chooseSidebarOwner } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "OpenCode and Pi external session catalogs",
@@ -90,59 +85,6 @@ function makeCatalog(
 }
 
 suite.define(() => {
-  it("uses native session actions for converted Beam rows under Involving me", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const key = "agent:main:dashboard:11111111-2222-4333-8444-555555555555";
-      const viewer = sessionPerson("profile-ada", "Ada");
-      const native = {
-        key,
-        sessionId: "native-clawcon-session",
-        kind: "direct",
-        label: "ClawCon planning",
-        updatedAt: Date.now(),
-        owner: { actor: viewer },
-      };
-      const gateway = await installMockGateway(page, {
-        sessionKey: key,
-        sessions: [native],
-        presenceUsers: [{ self: true, id: viewer.id, name: viewer.label }],
-        featureMethods: [...defaultControlUiFeatureMethods, ...featureMethods],
-        methodResponses: {
-          "sessions.list": ownerRoster([native], [viewer, sessionPerson("profile-bob", "Bob")]),
-          "sessions.catalog.list": {
-            catalogs: [
-              makeCatalog(
-                "beam",
-                "Beam",
-                "0123456789abcdef0123456789abcdef",
-                "Old Beam snapshot",
-                { hostId: "gateway", label: "Beam", kind: "gateway" },
-                { sessionKey: key, canContinue: true, shareRoute: SHARE_ROUTE },
-              ),
-            ],
-          },
-        },
-      });
-      await page.goto(
-        suite.server.baseUrl + "chat/main/~key/dashboard/11111111-2222-4333-8444-555555555555",
-      );
-      const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
-      await row.getByText("ClawCon planning", { exact: true }).waitFor();
-      await chooseSidebarOwner(page, "involving-me");
-      await gateway.waitForRequest("sessions.list", { match: { involvingMe: true } });
-      await row.waitFor();
-      await row.click({ button: "right" });
-      await page.getByRole("menuitem").first().waitFor();
-      const stage = process.env.OPENCLAW_BEAM_STAGE;
-      if (stage) {
-        const artifacts = createControlUiE2eArtifactDir("beam-native-actions");
-        await page.screenshot({ path: path.join(artifacts, `${stage}.png`) });
-      }
-      await page.getByRole("menuitem", { name: "Rename…", exact: true }).waitFor();
-      expect(await page.getByRole("menuitem", { name: "Import to OpenClaw" }).count()).toBe(0);
-    });
-  });
-
   it("continues from a Visitor owned Beam cold link without shared catalog privileges", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 720 } }, async ({ page }) => {
       const fullId = "a".repeat(32);

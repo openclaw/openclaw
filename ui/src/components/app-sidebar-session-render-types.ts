@@ -104,6 +104,7 @@ export interface SessionListHost {
     | "catalogMenu"
     | "catalogMenuView"
     | "catalogViewMenuPosition"
+    | "closeSessionMenu"
     | "openCatalogViewMenu"
     | "openSessionGroupMenu"
     | "openSessionMenu"
