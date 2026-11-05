@@ -146,6 +146,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
   const changesPanelSink = createDoctorChangesPanelSink(shouldRepair);
   const configRepairWarnings: string[] = [...(preflight.warnings ?? [])];
+  const configAdvisories: string[] = [];
   const applyConfigMutation = (
     mutation: DoctorConfigMutationResult & { warnings?: string[] },
     fixHint: string,
@@ -535,7 +536,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       params.options.json !== true,
     );
     state = repairSequence.state;
-    configRepairWarnings.push(...repairSequence.warningNotes);
+    configRepairWarnings.push(...repairSequence.repairWarningNotes);
+    configAdvisories.push(...repairSequence.advisoryNotes);
     if (referenceSource) {
       referenceSource.installedPluginIdRecovery = new Map([
         ...installedPluginRecovery.recovery,
@@ -707,7 +709,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     ...(referenceSource ? { referenceSource } : {}),
     path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig,
-    ...(configRepairWarnings.length ? { warnings: [...new Set(configRepairWarnings)] } : {}),
+    ...(configRepairWarnings.length || configAdvisories.length
+      ? { warnings: [...new Set([...configRepairWarnings, ...configAdvisories])] }
+      : {}),
     ...(shouldWriteConfig && pendingChangePanels.length > 0 ? { pendingChangePanels } : {}),
     sourceConfigValid: snapshot.valid,
     ...(legacyStep.partiallyValid === true ? { skipPluginValidationOnWrite: true } : {}),
