@@ -384,6 +384,13 @@ describePosix("scripts/pr finalized-task closeout", () => {
     expect(shared.output).toContain(f.template);
     expect(readFileSync(join(proof, "proof.txt"), "utf8")).toBe("task-owned proof\n");
     unlinkSync(dependencyLink);
+    symlinkSync(join(f.worktree, "scripts"), dependencyLink);
+    const checkout = await f.run();
+    expect(checkout.status, checkout.output).not.toBe(0);
+    expect(checkout.output).toMatch(/shared dependencies/iu);
+    expect(readFileSync(join(proof, "proof.txt"), "utf8")).toBe("task-owned proof\n");
+    expect(existsSync(join(f.worktree, "scripts", "pr"))).toBe(true);
+    unlinkSync(dependencyLink);
     const result = await f.runArtifacts([proof]);
     expect(result.status, result.output).toBe(0);
     expect(existsSync(proof)).toBe(false);

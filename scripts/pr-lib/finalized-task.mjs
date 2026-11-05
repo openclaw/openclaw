@@ -159,7 +159,9 @@ function inventory(plan) {
       requireSelected(path.resolve(worktree, file));
     }
   }
-  // A task installation can become shared by another registered checkout.
+  // A task installation can become shared by another registered checkout,
+  // including tracked contents removed with the selected worktree itself.
+  const resources = worktree ? [{ path: worktree }, ...artifacts] : artifacts;
   const registrations = git(root, "worktree", "list", "--porcelain", "-z").split("\0");
   for (const record of registrations) {
     if (!record.startsWith("worktree ")) {
@@ -181,7 +183,7 @@ function inventory(plan) {
     const shared = stat(dependencies) && physical(dependencies);
     if (
       shared &&
-      artifacts.some(
+      resources.some(
         (resource) =>
           within(shared, resource.path) ||
           (!stat(resource.path)?.isSymbolicLink() && within(resource.path, shared)),
