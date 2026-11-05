@@ -5,8 +5,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { expect } from "vitest";
-import { vitestWorkerRuntimeAssets } from "../../../scripts/lib/package-root-modules.mts";
-import { resolveSqliteSchemaAssetInputs } from "../../../scripts/lib/sqlite-schema-assets.mts";
 import { withPluginCohortConfigCapture } from "../../config/plugin-cohort-recovery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migrations.js";
@@ -14,7 +12,6 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { pluginCohortPublicationContext } from "../../infra/update-plugin-cohort-context.js";
 import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
-import { createCompiledSdkHost } from "../../plugins/compiled-sdk-host.test-support.js";
 import {
   readPersistedInstalledPluginIndexRowSync,
   seedInstalledPluginIndex,
@@ -25,6 +22,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { createUpdateCandidateRuntimeFixture } from "./update-candidate-runtime.test-support.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 
 /** Resolve after the execution fixture has loaded its native worker owners. */
@@ -40,47 +38,17 @@ export function resolveRollbackWorkerInputs() {
   return { gatewayLockUrl, databaseGenerationsUrl, sourceLoader };
 }
 
+const copyCandidateRuntime = createUpdateCandidateRuntimeFixture();
+
 /** Keep settlement on the real candidate's delegated native owner. */
 export async function prepareRollbackRuntime(root: string): Promise<string> {
-  const installed = createCompiledSdkHost(
-    [
-      runtimeProcessEntrypoints.updateMigratedFinalize,
-      runtimeProcessEntrypoints.workerNativeLifecycle,
-      runtimeProcessEntrypoints.spawnBroker,
-      runtimeProcessEntrypoints.sqliteWriterAdmission,
-      runtimeProcessEntrypoints.sqliteStore,
-      runtimeProcessEntrypoints.sqliteIntegrity,
-      runtimeProcessEntrypoints.sqliteReadOnly,
-      runtimeProcessEntrypoints.sqliteReadOnlyNativeResource,
-      runtimeProcessEntrypoints.sqliteSnapshotStaging,
-      runtimeProcessEntrypoints.sqliteSourceRevision,
-      runtimeProcessEntrypoints.sharedStateStore,
-      runtimeProcessEntrypoints.stateOwnership,
-      runtimeProcessEntrypoints.stateLeaseHeartbeat,
-      runtimeProcessEntrypoints.stateRead,
-    ],
-    () => root,
-  );
-  if (!installed) {
-    throw new Error("Database rollback fixture requires the compiled candidate worker generation");
-  }
+  await copyCandidateRuntime(root);
   // The fixture supplies dependencies from its common stage/live ancestor;
   // no checkout symlink belongs in either retained package identity.
   await fs.unlink(path.join(root, "node_modules"));
-  const worker = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateMigratedFinalize);
-  const generationRoot = path.resolve(path.dirname(fileURLToPath(worker)), "../..");
-  for (const asset of vitestWorkerRuntimeAssets) {
-    await fs.copyFile(path.join(generationRoot, asset), path.join(root, asset));
-  }
-  for (const asset of resolveSqliteSchemaAssetInputs()) {
-    const relative = path.join("dist", "assets", "sqlite-schema", path.basename(asset));
-    await fs.mkdir(path.dirname(path.join(root, relative)), { recursive: true });
-    await fs.copyFile(path.join(generationRoot, relative), path.join(root, relative));
-  }
-  const actual = path.join(root, "dist/infra/update-migrated-finalize.actual.js");
   await fs.copyFile(
     path.join(root, "dist", runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath),
-    actual,
+    path.join(root, "dist/infra/update-migrated-finalize.actual.js"),
   );
   return "./update-migrated-finalize.actual.js";
 }
