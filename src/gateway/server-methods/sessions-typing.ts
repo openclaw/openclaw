@@ -191,7 +191,8 @@ export const sessionTypingHandler: GatewayRequestHandlers[string] = async ({
       ) {
         return false;
       }
-      const liveIdentities = liveViewerIdentities(sessionKeys);
+      // Connected viewers outlive the bounded legacy presence cache.
+      const liveIdentities = liveViewerIdentities(context.getPresenceSnapshot(), sessionKeys);
       const actorKey = presenceUserKey({
         id: actor.id,
         identity: { type: "profile", id: actor.id },

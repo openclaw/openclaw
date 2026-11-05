@@ -198,10 +198,13 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/mcp-app-catalog.tsx":
     case "ui/src/lib/mcp-app-catalog.ts":
     case "ui/src/i18n/locales/en-mcp-app.ts":
+    case "ui/src/lib/reactive/format.ts":
+    case "ui/src/lib/permission-error.ts":
+    case "ui/src/i18n/locales/en-permission-errors.ts":
     case "ui/src/components/mcp-app-launch.ts":
     case "ui/src/lib/sessions/session-create-params.ts":
     case "packages/gateway-protocol/src/question-media.ts":
-      // Shared catalogs and session parameters must not pull Chat into other routes.
+      // Shared catalogs, labels, and formatters must not pull Chat into other routes.
       return "deferred-ui-support";
     case "ui/src/lib/page-request.ts":
     case "ui/src/lib/checkout-snapshot.ts":
