@@ -152,6 +152,11 @@ it("allows scoped isolated cron runs to remove the current job", async () => {
   expect(expectSingleCall("cron.remove")).toEqual({ id: "job-current" });
 });
 
+it("passes the requested page of the current job's run receipts", async () => {
+  await executeCron({ action: "runs", jobId: "job-current", limit: 2, offset: 1 }, scopedCaller);
+  expect(expectSingleCall("cron.runs")).toEqual({ id: "job-current", limit: 2, offset: 1 });
+});
+
 it("redacts global status while preserving authenticated caller identity", async () => {
   const identity = mockCaller({
     enabled: true,

@@ -28,6 +28,7 @@ import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js"
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
 import { sessionMethodDatabaseAdmission, isSessionTargetMethod } from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
+import { restoreSessionOperatorSource } from "./session-operator-sources.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
@@ -89,6 +90,12 @@ export async function prepareSessionPrincipalRunAuthority(
   }
 }
 
+// A revoked or changed source throws instead of yielding stale scopes.
+function currentRecordedScopes(authority: AdmittedRunOperatorAuthority): readonly string[] {
+  authority.assertCurrent();
+  return authority.scopes;
+}
+
 /** Resolve a recorded person against current grants and an existing exact session. */
 async function prepareSessionPrincipalRunAccess(params: {
   context: GatewayRequestContext;
@@ -106,21 +113,14 @@ async function prepareSessionPrincipalRunAccess(params: {
   const identity = await prepareUserProfileIdentity(params.profileId);
   const ownerProfilePath = resolveDatabasePath();
   let sharing: ReturnType<typeof resolveSessionMutationAuthorization>["authorization"];
+  let recorded: Awaited<ReturnType<typeof restoreSessionOperatorSource>>;
   const release = () => {
     sharing?.release?.();
+    recorded?.release();
     identity.release();
   };
-  const readRole = () => {
-    const profile = identity.readCurrentProfile();
-    return resolveOperatorRolePolicyForAssignment(
-      params.profileId,
-      profile.assignedRole,
-      getConfig(),
-      profile.githubLogin ?? null,
-    );
-  };
   const readScopes = () => {
-    identity.readCurrentProfile();
+    const profile = identity.readCurrentProfile();
     // The recorded principal must itself remain the Gateway owner; this is never a fallback.
     if (params.profileId === GATEWAY_OWNER_PROFILE_ID) {
       if (readResidentGatewayOwnerProfile(ownerProfilePath)?.id !== params.profileId) {
@@ -128,13 +128,34 @@ async function prepareSessionPrincipalRunAccess(params: {
       }
       return ["operator.admin"];
     }
-    const scopes = readRole()?.scopes;
+    const cfg = getConfig();
+    // Without roles a profile carries no authority of its own; only the person's recorded
+    // authenticated source for this session, revalidated on every use, supplies it.
+    const scopes =
+      !cfg.gateway?.roles && recorded
+        ? currentRecordedScopes(recorded.authority)
+        : resolveOperatorRolePolicyForAssignment(
+            params.profileId,
+            profile.assignedRole,
+            cfg,
+            profile.githubLogin ?? null,
+          )?.scopes;
     if (!scopes || resolveMissingOperatorScope(["operator.sessions.write"], scopes) !== null) {
       throw new Error("Session principal has no current run authority.");
     }
     return scopes;
   };
   try {
+    if (params.profileId !== GATEWAY_OWNER_PROFILE_ID && !getConfig().gateway?.roles) {
+      recorded = await restoreSessionOperatorSource({
+        context: params.context,
+        profileId: params.profileId,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+        assertCurrent: () => params.assertCurrent?.(),
+      });
+    }
     const scopes = readScopes();
     const access = resolveGatewayOperatorAccessAuthority(params.profileId, getConfig(), {
       requireLivePolicySet: true,
@@ -157,7 +178,7 @@ async function prepareSessionPrincipalRunAccess(params: {
       params.assertCurrent?.();
       access?.signal.throwIfAborted();
       access?.assertCurrent();
-      identity.readCurrentFacts();
+      // readScopes validates the retained identity before consuming its current role.
       if (resolveMissingOperatorScope(client.connect.scopes ?? [], readScopes()) !== null) {
         throw new Error("Session principal has no current run authority.");
       }
@@ -198,10 +219,13 @@ async function prepareSessionPrincipalRunAccess(params: {
       },
     );
     assertCurrent();
+    const signals = [access?.signal, recorded?.authority.signal].filter(
+      (signal): signal is AbortSignal => signal !== undefined,
+    );
     return {
       client,
       assertCurrent,
-      signal: access?.signal,
+      signal: signals.length > 1 ? AbortSignal.any(signals) : signals[0],
       gatewayAccessGrant: access ? access.gatewayAccessGrant : null,
       release,
     };
@@ -430,6 +454,12 @@ export async function resolveSessionMutationAuthorizationAsync(
           }
         },
         retain,
+        retainForRun: () => ({
+          // Published facts stay live without repeating history preparation or transport admission.
+          assertCurrent: () =>
+            (authorization.assertAdmittedInputCurrent ?? authorization.assertCurrent)(),
+          release: retain(),
+        }),
         release: () => {
           if (!transferred) {
             releaseRequest();

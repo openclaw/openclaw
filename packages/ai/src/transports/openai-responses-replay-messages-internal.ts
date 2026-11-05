@@ -675,16 +675,17 @@ function convertResponsesMessagesWithStyle(
       continue;
     }
     // Prepared suffix results resolve IDs against the current request's call map.
-    // Images already have prepared scalar facts. Caching their composed data URLs
-    // would retain a second large base64 string alongside each source image.
+    // Retained projections already prove source immutability. Images retain their own scalar facts.
+    let projections = responsesMessageProjections.get(msg);
     const reusable =
       immutable &&
       !preparedRequestSuffix.has(context) &&
-      immutable.isDeeplyFrozenPlainData(msg) &&
-      (typeof msg.content === "string" || !msg.content.some((block) => block.type === "image"));
+      (projections ||
+        (immutable.isDeeplyFrozenPlainData(msg) &&
+          (typeof msg.content === "string" ||
+            !msg.content.some((block) => block.type === "image"))));
     const key = `${projectionKey}:${msgIndex}`;
-    let projections = reusable ? responsesMessageProjections.get(msg) : undefined;
-    let output = projections?.get(key);
+    let output = reusable ? projections?.get(key) : undefined;
     if (!output) {
       output = convertMessage(msg, msgIndex);
       if (reusable) {

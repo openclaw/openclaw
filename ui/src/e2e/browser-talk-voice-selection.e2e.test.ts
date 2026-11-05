@@ -88,7 +88,7 @@ suite.define(() => {
       const sent = requireRecord((await gateway.waitForRequest("chat.send")).params);
       const runId = requireString(sent.idempotencyKey, "sent run ID");
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
-      const stopRun = page.getByRole("button", { name: "Stop generating" });
+      const stopRun = page.getByRole("button", { name: "Stop", exact: true });
       await expect.poll(() => stopRun.isVisible()).toBe(true);
 
       await gateway.deferNext("talk.client.create");

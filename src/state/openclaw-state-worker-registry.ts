@@ -84,6 +84,10 @@ const loaders = {
     ),
   userGitHubConnections: () =>
     import("./user-github-connections.worker.js").then((m) => m.userGitHubConnectionOperations),
+  "githubPublications.personalRestart": () =>
+    import("../gateway/github-personal-publication-store.worker.js").then(
+      ({ personalPublicationRestartOperations }) => personalPublicationRestartOperations,
+    ),
   githubPublications: () =>
     import("./github-publication.worker.js").then((m) => m.publicationOperations),
   userBackground: async () =>
@@ -113,8 +117,14 @@ const loaders = {
     import("../skills/library/store.worker.js").then((m) => m.skillLibraryOperations),
   skillUploads: () =>
     import("../skills/lifecycle/upload-store.worker.js").then((m) => m.skillUploadOperations),
-  skills: () =>
-    import("../skills/workshop/changes.worker.js").then((m) => m.skillWorkshopOperations),
+  // Workshop changes and generic skill usage share the `skills.` operation domain.
+  skills: async () => {
+    const [workshop, usage] = await Promise.all([
+      import("../skills/workshop-changes/changes.worker.js").then((m) => m.skillWorkshopOperations),
+      import("../skills/runtime/skill-usage.worker.js").then((m) => m.skillUsageOperations),
+    ]);
+    return { ...workshop, ...usage };
+  },
   transcripts: async () => {
     const [read, write] = await Promise.all([
       import("../transcripts/store-worker-read.js").then((m) => m.transcriptReadOperations),
@@ -139,7 +149,6 @@ const loaders = {
     ),
   audit: () => import("../audit/audit-event-writer.worker.js").then((m) => m.auditOperations),
   telemetry: () => import("../infra/telemetry-store.worker.js").then((m) => m.telemetryOperations),
-  doctor: () => import("../commands/doctor-state.worker.js").then((m) => m.doctorOperations),
   modelCatalog: () =>
     import("../model-catalog/remote-store.worker.js").then((m) => m.modelCatalogOperations),
   managedImages: () =>
@@ -210,5 +219,6 @@ export type RegisteredStateWorkerOperations = WorkerOperationsFromLoaders<typeof
 
 export const stateWorkerRegistry = createWorkerOperationRegistry<
   RegisteredStateWorkerOperations,
-  WorkerWriteOperationContext
+  WorkerWriteOperationContext,
+  keyof typeof loaders
 >(loaders);

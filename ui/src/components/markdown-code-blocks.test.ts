@@ -71,7 +71,7 @@ function mockClipboard(writeText = vi.fn().mockRejectedValue(denied), fallback =
 }
 function expectCopyFailed(button: HTMLButtonElement) {
   expect(button.classList.contains("copy-failed")).toBe(true);
-  expect(button.getAttribute("aria-label")).toBe("Copy failed");
+  expect(button.getAttribute("aria-label")).toBe("Couldn’t copy. Try again.");
 }
 async function copy(button: HTMLButtonElement, elapsed = 0) {
   button.click();
@@ -456,7 +456,7 @@ it("ignores an older clipboard attempt that finishes after the latest denied cop
   button.click();
   await vi.advanceTimersByTimeAsync(0);
 
-  expect(button.getAttribute("aria-label")).toBe("Copy failed");
+  expect(button.getAttribute("aria-label")).toBe("Couldn’t copy. Try again.");
 
   firstWrite.resolve();
   await vi.advanceTimersByTimeAsync(0);
@@ -501,7 +501,7 @@ it("keeps independent reset deadlines for different code-copy buttons", async ()
   await copy(second, 1_500);
 
   expect(first.getAttribute("aria-label")).toBe("Copy code");
-  expect(second.getAttribute("aria-label")).toBe("Copy failed");
+  expect(second.getAttribute("aria-label")).toBe("Couldn’t copy. Try again.");
 
   second.remove();
   await vi.advanceTimersByTimeAsync(500);
@@ -541,7 +541,7 @@ it.each([
   const button = fragment.querySelector<HTMLButtonElement>(".code-block-copy");
   expect(button).toBeInstanceOf(HTMLButtonElement);
   await copy(button!);
-  expect(button!.getAttribute("aria-label")).toBe("Copied!");
+  expect(button!.getAttribute("aria-label")).toBe("Copied");
   expect(writeText).toHaveBeenCalledWith(source);
 });
 

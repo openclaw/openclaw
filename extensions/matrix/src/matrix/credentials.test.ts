@@ -205,7 +205,7 @@ it("clears only the account removed through channels remove", async () => {
   await matrixSetupPlugin.lifecycle?.onAccountRemoved?.({
     prevCfg: {},
     accountId: "ops",
-    runtime: {} as never,
+    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
   });
 
   expect(loadMatrixCredentials({}, "ops")).toBeNull();
