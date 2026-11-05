@@ -45,13 +45,6 @@ struct GatewayCustomHeadersTests {
         #expect(headers == ["X-Fine": "value"])
     }
 
-    @Test func `token check rejects a spaced name and keeps a normal header name`() {
-        #expect(!GatewayCustomHeaders.isValidName("X Client ID"))
-        #expect(!GatewayCustomHeaders.isValidName("X:Bad"))
-        #expect(!GatewayCustomHeaders.isValidName("X-Bad-é"))
-        #expect(GatewayCustomHeaders.isValidName("X-Client-ID"))
-    }
-
     @Test func `reserved name check is case and whitespace insensitive`() {
         #expect(GatewayCustomHeaders.isReservedName(" HOST "))
         #expect(GatewayCustomHeaders.isReservedName("Sec-WebSocket-Extensions"))

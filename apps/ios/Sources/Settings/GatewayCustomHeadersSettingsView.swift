@@ -8,9 +8,15 @@ struct GatewayCustomHeadersSettingsView: View {
     let gatewayStableID: String
 
     @State private var entries: [HeaderEntry] = []
-    @State private var newName = ""
-    @State private var newValue = ""
+    @State private var newName: String
+    @State private var newValue: String
     @State private var loaded = false
+
+    init(gatewayStableID: String, draftName: String = "", draftValue: String = "") {
+        self.gatewayStableID = gatewayStableID
+        self._newName = State(initialValue: draftName)
+        self._newValue = State(initialValue: draftValue)
+    }
 
     private struct HeaderEntry: Identifiable, Equatable {
         let id = UUID()
