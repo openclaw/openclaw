@@ -690,7 +690,7 @@ describe("CI changed Node test plan", () => {
   });
 
   it.each(
-    [
+    Array.of<[string[], string[]]>(
       [
         [
           "src/secrets/runtime-auth-store-admission.ts",
@@ -759,7 +759,7 @@ describe("CI changed Node test plan", () => {
         ["src/plugins/official-runtime-plugins.ts"],
         ["src/node-host/codex-node-plugin.integration.test.ts"],
       ],
-    ].flatMap(([paths, expected]) => paths.map((changedPath) => ({ changedPath, expected }))),
+    ).flatMap(([paths, expected]) => paths.map((changedPath) => ({ changedPath, expected }))),
   )(
     "retains explicit policy guards for $changedPath in automatic CI",
     ({ changedPath, expected }) => {
@@ -788,12 +788,11 @@ describe("CI changed Node test plan", () => {
         });
         expect(shards, reasons.join("\n")).not.toBeNull();
         const files = selectedFiles(shards);
+        const unrelated = resolvePolicyTestTargets(["unrelated/path.ts"]);
         for (const guard of expected) {
           expect(files.filter((file) => file === guard)).toHaveLength(1);
+          expect(unrelated).not.toContain(guard);
         }
-        expect(
-          resolvePolicyTestTargets(["unrelated/path.ts"]).filter((file) => expected.includes(file)),
-        ).toEqual([]);
         expect(files.includes("test/vitest-pr-exempt-retention.test.ts")).toBe(
           expected.includes("test/vitest-pr-exempt-retention.test.ts"),
         );
