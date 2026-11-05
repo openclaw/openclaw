@@ -65,14 +65,30 @@
  * revision before passing --fixture-source; never import a live operator workspace.
  * First creation has cold owner/template state, not an evicted OS page cache.
  * --fake-builder-removal-ms 36000 substitutes a process-backed Podman fixture:
- * creation, termination and removal have persistent engine state; only rm sleeps.
+ * creation, termination and removal have persistent engine state. The builder
+ * ignores SIGTERM: stop waits its default ten-second grace (or --time), while
+ * kill terminates immediately. Calls record argv and start/completion timestamps.
  * Use with --acceleration --sandbox-backend podman --serial-turns --fresh-only.
  * Installation takes the real source-only fallback. Registry/housekeeping and
  * filesystem preparation remain real; this does not qualify Podman or btrfs.
  * Run separate fresh processes in A/A then ABAB order, at least five per arm.
+ * Retirement is nested inside template.build; never add those durations together.
+ * --owner-switch checks that another session at the same commit reuses the template.
+ * --head-advance cold|prewarm advances HEAD with identical source before that second
+ * session. The prewarm arm runs the existing background preparation owner first;
+ * its cost is reported separately. Compare two cold controls then five interleaved
+ * pairs: request-path template builds must change from one to zero, checkout HEAD
+ * must match, and prewarm plus request total cost must remain within measured spread.
  * --crash-builder interrupts the fixture's outstanding rm after the first prepare,
  * then exits without finalizers. Reopen that same --output with --recover-builder
  * --fake-builder-removal-ms 36000 to prove startup cleanup from persisted state.
+ * --creation-contender starts an unrelated real managed checkout when the first
+ * cold template build begins. Its latency/phases and the combined owner cost
+ * expose global allocation head-of-line blocking. Use --serial-turns --fresh-only
+ * --acceleration with a native dependency fixture; run two identical controls
+ * and five counterbalanced baseline/candidate pairs. Child CPU is excluded.
+ * Add --owner-switch --head-advance cold to start the contender on other-first,
+ * after warming both creation owners, while a new commit still needs a cold template.
  */
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -107,6 +123,8 @@ const { values } = parseArgs({
     "fixture-source": { type: "string" },
     "serial-turns": { type: "boolean", default: false },
     "owner-switch": { type: "boolean", default: false },
+    "creation-contender": { type: "boolean", default: false },
+    "head-advance": { type: "string" },
     "fresh-only": { type: "boolean", default: false },
     acceleration: { type: "boolean", default: false },
     "sandbox-backend": { type: "string", default: "docker" },
@@ -271,6 +289,20 @@ assert(!values["fixture-source"] || serialTurns);
 assert(!values["owner-switch"] || serialTurns);
 assert(!values["fresh-only"] || serialTurns);
 assert(!values.acceleration || serialTurns);
+assert(
+  !values["creation-contender"] ||
+    (serialTurns &&
+      values["fresh-only"] &&
+      values.acceleration &&
+      (!values["owner-switch"] || values["head-advance"] === "cold")),
+);
+assert(
+  !values["head-advance"] ||
+    (["cold", "prewarm"].includes(values["head-advance"]) &&
+      values["owner-switch"] &&
+      values["fresh-only"] &&
+      values.acceleration),
+);
 assert(["docker", "podman"].includes(values["sandbox-backend"]));
 assert(!values["sandbox-image"] || values.acceleration);
 const fakeBuilderRemovalMs =
@@ -587,6 +619,7 @@ const config: OpenClawConfig = {
     entries: { main: { workspace: repo } },
     defaults: {
       sandbox: {
+        ...(values["head-advance"] ? { mode: "all" as const } : {}),
         backend: values["sandbox-backend"],
         docker: { image: values["sandbox-image"] },
       },
@@ -874,6 +907,43 @@ measurement: try {
     fs.writeFileSync(path.join(canonical, sentinel), "canonical-only excluded bytes\n");
     const turns: unknown[] = [];
     const mutations = new Map<string, string | null>();
+    let createContender: (() => Promise<unknown>) | undefined;
+    if (values["creation-contender"]) {
+      const contenderRepo = path.join(output, "contender-repo");
+      fs.mkdirSync(contenderRepo);
+      const contenderGit = (...args: string[]) =>
+        execFileSync("git", ["-C", contenderRepo, ...args], { env: process.env });
+      contenderGit("init", "--quiet", "-b", "main");
+      contenderGit("config", "user.name", "Synthetic fixture");
+      contenderGit("config", "user.email", "fixture@example.invalid");
+      fs.writeFileSync(path.join(contenderRepo, "README.md"), "independent checkout\n");
+      contenderGit("add", ".");
+      contenderGit("commit", "--quiet", "-m", "Synthetic contender");
+      const { ManagedWorktreeService } = await import("../../src/agents/worktrees/service.js");
+      const service = new ManagedWorktreeService({ getConfig: () => config });
+      if (values["owner-switch"]) {
+        await service.create({ repoRoot: contenderRepo, name: "warmup", baseRef: "HEAD" });
+      }
+      createContender = async () => {
+        const spans: Record<string, number> = {};
+        const started = performance.now();
+        const record = await withDiagnosticsTimelineObserver(
+          (name, _attributes, duration) => {
+            const begin = performance.now();
+            return () => {
+              spans[name] = (spans[name] ?? 0) + (duration ?? performance.now() - begin);
+            };
+          },
+          () => service.create({ repoRoot: contenderRepo, name: "contender", baseRef: "HEAD" }),
+        );
+        const elapsedMs = performance.now() - started;
+        assert.equal(
+          fs.readFileSync(path.join(record.path, "README.md"), "utf8"),
+          "independent checkout\n",
+        );
+        return { elapsedMs, spans };
+      };
+    }
     const measureTurn = async (phase: string, prepare = prepareWorkspace) => {
       acquisitions = scans = probes = 0;
       manifestReads.length = 0;
@@ -886,8 +956,25 @@ measurement: try {
         totalBefore = process.cpuUsage();
       const allocationBefore = getHeapStatistics().total_allocated_bytes;
       const started = performance.now();
+      const buildStarted = Promise.withResolvers<void>();
+      let contenderStarted = false;
+      // Construct this continuation outside preparation's closure-bound authority.
+      const contender =
+        phase === (values["owner-switch"] ? "other-first" : "first") && createContender
+          ? buildStarted.promise.then(createContender)
+          : undefined;
+      void contender?.catch(() => {});
       const measuredWorkspace = await withDiagnosticsTimelineObserver(
         (name, _attributes, durationMs) => {
+          if (
+            contender &&
+            name.endsWith(".template.build") &&
+            durationMs === undefined &&
+            !contenderStarted
+          ) {
+            contenderStarted = true;
+            buildStarted.resolve();
+          }
           const begin = performance.now();
           return () => {
             const span = (spans[name] ??= { count: 0, totalMs: 0 });
@@ -896,7 +983,15 @@ measurement: try {
           };
         },
         () => withWorktreePreparationTiming("sandbox", prepare),
-      );
+      ).catch(async (error: unknown) => {
+        if (contenderStarted) {
+          await Promise.allSettled([contender]);
+        }
+        throw error;
+      });
+      const projectionElapsedMs = performance.now() - started;
+      assert(!contender || contenderStarted, "Cold template build never started contender");
+      const contenderResult = await contender;
       const elapsedMs = performance.now() - started;
       const cpu = process.threadCpuUsage(cpuBefore),
         total = process.cpuUsage(totalBefore);
@@ -913,6 +1008,7 @@ measurement: try {
       const result = {
         phase,
         elapsedMs,
+        ...(contender ? { projectionElapsedMs, contender: contenderResult } : {}),
         mainCpuMs: (cpu.user + cpu.system) / 1000,
         processCpuMs: (total.user + total.system) / 1000,
         allocatedBytes,
@@ -936,6 +1032,14 @@ measurement: try {
         assert(
           spans["worktree.sandbox.templateApply"],
           "Requested template proof fell back before cloning; check filesystem, lockfile, and image",
+        );
+      }
+      if (values["head-advance"] && phase === "other-first") {
+        assert.equal(
+          spans["attempt.setup.sandbox.workspace_selection.prepare.reconcile.template.build"]
+            ?.count ?? 0,
+          values["head-advance"] === "cold" ? 1 : 0,
+          "Prewarming must move exactly one template build off the fresh request",
         );
       }
       if (prepare !== prepareWorkspace) {
@@ -1018,6 +1122,20 @@ measurement: try {
       reads: typeof manifestReads;
     }> = [];
     if (values["owner-switch"]) {
+      if (values["head-advance"]) {
+        git("commit", "--quiet", "--allow-empty", "-m", "Synthetic HEAD advance");
+        if (values["head-advance"] === "prewarm") {
+          const { prewarmLocalWorkspaceTemplates } =
+            await import("../../src/gateway/worker-environments/local-workspace-prewarm.js");
+          await measureTurn("head-prewarm", async () => {
+            await prewarmLocalWorkspaceTemplates({
+              getConfig: () => config,
+              signal: new AbortController().signal,
+            });
+            return repo;
+          });
+        }
+      }
       const otherKey = `${sessionKey}:other`;
       const otherCanonical = path.join(output, "other-canonical");
       git("worktree", "add", "--quiet", "-b", "other", otherCanonical);
@@ -1085,6 +1203,13 @@ measurement: try {
         });
       }
       assert(otherProjection);
+      assert.equal(
+        execFileSync("git", ["-C", otherProjection, "rev-parse", "HEAD"], {
+          encoding: "utf8",
+        }).trim(),
+        git("rev-parse", "HEAD").trim(),
+        "Fresh projection must retain the selected checkout commit",
+      );
       for (const entry of inventory) {
         assert.deepEqual(
           readFixtureEntry(otherProjection, entry),
@@ -1102,6 +1227,7 @@ measurement: try {
         source: values["fixture-source"] ?? null,
         siblingWorktrees,
         acceleration: values.acceleration,
+        headAdvance: values["head-advance"] ?? null,
         sandboxBackend: sandbox.backend,
         sandboxImage: sandbox.docker.image,
         fakeBuilderRemovalMs,

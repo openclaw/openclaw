@@ -116,7 +116,11 @@ export async function captureManagedWorktreeSnapshot(params: {
           checkoutPath: record.path,
           repoRoot: record.repoRoot,
           reason: params.reason,
-          provisionedPaths,
+          // Ordinary recovery preserves user state, not reinstallable dependencies.
+          // Explicit exact-state retirement keeps its complete provisioned capture.
+          provisionedPaths: exactState
+            ? provisionedPaths
+            : provisionedPaths.filter((entry) => !/(^|\/)node_modules\//u.test(entry)),
           ...(exactState ? { exactState } : {}),
         },
       },

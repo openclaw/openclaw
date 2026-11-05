@@ -55,6 +55,7 @@ it.each([true, false])(
     })!;
     const programs = { cyber: ["standard", "daybreak_blue", "daybreak_red"] as const };
     const input = {
+      utilityModel: { modelRef: "openai/fixture@private", source: "config" as const },
       models: [
         {
           provider: "openai",
@@ -71,6 +72,8 @@ it.each([true, false])(
       ],
     };
     const result = projection.forAgent("main").catalog(input);
+    expect(result.utilityModel).toEqual({ modelRef: "openai/fixture", source: "config" });
+    expect(input.utilityModel.modelRef).toBe("openai/fixture@private");
     expect(result.models[0]?.availableAccessPrograms?.cyber).toEqual(["standard", "daybreak_blue"]);
     expect(result.models[0]?.runtimeChoices?.[0]?.availableAccessPrograms?.cyber).toEqual([
       "standard",

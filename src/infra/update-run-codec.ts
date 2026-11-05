@@ -43,6 +43,8 @@ const RETAINED_STEP_NAMES = [
   "diagnostic:openclaw doctor",
   "diagnostic:pre-plugin doctor",
   "diagnostic:post-plugin doctor",
+  // A later warning flood must not hide that post-update repair never ran.
+  "warning:post-plugin doctor",
   "managed-service-executor-check",
   "managed-service-install",
   "managed-service-restart",
@@ -169,6 +171,7 @@ function boundedJson(
           item.step !== "diagnostic:database snapshot" &&
           item.step !== "diagnostic:database migration writes" &&
           item.step !== "warning:database migration writes" &&
+          item.step !== "warning:post-plugin doctor" &&
           item.step !== "warning:reconcile:driver-lost-after-verification" &&
           item.step !== "diagnostic:database rollback" &&
           item.step !== "finalize:data-at-risk" &&

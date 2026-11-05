@@ -1,7 +1,8 @@
-/* @vitest-environment jsdom */
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { z } from "zod";
 import { createDeferred } from "../../../test/helpers/promise.js";
+/* @vitest-environment jsdom */
+import { i18n } from "../i18n/lib/translate.ts";
 import { createChromeExtensionSetupResult } from "../test-helpers/chrome-extension-setup.ts";
 import {
   createIosNativeDeviceSettingsSnapshot,
@@ -19,6 +20,7 @@ let capability: NativeDeviceSettingsCapability | null;
 afterEach(() => {
   capability?.dispose();
   capability = null;
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -642,4 +644,17 @@ describe("native device settings wire contract", () => {
     expect(capability?.snapshot?.app?.iconStyle?.selectedId).toBe("paper");
     expect(capability?.snapshot?.app?.keepGatewayRunning).toBe(false);
   });
+});
+
+it("localizes invalid native edit results at the device settings boundary", async () => {
+  const translate = vi.spyOn(i18n, "t").mockReturnValue("localized invalid edit");
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const post = installBridge();
+  post.mockResolvedValueOnce({ invalid: true });
+  const settled = vi.fn();
+  await capability!.set("capabilities.desktopSharingEnabled", false, settled);
+  expect(settled).toHaveBeenCalledWith(
+    expect.objectContaining({ message: "localized invalid edit" }),
+  );
+  expect(translate).toHaveBeenCalledWith("nativeDeviceEditError", undefined);
 });
