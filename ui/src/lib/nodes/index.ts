@@ -250,12 +250,12 @@ async function generateIdentity(): Promise<DeviceIdentity> {
   };
 }
 
-/**
- * Synchronous identity probe for render gating: reads the stored device id
- * without creating, repairing, or fingerprint-verifying an identity, so a
- * "do we hold credentials?" check stays side-effect free before connect().
- */
-export function peekStoredDeviceIdentityId(): string | null {
+// Storage-blocked pages (for example private browsing) must still present one
+// stable device per page lifetime; minting a fresh key on every reconnect
+// would raise a new unpaired request each time and never retain approval.
+let sessionDeviceIdentity: DeviceIdentity | null = null;
+
+function readPersistedDeviceIdentityId(): string | null {
   try {
     const raw = getSafeLocalStorage()?.getItem(DEVICE_IDENTITY_STORAGE_KEY);
     if (!raw) {
@@ -273,10 +273,17 @@ export function peekStoredDeviceIdentityId(): string | null {
   }
 }
 
-// Storage-blocked pages (for example private browsing) must still present one
-// stable device per page lifetime; minting a fresh key on every reconnect
-// would raise a new unpaired request each time and never retain approval.
-let sessionDeviceIdentity: DeviceIdentity | null = null;
+/**
+ * Synchronous identity probe for render gating: reads the device id without
+ * creating, repairing, or fingerprint-verifying an identity, so a "do we hold
+ * credentials?" check stays side-effect free before connect(). It falls back to
+ * the page-lifetime identity, matching loadOrCreateDeviceIdentity, so a
+ * credential kept in memory on a storage-blocked page can still be found and
+ * forgotten.
+ */
+export function peekStoredDeviceIdentityId(): string | null {
+  return readPersistedDeviceIdentityId() ?? sessionDeviceIdentity?.deviceId ?? null;
+}
 
 function readStoredDeviceIdentity(storage: Storage | null): StoredIdentity | null {
   try {
