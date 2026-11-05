@@ -53,8 +53,17 @@ for the default state directory, `~/.config/openclaw/gateway.env`.
 The app first copies its runtime to `<state>/runtime/<runtimeBuildId>/`, where
 `<state>` is `~/.openclaw` or `~/.openclaw-<profile>`. Copies use one APFS
 directory clone when available, falling back to a file copy, and are published atomically after provenance and
-Bun checks succeed. The child and app-managed Bun service use the concrete
-build directory so each process keeps its matching package and SQLite library.
+Bun checks succeed. The child uses the concrete build directory so it keeps its
+matching package and SQLite library. An app-managed Bun service also loads its
+package and SQLite library from that directory, but runs a copy of that build's
+Bun at the stable path `<state>/runtime/service/bun`. macOS records the
+Messages Automation grant for a standalone executable by its path, so a stable
+path lets later app updates keep it. The first update that moves a service onto
+this path, including a move from Node, still needs Automation approved once for
+the new executable. Full Disk Access is also checked against the executable's
+code signature, so an update that replaces an ad-hoc or source-built Bun can
+lose it while System Settings still shows `bun` as enabled; grant it again for
+`<state>/runtime/service/bun`.
 The `runtime/current` symlink selects the runtime for the terminal CLI shim.
 The app retains the current and previous builds; older copies are removed only
 after Gateway health succeeds and no process runs from them.
@@ -231,10 +240,11 @@ neither Doctor nor the CLI start fence may keep the receipt pending; the next
 CLI start/repair or `openclaw doctor` completes it.
 
 A newly installed app-managed Bun service is pinned to
-`<state>/runtime/<runtimeBuildId>/bin/bun`, with the matching package and
-`OPENCLAW_SQLITE_LIBRARY` environment. After an app update, the app reinstalls
-only services it owns whose executable is inside `<state>/runtime/` onto the new
-concrete build. A service using an executable outside that directory stays
+`<state>/runtime/service/bun`, with its matching package and
+`OPENCLAW_SQLITE_LIBRARY` loaded from `<state>/runtime/<runtimeBuildId>/`. After
+an app update, the app reinstalls only services it owns whose executable is
+inside `<state>/runtime/`, keeping the stable Bun path while selecting the new
+concrete build’s package and SQLite library. A service using an executable outside that directory stays
 unchanged, including an unpinned executable. The update window reports
 "Gateway service uses an operator-pinned runtime; update it yourself."
 
