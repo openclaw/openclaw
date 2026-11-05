@@ -17,10 +17,9 @@ import { listProfilesForProvider } from "../auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isAuthModeAllowedForModel } from "../model-auth-policy.js";
 import {
-  hasUsableCustomProviderApiKey,
   profileTypeToAuthMode,
-  resolveInlineProviderApiKeyCooldownUntil,
   resolveProviderEntryApiKeyProfileReference,
+  resolveUsableCustomProviderApiKey,
 } from "../model-auth-provider-config.js";
 
 type CapabilityMetadataSnapshot = Pick<PluginMetadataSnapshot, "index" | "plugins">;
@@ -141,17 +140,16 @@ function hasConfiguredCapabilityProviderSignal(params: {
     if (binding?.kind === "profile") {
       continue;
     }
-    // Like the runtime auth check, hide an inline key inside its billing/auth cooldown.
-    const inlineKeyUnusableUntil = params.authStore
-      ? resolveInlineProviderApiKeyCooldownUntil(params.authStore, signal.provider)
-      : null;
     if (
       (hasNonEmptyManifestEnvCandidate(
         process.env,
         manifestPluginSetupProviderEnvVars(params.plugin, signal.provider),
       ) ||
-        ((inlineKeyUnusableUntil ?? 0) <= Date.now() &&
-          hasUsableCustomProviderApiKey(params.config, signal.provider))) &&
+        resolveUsableCustomProviderApiKey({
+          cfg: params.config,
+          provider: signal.provider,
+          authStore: params.authStore,
+        })) &&
       (!capability ||
         isAuthModeAllowedForModel({ provider: signal.provider, capability, mode: "api-key" }))
     ) {
