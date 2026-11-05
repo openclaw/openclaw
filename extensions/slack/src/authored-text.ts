@@ -4,37 +4,41 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 
 export type SlackAuthoredTextPlacement = "none" | "blocks" | "outside-blocks";
 
-function normalizeComparableSlackText(text: string): string {
-  return text.trim().replace(/\s+/g, " ");
-}
-
 function isSlackAuthoredTextRepresentedInFragments(
-  text: string,
-  rawFragments: readonly string[],
+  plan: readonly string[],
+  fragments: readonly (string | null)[],
 ): boolean {
-  const target = normalizeComparableSlackText(text);
-  const fragments = rawFragments.map(normalizeComparableSlackText).filter(Boolean);
-  let remainingLength = fragments.reduce((length, fragment) => length + fragment.length + 1, -1);
-  // Legacy inline controls split surrounding text into multiple interactive text blocks.
-  for (const [start, firstFragment] of fragments.entries()) {
-    if (remainingLength < target.length) {
-      break;
-    }
-    remainingLength -= firstFragment.length + 1;
+  if (plan.length === 0) {
+    return false;
+  }
+  if (
+    fragments.some((_, start) => plan.every((text, index) => text === fragments[start + index]))
+  ) {
+    return true;
+  }
+  const [text] = plan;
+  // A legacy control can split plain prose at whitespace. Do not infer a split
+  // inside formatting or a native token; keep distinct authored content visible.
+  if (plan.length !== 1 || !text || /[*_~`<]/u.test(text)) {
+    return false;
+  }
+  for (let start = 0; start < fragments.length; start += 1) {
     let offset = 0;
-    for (let end = start; ; end += 1) {
+    for (let end = start; end < fragments.length; end += 1) {
       const fragment = fragments[end];
-      if (fragment === undefined || !target.startsWith(fragment, offset)) {
+      if (typeof fragment !== "string" || !text.startsWith(fragment, offset)) {
         break;
       }
       offset += fragment.length;
-      if (offset === target.length) {
+      if (offset === text.length) {
         return true;
       }
-      if (target[offset] !== " ") {
+      if (!/\s/u.test(text[offset] ?? "")) {
         break;
       }
-      offset += 1;
+      while (/\s/u.test(text[offset] ?? "")) {
+        offset += 1;
+      }
     }
   }
   return false;
@@ -44,18 +48,23 @@ function isSlackAuthoredTextRepresentedInFragments(
 export function resolveSlackAuthoredTextPlacement(params: {
   text?: string;
   interactive?: LegacyInteractiveReply;
-  renderedTextFragments?: readonly string[];
+  renderedTextFragments?: readonly (string | null)[];
+  authoredChunks?: readonly string[];
 }): SlackAuthoredTextPlacement {
   const text = normalizeOptionalString(params.text);
   if (!text) {
     return "none";
   }
-  const isRepresentedInBlocks =
-    isSlackAuthoredTextRepresentedInFragments(text, params.renderedTextFragments ?? []) ||
-    isSlackAuthoredTextRepresentedInFragments(
-      text,
-      params.interactive?.blocks.flatMap((block) => (block.type === "text" ? [block.text] : [])) ??
-        [],
-    );
-  return isRepresentedInBlocks ? "blocks" : "outside-blocks";
+  const fragments = (
+    params.renderedTextFragments ??
+    params.interactive?.blocks.flatMap((block) => (block.type === "text" ? [block.text] : [])) ??
+    []
+  )
+    .map((fragment) => fragment?.trim() ?? null)
+    .filter((fragment) => fragment !== "");
+  const represented = isSlackAuthoredTextRepresentedInFragments(
+    (params.authoredChunks ?? [text]).map((fragment) => fragment.trim()).filter(Boolean),
+    fragments,
+  );
+  return represented ? "blocks" : "outside-blocks";
 }

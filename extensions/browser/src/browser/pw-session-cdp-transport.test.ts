@@ -8,6 +8,29 @@ afterEach(() => {
   connectOverCdpSpy.mockReset();
 });
 
+function mockPageInitializationFailure(
+  wire: import("playwright-core").ConnectOverCDPTransport,
+  sessionId: string,
+  targetId: string,
+  transition?: () => void,
+) {
+  connectOverCdpSpy.mockImplementationOnce((async (value: unknown) => {
+    const transport = value as import("playwright-core").ConnectOverCDPTransport;
+    wire.onmessage?.({
+      method: "Target.attachedToTarget",
+      params: {
+        sessionId,
+        targetInfo: { targetId, type: "page", browserContextId: "default-context" },
+      },
+    });
+    transport.send({ id: 7, method: "Runtime.enable", sessionId });
+    transition?.();
+    const error = new Error("Timeout 1000ms exceeded");
+    error.name = "TimeoutError";
+    throw error;
+  }) as never);
+}
+
 describe("Playwright CDP initialization diagnostics", () => {
   it("identifies the page target whose initialization blocks a cold connection", async () => {
     const closeWire = vi.fn();
@@ -15,24 +38,7 @@ describe("Playwright CDP initialization diagnostics", () => {
       send: vi.fn(),
       close: closeWire,
     };
-    connectOverCdpSpy.mockImplementationOnce((async (value: unknown) => {
-      const transport = value as import("playwright-core").ConnectOverCDPTransport;
-      wire.onmessage?.({
-        method: "Target.attachedToTarget",
-        params: {
-          sessionId: "stalled-session",
-          targetInfo: {
-            targetId: "STALLED-PAGE",
-            type: "page",
-            browserContextId: "default-context",
-          },
-        },
-      });
-      transport.send({ id: 7, method: "Runtime.enable", sessionId: "stalled-session" });
-      const error = new Error("Timeout 1000ms exceeded");
-      error.name = "TimeoutError";
-      throw error;
-    }) as never);
+    mockPageInitializationFailure(wire, "stalled-session", "STALLED-PAGE");
 
     const connection = connectOverCdpTransport("http://127.0.0.1:18799", {
       timeout: 1000,
@@ -53,28 +59,12 @@ describe("Playwright CDP initialization diagnostics", () => {
       send: vi.fn(),
       close: vi.fn(),
     };
-    connectOverCdpSpy.mockImplementationOnce((async (value: unknown) => {
-      const transport = value as import("playwright-core").ConnectOverCDPTransport;
-      wire.onmessage?.({
-        method: "Target.attachedToTarget",
-        params: {
-          sessionId: "detached-session",
-          targetInfo: {
-            targetId: "DETACHED-PAGE",
-            type: "page",
-            browserContextId: "default-context",
-          },
-        },
-      });
-      transport.send({ id: 7, method: "Runtime.enable", sessionId: "detached-session" });
+    mockPageInitializationFailure(wire, "detached-session", "DETACHED-PAGE", () => {
       wire.onmessage?.({
         method: "Target.detachedFromTarget",
         params: { sessionId: "detached-session" },
       });
-      const error = new Error("Timeout 1000ms exceeded");
-      error.name = "TimeoutError";
-      throw error;
-    }) as never);
+    });
 
     await expect(
       connectOverCdpTransport("http://127.0.0.1:18799", {
@@ -90,25 +80,9 @@ describe("Playwright CDP initialization diagnostics", () => {
       send: vi.fn(),
       close: vi.fn(),
     };
-    connectOverCdpSpy.mockImplementationOnce((async (value: unknown) => {
-      const transport = value as import("playwright-core").ConnectOverCDPTransport;
-      wire.onmessage?.({
-        method: "Target.attachedToTarget",
-        params: {
-          sessionId: "healthy-session",
-          targetInfo: {
-            targetId: "HEALTHY-PAGE",
-            type: "page",
-            browserContextId: "default-context",
-          },
-        },
-      });
-      transport.send({ id: 7, method: "Runtime.enable", sessionId: "healthy-session" });
+    mockPageInitializationFailure(wire, "healthy-session", "HEALTHY-PAGE", () => {
       wire.onmessage?.({ id: 7, result: {} });
-      const error = new Error("Timeout 1000ms exceeded");
-      error.name = "TimeoutError";
-      throw error;
-    }) as never);
+    });
 
     await expect(
       connectOverCdpTransport("http://127.0.0.1:18799", {

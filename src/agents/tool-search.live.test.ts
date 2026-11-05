@@ -15,6 +15,7 @@ import {
 } from "./harness/context-engine-logical-turn.js";
 import { collectProviderApiKeys } from "./live-auth-keys.js";
 import {
+  createLiveResponsesConfig,
   isLiveTestEnabled,
   logLiveProgress,
   useLiveTestRuntimeConfig,
@@ -162,34 +163,7 @@ module.exports = {
       );
       const modelId = process.env.OPENCLAW_LIVE_RESPONSES_MODEL?.trim() || "gpt-5.4-mini";
       const config = {
-        models: {
-          providers: {
-            openai: {
-              api: "openai-responses",
-              auth: "api-key",
-              baseUrl: "https://api.openai.com/v1",
-              timeoutSeconds: 90,
-              models: [
-                {
-                  id: modelId,
-                  name: modelId,
-                  reasoning: true,
-                  input: ["text"],
-                  contextWindow: 200_000,
-                  maxTokens: 4096,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                },
-              ],
-            },
-          },
-        },
-        agents: {
-          entries: { main: { workspace: state.workspaceDir } },
-          defaults: {
-            skipBootstrap: true,
-            models: { [`openai/${modelId}`]: { params: { transport: "sse" } } },
-          },
-        },
+        ...createLiveResponsesConfig(modelId, state.workspaceDir, 4096),
         tools: {
           codeMode: false,
           ...(lane === "default"

@@ -3,16 +3,18 @@ import type { UsageSummary } from "../../../../src/infra/provider-usage.types.js
 // Each source degrades independently: unavailable usage data must not blank
 // the provider list.
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ModelAuthStatusResult, ModelCatalogProviderOutcome } from "../../api/types.ts";
+import type {
+  ModelAuthStatusResult,
+  ModelCatalogProviderOutcome,
+  ModelCatalogResult,
+} from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import {
-  formatMissingOperatorReadScopeMessage,
-  isMissingOperatorReadScopeError,
-} from "../../lib/gateway-errors.ts";
+import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
+import { formatMissingOperatorReadScopeMessage } from "../../lib/permission-error.ts";
 
 registerSettingsEnglish();
 
@@ -20,6 +22,8 @@ export type ModelProvidersData = {
   authStatus: ModelAuthStatusResult | null;
   /** Operation diagnostics; picker facts are owned by the shared catalog store. */
   providerOutcomes: ModelCatalogProviderOutcome[];
+  pendingProviders: readonly string[];
+  catalogRequestFailed: boolean;
   catalogError: string | null;
   providerUsage: UsageSummary | null;
   providerUsageFailed: boolean;
@@ -32,6 +36,8 @@ type RequestResult<T> = { ok: true; result: T } | { ok: false; error: unknown };
 export const EMPTY_MODEL_PROVIDERS_DATA: ModelProvidersData = {
   authStatus: null,
   providerOutcomes: [],
+  pendingProviders: [],
+  catalogRequestFailed: false,
   catalogError: null,
   providerUsage: null,
   providerUsageFailed: false,
@@ -83,11 +89,13 @@ export async function loadModelProvidersData(
   return {
     authStatus: authStatus.ok ? authStatus.result : null,
     providerOutcomes: catalog.ok ? (catalog.result.providerOutcomes ?? []) : [],
+    pendingProviders: catalog.ok ? (catalog.result.pendingProviders ?? []) : [],
+    catalogRequestFailed: !catalog.ok || (refreshResult !== undefined && !refreshResult.ok),
     catalogError:
       refreshResult && !refreshResult.ok
         ? errorMessage(refreshResult.error)
         : catalog.ok
-          ? modelCatalogRefreshError(catalog.result, t("modelProviders.defaults.discoverFailed"))
+          ? catalogDiscoveryError(catalog.result)
           : errorMessage(catalog.error),
     providerUsage: null,
     providerUsageFailed: false,
@@ -98,4 +106,19 @@ export async function loadModelProvidersData(
       ? (authStatus.result.unavailable?.message ?? null)
       : errorMessage(authStatus.error),
   };
+}
+
+/** Names the providers whose listing failed, so the warning points at its cause. */
+export function catalogDiscoveryError(result: ModelCatalogResult): string | null {
+  const failed = new Set(
+    (result.providerOutcomes ?? [])
+      .filter((outcome) => outcome.status === "unavailable")
+      .map((outcome) => outcome.provider),
+  );
+  return modelCatalogRefreshError(
+    result,
+    failed.size
+      ? t("modelProviders.defaults.discoverFailedFor", { providers: [...failed].join(", ") })
+      : t("modelProviders.defaults.discoverFailed"),
+  );
 }

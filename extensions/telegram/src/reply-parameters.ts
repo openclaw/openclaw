@@ -64,7 +64,7 @@ export function buildTelegramThreadReplyParams(opts?: {
   /** Keep native reply_parameters even without quote text. */
   nativeReply?: boolean;
 }): TelegramThreadReplyParams {
-  const params: TelegramThreadReplyParams = { ...buildTelegramThreadParams(opts?.thread) };
+  const params: TelegramThreadReplyParams = buildTelegramThreadParams(opts?.thread) ?? {};
 
   const replyToMessageId = normalizeTelegramReplyToMessageId(opts?.replyToMessageId);
   if (replyToMessageId == null) {

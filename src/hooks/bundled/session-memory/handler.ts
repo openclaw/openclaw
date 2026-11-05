@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import {
   normalizeOptionalString,
   normalizeLowercaseStringOrEmpty,
@@ -81,13 +82,6 @@ function isErrorSlugPayload(payload: { text?: string; isError?: boolean } | unde
   return PROVIDER_ERROR_PREFIX_RE.test(text) || PROVIDER_ERROR_DETAIL_RE.test(text);
 }
 
-function pickDateTimePart(
-  parts: Intl.DateTimeFormatPart[],
-  type: Intl.DateTimeFormatPartTypes,
-): string | undefined {
-  return parts.find((part) => part.type === type)?.value;
-}
-
 function formatLocalSessionTimestamp(
   date: Date,
   timeZone: string,
@@ -107,12 +101,12 @@ function formatLocalSessionTimestamp(
     hourCycle: "h23",
   }).formatToParts(date);
 
-  const year = pickDateTimePart(parts, "year") ?? String(date.getFullYear()).padStart(4, "0");
-  const month = pickDateTimePart(parts, "month") ?? String(date.getMonth() + 1).padStart(2, "0");
-  const day = pickDateTimePart(parts, "day") ?? String(date.getDate()).padStart(2, "0");
-  const hour = pickDateTimePart(parts, "hour") ?? String(date.getHours()).padStart(2, "0");
-  const minute = pickDateTimePart(parts, "minute") ?? String(date.getMinutes()).padStart(2, "0");
-  const second = pickDateTimePart(parts, "second") ?? String(date.getSeconds()).padStart(2, "0");
+  const year = parts.find((part) => part.type === "year")?.value;
+  const month = parts.find((part) => part.type === "month")?.value;
+  const day = parts.find((part) => part.type === "day")?.value;
+  const hour = parts.find((part) => part.type === "hour")?.value;
+  const minute = parts.find((part) => part.type === "minute")?.value;
+  const second = parts.find((part) => part.type === "second")?.value;
   return {
     date: `${year}-${month}-${day}`,
     time: `${hour}:${minute}:${second}`,
@@ -286,7 +280,7 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
             preparedRunAdmission.close();
           }
         } catch (err) {
-          const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
+          const message = err instanceof Error ? formatErrorStackWithMessage(err) : String(err);
           slugGeneratorLog.error(`Failed to generate slug: ${message}`);
         }
       }

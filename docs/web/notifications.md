@@ -51,13 +51,21 @@ Single-user Gateways use their durable owner profile for account defaults, so th
 
 By default, approval request and resolution notifications are enabled, and every other attention category is opt-in. Quiet hours suppress matching sends rather than queueing stale alerts for later delivery.
 
-Selecting an attention notification opens its question, conversation, or automation run on the Gateway that produced it. **Agent finished** waits for completion. A parent waiting for child agents does not count as finished. Automation failures use **Scheduled task failures**, without also generating a **Background task failures** alert for the same run.
+Selecting an attention notification opens its question, conversation, or automation run on the Gateway that produced it. **Agent finished** waits for completion. A parent waiting for child agents does not count as finished. The device currently showing that conversation does not receive its **Agent finished** push; other subscribed devices still do. Hiding the conversation or opening another one restores normal notification delivery for that device. Automation failures use **Scheduled task failures**, without also generating a **Background task failures** alert for the same run.
 
 The detail levels are:
 
 - **Private** — generic attention text only.
 - **Names only** — may include a sanitized person, session, device, agent, task, or automation label.
 - **Detailed** — currently uses the same bounded, sanitized producer-owned labels. Message excerpts, raw prompts, command arguments, output, environment values, and errors never enter the push payload.
+
+For browser **Agent finished** alerts, **Names only** and **Detailed** include the
+current explicit session label when the event has exactly one authoritative
+session target and the browser can read it. The label is sanitized and bounded
+by the existing notification-label policy. Unnamed sessions, multiple targets,
+and unavailable label metadata retain the agent-only fallback. Raw session keys,
+generated titles, and message text are never used as label fallbacks. **Private**
+remains generic. This does not change native macOS or mobile notifications.
 
 On iPhone and iPad, Web Push is available only after two steps. First, install the Control UI with **Share → Add to Home Screen**. Then open that installed app. A normal Safari tab remains usable for the Control UI. In that tab, the Notifications page reports the install requirement. It does not attempt to dereference an unavailable `PushManager`.
 

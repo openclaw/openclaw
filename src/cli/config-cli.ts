@@ -1,8 +1,10 @@
 import type { Command } from "commander";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isConfigReadFailure } from "../config/io.invalid-config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
+import { formatConfigFilePath } from "../config/logging.js";
 import { CONFIG_PATH, resolveConfigPath } from "../config/paths.js";
 import { danger, success, warn } from "../globals.js";
 import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
@@ -14,6 +16,7 @@ import {
   writeRuntimeJson,
   writeRuntimeStdout,
 } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { parseConcreteConfigPathTokens } from "../shared/dot-path.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
@@ -31,6 +34,9 @@ import { exitCliAfterOutput } from "./one-shot-exit.js";
 import { collectOption } from "./program/helpers.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
+
+const CONFIG_ALLOW_EXEC_DESCRIPTION =
+  "Dry-run only: allow exec SecretRef resolvability checks (may execute provider commands)";
 
 const CONFIG_SET_DESCRIPTION = [
   "Set config values by path (value mode, ref/provider builder mode, or batch JSON mode).",
@@ -64,51 +70,74 @@ async function runConfigMutation(
     runtime?: RuntimeEnv;
     throwOnError?: boolean;
     localStateOwner?: ConfigMutationOwner;
+    preparationSignal?: AbortSignal;
   },
   prepare: () => Promise<Omit<ConfigOperationParams, "runtime" | "options">>,
   jsonOutput = Boolean(opts.cliOptions.json),
 ) {
   const runtime = opts.runtime ?? defaultRuntime;
   const { handleConfigMutationError, runConfigOperations } = await import("./config-cli-runner.js");
+  let inputPrepared = false;
   try {
+    opts.preparationSignal?.throwIfAborted();
     const prepared = await prepare();
+    if (opts.preparationSignal?.aborted) {
+      return;
+    }
+    inputPrepared = true;
     const databaseOnly =
       opts.localStateOwner !== undefined &&
       prepared.operations.length > 0 &&
       prepared.operations.every(({ setPath }) => setPath[0] === "database");
-    // Previews inspect installed plugin state without acquiring write custody.
-    if (
-      opts.localStateOwner &&
-      opts.cliOptions.dryRun &&
-      !databaseOnly &&
-      !getDatabaseEngineSelection()
-    ) {
-      const { readConfigSnapshotForEngineSelection } =
-        await import("../commands/config-preflight-snapshot.js");
-      await readConfigSnapshotForEngineSelection();
-    }
-    const runLocal = () =>
+    const run = (commit?: ConfigOperationParams["commit"]) =>
       runConfigOperations({
         runtime,
         options: opts.cliOptions,
         ...prepared,
         ...(databaseOnly ? { databaseOnly: true } : {}),
+        ...(commit ? { commit } : {}),
       });
-    if (!opts.localStateOwner || opts.cliOptions.dryRun) {
-      await runLocal();
+    if (!opts.localStateOwner) {
+      await run();
+    } else if (opts.cliOptions.dryRun) {
+      // Previews inspect installed plugin state without write custody.
+      if (!databaseOnly && !getDatabaseEngineSelection()) {
+        const { readConfigSnapshotForEngineSelection } =
+          await import("../commands/config-preflight-snapshot.js");
+        await readConfigSnapshotForEngineSelection();
+      }
+      await run();
     } else {
       const { runWithLocalStateOwner } = await import("./local-state-owner.js");
+      const { target } = opts.localStateOwner;
       await runWithLocalStateOwner({
         ...opts.localStateOwner,
         params: {},
-        onForeignOwner: "refuse",
-        onlineAlternative:
-          "For online config changes, use openclaw gateway call config.patch with a raw patch and baseHash from openclaw gateway call config.get.",
+        ...(target === "config"
+          ? {}
+          : { recoveryCommand: `openclaw config get ${quoteCliArg(target)}` }),
+        ...(prepared.operations.some(({ setPath }) => setPath[0] === "database")
+          ? {
+              onForeignOwner: "refuse" as const,
+              onlineAlternative:
+                "Database settings select the state database the running Gateway holds open, so they change only offline.",
+            }
+          : {
+              // The Gateway stays the single config writer: this process prepares the same
+              // change it would write offline and the owner commits it against baseHash.
+              onForeignOwner: async ({ env, requestOwner }) => {
+                const { bindConfigOwner } = await import("./config-cli-owner-patch.js");
+                await run(await bindConfigOwner(requestOwner, env));
+              },
+            }),
         ...(databaseOnly ? { databaseAccess: "none" } : { databaseEngine: "configured" }),
-        runLocal,
+        runLocal: () => run(),
       });
     }
   } catch (err) {
+    if (!inputPrepared && opts.preparationSignal?.aborted) {
+      return;
+    }
     if (opts.throwOnError) {
       throw err;
     }
@@ -155,7 +184,8 @@ export async function runConfigPatch(opts: {
   runtime?: RuntimeEnv;
   localStateOwner?: ConfigMutationOwner;
 }) {
-  return runConfigMutation(opts, async () => {
+  const signal = opts.cliOptions.stdin ? getAsyncWorkSignal() : undefined;
+  return runConfigMutation({ ...opts, preparationSignal: signal }, async () => {
     const { configPatchModeError, readConfigPatchOperations } =
       await import("./config-cli-input.js");
     if (opts.cliOptions.allowExec && !opts.cliOptions.dryRun) {
@@ -218,7 +248,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
         writeRuntimeJson(runtime, formatCliJsonFailure(message));
         exitCliAfterOutput(runtime, 1);
       }
-      runtime.error(danger(message));
+      runtime.error(danger(terminalText`${message}`));
       exitCliAfterOutput(runtime, 1);
     }
     if (
@@ -239,7 +269,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
       writeRuntimeJson(runtime, formatCliJsonFailure(err));
       exitCliAfterOutput(runtime, 1);
     }
-    runtime.error(danger(formatErrorMessage(err)));
+    runtime.error(danger(terminalText`${formatErrorMessage(err)}`));
     exitCliAfterOutput(runtime, 1);
   }
 }
@@ -313,11 +343,7 @@ export function registerConfigCli(program: Command) {
       "Validate changes without writing openclaw.json (checks run in builder/json/batch modes; exec SecretRefs are skipped unless --allow-exec is set)",
       false,
     )
-    .option(
-      "--allow-exec",
-      "Dry-run only: allow exec SecretRef resolvability checks (may execute provider commands)",
-      false,
-    )
+    .option("--allow-exec", CONFIG_ALLOW_EXEC_DESCRIPTION, false)
     .option("--merge", "Merge object/map values instead of replacing the target path", false)
     .option(
       "--replace",
@@ -387,11 +413,7 @@ export function registerConfigCli(program: Command) {
       "Validate changes without writing openclaw.json (checks schema and SecretRef resolvability; exec SecretRefs are skipped unless --allow-exec is set)",
       false,
     )
-    .option(
-      "--allow-exec",
-      "Dry-run only: allow exec SecretRef resolvability checks (may execute provider commands)",
-      false,
-    )
+    .option("--allow-exec", CONFIG_ALLOW_EXEC_DESCRIPTION, false)
     .option("--json", "Output dry-run result as JSON", false)
     .option(
       "--replace-path <path>",
@@ -435,7 +457,7 @@ export function registerConfigCli(program: Command) {
         }
         writeRuntimeStdout(runtime, `${path}\n`);
       } catch (err) {
-        runtime.error(danger(formatErrorMessage(err)));
+        runtime.error(danger(terminalText`${formatErrorMessage(err)}`));
         exitCliAfterOutput(runtime, 1);
       }
     });
@@ -455,7 +477,7 @@ export function registerConfigCli(program: Command) {
           properties: { $schema: { type: "string" }, ...schema.properties },
         });
       } catch (err) {
-        runtime.error(danger(`Config schema error: ${formatErrorMessage(err)}`));
+        runtime.error(danger(terminalText`Config schema error: ${formatErrorMessage(err)}`));
         exitCliAfterOutput(runtime, 1);
       }
     });
@@ -495,7 +517,7 @@ export function registerConfigCli(program: Command) {
               0,
             );
           } else {
-            runtime.error(danger(`Config file not found: ${shortPath}`));
+            runtime.error(danger(`Config file not found: ${formatConfigFilePath(outputPath)}`));
             runtime.error(
               `Create one with ${formatCliCommand("openclaw onboard")} or run ${formatCliCommand("openclaw doctor --fix")}.`,
             );
@@ -513,7 +535,7 @@ export function registerConfigCli(program: Command) {
               issues,
             });
           } else {
-            runtime.error(`Config needs correction: ${shortPath}`);
+            runtime.error(`Config needs correction: ${formatConfigFilePath(outputPath)}`);
             for (const line of renderConfigValidationIssueLines(snapshot, "-")) {
               runtime.error(`  ${line}`);
             }
@@ -531,7 +553,7 @@ export function registerConfigCli(program: Command) {
         if (json) {
           writeRuntimeJson(runtime, { valid: true, path: outputPath, warnings }, 0);
         } else {
-          runtime.log(success(`Config valid: ${shortPath}`));
+          runtime.log(success(`Config valid: ${formatConfigFilePath(outputPath)}`));
           if (warnings.length > 0) {
             runtime.log(warn(`${warnings.length} warning(s):`));
             for (const line of formatConfigIssueLines(warnings, warn("!"), {
@@ -552,7 +574,7 @@ export function registerConfigCli(program: Command) {
             0,
           );
         } else {
-          runtime.error(danger(`Config validation error: ${formatErrorMessage(err)}`));
+          runtime.error(danger(terminalText`Config validation error: ${formatErrorMessage(err)}`));
         }
         exitCliAfterOutput(runtime, 1);
       }

@@ -3,7 +3,7 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { COMMUNITY_DISCORD_URL, OFFICIAL_SUPPORT_URL } from "../lib/product-links.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { renderSidebarMenuAction } from "./app-sidebar-nav-menus.tsx";
+import { renderSidebarMenuAction } from "./app-sidebar-dropdown.tsx";
 import type { IconName } from "./icon-data.ts";
 import { Icon } from "./solid/icon.tsx";
 import type { MenuItem } from "./solid/menu.tsx";
@@ -41,12 +41,12 @@ export function renderSidebarHelpMenu(): MenuItem | undefined {
       className: "sidebar-identity-menu__help",
     }),
     trigger: (
-      <span class="sidebar-customize-menu__trigger">
+      <>
         <span class="nav-item__icon" aria-hidden="true">
           <Icon name="circleQuestionMark" />
         </span>
         <span class="sidebar-customize-menu__text">{t("agentChip.help")}</span>
-      </span>
+      </>
     ),
     content: undefined,
     children: IDENTITY_MENU_LINKS.map((link) => ({

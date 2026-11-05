@@ -1,10 +1,6 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -26,17 +22,6 @@ const withPage = (
     run,
   );
 
-async function captureStatus(page: Page, name: string, surface: Locator, content: Locator[]) {
-  const frame = await takeControlUiScreenshotFrame(page, surface, content, {
-    elements: content,
-    animations: "disabled",
-  });
-  await writeFile(path.join(suite.artifactDir, `${name}.png`), frame.png);
-  for (const [index, element] of frame.elements.entries()) {
-    await writeFile(path.join(suite.artifactDir, `${name}-${index + 1}.png`), element.png);
-  }
-}
-
 suite.define(() => {
   it("keeps shared chat usable without polling operator-only surfaces", async () => {
     await withPage(
@@ -45,7 +30,6 @@ suite.define(() => {
         await page.clock.install();
         const sessionKey = "agent:main:scope-reader";
         const operatorMethods = [
-          "board.get",
           "presence.activity",
           "cron.list",
           "cron.status",
@@ -61,11 +45,14 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           sessionKey,
           operatorScopes: ["operator.sessions.read"],
-          featureMethods: [...defaultControlUiFeatureMethods, ...operatorMethods],
+          featureMethods: [...defaultControlUiFeatureMethods, "board.get", ...operatorMethods],
           historyMessages: [
             { role: "assistant", content: [{ type: "text", text: "Shared discussion" }] },
           ],
-          methodResponses: Object.fromEntries(operatorMethods.map((method) => [method, forbidden])),
+          methodResponses: {
+            ...Object.fromEntries(operatorMethods.map((method) => [method, forbidden])),
+            "board.get": { sessionKey, revision: 0, tabs: [], widgets: [] },
+          },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await page.getByText("Shared discussion", { exact: true }).waitFor();
@@ -76,13 +63,17 @@ suite.define(() => {
         }
         const requests = await gateway.getRequests();
         expect(requests.filter((request) => operatorMethods.includes(request.method))).toEqual([]);
-        expect(requests.some((request) => request.method === "chat.startup")).toBe(true);
+        expect(requests.filter((request) => request.method === "board.get")).toEqual([
+          expect.objectContaining({ params: { agentId: "main", sessionKey } }),
+        ]);
+        expect(requests.some((request) => request.method === "sessions.messages.subscribe")).toBe(
+          true,
+        );
         await page.goto(`${suite.server.baseUrl}cron`);
         await page
-          .getByText(
-            "You don't have permission to view scheduled tasks. Ask the person who manages OpenClaw for access.",
-            { exact: true },
-          )
+          .getByText("Couldn’t view scheduled tasks. Ask an admin to grant read access.", {
+            exact: true,
+          })
           .waitFor();
         expect(await gateway.getRequests("cron.list")).toHaveLength(0);
 
@@ -229,7 +220,6 @@ suite.define(() => {
           );
         }),
       ).toBe(true);
-      await captureStatus(page, "collapsed-avatar-flag", flag, [retainedStatus, flag]);
       await page.mouse.move(600, 400);
       await flag.waitFor({ state: "hidden" });
       await pauseVirtualClock(page);
@@ -250,7 +240,6 @@ suite.define(() => {
       await page.clock.runFor(200);
       await flag.waitFor({ state: "hidden" });
       await identityTooltip.waitFor({ state: "visible" });
-      await captureStatus(page, "collapsed-avatar-overlap", composer, [retainedStatus, composer]);
       await retainedStatus.focus();
       expect(await flag.isVisible()).toBe(false);
       expect(await retainedStatus.getAttribute("aria-label")).toContain("Reconnecting…");
@@ -307,7 +296,7 @@ suite.define(() => {
           await expect.poll(() => composer.inputValue()).toBe("");
         }
         const footer = page.locator(".sidebar-footer-bar");
-        const connectionStatus = page.locator(".sidebar-shell__footer .gateway-status");
+        const connectionStatus = page.locator(".sidebar-shell__connection .gateway-status");
         await expect.poll(() => page.locator(".chat-queue__item").count()).toBe(2);
         await connectionStatus.getByText("Reconnecting… · 2 queued", { exact: true }).waitFor();
         expect(await connectionStatus.getByRole("button").count()).toBe(0);
@@ -316,7 +305,7 @@ suite.define(() => {
           "Reconnecting… · 2 queued",
         );
         expect(await content.boundingBox()).toEqual(connectedContentBounds);
-        expect((await connectionStatus.boundingBox())!.height).toBe(44);
+        expect((await connectionStatus.boundingBox())!.height).toBe(28);
         const identityStatus = footer.locator(".sidebar-identity-card");
         expect(await identityStatus.isVisible()).toBe(true);
         expect(await identityStatus.getAttribute("data-connection-status")).toBe("reconnecting");
@@ -333,10 +322,6 @@ suite.define(() => {
         expect(await connectionStatus.getAttribute("role")).toBeNull();
         expect(await footer.textContent()).not.toContain("in outbox");
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-        await captureStatus(page, "desktop-footer-queued", connectionStatus, [
-          identityStatus,
-          connectionStatus,
-        ]);
 
         await page.setViewportSize({ width: 390, height: 844 });
         const mobileStatus = page.locator(".mobile-header__notices:visible");
@@ -361,10 +346,6 @@ suite.define(() => {
         // The shell owns the single live announcement, including queued messages.
         expect(await mobileStatus.getAttribute("role")).toBeNull();
         expect(await mobileStatus.getAttribute("aria-live")).toBeNull();
-        await captureStatus(page, "mobile-header-queued", mobileStatus, [
-          page.getByRole("button", { name: "Expand sidebar" }),
-          mobileStatus,
-        ]);
         await page.setViewportSize({ width: 1280, height: 900 });
         await footer.waitFor({ state: "visible" });
 

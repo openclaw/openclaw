@@ -249,6 +249,10 @@ import {
 import { createDiagnosticsLogExporter } from "./service-logs.js";
 import { createDiagnosticsOtelService } from "./service.js";
 import {
+  counter,
+  histogram,
+  type MetricArgs,
+  type MetricExpectation,
   CHILD_SPAN_ID,
   createOtelContext,
   createTestTrace,
@@ -261,6 +265,7 @@ import {
   OTEL_TEST_ENDPOINT,
   RUN_FIXTURE,
   SPAN_ID,
+  snapshotOtelEnv,
   startOtelService,
   stopStartedOtelServices,
   TOOL_SPAN_ID,
@@ -306,7 +311,7 @@ const OTEL_ENV_KEYS = [
     "TRACES_SAMPLER_ARG",
   ].map((field) => `OTEL_${field}`),
 ];
-const originalOtelEnv = new Map(OTEL_ENV_KEYS.map((key) => [key, process.env[key]]));
+const restoreOtelEnv = snapshotOtelEnv(OTEL_ENV_KEYS);
 
 function startedSpanCall(name: string, index = 0) {
   return telemetryState.tracer.startSpan.mock.calls.filter(([spanName]) => spanName === name)[
@@ -411,11 +416,11 @@ function firstSpanEndTime(name: string): unknown {
 }
 
 function firstCounterAddCall(name: string): [unknown, Record<string, unknown>?] {
-  const counter = telemetryState.counters.get(name);
-  if (!counter) {
+  const metric = telemetryState.counters.get(name);
+  if (!metric) {
     throw new Error(`Expected counter ${name}`);
   }
-  return mockCall(counter.add) as [unknown, Record<string, unknown>?];
+  return mockCall(metric.add) as [unknown, Record<string, unknown>?];
 }
 
 function lastHistogramRecord(name: string) {
@@ -599,17 +604,6 @@ function startServiceFixture(
   });
 }
 
-type MetricArgs = [
-  name: string,
-  value: number,
-  attributes: unknown,
-  position?: "first" | "last",
-  omittedText?: string[],
-];
-type MetricExpectation = [kind: "counter" | "histogram", ...MetricArgs];
-const counter = (...args: MetricArgs): MetricExpectation => ["counter", ...args];
-const histogram = (...args: MetricArgs): MetricExpectation => ["histogram", ...args];
-
 type RecorderCase = {
   name: string;
   signals?: OtelSignal[];
@@ -738,13 +732,7 @@ describe("diagnostics-otel service", () => {
   afterEach(async () => {
     await stopStartedOtelServices();
     resetDiagnosticEventsForTest();
-    for (const [key, value] of originalOtelEnv) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
+    restoreOtelEnv();
   });
 
   test("records message-flow metrics and spans", async () => {
@@ -1427,12 +1415,17 @@ describe("diagnostics-otel service", () => {
         skillSource: "workspace",
         activation: "read",
         toolName: "read",
+        skillFingerprint: "756e078a6680219e5930a735773815848dab098ba6225f03ad7a8da86fbd7e603",
         trace: createTestTrace(TOOL_SPAN_ID, CHILD_SPAN_ID),
       },
       metrics: [counter("openclaw.skill.used", 1, skillAttributes)],
       span: {
         name: "openclaw.skill.used",
-        attributes: skillAttributes,
+        attributes: {
+          ...skillAttributes,
+          "openclaw.skill.fingerprint":
+            "756e078a6680219e5930a735773815848dab098ba6225f03ad7a8da86fbd7e603",
+        },
         omittedText: ["run-should-not-export", "session-should-not-export"],
       },
     },

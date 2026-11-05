@@ -225,7 +225,7 @@ export async function resolveChannelTarget(params: {
 }): Promise<ResolveMessagingTargetResult> {
   const raw = params.input.trim();
   const plugin = params.plugin ?? getRuntimeVisibleChannelPlugin(params.channel);
-  const providerLabel = plugin?.meta?.label ?? params.channel;
+  const providerLabel = plugin?.meta.label ?? params.channel;
   const hint = plugin?.messaging?.targetResolver?.hint;
   if (!raw) {
     return {

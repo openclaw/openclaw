@@ -1,7 +1,7 @@
 import { matchesGlob } from "node:path";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
-import { readCiWorkflow, readWorkflow } from "./ci-workflow.test-support.js";
+import { acceptsWorkflowPaths, readCiWorkflow, readWorkflow } from "./ci-workflow.test-support.js";
 
 const before = "a".repeat(40);
 const head = "b".repeat(40);
@@ -14,17 +14,68 @@ const context = {
 const action = readWorkflow(".github/actions/detect-scheduled-changes/action.yml");
 const script = action.runs.steps[0].with.script;
 
-function acceptsPaths(patterns: string[], files: readonly string[]) {
-  return files.some((file) =>
-    patterns.reduce(
-      (selected, pattern) =>
-        pattern.startsWith("!")
-          ? selected && !matchesGlob(file, pattern.slice(1))
-          : selected || matchesGlob(file, pattern),
-      false,
-    ),
-  );
-}
+describe("Darwin tooling event scope", () => {
+  it.each([
+    [["scripts/lib/ci-node-test-plan.mts"], false],
+    [["scripts/lib/ci-extension-test-shards.mts"], false],
+    [["scripts/lib/ci-native-generated-scope.mjs"], false],
+    [["test/scripts/pr-ci-sweeper.test.ts"], false],
+    [["test/scripts/pr-ci-sweeper.test-support.ts"], false],
+    [["test/scripts/pr-prepare-gates.test.ts"], false],
+    [["test/scripts/pr-review-artifact-validation.test.ts"], false],
+    [["test/scripts/pr-main-refresh.test.ts"], false],
+    [["test/scripts/pr-future.test.ts"], false],
+    [["test/helpers/fixture-receipts.test.ts"], false],
+    [["test/helpers/temp-dir.test.ts"], false],
+    [["test/helpers/future/nested.test.ts"], false],
+    [["test/helpers/temp-dir.ts"], true],
+    [["test/helpers/run-node-script.ts"], true],
+    [["test/helpers/future/nested.ts"], true],
+    [["test/helpers/fixture-receipts.test.ts", "test/helpers/temp-dir.ts"], true],
+    [["test/helpers/temp-dir.test.ts", "test/scripts/pr-wrappers.test.ts"], true],
+    [["test/helpers/fixture-receipts.test.ts", "test/helpers/temp-dir.test.ts"], false],
+    [["test/scripts/pr-dependency-cache.test.ts"], true],
+    [["test/scripts/pr-wrappers.test.ts"], true],
+    [["test/scripts/pr-materialized-anchor.test.ts"], true],
+    [["test/scripts/pr-operation-lock.test.ts"], true],
+    [["test/scripts/pr-git-invocation.test.ts"], true],
+    [["test/scripts/package-mac-dist.test.ts"], true],
+    [["scripts/package-mac-dist.sh"], true],
+    [["scripts/notarize-mac-artifact.sh"], true],
+    [["src/infra/directory-walk.ts"], true],
+    [["test/scripts/package-mac-app.test.ts"], false],
+    [["src/infra/directory-walk.test.ts"], false],
+    [["test/scripts/pr-wrapper.test-support.ts"], true],
+    [["test/scripts/pr-main-refresh.test-support.ts"], true],
+    [["test/scripts/pr-darwin-process-identity.test.py"], true],
+    [["test/scripts/pr-future-input.json"], true],
+    [["test/scripts/pr-future.test.ts", "test/scripts/pr-wrappers.test.ts"], true],
+    [["test/scripts/pr-future.test.ts", "scripts/pr-lib/materialized-anchor.mjs"], true],
+    [["test/scripts/pr-future.test.ts", "test/scripts/pr-ci-sweeper.test-support.ts"], false],
+    [["scripts/lib/ci-test-timings.mts"], true],
+    [["scripts/lib/ci-test-timings-schema.mts"], true],
+    [["scripts/lib/ci-test-timings-refit.mts"], true],
+    [["scripts/lib/ci-node-test-groups-codec.mts"], true],
+    [["scripts/lib/ci-static-check-evidence.mjs"], true],
+    [["scripts/lib/new-native-input.mts"], true],
+    [["scripts/lib/ci-node-test-plan.mts", "scripts/pr"], true],
+    [[".github/workflows/pr-tooling-darwin.yml"], true],
+  ] as const)("routes %j", (files, expected) => {
+    const workflow = readWorkflow(".github/workflows/pr-tooling-darwin.yml");
+    expect(acceptsWorkflowPaths(workflow.on.pull_request.paths, files)).toBe(expected);
+  });
+
+  it("executes the complete macOS distribution owner without another admission condition", () => {
+    const workflow = readWorkflow(".github/workflows/pr-tooling-darwin.yml");
+    const steps = workflow.jobs.darwin.steps.filter(
+      (step: { run?: string }) =>
+        step.run ===
+        "node scripts/run-vitest.mjs test/scripts/package-mac-dist.test.ts --maxWorkers=1",
+    );
+    expect(steps).toHaveLength(1);
+    expect(steps[0].if).toBeUndefined();
+  });
+});
 
 describe("native locale refresh event scope", () => {
   it.each([
@@ -39,7 +90,7 @@ describe("native locale refresh event scope", () => {
     [[".github/workflows/native-app-locale-refresh.yml"], true],
   ] as const)("routes %j", (files, expected) => {
     const workflow = readWorkflow(".github/workflows/native-app-locale-refresh.yml");
-    expect(acceptsPaths(workflow.on.push.paths, files)).toBe(expected);
+    expect(acceptsWorkflowPaths(workflow.on.push.paths, files)).toBe(expected);
     expect(workflow.on.workflow_dispatch).toBeDefined();
   });
 });
@@ -53,9 +104,10 @@ describe("plugin scaffold event scope", () => {
     [[".github/workflows/plugin-init-scaffold-validation.yml"], true],
   ] as const)("routes %j", (files, expected) => {
     const workflow = readWorkflow(".github/workflows/plugin-init-scaffold-validation.yml");
+    expect(workflow.jobs["validate-provider-scaffold"]["runs-on"]).toBe("ubuntu-24.04");
     expect(workflow.on.push.paths).toEqual(workflow.on.pull_request.paths);
     for (const event of ["push", "pull_request"]) {
-      expect(acceptsPaths(workflow.on[event].paths, files)).toBe(expected);
+      expect(acceptsWorkflowPaths(workflow.on[event].paths, files)).toBe(expected);
     }
     expect(workflow.on.workflow_dispatch).toBeDefined();
     expect(workflow.on.schedule).toBeDefined();
@@ -68,10 +120,22 @@ async function scheduledScope(
     status?: string;
     ageHours?: number;
     skipFirst?: boolean;
+    recentJobs?: string[];
     unavailable?: boolean;
     paths?: string;
     missingProof?: boolean;
     identical?: boolean;
+    proofJobs?: string;
+    completedJobs?: string[];
+    codeqlConfig?: string;
+    profile?: Record<string, unknown>;
+    proofs?: string;
+    attributes?: [string, string];
+    attributeModes?: [string, string];
+    gitFiles?: string[];
+    gitFailure?: "fetch" | "diff";
+    gitOutput?: string;
+    gitHead?: string;
   } = {},
 ) {
   const proof = {
@@ -81,17 +145,21 @@ async function scheduledScope(
     run_attempt: 1,
     head_repository: { full_name: "openclaw/openclaw" },
   };
-  const jobs = [
-    {
-      name: "Proof",
-      head_sha: options.identical ? head : before,
-      conclusion: "success",
-      completed_at: new Date(Date.now() - (options.ageHours ?? 1) * 3600_000).toISOString(),
-    },
-  ];
+  const jobs = (options.completedJobs ?? ["Proof"]).map((name) => ({
+    name,
+    head_sha: options.identical ? head : before,
+    conclusion: "success",
+    completed_at: new Date(Date.now() - (options.ageHours ?? 1) * 3600_000).toISOString(),
+  }));
   const list = vi.fn().mockResolvedValue({
     data: {
-      workflow_runs: options.skipFirst ? [{ ...proof, id: 99 }, proof] : [proof],
+      workflow_runs:
+        options.skipFirst || options.recentJobs
+          ? [
+              { ...proof, id: 99, ...(options.recentJobs ? { head_sha: "c".repeat(40) } : {}) },
+              proof,
+            ]
+          : [proof],
     },
   });
   if (options.unavailable) {
@@ -101,40 +169,79 @@ async function scheduledScope(
     .fn()
     .mockImplementation((_method, args) =>
       args.run_id === 99
-        ? [{ ...jobs[0], conclusion: "skipped" }]
+        ? (options.recentJobs?.map((name) => ({ ...jobs[0], name, head_sha: "c".repeat(40) })) ?? [
+            { ...jobs[0], conclusion: "skipped" },
+          ])
         : options.missingProof
           ? []
           : jobs,
     );
   const output = vi.fn();
   const notice = vi.fn();
+  const compare = vi.fn().mockResolvedValue({
+    data: { status: options.status ?? "ahead", files: options.files ?? [] },
+  });
+  if (options.recentJobs) {
+    compare.mockImplementation(({ basehead }) =>
+      Promise.resolve({
+        data: {
+          status: "ahead",
+          files: basehead.startsWith("c".repeat(40)) ? [] : (options.files ?? []),
+        },
+      }),
+    );
+  }
+  const execute = vi.fn(async (command: string, args: string[]) => {
+    if (command === "yq") {
+      return { stdout: JSON.stringify(options.profile ?? readWorkflow(args[2]!)) };
+    }
+    if (options.gitFailure && args.includes(options.gitFailure)) {
+      throw new Error("Git unavailable");
+    }
+    if (args.includes("ls-tree")) {
+      const index = args.includes(before) ? 0 : 1;
+      return {
+        stdout: `${options.attributeModes?.[index] ?? "100644"} blob ${String(index).repeat(40)}\t.gitattributes\0`,
+      };
+    }
+    if (args[0] === "cat-file") {
+      return { stdout: options.attributes?.[args[2] === "0".repeat(40) ? 0 : 1] ?? "" };
+    }
+    return {
+      stdout:
+        args[0] === "rev-parse"
+          ? `${options.gitHead ?? head}\n`
+          : args[0] === "diff"
+            ? (options.gitOutput ?? (options.gitFiles ?? []).map((file) => `${file}\0`).join(""))
+            : "",
+    };
+  });
   await runInNewContext(`(async () => { ${script} })()`, {
     require: () => ({ matchesGlob }),
     context,
     process: {
       env: {
         SCHEDULED_PATHS: options.paths ?? "src/contracts/**\n.github/actions/**",
-        SCHEDULED_PROOF_JOBS: "Proof",
+        SCHEDULED_PROOF_JOBS: options.proofJobs ?? "Proof",
+        SCHEDULED_PROOFS: options.proofs,
+        SCHEDULED_CODEQL_CONFIG: options.codeqlConfig,
+        SCHEDULED_GIT_DIFF: options.gitFiles ? "true" : "false",
         SCHEDULED_WORKFLOW_REF: "openclaw/openclaw/.github/workflows/example.yml@refs/heads/main",
       },
     },
     core: { setOutput: output, notice, warning: vi.fn() },
+    exec: { getExecOutput: execute },
     github: {
       paginate,
       rest: {
         actions: { listWorkflowRuns: list, listJobsForWorkflowRunAttempt: vi.fn() },
         repos: {
-          compareCommitsWithBasehead: vi.fn().mockResolvedValue({
-            data: {
-              status: options.status ?? "ahead",
-              files: options.files ?? [],
-            },
-          }),
+          compareCommitsWithBasehead: compare,
         },
       },
     },
   });
-  return { output, notice, paginate };
+  return { output, notice, paginate, list, compare, execute };
 }
 
 describe("bounded scheduled proof reuse", () => {
@@ -207,13 +314,304 @@ describe("bounded scheduled proof reuse", () => {
             },
             vars: {},
             cancelled: () => false,
-            needs: { scope: { outputs: { changed } } },
+            needs: { scope: { outputs: { changed, rust_changed: changed } } },
           });
         expect(evaluate("schedule", "false")).toBe(false);
         expect(evaluate("schedule", "true")).toBe(true);
         expect(evaluate("pull_request", "")).toBe(true);
         expect(evaluate("workflow_dispatch", "")).toBe(true);
       }
+    },
+  );
+});
+
+describe("scheduled CodeQL input reuse", () => {
+  const workflow = readWorkflow(".github/workflows/codeql.yml");
+  const scopes = workflow.jobs.scope.steps.filter(
+    (step: { uses?: string }) => step.uses === "./.github/actions/detect-scheduled-changes",
+  );
+  const categories = [
+    "core-auth-secrets",
+    "channel-runtime-boundary",
+    "network-ssrf-boundary",
+    "mcp-process-tool-boundary",
+    "process-exec-boundary",
+    "plugin-trust-boundary",
+    "actions",
+  ];
+  const completedJobs = categories.map((category) => `Security High (${category})`);
+
+  async function selected(files: string[], options: Parameters<typeof scheduledScope>[0] = {}) {
+    expect(scopes).toHaveLength(1);
+    const { output } = await scheduledScope({
+      completedJobs,
+      files: files.map((filename) => ({ filename })),
+      ...options,
+      paths: scopes[0].with.paths,
+      proofs: scopes[0].with.proofs,
+    });
+    const results = JSON.parse(output.mock.calls[0]![1]);
+    return categories.filter((category) => results[category] !== false);
+  }
+
+  it.each([
+    ["docs/intro.md", []],
+    [".github/workflows/docs.yml", ["actions"]],
+    ["src/process/exec.ts", ["mcp-process-tool-boundary", "process-exec-boundary"]],
+    ["src/agents/bash-tools.exec-runtime.test.ts", []],
+    ["src/process/exec.test.ts", []],
+    ["src/infra/net/request.ts", ["network-ssrf-boundary"]],
+    ["src/channels/.runtime.ts", ["channel-runtime-boundary"]],
+    ["src/agents/nested/deep/auth-provider.ts", ["core-auth-secrets"]],
+    ["src/plugins/runtime/package.json", ["plugin-trust-boundary"]],
+    ["src/plugins/runtime/tsconfig.json", ["plugin-trust-boundary"]],
+    ["ui/src/views/channels.ts", []],
+    ["package.json", []],
+    [".github/codeql/codeql-actions-critical-security.yml", categories],
+    [".github/actions/detect-scheduled-changes/action.yml", categories],
+    [".github/workflows/codeql.yml", categories],
+    ["src/.hidden/.gitattributes", categories],
+  ])("selects extraction profiles after %s changes", async (filename, expected) => {
+    expect(await selected([filename as string])).toEqual(expected);
+  });
+
+  it("reuses each category's last actual proof, ignoring newer skipped jobs", async () => {
+    expect(
+      await selected(["docs/intro.md"], {
+        completedJobs: completedJobs.filter(
+          (name) => name !== "Security High (network-ssrf-boundary)",
+        ),
+        skipFirst: true,
+      }),
+    ).toEqual(["network-ssrf-boundary"]);
+  });
+
+  it("requires a complete diff before skipping a category beyond the API cap", async () => {
+    const docs = Array.from({ length: 300 }, (_, index) => `docs/${index}.md`);
+    expect(await selected(docs)).toEqual(categories);
+    expect(await selected(docs, { gitFiles: [...docs, "src/infra/net/request.ts"] })).toEqual([
+      "network-ssrf-boundary",
+    ]);
+    for (const failure of [
+      { gitFailure: "fetch" as const },
+      { gitFailure: "diff" as const },
+      { gitHead: before },
+      { gitOutput: "docs/incomplete" },
+    ]) {
+      expect(await selected(docs, { gitFiles: docs, ...failure })).toEqual(categories);
+    }
+  });
+
+  it("shares raw lookups while retaining each category's completed proof", async () => {
+    const docs = Array.from({ length: 300 }, (_, index) => ({ filename: `docs/${index}.md` }));
+    const result = await scheduledScope({
+      proofs: scopes[0].with.proofs,
+      paths: scopes[0].with.paths,
+      completedJobs: completedJobs.filter((job) => job !== "Security High (network-ssrf-boundary)"),
+      skipFirst: true,
+      files: docs,
+      gitFiles: docs.map((file) => file.filename),
+    });
+    expect(result.output).toHaveBeenCalledExactlyOnceWith(
+      "proofs",
+      JSON.stringify(
+        Object.fromEntries(
+          categories.map((category) => [category, category === "network-ssrf-boundary"]),
+        ),
+      ),
+    );
+    expect(result.list).toHaveBeenCalledOnce();
+    expect(result.paginate.mock.calls.map(([, args]) => args.run_id)).toEqual([99, 90]);
+    expect(result.compare).toHaveBeenCalledOnce();
+    expect(result.execute.mock.calls.filter(([, args]) => args.includes("fetch"))).toHaveLength(1);
+    expect(result.execute.mock.calls.filter(([, args]) => args[0] === "diff")).toHaveLength(1);
+  });
+
+  it("compares each category against its own successful revision", async () => {
+    const result = await scheduledScope({
+      proofs: scopes[0].with.proofs,
+      paths: scopes[0].with.paths,
+      completedJobs,
+      recentJobs: ["Security High (mcp-process-tool-boundary)"],
+      files: [{ filename: "src/process/exec.ts" }],
+    });
+    const decisions = JSON.parse(result.output.mock.calls[0]![1]);
+    expect(decisions["mcp-process-tool-boundary"]).toBe(false);
+    expect(decisions["process-exec-boundary"]).toBe(true);
+    expect(result.compare.mock.calls.map(([args]) => args.basehead)).toEqual([
+      `${before}...${head}`,
+      `${"c".repeat(40)}...${head}`,
+    ]);
+    expect(result.paginate.mock.calls.map(([, args]) => args.run_id)).toEqual([99, 90]);
+  });
+
+  it.each([
+    ["src/*.test.ts", "src/deep/example.test.ts", true],
+    ["src/*.test.ts", "src/example.test.ts", false],
+    ["**/*.test.ts", "src/deep/example.test.ts", false],
+    ["**/*.test.ts", "src/example.test.ts\n", true],
+    ["**/*.test.ts\n", "docs/intro.md", true],
+    ["**/*.test.ts", "example.test.ts", false],
+    ["src/**/fixtures", "src/fixtures/data.ts", false],
+    ["src/**/fixtures", "src/deep/fixtures/data.ts", false],
+    ["src/**/fixtures", "src/deep/fixtures-other/data.ts", true],
+    ["src/**foo", "docs/intro.md", true],
+    ["src/", "docs/intro.md", true],
+    ["src/[a-z]", "docs/intro.md", true],
+  ])("matches exclusion %s against %s conservatively", async (pattern, filename, expected) => {
+    const { output } = await scheduledScope({
+      codeqlConfig: "profile.yml",
+      profile: {
+        paths: ["src", "*.test.ts"],
+        "paths-ignore": [pattern],
+        queries: [{ uses: "security-extended" }],
+      },
+      files: [{ filename }],
+    });
+    expect(output).toHaveBeenCalledExactlyOnceWith("changed", expected);
+  });
+
+  it("never excludes a shared query or tooling input", async () => {
+    expect(
+      await selected([".github/workflows/codeql.yml"], {
+        profile: {
+          paths: ["src"],
+          "paths-ignore": ["**"],
+          queries: [{ uses: "security-extended" }],
+        },
+      }),
+    ).toEqual(categories);
+  });
+
+  it.each([
+    [
+      "*.ts text\n",
+      "*.ts text\n# Preserve immutable upstream bytes.\napps/ios/** -whitespace\napps/shared/** -whitespace\n",
+      false,
+    ],
+    ["*.ts text\napps/ios/** -whitespace\n", "*.ts text\n", false],
+    ["*.ts text\n", "*.ts -text\n", true],
+    ["*.ts text\n\uFFFD", "*.ts text\n\uFFFD", true],
+    ["*.ts text\n", "*.ts text -whitespace\n", true],
+    ["*.ts text\n", "[attr]whitespace -text\n*.ts text\n", true],
+    ["*.ts text\n", '"apps/ios/**" -whitespace\n*.ts text\n', true],
+  ])(
+    "only ignores standalone whitespace diagnostic rules",
+    async (oldContent, newContent, changed) => {
+      expect(
+        await selected([".gitattributes"], {
+          gitFiles: [],
+          attributes: [oldContent, newContent],
+        }),
+      ).toEqual(changed ? categories : []);
+    },
+  );
+
+  it("retains scans for attribute mode changes or unavailable exact blobs", async () => {
+    for (const failure of [
+      { attributeModes: ["100644", "120000"] as [string, string] },
+      { attributeModes: ["100644", "100755"] as [string, string] },
+      { gitFailure: "fetch" as const },
+      { gitHead: before },
+    ]) {
+      expect(await selected([".gitattributes"], { gitFiles: [], ...failure })).toEqual(categories);
+    }
+  });
+
+  it("includes a rename's old extraction path", async () => {
+    expect(
+      await selected([], {
+        files: [{ filename: "retired.ts", previous_filename: "src/infra/net/request.ts" }],
+      }),
+    ).toEqual(["network-ssrf-boundary"]);
+  });
+
+  it("runs every profile when its input contract is unsupported", async () => {
+    for (const profile of [
+      { paths: [], queries: [{ uses: "security-extended" }] },
+      ...["src/[a-z]", "src/", "./src", "."].map((path) => ({
+        paths: [path],
+        queries: [{ uses: "security-extended" }],
+      })),
+      { paths: ["src"], queries: [{ uses: "./custom-query.ql" }] },
+    ]) {
+      expect(await selected(["docs/intro.md"], { profile })).toEqual(categories);
+    }
+  });
+});
+
+describe("independent scheduled node runtime proofs", () => {
+  const workflow = readWorkflow(".github/workflows/node-runtime-conformance.yml");
+  const detectors = workflow.jobs.scope.steps.filter(
+    (step: { uses?: string }) => step.uses === "./.github/actions/detect-scheduled-changes",
+  );
+
+  async function admitted(options: Parameters<typeof scheduledScope>[0]) {
+    const steps = Object.fromEntries(
+      await Promise.all(
+        detectors.map(
+          async (step: { id: string; with: { paths: string; "proof-jobs": string } }) => {
+            const { output } = await scheduledScope({
+              completedJobs: ["TypeScript contracts", "Rust workspace"],
+              ...options,
+              paths: step.with.paths,
+              proofJobs: step.with["proof-jobs"],
+            });
+            return [step.id, { outputs: { changed: String(output.mock.calls[0]![1]) } }];
+          },
+        ),
+      ),
+    );
+    const outputs = Object.fromEntries(
+      Object.entries(workflow.jobs.scope.outputs).map(([key, value]) => [
+        key,
+        runInNewContext((value as string).slice(3, -2), { steps }),
+      ]),
+    );
+    return Object.fromEntries(
+      ["typescript", "rust"].map((id) => [
+        id,
+        runInNewContext(workflow.jobs[id].if.slice(3, -2), {
+          github: { event_name: "schedule", repository: "openclaw/openclaw" },
+          cancelled: () => false,
+          needs: { scope: { outputs } },
+        }),
+      ]),
+    );
+  }
+
+  it.each([
+    ["src/agents/run.ts", true, false],
+    ["scripts/run-vitest.mjs", true, false],
+    ["test/scripts/example.test.ts", true, false],
+    ["package.json", true, false],
+    ["pnpm-lock.yaml", true, false],
+    ["crates/openclaw-node-host/src/main.rs", true, true],
+    ["packages/gateway-protocol/src/version.ts", true, true],
+    ["test/fixtures/node-invoke-lifecycle-contract.json", true, true],
+    [".github/workflows/node-runtime-conformance.yml", true, true],
+    [".github/actions/detect-scheduled-changes/action.yml", true, true],
+    [".cargo/config", false, true],
+    [".cargo/config.toml", false, true],
+    ["rust-toolchain.toml", false, true],
+    ["rustfmt.toml", false, true],
+    [".rustfmt.toml", false, true],
+    ["clippy.toml", false, true],
+    [".clippy.toml", false, true],
+    [".gitattributes", false, true],
+    ["docs/intro.md", false, false],
+  ] as const)("admits %s only to its consuming proofs", async (filename, typescript, rust) => {
+    expect(await admitted({ files: [{ filename }] })).toEqual({ typescript, rust });
+  });
+
+  it.each([
+    { completedJobs: ["TypeScript contracts"], typescript: false, rust: true },
+    { completedJobs: ["Rust workspace"], typescript: true, rust: false },
+    { completedJobs: [], typescript: true, rust: true },
+  ])(
+    "requires each proof's own completed job: $completedJobs",
+    async ({ completedJobs, ...expected }) => {
+      expect(await admitted({ completedJobs })).toEqual(expected);
     },
   );
 });
@@ -235,7 +633,7 @@ describe("node runtime event scope", () => {
   ] as const)("routes %j", (files, expected) => {
     const workflow = readWorkflow(".github/workflows/node-runtime-conformance.yml");
     for (const event of ["push", "pull_request"]) {
-      expect(acceptsPaths(workflow.on[event].paths, files)).toBe(expected);
+      expect(acceptsWorkflowPaths(workflow.on[event].paths, files)).toBe(expected);
     }
     expect(workflow.on.workflow_dispatch).toBeDefined();
     expect(workflow.on.schedule).toBeDefined();
@@ -247,7 +645,8 @@ describe("workflow cost admission", () => {
     "keeps %s scoped to its hydration inputs",
     (name) => {
       const workflow = readWorkflow(`.github/workflows/${name}.yml`);
-      const accepts = (file: string) => acceptsPaths(workflow.on.pull_request.paths, [file]);
+      const accepts = (file: string) =>
+        acceptsWorkflowPaths(workflow.on.pull_request.paths, [file]);
       expect(accepts(".github/workflows/docs.yml")).toBe(false);
       for (const path of ["scripts/README.md", "scripts/AGENTS.md", "patches/README.md"]) {
         expect(accepts(path), path).toBe(false);

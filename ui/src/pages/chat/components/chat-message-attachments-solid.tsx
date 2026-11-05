@@ -13,17 +13,22 @@ import {
   safePlainTextAttachmentHref,
   safeMediaAttachmentHref,
 } from "./chat-attachment-href.ts";
+import { openResolvedImage } from "./chat-image-presentation.ts";
 import {
   shouldDeferAttachmentCard,
   type AttachmentAdmission,
 } from "./chat-message-attachment-admission-model.ts";
 import { ChatAttachmentAdmission } from "./chat-message-attachment-admission-solid.tsx";
 import { isManagedOutgoingMediaSource } from "./chat-message-attachment-availability.ts";
-import { resolveAttachmentSource, readAttachmentSource } from "./chat-message-attachment-source.ts";
+import {
+  resolveAttachmentSource,
+  resolveAttachmentSidebarSource,
+  readAttachmentSource,
+} from "./chat-message-attachment-source.ts";
 import { AssistantAttachmentStatusCard } from "./chat-message-attachment-status-solid.tsx";
 import { attachmentFailureReason } from "./chat-message-attachment-status.ts";
-import { openResolvedImage } from "./chat-message-image-open.ts";
 import { isLocalAssistantAttachmentSource } from "./chat-message-local-media.ts";
+import type { MessageMediaAction } from "./chat-message-media-actions.ts";
 import {
   resolveAttachmentImageKind,
   observeChatMediaResourceSubscriber,
@@ -31,14 +36,13 @@ import {
   type AttachmentItem,
   type AssistantAttachmentItem,
   type ImageRenderOptions,
-  type MessageMediaAction,
 } from "./chat-message-media.ts";
 import { MessageVideoPreview } from "./chat-message-video-preview-solid.tsx";
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
 import { ChatPastedText } from "./chat-pasted-text.tsx";
 import { isSentCommentAttachment } from "./chat-sent-comments.ts";
 import { SentCommentAttachments } from "./chat-sent-comments.tsx";
-import type { AttachmentSidebarState, SidebarContent } from "./chat-sidebar-content-types.ts";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { videoLightboxItem } from "./chat-video-lightbox-source.ts";
 
 registerEnglishCatalog(registerChatComposerEnglish);
@@ -139,7 +143,7 @@ export function AssistantAttachments(
         <SentCommentAttachments
           comments={comments()}
           inline={props.inlineComments && files().length === 0}
-          options={props.options}
+          options={{ ...props.options, onMediaChange: refreshComments }}
           resolve={(item) => commentSources().get(item)!}
         />
         <For each={files()} keyed={false}>
@@ -169,6 +173,27 @@ export function AssistantAttachments(
   );
 }
 
+function attachmentFileSearch(
+  item: AssistantAttachmentItem,
+  options: ImageRenderOptions,
+): (() => void) | undefined {
+  if (
+    item.type !== "attachment_error" ||
+    item.attachment.code !== "file-too-large" ||
+    !item.attachment.label.trim() ||
+    !options.sessionKey ||
+    !options.onFindWorkspaceFile
+  ) {
+    return undefined;
+  }
+  return () =>
+    options.onFindWorkspaceFile?.({
+      name: item.attachment.label,
+      sessionKey: options.sessionKey,
+      agentId: options.agentId,
+    });
+}
+
 export function MessageAttachment(props: MessageAttachmentProps): SolidJSX.Element {
   return (
     <Show
@@ -178,6 +203,7 @@ export function MessageAttachment(props: MessageAttachmentProps): SolidJSX.Eleme
           label={props.item.attachment.label}
           mimeType={props.item.attachment.mimeType}
           badge={t("chat.attachments.notSent")}
+          onFindWorkspaceFile={attachmentFileSearch(props.item, props.options)}
           reason={
             props.item.type === "attachment_error"
               ? attachmentFailureReason(props.item.attachment.code)
@@ -300,26 +326,12 @@ function prepareAttachment(
             voiceNote: attachment.isVoiceNote === true,
             ...(hasLiveSidebarSource
               ? {
-                  resolveSource: (sidebarUpdate, runtime): AttachmentSidebarState => {
-                    const next = resolveAttachmentSource(attachment, {
+                  resolveSource: (onMediaChange, runtime) =>
+                    resolveAttachmentSidebarSource(attachment, {
                       ...runtime,
                       messageId: options.messageId,
-                      onMediaChange: sidebarUpdate,
-                    });
-                    if (next.status === "available") {
-                      return { status: "ready", ...next.source };
-                    }
-                    if (next.status === "checking") {
-                      return { status: "pending" };
-                    }
-                    return next.error
-                      ? {
-                          status: "error",
-                          reason: next.reason ?? t("chat.attachments.unavailable"),
-                          onRetry: next.onRetry,
-                        }
-                      : { status: "unavailable", onRetry: next.onRetry };
-                  },
+                      onMediaChange,
+                    }),
                 }
               : {}),
           })
@@ -542,6 +554,7 @@ export function MessageAttachmentAction(
       when={props.item.type === "attachment" && props.item}
       fallback={props.render(() => ({
         pending: false,
+        onFindWorkspaceFile: attachmentFileSearch(props.item, props.options),
         reason:
           props.item.type === "attachment_error"
             ? attachmentFailureReason(props.item.attachment.code)

@@ -1,0 +1,2 @@
+# Protect byte compression and exact object retention in both pack classes.
+53

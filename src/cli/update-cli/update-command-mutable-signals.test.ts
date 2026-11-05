@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
-import { resolveVitestNodeArgs } from "../../../scripts/lib/vitest-process-env.mts";
+import { resolveVitestNodeArgs } from "../../../scripts/lib/vitest-node-args.mts";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import {
   assertManagedHandoffTestConsumer,
@@ -131,7 +131,7 @@ it.skipIf(process.platform === "win32").for([
     const { runCliWithExitFinalization } = await import(${JSON.stringify(resolveRuntimeWorkerUrl(native.oneShotExit).href)});
     const opts = {};
     if (mode === 'inherited') process.env.OPENCLAW_UPDATE_RUN_ID = createUpdateRun({trigger:'cli'}).runId;
-    const run = await admitUpdateCommandRun({opts, root:installRoot});
+    const run = await admitUpdateCommandRun({ env: process.env,opts, root:installRoot});
     const currentOptions = {...opts, run};
     let executorDatabasePath;
     const enter = async (executor) => {

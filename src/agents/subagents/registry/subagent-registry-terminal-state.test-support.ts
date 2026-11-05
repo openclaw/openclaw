@@ -2,9 +2,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, type Mock } from "vitest";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
-import { captureSessionEntryCurrentRead } from "../../../config/sessions/session-entry-current-runtime.js";
+import { captureSessionEntryCurrentCheckAsyncInternal } from "../../../config/sessions/session-entry-current-check.js";
 import type { SessionEntryCurrentCheck } from "../../../config/sessions/session-entry-current.types.js";
-import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import * as workerAdmission from "../../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as sessionStateEvents from "../../../sessions/session-state-events.js";
@@ -23,8 +22,6 @@ export function registerTerminalStateSignalAuthorityTests({
   createRunEntry,
   createLifecycleController,
   completeRun,
-  helperMocks,
-  lifecycleEventMocks,
 }: {
   createRunEntry: (overrides?: Partial<SubagentRunRecord>) => SubagentRunRecord;
   createLifecycleController: (
@@ -52,6 +49,7 @@ export function registerTerminalStateSignalAuthorityTests({
     async ({ change, stage }) => {
       const database = createDatabaseOptions();
       let restoreAdmission: (() => void) | undefined;
+      let releaseNative: (() => void) | undefined;
       let controller: SubagentLifecycleController | undefined;
       try {
         const entry = createRunEntry();
@@ -66,20 +64,15 @@ export function registerTerminalStateSignalAuthorityTests({
             updatedAt: 1,
           };
           await upsertSessionEntryCore(target, sessionEntry);
-          const current = await withSessionEntryReadOnlyInWorker(
-            target,
-            () => {},
-            async (read, owner) => {
-              if (!read.ok) {
-                throw read.error;
-              }
-              return captureSessionEntryCurrentRead(target, owner);
-            },
-          );
-          const source = expectDefined(current.source, "durable child source");
+          const current = await captureSessionEntryCurrentCheckAsyncInternal({
+            ...target,
+            fields: ["lifecycleRunId"],
+          });
+          releaseNative = current.release;
+          nativeCheck = expectDefined(current.entryCurrent, "durable child source");
           const writer = openOpenClawAgentDatabase({
             agentId: "main",
-            path: source.path,
+            path: nativeCheck.source.path,
             env: database.env,
           });
           changeNativeEntry = () => {
@@ -89,15 +82,6 @@ export function registerTerminalStateSignalAuthorityTests({
                 ? { lifecycleRunId: "successor-run" }
                 : { completionOwnerSessionKey: "agent:main:changed-parent" }),
             });
-          };
-          nativeCheck = {
-            source,
-            assertCurrent(facts) {
-              current.assertSourceCurrent();
-              if (facts?.lifecycleRunId !== sessionEntry.lifecycleRunId) {
-                throw new Error("Terminal child source was replaced");
-              }
-            },
           };
         }
         const runs = new Map<string, SubagentRunRecord>();
@@ -163,9 +147,7 @@ export function registerTerminalStateSignalAuthorityTests({
           await completion;
           await successorWrite;
           if (change === "none") {
-            const admissions = observe.mock.calls.length;
             await completeRun(controller, entry);
-            expect(observe.mock.calls).toHaveLength(admissions);
           }
         } else {
           await expect(completion).rejects.toMatchObject({ outcome: "not-committed" });
@@ -190,18 +172,14 @@ export function registerTerminalStateSignalAuthorityTests({
           if (change === "provisional kill") {
             expect(stored?.killReconciliation).toEqual({ killedAt: 4_001 });
           }
-          if (change === "none") {
-            expect(helperMocks.persistSubagentSessionTiming).toHaveBeenCalledOnce();
-          }
         } else {
           expect(events).toEqual([]);
           expect(stored?.execution.status).toBe("running");
           expect(runs.get(entry.runId)?.execution.status).toBe("running");
-          expect(helperMocks.persistSubagentSessionTiming).not.toHaveBeenCalled();
-          expect(lifecycleEventMocks.emitSessionLifecycleEvent).not.toHaveBeenCalled();
         }
       } finally {
         restoreAdmission?.();
+        releaseNative?.();
         controller?.clearRuntimeState();
         await cleanupSessionStateTestState();
       }

@@ -219,7 +219,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
   const attachmentReadRoot = !sandboxRoot ? options.attachmentReadRoot : undefined;
   const hostReadRoots = [
     ...(skillReadRoots ?? []),
-    ...(attachmentReadRoot && fs.existsSync(attachmentReadRoot) ? [attachmentReadRoot] : []),
+    ...(attachmentReadRoot ? [attachmentReadRoot] : []),
   ];
   const needsReadOnlyWorkspaceSkillMounts =
     options.shellTools !== "disabled" || (options.includeBaseCodingTools && options.workspaceOnly);
@@ -266,7 +266,11 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
                 bridge: sandboxFsBridge,
                 normalizeGuardedPathParams: true,
               }
-            : { resolutionCwd: options.codingRoot, normalizeGuardedPathParams: true },
+            : {
+                resolutionCwd: options.codingRoot,
+                normalizeGuardedPathParams: true,
+                allowLinkedWorktrees: tool.name !== "ls",
+              },
         )
       : tool;
 
@@ -337,6 +341,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
               }
             : {
                 additionalRoots: hostReadRoots.length > 0 ? hostReadRoots : undefined,
+                allowLinkedWorktrees: true,
                 resolutionCwd: options.codingRoot,
                 normalizeGuardedPathParams: true,
               },

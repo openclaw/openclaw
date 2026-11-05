@@ -31,6 +31,10 @@ it("preserves the package-derived Git fixture identity through build and lifecyc
     "scripts/preinstall-package-manager-warning.mjs",
     "scripts/postinstall-bundled-plugins.mjs",
     "scripts/lib/fs-safe-prebuild.mjs",
+    "scripts/lib/fs-safe-npm-cli-preload.generated.mjs",
+    "scripts/lib/fs-safe-npm-cli-protocol.mjs",
+    "runtime-process-bootstrap.generated.mjs",
+    "runtime-process-scripts.generated.mjs",
     "scripts/windows-cmd-helpers.mjs",
     "scripts/lib/package-lifecycle-marker.mjs",
   ]) {

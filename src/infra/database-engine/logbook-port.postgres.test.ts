@@ -70,7 +70,7 @@ portSuite("Logbook PostgreSQL port and exact backup", (client) => {
     fixture = portBackupFixture(client, directory, descriptor);
     using db = openNodeSqliteDatabase(sourcePath);
     db.exec(descriptor.sqlite);
-    db.exec(`PRAGMA user_version = 1;
+    db.exec(`PRAGMA user_version = ${descriptor.version};
       INSERT INTO batches (id, day, start_ms, end_ms, created_ms, updated_ms) VALUES
         (7, '2026-07-03', 1, 2, 1, 2), (70, '2026-07-03', 1, 2, 1, 2);
       INSERT INTO frames (id, captured_at_ms, day, path, content_hash, batch_id) VALUES
@@ -90,7 +90,7 @@ portSuite("Logbook PostgreSQL port and exact backup", (client) => {
     db.prepare("UPDATE frames SET path = ? WHERE id = 11").run(framePath);
     expect(sqliteDatabasePortProvider(db)).toBe(logbookPortProvider);
     expect(descriptor.inspectSqliteSource?.(db)).toEqual({
-      version: 1,
+      version: descriptor.version,
       migrationRequired: false,
       pendingColumns: {},
     });
@@ -116,7 +116,11 @@ portSuite("Logbook PostgreSQL port and exact backup", (client) => {
     }
     expect(rows(reversePath, descriptor)).toEqual(snapshot);
     const manifest = await fixture.export(sourcePath);
-    expect(manifest.source).toMatchObject({ owner: "logbook", schemaVersion: 1, storeId });
+    expect(manifest.source).toMatchObject({
+      owner: "logbook",
+      schemaVersion: descriptor.version,
+      storeId,
+    });
     expect(manifest.verification).toEqual(forward);
     expect(rows(file("backup/database.sqlite"), descriptor)).toEqual(snapshot);
     const anchorPath = file("restored-anchor.sqlite");
@@ -158,6 +162,40 @@ portSuite("Logbook PostgreSQL port and exact backup", (client) => {
       ],
     ] as const) {
       expect(await query(sql)).toEqual([{ id }]);
+    }
+  });
+
+  it("bounds sequence allocations by rows committed before the export snapshot", async () => {
+    const { file, namespace, query } = fixture;
+    await fs.rm(file("backup"), { recursive: true, force: true });
+    const writer = new Client({ connectionString: connection });
+    await writer.connect();
+    const forward = client.query.bind(client) as (...args: unknown[]) => Promise<unknown>;
+    // A running Gateway commits a row after any pre-snapshot read but before the export snapshot.
+    const spy = vi.spyOn(client, "query").mockImplementation((async (...args: unknown[]) => {
+      if (args[0] === "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY") {
+        spy.mockRestore();
+        await writer.query(
+          `INSERT INTO "${namespace}".batches (day, start_ms, end_ms, created_ms, updated_ms) VALUES ('2026-07-04', 1, 2, 1, 2)`,
+        );
+      }
+      return forward(...args);
+    }) as never);
+    try {
+      const manifest = await fixture.export(sourcePath);
+      expect(manifest.verification.allocations["batches.id"]).toEqual({
+        value: "71",
+        called: true,
+      });
+      const restored = await fixture.restore(manifest, file("online-anchor.sqlite"));
+      expect(
+        await query(
+          `INSERT INTO "${restored.namespace}".batches (day, start_ms, end_ms, created_ms, updated_ms) VALUES ('2026-07-05', 1, 2, 1, 2) RETURNING id`,
+        ),
+      ).toEqual([{ id: "72" }]);
+    } finally {
+      spy.mockRestore();
+      await writer.end();
     }
   });
 
@@ -214,7 +252,7 @@ portSuite("Team Reports database port and backup", (client) => {
       source.exec(descriptor.sqlite);
       expect(sqliteDatabasePortProvider(source)).toBe(teamReportsPortProvider);
       source.exec(`
-        INSERT INTO team_reports_schema_migrations VALUES ('schema-1', 1787184000000);
+        INSERT INTO team_reports_schema_migrations VALUES ('schema-${descriptor.version}', 1787184000000);
         INSERT INTO team_reports_periods VALUES (
           'day', '2026-08-20', 1787184000000, 1787270400000, 'closed', 1787270400000,
           '{"activeMembers":1,"memberCount":2,"totals":{"github":{"total":41}}}', NULL, '# Café 🦞');
@@ -268,7 +306,7 @@ portSuite("Team Reports database port and backup", (client) => {
       await descriptor.admit(sqlitePath);
       using database = openNodeSqliteDatabase(sqlitePath);
       expect(descriptor.inspectSqliteSource(database)).toEqual({
-        version: 1,
+        version: descriptor.version,
         migrationRequired: false,
         pendingColumns: {},
       });

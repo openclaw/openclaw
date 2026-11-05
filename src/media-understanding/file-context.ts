@@ -11,7 +11,7 @@ import { renderFileContextBlock } from "../media/file-context.js";
 import { extractFileContentFromBuffer } from "../media/input-files.js";
 import type { MediaFact } from "../media/media-facts.js";
 import { classifyMediaReferenceSource } from "../media/media-reference.js";
-import { resolveAttachmentKind } from "./attachments.js";
+import { resolveAttachmentKind } from "./attachments.normalize.js";
 import type { ExtractedFileImage } from "./extracted-file-images.js";
 import {
   type FileAttachmentOutcome,
@@ -35,18 +35,6 @@ import {
 } from "./runner.attachments.js";
 import type { MediaAttachment } from "./types.js";
 
-type ClassifiedFileAttachment = {
-  outcome: FileAttachmentOutcome;
-  filename?: string;
-  mimeType?: string;
-};
-
-export type LocalPathSelfServeUpgrade = {
-  attachmentIndex: number;
-  fallback: string;
-  render: (path?: string) => string | undefined;
-};
-
 // URL attachments may carry signed query credentials; only the pathname
 // basename is safe to surface as a model-visible display name.
 function attachmentUrlDisplayName(url: string): string | undefined {
@@ -65,12 +53,15 @@ export async function extractFileContext(params: {
   limits: FileExtractionLimits;
   skipAttachmentIndexes?: Set<number>;
   assertCurrent?: () => void;
+  signal?: AbortSignal;
   selfServePathsEnabled: boolean;
 }) {
   const { attachments, cache, cfg, limits, skipAttachmentIndexes } = params;
-  async function classifyFileAttachment(
-    attachment: MediaAttachment,
-  ): Promise<ClassifiedFileAttachment> {
+  async function classifyFileAttachment(attachment: MediaAttachment): Promise<{
+    outcome: FileAttachmentOutcome;
+    filename?: string;
+    mimeType?: string;
+  }> {
     const assertCurrent = params.assertCurrent;
     assertCurrent?.();
     const attachmentFilename =
@@ -198,6 +189,7 @@ export async function extractFileContext(params: {
         config: cfg,
         classification,
         mimeType: attachment.mime,
+        signal: params.signal,
       });
     } catch (err) {
       if (shouldLogVerbose()) {
@@ -219,7 +211,11 @@ export async function extractFileContext(params: {
 
   const blocks: AttachmentContextBlock[] = [];
   const images: ExtractedFileImage[] = [];
-  const localPathSelfServeUpgrades: LocalPathSelfServeUpgrade[] = [];
+  const localPathSelfServeUpgrades: Array<{
+    attachmentIndex: number;
+    fallback: string;
+    render: (path?: string) => string | undefined;
+  }> = [];
   for (const attachment of attachments) {
     const { outcome, filename, mimeType } = await classifyFileAttachment(attachment).finally(() =>
       cache.releaseBuffer(attachment.index),
@@ -281,6 +277,7 @@ export async function prepareFileContextFromMedia(params: {
   accountId?: string;
   maxChars: number;
   assertCurrent: () => void;
+  signal?: AbortSignal;
 }) {
   return await renderInboundDocumentContext({
     ctx: {
@@ -292,6 +289,7 @@ export async function prepareFileContextFromMedia(params: {
     workspaceDir: params.workspaceDir,
     maxChars: params.maxChars,
     assertCurrent: params.assertCurrent,
+    signal: params.signal,
   });
 }
 
@@ -304,6 +302,8 @@ export async function renderInboundDocumentContext(params: {
   workspaceDir?: string;
   maxChars?: number;
   assertCurrent?: () => void;
+  /** Cancels in-flight extraction, such as a worker-owned PDF parse. */
+  signal?: AbortSignal;
 }): Promise<InboundDocumentContext> {
   params.assertCurrent?.();
   const { ctx, cfg } = params;
@@ -321,6 +321,7 @@ export async function renderInboundDocumentContext(params: {
           : { ...limits, maxChars: Math.min(limits.maxChars, params.maxChars) },
       selfServePathsEnabled: false,
       assertCurrent: params.assertCurrent,
+      signal: params.signal,
     });
     params.assertCurrent?.();
     return {

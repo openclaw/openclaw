@@ -7,6 +7,7 @@ import {
   readSqliteTranscriptPayload,
   sqliteTranscriptPayloadColumns,
 } from "../../scripts/lib/sqlite-transcript-payload.mjs";
+import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
 import { prepareTranscriptPayload } from "../config/sessions/transcript-payload.js";
@@ -126,14 +127,7 @@ export function messageEvent(params: {
             api: "messages",
             provider: "anthropic",
             model: "sonnet-4.6",
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsageFixture(),
             stopReason: "stop",
           }
         : {}),

@@ -21,6 +21,20 @@ import {
 } from "./node-worker-supervisor.test-support.js";
 import type { NodeWorkerTurnReceipt } from "./node-worker-turn-store.js";
 
+const receiptDefaults = {
+  resultJson: null,
+  errorText: null,
+  completedAtMs: null,
+  createdAtMs: 1,
+  updatedAtMs: 1,
+};
+const engine = { id: "docker", command: "synthetic-container", target: "b".repeat(64) } as const;
+const containerIdentity = (id: string) => ({
+  engine: engine.id,
+  containerId: id.repeat(64),
+  engineTarget: engine.target,
+});
+
 export async function fixture(
   unknownOutcome = false,
   admission?: { entered: () => void; ready: Promise<void> },
@@ -75,11 +89,7 @@ export async function fixture(
       workerCleanupMode: null,
       workerLineageSettled: false,
       state: "pending",
-      resultJson: null,
-      errorText: null,
-      completedAtMs: null,
-      createdAtMs: 1,
-      updatedAtMs: 1,
+      ...receiptDefaults,
     };
     return { action: "start", receipt: launch, nonterminalCount: 1 };
   });
@@ -184,7 +194,7 @@ export async function fixture(
     kind: "started",
     adapter,
     cleanupMode: null,
-    container: { engine: "docker", containerId: "a".repeat(64), engineTarget: "b".repeat(64) },
+    container: containerIdentity("a"),
   });
   mocks.send
     .mockRejectedValue(new Error("Synthetic child input is closed"))
@@ -212,7 +222,7 @@ export async function fixture(
     bundleRoot: "/synthetic/bundles",
     env: { OPENCLAW_STATE_DIR: "/synthetic/state", NODE_DISABLE_COMPILE_CACHE: "1" },
     capacity: 1,
-    containerEngine: { id: "docker", command: "synthetic-container", target: "b".repeat(64) },
+    containerEngine: engine,
     onCapacityChanged: (snapshot) => snapshots.push(snapshot.available),
   });
   const launching = supervisor
@@ -259,7 +269,6 @@ export async function fixture(
 
 export function recoveryFixture(container = false) {
   const input = testWorkerLaunchInput("/synthetic/workspace", "recovery-turn");
-  const engine = { id: "docker", command: "synthetic-container", target: "b".repeat(64) } as const;
   const original: NodeWorkerLaunchReceipt = {
     ...testNodeWorkerLaunchIdentity(input),
     gatewayNamespace: input.gatewayNamespace,
@@ -268,20 +277,8 @@ export function recoveryFixture(container = false) {
     worker: { pid: 404, startTime: 2 },
     workerCleanupMode: container ? null : "owned-anchor",
     workerLineageSettled: !container,
-    ...(container
-      ? {
-          container: {
-            engine: engine.id,
-            containerId: "c".repeat(64),
-            engineTarget: engine.target,
-          },
-        }
-      : {}),
-    resultJson: null,
-    errorText: null,
-    completedAtMs: null,
-    createdAtMs: 1,
-    updatedAtMs: 1,
+    ...(container ? { container: containerIdentity("c") } : {}),
+    ...receiptDefaults,
   };
   let receipt = original;
   let active = true;

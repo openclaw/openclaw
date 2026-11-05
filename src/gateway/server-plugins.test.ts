@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { createInfoWarnErrorDebugLogger as createTestLog } from "../../test/helpers/mock-logger.js";
 import type { AgentWaitResult } from "../agents/run-wait.types.js";
 import { createTerminalTool } from "../agents/tools/terminal-tool.js";
 import {
@@ -39,6 +40,7 @@ import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js"
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { createParentTranscriptWriteContext } from "./server-plugin-transcript.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-plugin-restart-owner-");
 
@@ -207,15 +209,6 @@ let runtimeRegistryModule: PluginRuntimeRegistryModule;
 let gatewayRequestScopeModule: GatewayRequestScopeModule;
 let methodScopesModule: MethodScopesModule;
 let resolveTestGatewayContext: () => GatewayRequestContext | undefined = () => undefined;
-
-function createTestLog() {
-  return {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  };
-}
 
 function createTestContext(label: string): GatewayRequestContext {
   const config = {};
@@ -878,28 +871,16 @@ describe("loadGatewayPlugins", () => {
       opts.respond(true, { status: "accepted", runId: "child-run" });
     });
 
-    await withOwnedSessionTranscriptWrites(
-      {
-        sessionTarget: {
-          agentId: "main",
-          sessionId: "parent-session",
-          sessionKey: "agent:main:parent",
-          storePath: "/tmp/transcript-writer-parent.sqlite",
-          expectedWriterRunId: "parent-run",
-        },
-        withTranscriptWrite: trackAsyncWork,
-      },
-      async () => {
-        await expect(
-          serverPluginsModule.dispatchGatewayMethodInProcess("agent", {
-            sessionKey: "agent:main:child",
-          }),
-        ).resolves.toEqual({ status: "accepted", runId: "child-run" });
-        expect(getOwnedSessionTranscriptWriterFence()).toMatchObject({
-          expectedWriterRunId: "parent-run",
-        });
-      },
-    );
+    await withOwnedSessionTranscriptWrites(createParentTranscriptWriteContext(), async () => {
+      await expect(
+        serverPluginsModule.dispatchGatewayMethodInProcess("agent", {
+          sessionKey: "agent:main:child",
+        }),
+      ).resolves.toEqual({ status: "accepted", runId: "child-run" });
+      expect(getOwnedSessionTranscriptWriterFence()).toMatchObject({
+        expectedWriterRunId: "parent-run",
+      });
+    });
   });
 
   test("carries delegated tool-policy handoffs only in synthetic client context", async () => {

@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import JSON5 from "json5";
 import type { OxlintConfig } from "oxlint";
-import { reportLimitViolations } from "./lib/check-limits.mts";
+import { releaseBranchForChecks, reportLimitViolations } from "./lib/check-limits.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { createManagedCommandInvocation } from "./lib/managed-child-process.mts";
 import {
@@ -121,7 +121,16 @@ function collectViolations(
   if (result.error || (result.status !== 0 && result.status !== 1)) {
     throw result.error ?? new Error(result.stderr || "oxlint line-cap probe failed");
   }
-  const report: { diagnostics: OxlintDiagnostic[] } = JSON.parse(result.stdout);
+  let report: { diagnostics: OxlintDiagnostic[] };
+  try {
+    report = JSON.parse(result.stdout);
+  } catch (error) {
+    // Native binding and configuration failures can exit 1 before emitting JSON.
+    // Keep their diagnostic instead of replacing it with a report parse error.
+    throw result.status !== 0
+      ? new Error(result.stderr || result.stdout || "oxlint line-cap probe failed")
+      : error;
+  }
   for (const diagnostic of report.diagnostics) {
     // JetBrains terminals make oxlint emit file URLs; both forms must match Git paths.
     const filename = diagnostic.filename.startsWith("file://")
@@ -150,6 +159,10 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     const args = parseRatchetArgs(argv);
     if (args.prune) {
       throw new Error("Line caps have no baseline to prune; extract a coherent sibling module.");
+    }
+    if (releaseBranchForChecks(root)) {
+      console.log("Line-cap ratchet skipped for release branch.");
+      return 0;
     }
     const base = resolveRatchetBase(root, args);
     if (!base) {

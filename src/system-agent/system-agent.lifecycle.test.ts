@@ -22,7 +22,6 @@ it.each([false, true])(
       { label: "system-agent-harness", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
       async (state) => {
         const id = "conversation-harness";
-        const pluginDir = state.statePath(id);
         const nativeEvent = `system-agent-harness-native-${throws}`;
         const observationEvent = `system-agent-harness-observation-${throws}`;
         const before = process.listenerCount(nativeEvent);
@@ -57,7 +56,7 @@ it.each([false, true])(
           } };
         `,
         );
-        const authoredConfig: OpenClawConfig = {
+        await state.writeConfig({
           agents: {
             defaults: {
               workspace: state.workspaceDir,
@@ -67,12 +66,11 @@ it.each([false, true])(
           },
           plugins: {
             allow: [id],
-            load: { paths: [pluginDir] },
+            load: { paths: [state.statePath(id)] },
             slots: { memory: "none" },
             entries: { [id]: { enabled: true } },
           },
-        };
-        await state.writeConfig(authoredConfig);
+        } satisfies OpenClawConfig);
         const snapshot = await readConfigFileSnapshot();
         expect(snapshot.valid).toBe(true);
         const config = snapshot.runtimeConfig ?? snapshot.config;
@@ -140,14 +138,7 @@ it.each([false, true])(
           });
         onTestFinished(() => conversation.mockRestore());
         process.on(observationEvent, observe);
-        const work = runSystemAgent(
-          {
-            verifiedInference: binding,
-            input,
-            output,
-          },
-          runtime,
-        );
+        const work = runSystemAgent({ verifiedInference: binding, input, output }, runtime);
         const settled = work.then(
           () => undefined,
           (error: unknown) => error,

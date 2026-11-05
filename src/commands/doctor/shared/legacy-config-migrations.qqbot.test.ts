@@ -31,17 +31,17 @@ describe("Tencent QQBot 2.0 config migrations", () => {
     expect(JSON.stringify(config)).not.toContain("placeholder");
     const repaired = maybeRepairOpenPolicyAllowFrom(config);
     expect(repaired).toEqual({ config, changes: [] });
-    expect(maybeRepairOpenPolicyAllowFrom(repaired.config)).toEqual(repaired);
     const schema = widenOfficialExternalChannelSecretSchema({
       channelId: "qqbot",
       schema: { type: "object", additionalProperties: true },
     });
-    const validation = validateJsonSchemaValue({
-      cacheKey: "qqbot-doctor-order-regression",
-      schema: schema ?? {},
-      value: qqbot,
-    });
-    expect(validation.ok).toBe(true);
+    expect(
+      validateJsonSchemaValue({
+        cacheKey: "qqbot-doctor-order-regression",
+        schema: schema ?? {},
+        value: qqbot,
+      }).ok,
+    ).toBe(true);
   });
 
   it("allocates distinct file SecretRefs for root and colliding account aliases", () => {

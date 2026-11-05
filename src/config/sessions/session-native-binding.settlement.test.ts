@@ -86,11 +86,13 @@ it("retains both result and storage settlement failures for a native binding ope
       expect(error).toMatchObject({ code: "outcome-unknown" });
       expect(formatErrorMessageWithCode(error)).toContain(resultFailure.message);
       expect(formatErrorMessageWithCode(error)).toContain(settlementFailure.message);
+      const storageOutcome = classifyGatewayStorageFailure(error);
+      expect(storageOutcome).toBe("session_actor_reconciliation");
       expect(
         renderAssistantRequestFailureCopy({
-          storageFailure: classifyGatewayStorageFailure(error),
+          storageFailure: storageOutcome,
         }),
-      ).toContain("disk is full. Free up space");
+      ).toMatch(/check.*history.*before trying again/i);
       return true;
     });
     expect(delivery.dispatched).toBe(1);

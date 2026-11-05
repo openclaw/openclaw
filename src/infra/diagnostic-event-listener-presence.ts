@@ -17,12 +17,14 @@ const listenerPresence = resolveGlobalSingleton<{
   interestListeners: Map<string, Set<() => void>>;
   internalCount: number;
   trustedCount: number;
+  promptStatsCount: number;
 }>(DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY, () => ({
   untrustedInterest: { broadInterestCount: 0, eventInterestDeltas: new Map() },
   trustedInterest: { broadInterestCount: 0, eventInterestDeltas: new Map() },
   interestListeners: new Map(),
   internalCount: 0,
   trustedCount: 0,
+  promptStatsCount: 0,
 }));
 
 export type InternalDiagnosticEventInterest<EventType extends string = string> = Readonly<{
@@ -30,6 +32,8 @@ export type InternalDiagnosticEventInterest<EventType extends string = string> =
   exclude?: readonly EventType[];
   /** Restricts trusted events only; untrusted events still use include/exclude. */
   includeTrusted?: readonly EventType[];
+  /** False avoids requesting prompt sizes; other listeners may still request them. */
+  includePromptStats?: boolean;
 }>;
 
 export function isInternalDiagnosticEventInterested<EventType extends string>(
@@ -88,6 +92,14 @@ export function updateInternalDiagnosticEventInterest(
   );
   updateEventInterest(state.untrustedInterest, interest, delta, false);
   updateEventInterest(state.trustedInterest, interest, delta, true);
+  if (
+    interest?.includePromptStats !== false &&
+    ["model.call.started", "model.call.completed", "model.call.error"].some((type) =>
+      isInternalDiagnosticEventInterested(interest, type, true),
+    )
+  ) {
+    state.promptStatsCount += delta;
+  }
   for (const [type, listeners] of previouslyUninterested) {
     if (hasInternalDiagnosticEventInterest(type)) {
       notifyListeners(listeners, undefined);
@@ -112,10 +124,15 @@ export function hasInternalDiagnosticEventInterest(type: string, trusted = false
   return state.broadInterestCount + (state.eventInterestDeltas.get(type) ?? 0) > 0;
 }
 
+export function hasModelCallPromptStatsInterest(): boolean {
+  return listenerPresence.promptStatsCount > 0;
+}
+
 export function resetInternalDiagnosticEventListenerPresence(): void {
   const state = listenerPresence;
   state.internalCount = 0;
   state.trustedCount = 0;
+  state.promptStatsCount = 0;
   state.untrustedInterest.broadInterestCount = 0;
   state.untrustedInterest.eventInterestDeltas.clear();
   state.trustedInterest.broadInterestCount = 0;

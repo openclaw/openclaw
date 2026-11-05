@@ -1,4 +1,5 @@
 import { action, createOptimistic, For, Show } from "solid-js";
+import { projectUpdateRunHistory } from "../../../../src/infra/update-run-history-projection.ts";
 import { isAcknowledgedAbandonedUpdateRun } from "../../../../src/infra/update-run-record.ts";
 import {
   classifyUpdateOutcome,
@@ -7,8 +8,11 @@ import {
 import type { UpdateFailureReportNotice } from "../../app/overlays-types.ts";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { UpdateRunView } from "../../components/update-run-view.tsx";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerUpdateActionsEnglish } from "../../i18n/locales/en-update-actions.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { UpdatesCommandPresentation, UpdatesViewProps } from "./updates-types.ts";
+
+registerEnglishCatalog(registerUpdateActionsEnglish);
 
 export function RecordedAttempt(
   props: UpdatesViewProps & { confirming: boolean; checking: boolean },
@@ -30,10 +34,14 @@ export function RecordedAttempt(
     return presentReport(view, pending);
   };
   const run = () => props.update.updateRun;
+  const serving = () =>
+    props.connected ? { version: props.gatewayVersion, buildId: props.gatewayBuildId } : undefined;
   const failed = () => {
     const currentRun = run();
     return currentRun
-      ? !isAcknowledgedAbandonedUpdateRun(currentRun) && isReportableUpdateRun(currentRun)
+      ? !projectUpdateRunHistory(currentRun, serving()) &&
+          !isAcknowledgedAbandonedUpdateRun(currentRun) &&
+          isReportableUpdateRun(currentRun)
       : !props.update.recordedUpdateAttempt ||
           classifyUpdateOutcome(props.update.recordedUpdateAttempt) !== "noop";
   };
@@ -63,14 +71,15 @@ export function RecordedAttempt(
           }
         >
           <div class="settings-row settings-row--stacked">
-            <UpdateRunView run={run()} connected={props.connected} />
+            <UpdateRunView run={run()} connected={props.connected} serving={serving()} />
           </div>
         </Show>
         <Show when={failed() || props.update.updateStatusBanner?.source === "read"}>
           <SettingsRow
             title={t("updates.page.recoveryActions")}
+            stackedOnNarrow
             control={
-              <div class="updates-status-control">
+              <div class="updates-status-control updates-recovery-actions">
                 <button
                   class="btn btn--sm"
                   type="button"

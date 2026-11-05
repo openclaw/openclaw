@@ -31,16 +31,6 @@ export type ChatSubagentMobileStop = {
   onConfirm: () => void | Promise<void>;
 };
 
-type ChatSubagentMobileHeaderProps = {
-  title: string;
-  sessionKey: string;
-  backLabel: string;
-  onBack: () => void;
-  stop?: ChatSubagentMobileStop;
-  /** Preserve any native child-pane actions, such as Details. */
-  actions?: JSX.Element;
-};
-
 export function MobileStop(props: {
   action: ChatSubagentMobileStop;
   control?: SubagentStopControl;
@@ -105,7 +95,15 @@ function MobileTitle(props: { title: string }) {
   );
 }
 
-export function ChatSubagentMobileHeader(props: ChatSubagentMobileHeaderProps) {
+export function ChatSubagentMobileHeader(props: {
+  title: string;
+  sessionKey: string;
+  backLabel: string;
+  onBack: () => void;
+  stop?: ChatSubagentMobileStop;
+  /** Preserve any native child-pane actions, such as Details. */
+  actions?: JSX.Element;
+}) {
   return (
     <div class="chat-subagents-mobile__header">
       <button

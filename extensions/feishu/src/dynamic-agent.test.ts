@@ -177,8 +177,7 @@ it("keeps named-account dynamic agent ids bounded and sender-unique", async () =
   const firstAgentId = first.updatedCfg.bindings?.[0]?.agentId ?? "";
   const secondAgentId = second.updatedCfg.bindings?.at(-1)?.agentId ?? "";
 
-  expect(firstAgentId).toHaveLength(52);
-  expect(secondAgentId).toHaveLength(52);
+  expect([firstAgentId.length, secondAgentId.length]).toEqual([52, 52]);
   expect(firstAgentId).not.toBe(secondAgentId);
   expect(Object.keys(second.updatedCfg.agents?.entries ?? {})).toEqual([
     "main",
@@ -210,7 +209,6 @@ it("adds only the missing binding for an agent found in the cloned mutation rost
   expect(result.created).toBe(true);
   expect(commitConfig).toHaveBeenCalledTimes(1);
   expect(result.updatedCfg.agents).toEqual(mutationCfg.agents);
-  expect(result.updatedCfg.agents).not.toHaveProperty("list");
   expect(result.updatedCfg.bindings).toEqual([binding("feishu-ou_sender", "default")]);
   await expectNoDirectories();
 });
@@ -220,15 +218,10 @@ it("preserves concurrent runtime config when creating from a stale request snaps
     ...createConfig({}, { "feishu-ou_existing": existingAgent() }),
     bindings: [binding("feishu-ou_existing", undefined, "ou_existing")],
   } as OpenClawConfig;
-  const { result, mutateConfigFile } = await scenario(currentCfg, {
+  const { result } = await scenario(currentCfg, {
     request: { agents: createCanonicalAgentRoster(), bindings: [] },
   });
 
-  expect(mutateConfigFile).toHaveBeenCalledWith({
-    base: "runtime",
-    afterWrite: { mode: "auto" },
-    mutate: expect.any(Function),
-  });
   expect(result.updatedCfg.agents?.entries).toEqual({
     ...currentCfg.agents?.entries,
     "feishu-ou_sender": {

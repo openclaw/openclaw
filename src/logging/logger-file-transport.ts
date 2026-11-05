@@ -3,6 +3,7 @@ import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { appendRegularFile, appendRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { registerProcessExitCleanup } from "../infra/process-exit-cleanup.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { formatConsoleDiagnosticLine } from "./json-console-line.js";
 import { redactSensitiveText } from "./redact.js";
@@ -322,9 +323,7 @@ function startFlush(): void {
   const running = runFlushLoop().catch(() => undefined);
   flushPromise = running;
   void running.then(() => {
-    if (flushPromise === running) {
-      flushPromise = null;
-    }
+    flushPromise = null;
     if (queue.length > 0 || droppedCount > 0) {
       scheduleFlush();
     }
@@ -356,7 +355,7 @@ function installProcessHooks(): void {
   }
   processHooksInstalled = true;
   process.on("beforeExit", handleProcessBeforeExit);
-  process.on("exit", handleProcessExit);
+  registerProcessExitCleanup(handleProcessExit);
 }
 
 /** Enqueues one serialized record without waiting for filesystem I/O. */

@@ -7,7 +7,7 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { selectActiveTranscriptIdentityRows } from "./session-accessor.sqlite-projection-read.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
-import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js";
+import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-state.js";
 import { readSessionTranscriptAnchorsAsync } from "./session-transcript-anchor-read.js";
 import type { TranscriptAppendPostimage } from "./session-transcript-append-postimage.js";
 

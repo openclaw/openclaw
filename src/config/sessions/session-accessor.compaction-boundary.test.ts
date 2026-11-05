@@ -198,44 +198,59 @@ it.each([false, true])(
   },
 );
 
-it("rolls back the boundary and accounting when live authority is revoked at commit", async () => {
-  const scope = sessionScope("compaction-authority-at-commit");
-  const { compact } = await seedCompaction(scope);
-  const before = loadTranscriptEventsSync(scope);
-  let current = true;
-  let revoked = false;
-  const ownerClosed = new Error("compaction authority revoked");
-  const observed = sqliteWorkerOwnerProbe.admission(admission, (request, grant, callback) => {
-    if (
-      request.stage === "commit" &&
-      isRecord(request.facts) &&
-      request.facts.kind === "session-manager-authority"
-    ) {
-      current = false;
-      revoked = true;
+it.each(["explicit", "ambient"] as const)(
+  "rolls back the boundary and accounting when %s authority is revoked at commit",
+  async (binding) => {
+    const scope = sessionScope("compaction-authority-at-commit", "session", binding === "explicit");
+    const { compact, keptId } = await seedCompaction(scope);
+    const before = loadTranscriptEventsSync(scope);
+    let revoked = false;
+    const ownerClosed = new Error("compaction authority revoked");
+    const assertCurrent = () => {
+      if (revoked) {
+        throw ownerClosed;
+      }
+    };
+    const observed = sqliteWorkerOwnerProbe.admission(admission, (request, grant, callback) => {
+      if (
+        request.stage === "commit" &&
+        isRecord(request.facts) &&
+        request.facts.kind === "session-manager-authority"
+      ) {
+        revoked = true;
+      }
+      callback(request, grant);
+    });
+    try {
+      const pending =
+        binding === "explicit"
+          ? compact((prepared) =>
+              persistCompactionBoundaryWithSessionEntryAsync(
+                scope,
+                { prepared, tokensAfter: 45, transcriptByteCompactionLatch: null },
+                assertCurrent,
+              ),
+            )
+          : withOwnedSessionTranscriptWrites(
+              {
+                sessionTarget: scope,
+                assertCommitAllowed: assertCurrent,
+                withTranscriptWrite: async (run) => await run(),
+              },
+              () =>
+                persistCompactionBoundaryWithSessionEntryAsync(scope, {
+                  prepared: preparedBoundary(scope, keptId, "prepared-compaction"),
+                  transcriptByteCompactionLatch: byteLatch(scope),
+                }),
+            );
+      await expect(pending).rejects.toThrow("compaction authority revoked");
+      expect(revoked).toBe(true);
+    } finally {
+      observed.mockRestore();
     }
-    callback(request, grant);
-  });
-  try {
-    await expect(
-      compact((prepared) =>
-        persistCompactionBoundaryWithSessionEntryAsync(
-          scope,
-          { prepared, tokensAfter: 45, transcriptByteCompactionLatch: null },
-          () => {
-            if (!current) {
-              throw ownerClosed;
-            }
-          },
-        ),
-      ),
-    ).rejects.toThrow("compaction authority revoked");
-    expect(revoked).toBe(true);
-  } finally {
-    observed.mockRestore();
-  }
-  expectRolledBack(scope, before);
-});
+    expectRolledBack(scope, before);
+  },
+);
 
 it("recovers both transcript and accounting after a worker crash before compaction COMMIT", async () => {
   const scope = sessionScope("compaction-crash-before-commit");
@@ -467,47 +482,5 @@ it("rolls back accounting when the prepared boundary identity already exists", a
     `Session transcript entry was not persisted: ${keptId}: transcript-event-not-appended`,
   );
 
-  expectRolledBack(scope, before);
-});
-
-it("rolls back when the ambient writer is revoked at commit", async () => {
-  const scope = sessionScope("compaction-boundary-owner", "session", false);
-  const { keptId } = await seedCompaction(scope);
-  const before = loadTranscriptEventsSync(scope);
-  const ownerClosed = new Error("compaction owner closed");
-  let revoked = false;
-  const observed = sqliteWorkerOwnerProbe.admission(admission, (request, grant, callback) => {
-    if (
-      request.stage === "commit" &&
-      isRecord(request.facts) &&
-      request.facts.kind === "session-manager-authority"
-    ) {
-      revoked = true;
-    }
-    callback(request, grant);
-  });
-  try {
-    await expect(
-      withOwnedSessionTranscriptWrites(
-        {
-          sessionTarget: scope,
-          assertCommitAllowed: () => {
-            if (revoked) {
-              throw ownerClosed;
-            }
-          },
-          withTranscriptWrite: async (run) => await run(),
-        },
-        () =>
-          persistCompactionBoundaryWithSessionEntryAsync(scope, {
-            prepared: preparedBoundary(scope, keptId, "prepared-compaction"),
-            transcriptByteCompactionLatch: byteLatch(scope),
-          }),
-      ),
-    ).rejects.toThrow("compaction owner closed");
-    expect(revoked).toBe(true);
-  } finally {
-    observed.mockRestore();
-  }
   expectRolledBack(scope, before);
 });

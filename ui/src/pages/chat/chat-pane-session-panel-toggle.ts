@@ -25,7 +25,14 @@ import { listen } from "../../lib/reactive/listener.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
-import { closeSlot, openSlot, setSidebarDock, type SidebarSlotId } from "./sidebar-layout.ts";
+import {
+  closeSlot,
+  openSlot,
+  setSidebarDock,
+  setSidebarExpanded,
+  toggleSidebarPanelExpanded,
+  type SidebarSlotId,
+} from "./sidebar-layout.ts";
 
 interface ActivePanelOwner {
   sidebarRegion: HTMLElementTagNameMap["openclaw-chat-sidebar-region"] | null;
@@ -96,6 +103,15 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
     if (detail.dock) {
       layout = setSidebarDock(layout, detail.dock);
     }
+    const panel = layout.columns
+      .flatMap((column) => column.panels)
+      .find((entry) => entry.slot === slot);
+    if (detail.open && panel && typeof detail.expanded === "boolean") {
+      layout =
+        detail.expanded && panel.id !== layout.mainPanelId
+          ? toggleSidebarPanelExpanded(layout, panel.id)
+          : setSidebarExpanded(layout, detail.expanded);
+    }
     options.updateSidebarLayout(layout);
     if (detail.open) {
       options.onOpenPanel?.(slot);
@@ -150,6 +166,12 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
     } else if (panel && slot === "portal" && typeof detail?.environmentId === "string") {
       panel.environmentId = detail.environmentId;
       delete panel.portalId;
+    }
+    if (panel && typeof detail?.expanded === "boolean") {
+      layout =
+        detail.expanded && panel.id !== layout.mainPanelId
+          ? toggleSidebarPanelExpanded(layout, panel.id)
+          : setSidebarExpanded(layout, detail.expanded);
     }
     if (slot === "terminal") {
       const intent = terminalToggleIntent(event, resolveChatAgentId(owner.state));

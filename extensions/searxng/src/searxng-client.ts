@@ -2,17 +2,16 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { ProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import {
   externalContentStamp,
+  nativeWebSearchCodecs,
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_SEARCH_COUNT,
   readCachedSearchPayload,
   readResponseText,
   resolveCacheTtlMs,
   resolveSearchCount,
-  resolveSiteName,
   resolveTimeoutSeconds,
   withSelfHostedWebSearchEndpoint,
   withTrustedWebSearchEndpoint,
-  wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { resolveProviderWebSearchPluginConfig } from "openclaw/plugin-sdk/provider-web-search-config-contract";
@@ -24,23 +23,12 @@ import {
   isPrivateIpAddress,
   resolvePinnedHostnameWithPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import {
-  asOptionalObjectRecord,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const SEARXNG_BASE_URL_ENV_VAR = "SEARXNG_BASE_URL";
 const SEARXNG_BASE_URL_PATH = "plugins.entries.searxng.config.webSearch.baseUrl";
 const DEFAULT_TIMEOUT_SECONDS = 20;
 const MAX_RESPONSE_BYTES = 1_000_000;
-type SearxngEndpointMode = "selfHosted" | "strict";
-
-type SearxngResult = {
-  url: string;
-  title: string;
-  content?: string;
-  img_src?: string;
-};
 
 function normalizeBaseUrl(value: unknown): string | undefined {
   return normalizeSecretInput(value)?.replace(/\/+$/u, "") || undefined;
@@ -64,31 +52,6 @@ function resolveSearxngBaseUrl(config?: OpenClawConfig): string | undefined {
   return normalizeBaseUrl(process.env[SEARXNG_BASE_URL_ENV_VAR]);
 }
 
-function normalizeSearxngResult(value: unknown): SearxngResult | null {
-  const candidate = asOptionalObjectRecord(value);
-  if (typeof candidate?.url !== "string" || typeof candidate.title !== "string") {
-    return null;
-  }
-
-  return {
-    url: candidate.url,
-    title: candidate.title,
-    content: typeof candidate.content === "string" ? candidate.content : undefined,
-    img_src: typeof candidate.img_src === "string" ? candidate.img_src : undefined,
-  };
-}
-
-function shouldRetryEmptyCategorySearchWithGeneral(categories: string | undefined): boolean {
-  if (!categories) {
-    return false;
-  }
-  const normalized = categories
-    .split(",")
-    .map((category) => category.trim().toLowerCase())
-    .filter((category) => category.length > 0);
-  return normalized.length > 0 && !normalized.includes("general");
-}
-
 async function searxngEndpointTargetsPrivateNetwork(url: URL): Promise<boolean> {
   if (isBlockedHostnameOrIp(url.hostname)) {
     return true;
@@ -106,7 +69,7 @@ async function searxngEndpointTargetsPrivateNetwork(url: URL): Promise<boolean> 
   }
 }
 
-async function validateSearxngBaseUrl(baseUrl: string): Promise<SearxngEndpointMode> {
+async function validateSearxngBaseUrl(baseUrl: string): Promise<"selfHosted" | "strict"> {
   let parsed: URL;
   try {
     parsed = new URL(baseUrl);
@@ -128,30 +91,6 @@ async function validateSearxngBaseUrl(baseUrl: string): Promise<SearxngEndpointM
   }
 
   return (await searxngEndpointTargetsPrivateNetwork(parsed)) ? "selfHosted" : "strict";
-}
-
-function parseSearxngResponseText(text: string, count: number): SearxngResult[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    throw new Error("SearXNG returned invalid JSON.");
-  }
-
-  const rawResults = asOptionalObjectRecord(parsed)?.results;
-  const results: SearxngResult[] = [];
-
-  for (const rawResult of Array.isArray(rawResults) ? rawResults : []) {
-    const result = normalizeSearxngResult(rawResult);
-    if (result) {
-      results.push(result);
-    }
-    if (results.length >= count) {
-      break;
-    }
-  }
-
-  return results;
 }
 
 export async function runSearxngSearch(params: {
@@ -211,15 +150,12 @@ export async function runSearxngSearch(params: {
   const startedAt = Date.now();
   const query = params.query;
   const signal = params.signal;
-  const fetchSearxngResults = async (
-    searchCategories: string | undefined,
-  ): Promise<SearxngResult[]> => {
-    const url = new URL(baseUrl);
+  const fetchSearxngResults = async (searchCategories: string | undefined) => {
+    let url = new URL(baseUrl);
     const basePathname = url.pathname.replace(/\/+$/u, "");
     url.pathname = basePathname.endsWith("/search") ? basePathname : `${basePathname}/search`;
     url.search = "";
-    url.searchParams.set("q", query);
-    url.searchParams.set("format", "json");
+    url = new URL(nativeWebSearchCodecs["searxng.search"].request(url.href, query, count).url);
     if (searchCategories) {
       url.searchParams.set("categories", searchCategories);
     }
@@ -256,15 +192,29 @@ export async function runSearxngSearch(params: {
         if (body.truncated) {
           throw new Error(`SearXNG response incomplete after ${body.bytesRead} bytes.`);
         }
-        return parseSearxngResponseText(body.text, count);
+        const text = body.text;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          throw new Error("SearXNG returned invalid JSON.");
+        }
+
+        return nativeWebSearchCodecs["searxng.search"].results(parsed, count);
       },
     );
   };
   let results = await fetchSearxngResults(categories);
   params.signal?.throwIfAborted();
-  if (results.length === 0 && shouldRetryEmptyCategorySearchWithGeneral(categories)) {
-    results = await fetchSearxngResults("general");
-    params.signal?.throwIfAborted();
+  if (results.length === 0 && categories) {
+    const normalized = categories
+      .split(",")
+      .map((category) => category.trim().toLowerCase())
+      .filter((category) => category.length > 0);
+    if (normalized.length > 0 && !normalized.includes("general")) {
+      results = await fetchSearxngResults("general");
+      params.signal?.throwIfAborted();
+    }
   }
 
   const payload = {
@@ -273,13 +223,7 @@ export async function runSearxngSearch(params: {
     count: results.length,
     tookMs: Date.now() - startedAt,
     externalContent: externalContentStamp("searxng"),
-    results: results.map((result) => ({
-      title: wrapWebContent(result.title, "web_search"),
-      url: result.url,
-      snippet: result.content ? wrapWebContent(result.content, "web_search") : "",
-      siteName: resolveSiteName(result.url) || undefined,
-      img_src: result.img_src || undefined,
-    })),
+    results,
   } satisfies Record<string, unknown>;
 
   writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);

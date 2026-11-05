@@ -6,10 +6,18 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { MediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
 import { normalizeMediaExecutionProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
+import type {
+  AudioTranscriptionResult,
+  MediaAttachment,
+  MediaUnderstandingCapability,
+  MediaUnderstandingModelDecision,
+  MediaUnderstandingOutput,
+} from "../../packages/media-understanding-common/src/types.js";
 import {
   estimateBase64Size,
   resolveVideoMaxBase64Bytes,
 } from "../../packages/media-understanding-common/src/video.js";
+import { resolveImageCompressionModelPolicy } from "../agents/image-compression-policy.js";
 import type { RuntimeMsgContext as MsgContext, TemplateContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -33,7 +41,7 @@ import { resolveOfficialExternalPluginRepairHint } from "../plugins/official-ext
 import { runExec } from "../process/exec.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 import { assertRuntimeMediaRequestSecretOwnerAvailable } from "../secrets/runtime-media-secret-owner.js";
-import { MediaAttachmentCache } from "./attachments.js";
+import { MediaAttachmentCache } from "./attachments.cache.js";
 import { resolveCliOutput } from "./cli-output.js";
 import { CLI_OUTPUT_MAX_BUFFER, MIN_AUDIO_FILE_BYTES } from "./defaults.constants.js";
 import {
@@ -53,20 +61,10 @@ import {
   type MediaExecutionContext,
 } from "./provider-execution.js";
 import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./provider-registry.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 import { resolveCliModelEntry, resolveEntryRunOptions } from "./resolve.js";
 import { isTranscriptArtifactText } from "./transcription-text.js";
-import type {
-  AudioTranscriptionResult,
-  AudioTranscriptionRequest,
-  MediaAttachment,
-  MediaUnderstandingCapability,
-  MediaUnderstandingDecision,
-  MediaUnderstandingModelDecision,
-  MediaUnderstandingOutput,
-  MediaUnderstandingProvider,
-} from "./types.js";
-
-type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
+import type { AudioTranscriptionRequest } from "./types.js";
 
 function trimOutput(text: string, maxChars?: number): string {
   const trimmed = text.trim();
@@ -146,70 +144,6 @@ export function buildModelDecision(params: {
 
 export type MediaRequestOverrides = Pick<AudioTranscriptionRequest, "prompt" | "language">;
 
-/** Formats a compact operator-facing summary of a media-understanding decision. */
-export function formatDecisionSummary(decision: MediaUnderstandingDecision): string {
-  const { attachments } = decision;
-  const total = attachments.length;
-  const success = attachments.filter((entry) => entry.chosen?.outcome === "success").length;
-  const chosen = attachments.find((entry) => entry.chosen)?.chosen;
-  const provider = chosen?.provider?.trim();
-  const model = chosen?.model?.trim();
-  const modelLabel = provider
-    ? model && model !== provider
-      ? `${provider}/${model}`
-      : provider
-    : undefined;
-  const backendLabel = chosen?.observedBackend
-    ? ` observed=${chosen.observedBackend}`
-    : chosen?.requestedBackend
-      ? ` requested=${chosen.requestedBackend}`
-      : "";
-  const reason = findDecisionReason(decision, decision.outcome === "failed" ? "failed" : undefined);
-  const shortReason = summarizeDecisionReason(reason);
-  const countLabel = total > 0 ? ` (${success}/${total})` : "";
-  const viaLabel = modelLabel ? ` via ${modelLabel}${backendLabel}` : "";
-  const reasonLabel = shortReason ? ` reason=${shortReason}` : "";
-  return `${decision.capability}: ${decision.outcome}${countLabel}${viaLabel}${reasonLabel}`;
-}
-
-/** Returns the first non-empty attempt reason, optionally filtered by outcome. */
-export function findDecisionReason(
-  decision: MediaUnderstandingDecision,
-  outcome?: MediaUnderstandingModelDecision["outcome"],
-): string | undefined {
-  for (const attachment of decision.attachments) {
-    for (const attempt of attachment.attempts) {
-      if (outcome && attempt.outcome !== outcome) {
-        continue;
-      }
-      if (!attempt.reason?.trim()) {
-        continue;
-      }
-      return attempt.reason;
-    }
-  }
-  return undefined;
-}
-
-/** Trims provider/runtime error prefixes into a stable human-readable reason. */
-export function normalizeDecisionReason(reason?: string): string | undefined {
-  const trimmed = reason?.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const normalized = trimmed.replace(/^(?:Error|ProviderHttpError):\s*/i, "").trim();
-  return normalized || undefined;
-}
-
-/** Produces the short reason token used in status and decision summary output. */
-export function summarizeDecisionReason(reason?: string): string | undefined {
-  const normalized = normalizeDecisionReason(reason);
-  if (!normalized) {
-    return undefined;
-  }
-  return normalized.split(/:|\s+\[request_id=/)[0]?.trim() || undefined;
-}
-
 function assertMinAudioSize(params: { size: number; attachmentIndex: number }): void {
   if (params.size >= MIN_AUDIO_FILE_BYTES) {
     return;
@@ -250,7 +184,7 @@ export async function runProviderEntry(params: {
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
-  providerRegistry: ProviderRegistry;
+  providerRegistry: Map<string, MediaUnderstandingProvider>;
   assertCurrent?: () => void;
   config?: MediaUnderstandingConfig;
   secretOwnerId?: string;
@@ -297,11 +231,13 @@ export async function runProviderEntry(params: {
         ...normalizedMedia,
         fileName: media.fileName,
         maxBytes,
-        cfg,
-        provider: requestProviderId,
-        model: modelId,
-        agentDir: params.agentDir,
-        workspaceDir: params.workspaceDir,
+        modelPolicy: await resolveImageCompressionModelPolicy({
+          cfg,
+          provider: requestProviderId,
+          model: modelId,
+          agentDir: params.agentDir,
+          workspaceDir: params.workspaceDir,
+        }),
       });
     } catch (error) {
       if (error instanceof ImageOptimizationLimitError) {

@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { normalizeModelCatalogProviderRows } from "../../packages/model-catalog-core/src/model-catalog-normalize.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
-import { normalizeManifestModelCatalog } from "../plugins/manifest-decision-catalog.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -374,13 +373,7 @@ it.each([
 
 it("projects the declared Jev routes as decision-only without fabricated chat fields", () => {
   const manifest = readOpenRouterManifest();
-  const catalog = normalizeManifestModelCatalog({
-    providers: manifest.providers ?? [],
-    cliBackends: [],
-    decisionProviders: manifest.contracts?.decisionProviders,
-    decisionModels: undefined,
-    modelCatalog: manifest.modelCatalog,
-  });
+  const catalog = manifest.modelCatalog;
   const providerCatalog = catalog?.providers?.openrouter;
   if (!providerCatalog) {
     throw new Error("Missing canonical OpenRouter model catalog");

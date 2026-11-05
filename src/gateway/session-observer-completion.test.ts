@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { FailoverError } from "../agents/failover-error.js";
+import { runUtilityCompletion } from "../agents/utility-completion.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
@@ -6,21 +8,27 @@ import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction
 import { setGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { createSessionObserverCompletion } from "./session-observer-completion.js";
+import {
+  createSessionObserverCompletion,
+  reportSessionObserverDegradation,
+} from "./session-observer-completion.js";
 import type { defaultCompleteModel } from "./session-observer-model.js";
 import { observerState } from "./session-observer-state.test-support.js";
 import {
-  createHarness,
+  advanceAndFlush as advance,
+  expectBroadcast,
+  useObserverSuite,
+} from "./session-observer-suite.test-support.js";
+import {
   event,
-  flushObserver,
   modelMessage,
   preparedModel,
-  resetSessionObserverEventSequence,
   startAndAddToolNotes,
 } from "./session-observer.test-utils.js";
 
+const { createHarness } = useObserverSuite();
+
 beforeEach(() => {
-  vi.useFakeTimers();
   setGatewayPluginMetadataSnapshot(
     createPluginMetadataSnapshotFixture({
       plugins: [
@@ -29,6 +37,7 @@ beforeEach(() => {
           modelIdNormalization: {
             providers: { openai: { aliases: { "private-manifest-alias": "gpt-test" } } },
           },
+          modelCatalog: { providers: { openai: { defaultUtilityModel: "gpt-test", models: [] } } },
         },
       ],
     }),
@@ -36,8 +45,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.useRealTimers();
-  resetSessionObserverEventSequence();
   resetSecretRedactionRegistryForTest();
   setCurrentPluginMetadataSnapshot(undefined);
 });
@@ -45,7 +52,6 @@ afterEach(() => {
 it.each(["exact tool cap", "invalid schema", "manifest alias"])(
   "warns once when %s failures disable observation, and retries on the next run",
   async (failure) => {
-    vi.setSystemTime(0);
     const notices: AgentEventPayload[] = [];
     const unsubscribe = onAgentEvent((evt) => {
       if (evt.stream === "notice") {
@@ -86,29 +92,27 @@ it.each(["exact tool cap", "invalid schema", "manifest alias"])(
     );
     try {
       await startAndAddToolNotes(harness.observer);
-      await vi.advanceTimersByTimeAsync(24_000);
-      await flushObserver();
+      await advance(24_000);
       expect(notices).toMatchObject([
         {
           runId: "run-1",
           sessionKey: "agent:main:session-1",
           data: {
             phase: "warning",
-            message: expect.stringContaining("openai/gpt-test"),
+            message: expect.stringMatching(
+              /openai\/gpt-test.*choose a capable utility model.*utilityModel\.fallbacks/u,
+            ),
           },
         },
       ]);
-      expect(notices[0]?.data.message).toContain("choose a capable utility model");
-      expect(notices[0]?.data.message).toContain("utilityModel.fallbacks");
-      expect(notices[0]?.data.message).not.toContain("private-profile");
-      expect(notices[0]?.data.message).not.toContain("private-utility-alias");
-      expect(notices[0]?.data.message).not.toContain("private-manifest-alias");
+      expect(notices[0]?.data.message).not.toMatch(
+        /private-profile|private-utility-alias|private-manifest-alias/u,
+      );
       const callsAtDisable = prepareModel.mock.calls.length + completeModel.mock.calls.length;
       await harness.observer.handleEventAsync(
         event({ stream: "tool", data: { phase: "start", name: "read", args: { path: "more" } } }),
       );
-      await vi.advanceTimersByTimeAsync(60_000);
-      await flushObserver();
+      await advance(60_000);
       expect(prepareModel.mock.calls.length + completeModel.mock.calls.length).toBe(callsAtDisable);
       expect(notices).toHaveLength(1);
 
@@ -117,14 +121,8 @@ it.each(["exact tool cap", "invalid schema", "manifest alias"])(
         modelMessage({ headline: "Working", health: "on-track" }),
       );
       await startAndAddToolNotes(harness.observer, { runId: "run-2" });
-      await vi.advanceTimersByTimeAsync(12_000);
-      await flushObserver();
-      expect(harness.broadcastToConnIds).toHaveBeenCalledWith(
-        "session.observer",
-        expect.objectContaining({ runId: "run-2", headline: "Working" }),
-        expect.any(Set),
-        expect.anything(),
-      );
+      await advance(12_000);
+      expectBroadcast(harness, { runId: "run-2", headline: "Working" });
       expect(notices).toHaveLength(1);
     } finally {
       unsubscribe();
@@ -134,12 +132,108 @@ it.each(["exact tool cap", "invalid schema", "manifest alias"])(
   },
 );
 
-function completionAfter(delay?: number) {
-  const reply = modelMessage({
-    headline: "Reviewing the implementation",
-    assessment: "The work is progressing steadily.",
-    health: "on-track",
+it.each([
+  { name: "provider default", utilityModel: undefined, agentUtilityModel: undefined, warnings: 0 },
+  {
+    name: "configured fallback",
+    utilityModel: { fallbacks: ["openai/gpt-recovery"] },
+    agentUtilityModel: undefined,
+    warnings: 1,
+  },
+  {
+    name: "per-agent model",
+    utilityModel: undefined,
+    agentUtilityModel: "openai/gpt-test",
+    warnings: 1,
+  },
+])(
+  "only posts a conversation warning for explicit utility settings: $name",
+  async ({ utilityModel, agentUtilityModel, warnings }) => {
+    const notices: AgentEventPayload[] = [];
+    const unsubscribe = onAgentEvent((evt) => {
+      if (evt.stream === "notice") {
+        notices.push(evt);
+      }
+    });
+    const prepareModel = vi.fn(async () => {
+      throw new Error("Synthetic utility model failure");
+    });
+    const harness = createHarness({
+      prepareModel,
+      config: {
+        agents: {
+          defaults: { model: "openai/gpt-main", utilityModel },
+          entries: { main: { utilityModel: agentUtilityModel } },
+        },
+      },
+    });
+    try {
+      await startAndAddToolNotes(harness.observer);
+      await advance(24_000);
+      expect(prepareModel).toHaveBeenCalledTimes(2);
+      expect(notices).toHaveLength(warnings);
+      await advance(60_000);
+      expect(prepareModel).toHaveBeenCalledTimes(2);
+    } finally {
+      unsubscribe();
+    }
+  },
+);
+
+it("names missing models and exhausted utility fallbacks without exposing provider error text", async () => {
+  const cfg = {
+    agents: {
+      defaults: {
+        utilityModel: {
+          primary: "fixture/missing@private-profile",
+          fallbacks: ["fixture/unavailable", "fixture/recovery"],
+        },
+      },
+    },
+  };
+  const notices: AgentEventPayload[] = [];
+  const unsubscribe = onAgentEvent((evt) => {
+    if (evt.stream === "notice") {
+      notices.push(evt);
+    }
   });
+  const complete = vi.fn<NonNullable<Parameters<typeof runUtilityCompletion>[1]>>(
+    async (request) => {
+      throw new FailoverError("private-provider-error", {
+        reason: "model_not_found",
+        provider: request.provider,
+        model: request.model,
+      });
+    },
+  );
+  const request = {
+    config: cfg,
+    agentId: "main",
+    provider: "fixture",
+    model: "missing",
+    useUtilityModel: true,
+    prompt: "Synthetic task",
+    systemPrompt: "Return JSON",
+    timeoutMs: 1000,
+  };
+  try {
+    const error = await runUtilityCompletion(request, complete).catch((caught: unknown) => caught);
+    reportSessionObserverDegradation(
+      { ...observerState(), utilityModelRef: "fixture/missing@private-profile" },
+      error,
+      cfg,
+    );
+    expect(notices[0]?.data.message).toContain(
+      "Unavailable model IDs: fixture/missing, fixture/unavailable, fixture/recovery.",
+    );
+    expect(notices[0]?.data.message).toContain("Utility fallbacks exhausted");
+    expect(notices[0]?.data.message).not.toMatch(/private-profile|private-provider-error/u);
+  } finally {
+    unsubscribe();
+  }
+});
+
+function completionAfter(delay?: number) {
   return vi.fn(
     (params: { abortSignal?: AbortSignal }) =>
       new Promise<ReturnType<typeof modelMessage>>((resolve, reject) => {
@@ -147,7 +241,10 @@ function completionAfter(delay?: number) {
           once: true,
         });
         if (delay !== undefined) {
-          setTimeout(() => resolve(reply), delay);
+          setTimeout(
+            () => resolve(modelMessage({ headline: "Working", health: "on-track" })),
+            delay,
+          );
         }
       }),
   );
@@ -188,49 +285,32 @@ it("reports a redacted, collapsed, bounded prefix of the last of two rejected re
 });
 
 it("publishes a digest from a utility model that answers after 15s", async () => {
-  vi.setSystemTime(0);
-  // CLI-backed utility models (for example claude-cli Haiku) take 9-16s per call.
   const completeModel = completionAfter(15_000);
   const harness = createHarness({ completeModel });
   await startAndAddToolNotes(harness.observer);
 
-  await vi.advanceTimersByTimeAsync(12_000);
-  await flushObserver();
+  await advance(12_000);
   expect(completeModel).toHaveBeenCalledOnce();
-  await vi.advanceTimersByTimeAsync(15_000);
-  await flushObserver();
+  await advance(15_000);
 
   expect(completeModel.mock.calls[0]?.[0].abortSignal?.aborted).toBe(false);
-  expect(harness.broadcastToConnIds).toHaveBeenCalledWith(
-    "session.observer",
-    expect.objectContaining({ headline: "Reviewing the implementation", health: "on-track" }),
-    expect.any(Set),
-    expect.anything(),
-  );
-  await harness.observer.disposeAsync();
+  expectBroadcast(harness, { headline: "Working", health: "on-track" });
 });
 
 it("aborts stuck completions at the cap and disables the run after two failures", async () => {
-  vi.setSystemTime(0);
   const completeModel = completionAfter();
   const signal = (index: number) => completeModel.mock.calls[index]?.[0].abortSignal;
   const harness = createHarness({ completeModel });
   await startAndAddToolNotes(harness.observer);
-  await vi.advanceTimersByTimeAsync(12_000);
-  await flushObserver();
-  await vi.advanceTimersByTimeAsync(29_999);
-  await flushObserver();
+  await advance(12_000);
+  await advance(29_999);
   expect(signal(0)?.aborted).toBe(false);
-  await vi.advanceTimersByTimeAsync(1);
-  await flushObserver();
+  await advance(1);
   expect(signal(0)?.aborted).toBe(true);
   expect(completeModel).toHaveBeenCalledTimes(2);
-  await vi.advanceTimersByTimeAsync(30_000);
-  await flushObserver();
+  await advance(30_000);
   expect(signal(1)?.aborted).toBe(true);
-  await vi.advanceTimersByTimeAsync(60_000);
-  await flushObserver();
+  await advance(60_000);
   expect(completeModel).toHaveBeenCalledTimes(2);
   expect(harness.broadcastToConnIds).not.toHaveBeenCalled();
-  await harness.observer.disposeAsync();
 });

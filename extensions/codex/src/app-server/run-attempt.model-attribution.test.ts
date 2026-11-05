@@ -29,7 +29,6 @@ import { CodexAppServerClient } from "./client.js";
 import type { CodexPluginConfig } from "./config.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
-import { isJsonObject } from "./protocol.js";
 import {
   createTestParams,
   getMockRuntimeIdentity,
@@ -47,7 +46,7 @@ import {
 } from "./session-binding.js";
 import { createCodexRuntimeTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
-import { createClientHarness } from "./test-support.js";
+import { createRequestClientHarness, isCodexTurnContextHandoff } from "./test-support.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 
 setupRunAttemptTestHooks();
@@ -180,19 +179,9 @@ it("attributes completed models and refreshes their selection on warm reuse", as
     "thread/backgroundTerminals/list": () => ({ data: [], nextCursor: null }),
     "thread/unsubscribe": () => ({ status: "unsubscribed" }),
   };
-  const transport = createClientHarness({
-    onWrite(line, send) {
-      const message: unknown = JSON.parse(line);
-      if (
-        !isJsonObject(message) ||
-        typeof message.method !== "string" ||
-        message.id === undefined
-      ) {
-        return;
-      }
-      requests.push({ method: message.method, params: message.params });
-      send({ id: message.id, result: responses[message.method]?.() ?? {} });
-    },
+  const transport = createRequestClientHarness((method, id, requestParams, send) => {
+    requests.push({ method, params: requestParams });
+    send({ id, result: responses[method]?.() ?? {} });
   });
   const sendTurn = (
     status: string,
@@ -314,7 +303,12 @@ it("attributes completed models and refreshes their selection on warm reuse", as
     });
     expect(requests.filter(({ method }) => method === "thread/resume")).toHaveLength(1);
     expect(requests.filter(({ method }) => method === "thread/unsubscribe")).toHaveLength(0);
-    expect(requests.filter(({ method }) => method === "thread/inject_items")).toHaveLength(1);
+    expect(
+      requests.filter(
+        ({ method, params: requestParams }) =>
+          method === "thread/inject_items" && !isCodexTurnContextHandoff(requestParams),
+      ),
+    ).toHaveLength(1);
   } finally {
     abort.abort("test cleanup");
     try {

@@ -2,11 +2,10 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { zstdCompressSync } from "node:zlib";
+import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
-  decodeSessionArchiveBytes,
   encodeSessionArchiveContent,
   SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "../config/sessions/archive-compression.js";
@@ -187,7 +186,9 @@ function expectNoChanges(result: { changes: string[]; warnings: string[] }) {
 
 function expectCanonical(row: ArchiveRow): void {
   expect(sha256(row.archive_blob)).toBe(row.archive_sha256);
-  const content = decodeSessionArchiveBytes(row.archive_blob, row.encoding === "zstd");
+  const bytes = Buffer.from(row.archive_blob);
+  const content =
+    row.encoding === "zstd" ? zstdDecompressSync(bytes).toString("utf8") : bytes.toString("utf8");
   expect(content.endsWith("\n")).toBe(true);
   expect(
     content
@@ -519,8 +520,8 @@ describe("media migration of canonical SQLite transcript archives", () => {
         .prepare("UPDATE session_transcript_archives SET archive_blob = ?")
         .run(Buffer.from("corrupt"));
     }
-    expect((await migrateLegacyMediaPersistence({ env: f.env })).warnings.join("\n")).toContain(
-      "Canonical SQLite transcript archive is corrupt",
+    expect((await migrateLegacyMediaPersistence({ env: f.env })).warnings.join("\n")).toMatch(
+      /Failed migrating transcript archive \([^)]+\): Canonical SQLite transcript archive is corrupt \[/u,
     );
   });
 

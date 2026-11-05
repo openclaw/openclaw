@@ -1,11 +1,19 @@
-import { Type } from "typebox";
+import assert from "node:assert/strict";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { makeUserMessage } from "../../test/helpers/user-message.js";
+import { withPreparedTranscriptCorrection } from "../config/sessions/session-transcript-correction.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
+import * as codeModeJson from "./code-mode-json.js";
 import {
   bindCodeModeSessionStore,
   createCodeModeSessionStoreAccess,
 } from "./code-mode-session-store.js";
+import { withSessionState } from "./sessions/session-manager-fixtures.test-support.js";
+import { withSelectedTranscriptReader } from "./sessions/session-manager-reader.test-support.js";
 import { SessionManager } from "./sessions/session-manager.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import { clearToolSearchCatalog, restrictToolSearchCatalog } from "./tool-search-catalog.js";
 import type { ToolSearchCatalogRef } from "./tool-search-types.js";
 
@@ -40,66 +48,266 @@ async function saveCell(owner: Pick<ReturnType<typeof run>, "cell">, key: string
   await cell.commit();
 }
 
-it("appends one hidden entry per cell and replays writes, deletes, and provenance in the next run", async () => {
-  const { manager, ...first } = run();
-  const cell = first.cell();
-  await cell.save("report", { title: "remote" }, true);
-  await cell.save("draft", 1, false);
-  await cell.save("draft", undefined, false);
-  await cell.commit();
-  expect(manager.getEntries()).toEqual([
-    expect.objectContaining({
-      type: "custom",
-      customType: "openclaw.code-mode-store",
-      data: {
-        set: { report: { title: "remote" } },
-        delete: ["draft"],
-        networkContent: { report: true },
+async function loadDurableStore(scope: Parameters<typeof withSelectedTranscriptReader>[0]) {
+  return withSelectedTranscriptReader(
+    scope,
+    async () => {
+      const owner = run(await SessionManager.openAsync(scope));
+      try {
+        return await owner.cell().load("key");
+      } finally {
+        owner.close();
+      }
+    },
+    true,
+  );
+}
+
+it("reuses committed encodings across admitted turns while isolating loads and branch changes", () =>
+  withSessionState("store-replay-turns", async ({ scope }) => {
+    const admitted = <T>(operation: () => Promise<T>) =>
+      withSelectedTranscriptReader(scope, operation, true);
+    const originalLeaf = await admitted(async () => {
+      const source = await SessionManager.openAsync(scope);
+      const seed = run(source);
+      await saveCell(seed, "key", { z: "🦞\n", a: [1, null] });
+      seed.close();
+      return source.getLeafId()!;
+    });
+
+    const stringify = vi.spyOn(codeModeJson, "stringifyCodeModeJsonSafe");
+    const first = await loadDurableStore(scope);
+    expect(stringify).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(first.value)).toBe('{"z":"🦞\\n","a":[1,null]}');
+    assert(isRecord(first.value));
+    first.value.z = "caller mutation";
+
+    await admitted(async () => {
+      const source = await SessionManager.openAsync(scope);
+      await source.appendMessageAsync(makeUserMessage("Another turn", 1));
+    });
+    stringify.mockClear();
+    const second = await loadDurableStore(scope);
+    expect(stringify).not.toHaveBeenCalled();
+    expect(second).toEqual({ value: { z: "🦞\n", a: [1, null] }, networkContent: false });
+    expect(second.value).not.toBe(first.value);
+
+    await closeOpenClawAgentDatabaseByPathAsync(scope.storePath, scope.agentId);
+    stringify.mockClear();
+    await expect(loadDurableStore(scope)).resolves.toEqual(second);
+    expect(stringify).toHaveBeenCalledTimes(1);
+
+    await admitted(async () => {
+      const changed = run(await SessionManager.openAsync(scope));
+      await saveCell(changed, "key", "appended value");
+      changed.close();
+    });
+    stringify.mockClear();
+    await expect(loadDurableStore(scope)).resolves.toEqual({
+      value: "appended value",
+      networkContent: false,
+    });
+    expect(stringify).toHaveBeenCalledTimes(1);
+    await admitted(async () => {
+      const source = await SessionManager.openAsync(scope);
+      await source.branchAsync(originalLeaf);
+      const branch = run(source);
+      try {
+        await expect(branch.cell().load("key")).resolves.toEqual({
+          value: { z: "🦞\n", a: [1, null] },
+          networkContent: false,
+        });
+      } finally {
+        branch.close();
+      }
+    });
+  }));
+
+it("invalidates cached encodings when a transcript rewrite preserves custom entry IDs", () =>
+  withSessionState("store-replay-rewrite", async ({ scope }) => {
+    const admitted = <T>(operation: () => Promise<T>) =>
+      withSelectedTranscriptReader(scope, operation, true);
+    const entryId = await admitted(async () => {
+      const source = await SessionManager.openAsync(scope);
+      const seed = run(source);
+      await saveCell(seed, "key", { before: 1, after: 2 });
+      seed.close();
+      return source.getLeafId();
+    });
+    await expect(loadDurableStore(scope)).resolves.toEqual({
+      value: { before: 1, after: 2 },
+      networkContent: false,
+    });
+
+    await admitted(() =>
+      withPreparedTranscriptCorrection(scope, async (correction) => {
+        const entries = await correction.readEvents();
+        const index = entries.findIndex((entry) => isRecord(entry) && entry.id === entryId);
+        const original = entries[index];
+        assert(isRecord(original));
+        const replacement = entries.slice();
+        replacement[index] = {
+          ...original,
+          data: {
+            set: { key: { after: 2, before: 1 } },
+            delete: [],
+            networkContent: { key: true },
+          },
+        };
+        await correction.replaceEvents(replacement);
+      }),
+    );
+    const loaded = await loadDurableStore(scope);
+    expect(JSON.stringify(loaded.value)).toBe('{"after":2,"before":1}');
+    expect(loaded.networkContent).toBe(true);
+  }));
+
+it("matches full replay through randomized appends, branch switches, and generation changes", () =>
+  withSessionState("store-replay-differential", async ({ scope }) => {
+    const admitted = <T>(operation: () => Promise<T>) =>
+      withSelectedTranscriptReader(scope, operation, true);
+    const keys = Array.from({ length: 6 }, (_, index) => `key-${index}`);
+    const branches: string[] = [];
+    let random = 695;
+    const next = () => (random = (Math.imul(random, 1664525) + 1013904223) >>> 0);
+    for (let step = 0; step < 36; step++) {
+      await admitted(async () => {
+        const manager = await SessionManager.openAsync(scope);
+        if (step === 12 || step === 24) {
+          const leaf = branches[step === 12 ? 3 : 8];
+          assert(leaf);
+          await manager.branchAsync(leaf);
+        }
+        const prior = run(manager);
+        const priorCell = prior.cell();
+        const before = await Promise.all(keys.map((key) => priorCell.load(key)));
+        const set: Record<string, unknown> = {};
+        const networkContent: Record<string, boolean> = {};
+        const deleted: string[] = [];
+        for (let index = 0; index < 3; index++) {
+          const key = keys[next() % keys.length]!;
+          set[key] = { step, payload: "🦞".repeat(next() % 256), nested: [null, next()] };
+          networkContent[key] = next() % 2 === 0;
+          if (next() % 3 === 0) {
+            deleted.push(keys[next() % keys.length]!);
+          }
+        }
+        await manager.appendCustomEntryAsync("openclaw.code-mode-store", {
+          set,
+          delete: deleted,
+          networkContent,
+        });
+        branches.push(manager.getLeafId()!);
+        const full = SessionManager.inMemory();
+        for (const entry of manager.getBranch()) {
+          if (entry.type === "custom") {
+            await full.appendCustomEntryAsync(entry.customType, entry.data);
+          }
+        }
+        const incremental = run(manager);
+        const reference = run(full);
+        const incrementalCell = incremental.cell();
+        const referenceCell = reference.cell();
+        expect(await Promise.all(keys.map((key) => incrementalCell.load(key)))).toEqual(
+          await Promise.all(keys.map((key) => referenceCell.load(key))),
+        );
+        expect(await Promise.all(keys.map((key) => priorCell.load(key)))).toEqual(before);
+        prior.close();
+        incremental.close();
+        reference.close();
+      });
+      if (step === 18) {
+        await admitted(() =>
+          withPreparedTranscriptCorrection(scope, async (correction) => {
+            const entries = await correction.readEvents();
+            const replacement = entries.slice();
+            for (const [index, entry] of entries.entries()) {
+              if (isRecord(entry) && entry.type === "custom") {
+                replacement[index] = {
+                  ...entry,
+                  data: {
+                    set: { "key-0": "rewritten" },
+                    delete: [],
+                    networkContent: { "key-0": true },
+                  },
+                };
+              }
+            }
+            await correction.replaceEvents(replacement);
+          }),
+        );
+        await admitted(async () => {
+          const rewritten = run(await SessionManager.openAsync(scope));
+          await expect(rewritten.cell().load("key-0")).resolves.toEqual({
+            value: "rewritten",
+            networkContent: true,
+          });
+          rewritten.close();
+        });
+      }
+    }
+  }));
+
+it("matches full replay errors after a cached prefix, including later deletes of invalid history", () =>
+  withSessionState("store-replay-errors", async ({ scope }) => {
+    const value = "x".repeat(256 * 1024 - 2);
+    const cases = [
+      { set: {}, delete: [], networkContent: null },
+      { set: { e: 1 }, delete: [], networkContent: {} },
+      { set: { "": 1 }, delete: [], networkContent: { "": false } },
+      { set: {}, delete: [1], networkContent: {} },
+      { set: { e: `${value}x` }, delete: ["e"], networkContent: { e: false } },
+      { set: { e: value }, delete: [], networkContent: { e: false } },
+    ];
+    await withSelectedTranscriptReader(
+      scope,
+      async () => {
+        const manager = await SessionManager.openAsync(scope);
+        await manager.appendCustomEntryAsync("openclaw.code-mode-store", {
+          set: { a: value, b: value, c: value, d: value },
+          delete: [],
+          networkContent: { a: false, b: false, c: false, d: false },
+        });
+        const prefix = manager.getLeafId()!;
+        const outcome = async (source: SessionManager) => {
+          const owner = run(source);
+          try {
+            return await owner.cell().load("a");
+          } catch (error) {
+            assert(error instanceof Error);
+            return {
+              name: error.name,
+              message: error.message,
+              cause: error.cause instanceof Error ? [error.cause.name, error.cause.message] : null,
+            };
+          } finally {
+            owner.close();
+          }
+        };
+        for (const data of cases) {
+          await manager.branchAsync(prefix);
+          expect(await outcome(manager)).toEqual({ value, networkContent: false });
+          await manager.appendCustomEntryAsync("openclaw.code-mode-store", data);
+          await manager.appendCustomEntryAsync("openclaw.code-mode-store", {
+            set: {},
+            delete: ["a", "b", "c", "d", "e"],
+            networkContent: {},
+          });
+          const full = SessionManager.inMemory();
+          for (const entry of manager.getBranch()) {
+            if (entry.type === "custom") {
+              await full.appendCustomEntryAsync(entry.customType, entry.data);
+            }
+          }
+          const expected = await outcome(full);
+          expect(expected).toHaveProperty("message");
+          expect(await outcome(manager)).toEqual(expected);
+          expect(await outcome(manager)).toEqual(expected);
+        }
       },
-    }),
-  ]);
-  expect(manager.buildSessionContext().messages).toEqual([]);
-  first.close();
-  const second = run(manager);
-  await expect(second.cell().load("report")).resolves.toEqual({
-    value: { title: "remote" },
-    networkContent: true,
-  });
-  await expect(second.cell().load("draft")).resolves.toEqual({ networkContent: false });
-});
-
-it("replays only the selected branch, preserves earlier values through compaction, and forks that path", async () => {
-  const { manager, ...rootRun } = run();
-  await saveCell(rootRun, "inherited", "root");
-  const root = manager.getLeafId()!;
-  rootRun.close();
-
-  const branchA = run(manager);
-  await saveCell(branchA, "branch", "A");
-  const leafA = manager.getLeafId()!;
-  branchA.close();
-
-  await manager.branchAsync(root);
-  const branchB = run(manager);
-  await expect(branchB.cell().load("branch")).resolves.toEqual({ networkContent: false });
-  await saveCell(branchB, "branch", "B");
-  branchB.close();
-  const kept = await manager.appendMessageAsync({
-    role: "user",
-    content: "Keep this turn",
-    timestamp: 1,
-  });
-  await manager.appendCompactionAsync("Earlier conversation summarized", kept!, 100);
-
-  const compacted = run(manager);
-  await expect(compacted.cell().load("inherited")).resolves.toMatchObject({ value: "root" });
-  await expect(compacted.cell().load("branch")).resolves.toMatchObject({ value: "B" });
-  compacted.close();
-  await manager.createBranchedSession(leafA);
-  const fork = run(manager);
-  await expect(fork.cell().load("inherited")).resolves.toMatchObject({ value: "root" });
-  await expect(fork.cell().load("branch")).resolves.toMatchObject({ value: "A" });
-});
+      true,
+    );
+  }));
 
 it("keeps the projection unchanged after failed persistence and admits a later cell", async () => {
   const { manager, ...owner } = run();
@@ -125,6 +333,7 @@ it("rechecks total capacity in commit order when cells buffered against the same
     await seed.save(key, value, false);
   }
   await seed.commit();
+  expect(manager.buildSessionContext().messages).toEqual([]);
   const first = owner.cell();
   const second = owner.cell();
   await first.save("d", value, false);
@@ -172,13 +381,7 @@ it("retires old accesses on catalog restriction while keeping the session availa
     name: "fixture",
     source: "openclaw",
     description: "Fixture tool",
-    tool: {
-      name: "fixture",
-      label: "Fixture",
-      description: "Fixture tool",
-      parameters: Type.Object({}),
-      execute: async () => ({ content: [], details: {} }),
-    },
+    tool: fakeTool("fixture", "Fixture tool"),
   });
   restrictToolSearchCatalog({ catalogRef: owner.catalogRef, allowedToolNames: new Set() });
   await expect(old.load("retained")).rejects.toThrow("active session-bound run");
@@ -190,4 +393,71 @@ it("retires old accesses on catalog restriction while keeping the session availa
   await next.commit();
   owner.close();
   await expect(owner.cell().load("new")).rejects.toThrow("active session-bound run");
+});
+
+it("replays overwrite history without rescanning every retained value per entry", async () => {
+  const manager = SessionManager.inMemory();
+  for (let index = 0; index < 100; index++) {
+    const key = `key-${index % 20}`;
+    await manager.appendCustomEntryAsync("openclaw.code-mode-store", {
+      set: { [key]: { index } },
+      delete: [],
+      networkContent: { [key]: index % 2 === 0 },
+    });
+  }
+  const owner = run(manager);
+  const scan = vi.spyOn(Map.prototype, "values");
+  const loaded = await owner.cell().load("key-19");
+  const scannedValues = scan.mock.contexts.reduce<number>(
+    (total, map) => total + (map instanceof Map ? map.size : 0),
+    0,
+  );
+  scan.mockRestore();
+  expect(loaded).toEqual({ value: { index: 99 }, networkContent: false });
+  expect(scannedValues).toBeLessThanOrEqual(100);
+});
+
+it.each(["value", "total"] as const)(
+  "rejects historical %s overflow even when a later entry deletes it",
+  async (kind) => {
+    const manager = SessionManager.inMemory();
+    const set =
+      kind === "value"
+        ? { a: "x".repeat(256 * 1024) }
+        : Object.fromEntries(
+            ["a", "b", "c", "d", "e"].map((key) => [key, "x".repeat(256 * 1024 - 2)]),
+          );
+    await manager.appendCustomEntryAsync("openclaw.code-mode-store", {
+      set,
+      delete: [],
+      networkContent: Object.fromEntries(Object.keys(set).map((key) => [key, false])),
+    });
+    await manager.appendCustomEntryAsync("openclaw.code-mode-store", {
+      set: {},
+      delete: Object.keys(set),
+      networkContent: {},
+    });
+    await expect(run(manager).cell().load("a")).rejects.toMatchObject({
+      message: "Code Mode session store replay failed; repair the session before using store/load.",
+      cause: expect.any(RangeError),
+    });
+  },
+);
+
+it("checks total replay capacity after the whole entry, including deletions", async () => {
+  const manager = SessionManager.inMemory();
+  const value = "x".repeat(256 * 1024 - 2);
+  await manager.appendCustomEntryAsync("openclaw.code-mode-store", {
+    set: { a: value, b: value, c: value, d: value },
+    delete: [],
+    networkContent: { a: false, b: false, c: false, d: false },
+  });
+  await manager.appendCustomEntryAsync("openclaw.code-mode-store", {
+    set: { e: value, a: value },
+    delete: ["a", "a", "missing"],
+    networkContent: { e: true, a: false },
+  });
+  const cell = run(manager).cell();
+  await expect(cell.load("e")).resolves.toEqual({ value, networkContent: true });
+  await expect(cell.load("a")).resolves.toEqual({ networkContent: false });
 });

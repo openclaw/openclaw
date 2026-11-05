@@ -21,11 +21,11 @@ import type { PluginBindingTranscriptOwner } from "./dispatch-from-config.events
 import { resolveVisibleRepliesPolicy } from "./dispatch-from-config.harness-defaults.js";
 import type { PrepareDispatchDeliveryReadyState } from "./dispatch-from-config.prepare-delivery.js";
 import type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
+import { InboundDedupePendingError } from "./inbound-dedupe-error.js";
 import { claimInboundDedupe } from "./inbound-dedupe.js";
 import { emitMessageReceivedHooks as emitSharedMessageReceivedHooks } from "./message-received-hooks.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
-import { isDuplicateRestartRecoverySource } from "./restart-recovery-source.js";
 import { resolveDispatchConversationBinding } from "./session-conversation-binding.js";
 import {
   resolveReplyMessageToolAvailability,
@@ -45,7 +45,7 @@ import {
 } from "./source-turn-id.js";
 import {
   isReplyOperationStalledBeforeOutput,
-  STALLED_TURN_NOTICE_TEXT,
+  resolveStalledTurnNoticeText,
 } from "./stalled-turn-recovery.js";
 
 export async function prepareDispatchOperationContext(state: PrepareDispatchDeliveryReadyState) {
@@ -343,12 +343,6 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       : undefined);
   // Compute once before hooks. The prepared agent turn reuses this exact route-scoped id.
   setChannelSourceTurnId(ctx, durableSourceTurnId);
-  if (isDuplicateRestartRecoverySource(sessionStoreEntry.entry, durableSourceTurnId)) {
-    // Process-local inbound dedupe cannot see provider redelivery after restart.
-    // Drop durable duplicates before any plugin dispatch hook can repeat effects.
-    return skipDuplicate();
-  }
-
   const sourceRunId = normalizeOptionalString(ctx.MessageSid);
   const recorder = params.replyOptions?.userTurnTranscriptRecorder;
   let reclaimPendingInput: (() => boolean) | undefined;
@@ -380,13 +374,41 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     reclaimPendingInput && recorder?.withPendingInputCurrent
       ? await recorder.withPendingInputCurrent(claimInput)
       : claimInput();
+  const lifecycle = params.replyOptions?.turnAdoptionLifecycle;
+  // Recovery can arrive before the retired source finishes cleanup.
+  if (inboundDedupeClaim.status === "inflight" && lifecycle?.admission === "exclusive") {
+    throw new InboundDedupePendingError();
+  }
   if (inboundDedupeClaim.status === "duplicate" || inboundDedupeClaim.status === "inflight") {
     return skipDuplicate();
   }
-  const commitInboundDedupeIfClaimed = () => inboundDedupeClaim.commit?.();
+  const commitInboundDedupeIfClaimed = () => {
+    const admission = state.replyOperationRunState.admission;
+    // Queued admission is pending; its source still owns the input receipt.
+    if (
+      lifecycle?.admission === "exclusive" &&
+      admission?.status === "accepted" &&
+      admission.mode === "followup" &&
+      !state.turnAdoptionState?.adopted &&
+      !state.inboundDedupeReplayUnsafe
+    ) {
+      return;
+    }
+    inboundDedupeClaim.commit?.();
+  };
   const releaseInboundDedupeIfClaimed = () => inboundDedupeClaim.release?.();
-  const lifecycle = params.replyOptions?.turnAdoptionLifecycle;
   if (lifecycle && inboundDedupeClaim.status === "claimed") {
+    const onAdopted = lifecycle.onAdopted;
+    lifecycle.onAdopted = async () => {
+      await onAdopted();
+      inboundDedupeClaim.commit();
+    };
+    const onSettled = lifecycle.onSettled;
+    lifecycle.onSettled = () => {
+      // Abandonment released its exact owner; only consumption can still commit.
+      inboundDedupeClaim.commit();
+      return onSettled?.();
+    };
     const onAbandoned = lifecycle.onAbandoned;
     lifecycle.onAbandoned = () => {
       // Release before ingress retries, including abandonment before commit.
@@ -430,7 +452,10 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     const queuedFinal =
       isReplyOperationStalledBeforeOutput(operation) &&
       state.replyOperationRunState.continueStalledTurn?.() !== true
-        ? dispatcher.sendFinalReply({ text: STALLED_TURN_NOTICE_TEXT, isError: true })
+        ? dispatcher.sendFinalReply({
+            text: resolveStalledTurnNoticeText(operation),
+            isError: true,
+          })
         : false;
     if (
       state.turnAdoptionState &&

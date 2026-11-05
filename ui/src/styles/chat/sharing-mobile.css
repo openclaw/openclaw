@@ -288,7 +288,6 @@
 }
 
 .chat-sharing-mobile__search input {
-  box-sizing: border-box;
   width: 100%;
   height: 44px;
   padding: 8px 12px 8px 38px;

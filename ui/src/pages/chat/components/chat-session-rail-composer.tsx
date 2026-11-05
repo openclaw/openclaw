@@ -2,7 +2,7 @@ import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { isMobileBrowserPlatform, keepMobileReturnNative } from "../../../lib/browser-platform.ts";
 import {
   clearCompositionEnd,
@@ -32,13 +32,15 @@ import {
   paneDomId,
   scheduleTextareaHeightAdjustment,
 } from "./chat-composer-dom.ts";
-import { createComposerEmojiMenu, EmojiMenu } from "./chat-composer-emoji.tsx";
+import { createComposerEmojiMenu } from "./chat-composer-emoji-state.ts";
+import { EmojiMenu } from "./chat-composer-emoji.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
-import { ChatModelControls, type ChatModelControlsProps } from "./chat-model-controls.tsx";
+import { ChatModelControls } from "./chat-model-controls.tsx";
+import type { ChatModelControlsProps } from "./chat-model-controls.types.ts";
 import { ComposerDictationStatus } from "./chat-voice-activity.tsx";
 import { DirectDictationView } from "./direct-dictation-view.tsx";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 const SIDE_CHAT_QUESTION_MAX_LENGTH = 400;
 
@@ -47,7 +49,9 @@ export function sessionRailQuestion(companion: ChatSessionCompanionThread): stri
     companion.draft.trim() ||
     (companion.attachments?.some((attachment) => attachment.mimeType.startsWith("image/"))
       ? t("chat.rail.askImageQuestion")
-      : "")
+      : companion.attachments?.some((attachment) => attachment.selectionAnnotation)
+        ? t("chat.rail.askSelectionQuestion")
+        : "")
   );
 }
 
@@ -86,7 +90,7 @@ export function SessionRailComposer(props: {
     // Follow-ups stay editable while an answer is pending; submit owns that gate.
     canCommit: () => props.connected,
     onMessage: (message) => props.onDraftChange?.(message.slice(0, SIDE_CHAT_QUESTION_MAX_LENGTH)),
-    onError: (message) => showToast({ message }),
+    onError: (message) => showToast({ severity: "error", message }),
     onSubmit: () => props.submit(),
   });
   const dictation = projectOwner(dictationControl, (owner) => owner);
@@ -172,6 +176,11 @@ export function SessionRailComposer(props: {
       />
       <div class="agent-chat__composer-lede">
         <ComposerDictationStatus readDictation={() => dictation.read().dictation} />
+        <Show when={props.companion.commentsSaving}>
+          <div class="muted chat-session-rail__save-status" role="status">
+            {t("common.saving")}
+          </div>
+        </Show>
       </div>
       <div class="agent-chat__composer-input-row">
         <label class="agent-chat__composer-combobox chat-session-rail__prompt">
@@ -197,7 +206,7 @@ export function SessionRailComposer(props: {
             readonly={dictationActive()}
             onPaste={(event) => {
               if (props.connected) {
-                handleChatAttachmentPaste(event, props.attachmentProps, { imagesOnly: true });
+                handleChatAttachmentPaste(event, props.attachmentProps);
                 if (event.defaultPrevented) {
                   event.stopPropagation();
                 }

@@ -1,28 +1,18 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
-import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import {
+  createChatFlowE2eSuite,
+  installMockGateway,
+  waitForTranscriptScrollIdle as waitForHomeScrollIdle,
+} from "./chat-flow.test-support.ts";
 import { openProgressHomeDock } from "./session-progress-home.test-support.ts";
 
-const suite = createChatFlowE2eSuite();
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
-async function waitForHomeScrollIdle(thread: Locator) {
-  await expect
-    .poll(() =>
-      thread.evaluate(async (element) => {
-        const before = [element.scrollTop, element.scrollHeight, element.clientHeight];
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-        });
-        const after = [element.scrollTop, element.scrollHeight, element.clientHeight];
-        return before.every((value, index) => value === after[index]);
-      }),
-    )
-    .toBe(true);
-}
+const suite = createChatFlowE2eSuite();
 
 const sessionKey = "agent:main:main";
 const progress = {
@@ -108,7 +98,7 @@ suite.define(() => {
         // The same Home conversation cannot own both the page and its dock.
         await page.goto(`${suite.server.baseUrl}new`);
         await openProgressHomeDock(page);
-        await gateway.waitForRequest("chat.startup", { match: { sessionKey } });
+        await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
         await card.waitFor();
         await waitForHomeScrollIdle(thread);
         await home
@@ -136,6 +126,7 @@ suite.define(() => {
         await card.locator("summary").click();
         await card.locator("summary").click();
         expect(await isOpen()).toBe(true);
+        await waitForHomeScrollIdle(thread);
         if (target === "canceled wheel") {
           await outputScroller.evaluate((element) => {
             element.addEventListener("wheel", (event) => event.preventDefault(), {
@@ -145,14 +136,20 @@ suite.define(() => {
         }
         const wheelPoint = await outputScroller.evaluate((element) => {
           const rect = element.getBoundingClientRect();
-          return { x: rect.left + 100, y: rect.top + 100 };
+          const point = { x: rect.left + 100, y: rect.top + 100 };
+          if (!element.contains(document.elementFromPoint(point.x, point.y))) {
+            throw new Error("Nested output wheel target is not visible");
+          }
+          return point;
         });
         await page.mouse.move(wheelPoint.x, wheelPoint.y);
         const before = {
           thread: await thread.evaluate((element) => element.scrollTop),
           output: await outputScroller.evaluate((element) => element.scrollTop),
         };
-        await page.screenshot({ path: path.join(artifactDir, "before-wheel.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifactDir, "before-wheel.png") });
+        }
         for (let index = 0; index < 3; index++) {
           await page.mouse.wheel(0, -240);
           // These are three separate gestures under the disclosure's 200 ms boundary.
@@ -164,7 +161,9 @@ suite.define(() => {
           thread: await thread.evaluate((element) => element.scrollTop),
           output: await outputScroller.evaluate((element) => element.scrollTop),
         };
-        await page.screenshot({ path: path.join(artifactDir, "after-wheel.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifactDir, "after-wheel.png") });
+        }
         await writeFile(
           path.join(artifactDir, "offsets.json"),
           JSON.stringify({ target, before, after, cardOpen: await isOpen() }, null, 2),
@@ -228,7 +227,7 @@ suite.define(() => {
       // The same Home conversation cannot own both the page and its dock.
       await page.goto(`${suite.server.baseUrl}new`);
       await openProgressHomeDock(page);
-      await gateway.waitForRequest("chat.startup", { match: { sessionKey } });
+      await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
       await card.waitFor();
       expect(await card.getAttribute("open")).toBeNull();
       await card.locator("summary").click();
@@ -249,7 +248,9 @@ suite.define(() => {
         );
       });
       const offsets: Array<{ before: number; released: number; settled: number }> = [];
-      await page.screenshot({ path: path.join(artifactDir, "before-touch.png") });
+      if (captureUiProof) {
+        await page.screenshot({ path: path.join(artifactDir, "before-touch.png") });
+      }
       for (let index = 0; index < 3; index++) {
         const before = await thread.evaluate((element) => element.scrollTop);
         const timestamp = Date.now() / 1000;
@@ -283,7 +284,9 @@ suite.define(() => {
           ),
         );
       }
-      await page.screenshot({ path: path.join(artifactDir, "after-touch.png") });
+      if (captureUiProof) {
+        await page.screenshot({ path: path.join(artifactDir, "after-touch.png") });
+      }
       await writeFile(
         path.join(artifactDir, "touch-offsets.json"),
         JSON.stringify(offsets, null, 2),
@@ -321,6 +324,7 @@ suite.define(() => {
           messages: recent,
           hasMore: true,
           nextOffset: 80,
+          olderCursor: "older-progress",
           totalMessages: 160,
           sessionId: "progress-scroll",
         },
@@ -341,13 +345,13 @@ suite.define(() => {
       // The same Home conversation cannot own both the page and its dock.
       await page.goto(`${suite.server.baseUrl}new`);
       await openProgressHomeDock(page);
-      await gateway.waitForRequest("chat.startup", { match: { sessionKey } });
+      await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
       await card.waitFor();
       await waitForHomeScrollIdle(thread);
       await gateway.deferNext("chat.history");
       await thread.hover();
       await page.mouse.wheel(0, -100_000);
-      await gateway.waitForRequest("chat.history", { match: { offset: 80 } });
+      await gateway.waitForRequest("chat.history", { match: { cursor: "older-progress" } });
       await waitForHomeScrollIdle(thread);
       await card.locator("summary").click();
       await card.locator("summary").click();

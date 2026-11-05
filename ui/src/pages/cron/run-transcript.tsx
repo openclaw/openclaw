@@ -1,14 +1,19 @@
 import type { CronHistoryResult } from "@openclaw/gateway-protocol";
-import { onSettled } from "solid-js";
+import { lazy, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronRunLogEntry } from "../../api/types.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { formatMs } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { attachHistoryActivity } from "../chat/chat-history-request.ts";
 import { mergeChatTranscriptPages } from "../chat/chat-transcript-pages.ts";
 import { ChatHistoryBoundary } from "../chat/components/chat-history-boundary.tsx";
-import { ChatTranscriptFeed } from "../chat/components/chat-transcript-feed-view.tsx";
+import { ChatLazyBoundary } from "../chat/components/chat-lazy-boundary.tsx";
+
+const ChatTranscriptFeed = lazy(() => import("../chat/components/chat-transcript-feed-view.tsx"), {
+  export: "ChatTranscriptFeed",
+});
 
 type Scope = { client: GatewayBrowserClient; isCurrent: () => boolean };
 
@@ -153,6 +158,14 @@ export function CronRunTranscriptView(props: {
               {t("common.close")}
             </button>
           </div>
+          <div>{state().entry?.jobName ?? state().entry?.jobId}</div>
+          {state().entry?.runAtMs !== undefined ? (
+            <div class="muted">
+              {/* Track locale through the label without adding a shared reactive formatter import. */}
+              {`${t("cron.runEntry.runAt")} ${formatMs(state().entry?.runAtMs)}`}
+            </div>
+          ) : null}
+          <p class="muted">{t("cron.runEntry.transcriptScope")}</p>
           {state().error ? (
             <>
               <p role="alert">{state().error}</p>
@@ -176,7 +189,9 @@ export function CronRunTranscriptView(props: {
               onShowEarlier={() => void props.transcript.load(props.transcript.nextCursor)}
             />
           ) : undefined}
-          <ChatTranscriptFeed messages={state().messages} />
+          <ChatLazyBoundary fallback={<p role="status">{t("common.loading")}</p>}>
+            <ChatTranscriptFeed messages={state().messages} />
+          </ChatLazyBoundary>
         </section>
       ) : null}
     </>

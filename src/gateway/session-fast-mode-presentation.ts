@@ -43,19 +43,24 @@ export function projectModelFastModeCatalog<
     return payload;
   }
   const project = (models: ModelChoice[]) =>
-    models.map((model) => ({
-      ...model,
-      ...(model.effectiveFastMode === "ultrafast" ? { effectiveFastMode: true } : {}),
-      ...(model.runtimeChoices
-        ? {
-            runtimeChoices: model.runtimeChoices.map((choice) =>
-              choice.effectiveFastMode === "ultrafast"
-                ? { ...choice, effectiveFastMode: true }
-                : choice,
-            ),
-          }
-        : {}),
-    }));
+    models.map((model) => {
+      const runtimeChoices = model.runtimeChoices?.some(
+        (choice) => choice.effectiveFastMode === "ultrafast",
+      )
+        ? model.runtimeChoices.map((choice) =>
+            choice.effectiveFastMode === "ultrafast"
+              ? { ...choice, effectiveFastMode: true }
+              : choice,
+          )
+        : model.runtimeChoices;
+      return model.effectiveFastMode !== "ultrafast" && runtimeChoices === model.runtimeChoices
+        ? model
+        : {
+            ...model,
+            ...(model.effectiveFastMode === "ultrafast" ? { effectiveFastMode: true } : {}),
+            ...(runtimeChoices ? { runtimeChoices } : {}),
+          };
+    });
   return {
     ...payload,
     ...(payload.models ? { models: project(payload.models) } : {}),
