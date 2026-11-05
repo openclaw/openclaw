@@ -1080,6 +1080,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["partial start", ["A. X.", true, "A. X. E.", 2, "N.", false], ["A. X.", "A. X. E.\n\nN."]],
     ["idle start", ["A. X.", null, "A. X. E.", 2, "N."], ["A. X.", "E.\n\nN."]],
     ["fence cr indent", ["~~~\rx\r", null, "~~~\rx\r  y"], ["~~~\rx\r", "~~~\n  y"]],
+    ["partial 2", ["P", null, "PA", true, "PAE", 2, "PN", 2, false], ["P", "A", "AE\n\nPN"]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
@@ -1100,7 +1101,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       if (event === null) {
         await options.onIdle?.();
       } else if (event === true) {
-        stream(0).closeWithResult.mockImplementationOnce(close.wait);
+        stream(streamingInstances.length - 1).closeWithResult.mockImplementationOnce(close.wait);
         await Promise.race([options.onIdle?.(), close.started]);
       } else if (event === false) {
         const content = name === "cut" ? "    a\n" : name === "partial base" ? "A. B." : "A.";
@@ -1328,7 +1329,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       deliveryResult: { messageIds: ["om-media"], visibleReplySent: true },
     });
   });
-
   it("allows recovery after a final rewrite leaves only an earlier preview visible", async () => {
     const { result, options } = createDispatcherHarness();
     result.replyOptions.onPartialReply?.({ text: "accepted preview" });
