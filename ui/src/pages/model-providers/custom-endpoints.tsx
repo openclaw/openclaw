@@ -1,5 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, createSignal, For, Show, untrack } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import {
   AVATAR_MAX_BYTES,
   isRenderableAvatarImageDataUrl,
@@ -82,19 +82,17 @@ export function CustomProviderEditor(props: {
         })
       : undefined;
   });
-  // The page owns embedded setup sessions; only the endpoint editor follows connection scope.
-  const content = untrack(() =>
-    props.children({
-      get disabled() {
-        return editor()?.actions.disabled ?? true;
-      },
-      create: () => editor()?.actions.create(),
-      edit: (provider) => editor()?.actions.edit(provider),
-    }),
-  );
+  // Keep page/setup rendering outside the connection-scoped editor computation.
+  const actions: CustomProviderEditorActions = {
+    get disabled() {
+      return editor()?.actions.disabled ?? true;
+    },
+    create: () => editor()?.actions.create(),
+    edit: (provider) => editor()?.actions.edit(provider),
+  };
   return (
     <>
-      {content}
+      {props.children(actions)}
       {editor()?.dialog}
     </>
   );
@@ -427,20 +425,20 @@ function createEndpointEditor(props: {
             }}
           >
             <form
-              class="custom-endpoint-editor"
+              class="oc-dialog"
               onSubmit={(event) => {
                 event.preventDefault();
                 void run((scope) => save(scope));
               }}
             >
-              <header class="custom-endpoint-editor__header">
-                <h2>
+              <header class="oc-dialog__header">
+                <h2 class="oc-dialog__title">
                   {t(editing() ? "modelProviders.endpoints.edit" : "modelProviders.endpoints.add")}
                 </h2>
               </header>
-              <div class="custom-endpoint-editor__body">
+              <div class="oc-dialog__body">
                 <p class="muted">{t("modelProviders.endpoints.gatewayConnects")}</p>
-                <div class="custom-endpoint-editor__connection">
+                <div class="grid custom-endpoint-editor__connection">
                   <label class="field">
                     <span>{t("modelProviders.endpoints.providerId")}</span>
                     <input
@@ -566,7 +564,7 @@ function createEndpointEditor(props: {
                   {t("modelProviders.endpoints.noAuth")}
                 </label>
                 <p class="muted">{t("modelProviders.endpoints.preserve")}</p>
-                <div class="custom-endpoint-editor__heading">
+                <div class="row">
                   <h3>{t("modelProviders.endpoints.models")}</h3>
                   <button
                     type="button"
@@ -613,7 +611,7 @@ function createEndpointEditor(props: {
                     <legend>{t("modelProviders.endpoints.discovered")}</legend>
                     <For each={discovered()}>
                       {(id) => (
-                        <label class="custom-endpoint-editor__discovered">
+                        <label class="field checkbox">
                           <input
                             type="checkbox"
                             checked={selected().includes(id)}
@@ -650,7 +648,7 @@ function createEndpointEditor(props: {
                   </fieldset>
                 </Show>
               </div>
-              <div class="custom-endpoint-editor__footer">
+              <footer class="oc-dialog__body">
                 <p>{t("modelProviders.endpoints.defaultUnchanged")}</p>
                 <Show when={status().message}>
                   <p role={status().failed ? "alert" : "status"}>{status().message}</p>
@@ -689,7 +687,7 @@ function createEndpointEditor(props: {
                     {status().busy ? t("modelProviders.saving") : t("common.save")}
                   </button>
                 </openclaw-modal-actions>
-              </div>
+              </footer>
             </form>
           </ModalDialog>
         )}

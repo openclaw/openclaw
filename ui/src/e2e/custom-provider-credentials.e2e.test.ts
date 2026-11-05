@@ -82,7 +82,7 @@ suite.define(() => {
           // The endpoint owner refuses this remote definition write. Credential-only
           // writes must still use their existing owner, not retry through this RPC.
           await edit.click();
-          const form = page.locator(".custom-endpoint-editor");
+          const form = page.getByRole("dialog").locator("form");
           await form.getByRole("button", { name: "Save", exact: true }).click();
           await expect
             .poll(() => form.textContent())

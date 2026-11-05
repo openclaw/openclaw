@@ -49,7 +49,7 @@ export function AccountLimits(props: { scope: AccountUsageScope; profileId: stri
     }
   });
   return (
-    <div class="model-providers__account-limits">
+    <div class="model-providers__account-limits muted">
       <Loading on={account()} fallback={<span>{t("common.loading")}</span>}>
         <Show when={result().error}>
           {(error) => <span class="provider-usage__error">{error()}</span>}
@@ -66,7 +66,7 @@ export function AccountLimits(props: { scope: AccountUsageScope; profileId: stri
           {(snapshot) => (
             <>
               <Show when={snapshot().plan}>
-                <span class="model-providers__account-plan">{snapshot().plan}</span>
+                <span class="model-providers__account-plan muted">{snapshot().plan}</span>
               </Show>
               <Show
                 when={hasProviderUsageDetails(snapshot())}

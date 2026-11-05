@@ -37,7 +37,7 @@ suite.define(() => {
           ),
           "models.list": { models: [] },
           "models.authStatus": { ts: 1, providers: [], providerCapabilities: [] },
-          "usage.status": emptyUsage(),
+          ...emptyUsage(1),
         },
       });
       await page.goto(suite.server.baseUrl + "settings/model-providers");
@@ -52,7 +52,7 @@ suite.define(() => {
       await writeFile(path.join(suite.artifactDir, "model-level-entry.png"), entryFrame.png);
       expect(await edit.isDisabled()).toBe(false);
       await edit.click();
-      const form = page.locator(".custom-endpoint-editor");
+      const form = page.getByRole("dialog").locator("form");
       expect(await form.getByLabel("API adapter", { exact: true }).inputValue()).toBe("");
       const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [form], {
         animations: "disabled",
@@ -111,7 +111,7 @@ suite.define(() => {
       await expect.poll(() => option.count()).toBe(1);
       await capture("after-picker", page.locator(".model-provider-login"));
       await option.click();
-      const form = page.locator(".custom-endpoint-editor");
+      const form = page.getByRole("dialog").locator("form");
       await form.getByLabel("Provider ID", { exact: false }).fill("lab-inference");
       await form.getByLabel("Provider name (optional)", { exact: true }).fill(provider.name);
       await form
@@ -154,9 +154,12 @@ suite.define(() => {
       await row.getByRole("button", { name: "Edit endpoint", exact: true }).click();
       expect(await form.getByLabel("Provider ID", { exact: false }).isDisabled()).toBe(true);
       await form.getByLabel("Provider name (optional)", { exact: true }).fill("Research Studio");
-      await form.locator(".custom-endpoint-editor__body").evaluate((element) => {
-        element.scrollTop = 0;
-      });
+      await form
+        .locator(".oc-dialog__body")
+        .first()
+        .evaluate((element) => {
+          element.scrollTop = 0;
+        });
       await capture("after-branded-config", form);
       await page.emulateMedia({ colorScheme: "dark" });
       const mobileBranding = await takeControlUiScreenshotFrame(
@@ -171,7 +174,8 @@ suite.define(() => {
       );
       expect(
         await form
-          .locator(".custom-endpoint-editor__body")
+          .locator(".oc-dialog__body")
+          .first()
           .evaluate((element) => element.scrollWidth <= element.clientWidth),
       ).toBe(true);
       await page.emulateMedia({ colorScheme: "light" });
@@ -246,7 +250,7 @@ suite.define(() => {
       await page.getByRole("button", { name: "Add account", exact: true }).first().click();
       await page.locator("[data-models-login-search]").fill("custom");
       await page.getByRole("button", { name: "Custom Provider", exact: false }).click();
-      const form = page.locator(".custom-endpoint-editor");
+      const form = page.getByRole("dialog").locator("form");
       await form.getByLabel("Provider ID", { exact: false }).fill("lab-inference");
       await form.getByLabel("API base URL", { exact: true }).fill("http://lab.lan:8000/v1");
       await form.getByLabel("Model ID", { exact: true }).fill("chat-small");
@@ -258,7 +262,7 @@ suite.define(() => {
       await form.getByLabel("Text input", { exact: true }).nth(1).check();
       await form.getByLabel("Image input", { exact: true }).nth(1).check();
       expect(await form.getByLabel("Optional API key", { exact: true }).inputValue()).toBe("");
-      await form.locator(".custom-endpoint-editor__body").evaluate((element) => {
+      await form.locator("div.oc-dialog__body").evaluate((element) => {
         element.scrollTop = 0;
       });
       const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [form], {
@@ -371,7 +375,7 @@ suite.define(() => {
         await page.goto(suite.server.baseUrl + "settings/model-providers");
         const section = page.locator('[data-provider-id="lab-existing"]');
         await section.getByRole("button", { name: "Edit endpoint", exact: true }).click();
-        const form = page.locator(".custom-endpoint-editor");
+        const form = page.getByRole("dialog").locator("form");
         expect(await form.getByLabel("Context window", { exact: true }).first().inputValue()).toBe(
           materialized ? "128000" : "",
         );
@@ -379,7 +383,7 @@ suite.define(() => {
         expect(await form.getByLabel("Text input", { exact: true }).nth(2).isChecked()).toBe(false);
         await form.getByLabel("API base URL", { exact: true }).fill("https://after.example/v1");
         if (!materialized) {
-          await form.locator(".custom-endpoint-editor__body").evaluate((element) => {
+          await form.locator("div.oc-dialog__body").evaluate((element) => {
             element.scrollTop = 0;
           });
           const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [form], {
@@ -453,7 +457,7 @@ suite.define(() => {
         await page.getByRole("button", { name: "Add account", exact: true }).first().click();
         await page.locator("[data-models-login-search]").fill("custom");
         await page.getByRole("button", { name: "Custom Provider", exact: false }).click();
-        const form = page.locator(".custom-endpoint-editor");
+        const form = page.getByRole("dialog").locator("form");
         await form.getByLabel("Provider ID", { exact: false }).fill("lab-discovery");
         await form.getByLabel("API base URL", { exact: true }).fill("http://lab.lan/v1");
         await gateway.deferNext("config.customEndpoint");
@@ -489,7 +493,7 @@ suite.define(() => {
           .poll(() => form.textContent())
           .toContain("Remote custom setup is not supported.");
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
-        await form.locator(".custom-endpoint-editor__body").evaluate((element) => {
+        await form.locator("div.oc-dialog__body").evaluate((element) => {
           element.scrollTop = 0;
         });
         const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [form], {

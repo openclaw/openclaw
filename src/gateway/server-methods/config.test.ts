@@ -1,9 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configFor, modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
+import { materializeRuntimeConfig } from "../../config/materialize.js";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
 import { invalidateGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { validateConfigObjectRaw } from "../../config/validation-core.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
@@ -600,9 +602,20 @@ describe("local custom endpoint config workflow", () => {
       api: "openai-completions" as const,
       maxTokens: 6400,
     };
-    storedConfig = {
+    const source = validateConfigObjectRaw({
       models: { providers: { lab: { baseUrl: "http://lab.lan/v1", models: [model] } } },
-    };
+    });
+    if (!source.ok) {
+      throw new Error("Invalid authored endpoint fixture");
+    }
+    storedConfig = source.config;
+    configWriteMocks.readConfigFileSnapshotForWrite.mockImplementationOnce(async () => {
+      const result = currentWriteSnapshot();
+      const runtime = materializeRuntimeConfig(result.snapshot.sourceConfig);
+      result.snapshot.config = runtime;
+      result.snapshot.runtimeConfig = runtime;
+      return result;
+    });
     const client = createMemoryOperatorClient(["operator.admin"]);
     client.internal = { isLocalClient: true };
     const harness = createConfigHandlerHarness({

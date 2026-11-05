@@ -32,7 +32,6 @@
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-2);
-  color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
 
@@ -63,7 +62,6 @@
 
 .model-providers__profiles-heading-copy span,
 .model-providers__profile-copy span {
-  color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
 
@@ -241,7 +239,6 @@
 
 .model-providers__profile-position {
   min-width: 2ch;
-  color: var(--muted);
   font-size: var(--control-ui-text-xs);
   font-variant-numeric: tabular-nums;
   text-align: center;
@@ -329,7 +326,6 @@
 
 .model-providers__probe-target small {
   flex-basis: 100%;
-  color: var(--muted);
 }
 
 .model-providers__label-with-help {
@@ -439,7 +435,6 @@
   gap: var(--space-2);
   min-width: 0;
   margin-block-start: var(--space-2);
-  color: var(--muted);
   font-size: var(--control-ui-text-sm);
 }
 
@@ -448,7 +443,6 @@
 }
 
 .model-providers__account-plan {
-  color: var(--muted);
   font-size: var(--control-ui-text-xs);
   text-transform: capitalize;
 }
@@ -466,10 +460,6 @@
   inset-block-start: 0;
   padding-block: var(--space-3) var(--space-2);
   background: var(--overlay-modal-surface);
-}
-
-.model-provider-login__search .input {
-  width: 100%;
 }
 
 .model-provider-login__providers {
@@ -529,7 +519,6 @@
 }
 
 .model-provider-login__copy > span {
-  color: var(--muted);
   font-size: var(--control-ui-text-xs);
   font-weight: 400;
 }
@@ -584,7 +573,6 @@
 .model-providers__agents-missing {
   margin: 0;
   padding: var(--space-3) var(--space-4);
-  color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
 
@@ -830,64 +818,22 @@
   }
 }
 
-/* The native modal owns alignment and its viewport limit. */
+/* The native dialog owns the surface, scrolling body, and fixed actions. */
 .custom-endpoint-dialog {
   --openclaw-modal-width: 48rem;
 }
-.custom-endpoint-editor {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  max-height: var(--openclaw-modal-height-limit);
-  overflow: hidden;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--panel);
-}
-.custom-endpoint-editor__header,
-.custom-endpoint-editor__footer {
-  padding: 1rem 1.5rem;
-}
-.custom-endpoint-editor__header h2 {
-  margin: 0;
-}
-.custom-endpoint-editor__body {
-  overflow-y: auto;
-  min-height: 0;
-  padding: 0 1.5rem 1rem;
-}
+
 .custom-endpoint-editor__connection {
-  display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 1rem;
-  margin-block: 1rem;
+  align-items: start;
+
+  /* Intrinsic input widths must fit the connection grid. */
+  & > .field {
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
-.custom-endpoint-editor__connection > .field {
-  align-self: start;
-  min-width: 0;
-  grid-template-columns: minmax(0, 1fr);
-}
-.custom-endpoint-editor__connection input {
-  min-width: 0;
-}
-.custom-endpoint-editor__heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  margin-top: 1rem;
-}
-.custom-endpoint-editor__model {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 1rem;
-  margin-block: 1rem;
-  min-width: 0;
-}
-.custom-endpoint-editor__discovered {
-  display: block;
-  margin-block: 0.5rem;
-  overflow-wrap: anywhere;
-}
+
 @media (max-width: 640px) {
   .custom-endpoint-editor__connection {
     grid-template-columns: minmax(0, 1fr);

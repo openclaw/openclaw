@@ -1,0 +1,4 @@
+# Endpoint editor regression coverage: 1068 feature-owned LF lines, 13
+# lines for the authored/runtime fixture contract, and 5 lines proving the
+# shared search field remains full-width. No added browser case.
+1086

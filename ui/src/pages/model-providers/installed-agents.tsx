@@ -662,7 +662,7 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
                 {(agent) => <AgentRow agent={agent()} />}
               </For>
               <Show when={missing().length > 0}>
-                <p class="model-providers__agents-missing" data-installed-agents-missing>
+                <p class="model-providers__agents-missing muted" data-installed-agents-missing>
                   {t("modelProviders.installedAgents.notDetected", {
                     names: missing()
                       .map((agent) => agent.name)
