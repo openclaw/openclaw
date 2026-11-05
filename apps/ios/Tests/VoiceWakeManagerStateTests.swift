@@ -188,7 +188,7 @@ private actor VoiceWakeCommandBarrier {
         #expect(manager.statusText == "Paused")
     }
 
-    @Test(.testWaitLimit, arguments: ["focus", "gateway", "watch-target"]) @MainActor
+    @Test(.testWaitLimit, arguments: ["focus", "gateway", "watch-target", "agent"]) @MainActor
     func `route changes cancel pending commands and retire buffered recognition`(change: String) async throws {
         let isolation = await GatewayRegistryTestIsolation()
         defer { isolation.restore() }
@@ -202,8 +202,15 @@ private actor VoiceWakeCommandBarrier {
             let model = NodeAppModel()
             let manager = model.voiceWake
             defer { manager.stop() }
+            if change == "agent" {
+                model.setSelectedAgentId("alpha")
+            }
             model.focusChatSession("agent:main:original")
-            if change == "watch-target" {
+            if change == "agent" {
+                // Talk can already target another agent while phone focus still
+                // belongs to the old agent. Selecting it must retire that capture.
+                model.synchronizeTalkSessionKey("agent:beta:main")
+            } else if change == "watch-target" {
                 // Watch-started Talk can leave its target after Talk stops;
                 // phone focus must invalidate wake even when Talk already targets the next chat.
                 model.synchronizeTalkSessionKey("agent:main:replacement")
@@ -249,6 +256,10 @@ private actor VoiceWakeCommandBarrier {
             try await entered.wait("wake command admitted")
             if change == "gateway" {
                 await model.resetGatewaySessionsForTargetSwitch()
+            } else if change == "agent" {
+                model.setSelectedAgentId("beta")
+                #expect(model.mainSessionKey == "agent:beta:main")
+                #expect(model.focusedChatSessionKey == nil)
             } else {
                 model.focusChatSession("agent:main:replacement")
             }

@@ -1699,6 +1699,11 @@ final class NodeAppModel {
         let currentSelectedAgentId = self.selectedAgentId?.trimmingCharacters(in: .whitespacesAndNewlines)
         let selectedAgentChanged = currentSelectedAgentId != nextSelectedAgentId
         let stableID = GatewayStableIdentifier.exact(self.connectedGatewayID)
+        if selectedAgentChanged {
+            // Watch-started Talk may already target the next agent, so its key
+            // comparison cannot retire recognition captured for the old agent.
+            self.voiceWake.invalidatePendingCommand()
+        }
         self.selectedAgentId = nextSelectedAgentId
         if let stableID {
             GatewaySettingsStore.saveGatewaySelectedAgentId(
