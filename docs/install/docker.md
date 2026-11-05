@@ -714,7 +714,9 @@ Pass these to Buildx from the pinned tooling checkout. Keep the context unchange
 through consumption, then verify it again. The default source-build route is
 unchanged. The installed-assets stage runs finalization with networking disabled;
 it checks the native prebuild before lifecycle and never repairs missing app
-dependencies with npm. Later shared image stages still install OS utilities and
+dependencies with npm. After pruning, finalization restores bundled plugins’ public
+SDK aliases so native setup and worker imports use the installed host SDK.
+Later shared image stages still install OS utilities and
 operator tools and can require network access.
 
 Composition and recipe verification are **not Linux runtime qualification**.

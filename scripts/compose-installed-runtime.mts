@@ -424,6 +424,7 @@ async function prepareTargetHelpers(app: string, sourceRoot: string) {
     }
     const source = path.join(
       relative === "scripts/finalize-installed-runtime.mjs" ||
+        relative === "scripts/lib/bundled-plugin-sdk-alias.mjs" ||
         relative === "scripts/check-package-dist-imports.mjs"
         ? toolingRoot
         : sourceRoot,
