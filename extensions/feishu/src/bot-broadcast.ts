@@ -32,7 +32,7 @@ export function createFeishuBroadcastIngressSettlement(params: {
   const failures: unknown[] = [];
   const fallbackAbort = new AbortController();
   let fanoutSettled = false;
-  let terminal: "adopted" | "abandoned" | "dropped" | undefined;
+  let terminal: { kind: "adopted" | "dropped" } | { kind: "abandoned"; error: unknown } | undefined;
   let dropReason: QueueDropReason | undefined;
   let terminalSettled = false;
   let finalizing = false;
@@ -70,7 +70,7 @@ export function createFeishuBroadcastIngressSettlement(params: {
     if (terminal) {
       return;
     }
-    terminal = "abandoned";
+    terminal = { kind: "abandoned", error };
     params.replayClaim?.release({ error });
     for (const lane of lanes) {
       if (lane.status === "dropped") {
@@ -89,7 +89,7 @@ export function createFeishuBroadcastIngressSettlement(params: {
     if (terminal) {
       return;
     }
-    terminal = "dropped";
+    terminal = { kind: "dropped" };
     try {
       beginFinalizing();
       if (params.lifecycle?.onDropped) {
@@ -135,7 +135,7 @@ export function createFeishuBroadcastIngressSettlement(params: {
     }
     // Choose one terminal action. Re-entrant terminal callbacks are best effort;
     // accepted lane commits remain tracked through their own completion.
-    terminal = "adopted";
+    terminal = { kind: "adopted" };
     try {
       beginFinalizing();
       await params.lifecycle?.onAdopted();
@@ -248,7 +248,16 @@ export function createFeishuBroadcastIngressSettlement(params: {
             }
             lane.status = "dropped";
             dropReason ??= reason;
-            await maybeSettle();
+            try {
+              await maybeSettle();
+            } finally {
+              // Initial fanout may still be dispatching another lane. Retain
+              // this source through the aggregate receipt and admitted work.
+              await settlement.promise;
+            }
+            if (terminal?.kind === "abandoned") {
+              throw terminal.error;
+            }
           },
         },
         onDispatchComplete: async (dispatched) => {

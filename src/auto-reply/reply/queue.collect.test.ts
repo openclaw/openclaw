@@ -999,48 +999,28 @@ describe("followup queue collect routing", () => {
   });
 
   it("retries split overflow summaries after transient failure", async () => {
-    const key = `test-collect-overflow-split-retry-${Date.now()}`;
+    const q = createQueueCase({ cap: 1 });
     const prompts: string[] = [];
-    const done = createDeferred();
     const onComplete = vi.fn();
-    let attempt = 0;
-    const settings = createQueueSettings({ cap: 1 });
-
-    enqueueFollowupRun(
-      key,
-      {
-        ...createRun({
-          prompt: "private source",
-          originatingChannel: "slack",
-          originatingTo: "same-target",
-          originatingChatType: "direct",
-        }),
-        turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: onComplete },
-      },
-      settings,
-    );
-    enqueueTestRun(
-      key,
-      {
-        prompt: "public survivor",
-        originatingChannel: "slack",
-        originatingTo: "same-target",
-        originatingChatType: "channel",
-      },
-      settings,
-    );
-
-    await drainSettledQueue(key, async (run) => {
-      attempt += 1;
+    q.enqueue({
+      prompt: "private source",
+      originatingChannel: "slack",
+      originatingTo: "same-target",
+      originatingChatType: "direct",
+      turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: onComplete },
+    });
+    q.enqueue({
+      prompt: "public survivor",
+      originatingChannel: "slack",
+      originatingTo: "same-target",
+      originatingChatType: "channel",
+    });
+    await drainSettledQueue(q.key, async (run) => {
       prompts.push(run.prompt);
-      if (attempt === 1) {
+      if (prompts.length === 1) {
         rejectQueuePreparation(run, new Error("transient summary preparation failure"));
       }
-      if (attempt >= 3) {
-        done.resolve();
-      }
     });
-
     expect(prompts).toHaveLength(3);
     expect(prompts[0]).toContain("- private source");
     expect(prompts[1]).toContain("- private source");

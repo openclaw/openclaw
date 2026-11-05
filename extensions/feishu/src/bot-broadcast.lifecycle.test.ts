@@ -1,8 +1,9 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it, vi } from "vitest";
 import { createFeishuBroadcastIngressSettlement } from "./bot-broadcast.js";
 
-it("joins an admitted lane commit after broadcast failure and retires late adoption", async () => {
+it("joins admitted and dropped lane custody after broadcast failure and retires late adoption", async () => {
   const started = createDeferred<void>();
   const commitGate = createDeferred<void>();
   const abandonmentStarted = createDeferred<void>();
@@ -41,6 +42,7 @@ it("joins an admitted lane commit after broadcast failure and retires late adopt
     release,
   });
   const failing = broadcast.createLane();
+  const dropped = broadcast.createLane();
   const late = broadcast.createLane({
     keys: ["late-lane"],
     commit: lateCommit,
@@ -48,7 +50,12 @@ it("joins an admitted lane commit after broadcast failure and retires late adopt
   });
   adopting.lifecycle.onDeferred();
   failing.lifecycle.onDeferred();
+  dropped.lifecycle.onDeferred();
   late.lifecycle.onDeferred();
+  const droppedOutcome = Promise.resolve(dropped.lifecycle.onDropped?.("queue-cap-old")).catch(
+    (error: unknown) => error,
+  );
+  const failure = new Error("another lane failed");
   await broadcast.onDispatchComplete();
   const adoption = adopting.lifecycle.onAdopted();
   try {
@@ -56,14 +63,12 @@ it("joins an admitted lane commit after broadcast failure and retires late adopt
     await adopting.lifecycle.onAbandoned();
     await adopting.onDispatchComplete(true);
     expect(release).not.toHaveBeenCalled();
-    abandonment = failing.onDispatchFailed(new Error("another lane failed"));
+    abandonment = failing.onDispatchFailed(failure);
     await abandonmentStarted.promise;
     await late.lifecycle.onAdopted();
     expect(late.lifecycle.abortSignal.aborted).toBe(true);
     expect(lateCommit).not.toHaveBeenCalled();
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    expect(await Promise.race([droppedOutcome, nextTurn().then(() => "pending")])).toBe("pending");
     expect(settled).toBe(false);
     commitGate.resolve();
     await adoption;
@@ -76,4 +81,5 @@ it("joins an admitted lane commit after broadcast failure and retires late adopt
     await completion;
   }
   expect(settled).toBe(true);
+  expect(await droppedOutcome).toBe(failure);
 });

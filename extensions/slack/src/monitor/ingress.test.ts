@@ -399,7 +399,9 @@ describe("Slack durable ingress", () => {
       const started = createDeferred<void>();
       const gate = createDeferred<void>();
       const starts: string[] = [];
-      let messageLifecycle: ReturnType<typeof resolveSlackIngressTurnLifecycle> = null;
+      const messageLifecycle: { current: ReturnType<typeof resolveSlackIngressTurnLifecycle> } = {
+        current: null,
+      };
       const { app, ingress, receive } = attachBoltIngress(queue, {
         adoptionStallTimeoutMs: 5_000,
       });
@@ -413,7 +415,7 @@ describe("Slack durable ingress", () => {
       };
       app.event("message", async ({ context }) => {
         const lifecycle = resolveSlackIngressTurnLifecycle(context);
-        messageLifecycle = lifecycle;
+        messageLifecycle.current = lifecycle;
         await lifecycle?.onSessionRouted?.("agent:main:slack:thread:C_NEW");
         if (deferred) {
           lifecycle?.onDeferred();
@@ -469,7 +471,7 @@ describe("Slack durable ingress", () => {
       } finally {
         gate.resolve();
         if (dropReason) {
-          await messageLifecycle?.onAbandoned();
+          await messageLifecycle.current?.onAbandoned();
         }
         await ingress.waitForIdle();
         await ingress.stop();

@@ -382,7 +382,7 @@ describe("telegram bot message processor", () => {
           : turnAdoptionLifecycle.onAdopted();
         sourceResult = Promise.resolve(settlement).then(
           () => events.push("source"),
-          (error) => error,
+          (error: unknown) => error,
         );
         callbackStarted.resolve();
         await settlement;
@@ -674,7 +674,9 @@ describe("telegram bot message processor", () => {
       turnAdoptionLifecycle?.onDeferred?.();
       for (let attempt = 0; attempt < 3; attempt += 1) {
         admissionErrors.push(
-          await turnAdoptionLifecycle.onAdopted().catch((error: unknown) => error),
+          await Promise.resolve()
+            .then(() => turnAdoptionLifecycle.onAdopted())
+            .catch((error: unknown) => error),
         );
         if (attempt === 0) {
           settledAfterFirstAdmission = participantSettles > 0;

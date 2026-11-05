@@ -446,50 +446,55 @@ describe("createTelegramIngressMonitor", () => {
 
   it.each([
     ...(["queue-cap-old", "queue-cap-new"] as const).flatMap((reason) =>
-      [false, true].map((deferred) => ({ reason, deferred })),
+      [false, true].map((isDeferred) => ({ reason, deferred: isDeferred })),
     ),
     { reason: "dispatch-dedupe-rollback-failed" as const, deferred: true },
-  ])("retains $reason across restart (deferred=$deferred)", async ({ reason, deferred }) => {
-    await withTempState(async ({ stateDir, queue, monitor: makeMonitor, enqueue }) => {
-      const { eventId, payload, laneKey } = await enqueue(5);
-      const outcome: TelegramMessageProcessingResult =
-        reason === "dispatch-dedupe-rollback-failed"
-          ? {
-              kind: "failed-retryable",
-              error: await createTelegramMessageDispatchReplayForgetError(),
-            }
-          : { kind: "dropped", reason };
-      const held = deferred ? await startDeferred(makeMonitor, "test:terminal") : undefined;
-      const dispatch = held?.dispatch ?? vi.fn(async () => outcome);
-      const monitor = held?.monitor ?? makeMonitor({ dispatch });
-      if (held) {
-        held.participant.current?.settle(outcome);
-      } else {
-        monitor.start();
-      }
-      await vi.waitFor(async () =>
-        expect(await queue.listFailed?.({ limit: "all" })).toMatchObject([{ id: eventId, reason }]),
-      );
-      await monitor.waitForIdle();
-      expect(await queue.listPending({ limit: "all" })).toEqual([]);
-      expect(await queue.listClaims()).toEqual([]);
-      expect(dispatch).toHaveBeenCalledOnce();
-      await monitor.stop();
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-      const restarted = createFixture(stateDir);
-      expect((await restarted.queue.enqueue(eventId, payload, { laneKey })).kind).toBe("failed");
-      expect(await restarted.queue.listFailed?.({ limit: "all" })).toMatchObject([
-        { id: eventId, reason },
-      ]);
-      const replay = vi.fn(async () => ({ kind: "completed" as const }));
-      const restartedMonitor = restarted.monitor({ dispatch: replay });
-      restartedMonitor.start();
-      await restartedMonitor.waitForIdle();
-      expect(replay).not.toHaveBeenCalled();
-      await restartedMonitor.stop();
-    });
-  });
+  ])(
+    "retains $reason across restart (deferred=$deferred)",
+    async ({ reason, deferred: isDeferred }) => {
+      await withTempState(async ({ stateDir, queue, monitor: makeMonitor, enqueue }) => {
+        const { eventId, payload, laneKey } = await enqueue(5);
+        const outcome: TelegramMessageProcessingResult =
+          reason === "dispatch-dedupe-rollback-failed"
+            ? {
+                kind: "failed-retryable",
+                error: await createTelegramMessageDispatchReplayForgetError(),
+              }
+            : { kind: "dropped", reason };
+        const held = isDeferred ? await startDeferred(makeMonitor, "test:terminal") : undefined;
+        const dispatch = held?.dispatch ?? vi.fn(async () => outcome);
+        const monitor = held?.monitor ?? makeMonitor({ dispatch });
+        if (held) {
+          held.participant.current?.settle(outcome);
+        } else {
+          monitor.start();
+        }
+        await vi.waitFor(async () =>
+          expect(await queue.listFailed?.({ limit: "all" })).toMatchObject([
+            { id: eventId, reason },
+          ]),
+        );
+        await monitor.waitForIdle();
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+        expect(await queue.listClaims()).toEqual([]);
+        expect(dispatch).toHaveBeenCalledOnce();
+        await monitor.stop();
+        await closeOpenClawStateDatabaseAsync();
+        closeOpenClawStateDatabaseForTest();
+        const restarted = createFixture(stateDir);
+        expect((await restarted.queue.enqueue(eventId, payload, { laneKey })).kind).toBe("failed");
+        expect(await restarted.queue.listFailed?.({ limit: "all" })).toMatchObject([
+          { id: eventId, reason },
+        ]);
+        const replay = vi.fn(async () => ({ kind: "completed" as const }));
+        const restartedMonitor = restarted.monitor({ dispatch: replay });
+        restartedMonitor.start();
+        await restartedMonitor.waitForIdle();
+        expect(replay).not.toHaveBeenCalled();
+        await restartedMonitor.stop();
+      });
+    },
+  );
 
   it.each([
     { kind: "completed" },
