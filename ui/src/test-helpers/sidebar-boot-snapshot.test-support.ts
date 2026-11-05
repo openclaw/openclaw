@@ -27,6 +27,7 @@ export function sidebarBootSnapshot(roster: BootRoster | null): SidebarSnapshotM
     involvingMe: false,
     home: null,
     homeAllowed: false,
+    homeSessionKey: "agent:main:main",
     ownershipAvatars: false,
     newSessionAllowed: false,
     windowKeys: [],

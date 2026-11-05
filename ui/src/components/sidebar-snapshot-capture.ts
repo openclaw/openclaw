@@ -189,16 +189,13 @@ export function captureSidebarSnapshotModel(
     collapsedAgentIds:
       loadSettings(context.gateway.connection.gatewayUrl).sidebarCollapsedAgentIds ?? [],
     plugins,
-    onlineUsers: online.users.map((user) => {
-      const lastActivityAt = presenceViewerLastActivity(user);
-      return {
-        ...displayUser(user),
-        watchedSessions: user.watchedSessions.filter(
-          (key) => zone.sessionRows.has(key) && !isIncognitoSessionKey(key),
-        ),
-        entries: [{ ts: 0, lastActivityAt }],
-      };
-    }),
+    onlineUsers: online.users.map((user) => ({
+      ...displayUser(user),
+      watchedSessions: user.watchedSessions.filter(
+        (key) => zone.sessionRows.has(key) && !isIncognitoSessionKey(key),
+      ),
+      entries: [{ ts: 0, lastActivityAt: presenceViewerLastActivity(user) }],
+    })),
     onlineCounts: [...(online.counts ?? [])],
     peopleSortMode: host.people.sortMode,
     peopleStatusFilter: host.people.statusFilter,
@@ -210,12 +207,13 @@ export function captureSidebarSnapshotModel(
     involvingMe: host.sessionInvolvingMeFilterActive,
     home: snapshotSessions(home ? [home] : [], presentation)[0] ?? null,
     homeAllowed: isHomePanelAvailable(context.gateway),
+    homeSessionKey: host.selectedAgentMainSessionKey(host.expandedAgentId()),
     ownershipAvatars: host.sessionOwnershipVisibility.avatars,
     newSessionAllowed: host.readNewSessionAccess().allowed,
     windowKeys: [...host.mountedPresence().sessionKeys].filter(
       (key) => !isIncognitoSessionKey(key),
     ),
-    scrollTop: host.scroll?.position() ?? 0,
+    scrollTop: host.scroll?.element()?.scrollTop ?? 0,
     footer: displayUser(context.gateway.snapshot.selfUser),
     brand: readSidebarBrandPresentation(host),
   });

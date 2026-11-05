@@ -77,11 +77,8 @@ export function renderSidebarSessionIndicators(
   // archive attribution visible; the participant count includes unshown faces.
   const selfUser = createMemo(() => {
     const gateway = host().sessionDataContext?.gateway;
-    return (
-      (gateway && gatewayPresentationScope(gateway).displayUser) ??
-      host().sidebarSnapshot?.footer ??
-      null
-    );
+    const scopedUser = gateway && gatewayPresentationScope(gateway).displayUser;
+    return scopedUser ?? host().sidebarSnapshot?.footer ?? null;
   });
   const selfProfileId = createMemo(() => selfUser()?.identity?.id ?? selfUser()?.id);
   const ownerRepeatedByFilter = createMemo(() => {

@@ -33,7 +33,6 @@ export function createSidebarScroll(
       : host.navigationView;
   return {
     state,
-    position: () => scroller?.scrollTop ?? 0,
     element: () => scroller,
     content: () => content,
     createContentRef() {

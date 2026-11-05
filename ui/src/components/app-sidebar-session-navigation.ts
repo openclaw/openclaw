@@ -744,10 +744,9 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
 
   /** Header metadata follows session filters; Home navigation and child hydration do not. */
   visibleHomeSession(agentId: string): SidebarRecentSession | null {
-    if (this.sidebarSnapshot) {
-      return this.readSnapshotNavigation(this.sidebarSnapshot).home;
-    }
-    return projectSidebarVisibleMainSession(this, agentId);
+    return this.sidebarSnapshot
+      ? this.readSnapshotNavigation(this.sidebarSnapshot).home
+      : projectSidebarVisibleMainSession(this, agentId);
   }
 
   /** Gateway row backing the identity card (unread/running state), if loaded. */

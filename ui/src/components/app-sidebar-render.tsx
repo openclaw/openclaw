@@ -39,7 +39,7 @@ import {
 import { ThemeBrandIcon } from "./theme-brand-icon.tsx";
 
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
-  readonly scroll?: { position(): number };
+  readonly scroll?: { element(): HTMLElement | undefined };
   readonly nativeGatewaySnapshot: NativeGatewaysSnapshot | null;
   readonly people: import("./sidebar-people.ts").SidebarPeoplePreferences;
   readonly peopleView?: ReturnType<typeof import("./sidebar-people.ts").createSidebarPeople>;
@@ -332,14 +332,16 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
   const profileGateway = projectGateway(context.gateway);
   const home = () => host.visibleHomeSession(host.expandedAgentId());
   const homeAvailable = () =>
-    host.sidebarSnapshot?.homeAllowed ?? isHomePanelAvailable(host.sessionDataContext?.gateway);
+    profileGateway.read().hello
+      ? isHomePanelAvailable(context.gateway)
+      : host.sidebarSnapshot?.homeAllowed;
   const connectionStatus = () => host.connectionStatus;
-  const selfUser = createMemo(() => {
+  const displayUser = createMemo(() => {
     profileGateway.read();
     const gateway = host.sessionDataContext?.gateway;
-    return gateway ? gatewayPresentationScope(gateway).displayUser : null;
+    const user = gateway && gatewayPresentationScope(gateway).displayUser;
+    return user ?? host.sidebarSnapshot?.footer;
   });
-  const displayUser = () => selfUser() ?? host.sidebarSnapshot?.footer;
   const selfLabel = () => displayUser()?.name ?? displayUser()?.email ?? t("nav.owner");
   const avatarUser = createMemo(() => ({
     id: "owner",
@@ -348,7 +350,6 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
     watchedSessions: [],
   }));
   const gateway = () => readSidebarNativeGateway(host);
-  const buildSubtitle = () => formatSidebarBuildSubtitle(CONTROL_UI_BUILD_INFO);
   const gatewayPrimaryTag = () => (gateway()?.isPrimary ? t("nav.gateway.primaryTag") : null);
   const identityMenuLabel = () => t("profilePage.identity.menuButtonLabel", { name: selfLabel() });
   const statusLabel = () =>
@@ -364,7 +365,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
       status ??
       (selectedGateway
         ? `${selectedGateway.name}${gatewayPrimaryTag() ? `, ${gatewayPrimaryTag()}` : ""}`
-        : buildSubtitle())
+        : formatSidebarBuildSubtitle(CONTROL_UI_BUILD_INFO))
     );
   };
   const identityLabel = () =>
@@ -426,6 +427,11 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
             aria-label={t("assistantPanel.toggle")}
             disabled={!homeAvailable()}
             onClick={(event) => {
+              if (host.sidebarSnapshot && !context.gateway.snapshot.hello) {
+                // Before Home accepts panel requests, its cached target can open as a conversation.
+                host.selectSession(host.sidebarSnapshot.homeSessionKey, host.expandedAgentId());
+                return;
+              }
               window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT));
               if (
                 !isMobileNavLayout() &&

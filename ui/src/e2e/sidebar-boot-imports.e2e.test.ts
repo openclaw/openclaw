@@ -200,6 +200,13 @@ suite.define(() => {
           JSON.stringify({ scrolled, restored, bytes }),
         );
         expect(restored).toBe(scrolled);
+        expect(
+          await evaluateControlUiContext(page, (app) => app.gateway.snapshot.hello),
+        ).toBeNull();
+        const beforeHome = page.url();
+        await page.locator(".sidebar-footer-bar__home").click();
+        await page.evaluate(() => new Promise(requestAnimationFrame));
+        expect(page.url()).not.toBe(beforeHome);
         await page.locator(".sidebar-rail__button.sidebar-new-session").click();
         await page.locator(".new-session-page").waitFor();
       },

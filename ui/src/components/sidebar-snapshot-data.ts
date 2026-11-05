@@ -209,6 +209,7 @@ export const sidebarSnapshotSchema = json.object({
   involvingMe: json.boolean,
   home: json.nullable(session),
   homeAllowed: json.boolean,
+  homeSessionKey: sessionKey,
   ownershipAvatars: json.boolean,
   newSessionAllowed: json.boolean,
   windowKeys: json.array(sessionKey),
