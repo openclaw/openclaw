@@ -20,6 +20,10 @@ const loaders = {
   tui: () => import("../tui/tui-last-session.kernel.js").then((m) => m.tuiLastSessionOperations),
   sessionState: () =>
     import("../sessions/session-state-events.worker.js").then((m) => m.sessionStateOperations),
+  "sessionState.record": () =>
+    import("../sessions/session-state-events-record.worker.js").then(
+      (m) => m.sessionStateRecordOperations,
+    ),
   sessionUpstream: () =>
     import("../sessions/session-upstream-links.worker.js").then((m) => m.sessionUpstreamOperations),
   subagents: () =>
