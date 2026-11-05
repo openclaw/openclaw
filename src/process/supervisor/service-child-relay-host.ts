@@ -23,6 +23,7 @@ import {
   type ServiceChildAnchorMessage,
 } from "./service-child-protocol.js";
 import {
+  assertServiceChildSpawn,
   createServiceChildStart,
   prepareServiceChildRelay,
   type ServiceChildRelayAdapter,
@@ -48,11 +49,7 @@ export async function createServiceChildRelayAdapter(
   using preparation = prepareServiceChildRelay(params);
   const { useWindowsJobAnchor, useLinuxSubreaper, controlFd, lineageFd } = preparation;
 
-  if (params.abortSignal?.aborted) {
-    throw new Error("service child construction aborted");
-  }
-  params.assertCurrent?.();
-  params.beforeSpawn?.();
+  assertServiceChildSpawn(params);
   const { child, cleanup, transportReady } = spawnServiceChildRelay({
     ...preparation.spawn,
     onSpawnCleanup: params.onSpawnCleanup,
@@ -404,8 +401,20 @@ export async function createServiceChildRelayAdapter(
       return;
     }
     inboundSequence = message.sequence;
-    if (message.type === "prepared" && state === "starting" && params.initiateSpawn) {
-      void sendControlMessage({ type: "launch" }, params.initiateSpawn).catch((error: unknown) => {
+    if (
+      message.type === "prepared" &&
+      state === "starting" &&
+      (params.initiateSpawn || params.prepareTargetSpawn)
+    ) {
+      void (async () => {
+        try {
+          await params.prepareTargetSpawn?.();
+          assertServiceChildSpawn(params);
+        } catch (error) {
+          throw new ServiceChildLaunchNotInitiatedError(error);
+        }
+        await sendControlMessage({ type: "launch" }, params.initiateSpawn);
+      })().catch((error: unknown) => {
         if (!(error instanceof ServiceChildLaunchNotInitiatedError) || state !== "starting") {
           return loseIdentity(String(error));
         }
@@ -609,11 +618,7 @@ export async function createServiceChildRelayAdapter(
   const ready = (async () => {
     using delivery = preparation.transferSecretInput();
     try {
-      params.assertCurrent?.();
-      if (params.abortSignal?.aborted) {
-        onConstructionAbort();
-      }
-      params.beforeSpawn?.();
+      assertServiceChildSpawn(params, onConstructionAbort);
       await Promise.race([sendServiceChildMessage(child, start), constructionAbort.promise]);
       params.assertCurrent?.();
       const [startupResult, secretDeliveryResult] = await Promise.allSettled([

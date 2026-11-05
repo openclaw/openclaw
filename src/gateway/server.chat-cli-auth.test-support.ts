@@ -73,8 +73,8 @@ if (process.argv.includes("auth")) {
   send({ loggedIn: nativeLogin });
   process.exit(0);
 }
-appendFileSync(join(nativeRoot, "execution-launches.log"), "launch\n");
 const descriptor = process.env.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR;
+appendFileSync(join(nativeRoot, "execution-launches.log"), descriptor === undefined ? "native\n" : "saved\n");
 let credential = nativeLogin
   ? JSON.parse(readFileSync(join(nativeRoot, ".credentials.json"), "utf8")).claudeAiOauth?.accessToken
   : undefined;

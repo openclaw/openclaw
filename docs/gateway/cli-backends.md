@@ -499,6 +499,8 @@ Native login makes the Claude CLI route available; it does not supply an Anthrop
 New sessions select saved subscription credentials through the configured account
 order and forward them to the CLI through a protected file descriptor. Existing
 sessions keep their account until you select another or remove its saved profile.
+Saved accounts are checked again before starting a CLI process and sending its first input.
+If the account was removed during preparation, select a connected account or sign in again and retry.
 Explicit account selections and empty account orders remain authoritative. API keys saved
 for the `anthropic` provider require an explicit selection; they do not replace
 native subscription login automatically.
