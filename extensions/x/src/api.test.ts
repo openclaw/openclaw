@@ -132,6 +132,32 @@ describe("X API authentication", () => {
     );
   });
 
+  it("keeps an emoji whole in an X API error detail", async () => {
+    vi.useFakeTimers();
+    const message = `${"e".repeat(511)}😀ZZEND`;
+    const api = createXApiClient({
+      clientSecret: "test-secret",
+      refreshToken: "test-seed",
+      bearerToken: "test-app-bearer",
+      fetch: async (url, init) => {
+        if (url.endsWith("/oauth2/token")) {
+          return Response.json({ access_token: "test-user-access", refresh_token: "test-rotated" });
+        }
+        return init?.method === "POST"
+          ? new Response(JSON.stringify({ errors: [{ message }] }), { status: 400 })
+          : Response.json({ data: [] });
+      },
+    });
+    const failure = api.ensureActivitySubscriptions("9");
+    await expect(failure).rejects.toThrow(/X API \/2\/activity\/subscriptions failed \(HTTP 400\)/);
+    await failure.catch((error: unknown) => {
+      const text = error instanceof Error ? error.message : String(error);
+      expect(text).toContain("e".repeat(511));
+      expect(text).not.toContain("ZZEND");
+      expect(text).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+    });
+  });
+
   it.each([
     ["reply", "refresh"],
     ["batch user lookup", "refresh"],
