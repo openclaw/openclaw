@@ -1,0 +1,4 @@
+# Exact net regression growth for account-run iMessage Automation status.
+# Covers the native attachment process, action attachment, and Gateway status
+# lifecycle without duplicate helper tests or broadening the shared baseline.
+132

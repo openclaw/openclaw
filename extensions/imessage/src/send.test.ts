@@ -4,7 +4,7 @@ import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbou
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { IMessageRpcClient } from "./client.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";
 import {
@@ -1124,52 +1124,64 @@ describe("sendMessageIMessage receipts", () => {
     },
   );
 
-  it("preserves the default CLI attachment rejection", async () => {
-    const cliPath = openClawState.path("fake-attachment-cli");
-    const logPath = openClawState.path("attachment-cli-argv.jsonl");
-    const dbPath = openClawState.path("unused-chat.db");
-    const mediaPath = createOutboundMediaFile("fixture.pdf", Buffer.from("%PDF-1.4\nsynthetic"));
-    const response = { success: false, error: "synthetic CLI rejection" };
-    fs.writeFileSync(
-      cliPath,
-      [
-        "#!" + process.execPath,
-        'const fs = require("node:fs");',
-        `fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(process.argv.slice(2)) + "\\n");`,
-        `process.stdout.write(${JSON.stringify(JSON.stringify(response) + "\n")});`,
-      ].join("\n"),
-      { mode: 0o755 },
-    );
-    const createRpc = vi
-      .spyOn(clientRuntime, "createIMessageRpcClient")
-      .mockResolvedValue(createClient({ guid: "unexpected-rpc" }));
-    mockAttachment({ path: mediaPath, contentType: "application/pdf" });
-    const sending = sendMessageIMessage("chat_guid:fixture-chat", "", {
-      config: createSendConfig({ accounts: { default: { cliPath, dbPath } } }),
-      mediaUrl: mediaPath,
-    });
-    await expect(sending).rejects.toThrow("synthetic CLI rejection");
-    expect(createRpc).not.toHaveBeenCalled();
-    const calls = fs
-      .readFileSync(logPath, "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
-    expect(calls).toEqual([
-      [
+  it.each(["applescript", "auto"] as const)(
+    "reports %s Automation errors",
+    async (sendTransport) => {
+      const cliPath = openClawState.path("fake-attachment-cli");
+      const logPath = openClawState.path("attachment-cli-argv.jsonl");
+      const dbPath = openClawState.path("unused-chat.db");
+      const mediaPath = createOutboundMediaFile("fixture.pdf", Buffer.from("%PDF-1.4\nsynthetic"));
+      const detail = "Messages automation failed with AppleScript error -1712.";
+      const response = { success: false, error: detail };
+      const { getIMessageRuntime } = await import("./runtime.js");
+      const patches: unknown[] = [];
+      const lease = getIMessageRuntime().channel.runtimeContexts.register({
+        channelId: "imessage",
+        capability: "imessage-send-status",
+        accountId: "work",
+        abortSignal: new AbortController().signal,
+        context: {
+          getStatus: () => ({ accountId: "work" }),
+          setStatus: (next: unknown) => patches.push(next),
+        },
+      });
+      onTestFinished(() => lease?.dispose());
+      fs.writeFileSync(
+        cliPath,
+        [
+          "#!" + process.execPath,
+          'const fs = require("node:fs");',
+          `fs.appendFileSync(${JSON.stringify(logPath)}, JSON.stringify(process.argv.slice(2)));`,
+          `process.stdout.write(${JSON.stringify(JSON.stringify(response) + "\n")});`,
+        ].join("\n"),
+        { mode: 0o755 },
+      );
+      const createRpc = vi.spyOn(clientRuntime, "createIMessageRpcClient");
+      mockAttachment({ path: mediaPath, contentType: "application/pdf" });
+      const sending = sendMessageIMessage("chat_guid:fixture-chat", "", {
+        config: createSendConfig({ accounts: { Work: { cliPath, dbPath, sendTransport } } }),
+        accountId: "WORK",
+        mediaUrl: mediaPath,
+      });
+      await expect(sending).rejects.toMatchObject({ name: "Error", message: detail });
+      expect(patches).toMatchObject([
+        { accountId: "work", lastError: expect.stringContaining("Automation") },
+      ]);
+      expect(createRpc).not.toHaveBeenCalled();
+      expect(JSON.parse(fs.readFileSync(logPath, "utf8"))).toEqual([
         "send-attachment",
         "--chat",
         "fixture-chat",
         "--file",
         mediaPath,
         "--transport",
-        "auto",
+        sendTransport,
         "--db",
         dbPath,
         "--json",
-      ],
-    ]);
-  });
+      ]);
+    },
+  );
 
   it("joins pending echo persistence before sending and its rollback before rejecting", async () => {
     const { getIMessageRuntime } = await import("./runtime.js");

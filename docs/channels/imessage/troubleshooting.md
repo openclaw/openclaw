@@ -26,7 +26,7 @@ Symptom-first fixes for the iMessage channel, plus the configuration reference l
   </Accordion>
 
   <Accordion title="Replies fail after an app update, but channel status is healthy">
-    A successful `channels status --probe` checks RPC/read access, not whether Messages can send. Automation failures can therefore coexist with a healthy probe and working inbound messages.
+    A successful `channels status --probe` checks RPC/read access, not whether Messages can send. Automation failures can therefore coexist with a healthy probe and working inbound messages. After a send reports an Automation failure, OpenClaw retains the warning in that account's status for the running account. A healthy read probe does not clear it; an accepted send does. Restarting the account resets the observation, not the macOS permission. OpenClaw does not automatically resend the failed message.
 
     For structured AppleScript failures, OpenClaw includes launch-context guidance with the send error. Error `-1743` means Messages Automation was denied. Error `-1712` is an Apple event timeout: a missing grant is one possible cause, not a confirmed diagnosis.
 

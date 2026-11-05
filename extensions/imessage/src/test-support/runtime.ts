@@ -78,7 +78,7 @@ function installRuntime(
           }) as PluginRuntime["state"]["openKeyedStoreV2"],
       openSyncKeyedStore: failStores ? failStore : createIMessagePluginStateSyncStoreForTest,
     },
-    channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
+    channel: createPluginRuntimeMock().channel,
   } as PluginRuntime);
   if (failStores) {
     return;
