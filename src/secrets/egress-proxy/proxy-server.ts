@@ -207,7 +207,7 @@ function substituteRequest(params: {
     // Buffer's decoder is permissive. Accept only canonical UTF-8 credentials.
     const canonical = bytes.toString("base64");
     if (
-      (basic[2].includes("=") ? canonical : canonical.replace(/=+$/u, "")) !== basic[2] ||
+      (basic[2].includes("=") ? canonical : canonical.replace(/[=]+$/u, "")) !== basic[2] ||
       !Buffer.from(credentials, "utf8").equals(bytes) ||
       !credentials.includes(":") ||
       // oxlint-disable-next-line no-control-regex -- Basic credentials prohibit C0 controls and DEL.

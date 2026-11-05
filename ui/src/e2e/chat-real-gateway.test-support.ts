@@ -18,9 +18,11 @@ export function createChatGatewayInstance(options: {
   defaults?: Record<string, unknown>;
   config?: Record<string, unknown>;
   entrypoint?: string[];
+  cwd?: string;
 }) {
   return createOpenClawTestInstance({
     name: options.name,
+    cwd: options.cwd,
     entrypoint: options.entrypoint,
     env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
     config: {
@@ -54,7 +56,7 @@ export function createChatGatewayInstance(options: {
 
 export async function runGatewayCli(instance: OpenClawTestInstance, args: string[]) {
   const result = await instance.cli(args);
-  expect(result.code, result.stderr).toBe(0);
+  expect(result.code, result.stderr || result.stdout).toBe(0);
   return result.stdout;
 }
 

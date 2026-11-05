@@ -79,7 +79,8 @@ function applyLine(state: ProtectionScanState, line: string): void {
     return;
   }
   if (UNMODELED_BLOCK_START.test(line)) {
-    state.blockAmbiguous = true;
+    state.paragraphAmbiguous = true;
+    state.blockAmbiguous ||= / {4}|\t/.test(line);
   }
   if (line.includes("`") || state.blockAmbiguous) {
     state.paragraphAmbiguous = true;

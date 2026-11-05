@@ -384,7 +384,7 @@ export function resolveMemoryIndexSearchDiagnostic(
 
 export function resolveMemorySearchStaleness(
   status: Pick<MemoryProviderStatus, "custom" | "lastSyncError"> &
-    Partial<Pick<MemoryProviderStatus, "provider" | "requestedProvider">>,
+    Partial<Pick<MemoryProviderStatus, "provider" | "requestedProvider" | "dirty">>,
   agentId?: string,
 ): { stale: true; warning: string; action: string } | null {
   const diagnostic = resolveMemoryIndexIdentityDiagnostic(status);
@@ -393,7 +393,13 @@ export function resolveMemorySearchStaleness(
   }
   const reason = status.lastSyncError?.trim();
   if (!reason) {
-    return null;
+    return status.dirty
+      ? {
+          stale: true,
+          warning: "Memory index has pending updates. Results use the last published index.",
+          action: `Retry after background indexing, or run: ${formatMemoryIndexRebuildGuidance(status, agentId)}`,
+        }
+      : null;
   }
   return {
     stale: true,

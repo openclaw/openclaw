@@ -39,6 +39,12 @@ describe("Darwin tooling event scope", () => {
     [["test/scripts/pr-materialized-anchor.test.ts"], true],
     [["test/scripts/pr-operation-lock.test.ts"], true],
     [["test/scripts/pr-git-invocation.test.ts"], true],
+    [["test/scripts/package-mac-dist.test.ts"], true],
+    [["scripts/package-mac-dist.sh"], true],
+    [["scripts/notarize-mac-artifact.sh"], true],
+    [["src/infra/directory-walk.ts"], true],
+    [["test/scripts/package-mac-app.test.ts"], false],
+    [["src/infra/directory-walk.test.ts"], false],
     [["test/scripts/pr-wrapper.test-support.ts"], true],
     [["test/scripts/pr-main-refresh.test-support.ts"], true],
     [["test/scripts/pr-darwin-process-identity.test.py"], true],
@@ -57,6 +63,17 @@ describe("Darwin tooling event scope", () => {
   ] as const)("routes %j", (files, expected) => {
     const workflow = readWorkflow(".github/workflows/pr-tooling-darwin.yml");
     expect(acceptsWorkflowPaths(workflow.on.pull_request.paths, files)).toBe(expected);
+  });
+
+  it("executes the complete macOS distribution owner without another admission condition", () => {
+    const workflow = readWorkflow(".github/workflows/pr-tooling-darwin.yml");
+    const steps = workflow.jobs.darwin.steps.filter(
+      (step: { run?: string }) =>
+        step.run ===
+        "node scripts/run-vitest.mjs test/scripts/package-mac-dist.test.ts --maxWorkers=1",
+    );
+    expect(steps).toHaveLength(1);
+    expect(steps[0].if).toBeUndefined();
   });
 });
 

@@ -14,6 +14,24 @@ const { child, pty, readMemory } = vi.hoisted(() => ({
   pty: vi.fn(),
   readMemory: vi.fn<(path: string, callback: (error: null, text: Buffer) => void) => void>(),
 }));
+const memoryOwner = vi.hoisted(() => ({
+  setBudget: (_budget: { memoryBytes: number; swapBytes: number } | undefined) => {},
+}));
+vi.mock("../../shared/global-singleton.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../shared/global-singleton.js")>();
+  return {
+    ...actual,
+    resolveGlobalSingleton: (...args: Parameters<typeof actual.resolveGlobalSingleton>) => {
+      const owner = actual.resolveGlobalSingleton(...args);
+      if (args[0] === Symbol.for("openclaw.hostExecMemory") && owner && typeof owner === "object") {
+        memoryOwner.setBudget = (budget) => {
+          Object.assign(owner, { budget });
+        };
+      }
+      return owner;
+    },
+  };
+});
 vi.mock("./adapters/child.js", () => ({
   createChildAdapter: async (
     ...args: Parameters<typeof import("./adapters/child.js").createChildAdapter>
@@ -26,6 +44,10 @@ vi.mock("./adapters/pty.js", () => ({ createPtyAdapter: pty }));
 vi.mock("node:fs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs")>()),
   readFile: readMemory,
+}));
+vi.mock("node:fs/promises", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs/promises")>()),
+  readdir: async () => [],
 }));
 
 let supervisor: ReturnType<typeof createProcessSupervisor>;
@@ -82,6 +104,7 @@ beforeEach(() => {
   supervisor = createProcessSupervisor();
 });
 afterEach(() => {
+  memoryOwner.setBudget(undefined);
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -123,6 +146,7 @@ describe("process supervisor", () => {
     async (mode) => {
       vi.useFakeTimers();
       mockProcessPlatform("linux");
+      memoryOwner.setBudget({ memoryBytes: 128 * 1024, swapBytes: 0 });
       const read = readMemory.mockImplementation((_path, callback) => {
         callback(null, Buffer.from("Name:\tfixture\nVmRSS:\t256 kB\n"));
       });
@@ -136,27 +160,33 @@ describe("process supervisor", () => {
       const run = await supervisor.spawn({
         mode: mode === "pty" ? "pty" : "child",
         argv: ["fixture"],
-        memoryLimitBytes: 128 * 1024,
+        executionIntent: "agent-tool",
         ...(mode === "external" ? { cleanupOwnership: "external" } : {}),
       });
-      await vi.advanceTimersByTimeAsync(1000);
-      if (mode === "external") {
-        expect(read).not.toHaveBeenCalled();
+      try {
+        await vi.advanceTimersByTimeAsync(1000);
+        if (mode === "external") {
+          expect(read).not.toHaveBeenCalled();
+          adapter.settle(0);
+        } else {
+          expect(read).toHaveBeenCalledWith("/proc/4321/status", expect.any(Function));
+          expect(adapter.killMock).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+          await expect(run.wait()).resolves.toMatchObject({
+            reason: "memory-limit",
+            timedOut: false,
+            stderr: expect.stringContaining("shared host exec memory budget"),
+          });
+        }
+        await run.wait();
+        await supervisor.shutdown();
+        const reads = read.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(5000);
+        expect(read).toHaveBeenCalledTimes(reads);
+      } finally {
         adapter.settle(0);
-      } else {
-        expect(adapter.killMock).toHaveBeenCalledExactlyOnceWith("SIGKILL");
-        expect(read).toHaveBeenCalledWith("/proc/4321/status", expect.any(Function));
-        await expect(run.wait()).resolves.toMatchObject({
-          reason: "memory-limit",
-          timedOut: false,
-          stderr: expect.stringContaining("Command killed for exceeding its host memory bound"),
-        });
+        await run.wait();
+        await supervisor.shutdown();
       }
-      await run.wait();
-      await supervisor.shutdown();
-      const reads = read.mock.calls.length;
-      await vi.advanceTimersByTimeAsync(5000);
-      expect(read).toHaveBeenCalledTimes(reads);
     },
   );
 

@@ -40,7 +40,7 @@ function isHttpMediaUrl(value: string): boolean {
 }
 
 function normalizeBase64ForCompare(value: string): string {
-  return value.replace(/=+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
+  return value.replace(/[=]+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
 }
 
 function decodeAttachmentBase64(value: string): Buffer | null {

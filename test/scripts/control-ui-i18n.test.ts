@@ -307,6 +307,9 @@ describe("control-ui-i18n generated ownership", () => {
     for (const [key, value] of Object.entries(en.chat.recovery)) {
       expect(source.get("chat.recovery." + key), key).toBe(value);
     }
+    for (const [key, value] of Object.entries(en.chat.sessionReset)) {
+      expect(source.get("chat.sessionReset." + key), key).toBe(value);
+    }
     for (const fragment of [
       registerChatDetailsEnglish.catalog,
       registerChatSessionEnglish.catalog,

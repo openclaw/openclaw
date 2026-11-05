@@ -341,7 +341,10 @@ function SomeAll(value, callback) {
   );
 }
 function Counted(value, callback) {
-  return value.reduce((result, value2, index) => (callback(value2, index) ? ++result : result), 0);
+  return value.reduce(
+    (result, value2, index) => (callback(value2, index) ? result + 1 : result),
+    0,
+  );
 }
 function ShiftLeft(array, true_, false_) {
   return IsEqual(array.length, 0) ? false_() : true_(array[0], array.slice(1));
@@ -1158,11 +1161,11 @@ var External = [
     /(^kind$|^argv$|^cwd$|^env$|^input$|^timeoutSeconds$|^noOutputTimeoutSeconds$|^outputMaxBytes$|^toolsAllow$|^toolsAllowIsDefault$)/u,
     /(^kind$|^script$|^timeoutSeconds$|^toolBudget$|^toolsAllow$|^toolsAllowIsDefault$)/u,
     /(^mode$|^channel$|^threadId$|^accountId$|^bestEffort$|^failureDestination$|^target$|^directPolicy$|^to$)/u,
-    /(^channel$|^to$|^mode$|^accountId$)/u,
+    /(^threadId$|^channel$|^to$|^mode$|^accountId$)/u,
     /(^mode$|^channel$|^threadId$|^accountId$|^bestEffort$|^failureDestination$|^target$|^directPolicy$|^completionDestination$|^to$)/u,
     /(^mode$|^to$)/u,
     /(^mode$|^channel$|^threadId$|^accountId$|^bestEffort$|^failureDestination$|^to$)/u,
-    /(^after$|^channel$|^to$|^cooldownMs$|^includeSkipped$|^mode$|^accountId$)/u,
+    /(^threadId$|^after$|^channel$|^to$|^cooldownMs$|^includeSkipped$|^mode$|^accountId$)/u,
     /(^id$|^patch$|^expectedConfigRevision$)/u,
     /(^ownerProfileId$|^name$|^displayName$|^agentId$|^sessionKey$|^description$|^enabled$|^deleteAfterRun$|^schedule$|^pacing$|^activeHours$|^idleOnly$|^trigger$|^sessionTarget$|^wakeMode$|^payload$|^delivery$|^failureAlert$|^state$)/u,
     /\S/u,
@@ -1174,9 +1177,9 @@ var External = [
     /(^kind$|^argv$|^cwd$|^env$|^input$|^timeoutSeconds$|^noOutputTimeoutSeconds$|^outputMaxBytes$|^toolsAllow$|^toolsAllowIsDefault$)/u,
     /(^kind$|^script$|^timeoutSeconds$|^toolBudget$|^toolsAllow$|^toolsAllowIsDefault$)/u,
     /(^mode$|^target$|^directPolicy$|^channel$|^threadId$|^accountId$|^bestEffort$|^failureDestination$|^completionDestination$|^to$)/u,
-    /(^channel$|^to$|^mode$|^accountId$)/u,
+    /(^threadId$|^channel$|^to$|^mode$|^accountId$)/u,
     /(^mode$|^to$)/u,
-    /(^after$|^channel$|^to$|^cooldownMs$|^includeSkipped$|^mode$|^accountId$)/u,
+    /(^threadId$|^after$|^channel$|^to$|^cooldownMs$|^includeSkipped$|^mode$|^accountId$)/u,
     /(^nextRunAtMs$|^runningAtMs$|^lastRunAtMs$|^lastRunStatus$|^lastStatus$|^lastError$|^lastErrorReason$|^lastDurationMs$|^consecutiveErrors$|^consecutiveSkipped$|^lastDelivered$|^lastDeliveryStatus$|^lastDeliveryError$|^lastFailureNotificationDelivered$|^lastFailureNotificationDeliveryStatus$|^lastFailureNotificationDeliveryError$|^lastFailureAlertAtMs$|^lastTriggerEvalAtMs$|^triggerEvalCount$|^lastTriggerFireAtMs$|^triggerState$|^streamStatus$|^streamError$|^streamConsecutiveFailures$|^streamRestartExhausted$|^streamDroppedBatches$|^streamCoalescedBatches$|^streamLastStartedAtMs$|^streamLastExitAtMs$)/u,
     /(^jobId$|^patch$|^expectedConfigRevision$)/u,
     /(^id$|^expectedConfigRevision$)/u,
@@ -3494,7 +3497,7 @@ var External = [
       check_259(value.machineClass)) &&
     (value.os === void 0 || !("os" in value) || check_327(value.os)) &&
     [check_328(value), check_332(value), check_337(value), check_339(value)].reduce(
-      (result, unique_177, _) => (unique_177 === !0 ? ++result : result),
+      (result, unique_177, _) => (unique_177 === !0 ? result + 1 : result),
       0,
     ) === 1,
   check_326 = (value) => typeof value == "boolean" && value === !0,
@@ -8754,7 +8757,7 @@ var External = [
       !("decisionLimit" in value) ||
       check_632(value.decisionLimit)) &&
     [check_1253(value), check_1255(value)].reduce(
-      (result, unique_788, _) => (unique_788 === !0 ? ++result : result),
+      (result, unique_788, _) => (unique_788 === !0 ? result + 1 : result),
       0,
     ) === 1,
   check_1252 = (value) =>
@@ -10907,6 +10910,7 @@ var External = [
     Object.getOwnPropertyNames(value).every(
       (unique_1044, unique_1045) => External[538].test(unique_1044) || check_2(value[unique_1044]),
     ) &&
+    (value.threadId === void 0 || !("threadId" in value) || check_901(value.threadId)) &&
     (value.channel === void 0 || !("channel" in value) || check_1630(value.channel)) &&
     (value.to === void 0 || !("to" in value) || check_564(value.to)) &&
     (value.mode === void 0 || !("mode" in value) || check_1633(value.mode)) &&
@@ -10977,6 +10981,7 @@ var External = [
     Object.getOwnPropertyNames(value).every(
       (unique_1052, unique_1053) => External[542].test(unique_1052) || check_2(value[unique_1052]),
     ) &&
+    (value.threadId === void 0 || !("threadId" in value) || check_901(value.threadId)) &&
     (value.after === void 0 || !("after" in value) || check_485(value.after)) &&
     (value.channel === void 0 || !("channel" in value) || check_1630(value.channel)) &&
     (value.to === void 0 || !("to" in value) || check_564(value.to)) &&
@@ -11224,6 +11229,7 @@ var External = [
     Object.getOwnPropertyNames(value).every(
       (unique_1074, unique_1075) => External[554].test(unique_1074) || check_2(value[unique_1074]),
     ) &&
+    (value.threadId === void 0 || !("threadId" in value) || check_1105(value.threadId)) &&
     (value.channel === void 0 || !("channel" in value) || check_1674(value.channel)) &&
     (value.to === void 0 || !("to" in value) || check_1678(value.to)) &&
     (value.mode === void 0 || !("mode" in value) || check_1679(value.mode)) &&
@@ -11250,6 +11256,7 @@ var External = [
     Object.getOwnPropertyNames(value).every(
       (unique_1078, unique_1079) => External[556].test(unique_1078) || check_2(value[unique_1078]),
     ) &&
+    (value.threadId === void 0 || !("threadId" in value) || check_1105(value.threadId)) &&
     (value.after === void 0 || !("after" in value) || check_1684(value.after)) &&
     (value.channel === void 0 || !("channel" in value) || check_1674(value.channel)) &&
     (value.to === void 0 || !("to" in value) || check_1678(value.to)) &&
@@ -19322,7 +19329,7 @@ var External = [
     (value.native === void 0 || !("native" in value) || check_2898(value.native)) &&
     (value.baseHash === void 0 || !("baseHash" in value) || check_63(value.baseHash)) &&
     [check_2904(value), check_2906(value)].reduce(
-      (result, unique_1958, _) => (unique_1958 === !0 ? ++result : result),
+      (result, unique_1958, _) => (unique_1958 === !0 ? result + 1 : result),
       0,
     ) === 1,
   check_2897 = (value) =>
@@ -19403,7 +19410,7 @@ var External = [
     (value.constraints === void 0 || !("constraints" in value) || check_2912(value.constraints)) &&
     (value.message === void 0 || !("message" in value) || check_272(value.message)) &&
     [check_2913(value), check_2921(value), check_2927(value)].reduce(
-      (result, unique_1966, _) => (unique_1966 === !0 ? ++result : result),
+      (result, unique_1966, _) => (unique_1966 === !0 ? result + 1 : result),
       0,
     ) === 1,
   check_2910 = (value) =>
