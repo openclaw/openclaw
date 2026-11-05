@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   mapToolContextToSpawnedRunMetadata as mapContext,
   normalizeSpawnedRunMetadata as normalize,
@@ -54,52 +54,16 @@ it.each([
   expect(inheritWorkspace({ config, ...context })).toBe(expected);
 });
 
-describe("resolveIngressWorkspaceOverrideForSessionRun", () => {
-  it("uses inherited workspaces for spawned runs and managed cwd for dashboard worktrees", () => {
-    expect([
-      ingressWorkspace({
-        spawnedBy: "agent:main:subagent:parent",
-        workspaceDir: "/tmp/ws",
-        cwd: "/tmp/task",
-      }),
-      ingressWorkspace({ spawnedBy: "", workspaceDir: "/tmp/ws", cwd: "/tmp/worktree" }),
-      ingressWorkspace({
-        spawnedBy: "agent:main:subagent:parent",
-        workspaceDir: "/tmp/ws",
-        cwd: "/home/node-user",
-        execHost: "node",
-        runtimeBackendId: "claude-cli",
-      }),
-      ingressWorkspace(),
-    ]).toEqual(["/tmp/ws", "/tmp/worktree", "/tmp/ws", undefined]);
-  });
-
-  it("does not treat an adopted node-session cwd as a Gateway workspace", () => {
-    expect(
-      ingressWorkspace({
-        spawnedBy: "",
-        cwd: "/home/node-user",
-        execHost: "node",
-        runtimeBackendId: "claude-cli",
-      }),
-    ).toBeUndefined();
-  });
-
-  it("keeps a local worktree when node host only routes shell commands", () => {
-    expect(
-      ingressWorkspace({
-        spawnedBy: "",
-        cwd: "/tmp/worktree",
-        execHost: "node",
-        runtimeBackendId: "openai",
-      }),
-    ).toBe("/tmp/worktree");
-    expect(
-      ingressWorkspace({
-        spawnedBy: "",
-        cwd: "/tmp/worktree",
-        execHost: "node",
-      }),
-    ).toBe("/tmp/worktree");
-  });
+const inherited = { spawnedBy: requesterSessionKey, workspaceDir: "/tmp/ws" };
+const nodeCwd = { cwd: "/home/node-user", execHost: "node" as const };
+it.each([
+  [{ ...inherited, cwd: "/tmp/task" }, "/tmp/ws"],
+  [{ spawnedBy: "", workspaceDir: "/tmp/ws", cwd: "/tmp/worktree" }, "/tmp/worktree"],
+  [{ ...inherited, ...nodeCwd, runtimeBackendId: "claude-cli" }, "/tmp/ws"],
+  [{ ...nodeCwd, runtimeBackendId: "claude-cli" }, undefined],
+  [{ ...nodeCwd, cwd: "/tmp/worktree", runtimeBackendId: "openai" }, "/tmp/worktree"],
+  [{ ...nodeCwd, cwd: "/tmp/worktree" }, "/tmp/worktree"],
+  [undefined, undefined],
+])("resolves the Gateway workspace separately from execution cwd for %j", (context, expected) => {
+  expect(ingressWorkspace(context)).toBe(expected);
 });
