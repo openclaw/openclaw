@@ -565,24 +565,28 @@ async function updateCommandInternal(
     const rollbackBlockedReason =
       opts.recovery || failedBeforeMutation
         ? undefined
-        : await inspectActivatedUpdateState({
-            result,
-            root,
-            packageUpdateNodeRunner,
-            schemaVersions: execution.schemaVersions,
-            candidateSchemaVersions: execution.candidateSchemaVersions,
-            config: finalization.configSnapshot.config,
-            env: ownedManagedUpdateContext?.env ?? run.env,
-            timeoutMs: updateStepTimeoutMs,
-          });
+        : await runMutableUpdateRecovery(() =>
+            inspectActivatedUpdateState({
+              result,
+              root,
+              packageUpdateNodeRunner,
+              schemaVersions: execution.schemaVersions,
+              candidateSchemaVersions: execution.candidateSchemaVersions,
+              config: finalization.configSnapshot.config,
+              env: ownedManagedUpdateContext?.env ?? run.env,
+              timeoutMs: updateStepTimeoutMs,
+            }),
+          );
     run.executorFence?.assertCurrent();
     if (opts.recovery || rollbackBlockedReason) {
       // Only candidate code may reopen migrated state, including during reporting and cleanup.
       recoveryState.ledgerHandoffOwned = true;
       const assertRollbackCurrent = createUpdateCommandFinalizationFence(finalization);
-      const continued = await continueMigratedUpdateInFreshProcess(
-        { ...finalization, rollbackBlockedReason },
-        progress.pendingSteps,
+      const continued = await runMutableUpdateRecovery(() =>
+        continueMigratedUpdateInFreshProcess(
+          { ...finalization, rollbackBlockedReason },
+          progress.pendingSteps,
+        ),
       );
       if (continued.databaseRollbackAvailable && finalization.databaseBackup) {
         const backup = finalization.databaseBackup;
@@ -602,15 +606,17 @@ async function updateCommandInternal(
             continued.result.steps.at(-1)?.stderrTail ?? undefined,
           );
         }
-        await finishUpdate(
-          { ...finalization, result: continued.result },
-          {
-            beforeFinalization: async () => {
-              await progress.flushLedgerWrites();
-              recoveryState.ledgerHandoffOwned = false;
-              presentation.resume();
+        await runMutableUpdateRecovery(() =>
+          finishUpdate(
+            { ...finalization, result: continued.result },
+            {
+              beforeFinalization: async () => {
+                await progress.flushLedgerWrites();
+                recoveryState.ledgerHandoffOwned = false;
+                presentation.resume();
+              },
             },
-          },
+          ),
         );
         return;
       }
@@ -620,12 +626,14 @@ async function updateCommandInternal(
       }
       return;
     }
-    await finishUpdate(finalization, {
-      beforeFinalization: async () => {
-        await progress.flushLedgerWrites();
-        presentation.resume();
-      },
-    });
+    await runMutableUpdateRecovery(() =>
+      finishUpdate(finalization, {
+        beforeFinalization: async () => {
+          await progress.flushLedgerWrites();
+          presentation.resume();
+        },
+      }),
+    );
   };
 
   return await withUpdateCandidateAdmission(
