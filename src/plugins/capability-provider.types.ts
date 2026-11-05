@@ -21,15 +21,17 @@ import type {
   RealtimeTranscriptionSession,
 } from "../realtime-transcription/provider-types.js";
 import type {
-  RealtimeVoiceBridge,
-  RealtimeVoiceBrowserSession,
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceBridgeCreateRequest,
+  RealtimeVoiceProviderConfiguredContext,
+  RealtimeVoiceProviderResolveConfigContext,
+} from "../talk/provider-contexts.js";
+import type {
+  RealtimeVoiceBridge,
+  RealtimeVoiceBrowserSession,
   RealtimeVoiceProviderCapabilities,
   RealtimeVoiceProviderConfig,
-  RealtimeVoiceProviderConfiguredContext,
   RealtimeVoiceProviderId,
-  RealtimeVoiceProviderResolveConfigContext,
 } from "../talk/provider-types.js";
 import type { TranscriptSourceProvider as TranscriptsSourceProviderCapability } from "../transcripts/provider-types.js";
 import type {
