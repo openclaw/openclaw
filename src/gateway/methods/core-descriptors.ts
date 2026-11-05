@@ -737,7 +737,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["diagnostics.capabilities", "diagnostics", "operator.read", "2026.10"],
   ["cron.bind", "cron", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["talk.client.say", "talk", "operator.talk", "2026.10"],
-  ["cron.liveOutput", "cron", "operator.read", "2026.10"],
+  ["cron.liveOutput", "cron", "operator.read", "2026.11"],
   [
     "sessions.github.readiness",
     "sessions-github",
@@ -750,4 +750,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["users.channelIdentity", "users", "operator.sessions.read", "2026.10", PROFILE_DEPENDENT],
   ["sessions.groups.create", "sessions-groups", "operator.write", "2026.10"],
   ["sessions.catalog.resolve", "session-catalog", "operator.read", "2026.10"],
+  ["chat.steerNow", "chat", "operator.write", "2026.11", OWN_SESSION_WRITE],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

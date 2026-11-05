@@ -177,5 +177,10 @@
     "knowledge_unmerge": { "profiles": ["coding"] },
     "knowledge_verify": { "profiles": ["coding"] },
     "knowledge_withdraw": { "profiles": ["coding"] }
-  }
+  },
+  "recommendedPrompts": [
+    "Help me get started with Knowledge.",
+    "Help me import my existing Memory into Knowledge.",
+    "Answer a question using my saved Knowledge and cite the evidence."
+  ]
 }

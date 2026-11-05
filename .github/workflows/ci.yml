@@ -1055,6 +1055,7 @@ jobs:
             /.github/actions/
             /scripts/
             /test/vitest/
+            /config/ci-adaptive-markdown.json
             /config/ci-test-timings.json
             /node-runtime-env.mjs
             /runtime-process-scripts.generated.mjs

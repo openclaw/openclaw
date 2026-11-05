@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   collectLegacyWhatsAppCrontabHealthWarning,
   noteCronDeliveryTargetAdvisory,
@@ -24,9 +25,10 @@ afterEach(() => vi.clearAllMocks());
 async function advisory(
   jobs: Array<Record<string, unknown>>,
   channels: string[] = [],
+  cfg: OpenClawConfig = {},
 ): Promise<string | null> {
   mocks.plugins.mockReturnValue(channels.map((id) => ({ id })));
-  await noteCronDeliveryTargetAdvisory({ cfg: {}, jobs });
+  await noteCronDeliveryTargetAdvisory({ cfg, jobs });
   return mocks.note.mock.calls.at(-1)?.[0] ?? null;
 }
 
@@ -48,6 +50,40 @@ it("reports unavailable channels with id/name/unnamed examples and ignores unpin
 it("treats a channel alias as active when its canonical id is available", async () => {
   expect(
     await advisory([{ delivery: { mode: "announce", channel: "gchat" } }], ["googlechat"]),
+  ).toBeNull();
+});
+
+it("reports configured default destinations on unavailable channels", async () => {
+  const cfg: OpenClawConfig = {
+    cron: {
+      delivery: { channel: "ghost", to: "1" },
+      failureAlert: { channel: "telegram", to: "1" },
+      agents: { ops: { delivery: { channel: "last", to: "1" } } },
+      creators: {
+        alice: {
+          failureAlert: { channel: "missing-channel", to: "1" },
+          delivery: { channel: "gchat", to: "spaces/a" },
+        },
+      },
+    },
+  };
+  const message = await advisory(
+    [{ id: "routeless", delivery: { mode: "announce" } }],
+    ["googlechat", "telegram"],
+    cfg,
+  );
+  expect(message?.split("\n")).toEqual([
+    "Automation delivery targets unavailable channels.",
+    "- Default destinations on a channel whose plugin is not active: cron.delivery.channel -> ghost, cron.creators.alice.failureAlert.channel -> missing-channel; automations that fall back to them will fail to deliver",
+    expect.stringContaining("or the listed `cron` default after reviewing"),
+  ]);
+});
+
+it("stays quiet when every default destination channel is available", async () => {
+  expect(
+    await advisory([{ id: "routeless", delivery: { mode: "announce" } }], ["telegram"], {
+      cron: { delivery: { channel: "telegram", to: "1" } },
+    }),
   ).toBeNull();
 });
 

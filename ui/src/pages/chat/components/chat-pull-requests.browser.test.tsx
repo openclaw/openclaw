@@ -169,45 +169,49 @@ it.each([
             style={{ position: "relative", width: `${width}px`, "max-width": "none" }}
           >
             <ChatDetailsDesktopBody presented>
-              <ChatDetailsEnvironment
-                presented
-                details={{
-                  sessionKey: "agent:main:branch",
-                  currentAgentId: "main",
-                  messages: [],
-                  selectedSession: undefined,
-                  detailsWorkspace: {
-                    root: "/synthetic/project",
-                    label: "project",
-                    branch: branch.branch,
-                  },
-                }}
-                work={{
-                  pullRequests: [],
-                  branch,
-                  status: "ready",
-                  onDismiss: () => {},
-                  onDismissBranch,
-                  publication: publication({
-                    onPublish,
-                    onSelect,
-                    options: {
-                      shared,
-                      personal: {
-                        state: "connected",
-                        generation: "personal",
-                        account: { accountId: 2, login: "alice-tools" },
-                        accessExpiresAtMs: null,
-                        refreshState: "available",
-                        pending: null,
+              {() => (
+                <>
+                  <ChatDetailsEnvironment
+                    presented
+                    details={{
+                      sessionKey: "agent:main:branch",
+                      currentAgentId: "main",
+                      messages: [],
+                      selectedSession: undefined,
+                      detailsWorkspace: {
+                        root: "/synthetic/project",
+                        label: "project",
+                        branch: branch.branch,
                       },
-                      pendingPersonal: null,
-                      latestShared: null,
-                    },
-                    selection: { source: "shared", expected: shared },
-                  }),
-                }}
-              />
+                    }}
+                    work={{
+                      pullRequests: [],
+                      branch,
+                      status: "ready",
+                      onDismiss: () => {},
+                      onDismissBranch,
+                      publication: publication({
+                        onPublish,
+                        onSelect,
+                        options: {
+                          shared,
+                          personal: {
+                            state: "connected",
+                            generation: "personal",
+                            account: { accountId: 2, login: "alice-tools" },
+                            accessExpiresAtMs: null,
+                            refreshState: "available",
+                            pending: null,
+                          },
+                          pendingPersonal: null,
+                          latestShared: null,
+                        },
+                        selection: { source: "shared", expected: shared },
+                      }),
+                    }}
+                  />
+                </>
+              )}
             </ChatDetailsDesktopBody>
           </section>
         </>

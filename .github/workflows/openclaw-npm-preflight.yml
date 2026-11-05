@@ -211,6 +211,8 @@ jobs:
       - name: Check source, test types, and architecture
         env:
           OPENCLAW_LOCAL_CHECK: "0"
+          # The 32-class delivers only 8 CPUs/31 GiB; concurrent oxlint shards lost the runner.
+          OPENCLAW_OXLINT_SHARD_CONCURRENCY: "1"
         run: |
           set -euo pipefail
           harness_root="$RUNNER_TEMP/npm-preflight-release-harness"
@@ -863,7 +865,9 @@ jobs:
           (needs.check_openclaw_npm.result == 'success' || inputs.source_check_json != '') &&
           needs.check_sdk_npm.result == 'success' && needs.check_dependencies_npm.result == 'success' &&
           needs.check_contents_npm.result == 'success' }}
-    runs-on: *linux_runner_xlarge
+    runs-on: >-
+      ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
+      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     outputs:
       qualified_preflight_bundle_json: ${{ steps.qualified_bundle.outputs.bundle_json }}
     steps:

@@ -904,7 +904,7 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     ...configPage(),
     completion: [
       { selector: "openclaw-config-page .settings-row", minimum: quantity.advancedRows },
-      { selector: 'openclaw-config-page .settings-page[aria-busy="true"]', minimum: 0, maximum: 0 },
+      { selector: 'openclaw-config-page [aria-busy="true"]', minimum: 0, maximum: 0 },
       {
         selector:
           "openclaw-config-page input, openclaw-config-page select, openclaw-config-page textarea, openclaw-config-page button",
@@ -992,7 +992,10 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   },
   infrastructure: configPage(),
   updates: configPage(),
-  "ai-agents": configPage(),
+  "ai-agents": {
+    ...configPage(),
+    completion: [{ selector: 'openclaw-config-page [aria-busy="true"]', minimum: 0, maximum: 0 }],
+  },
   sessions: {
     ready: ".sessions-table .session-data-row",
     source: requiredScenario(interactionScenarios, "sessions-search"),

@@ -3589,7 +3589,8 @@ openclaw-tooltip.sidebar-hover-tooltip {
 }
 
 .content--workboard > openclaw-router-outlet,
-.content--custodian > openclaw-router-outlet {
+.content--custodian > openclaw-router-outlet,
+.content.content--systems > openclaw-router-outlet {
   /* These pages already fill the shell. A retained outlet box would move when
      their route inset replaces the previous page's, creating a layout shift. */
   display: contents;

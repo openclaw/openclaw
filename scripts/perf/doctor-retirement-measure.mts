@@ -24,12 +24,15 @@ const { values } = parseArgs({
     "cold-driver-root": { type: "string" },
     "warm-driver-root": { type: "string" },
     "target-sha": { type: "string" },
+    "scratch-root": { type: "string" },
     "install-lock": { type: "string" },
     "pnpm-store": { type: "string" },
     mode: { type: "string", default: "count" },
     "cold-only": { type: "boolean", default: false },
     "observer-root": { type: "string" },
     "retained-wal": { type: "boolean", default: false },
+    "standing-advisories": { type: "boolean", default: false },
+    "custom-codex-command": { type: "boolean", default: false },
   },
 });
 assert.ok(values.output, "--output is required (use a fresh directory per invocation)");
@@ -68,7 +71,18 @@ assert.ok(!fs.existsSync(output), "--output must not already exist");
 fs.mkdirSync(output, { recursive: true });
 const scratchParent = process.env.TMPDIR;
 assert.ok(scratchParent, "Set TMPDIR to the lane's internal-disk scratch directory");
-const scratch = fs.mkdtempSync(path.join(scratchParent, "doctor-direct-"));
+// An explicit root is created fresh and owned by this invocation, with the same cleanup.
+const scratch = values["scratch-root"]
+  ? path.resolve(values["scratch-root"])
+  : fs.mkdtempSync(path.join(scratchParent, "doctor-direct-"));
+if (values["scratch-root"]) {
+  assert.equal(
+    path.dirname(scratch),
+    path.resolve(scratchParent),
+    "--scratch-root must be directly inside TMPDIR",
+  );
+  fs.mkdirSync(scratch, { mode: 0o700 });
+}
 for (const name of ["home", "state", "cache"]) {
   fs.mkdirSync(path.join(scratch, name));
 }
@@ -383,6 +397,104 @@ try {
   cfg.plugins ??= {};
   cfg.plugins.entries ??= {};
   cfg.plugins.entries.github = { ...cfg.plugins.entries.github, enabled: false };
+  if (values["custom-codex-command"]) {
+    cfg.plugins.entries.codex = {
+      ...cfg.plugins.entries.codex,
+      config: { appServer: { command: "/synthetic/custom-codex" } },
+    };
+    summary.customCodexCommand = true;
+  }
+  if (values["standing-advisories"]) {
+    const id = "postpass-advisory";
+    const peers = ["synthetic-a", "synthetic-b"];
+    const pluginRoot = path.join(scratch, id);
+    fs.mkdirSync(pluginRoot);
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        name: id,
+        version: "0.0.0",
+        type: "module",
+        openclaw: { extensions: ["./index.js"], setupEntry: "./setup.js" },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "openclaw.plugin.json"),
+      JSON.stringify({
+        id,
+        channels: [id],
+        doctorContract: { stateMigrations: [] },
+        channelConfigs: {
+          [id]: {
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                enabled: { type: "boolean" },
+                dmPolicy: { const: "allowlist" },
+                allowFrom: { type: "array", items: { type: "string" } },
+              },
+            },
+          },
+        },
+        configSchema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["peers"],
+          properties: { peers: { type: "array", items: { type: "string" } } },
+        },
+      }),
+    );
+    // The loader observes this still-supported import and emits its real dated SDK notice.
+    fs.writeFileSync(
+      path.join(pluginRoot, "channel.js"),
+      `import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
+const id = "postpass-advisory";
+const account = () => ({ accountId: "default", enabled: true, configured: true });
+export const plugin = {
+  id,
+  meta: { id, label: "Synthetic advisory", selectionLabel: "Synthetic advisory",
+    docsPath: "/synthetic", blurb: "Native update standing-advisory fixture" },
+  capabilities: { chatTypes: ["direct"] },
+  config: { listAccountIds: () => ["default"], resolveAccount: account, inspectAccount: account },
+  gateway: { async startAccount({ abortSignal, setStatus }) {
+    setStatus({ running: true, connected: true, lifecycle: "ready" });
+    if (!abortSignal.aborted) {
+      await new Promise(resolve => abortSignal.addEventListener("abort", resolve, { once: true }));
+    }
+  } },
+  security: { resolveDmPolicy: ({ cfg }) => ({
+    policy: "allowlist", allowFrom: resolvePluginConfigObject(cfg, id).peers,
+    policyPath: "channels.postpass-advisory.dmPolicy",
+    allowFromPath: "channels.postpass-advisory.", approveHint: "Synthetic fixture only",
+  }) },
+};
+`,
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "index.js"),
+      `import { plugin } from "./channel.js";
+export default { id: "postpass-advisory", register(api) { api.registerChannel({ plugin }); } };
+`,
+    );
+    fs.writeFileSync(path.join(pluginRoot, "setup.js"), 'export { plugin } from "./channel.js";\n');
+    fs.writeFileSync(
+      path.join(pluginRoot, "doctor-contract-api.js"),
+      "export const stateMigrations = [];\n",
+    );
+    cfg.plugins.allow = [...(cfg.plugins.allow ?? []), id];
+    cfg.plugins.load = { paths: [...(cfg.plugins.load?.paths ?? []), pluginRoot] };
+    cfg.plugins.entries[id] = { enabled: true, config: { peers } };
+    cfg.channels[id] = { enabled: true, dmPolicy: "allowlist", allowFrom: peers };
+    cfg.session = { ...cfg.session, dmScope: "main" };
+    cfg.bindings = [...(cfg.bindings ?? []), { agentId: "qa", match: { channel: id } }];
+    // Doctor inspects authenticated LAN config; the proof Gateway still binds loopback below.
+    cfg.gateway.bind = "lan";
+    summary.standingAdvisories = {
+      channel: id,
+      expected: ["gateway.bind_network_accessible", "DM principals share a session", "2026-12-01"],
+    };
+  }
   const configBytes = `${JSON.stringify(cfg, null, 2)}\n`;
   fs.writeFileSync(configPath, configBytes, { mode: 0o600 });
   fs.mkdirSync(path.dirname(authConfigPath), { recursive: true, mode: 0o700 });

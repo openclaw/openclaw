@@ -270,6 +270,7 @@ const CronPayloadPatchSchema = Type.Union([
 
 /** Failure alert policy for repeated cron run failures. */
 const CronFailureAlertSchema = closedObject({
+  threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
   after: Type.Optional(Type.Integer({ minimum: 1 })),
   channel: Type.Optional(CronAnnounceChannelSchema),
   to: Type.Optional(NonBlankString),
@@ -280,6 +281,7 @@ const CronFailureAlertSchema = closedObject({
 });
 
 const CronFailureAlertPatchSchema = closedObject({
+  threadId: Type.Optional(Type.Union([Type.String(), Type.Number(), Type.Null()])),
   after: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()])),
   channel: Type.Optional(Type.Union([CronAnnounceChannelSchema, Type.Null()])),
   to: Type.Optional(Type.Union([NonBlankString, Type.Null()])),
@@ -290,7 +292,7 @@ const CronFailureAlertPatchSchema = closedObject({
 });
 
 /** Delivery destination used when failure alerts need a separate target. */
-const CronFailureDestinationFields = ["channel", "to", "accountId", "mode"] as const;
+const CronFailureDestinationFields = ["channel", "to", "threadId", "accountId", "mode"] as const;
 const CronFailureDestinationSchema = closedObject(
   Type.Pick(CronFailureAlertSchema, CronFailureDestinationFields).properties,
 );
@@ -640,12 +642,14 @@ export const CronDeclarativeAddResultSchema = closedObject({
   updated: Type.Optional(Type.Boolean()),
   job: CronJobSchema,
   deliveryPreview: Type.Optional(CronDeliveryPreviewSchema),
+  warning: Type.Optional(NonEmptyString),
 });
 
 /** Imperative create result: the public job plus an optional create-time preview. */
 export const CronAddJobResultSchema = closedObject({
   ...CronJobSchema.properties,
   deliveryPreview: Type.Optional(CronDeliveryPreviewSchema),
+  warning: Type.Optional(NonEmptyString),
 });
 
 /** Successful result from imperative create or declaration-key convergence. */
