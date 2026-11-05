@@ -702,18 +702,22 @@ export function BoardWidgetFrame(props: {
               </div>
             </Match>
             <Match when={view().waiting}>
+              {/* Disclosed guidance must stay readable in narrow cards. Inline keeps
+                  this rarely shown state out of the shared Control UI stylesheet. */}
               <div
-                class={{
-                  "board-widget__notice": true,
-                  "board-widget__notice--wrap": view().sandboxUnreachable,
-                }}
+                class="board-widget__notice"
+                style={
+                  view().sandboxUnreachable
+                    ? { "max-width": "64ch", "white-space": "normal" }
+                    : undefined
+                }
                 role="status"
               >
                 {t("board.widget.waitingForConnection")}
                 <Show when={view().sandboxUnreachable}>
-                  <details class="board-widget__notice-details">
+                  <details>
                     <summary>{t("board.widget.moreInfo")}</summary>
-                    <p>{t("board.widget.sandboxUnreachableHint")}</p>
+                    <p style={{ margin: "4px 0 0" }}>{t("board.widget.sandboxUnreachableHint")}</p>
                   </details>
                 </Show>
               </div>
