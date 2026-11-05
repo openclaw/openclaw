@@ -348,6 +348,8 @@ separates keydown-to-paste dispatch, paste-to-ready-frame, and their combined
 latency; a ready animation frame is not a paint timestamp. Clipboard preparation
 and image encoding happen before measurement. Use Chromium at `--cpu-throttle 1`
 and `4`; WebKit supports only native CPU speed.
+Generic CPU counters cover the whole scenario, including work before the paste
+keypress. Use a separate trace to attribute CPU within the native input interval.
 
 `--pages` selects the route-catalog census: first visit after boot, each page's
 primary interaction, and route leave. The manifest records redirects,
