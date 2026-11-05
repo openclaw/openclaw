@@ -88,9 +88,11 @@ vi.mock("openclaw/plugin-sdk/runtime-group-policy", () => ({
     cfg.channels?.line?.groupPolicy ?? "open",
   warnMissingProviderGroupPolicyFallbackOnce: () => {},
 }));
-vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+const logVerboseMock = vi.hoisted(() => vi.fn());
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
   danger: (text: string) => text,
-  logVerbose: () => {},
+  logVerbose: logVerboseMock,
 }));
 vi.mock("openclaw/plugin-sdk/reply-history", () => ({
   DEFAULT_GROUP_HISTORY_LIMIT: 20,
@@ -319,6 +321,7 @@ describe("handleLineWebhookEvents", () => {
   });
 
   beforeEach(() => {
+    logVerboseMock.mockClear();
     setLineRuntime(createPluginRuntimeMock());
     pairingDeliveryMocks.invokePairingReply = false;
     pairingDeliveryMocks.pushMessageLine.mockReset().mockImplementation(async () => {
@@ -327,26 +330,22 @@ describe("handleLineWebhookEvents", () => {
     pairingDeliveryMocks.replyMessageLine.mockReset().mockImplementation(async () => {
       throw new Error("replyMessageLine should not be called from bot-handlers tests");
     });
-    buildLineMessageContextMock.mockReset();
-    buildLineMessageContextMock.mockImplementation(async () => ({
+    buildLineMessageContextMock.mockReset().mockImplementation(async () => ({
       ctxPayload: { From: "line:group:group-1" },
       replyToken: "reply-token",
       route: { agentId: "default" },
       isGroup: true,
       accountId: "default",
     }));
-    buildLinePostbackContextMock.mockReset();
-    buildLinePostbackContextMock.mockImplementation(async () => null as unknown);
-    readAllowFromStoreMock.mockReset();
-    readAllowFromStoreMock.mockImplementation(async () => [] as string[]);
-    upsertPairingRequestMock.mockReset();
-    upsertPairingRequestMock.mockImplementation(async () => ({ code: "CODE", created: true }));
-    downloadLineMediaMock.mockReset();
-    downloadLineMediaMock.mockImplementation(async () => {
+    buildLinePostbackContextMock.mockReset().mockImplementation(async () => null as unknown);
+    readAllowFromStoreMock.mockReset().mockImplementation(async () => [] as string[]);
+    upsertPairingRequestMock
+      .mockReset()
+      .mockImplementation(async () => ({ code: "CODE", created: true }));
+    downloadLineMediaMock.mockReset().mockImplementation(async () => {
       throw new Error("downloadLineMedia should not be called from bot-handlers tests");
     });
-    getUserDisplayNameMock.mockReset();
-    getUserDisplayNameMock.mockImplementation(async (userId: string) => userId);
+    getUserDisplayNameMock.mockReset().mockImplementation(async (userId: string) => userId);
   });
   it.each<{
     name: string;
@@ -818,7 +817,7 @@ describe("handleLineWebhookEvents", () => {
     },
   );
 
-  it("still routes an ordinary postback to the agent", async () => {
+  it("routes an ordinary postback without logging its content", async () => {
     resolveLineQuestionPostbackMock.mockClear();
     const processMessage = vi.fn();
     const context = createLineWebhookTestContext({ processMessage, dmPolicy: "open" });
@@ -841,6 +840,7 @@ describe("handleLineWebhookEvents", () => {
 
     expect(resolveLineQuestionPostbackMock).not.toHaveBeenCalled();
     expect(buildLinePostbackContextMock).toHaveBeenCalled();
+    expect(logVerboseMock.mock.calls.join(",")).not.toContain("line.action=play&line.device=tv");
   });
 
   it("keeps a group message recorded during a mention turn instead of clearing it", async () => {
