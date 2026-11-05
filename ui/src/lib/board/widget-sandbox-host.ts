@@ -32,6 +32,7 @@ type BoardWidgetSandboxHostOptions = {
   onLoaded: () => void;
   onRendered?: () => void;
   onError: (error: unknown) => void;
+  onLinkResult?: (ok: boolean) => void;
 };
 
 const ACTIVATION_QUERY_TIMEOUT_MS = 250;
@@ -277,24 +278,29 @@ export class BoardWidgetSandboxHost {
         isCurrent: () => generation === this.requestGeneration && frame === this.options.frame,
       })
       .then((result) => {
-        this.completeRequest(data.id, generation, true, result);
+        this.completeRequest(data, generation, true, result);
       })
       .catch((error: unknown) => {
-        this.completeRequest(data.id, generation, false, undefined, formatUiError(error));
+        this.completeRequest(data, generation, false, undefined, formatUiError(error));
       });
   }
 
   private completeRequest(
-    id: string,
+    request: { id: string; method: string },
     generation: number,
     ok: boolean,
     result?: unknown,
     error?: string,
   ): void {
+    const { id } = request;
     if (generation !== this.requestGeneration || !this.pendingRequests.has(id)) {
       return;
     }
     this.pendingRequests.delete(id);
+    // Stored wrappers may swallow failures; the trusted host owns feedback.
+    if (request.method === "host.open") {
+      this.options.onLinkResult?.(ok);
+    }
     this.postResponse(id, ok, result, error);
   }
 

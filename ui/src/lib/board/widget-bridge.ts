@@ -87,7 +87,7 @@ export class BoardWidgetBridgeOwner {
   // frame only from input inside this widget, so code that took the wrapper's
   // port cannot open links on input elsewhere, and one gesture opens one link.
   private async openNativeLink(url: string, isCurrent?: () => boolean): Promise<boolean> {
-    if (!hasNativeExternalLink() || !navigator.userActivation?.isActive) {
+    if (!navigator.userActivation?.isActive) {
       return false;
     }
     const widgetActivated = await this.options.widgetActivated();
@@ -165,13 +165,17 @@ export class BoardWidgetBridgeOwner {
       // `blob:`, which the general external-link path allows.
       case "host.open": {
         const url = requiredString(params, "url");
-        if (!/^https?:\/\//i.test(url)) {
+        if (!/^https?:\/\//i.test(url) || !URL.canParse(url)) {
           throw new Error("widget link url is invalid");
         }
-        // A request the native route refuses falls through to window.open,
-        // which WebKit's popup blocker refuses as it does on main.
-        if (!(await this.openNativeLink(url, options.isCurrent)) && !openExternalUrlSafe(url)) {
-          throw new Error("widget link could not be opened");
+        // Native refusal is terminal; only bridge absence selects the browser.
+        if (hasNativeExternalLink()) {
+          if (!(await this.openNativeLink(url, options.isCurrent))) {
+            throw new Error("widget link could not be opened");
+          }
+        } else {
+          // noopener may return null even after opening; it is not a failure receipt.
+          openExternalUrlSafe(url);
         }
         return { ok: true };
       }

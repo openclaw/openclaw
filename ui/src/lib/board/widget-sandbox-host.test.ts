@@ -378,12 +378,7 @@ describe("BoardWidgetSandboxHost", () => {
         )
         .map(([, targetOrigin]) => targetOrigin),
     ).toEqual(Array(5).fill(SANDBOX_ORIGIN));
-    expect(open.mock.calls.map(([url]) => url)).toEqual([
-      "https://example.com/outside-widget",
-      "https://example.com/other-frame",
-      "https://example.com/other-origin",
-      "https://example.com/guessed-id",
-    ]);
+    expect(open).not.toHaveBeenCalled();
   });
   it.each([
     ["retired", (f: ReturnType<typeof createHost>) => f.host.setActive(false)],

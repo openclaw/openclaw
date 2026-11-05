@@ -65,9 +65,9 @@ const stubUserActivation = (isActive: boolean) => {
 it.each([
   ["https://example.com/path", false, null],
   ["javascript:alert(1)", false, "widget link url is invalid"],
-  ["https://example.com/path", true, "widget link could not be opened"],
-] as const)("opens safe links or reports failure: %s (%s)", async (url, blocked, error) => {
-  const open = vi.spyOn(window, "open").mockReturnValue(blocked ? null : ({} as Window));
+  ["https://example.com/path", true, null],
+] as const)("opens safe links or reports failure: %s (%s)", async (url, nullHandle, error) => {
+  const open = vi.spyOn(window, "open").mockReturnValue(nullHandle ? null : ({} as Window));
   const result = handle("host.open", { url });
   if (error) {
     await expect(result).rejects.toThrow(error);
@@ -99,13 +99,13 @@ it("keeps widget links without user activation away from the native link owner",
   const postMessage = vi.fn();
   vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
   stubUserActivation(false);
-  // WebKit's popup blocker refuses the fallback open, as it does on main.
+  // Refusal is terminal even if the browser would allow a popup.
   const open = vi.spyOn(window, "open").mockReturnValue(null);
   await expect(handle("host.open", { url: "https://example.com/path" })).rejects.toThrow(
     "widget link could not be opened",
   );
   expect(postMessage).not.toHaveBeenCalled();
-  expect(open.mock.calls).toEqual([["https://example.com/path", "_blank", "noopener,noreferrer"]]);
+  expect(open).not.toHaveBeenCalled();
 });
 it("spends the gesture on every native widget link open", async () => {
   const postMessage = vi.fn();
@@ -125,13 +125,13 @@ it("spends the gesture on every native widget link open", async () => {
     [{ type: "open-link", url: "https://example.com/second-click", target: "external" }],
   ]);
   expect(activation.showPicker).toHaveBeenCalledTimes(2);
-  expect(open.mock.calls).toEqual([["https://example.com/reuse", "_blank", "noopener,noreferrer"]]);
+  expect(open).not.toHaveBeenCalled();
 });
 it("keeps widget links away from the native link owner when the gesture cannot be spent", async () => {
   const postMessage = vi.fn();
   vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
   const activation = stubUserActivation(true);
-  vi.spyOn(window, "open").mockReturnValue(null);
+  const open = vi.spyOn(window, "open").mockReturnValue({} as Window);
   // An engine whose showPicker() leaves activation live, or throws, fails closed.
   activation.showPicker.mockImplementationOnce(() => {});
   activation.showPicker.mockImplementationOnce(() => {
@@ -143,6 +143,20 @@ it("keeps widget links away from the native link owner when the gesture cannot b
     );
   }
   expect(postMessage).not.toHaveBeenCalled();
+  expect(open).not.toHaveBeenCalled();
+});
+it("does not retry a failed native post through the browser", async () => {
+  const postMessage = vi.fn(() => {
+    throw new Error("bridge unavailable");
+  });
+  vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
+  stubUserActivation(true);
+  const open = vi.spyOn(window, "open").mockReturnValue({} as Window);
+  await expect(handle("host.open", { url: "https://example.com/path" })).rejects.toThrow(
+    "widget link could not be opened",
+  );
+  expect(postMessage).toHaveBeenCalledOnce();
+  expect(open).not.toHaveBeenCalled();
 });
 it("drops a widget link retired while its activation query is pending", async () => {
   const postMessage = vi.fn();
@@ -180,9 +194,7 @@ it("opens native widget links only while that widget's own frame holds user acti
   );
   expect(widgetActivated).toHaveBeenCalledOnce();
   expect(postMessage).not.toHaveBeenCalled();
-  expect(open.mock.calls).toEqual([
-    ["https://example.com/elsewhere", "_blank", "noopener,noreferrer"],
-  ]);
+  expect(open).not.toHaveBeenCalled();
   widgetActivated.mockResolvedValue(true);
   await expect(handle("host.open", { url: "https://example.com/inside" })).resolves.toEqual({
     ok: true,
@@ -237,7 +249,7 @@ it.each([
   ["//example.com/path", "widget link url is invalid"],
   [" https://example.com/path", "widget link url is invalid"],
   ["https:example.com", "widget link url is invalid"],
-  ["https://", "widget link could not be opened"],
+  ["https://", "widget link url is invalid"],
 ] as const)(
   "never opens a non-HTTP(S) widget link natively or by popup: %s",
   async (url, error) => {
