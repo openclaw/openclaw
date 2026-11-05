@@ -123,6 +123,14 @@ function recordConfigPublication(
 /** A later writer changed what this publication wrote; recovery keeps that file. */
 class LaterConfigChangeError extends ConfigMutationConflictError {}
 
+/** Invalid config is not a later edit to keep; recovery stays pending. */
+function invalidConfig(file: PluginCohortConfigFileIntent): never {
+  throw new ConfigMutationConflictError(
+    `Configuration is invalid after update publication: ${file.filePath}. Plugin cohort recovery preserved it.`,
+    { retryable: false },
+  );
+}
+
 function conflict(file: PluginCohortConfigFileIntent): never {
   throw new LaterConfigChangeError(
     `Configuration changed after update publication: ${file.filePath}. Plugin cohort recovery preserved it.`,
@@ -293,6 +301,10 @@ async function restoreConfigPublication(
             ownership.targetPath !== file.targetPath ||
             prepared.writeOptions.includeFileTargetsForWrite?.[file.filePath] !== file.targetPath
           ) {
+            // An unparseable include has no provenance; that is invalid, not a later edit.
+            if (!prepared.snapshot.valid) {
+              invalidConfig(file);
+            }
             conflict(file);
           }
         }
@@ -382,11 +394,7 @@ async function restoreConfigPublication(
           // Only the exact owned postimage qualifies for old-schema byte compensation.
           // A merge keeps normal future-writer protection and the later writer's stamp.
           if (!prepared.snapshot.valid) {
-            // Invalid config is not a later edit to keep; recovery stays pending.
-            throw new ConfigMutationConflictError(
-              `Configuration is invalid after update publication: ${file.filePath}. Plugin cohort recovery preserved it.`,
-              { retryable: false },
-            );
+            invalidConfig(file);
           }
           const future = resolveFutureConfigActionBlock({
             action: "restore plugin cohort configuration",
@@ -404,10 +412,7 @@ async function restoreConfigPublication(
           let candidateRaw = mergedRaw;
           if (file.include) {
             if (!prepared.snapshot.authoredConfig) {
-              throw new ConfigMutationConflictError(
-                `Configuration is invalid after update publication: ${file.filePath}. Plugin cohort recovery preserved it.`,
-                { retryable: false },
-              );
+              invalidConfig(file);
             }
             const candidate = structuredClone(prepared.snapshot.authoredConfig);
             setConfigValueAtPath(candidate, file.include.boundaryPath, mergedValue);
