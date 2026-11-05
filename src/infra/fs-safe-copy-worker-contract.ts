@@ -21,10 +21,26 @@ export type FsSafeProvisionCopy = {
   paths: readonly string[];
 };
 
+/** Fixed-size wall-time/counter receipt; no file identities or payloads. */
+export type FsSafeProvisionCopyDiagnostics = Partial<{
+  workerMs: number;
+  preflightMs: number;
+  authorityWaitMs: number;
+  copyAwaitMs: number;
+  attemptedFiles: number;
+  copiedFiles: number;
+  sourceBytes: number;
+}>;
+
 export type FsSafeCopyReply =
   | { type: "probe"; backend: TreeCloneBackend | undefined; nativeMode: FsSafeNativeMode }
   | { type: "metadata"; entries: (CloneFileMetadata | undefined)[] }
   | { type: "acl"; acl: DarwinAclInspection }
   | { type: "written" }
-  | { type: "provisioned"; paths: string[] }
-  | { type: "failed"; message: string; code?: string };
+  | { type: "provisioned"; paths: string[]; diagnostics: FsSafeProvisionCopyDiagnostics }
+  | {
+      type: "failed";
+      message: string;
+      code?: string;
+      diagnostics?: FsSafeProvisionCopyDiagnostics;
+    };
