@@ -629,7 +629,7 @@ async function runDoctorHealthContributionList(
           return;
         }
         if (retirementOnly && !ctx.retirementOnly) {
-          ctx.runtime.log(`Retirement-only Doctor widened: ${contribution.id}`);
+          ctx.runtime.error(`Retirement-only Doctor widened: ${contribution.id}`);
           return;
         }
       } catch (error) {
@@ -656,7 +656,7 @@ async function runDoctorHealthContributionList(
         recordDoctorHealthWarnings(ctx, [], [message]);
         if (retirementOnly) {
           ctx.retirementOnly = false;
-          ctx.runtime.log(`Retirement-only Doctor widened: ${contribution.id}.failed`);
+          ctx.runtime.error(`Retirement-only Doctor widened: ${contribution.id}.failed`);
           return;
         }
       }
@@ -698,7 +698,7 @@ export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext)
       (Boolean(ctx.updateWarnings?.length) && "startup-warnings");
     if (blocker) {
       ctx.retirementOnly = false;
-      ctx.runtime.log(`Retirement-only Doctor widened: ${blocker}`);
+      ctx.runtime.error(`Retirement-only Doctor widened: ${blocker}`);
     }
   }
   if (ctx.retirementOnly) {

@@ -400,6 +400,12 @@ pass. An explicit `openclaw doctor` continues to run the full pass. This correct
 must be in the candidate Doctor; the installed updater must already support
 retirement-only requests. Older updaters keep their existing full-pass selection.
 
+When a retirement-only request needs the full pass, the candidate Doctor writes a
+fixed `Retirement-only Doctor widened:` reason to stderr. Updated updaters retain
+that reason in the step diagnostics and compacted update history. The candidate
+and installed updater must both contain this diagnostic fix to retain it there;
+older updaters still run the same repairs.
+
 Direct updates from extended-stable 2026.9.33 and 2026.9.34 are supported when
 the candidate contains the legacy database-generation adapter. Under maintenance
 custody, candidate Doctor verifies the older updater's entire physical database
