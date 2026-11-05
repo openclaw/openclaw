@@ -3,7 +3,7 @@ summary: "Local versus remote control, the node browser proxy, and hosted CDP pr
 title: "Remote and hosted browsers"
 read_when:
   - The browser runs on a different machine from the Gateway
-  - You are attaching to Browserless, Browserbase, or Notte
+  - You are attaching to Browserless, Browserbase, Browser Use, or Notte
   - You need the accepted CDP URL shapes
 ---
 
@@ -159,7 +159,8 @@ CDP URL shapes and picks the right connection strategy automatically:
   `/json/version` entirely.
 - **Bare WebSocket roots** - `ws://host[:port]` or `wss://host[:port]` with no
   `/devtools/...` path (e.g. [Browserless](https://browserless.io),
-  [Browserbase](https://www.browserbase.com)). OpenClaw tries HTTP
+  [Browserbase](https://www.browserbase.com),
+  [Browser Use](https://browser-use.com)). OpenClaw tries HTTP
   `/json/version` discovery first (normalising the scheme to `http`/`https`);
   if discovery returns a `webSocketDebuggerUrl` it is used, otherwise OpenClaw
   falls back to a direct WebSocket handshake at the bare root. If the advertised
