@@ -222,7 +222,7 @@ it.each(["installed", "bundled-mjs"] as const)(
               expect(evaluated).toHaveBeenCalledTimes(bundled ? 1 : 3);
             });
           } finally {
-            recovery.module.dispose();
+            await recovery.module.dispose();
           }
         },
       );
@@ -337,7 +337,7 @@ it("joins a failed candidate's declared stop hook before recovering the previous
     expect(fs.existsSync(lock)).toBe(false);
   } finally {
     gate.resolve();
-    recovery?.module.dispose();
+    await recovery?.module.dispose();
     for (const registry of registries.toReversed()) {
       await disposePluginRegistryInstances(registry);
     }

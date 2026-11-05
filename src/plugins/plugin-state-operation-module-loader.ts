@@ -99,6 +99,7 @@ export function captureBundledPluginStateOperationModules(params: {
     capture(): PluginModuleLoaderRecovery {
       retain();
       let available = true;
+      let disposal: Promise<void> | undefined;
       return {
         bind(instance) {
           if (!available) {
@@ -107,14 +108,12 @@ export function captureBundledPluginStateOperationModules(params: {
           available = false;
           bind(instance);
         },
-        dispose() {
+        async dispose() {
           if (available) {
             available = false;
-            if (--references === 0) {
-              disposed = true;
-              artifact.dispose();
-            }
+            disposal = release();
           }
+          await disposal;
         },
       };
     },

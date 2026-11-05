@@ -240,7 +240,7 @@ describe("plugin module generation SDK identity", () => {
            instances.push(restored);
            try {
              withPluginSourceCaptureDirectory(captures, () => recovery.bind(restored));
-           } finally { recovery.dispose(); }
+           } finally { await recovery.dispose(); }
            await assertWorker(restored.loadModule(${JSON.stringify(path.join(plugin, "eager.ts"))}));
            console.log('shared host identity');
          } finally {
