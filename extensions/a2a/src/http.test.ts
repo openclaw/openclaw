@@ -219,6 +219,49 @@ describe("A2A message replay", () => {
     expect(otherPeer.result.task.id).not.toBe(first.result.task.id);
     expect(dispatch).toHaveBeenCalledTimes(2);
   });
+
+  it("resolves a retried follow-up to its own task instead of rejecting it as running", async () => {
+    const dispatch = vi.fn(async () => {});
+    const harness = await startHttpHarness({ onDispatch: dispatch });
+    const opening = (await (
+      await harness.post(sendRequest({ messageId: "opening-message", returnImmediately: true }))
+    ).json()) as { result: { task: { id: string } } };
+    harness.taskStore.requireInput(opening.result.task.id, "Which color?");
+    expect(dispatch).toHaveBeenCalledTimes(1);
+
+    const answer = sendRequest({
+      taskId: opening.result.task.id,
+      messageId: "answer-1",
+      returnImmediately: true,
+    });
+    // The first answer resumes the interrupted task and runs another turn.
+    const first = (await (await harness.post(answer)).json()) as {
+      result: { task: { id: string; status: { state: string } } };
+    };
+    expect(first).toMatchObject({
+      result: { task: { id: opening.result.task.id, status: { state: "TASK_STATE_WORKING" } } },
+    });
+    expect(dispatch).toHaveBeenCalledTimes(2);
+
+    // A retry of the identical SendMessage resolves to the same task — it is
+    // not rejected as "still running" and does not run a second turn.
+    const retry = await (await harness.post(answer)).json();
+    expect(retry).toEqual(first);
+    expect(dispatch).toHaveBeenCalledTimes(2);
+
+    // Nor after the turn completes: the retry contract returns the task the
+    // message produced, without duplicating its history entry.
+    harness.taskStore.complete(opening.result.task.id, "final");
+    const settled = (await (await harness.post(answer)).json()) as {
+      result: { task: { id: string } };
+    };
+    expect(settled).toMatchObject({
+      result: { task: { id: opening.result.task.id, status: { state: "TASK_STATE_COMPLETED" } } },
+    });
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    const history = harness.taskStore.get(opening.result.task.id, "alpha")?.history ?? [];
+    expect(history.filter((entry) => entry.messageId === "answer-1")).toHaveLength(1);
+  });
 });
 
 describe("A2A HTTP agent discovery", () => {

@@ -88,7 +88,8 @@ export class A2aTaskStore {
   readonly #tasks = new Map<string, A2aTask>();
   readonly #taskOwners = new Map<string, string>();
   readonly #messageTasks = new Map<string, A2aTask>();
-  readonly #taskMessageKeys = new Map<string, string>();
+  /** Every message identity registered against a task — a follow-up turn adds its own key. */
+  readonly #taskMessageKeys = new Map<string, Set<string>>();
   readonly #terminalTasks = new Map<string, number>();
   readonly #waiters = new Map<string, Set<A2aTaskWaiter>>();
   /**
@@ -97,13 +98,6 @@ export class A2aTaskStore {
    * shared queue would let one subscriber steal frames from the other.
    */
   readonly #queues = new Map<string, Set<A2aTaskEventQueue>>();
-  /**
-   * Replay buffer per task, kept from creation so a subscriber that arrives a
-   * tick late still sees every transition since `submitted`. Each new queue is
-   * seeded with a copy; live events then flow into the buffer and every live
-   * queue alike.
-   */
-  readonly #replayBuffers = new Map<string, A2aStreamResponse[]>();
   readonly #observers = new Set<A2aTaskEventObserver>();
   readonly #evictionObservers = new Set<A2aTaskEvictionObserver>();
 
@@ -122,17 +116,47 @@ export class A2aTaskStore {
       history: [],
     };
     this.#tasks.set(task.id, task);
-    // Reserve the replay buffer before any work can publish, so a stream
-    // opened after dispatch still replays every event the task produced.
-    this.#replayBuffers.set(task.id, []);
     if (ownerPeer !== undefined) {
       this.#taskOwners.set(task.id, ownerPeer);
     }
     if (messageKey !== undefined) {
       this.#messageTasks.set(messageKey, task);
-      this.#taskMessageKeys.set(task.id, messageKey);
+      this.#taskMessageKeys.set(task.id, new Set([messageKey]));
     }
     return task;
+  }
+
+  /**
+   * Peer-scoped message identity lookup (retry contract): the task that a
+   * (ownerPeer, messageId) pair was admitted against, if any. A retried
+   * SendMessage resolves to that task instead of being admitted twice.
+   */
+  findTaskByMessageId(messageId: string, ownerPeer: string): A2aTask | undefined {
+    return this.#messageTasks.get(JSON.stringify([ownerPeer, messageId]));
+  }
+
+  /**
+   * Register a follow-up message's peer-scoped identity against its task, so
+   * a retry of that answer resolves to the turn it already produced rather
+   * than being rejected as "still running" or dispatched again. Idempotent
+   * per (ownerPeer, messageId); the key set expires with the task.
+   */
+  registerMessageIdentity(taskId: string, messageId: string, ownerPeer: string): void {
+    const task = this.#tasks.get(taskId);
+    if (!task) {
+      return;
+    }
+    const key = JSON.stringify([ownerPeer, messageId]);
+    if (this.#messageTasks.has(key)) {
+      return;
+    }
+    this.#messageTasks.set(key, task);
+    const keys = this.#taskMessageKeys.get(taskId);
+    if (keys) {
+      keys.add(key);
+    } else {
+      this.#taskMessageKeys.set(taskId, new Set([key]));
+    }
   }
 
   get(taskId: string, ownerPeer?: string): A2aTask | undefined {
@@ -261,13 +285,13 @@ export class A2aTaskStore {
   /**
    * Stream task updates (spec §3.1.2 / §3.1.6).
    *
-   * The first frame is always the current Task snapshot — that is what
-   * prevents a peer from missing an update between `GetTask` and
-   * subscribing. For a live task the replayed transitions follow it in
-   * generation order (spec §3.5.2). A terminal task (e.g. a `messageId`
-   * reuse landing on a completed task) drops the replayed transitions
-   * instead: yielding them after the newer snapshot would regress the state
-   * sequence. The stream ends once the task reaches a terminal state.
+   * The first frame is always the current Task snapshot — it represents
+   * every transition the task already went through, so replaying those
+   * older events after it would regress the state sequence (spec §3.5.2
+   * generation order, STREAM-ORDER-001). The queue is subscribed before the
+   * snapshot is yielded, so updates published from that boundary onward are
+   * delivered in generation order; the stream ends once the task reaches a
+   * terminal state.
    */
   async *stream(
     taskId: string,
@@ -278,31 +302,18 @@ export class A2aTaskStore {
     if (!task) {
       throw taskNotFound("Task not found", taskId);
     }
-    // Subscribe before the first yield: an event published while the snapshot
-    // frame is in flight must land in this queue, not be missed. The queue is
-    // seeded with the replay buffer so a late subscriber still observes every
-    // transition since `submitted`.
-    const replay = [...(this.#replayBuffers.get(taskId) ?? [])];
+    // Subscribe before the first yield: the body from here to the snapshot
+    // yield is synchronous, so an event published after the snapshot can only
+    // land in this queue, never be missed. The queue carries only
+    // post-snapshot events — everything earlier is already in the snapshot.
     const queue: A2aTaskEventQueue = {
-      events: replay,
+      events: [],
       waiters: new Set(),
       closed: false,
     };
     this.#subscribeQueue(taskId, queue);
-    // Captured before the first yield: the state as of the snapshot, not
-    // whatever the task has reached by the time the consumer resumes. A
-    // task that completes while the snapshot frame is in flight is live to
-    // this stream — its transitions still follow the snapshot in order.
-    const snapshotWasTerminal = isTerminalTaskState(task.status.state);
     try {
       yield { task: cloneTask(task) };
-      // A terminal snapshot is newer than every buffered transition, so
-      // replaying them after it would regress the state sequence
-      // (STREAM-ORDER-001); a live snapshot cannot regress — `submitted` is
-      // never published, and the interrupted states share the working order.
-      if (snapshotWasTerminal) {
-        queue.events.length = 0;
-      }
       // A task that never settles must not pin an HTTP response open forever. The
       // deadline bounds one stream; the peer can reconnect with SubscribeToTask.
       const deadline =
@@ -431,7 +442,6 @@ export class A2aTaskStore {
       }
     }
     this.#queues.clear();
-    this.#replayBuffers.clear();
     this.#waiters.clear();
   }
 
@@ -529,13 +539,6 @@ export class A2aTaskStore {
   }
 
   #publish(task: A2aTask, event: A2aStreamResponse): void {
-    const replay = this.#replayBuffers.get(task.id);
-    if (replay) {
-      replay.push(event);
-      if (replay.length > A2A_MAX_BUFFERED_EVENTS) {
-        replay.splice(0, replay.length - A2A_MAX_BUFFERED_EVENTS);
-      }
-    }
     const subscribers = this.#queues.get(task.id);
     if (subscribers) {
       for (const queue of subscribers) {
@@ -610,13 +613,14 @@ export class A2aTaskStore {
         break;
       }
       const ownerPeer = this.#taskOwners.get(taskId);
-      const messageKey = this.#taskMessageKeys.get(taskId);
-      if (messageKey !== undefined) {
-        this.#messageTasks.delete(messageKey);
+      const messageKeys = this.#taskMessageKeys.get(taskId);
+      if (messageKeys !== undefined) {
+        for (const key of messageKeys) {
+          this.#messageTasks.delete(key);
+        }
         this.#taskMessageKeys.delete(taskId);
       }
       this.#queues.delete(taskId);
-      this.#replayBuffers.delete(taskId);
       this.#terminalTasks.delete(taskId);
       this.#taskOwners.delete(taskId);
       this.#tasks.delete(taskId);

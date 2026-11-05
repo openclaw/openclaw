@@ -173,24 +173,18 @@ describe("A2A task store", () => {
     await expect(drain(second)).resolves.toEqual(["TASK_STATE_WORKING", "TASK_STATE_COMPLETED"]);
   });
 
-  it("replays transitions that happened before a subscriber attached", async () => {
+  it("delivers only updates published after the opening snapshot", async () => {
     const store = createTaskStore();
-    const task = store.create("ctx-replay", "alice");
+    const task = store.create("ctx-live", "alice");
     store.start(task.id);
     const iterator = store.stream(task.id, "alice");
 
-    // The first frame is the live Task snapshot...
+    // The pre-subscription WORKING transition is represented by the snapshot...
     await expect(iterator.next()).resolves.toMatchObject({
       value: { task: { status: { state: "TASK_STATE_WORKING" } } },
     });
-    // ...followed by the transitions already buffered before subscribing.
-    await expect(iterator.next()).resolves.toMatchObject({
-      value: { statusUpdate: { status: { state: "TASK_STATE_WORKING" } } },
-    });
-
+    // ...and is not replayed after it; only post-snapshot updates arrive.
     store.complete(task.id, "done");
-    // `complete` records the final artifact before the terminal status, in
-    // generation order; the stream must preserve that order.
     await expect(iterator.next()).resolves.toMatchObject({
       value: { artifactUpdate: { lastChunk: true } },
     });
@@ -200,7 +194,35 @@ describe("A2A task store", () => {
     await iterator.return?.(undefined);
   });
 
-  it("opens a stream with the Task snapshot and drops stale transitions on a completed task", async () => {
+  it("does not replay older transitions after a newer interrupted snapshot", async () => {
+    const store = createTaskStore();
+    const task = store.create("ctx-interrupted", "alice");
+    store.start(task.id);
+    store.requireInput(task.id, "What color?");
+
+    // WORKING and INPUT_REQUIRED happened before subscribing: the snapshot
+    // carries the newest state, and replaying the older transitions after it
+    // would regress the sequence (spec §3.5.2).
+    const iterator = store.stream(task.id, "alice");
+    await expect(iterator.next()).resolves.toMatchObject({
+      value: { task: { status: { state: "TASK_STATE_INPUT_REQUIRED" } } },
+    });
+
+    store.resume(task.id);
+    await expect(iterator.next()).resolves.toMatchObject({
+      value: { statusUpdate: { status: { state: "TASK_STATE_WORKING" } } },
+    });
+    store.complete(task.id, "done");
+    await expect(iterator.next()).resolves.toMatchObject({
+      value: { artifactUpdate: { lastChunk: true } },
+    });
+    await expect(iterator.next()).resolves.toMatchObject({
+      value: { statusUpdate: { status: { state: "TASK_STATE_COMPLETED" } } },
+    });
+    await iterator.return?.(undefined);
+  });
+
+  it("opens and closes a completed task's stream with the Task snapshot alone", async () => {
     const store = createTaskStore();
     const first = store.create("ctx-dup", "alice", "reused-message");
     store.start(first.id);
@@ -215,10 +237,9 @@ describe("A2A task store", () => {
       frames.push(frame);
     }
 
-    // A stream must open with the Task (spec §3.5.2), so the completed
-    // snapshot leads; replaying the older `working` transition after it
-    // would regress the state sequence, so it is dropped instead
-    // (STREAM-ORDER-001).
+    // A stream must open with the Task (spec §3.5.2); the completed snapshot
+    // represents every transition the task went through, so nothing older is
+    // replayed after it (STREAM-ORDER-001).
     expect(frames[0]).toMatchObject({
       task: { id: first.id, status: { state: "TASK_STATE_COMPLETED" } },
     });

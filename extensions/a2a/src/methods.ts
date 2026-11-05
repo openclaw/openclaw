@@ -145,6 +145,24 @@ function admitSendMessage(
     if (message.contextId !== undefined && message.contextId !== referenced.contextId) {
       throw invalidParams("Message contextId does not match the referenced task");
     }
+    const messageId = message.messageId ?? randomUUID();
+    // Peer-scoped retry identity precedes lifecycle admission: a retried
+    // follow-up must resolve to the turn it already produced, instead of
+    // being rejected as "still running" (or dispatched a second time) by
+    // the state checks below.
+    const priorTask = ctx.store.findTaskByMessageId(messageId, ctx.peerName);
+    if (priorTask) {
+      return {
+        task: priorTask,
+        text,
+        messageId,
+        historyLength: send.data.configuration?.historyLength,
+        pushConfig: undefined,
+        returnImmediately: send.data.configuration?.returnImmediately === true,
+        dispatch: false,
+        resumed: true,
+      };
+    }
     if (isTerminalTaskState(referenced.status.state)) {
       throw unsupportedOperation(
         `Task ${referencedTaskId} is in terminal state ${referenced.status.state} and cannot accept new messages`,
@@ -157,9 +175,9 @@ function admitSendMessage(
         "Task is still running; wait for it to reach a terminal or interrupted state before sending a follow-up",
       );
     }
-    const messageId = message.messageId ?? randomUUID();
     // Answering an `input-required` / `auth-required` task resumes the same task
     // and runs another turn on the same session.
+    ctx.store.registerMessageIdentity(referenced.id, messageId, ctx.peerName);
     ctx.store.resume(referenced.id);
     ctx.store.appendHistory(referenced.id, {
       messageId,
@@ -435,8 +453,9 @@ export async function* streamA2aMethod(
   if (admitted.pushConfig) {
     ctx.registerInlinePushConfig(admitted.task.id, admitted.pushConfig);
   }
-  // The mailbox is reserved at task creation, so events produced between here and
-  // the first `next()` are replayed rather than lost.
+  // Events produced before the first `next()` are folded into the opening
+  // Task snapshot; the stream subscribes before yielding it, so every update
+  // from that boundary onward is delivered in generation order.
   dispatchTask(ctx, admitted);
   yield* ctx.store.stream(admitted.task.id, ctx.peerName, { timeoutMs: ctx.streamTimeoutMs });
 }

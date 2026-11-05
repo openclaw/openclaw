@@ -134,10 +134,15 @@ describe("A2A streaming (SendStreamingMessage / SubscribeToTask)", () => {
     const payloads = frames.map(resultOf);
     // The stream must open with the Task object, never with a bare update.
     expect(Object.keys(payloads[0] ?? {})).toEqual(["task"]);
+    // Transitions that happened before the stream opened (the task was
+    // started during admission) are represented by the snapshot, not
+    // replayed as events after it.
+    expect((payloads[0] as { task: { status: { state: string } } }).task.status.state).toBe(
+      "TASK_STATE_WORKING",
+    );
     const states = payloads
       .filter((entry) => "statusUpdate" in entry)
       .map((entry) => (entry.statusUpdate as { status: { state: string } }).status.state);
-    expect(states).toContain("TASK_STATE_WORKING");
     expect(states.at(-1)).toBe("TASK_STATE_COMPLETED");
     expect(payloads.some((entry) => "artifactUpdate" in entry)).toBe(true);
     expect(taskStore.listTasks({ ownerPeer: "alpha" }).tasks).toHaveLength(1);
