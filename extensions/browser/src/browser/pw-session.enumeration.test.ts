@@ -127,7 +127,6 @@ describe("pw-session page enumeration", () => {
     const healthy = tab("HEALTHY", "Healthy", "https://example.org/");
     const fixture = makePageEnumerationBrowser([healthy]);
     connectOverCdpSpy.mockResolvedValue(fixture.browser);
-    getChromeWebSocketUrlSpy.mockResolvedValue("ws://127.0.0.1:9222/cdp");
     await expect(
       listPagesViaPlaywright({
         cdpUrl,
