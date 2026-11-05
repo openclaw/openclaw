@@ -57,6 +57,48 @@ describe("stale lock file ownership", () => {
     ).toBe(true);
   });
 
+  it("ages an empty payload by the lock file mtime after the grace period", () => {
+    const now = Date.parse("2026-05-23T00:10:00.000Z");
+    expect(
+      shouldRemoveDeadOwnerOrExpiredLock({
+        payload: null,
+        staleMs: 10_000,
+        nowMs: now,
+        mtimeMs: now - 60_000,
+      }),
+    ).toBe(true);
+    expect(
+      shouldRemoveDeadOwnerOrExpiredLock({
+        payload: {},
+        staleMs: 10_000,
+        nowMs: now,
+        mtimeMs: now - 60_000,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps a fresh empty payload within the mtime grace period", () => {
+    const now = Date.parse("2026-05-23T00:10:00.000Z");
+    expect(
+      shouldRemoveDeadOwnerOrExpiredLock({
+        payload: null,
+        staleMs: 10_000,
+        nowMs: now,
+        mtimeMs: now - 5_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps an empty payload when no mtime is available", () => {
+    expect(
+      shouldRemoveDeadOwnerOrExpiredLock({
+        payload: null,
+        staleMs: 10_000,
+        nowMs: Date.parse("2026-05-23T00:10:00.000Z"),
+      }),
+    ).toBe(false);
+  });
+
   it("keeps malformed locks", () => {
     expect(isLockOwnerDefinitelyStale({ payload: null })).toBe(false);
   });

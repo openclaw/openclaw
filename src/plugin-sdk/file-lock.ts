@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { statSync } from "node:fs";
 import {
   acquireFileLock as acquireFsSafeFileLock,
   drainFileLockManagerForTest,
@@ -65,6 +66,14 @@ export type FileLockStaleError = Error & {
   /** Lock sidecar path that could not be safely reclaimed. */
   lockPath: string;
 };
+
+function lockFileMtimeMs(filePath: string): number | undefined {
+  try {
+    return statSync(filePath).mtimeMs;
+  } catch {
+    return undefined;
+  }
+}
 
 const FILE_LOCK_MANAGER_KEY = "openclaw.plugin-sdk.file-lock";
 const STALE_FILE_LOCK_RECLAIM_MANAGER_KEY = "openclaw.plugin-sdk.stale-file-lock-reclaim";
@@ -186,6 +195,7 @@ export async function acquireFileLock(
           payload: asNullableRecord(params.payload),
           staleMs: params.staleMs,
           nowMs: params.nowMs,
+          mtimeMs: lockFileMtimeMs(filePath),
         });
       },
       ...(staleRecovery === "remove-if-unchanged" || staleRecovery === "remove-if-definitely-stale"

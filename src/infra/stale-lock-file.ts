@@ -84,13 +84,21 @@ export function shouldRemoveDeadOwnerOrExpiredLock(params: {
   payload: Record<string, unknown> | null;
   staleMs: number;
   nowMs?: number;
+  /** Lock file mtime; ages a crash-truncated file that never received a payload. */
+  mtimeMs?: number;
 }): boolean {
   const payload = readLockFileOwnerPayload(params.payload);
   if (payload?.pid) {
     return isLockOwnerDefinitelyStale({ payload: params.payload });
   }
   if (!payload?.createdAt) {
-    return false;
+    // A crash between file creation and payload write leaves an empty or
+    // unparsable lock. Age it by the file's mtime with the same grace an
+    // expired createdAt receives; without an mtime, stay conservative.
+    if (params.mtimeMs === undefined) {
+      return false;
+    }
+    return (params.nowMs ?? Date.now()) - params.mtimeMs > params.staleMs;
   }
   const createdAt = Date.parse(payload.createdAt);
   return !Number.isFinite(createdAt) || (params.nowMs ?? Date.now()) - createdAt > params.staleMs;
