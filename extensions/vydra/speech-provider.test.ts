@@ -51,8 +51,7 @@ describe("vydra speech provider", () => {
 
   it("rejects an invalid environment baseUrl at synthesis instead of using hosted Vydra", async () => {
     vi.stubEnv("VYDRA_BASE_URL", "https://[");
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = stubFetch();
 
     expect(
       await provider.isConfiguredAsync?.({ providerConfig: request.providerConfig, timeoutMs: 1 }),

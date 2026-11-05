@@ -54,16 +54,11 @@ describe("fal video generation provider", () => {
   });
 
   it("rejects an invalid configured baseUrl instead of submitting to hosted fal", async () => {
-    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
-      apiKey: "fal-key",
-      source: "env",
-      mode: "api-key",
-    });
-    await expect(
-      generateVideo({
-        cfg: { models: { providers: { fal: { baseUrl: "https://[", models: [] } } } },
-      }),
-    ).rejects.toThrow("Invalid fal baseUrl: value is not a valid URL");
+    mockFalProviderRuntime();
+    await expectRejected(
+      { cfg: { models: { providers: { fal: { baseUrl: "https://[", models: [] } } } } },
+      "Invalid fal baseUrl: value is not a valid URL",
+    );
     expect(fetchGuardMock).not.toHaveBeenCalled();
   });
 
