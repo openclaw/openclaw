@@ -194,7 +194,7 @@ export async function tryDispatchAcpReplyCore(
       : resolveAgentIdFromSessionKey(canonicalSessionKey);
   const preparedTtsPreferences = params.preparedTtsPreferences ?? (await prepareTtsPreferences());
   await input.withCurrent(() => {});
-  const shouldDeferVisibleTextForTts = shouldDeferFinalTtsText({
+  const shouldDeferVisibleTextForTts = await shouldDeferFinalTtsText({
     preparedTtsPreferences,
     cfg: params.cfg,
     ttsAuto: params.sessionTtsAuto,
@@ -204,7 +204,7 @@ export async function tryDispatchAcpReplyCore(
     inboundAudio: params.inboundAudio,
   });
   let queuedFinal = false;
-  const delivery = createAcpDispatchDeliveryCoordinator({
+  const delivery = await createAcpDispatchDeliveryCoordinator({
     ...params,
     preparedTtsPreferences,
     agentId: acpAgentId,

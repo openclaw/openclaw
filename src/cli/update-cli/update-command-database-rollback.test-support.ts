@@ -46,6 +46,7 @@ export async function prepareRollbackRuntime(root: string): Promise<string> {
     [
       runtimeProcessEntrypoints.updateMigratedFinalize,
       runtimeProcessEntrypoints.workerNativeLifecycle,
+      runtimeProcessEntrypoints.spawnBroker,
       runtimeProcessEntrypoints.sqliteWriterAdmission,
       runtimeProcessEntrypoints.sqliteStore,
       runtimeProcessEntrypoints.sqliteIntegrity,

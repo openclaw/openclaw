@@ -5,8 +5,10 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/capability-provider.types.js";
 import { requireWorkerResourceReceipt } from "../../plugins/worker-resource-receipt.js";
+import { requireWorkerEnvironmentRetention } from "../../plugins/worker-retention.js";
 import type {
   DB as StateDatabase,
   WorkerEnvironmentCredentials,
@@ -108,6 +110,10 @@ export function decodeWorkerEnvironmentRow(
       row.resource_receipt_json === null
         ? null
         : requireWorkerResourceReceipt(JSON.parse(row.resource_receipt_json)),
+    retention:
+      row.retention_json === null
+        ? null
+        : requireWorkerEnvironmentRetention(JSON.parse(row.retention_json)),
     nodeSetupId: row.node_setup_id,
     nodeDeviceId: row.node_device_id,
     sharedHost: row.shared_host === null ? null : row.shared_host === 1,
@@ -242,3 +248,10 @@ export function readWorkerEnvironmentFacts(
     attachments,
   };
 }
+
+export const workerEnvironmentReadOperations = {
+  "workerEnvironments.snapshot": (input: { ids?: readonly string[] }, db: EngineConnection) => ({
+    type: "workerEnvironments.snapshot" as const,
+    facts: runSqliteReadSnapshotSync(db, () => readWorkerEnvironmentFacts(db, input.ids)),
+  }),
+};

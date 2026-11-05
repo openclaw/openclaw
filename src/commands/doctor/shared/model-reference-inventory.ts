@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import {
   collectConfiguredModelRefs,
   visitModelSelectorRefs,
@@ -5,12 +6,16 @@ import {
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { listAgentIds } from "../../../agents/agent-scope.js";
 import { scanDoctorSessionEntriesTolerant } from "../../../config/sessions/session-accessor.js";
+import { prepareSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target.js";
 import {
   resolveAllAgentSessionStoreTargetsSync,
   resolveConfiguredAgentDatabaseTargets,
 } from "../../../config/sessions/targets.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { prepareArtifactPreservingSqliteRead } from "../../../infra/sqlite-snapshot-source.js";
 import { createRetainedAgentDatabaseMatcher } from "../../../state/agent-deletion-discovery.js";
+import { isArtifactPreservingStateRead } from "../../../state/artifact-preserving-state-reads.js";
+import { getActiveOpenClawStateDatabaseReadSnapshotAsync } from "../../../state/openclaw-state-db-readonly.js";
 import { readCronStoreSelectionForDoctor } from "../cron/default-store-selection.js";
 import { loadLegacyCronRepairState } from "../cron/legacy-repair.js";
 import { createDoctorModelRefResolver } from "./model-reference-resolver.js";
@@ -32,6 +37,7 @@ export async function inspectDoctorModelReferences(params: {
   matches: (modelRef: string) => boolean;
 }): Promise<DoctorModelReferenceInventory> {
   const env = params.env ?? process.env;
+  await getActiveOpenClawStateDatabaseReadSnapshotAsync({ env });
   const resolve = createDoctorModelRefResolver(params.cfg);
   const refs = new Map<string, DoctorModelReference>();
   const warnings: string[] = [];
@@ -75,6 +81,15 @@ export async function inspectDoctorModelReferences(params: {
     for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg, { env })) {
       if (retained(target.storePath, target.agentId)) {
         continue;
+      }
+      if (isArtifactPreservingStateRead("agent")) {
+        const sqlite = await prepareSqliteTargetFromSessionStorePath(target.storePath, {
+          agentId: target.agentId,
+          env,
+        });
+        if (existsSync(sqlite.path)) {
+          await prepareArtifactPreservingSqliteRead(sqlite.path);
+        }
       }
       scanDoctorSessionEntriesTolerant({ ...target, env }, ({ entry, sessionKey }) => {
         if (entry.modelOverride) {

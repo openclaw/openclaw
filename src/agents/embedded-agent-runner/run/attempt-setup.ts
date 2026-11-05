@@ -1,8 +1,9 @@
 import path from "node:path";
 import { isPathRelativeEscape } from "@openclaw/fs-safe/path";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import { resolveCompactionThreshold } from "../../../../packages/agent-core/src/harness/compaction/compaction-threshold.js";
 import { getRuntimeConfigSnapshot } from "../../../config/config.js";
-import type { ModelCompatConfig } from "../../../config/types.models.js";
+import type { ModelCompatConfig } from "../../../config/zod-schema.model-compat.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
@@ -40,7 +41,6 @@ import { readModelPromptProjection } from "../../../sessions/user-turn-transcrip
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
-import { DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../agent-settings.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers/context-file.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
@@ -66,6 +66,7 @@ import {
   resolveLiveToolResultMaxChars,
 } from "../tool-result-truncation.js";
 import { mapThinkingLevel, mapThinkingLevelForProvider } from "../utils.js";
+import { publishEmbeddedRequestContext } from "./attempt-context-accounting.js";
 import { buildLoopPromptCacheInfo } from "./attempt-context-engine-helpers.js";
 import { resolveModelPromptText } from "./attempt-llm-boundary.js";
 import { buildAfterTurnRuntimeContext } from "./attempt-prompt-helpers.js";
@@ -74,8 +75,9 @@ import {
   logEmbeddedRunStageSummary,
 } from "./attempt-stage-timing.js";
 import { hydratePromptMediaMessages } from "./images.js";
-import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
-import { checkMidTurnPrecheck } from "./preemptive-compaction.js";
+import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
+import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
+import { resolveProjectedRequestPressure } from "./preemptive-compaction.js";
 import { promptImageSessionKey } from "./prompt-image-decisions.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
@@ -246,7 +248,7 @@ export function installEmbeddedAttemptContextGuards(input: {
   activeContextEngine?: ContextEngine;
   activeSession: AgentSession;
   agentDir: string;
-  attempt: EmbeddedRunAttemptParams;
+  attempt: EmbeddedRunAttemptInternalParams;
   computerContextEpoch: { value: number };
   dropThinkingBlocksForEstimate: boolean;
   effectiveCwd: string;
@@ -401,6 +403,7 @@ export function installEmbeddedAttemptContextGuards(input: {
 
   const previousContextTransform = activeSession.agent.transformContext;
   activeSession.agent.transformContext = async (messages, signal) => {
+    let localRoots: readonly string[] | undefined;
     const hydrated = await hydratePromptMediaMessages(messages, {
       workspaceDir: input.effectiveWorkspace,
       agentWorkspaceDir: attempt.workspaceDir,
@@ -410,7 +413,11 @@ export function installEmbeddedAttemptContextGuards(input: {
       workspaceOnly: input.effectiveFsWorkspaceOnly,
       localRoots: input.effectiveFsWorkspaceOnly
         ? undefined
-        : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.sessionAgentId),
+        : () =>
+            (localRoots ??= getAgentScopedMediaLocalRoots(
+              attempt.config ?? {},
+              input.sessionAgentId,
+            )),
       sandbox:
         input.sandbox?.enabled && input.sandbox.fsBridge
           ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
@@ -430,26 +437,38 @@ export function installEmbeddedAttemptContextGuards(input: {
   };
 
   return {
-    checkMidTurnPrecheck: (
-      request: Pick<Parameters<typeof checkMidTurnPrecheck>[0], "context" | "previousRequest">,
+    checkMidTurnPrecheck: async (
+      request: Pick<
+        Parameters<typeof resolveProjectedRequestPressure>[0],
+        "context" | "previousRequest" | "fixedTokenPressure"
+      > & { measuredContextTokens?: number },
     ) => {
-      // Compaction ownership does not waive host admission at the provider boundary.
-      if (activeSession[agentSessionDeferThresholdCompaction]) {
-        return;
-      }
-      const softPrecheckEnabled =
-        activeContextEngine?.info.ownsCompaction ||
-        attempt.config?.agents?.defaults?.compaction?.midTurnPrecheck?.enabled === true;
-      // A guaranteed overflow must reach the existing recovery owner even when
-      // the earlier, configured pressure threshold is disabled.
-      const reserveTokens = Math.max(
-        DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
-        softPrecheckEnabled ? settingsManager.getCompactionReserveTokens() : 0,
-      );
-      checkMidTurnPrecheck({
+      // Deferring maintenance never authorizes an over-window provider request.
+      const deferThreshold = activeSession[agentSessionDeferThresholdCompaction];
+      const compaction = attempt.config?.agents?.defaults?.compaction;
+      const reserveTokens = settingsManager.getCompactionReserveTokens();
+      const threshold = resolveCompactionThreshold({
+        contextWindowTokens: contextTokenBudget,
+        reserveTokensFloor: reserveTokens,
+      });
+      // Provider-measured occupancy drives proactive maintenance. An estimate of
+      // pending content protects the hard window without declaring a full prompt's
+      // conservative estimate to be a provider refusal.
+      const proactive =
+        !deferThreshold &&
+        compaction?.enabled !== false &&
+        (request.measuredContextTokens ?? request.previousRequest?.contextTokens ?? 0) >= threshold;
+      const decision = resolveProjectedRequestPressure({
         ...request,
         contextTokenBudget,
-        reserveTokens,
+        reserveTokens: deferThreshold
+          ? 0
+          : proactive
+            ? contextTokenBudget - threshold
+            : activeContextEngine?.info.ownsCompaction ||
+                compaction?.midTurnPrecheck?.enabled === true
+              ? reserveTokens
+              : 0,
         toolResultMaxChars,
         replay: {
           model: attempt.model,
@@ -457,10 +476,13 @@ export function installEmbeddedAttemptContextGuards(input: {
           authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
           enabled: input.getCompactionReplayEnabled(),
         },
-        onPrecheck: (precheck) => {
-          pendingMidTurnPrecheckRequest = precheck;
-        },
       });
+      await publishEmbeddedRequestContext(attempt, decision.estimatedPromptTokens);
+      if (decision.route !== "fits") {
+        pendingMidTurnPrecheckRequest = { ...decision, route: decision.route };
+        throw new MidTurnPrecheckSignal(pendingMidTurnPrecheckRequest);
+      }
+      return decision.estimatedPromptTokens;
     },
     getAfterTurnCheckpoint: () => afterTurnCheckpoint,
     recordCacheTouch: cacheTouch.recordCacheTouch,

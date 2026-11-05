@@ -148,11 +148,12 @@ suite.define(() => {
       }
       for (let attempt = 0; attempt < failures; attempt += 1) {
         await downloadButton.click();
-        const error = page.getByText("Could not download this image. Try again.", {
+        const error = page.getByText("Couldn’t download this image. Try again.", {
           exact: true,
         });
         await error.waitFor({ state: "visible" });
-        await page.clock.runFor(6_000);
+        // Errors stay 10 s, then fade out.
+        await page.clock.runFor(10_200);
         await error.waitFor({ state: "hidden" });
         expect(requestedVariants.filter((variant) => variant === "full")).toHaveLength(attempt + 1);
       }

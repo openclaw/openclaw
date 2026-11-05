@@ -280,9 +280,15 @@ export class AcpGatewayAgent implements Agent {
         ? await this.sessionUpdates.readLedgerReplayBySessionKey(params.sessionId)
         : { complete: false, events: [] };
     const routedLedgerReplay = exactLedgerReplay.complete ? exactLedgerReplay : listedLedgerReplay;
+    // Trimmed replay history still keeps the bridge session's binding.
+    const ledgerSessionKey =
+      routedLedgerReplay.sessionKey ??
+      (hasExplicitRouting
+        ? undefined
+        : await this.sessionUpdates.readLedgerSessionKey(params.sessionId));
     const sessionKey = await this.resolveSessionKeyFromMeta({
       meta,
-      fallbackKey: routedLedgerReplay.sessionKey ?? params.sessionId,
+      fallbackKey: ledgerSessionKey ?? params.sessionId,
     });
     const ledgerReplay =
       exactLedgerReplay.complete && exactLedgerReplay.sessionKey === sessionKey

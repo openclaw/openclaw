@@ -159,12 +159,11 @@ export const AgentDefaultsBaseSchema = z.strictObject({
           maxRetries: z.number().int().nonnegative().optional(),
         })
         .optional(),
-      /** Soft mid-turn pressure threshold; hard window admission always runs. Default: disabled. */
+      /** Optional estimated-pressure threshold; hard window admission remains active. */
       midTurnPrecheck: z
         .strictObject({
           /**
-           * Enable the configured soft context pressure threshold after tool results are appended
-           * and before the next agent model call. Default: false.
+           * Reserve compaction headroom against estimated tool-loop pressure. Default: false.
            */
           enabled: z.boolean().optional(),
         })

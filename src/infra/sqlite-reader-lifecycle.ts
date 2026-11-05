@@ -2,8 +2,13 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isMainThread, threadId } from "node:worker_threads";
 import { normalizeWindowsPathForComparison } from "@openclaw/fs-safe/path";
+import type { SubsystemLogger } from "../logging/subsystem.js";
 import { AsyncContext } from "../shared/async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { sqliteReaderCounter } from "./sqlite-reader-metrics.js";
+import { readThreadDiskReadBytes } from "./thread-disk-io.js";
+
+const HEAVY_READ_BYTES = 64 * 1024 * 1024;
 
 export type SqliteReaderOwner = {
   operation: string;
@@ -65,6 +70,7 @@ const readerOwners = new AsyncContext<
       databaseAdmissionWaitMs: number;
       transactions: { count: number };
       holdContext?: SqliteOperationHoldContext;
+      diskRead?: { context?: SqliteOperationHoldContext };
     };
   }
 >(Symbol.for("openclaw.sqliteReaderOwners"));
@@ -91,20 +97,84 @@ export function withSqliteReaderOwner<T>(
   owner: SqliteReaderOwner,
   operation: () => T,
   holdContext?: SqliteOperationHoldContext,
-): T {
+  /** Reader workers supply the sink to keep logging out of shared lifecycle imports. */
+  logger?: Pick<SubsystemLogger, "warn">,
+): T;
+export function withSqliteReaderOwner<T>(
+  owner: SqliteReaderOwner,
+  operation: () => T | Promise<T>,
+  holdContext?: SqliteOperationHoldContext,
+  logger?: Pick<SubsystemLogger, "warn">,
+): T | Promise<T> {
+  const parent = readerOwners.getStore();
+  const operationName = boundedOperation(owner.operation);
+  const before =
+    logger && !parent && !isMainThread && owner.ownerKind === "worker"
+      ? readThreadDiskReadBytes()
+      : undefined;
+  const diskRead: { context?: SqliteOperationHoldContext } | undefined =
+    parent?.timing.diskRead ?? (before === undefined ? undefined : {});
+  const startedAtMs = Date.now();
+  const counter = before === undefined ? undefined : sqliteReaderCounter(operationName);
   return readerOwners.run(
     {
       ...owner,
-      operation: boundedOperation(owner.operation),
+      operation: operationName,
       timing: {
-        preparedAtMs: Date.now(),
+        preparedAtMs: startedAtMs,
         hostAdmissionWaitMs: 0,
         databaseAdmissionWaitMs: 0,
-        transactions: readerOwners.getStore()?.timing.transactions ?? { count: 0 },
+        transactions: parent?.timing.transactions ?? { count: 0 },
         holdContext,
+        diskRead,
       },
     },
-    operation,
+    () => {
+      if (before === undefined || !diskRead || !logger) {
+        return operation();
+      }
+      const finish = () => {
+        try {
+          const after = readThreadDiskReadBytes();
+          if (after === undefined || after < before) {
+            return;
+          }
+          if (counter) {
+            Atomics.add(counter.values, 0, 1n);
+            Atomics.add(counter.values, 1, BigInt(after - before));
+          }
+          if (after - before < HEAVY_READ_BYTES) {
+            return;
+          }
+          logger.warn("heavy SQLite reader operation", {
+            operation: operationName,
+            readBytes: after - before,
+            elapsedMs: Date.now() - startedAtMs,
+            context: {
+              ...diskRead.context,
+              ...holdContext,
+              readerOperation: operationName,
+            },
+            pid: process.pid,
+            threadId,
+            thresholdBytes: HEAVY_READ_BYTES,
+          });
+        } catch {
+          // Accounting and logging cannot change a completed operation's outcome.
+        }
+      };
+      try {
+        const result = operation();
+        if (result instanceof Promise) {
+          return result.finally(finish);
+        }
+        finish();
+        return result;
+      } catch (error) {
+        finish();
+        throw error;
+      }
+    },
   );
 }
 

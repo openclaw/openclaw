@@ -736,7 +736,12 @@ try {
                 );
               }
               if (scenario.id.startsWith("page-")) {
-                observation.pageMetrics = await readControlUiPageObserver(page);
+                // The earlier reset counts initial DOM outside CPU collection. Exclude
+                // CDP/profiler setup from long tasks and shifts using the actual action boundary.
+                observation.pageMetrics = await readControlUiPageObserver(
+                  page,
+                  observation.actionTiming?.startMs,
+                );
                 observation.evidence = {
                   ...observation.evidence,
                   ...(await collectEnginePageStructure(page)),

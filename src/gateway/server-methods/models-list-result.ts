@@ -73,6 +73,10 @@ import {
 import { resolveDefaultModelsPreview } from "./models-list-result.default-models.js";
 import { prepareModelPickerRuntimeChoices } from "./models-list-runtime-choices.js";
 
+type StatedRuntimeModelChoice = ModelChoice & {
+  agentRuntime: NonNullable<ModelChoice["agentRuntime"]>;
+};
+
 type PreparedModelsListResult = {
   read: () => ModelsListResult;
   isCurrent: () => boolean;
@@ -188,6 +192,7 @@ export async function prepareModelsListResult({
     const availableDecisionModels = listDecisionModels({
       config: cfg,
       snapshot: metadataSnapshot,
+      catalog: snapshot.entries,
     });
     const selectedModel = resolveSessionModelRef(cfg, scope?.sessionEntry, agentId, {
       allowPluginNormalization: false,
@@ -210,8 +215,6 @@ export async function prepareModelsListResult({
       observationConfig: preparedProjectionOwner?.observationConfig,
     });
     const { defaultModel } = preparedCatalog;
-    const preparedRuntimeAuthModes = preparedProjectionOwner?.authModes;
-    const preparedRuntimeAuthMaterializations = preparedProjectionOwner?.authMaterializations;
     // Capture authority again after acquisition and before hydrating a personal projection.
     draft?.assertCurrent();
     const decisionOwner = () => ({
@@ -220,8 +223,8 @@ export async function prepareModelsListResult({
       metadataSnapshot,
       preparedAuthStore,
       accountCatalog: preparedProjectionOwner?.accountCatalog,
-      preparedRuntimeAuthModes,
-      preparedRuntimeAuthMaterializations,
+      preparedRuntimeAuthModes: preparedProjectionOwner?.authModes,
+      preparedRuntimeAuthMaterializations: preparedProjectionOwner?.authMaterializations,
       pluginRegistry: preparedPluginRegistry,
       isCurrent,
       observationConfig: preparedProjectionOwner?.observationConfig,
@@ -299,26 +302,24 @@ export async function prepareModelsListResult({
       manifestPlugins: metadataSnapshot,
     });
     draft?.assertCurrent();
-    const defaultModels =
-      (params.params.includeDefaultModels ??
-      (view === "configured" && !params.params.sessionKey && !params.params.authProfileId))
-        ? await resolveDefaultModelsPreview({
-            cfg,
-            agentId,
-            agentDir: sourceOwner?.agentDir,
-            workspaceDir,
-            metadataSnapshot,
-            preparedAuthStore,
-            preparedRuntimeAuthModes: preparedProjectionOwner?.authModes,
-            preparedRuntimeAuthMaterializations: preparedProjectionOwner?.authMaterializations,
-            pluginRegistry: preparedPluginRegistry,
-            snapshot,
-            isCurrent,
-          })
-        : undefined;
+    const modelPreviews = await resolveDefaultModelsPreview({
+      cfg,
+      agentId,
+      agentDir: sourceOwner?.agentDir,
+      workspaceDir,
+      metadataSnapshot,
+      preparedAuthStore,
+      preparedRuntimeAuthModes: preparedProjectionOwner?.authModes,
+      preparedRuntimeAuthMaterializations: preparedProjectionOwner?.authMaterializations,
+      pluginRegistry: preparedPluginRegistry,
+      snapshot,
+      isCurrent,
+      request: params.params,
+      view,
+    });
     draft?.assertCurrent();
     const outcomeProjection = {
-      ...(defaultModels ? { defaultModels } : {}),
+      ...modelPreviews,
       ...(publicProviderOutcomes?.length ? { providerOutcomes: publicProviderOutcomes } : {}),
     };
     const readAccountSelection =
@@ -396,7 +397,7 @@ export async function prepareModelsListResult({
       });
       const catalogResolver = createThinkingCatalogResolver(catalog);
       // Route rows retain identity across reads; keep display/thinking work outside the hot overlay.
-      const prepared = new WeakMap<ModelCatalogEntry, Map<string, ModelChoice>>();
+      const prepared = new WeakMap<ModelCatalogEntry, Map<string, StatedRuntimeModelChoice>>();
       return (
         entry: ModelCatalogEntry,
         evaluation: ModelAuthAvailabilityEvaluation,
@@ -413,22 +414,22 @@ export async function prepareModelsListResult({
               ? Object.assign({}, entry, { alias })
               : entry;
           const capabilityProvider = capableProviders?.resolveProvider(entry.provider);
+          // Every row states its runtime, including the implicit built-in one, so
+          // clients read placement and runtime facts instead of interpreting omission.
           const selectedRuntime = runtimeChoice
             ? { id: runtimeChoice, source: "model" as const }
-            : resolveCatalogDecisionRuntime({
+            : (resolveCatalogDecisionRuntime({
                 cfg,
                 agentId,
                 entry,
                 evaluation,
                 pluginRegistry: preparedPluginRegistry,
-              });
-          const agentRuntime = selectedRuntime
-            ? preparedPluginRegistry
-              ? withPluginRuntimeRegistryScope(preparedPluginRegistry, () =>
-                  projectWorkerPlacementAgentRuntime(selectedRuntime),
-                )
-              : projectWorkerPlacementAgentRuntime(selectedRuntime)
-            : undefined;
+              }) ?? { id: "openclaw", source: "implicit" as const });
+          const agentRuntime = preparedPluginRegistry
+            ? withPluginRuntimeRegistryScope(preparedPluginRegistry, () =>
+                projectWorkerPlacementAgentRuntime(selectedRuntime),
+              )
+            : projectWorkerPlacementAgentRuntime(selectedRuntime);
           const thinkingProfile =
             typeof publicEntry.reasoning !== "boolean"
               ? undefined
@@ -437,7 +438,7 @@ export async function prepareModelsListResult({
                   agentId,
                   provider: entry.provider,
                   model: entry.id,
-                  agentRuntime: selectedRuntime?.id ?? "openclaw",
+                  agentRuntime: selectedRuntime.id,
                   modelCatalog: runtimeChoice ? [entry] : catalog,
                   catalogResolver: runtimeChoice
                     ? createThinkingCatalogResolver([entry])
@@ -462,7 +463,7 @@ export async function prepareModelsListResult({
                 }
               : {}),
             ...(configuredEntry?.tags.size ? { tags: [...configuredEntry.tags] } : {}),
-            ...(agentRuntime ? { agentRuntime } : {}),
+            agentRuntime,
             ...thinkingProfile,
             ...(fastModeState.source === "default"
               ? {}
@@ -474,7 +475,7 @@ export async function prepareModelsListResult({
               : {}),
             ...(view === "provider-config" && entry.input?.length ? { input: entry.input } : {}),
           };
-          const entries = prepared.get(entry) ?? new Map<string, ModelChoice>();
+          const entries = prepared.get(entry) ?? new Map<string, StatedRuntimeModelChoice>();
           entries.set(runtimeKey, preparedEntry);
           prepared.set(entry, entries);
         }
@@ -482,8 +483,7 @@ export async function prepareModelsListResult({
           preserveUnknownAvailability || evaluation.runtimeAuth?.source === "native"
             ? evaluation.availability
             : (evaluation.availability ?? false);
-        // An omitted row runtime means the implicit OpenClaw runtime, not an unknown one.
-        const runtimeId = preparedEntry.agentRuntime?.id ?? "openclaw";
+        const runtimeId = preparedEntry.agentRuntime.id;
         const speedPolicy = fastMode(entry, evaluation, runtimeId);
         const supportsFastMode = speedPolicy.supportsFastMode;
         const serviceTiers = projectModelServiceTiers({

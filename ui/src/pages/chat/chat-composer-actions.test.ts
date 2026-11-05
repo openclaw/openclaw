@@ -61,6 +61,21 @@ async function renderQueue(queue: QueuedMessage[], overrides: Partial<ChatCompos
 }
 
 describe("renderChatComposer controls", () => {
+  it.each(["Win32", "Linux x86_64", "MacIntel"])(
+    "uses compact non-Mac alternate-send hints on %s",
+    (platform) => {
+      vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+      const { container } = renderComposer({
+        ...activeRun(),
+        draft: "Follow up",
+        followUpMode: "steer",
+        sendShortcut: "enter",
+      });
+      const hints = Array.from(container.querySelectorAll("kbd"), (key) => key.textContent);
+      expect(hints).toContain(platform === "MacIntel" ? "⌘/Ctrl+Enter" : "CtrlEnter");
+    },
+  );
+
   it.each([
     { name: "without send permission", draft: "local draft", canCompose: true, canSend: false },
     { name: "offline text", draft: "queue this", connected: false, allowed: true },
@@ -155,7 +170,7 @@ describe("renderChatComposer controls", () => {
     const stop = primaryButton(container);
 
     expect(stop.disabled).toBe(false);
-    expect(stop.getAttribute("aria-label")).toBe(t("chat.runControls.stopGenerating"));
+    expect(stop.getAttribute("aria-label")).toBe(t("chat.runControls.stop"));
     expect(query(container, ".chat-mobile-primary-action > openclaw-tooltip > button")).toBe(stop);
     expect(container.querySelectorAll(".chat-send-btn--stop")).toHaveLength(1);
     stop.click();
@@ -201,7 +216,7 @@ describe("renderChatComposer controls", () => {
 
   it("finishes locked dictation before submitting the complete draft with history held", async () => {
     const { container, active, locked, finishActive, onSend, commit } = renderDictatingComposer({
-      submitDisabledReason: "Loading chat",
+      submitDisabledReason: "Loading conversation…",
     });
     const finalTranscript = createDeferred<string>();
     finishActive.mockImplementation(async () => {

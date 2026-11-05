@@ -1,4 +1,3 @@
-import os from "node:os";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_IDS,
@@ -22,7 +21,6 @@ import {
 } from "../../../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
 import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
-import { buildAuthenticatedPresenceUser } from "../../authenticated-presence-user.js";
 import { prepareGatewayRecipientProfile } from "../../expected-profile.js";
 import { shouldUseGatewayOwnerProfile } from "../../gateway-owner-profile.js";
 import {
@@ -47,7 +45,8 @@ import {
   setClientPluginNodeCapability,
   type PluginNodeCapabilitySurface,
 } from "../../plugin-node-capability.js";
-import { formatForLog } from "../../ws-log.js";
+import { formatForLog, formatPeerTextForLog } from "../../ws-log.js";
+import { buildClientPresence } from "../client-presence.js";
 import { truncateCloseReason } from "../close-reason.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import {
@@ -406,7 +405,7 @@ export async function attachAuthenticatedGatewayConnect(
   const localUserIngress = prepareLocalUserIngress();
   if (usesLegacyNodeProtocol) {
     logWsControl.warn(
-      `legacy node protocol accepted conn=${connId} client=${formatForLog(clientLabel)} v${formatForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} current=${PROTOCOL_VERSION}; upgrade recommended`,
+      `legacy node protocol accepted conn=${connId} client=${formatPeerTextForLog(clientLabel)} v${formatPeerTextForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} current=${PROTOCOL_VERSION}; upgrade recommended`,
     );
   }
   const nextClient: GatewayWsClient = {
@@ -471,7 +470,7 @@ export async function attachAuthenticatedGatewayConnect(
       const releaseOrder = compareOpenClawReleaseVersions(clientVersion, gatewayVersion);
       if (releaseOrder !== null && releaseOrder < 0) {
         logWsControl.info(
-          `node version mismatch conn=${connId} client=${formatForLog(clientLabel)} clientVersion=${formatForLog(clientVersion)} gatewayVersion=${gatewayVersion}; closing for supervisor restart`,
+          `node version mismatch conn=${connId} client=${formatPeerTextForLog(clientLabel)} clientVersion=${formatPeerTextForLog(clientVersion)} gatewayVersion=${gatewayVersion}; closing for supervisor restart`,
         );
         sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, "client version mismatch", {
           details: {
@@ -585,45 +584,21 @@ export async function attachAuthenticatedGatewayConnect(
   logWsControl.info(
     [
       `client connected conn=${connId}`,
-      `client=${clientId} name=${formatForLog(clientLabel)}`,
+      `client=${clientId} name=${formatPeerTextForLog(clientLabel)}`,
       `mode=${connectParams.client.mode} role=${role} auth=${authMethod}`,
-      `version=${formatForLog(connectParams.client.version)} platform=${formatForLog(connectParams.client.platform)}`,
-      `build=${formatForLog(connectParams.client.buildId?.trim() || "legacy")} remote=${remoteAddr ?? "?"}`,
+      `version=${formatPeerTextForLog(connectParams.client.version)} platform=${formatPeerTextForLog(connectParams.client.platform)}`,
+      `build=${formatPeerTextForLog(connectParams.client.buildId?.trim() || "legacy")} remote=${remoteAddr ?? "?"}`,
       authenticatedUserId ? `user=${formatForLog(authenticatedUserId)}` : undefined,
     ]
       .filter(Boolean)
       .join(" "),
   );
 
-  const currentAuthenticatedPresenceUser = () =>
-    nextClient.authenticatedGitHubIdentitySync && !nextClient.authenticatedUserProfile
-      ? undefined
-      : buildAuthenticatedPresenceUser({
-          authenticatedUserId,
-          authenticatedUserIsTailscaleProvider,
-          authenticatedUserProfile: nextClient.authenticatedUserProfile,
-        });
-
   if (presenceKey) {
-    const authenticatedPresenceUser = currentAuthenticatedPresenceUser();
     upsertPresence(
       presenceKey,
       {
-        connectionId: connId,
-        host: connectParams.client.displayName ?? connectParams.client.id ?? os.hostname(),
-        clientId: connectParams.client.id,
-        ip: isLocalClient ? undefined : reportedClientIp,
-        version: connectParams.client.version,
-        platform: connectParams.client.platform,
-        deviceFamily: connectParams.client.deviceFamily,
-        modelIdentifier: connectParams.client.modelIdentifier,
-        timeZone: connectParams.client.timeZone,
-        mode: connectParams.client.mode,
-        deviceId: device?.id,
-        roles: [role],
-        scopes,
-        instanceId: role === "node" ? (device?.id ?? instanceId) : instanceId,
-        ...(authenticatedPresenceUser ? { user: authenticatedPresenceUser } : {}),
+        ...buildClientPresence(nextClient),
         reason: "connect",
       },
       { pending: true },
