@@ -234,7 +234,9 @@ describe("prepareWorkerGitHubEnvironment", () => {
     let rejectedProfile = "";
     inspectPathPermissions.mockImplementationOnce(async (profileDir: string) => {
       rejectedProfile = profileDir;
-      expect(await fs.readFile(path.join(profileDir, "hosts.yml"), "utf8")).toContain(binding.token);
+      expect(await fs.readFile(path.join(profileDir, "hosts.yml"), "utf8")).toContain(
+        binding.token,
+      );
       return {
         ok: true,
         source: "windows-acl",
