@@ -447,19 +447,20 @@ export class ExtensionRelayBridge {
     tabId: number,
     use?: (targetId: string) => void,
   ): Promise<void> {
-    return this.withAttachedTab(
-      client,
-      tabId,
-      publishDiscoveryAttachment(
-        (attached) =>
-          this.announceAttachedTab(
-            tabId,
-            attached,
-            this.autoAttachRecipients(tabId, attached.sessionId),
-          ),
-        use,
+    return awaitDiscoveryAttachment(
+      this.withAttachedTab(
+        client,
+        tabId,
+        publishDiscoveryAttachment(
+          (attached) =>
+            this.announceAttachedTab(
+              tabId,
+              attached,
+              this.autoAttachRecipients(tabId, attached.sessionId),
+            ),
+          use,
+        ),
       ),
-      undefined,
       4_000,
     );
   }
@@ -469,7 +470,6 @@ export class ExtensionRelayBridge {
     tabId: number,
     use: (attached: { targetId: string; sessionId: string }) => void,
     createdTargetId?: string,
-    timeoutMs?: number,
   ): Promise<void> {
     const tab = this.tabs.get(tabId);
     const extension = this.extension;
@@ -481,10 +481,7 @@ export class ExtensionRelayBridge {
     const claimant = { client };
     tab.claimants.add(claimant);
     try {
-      const attached = await awaitDiscoveryAttachment(
-        this.ensureTabAttached(tabId, createdTargetId),
-        timeoutMs,
-      );
+      const attached = await this.ensureTabAttached(tabId, createdTargetId);
       if (
         !this.clients.has(client) ||
         this.tabs.get(tabId) !== tab ||

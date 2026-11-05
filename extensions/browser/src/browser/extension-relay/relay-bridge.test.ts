@@ -648,6 +648,23 @@ it("bounds target enumeration when one debugger attachment never replies", async
   expect(asOptionalRecord(response(client, 2)?.result)?.targetInfos).toHaveLength(2);
 });
 
+it("publishes an automatic attachment that succeeds after discovery stops waiting", async () => {
+  vi.useFakeTimers();
+  const { bridge, socket, handlers } = readyBridge((message) =>
+    message.type === "attach" ? null : replyFor(message),
+  );
+  const { client, cdp } = connectClient(bridge);
+  sendCommand(cdp, 1, "Target.setAutoAttach", { autoAttach: true });
+  await vi.advanceTimersByTimeAsync(4_001);
+  expect(response(client, 1)?.error).toBeUndefined();
+  expect(attached(client)).toHaveLength(0);
+  await vi.advanceTimersByTimeAsync(999);
+  sendResult(handlers, frames(socket, "attach")[0]?.seq, { targetId: "target-1" });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(attached(client)).toHaveLength(1);
+  expect(JSON.stringify(attached(client)[0])).toContain("target-1");
+});
+
 it("keeps explicit attachment alive after a discovery claimant expires", async () => {
   vi.useFakeTimers();
   let blocked = false;
