@@ -305,6 +305,7 @@ describe("session menu", () => {
         "Rename…",
         "Mark as unread",
         "Copy link",
+        "Open in new tab",
         "Move to group",
         "Add to section",
         "Archive session",
@@ -587,8 +588,7 @@ describe("session menu", () => {
     ["editor", { pullRequestUrl: null, worktreePath: "/work/trees/demo" }],
   ] as const)("opens resolved workspace destinations: %s", async (_name, work) => {
     const { menu, onAction } = await actionMenu({ work });
-    const openIn = menuItem(menu, "Open in");
-    expect(menuItemLabels(openIn)).toContain(work?.worktreePath ? "VS Code" : "New tab");
+    expect(menuItemLabels(menuItem(menu, "Open in"))).toContain("New window");
     if (work?.pullRequestUrl) {
       const openPr = menuItem(menu, "Open PR");
       openPr.focus();

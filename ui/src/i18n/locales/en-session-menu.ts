@@ -90,7 +90,7 @@ const catalog = {
     copySessionId: "Session ID",
     copySessionPreviewLink: "Preview link",
     copyMarkdown: "Conversation as Markdown",
-    openNewTab: "New tab",
+    openNewTab: "Open in new tab",
     openNewWindow: "New window",
     openPullRequest: "Open PR",
     stopWorker: sharedSessions.stopWorker,

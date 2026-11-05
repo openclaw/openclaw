@@ -308,7 +308,7 @@ export function useSessionMenuEntries(
         ];
       case "open-in":
         return [
-          ...(state.navigationAllowed ? items(["open-new-tab", "open-new-window"]) : []),
+          ...(state.navigationAllowed ? items(["open-new-window"]) : []),
           ...(state.splitAllowed ? items(["split-right", "split-below"]) : []),
           ...(options.openInExtra?.() ?? []),
           ...(state.worktreePath
@@ -404,6 +404,7 @@ export function useSessionMenuEntries(
           }),
         ]
       : []),
+    ...(!batch() && state.navigationAllowed ? items(["open-new-tab"]) : []),
     ...(!batch() && state.session.placementAction
       ? [
           item({
