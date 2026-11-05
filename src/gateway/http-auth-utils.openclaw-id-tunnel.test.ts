@@ -1,5 +1,6 @@
 import { ServerResponse } from "node:http";
 import { afterEach, expect, it } from "vitest";
+import { ensureCanonicalUserProfileForOpenClawIdIdentity } from "../state/user-profile-openclaw-id.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeScopedGatewayHttpRequestOrReply } from "./http-auth-utils.js";
 import { assertGatewayHttpRequestCurrent } from "./http-request-authority.js";
@@ -84,9 +85,15 @@ it("a member's request loses authority when the role changes, and when OpenClaw 
     };
     membership.set(MEMBER_KEY, operator);
     publishMembership();
+    const profile = await ensureCanonicalUserProfileForOpenClawIdIdentity({
+      accountId: operator.accountId,
+      name: "Member",
+      email: "member@example.test",
+    });
     const first = await admitTunnelRequest(MEMBER_KEY);
     try {
       expect(first.requestAuth.hasCurrentClientAuthority()).toBe(true);
+      expect(first.requestAuth.authenticatedUserProfile?.profileId).toBe(profile.id);
       membership.set(MEMBER_KEY, { ...operator, role: "viewer" });
       expect(first.requestAuth.hasCurrentClientAuthority()).toBe(false);
     } finally {

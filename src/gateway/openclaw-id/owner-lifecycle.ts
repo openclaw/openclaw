@@ -5,7 +5,9 @@ import type {
   InactivityWindows,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import type { GatewayOpenClawIdConfig } from "../../config/types.gateway.js";
+import { isOpenClawIdEnabled } from "../../shared/openclaw-id-policy.js";
 import type { OpenClawIdAuthority } from "./authority.js";
+import { createOwnerExpiryTimer } from "./owner-expiry.js";
 
 const DAY_SECONDS = 86400;
 
@@ -47,4 +49,39 @@ export async function ownerLifecycleEvents(
     ...(dropped.length > 0 ? [{ type: "invalidate_tokens" as const, peer_keys: dropped }] : []),
     { type: "publish_snapshot" },
   ];
+}
+
+/** Arms the existing local expiry timer only while its observed authority still owns the service. */
+export async function armLocalExpiry(
+  owner: OpenClawIdAuthority,
+  readObserver: () => object | undefined,
+  getConfig: () => GatewayOpenClawIdConfig | undefined,
+  timer: Pick<ReturnType<typeof createOwnerExpiryTimer>, "arm">,
+): Promise<void> {
+  const observing = readObserver();
+  const deadline = await owner.nextOwnerExpiry(inactivityWindows(getConfig()));
+  // A disabled or replaced local owner cannot publish a delayed timer arm.
+  if (observing && observing === readObserver() && isOpenClawIdEnabled(getConfig())) {
+    timer.arm(deadline);
+  }
+}
+
+/** Re-arms the single People deadline from the committed record after each expiry. */
+export function createPeopleExpiry(params: {
+  next: () => number | undefined;
+  enabled: () => boolean;
+  changed: () => void;
+}) {
+  const timer = createOwnerExpiryTimer({
+    onExpired: async () => {
+      params.changed();
+      arm();
+    },
+  });
+  const arm = () => {
+    if (params.enabled()) {
+      timer.arm(params.next());
+    }
+  };
+  return { arm, stop: () => timer.stop() };
 }

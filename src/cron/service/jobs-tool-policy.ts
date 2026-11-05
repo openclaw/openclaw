@@ -92,6 +92,7 @@ export function cronJobMessageActionAuthorityInputsEqual(
 export function resolveCronRequesterExecutionRevision(job: CronStoredJob): string {
   const {
     operatorSource: _operatorSource,
+    streamOperatorSource: _streamOperatorSource,
     description: _description,
     displayName: _displayName,
     createdActor: _createdActor,
@@ -114,6 +115,8 @@ export function reconcileCronOperatorSource(params: {
   previousJob?: CronStoredJob;
   captured?: NonNullable<CronStoredJob["operatorSource"]>["source"];
   capturedExecutionRevision?: string;
+  /** The patched definition before the store adds cadence anchors and other scheduling facts. */
+  requestedExecutionRevision?: string;
   /** Agent-less jobs run as the configured default agent, so they match on that agent. */
   defaultAgentId?: string;
 }): void {
@@ -124,16 +127,35 @@ export function reconcileCronOperatorSource(params: {
   }
   const executionRevision = resolveCronOperatorExecutionRevision(job);
   const captured =
-    params.capturedExecutionRevision === executionRevision ? params.captured : undefined;
+    params.capturedExecutionRevision === (params.requestedExecutionRevision ?? executionRevision)
+      ? params.captured
+      : undefined;
   const previous = previousJob?.operatorSource;
   const source = captured ?? previous?.source;
+  if (source?.kind === "gateway") {
+    if (!captured && previous?.executionRevision !== executionRevision) {
+      throw new TypeError(
+        "This automation needs current authenticated source authority for an executable edit.",
+      );
+    }
+    if (tryResolveCronJobEffectiveAgentId(job, params.defaultAgentId) !== source.agentId) {
+      throw new TypeError("The automation's authenticated source belongs to another agent.");
+    }
+    job.operatorSource = { source, executionRevision };
+    return;
+  }
   if (
     source &&
     (captured || previous?.executionRevision === executionRevision) &&
-    job.payload.kind === "agentTurn" &&
-    job.scheduledToolPolicy?.mode === "account" &&
+    (job.payload.kind === "agentTurn" ||
+      (source.snapshot.openclawIdPrincipal !== undefined &&
+        (job.payload.kind === "script" || job.schedule.kind === "stream"))) &&
     job.owner?.sessionKey === source.sessionKey &&
-    job.scheduledToolPolicy.ownerSessionKey === source.sessionKey &&
+    ((job.scheduledToolPolicy?.mode === "account" &&
+      job.scheduledToolPolicy.ownerSessionKey === source.sessionKey) ||
+      (source.snapshot.openclawIdPrincipal !== undefined &&
+        job.schedule.kind === "stream" &&
+        job.payload.kind === "command")) &&
     tryResolveCronJobEffectiveAgentId(job, params.defaultAgentId) === source.agentId &&
     isCronOperatorSourceParent(job, source.sessionKey)
   ) {

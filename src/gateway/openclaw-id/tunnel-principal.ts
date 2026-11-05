@@ -1,3 +1,4 @@
+import { z } from "zod";
 // Gateway identity of an admitted OpenClaw ID tunnel device (OCF-225). The
 // tunnel child authenticates the device endpoint key W in the QUIC handshake
 // and the private ingress listener attributes the request to it; this module
@@ -8,6 +9,7 @@
 //   member's OpenClaw ID role (operator or viewer).
 // While OpenClaw ID is off no resolver is published and nothing here runs.
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
+import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import {
   APPROVALS_SCOPE,
   QUESTIONS_SCOPE,
@@ -20,9 +22,39 @@ import {
 type OpenClawIdMemberRole = "operator" | "viewer";
 
 /** Who an admitted tunnel device is, decided by the Gateway's membership authority. */
-export type OpenClawIdTunnelPrincipal =
+export type OpenClawIdTunnelPrincipal = (
   | { kind: "owner"; peerKey: string }
-  | { kind: "member"; peerKey: string; accountId: string; role: OpenClawIdMemberRole };
+  | { kind: "member"; peerKey: string; accountId: string; role: OpenClawIdMemberRole }
+) & {
+  /** The resident membership owner supplies the original listing, not transport callers. */
+  authority?: {
+    clawId: string;
+    rootPub: string;
+    listedSeq: number;
+    ownerDevice?: string;
+  };
+};
+
+const sourceFields = {
+  peerKey: z.string().regex(/^iroh:[a-f0-9]{64}$/),
+  authority: z.strictObject({
+    clawId: z.string().min(1).max(256),
+    rootPub: z.string().min(1).max(256),
+    listedSeq: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    ownerDevice: z.string().min(1).max(256).optional(),
+  }),
+};
+
+/** Durable sources require the claw/root/listing identity; a bare peer is not recovery evidence. */
+export const openClawIdRecoveryPrincipalSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("owner"), ...sourceFields }),
+  z.strictObject({
+    kind: z.literal("member"),
+    ...sourceFields,
+    accountId: z.string().min(1).max(256),
+    role: z.enum(["operator", "viewer"]),
+  }),
+]);
 
 /** Resolves a tunnel peer key to its principal, or undefined when it is not admitted now. */
 export type OpenClawIdTunnelPrincipalResolver = (
@@ -36,6 +68,18 @@ export type OpenClawIdTunnelPrincipalLookup = (
 
 let resolver: OpenClawIdTunnelPrincipalResolver | undefined;
 let lookup: OpenClawIdTunnelPrincipalLookup | undefined;
+let prepareLookup: (() => Promise<void>) | undefined;
+const changes = new Set<() => void>();
+
+/** Notifies retained work after committed membership changes or a service lifecycle change. */
+export function notifyOpenClawIdTunnelPrincipalsChanged(): void {
+  notifyListeners(changes, undefined);
+}
+
+/** Subscribe before preparation yields so a removed source cannot regain a retained lifetime. */
+export function onOpenClawIdTunnelPrincipalsChanged(listener: () => void): () => void {
+  return registerListener(changes, listener);
+}
 
 /** Publishes or clears the resolver (the OpenClaw ID service does this while it is on). */
 export function setOpenClawIdTunnelPrincipalResolver(
@@ -60,8 +104,11 @@ export async function resolveOpenClawIdTunnelPrincipal(
 /** Publishes or clears the synchronous lookup, alongside the resolver. */
 export function setOpenClawIdTunnelPrincipalLookup(
   next: OpenClawIdTunnelPrincipalLookup | undefined,
+  prepare?: () => Promise<void>,
 ): void {
   lookup = next;
+  prepareLookup = prepare;
+  notifyOpenClawIdTunnelPrincipalsChanged();
 }
 
 /**
@@ -72,6 +119,18 @@ export function setOpenClawIdTunnelPrincipalLookup(
 export function isOpenClawIdTunnelPrincipalCurrent(principal: OpenClawIdTunnelPrincipal): boolean {
   const current = lookup?.(principal.peerKey);
   if (!current || current.kind !== principal.kind) {
+    return false;
+  }
+  const original = principal.authority;
+  const live = current.authority;
+  if (
+    original &&
+    (!live ||
+      live.clawId !== original.clawId ||
+      live.rootPub !== original.rootPub ||
+      live.listedSeq !== original.listedSeq ||
+      live.ownerDevice !== original.ownerDevice)
+  ) {
     return false;
   }
   return (
@@ -112,4 +171,14 @@ export function openclawIdTunnelRolePolicy(
     return undefined;
   }
   return principal.role === "operator" ? OPERATOR_POLICY : VIEWER_POLICY;
+}
+
+/** Wait only for local authority hydration; recovery does not count as a tunnel admission. */
+export async function prepareOpenClawIdTunnelPrincipal(
+  principal: OpenClawIdTunnelPrincipal,
+): Promise<void> {
+  await prepareLookup?.();
+  if (!isOpenClawIdTunnelPrincipalCurrent(principal)) {
+    throw new Error("OpenClaw ID membership authority changed");
+  }
 }

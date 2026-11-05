@@ -16,6 +16,7 @@ import {
 import {
   ensureCanonicalGatewayOwnerProfile,
   ensureCanonicalUserProfileForEmail,
+  ensureCanonicalUserProfileForOpenClawIdIdentity,
   ensureCanonicalUserProfileForTailscaleIdentity,
 } from "../state/user-profile-writes.js";
 import type { GatewayAuthResult } from "./auth.js";
@@ -45,6 +46,8 @@ const profileLog = createSubsystemLogger("gateway/user-profiles");
 
 export type AuthenticatedHttpUserProfile = {
   authenticatedUserProfile?: GatewayClient["authenticatedUserProfile"];
+  /** Original authenticated device authority, retained across synthetic execution clients. */
+  openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
   preparedSessionProfile?: GatewayClient["preparedSessionProfile"];
   operatorRolePolicy?: GatewayOperatorRoleDefinition;
   operatorAccessAuthority?: GatewayOperatorAccessAuthority | null;
@@ -80,6 +83,7 @@ function withOpenClawIdPrincipal(
   const hasCurrentProfileAuthority = profile.hasCurrentProfileAuthority;
   return {
     ...profile,
+    openclawIdPrincipal: principal,
     ...(rolePolicy ? { operatorRolePolicy: rolePolicy } : {}),
     hasCurrentProfileAuthority: () =>
       hasCurrentProfileAuthority?.() !== false && isOpenClawIdTunnelPrincipalCurrent(principal),
@@ -230,14 +234,24 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
       requestHeaders: params.req.headers,
       assertCurrent,
     });
-    const profile = syncGitHubIdentity
-      ? await syncGitHubIdentity()
-      : params.authResult.tailscaleIdentity
-        ? await ensureCanonicalUserProfileForTailscaleIdentity(
-            params.authResult.tailscaleIdentity,
-            options,
-          )
-        : await ensureCanonicalUserProfileForEmail(authenticatedUserId, options);
+    const member =
+      params.authResult.method === "trusted-proxy" &&
+      params.authResult.openclawId?.kind === "member"
+        ? params.authResult.openclawId
+        : undefined;
+    const profile = member
+      ? await ensureCanonicalUserProfileForOpenClawIdIdentity(
+          { accountId: member.accountId },
+          options,
+        )
+      : syncGitHubIdentity
+        ? await syncGitHubIdentity()
+        : params.authResult.tailscaleIdentity
+          ? await ensureCanonicalUserProfileForTailscaleIdentity(
+              params.authResult.tailscaleIdentity,
+              options,
+            )
+          : await ensureCanonicalUserProfileForEmail(authenticatedUserId, options);
     const profileId = "profileId" in profile ? profile.profileId : profile.id;
     return await prepareHttpProfile(
       profileId,

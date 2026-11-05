@@ -5,14 +5,21 @@ import {
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { authorizeHttpGatewayConnect } from "../auth.js";
 import type { GatewayIngressAttribution } from "../ingress-attribution.js";
+import { createOpenClawIdAuthority } from "./authority.js";
 import { linkedClaw } from "./openclaw-id.test-support.js";
 import {
+  isOpenClawIdTunnelPrincipalCurrent,
+  openClawIdRecoveryPrincipalSchema,
+  setOpenClawIdTunnelPrincipalLookup,
   openclawIdTunnelRolePolicy,
   openclawIdTunnelUser,
   setOpenClawIdTunnelPrincipalResolver,
 } from "./tunnel-principal.js";
 
-afterEach(() => setOpenClawIdTunnelPrincipalResolver(undefined));
+afterEach(() => {
+  setOpenClawIdTunnelPrincipalResolver(undefined);
+  setOpenClawIdTunnelPrincipalLookup(undefined);
+});
 
 function tunnelAttribution(peerKey: string): GatewayIngressAttribution {
   return {
@@ -41,8 +48,11 @@ describe("OpenClaw ID tunnel principals", () => {
       });
       expect(await claw.authority.submit(add, "tunnel")).toMatchObject({ ok: true });
     }
-    expect(await claw.authority.resolvePeer(claw.w1)).toEqual({ kind: "owner", peerKey: claw.w1 });
-    expect(await claw.authority.resolvePeer(op)).toEqual({
+    expect(await claw.authority.resolvePeer(claw.w1)).toMatchObject({
+      kind: "owner",
+      peerKey: claw.w1,
+    });
+    expect(await claw.authority.resolvePeer(op)).toMatchObject({
       kind: "member",
       peerKey: op,
       accountId: "acct-op",
@@ -129,4 +139,32 @@ describe("OpenClaw ID tunnel principals", () => {
       }),
     ).toEqual({ ok: true, method: "token" });
   });
+});
+
+it("retains the original signed listing across authority reload, not a later approval of the same peer", async () => {
+  const claw = await linkedClaw();
+  const peer = formatIrohEndpointKey(randomBytes(32));
+  const add = () =>
+    claw.sign({
+      op: "add",
+      account_id: "acct-durable",
+      role: "operator",
+      peer_keys: [peer],
+      invite_id: null,
+    });
+  expect(await claw.authority.submit(await add(), "tunnel")).toMatchObject({ ok: true });
+  const admitted = openClawIdRecoveryPrincipalSchema.parse(await claw.authority.resolvePeer(peer));
+  const owner = openClawIdRecoveryPrincipalSchema.parse(await claw.authority.resolvePeer(claw.w1));
+  const reloaded = createOpenClawIdAuthority(claw.store);
+  await reloaded.load();
+  setOpenClawIdTunnelPrincipalLookup((key) => reloaded.currentPeer(key));
+  const serialized = JSON.stringify(admitted);
+  expect(isOpenClawIdTunnelPrincipalCurrent(JSON.parse(serialized))).toBe(true);
+  expect(isOpenClawIdTunnelPrincipalCurrent(owner)).toBe(true);
+  const remove = await claw.sign({ op: "remove", account_id: "acct-durable" });
+  expect(await claw.authority.submit(remove, "tunnel")).toMatchObject({ ok: true });
+  expect(await claw.authority.submit(await add(), "tunnel")).toMatchObject({ ok: true });
+  setOpenClawIdTunnelPrincipalLookup((key) => claw.authority.currentPeer(key));
+  expect(isOpenClawIdTunnelPrincipalCurrent(admitted)).toBe(false);
+  expect(isOpenClawIdTunnelPrincipalCurrent(owner)).toBe(true);
 });

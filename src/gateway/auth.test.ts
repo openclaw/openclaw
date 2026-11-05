@@ -20,6 +20,7 @@ import {
 } from "./auth.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "./net.js";
+import { setOpenClawIdTunnelPrincipalResolver } from "./openclaw-id/tunnel-principal.js";
 
 function createSingleAttemptLimiter() {
   return createGatewayAuthRateLimiter(
@@ -848,6 +849,27 @@ it.each(["ready", "mode", "roles", "user-header", "jwt-header"] as const)(
       expect(result).toBeUndefined();
     } else {
       expect(result).toContain("Person ingress requires");
+    }
+  },
+);
+
+// Tunnel admission is explicit peer authority, not ambient Tailscale identity.
+it.each([undefined, "https://linked-claw.example.test"])(
+  "admits tunnel Control UI reads with origin %s while ambient Tailscale is enabled",
+  async (origin) => {
+    const peerKey = `iroh:${"ef".repeat(32)}`;
+    const principal = { kind: "owner" as const, peerKey };
+    setOpenClawIdTunnelPrincipalResolver(async () => principal);
+    const req = request({ host: "linked-claw.example.test", ...(origin ? { origin } : {}) });
+    markGatewayIngressTransport(req, { kind: "openclaw-id-tunnel", peerKey, clientIp: "fd69::1" });
+    try {
+      await expect(authorizeAvatar(req)).resolves.toMatchObject({
+        ok: true,
+        method: "trusted-proxy",
+        openclawId: principal,
+      });
+    } finally {
+      setOpenClawIdTunnelPrincipalResolver(undefined);
     }
   },
 );

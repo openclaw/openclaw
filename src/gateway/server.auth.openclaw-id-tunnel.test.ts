@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 // the private ingress listener marks them; a test-only header selects the peer.
 import { EventEmitter } from "node:events";
 import http, { type IncomingMessage } from "node:http";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { writeConfigFile } from "../config/config.js";
@@ -13,10 +14,14 @@ import {
   rejectDevicePairing,
   removePairedDevice,
 } from "../infra/device-pairing.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { CONTROL_UI_OWNER_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
+import { ensureCanonicalUserProfileForOpenClawIdIdentity } from "../state/user-profile-openclaw-id.js";
+import * as profileWrites from "../state/user-profile-writes.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import {
   setOpenClawIdTunnelPrincipalResolver,
+  setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
 import { useAuthIdentityFixture } from "./server.auth.identity-fixture.test-support.js";
@@ -83,10 +88,12 @@ beforeAll(async () => {
   });
   started = await createGatewaySuiteHarness();
   setOpenClawIdTunnelPrincipalResolver(async (peerKey) => PRINCIPALS[peerKey]);
+  setOpenClawIdTunnelPrincipalLookup((peerKey) => PRINCIPALS[peerKey]);
 });
 
 afterAll(async () => {
   setOpenClawIdTunnelPrincipalResolver(undefined);
+  setOpenClawIdTunnelPrincipalLookup(undefined);
   await started?.close();
   vi.restoreAllMocks();
 });
@@ -146,9 +153,18 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
   });
 
   test("an operator member chats but is refused admin, config and pairing", async () => {
+    const profile = await ensureCanonicalUserProfileForOpenClawIdIdentity({
+      accountId: "acct_op",
+      name: "Operator Member",
+      email: "member@example.test",
+    });
     const { ws, res } = await connectTunnel(OPERATOR_KEY);
     try {
       expect(res.ok).toBe(true);
+      expect(await rpcReq(ws, "users.self", {})).toMatchObject({
+        ok: true,
+        payload: { profile: { id: profile.id, displayName: "Operator Member" } },
+      });
       const scopes = grantedScopes(res);
       expect(scopes).toEqual(expect.arrayContaining(["operator.read", "operator.write"]));
       expect(scopes).not.toContain("operator.admin");
@@ -160,6 +176,56 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
         expect(refused.error?.message, method).toMatch(/missing scope/);
       }
     } finally {
+      ws.close();
+    }
+  });
+
+  test("a downgrade during profile preparation prevents the pending operator connection", async () => {
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const ensure = profileWrites.ensureCanonicalUserProfileForOpenClawIdIdentity;
+    const spy = vi
+      .spyOn(profileWrites, "ensureCanonicalUserProfileForOpenClawIdIdentity")
+      .mockImplementationOnce(async (...args) => {
+        const profile = await ensure(...args);
+        entered.resolve();
+        await release.promise;
+        return profile;
+      });
+    const original = expectDefined(PRINCIPALS[OPERATOR_KEY], "operator principal");
+    const pending = connectTunnel(OPERATOR_KEY);
+    try {
+      await entered.promise;
+      PRINCIPALS[OPERATOR_KEY] = {
+        kind: "member",
+        peerKey: OPERATOR_KEY,
+        accountId: "acct_op",
+        role: "viewer",
+      };
+      release.resolve();
+      await expect(pending).rejects.toThrow("closed 4001: gateway auth changed");
+    } finally {
+      release.resolve();
+      PRINCIPALS[OPERATOR_KEY] = original;
+      spy.mockRestore();
+    }
+  });
+
+  test("a connected operator cannot use even a read request after its membership role changes", async () => {
+    const original = expectDefined(PRINCIPALS[OPERATOR_KEY], "operator principal");
+    const { ws, res } = await connectTunnel(OPERATOR_KEY);
+    try {
+      expect(res.ok).toBe(true);
+      expect((await rpcReq(ws, "health", {})).ok).toBe(true);
+      PRINCIPALS[OPERATOR_KEY] = {
+        kind: "member",
+        peerKey: OPERATOR_KEY,
+        accountId: "acct_op",
+        role: "viewer",
+      };
+      await expect(rpcReq(ws, "health", {})).rejects.toThrow(/closed 4001.*membership changed/);
+    } finally {
+      PRINCIPALS[OPERATOR_KEY] = original;
       ws.close();
     }
   });
