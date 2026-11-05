@@ -248,7 +248,10 @@ export function createSidebarSessionWindow(
   );
   const items = createMemo(() => {
     const ready = view();
-    if (ready) return new Map(ready.items.map((item) => [item.row.key, item]));
+    // A zero-height measurement still belongs to the previous empty row set.
+    if (ready && (ready.height > 0 || inputs().length === 0)) {
+      return new Map(ready.items.map((item) => [item.row.key, item]));
+    }
     const keys = new Set(host().sidebarSnapshot?.windowKeys);
     let top = 0;
     return new Map(

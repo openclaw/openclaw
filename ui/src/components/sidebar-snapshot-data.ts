@@ -261,7 +261,7 @@ export function removeSidebarSnapshotSession(
   };
   const next = {
     ...model,
-    home: model.home && retain(model.home) ? model.home : null,
+    home: prune(model.home ? [model.home] : [])[0] ?? null,
     windowKeys: model.windowKeys.filter((value) => retain({ key: value })),
     onlineUsers: model.onlineUsers.map((user) => ({
       ...user,

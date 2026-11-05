@@ -184,10 +184,14 @@ async function readSidebarPixelProof(
   const captureFinishedMs = await page.evaluate(() => performance.now());
   await writeFile(settledFile, Buffer.from(screenshot.data, "base64"));
   const surfaces = await capture.stop();
-  const frames = surfaces.map((frame) => ({
-    ...frame,
-    atMs: frame.epochMs - presentation.timeOrigin,
-  }));
+  // Compositor timestamps, rather than asynchronous CDP delivery, order the surfaces.
+  const frames = surfaces
+    .map((frame, captureIndex) => ({
+      ...frame,
+      captureIndex,
+      atMs: frame.epochMs - presentation.timeOrigin,
+    }))
+    .toSorted((a, b) => a.atMs - b.atMs);
   const first =
     populated &&
     live &&
@@ -224,62 +228,25 @@ async function readSidebarPixelProof(
   if (presentation.reconnectMasks.some((mask) => mask.reason !== "Permitted reconnect indicator")) {
     throw new Error("Sidebar pixel proof permits only reconnect-indicator masks");
   }
-  const x = Math.min(populated.sidebar.x, final.sidebar.x);
-  const y = Math.min(populated.sidebar.y, final.sidebar.y);
+  const domFrames = presentation.frames.filter((frame) => frame.at >= populated.at);
+  const viewport = page.viewportSize()!;
+  const x = Math.max(0, Math.floor(Math.min(...domFrames.map((frame) => frame.sidebar.x))));
+  const y = Math.max(0, Math.floor(Math.min(...domFrames.map((frame) => frame.sidebar.y))));
   const region = {
     name: "sidebar",
     x,
     y,
     width:
-      Math.max(
-        populated.sidebar.x + populated.sidebar.width,
-        final.sidebar.x + final.sidebar.width,
+      Math.min(
+        viewport.width,
+        Math.ceil(Math.max(...domFrames.map((frame) => frame.sidebar.x + frame.sidebar.width))),
       ) - x,
     height:
-      Math.max(
-        populated.sidebar.y + populated.sidebar.height,
-        final.sidebar.y + final.sidebar.height,
+      Math.min(
+        viewport.height,
+        Math.ceil(Math.max(...domFrames.map((frame) => frame.sidebar.y + frame.sidebar.height))),
       ) - y,
   };
-  const visual = await analyzeReloadFrames({
-    frames: [
-      { file: first.file, atMs: first.atMs },
-      { file: settledFile, atMs: captureStartedMs },
-    ],
-    regions: [region],
-    masks: presentation.reconnectMasks,
-    outputDir,
-    channelThreshold: 0,
-    minChangedPixels: 1,
-    minChangedRatio: 0,
-  });
-  const initialKeys = new Set(populated.mountedKeys);
-  const finalKeys = new Set(final.mountedKeys);
-  const rowChanges =
-    [...initialKeys].filter((key) => !finalKeys.has(key)).length +
-    [...finalKeys].filter((key) => !initialKeys.has(key)).length;
-  const avatarChanges = populated.mountedRows.filter((row) => {
-    const liveRow = final.mountedRows.find((value) => value.key === row.key);
-    return (
-      !liveRow ||
-      JSON.stringify([row.avatars, row.images]) !==
-        JSON.stringify([liveRow.avatars, liveRow.images])
-    );
-  }).length;
-  const avatarCounts = (frame: SidebarPresentationSnapshot["frames"][number]) => ({
-    ownerParticipants: frame.rows.reduce((sum, row) => sum + row.ownerAvatars, 0),
-    presence: frame.rows.reduce((sum, row) => sum + row.presenceAvatars, 0),
-    total: frame.rows.reduce((sum, row) => sum + row.avatars.length, 0),
-    images: frame.rows.reduce((sum, row) => sum + row.images.length, 0),
-  });
-  const noZeroRowCachedFrame = !presentation.frames.some(
-    (frame) => frame.cached && frame.mountedKeys.length === 0,
-  );
-  const scrollPreserved =
-    initial.scrollTop === requestedScrollTop &&
-    populated.scrollTop === requestedScrollTop &&
-    final.scrollTop === requestedScrollTop;
-  const changedPixels = visual.regions.sidebar!.timeline.at(-1)!.changedPixels;
   const strips = {
     cached: await writeWarmReloadRegionStrip(
       first.file,
@@ -292,6 +259,106 @@ async function readSidebarPixelProof(
       path.join(outputDir, "settled-sidebar.png"),
     ),
   };
+  const croppedRegion = { ...region, x: 0, y: 0 };
+  const croppedMasks = presentation.reconnectMasks.map((mask) => ({
+    ...mask,
+    x: mask.x - region.x,
+    y: mask.y - region.y,
+  }));
+  const thresholds = { channelThreshold: 0, minChangedPixels: 1, minChangedRatio: 0 };
+  const visual = await analyzeReloadFrames({
+    frames: [
+      { file: strips.cached, atMs: first.atMs },
+      { file: strips.settled, atMs: captureFinishedMs },
+    ],
+    regions: [croppedRegion],
+    masks: croppedMasks,
+    outputDir,
+    ...thresholds,
+  });
+  const restorationDir = path.join(outputDir, "restoration");
+  await mkdir(restorationDir, { recursive: true });
+  const restorationFrames: Array<(typeof frames)[number] & { sourceFile: string }> = [];
+  for (const frame of frames.filter(
+    (surface) => surface.atMs >= first.atMs && surface.atMs <= captureFinishedMs,
+  )) {
+    const file =
+      frame.file === first.file
+        ? strips.cached
+        : await writeWarmReloadRegionStrip(
+            frame.file,
+            region,
+            path.join(restorationDir, path.basename(frame.file)),
+          );
+    restorationFrames.push({ ...frame, sourceFile: frame.file, file });
+  }
+  await writeFile(
+    path.join(restorationDir, "frames.json"),
+    JSON.stringify(
+      {
+        cropBounds: region,
+        frames: restorationFrames,
+        settled: { file: strips.settled, captureStartedMs, captureFinishedMs },
+      },
+      null,
+      2,
+    ),
+  );
+  const restorationVisual = await analyzeReloadFrames({
+    frames: [...restorationFrames, { file: strips.settled, atMs: captureFinishedMs }],
+    regions: [croppedRegion],
+    masks: croppedMasks,
+    outputDir: restorationDir,
+    ...thresholds,
+  });
+  const restorationSidebar = restorationVisual.regions.sidebar!;
+  const maxFrameToFrameChangedPixels = Math.max(
+    ...restorationSidebar.timeline.map((frame) => frame.changedPixels),
+  );
+  const finalKeys = new Set(final.mountedKeys);
+  const domDrift = domFrames.map((frame) => {
+    const keys = new Set(frame.mountedKeys);
+    return {
+      atMs: frame.at,
+      cached: frame.cached,
+      mountedRows: frame.mountedKeys.length,
+      visibleRows: frame.rows.length,
+      avatarNodes: frame.mountedRows.reduce((sum, row) => sum + row.avatars.length, 0),
+      images: frame.mountedRows.reduce((sum, row) => sum + row.images.length, 0),
+      scrollTop: frame.scrollTop,
+      rowChanges:
+        [...keys].filter((key) => !finalKeys.has(key)).length +
+        [...finalKeys].filter((key) => !keys.has(key)).length,
+      avatarChanges: frame.mountedRows.filter((row) => {
+        const liveRow = final.mountedRows.find((value) => value.key === row.key);
+        return (
+          !liveRow ||
+          JSON.stringify([row.avatars, row.images]) !==
+            JSON.stringify([liveRow.avatars, liveRow.images])
+        );
+      }).length,
+    };
+  });
+  const { rowChanges, avatarChanges } = domDrift[0]!;
+  const maxRowChanges = Math.max(...domDrift.map((frame) => frame.rowChanges));
+  const maxAvatarChanges = Math.max(...domDrift.map((frame) => frame.avatarChanges));
+  const noZeroRowFrame = domDrift.every((frame) => frame.mountedRows > 0 && frame.visibleRows > 0);
+  const avatarCounts = (frame: SidebarPresentationSnapshot["frames"][number]) => ({
+    ownerParticipants: frame.rows.reduce((sum, row) => sum + row.ownerAvatars, 0),
+    presence: frame.rows.reduce((sum, row) => sum + row.presenceAvatars, 0),
+    total: frame.rows.reduce((sum, row) => sum + row.avatars.length, 0),
+    images: frame.rows.reduce((sum, row) => sum + row.images.length, 0),
+  });
+  const noZeroRowCachedFrame = !presentation.frames.some(
+    (frame) => frame.cached && frame.mountedKeys.length === 0,
+  );
+  const noZeroVisibleRowCachedFrame = !presentation.frames.some(
+    (frame) => frame.cached && frame.rows.length === 0,
+  );
+  const scrollPreserved =
+    initial.scrollTop === requestedScrollTop &&
+    domFrames.every((frame) => frame.scrollTop === requestedScrollTop);
+  const changedPixels = visual.regions.sidebar!.timeline.at(-1)!.changedPixels;
   const report = {
     valid: browserErrors.length === 0,
     captureValid: true,
@@ -307,6 +374,8 @@ async function readSidebarPixelProof(
     populatedRows: populated.mountedKeys.length,
     finalRows: final.mountedKeys.length,
     noZeroRowCachedFrame,
+    noZeroVisibleRowCachedFrame,
+    noZeroRowFrame,
     requestedScrollTop,
     scrollTop: {
       initial: initial.scrollTop,
@@ -316,17 +385,30 @@ async function readSidebarPixelProof(
     scrollPreserved,
     rowChanges,
     avatarChanges,
+    maxRowChanges,
+    maxAvatarChanges,
+    domDrift,
     avatars: { cached: avatarCounts(populated), settled: avatarCounts(final) },
     changedPixels,
+    cropBounds: region,
+    analyzedRestorationSurfaces: restorationFrames.length,
+    restorationComparison:
+      "Every native surface through final capture, losslessly cropped at native pixel density. Zero consecutive differences requires all surfaces to match settle. The settled PNG uses its recorded capture-completion upper bound, not an inferred compositor timestamp.",
+    maxFrameToFrameChangedPixels,
+    restorationPixelTransitions: restorationSidebar.transitionCount,
     strictParity:
       browserErrors.length === 0 &&
       changedPixels === 0 &&
-      rowChanges === 0 &&
-      avatarChanges === 0 &&
+      restorationSidebar.transitionCount === 0 &&
+      maxRowChanges === 0 &&
+      maxAvatarChanges === 0 &&
       noZeroRowCachedFrame &&
+      noZeroVisibleRowCachedFrame &&
+      noZeroRowFrame &&
       scrollPreserved,
     strips,
     visual,
+    restorationVisual,
   };
   await writeFile(path.join(outputDir, "sidebar-pixels.json"), JSON.stringify(report, null, 2));
   return report;
@@ -2020,11 +2102,17 @@ try {
             )
             .waitFor({ state: "visible" });
         }
-        await page
-          .locator(
-            `[data-session-section="pinned"] [data-session-key="${fixture.pinnedKeys.at(-1)}"]`,
-          )
-          .waitFor({ state: "attached" });
+        if (values["sidebar-cached-parity"]) {
+          await page
+            .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
+            .waitFor();
+        } else {
+          await page
+            .locator(
+              `[data-session-section="pinned"] [data-session-key="${fixture.pinnedKeys.at(-1)}"]`,
+            )
+            .waitFor({ state: "attached" });
+        }
         await page.locator('[data-sidebar-entry="plugin:team-scale-7/overview"]').waitFor();
         if (sidebarView === "online") {
           await page.locator('[data-online-user-id="team-person-120"]').waitFor();
@@ -2418,9 +2506,14 @@ try {
         await page.locator(".sidebar-shell__body").evaluate((element, top) => {
           element.scrollTop = top;
           element.dispatchEvent(new Event("scroll"));
-          window.dispatchEvent(new Event("pagehide"));
         }, Number(values["sidebar-scroll-top"]));
-        await page.evaluate(() => new Promise(requestAnimationFrame));
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            }),
+        );
+        await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
         await qualifyLateRowFacts();
         await qualifyDetailsProcess();
         const { storage: captured, ...saved } = await page.evaluate(

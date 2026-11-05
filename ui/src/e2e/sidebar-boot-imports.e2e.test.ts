@@ -154,12 +154,26 @@ suite.define(() => {
           });
           scroller.scrollTop = 1400;
           scroller.dispatchEvent(new Event("scroll"));
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          });
           window.dispatchEvent(new Event("pagehide"));
           return saved;
         });
         await page.reload();
         await gateway.waitForRequest("connect");
         await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
+        await page.evaluate(() => new Promise(requestAnimationFrame));
+        const scrollPresentation = await page.evaluate(() =>
+          Reflect.get(window, "__sidebarPresentation").read(),
+        );
+        await writeFile(
+          path.join(suite.artifactDir, "scroll-presentation.json"),
+          JSON.stringify(scrollPresentation, null, 2),
+        );
+        const first = scrollPresentation.frames.find((frame: { cached: boolean }) => frame.cached);
+        expect(first?.mountedKeys.length).toBeGreaterThan(0);
+        expect(first?.rows.length).toBeGreaterThan(0);
         const restored = await page
           .locator(".sidebar-shell__body")
           .evaluate((element) => element.scrollTop);

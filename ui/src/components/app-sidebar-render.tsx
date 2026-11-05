@@ -331,6 +331,8 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
   const context = useApplication();
   const profileGateway = projectGateway(context.gateway);
   const home = () => host.visibleHomeSession(host.expandedAgentId());
+  const homeAvailable = () =>
+    host.sidebarSnapshot?.homeAllowed ?? isHomePanelAvailable(host.sessionDataContext?.gateway);
   const connectionStatus = () => host.connectionStatus;
   const selfUser = createMemo(() => {
     profileGateway.read();
@@ -422,12 +424,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
             type="button"
             class="sidebar-brand__icon sidebar-footer-bar__home"
             aria-label={t("assistantPanel.toggle")}
-            disabled={
-              !(
-                host.sidebarSnapshot?.homeAllowed ??
-                isHomePanelAvailable(host.sessionDataContext?.gateway)
-              )
-            }
+            disabled={!homeAvailable()}
             onClick={(event) => {
               window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT));
               if (
