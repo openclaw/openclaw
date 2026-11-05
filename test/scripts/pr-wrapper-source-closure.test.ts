@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
-import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
+import { createRuntimeImportGraph } from "../../scripts/lib/runtime-import-closure.mts";
 import {
   acceptsWorkflowPaths,
   readWorkflow,
@@ -15,29 +15,15 @@ const components = [
   ...readFileSync("scripts/pr-lib/wrapper-components.txt", "utf8").trim().split("\n"),
 ];
 
-it.each([
+const wrapperRoots = [
   "src/infra/gateway-state-owner.ts",
   "src/plugins/discovery.ts",
   "src/infra/sqlite-readonly-location.worker.ts",
-])(
-  "retains %s and its relative ESM runtime dependencies in the wrapper inventory",
-  (entrypoint) => {
-    const closure = collectRuntimeImportClosure(process.cwd(), [entrypoint], {
-      includeDynamicImports: true,
-    });
-    expect(
-      closure.filter(
-        (file) =>
-          !components.some((component) => file === component || file.startsWith(`${component}/`)),
-      ),
-    ).toEqual([]);
-  },
-);
+];
 
-// Native preparation compiles the full worker inventory, including string-named
-// entries. Guard excluded namespaces and shared helpers against routing gaps;
-// the wrapper inventory owns its broader closure independently.
-it("retains Darwin inputs inside excluded namespaces", () => {
+// Native preparation also compiles string-named workers. Query both inventories
+// in one graph while retaining their separate closure and routing assertions.
+it("retains wrapper runtime dependencies and Darwin inputs inside excluded namespaces", () => {
   const workflow = readWorkflow(".github/workflows/pr-tooling-darwin.yml");
   const paths = workflow.on.pull_request.paths as string[];
   const dependencyInputs = JSON.parse(
@@ -84,11 +70,18 @@ it("retains Darwin inputs inside excluded namespaces", () => {
     ),
     ...workerInputs,
   ];
-  const inputs = new Set([
-    ...components,
-    ...dependencyInputs.files,
-    ...collectRuntimeImportClosure(process.cwd(), roots, { includeDynamicImports: true }),
-  ]);
+  using graph = createRuntimeImportGraph(process.cwd(), [...wrapperRoots, ...roots], {
+    includeDynamicImports: true,
+  });
+  expect(
+    graph
+      .collect(wrapperRoots)
+      .filter(
+        (file) =>
+          !components.some((component) => file === component || file.startsWith(`${component}/`)),
+      ),
+  ).toEqual([]);
+  const inputs = new Set([...components, ...dependencyInputs.files, ...graph.collect(roots)]);
   const excludedInputs = [...inputs].filter(
     (file) =>
       /^scripts\/lib\/ci-.*\.(?:mts|mjs)$/u.test(file) ||

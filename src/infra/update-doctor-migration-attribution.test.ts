@@ -19,6 +19,7 @@ import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.t
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
+import { repairDoctorStateSchemaAsync } from "../state/openclaw-state-db-repair.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -434,48 +435,85 @@ async function withCapture(
   }
 }
 
-it("migrates captured legacy approvals after a current update-admission read", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const { env, stateDir } = state;
-    writeConfigMachineState("stable-fixture", { retained: true }, { env });
-    const pathname = openOpenClawStateDatabase({ env }).path;
-    const sourcePath = state.statePath("exec-approvals.json");
-    fs.writeFileSync(
-      sourcePath,
-      JSON.stringify({
+it.each(
+  (["doctor", "version"] as const).flatMap((scope) =>
+    (["clean", "retained WAL", "retained journal", "wrong mode"] as const).map((shape) => ({
+      scope,
+      shape,
+    })),
+  ),
+)(
+  "captures writing $scope phases before migrating legacy approvals ($shape)",
+  async ({ scope, shape }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const { env, stateDir } = state;
+      const pathname = openOpenClawStateDatabase({ env }).path;
+      const sourcePath = await state.writeJson("exec-approvals.json", {
         version: 1,
         defaults: { security: "deny" },
         agents: {},
         socket: { path: "/tmp/fixture.sock", token: "synthetic-token" },
-      }),
-    );
-    await closeOpenClawStateDatabaseAsync();
-    const generations = readUpdateDatabaseGenerations([
-      pathname,
-      state.statePath("client", "credentials.sqlite"),
-    ]);
-    const { receipt, warnings } = await withCapture(env, generations, async () => {
-      await openOpenClawStateDatabaseForDoctor({ env });
-      resolveDoctorUpdateAdmission(env).assertCurrent();
-      const result = await migrateLegacyExecApprovals({
-        env,
-        stateDir,
-        detected: detectLegacyExecApprovals({ stateDir, doctorOnlyStateMigrations: true }),
       });
-      expect(result.warnings).toEqual([]);
-      expect(fs.existsSync(sourcePath)).toBe(false);
-    });
-    expect(warnings).toEqual([]);
-    expect(receipt?.unchanged).toBe(true);
-    expect(
-      JSON.parse(readExecApprovalsConfigRow(openOpenClawStateDatabase({ env }).db)!.raw_json),
-    ).toMatchObject({ defaults: { security: "deny" } });
-    expect(runClientCredentialOperation(env, { kind: "socket.read" })).toMatchObject({
-      kind: "socket",
-      socket: { socket_path: "/tmp/fixture.sock", socket_token: "synthetic-token" },
-    });
-  });
-});
+      await closeOpenClawStateDatabaseAsync();
+      if (shape === "retained WAL" || shape === "retained journal") {
+        const setup = spawnNodeEvalSync(`
+          const { DatabaseSync } = await import('node:sqlite');
+          const db = new DatabaseSync(${JSON.stringify(pathname)});
+          const wal = ${shape === "retained WAL"};
+          db.exec(wal ? 'PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;' : 'PRAGMA journal_mode=PERSIST;');
+          db.exec('CREATE TABLE retained(value);');
+          if (wal) {
+            const reader = new DatabaseSync(${JSON.stringify(pathname)}, { readOnly: true });
+            reader.exec('BEGIN; SELECT * FROM retained;');
+            db.close(); reader.exec('COMMIT'); reader.close();
+          } else db.close();
+        `);
+        expect(setup.status, setup.stderr).toBe(0);
+        expect(
+          fs.statSync(`${pathname}-${shape === "retained WAL" ? "wal" : "journal"}`).size,
+        ).toBeGreaterThan(32);
+      } else if (shape === "wrong mode") {
+        fs.chmodSync(pathname, 0o644);
+      }
+      const generations = readUpdateDatabaseGenerations([
+        pathname,
+        state.statePath("client", "credentials.sqlite"),
+      ]);
+      const { receipt, warnings } = await withCapture(env, generations, async () => {
+        const inspections = await import("./update-candidate-state.inspection.js");
+        const observations = vi.spyOn(
+          inspections,
+          "readUpdateSqliteDatabaseGenerationPairIsolated",
+        );
+        await repairDoctorStateSchemaAsync({ env }, scope);
+        expect(
+          observations.mock.calls.filter(([paths]) => paths.length === 1 && paths[0] === pathname),
+        ).toHaveLength(shape === "retained WAL" || shape === "retained journal" ? 4 : 2);
+        await openOpenClawStateDatabaseForDoctor({ env });
+        resolveDoctorUpdateAdmission(env).assertCurrent();
+        await executeExistingOpenClawStateRead(
+          { env },
+          { type: "updateRuns.recoveryAdmission" },
+          shape === "clean" ? { current: true, live: true } : { current: true },
+        );
+        const result = await migrateLegacyExecApprovals({
+          env,
+          stateDir,
+          detected: detectLegacyExecApprovals({ stateDir, doctorOnlyStateMigrations: true }),
+        });
+        expect(result.warnings).toEqual([]);
+        expect(fs.existsSync(sourcePath)).toBe(false);
+      });
+      expect(warnings).toEqual([]);
+      expect(receipt?.unchanged).toBe(true);
+      expect(
+        JSON.parse(readExecApprovalsConfigRow(openOpenClawStateDatabase({ env }).db)!.raw_json),
+      ).toMatchObject({ defaults: { security: "deny" } });
+      expect(runClientCredentialOperation(env, { kind: "socket.read" })).toMatchObject({
+        socket: { socket_path: "/tmp/fixture.sock", socket_token: "synthetic-token" },
+      });
+    }),
+);
 
 it.each(["native", "worker"] as const)(
   "completes retirement after Doctor migrations and %s parent bookkeeping",
@@ -768,44 +806,6 @@ it.each(["captured-generation", null, undefined])(
     expect(hasUpdateDoctorMigrationCapture()).toBe(false);
   },
 );
-
-it("migrates legacy exec approvals after Doctor detection retained a shared-state reader", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const { env, stateDir } = state;
-    const pathname = openOpenClawStateDatabase({ env }).path;
-    await closeOpenClawStateDatabaseAsync();
-    await state.writeJson("exec-approvals.json", {
-      version: 1,
-      socket: { path: "/tmp/synthetic-approvals.sock", token: "synthetic-token" },
-      defaults: { security: "deny" },
-      agents: {},
-    });
-    const generations = readUpdateDatabaseGenerations([
-      pathname,
-      state.statePath("client", "credentials.sqlite"),
-    ]);
-    let result: Awaited<ReturnType<typeof migrateLegacyExecApprovals>> | undefined;
-    const { warnings } = await withCapture(env, generations, async () => {
-      await openOpenClawStateDatabaseForDoctor({ env });
-      // Doctor detection reads live plugin state; maintenance keeps that worker reader warm.
-      await executeExistingOpenClawStateRead(
-        { env },
-        { type: "updateRuns.recoveryAdmission" },
-        { live: true },
-      );
-      result = await migrateLegacyExecApprovals({
-        env,
-        stateDir,
-        detected: detectLegacyExecApprovals({ stateDir, doctorOnlyStateMigrations: true }),
-      });
-    });
-    expect(warnings).toEqual([]);
-    expect(result).toMatchObject({
-      warnings: [],
-      changes: ["Imported legacy exec approvals policy and local socket credentials."],
-    });
-  });
-});
 
 it.runIf(process.platform !== "win32").each(["none", "before", "after"])(
   "retains the original capture through a predecessor stop receipt (outside write: %s)",
