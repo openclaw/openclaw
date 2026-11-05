@@ -52,6 +52,7 @@ import { shortenHomePath } from "../utils.js";
 import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
 import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import { createDoctorSessionEntryInspector } from "./doctor-session-entry-integrity.js";
 import {
   createPluginSessionStateDoctorScanner,
   runPluginSessionStateDoctorRepairs,
@@ -794,18 +795,13 @@ export async function noteStateIntegrity(
     });
     const sqlitePluginStateScanner = createPluginSessionStateDoctorScanner({ agentId, cfg, env });
     const legacyPluginStateScanner = createPluginSessionStateDoctorScanner({ agentId, cfg, env });
-    let mainEntry: SessionEntry | undefined;
-    const inspectMergedEntry = (sessionKey: string, entry: SessionEntry) => {
-      if (sessionKey === mainKey) {
-        mainEntry = entry;
-      }
-    };
+    const sessionInspector = createDoctorSessionEntryInspector({ mainKey, env, warnings });
     const sqliteEntryCount = scanDoctorSessionEntriesStrict(
       { agentId, storePath: sqliteStorePath },
       ({ entry, sessionKey }) => {
         sqliteSessionKeys.add(sessionKey);
         sqlitePluginStateScanner.scanEntry(sessionKey, entry);
-        inspectMergedEntry(sessionKey, entry);
+        sessionInspector.inspect(sessionKey, entry);
       },
     );
     for (const [sessionKey, entry] of legacyEntries) {
@@ -813,8 +809,9 @@ export async function noteStateIntegrity(
         continue;
       }
       legacyPluginStateScanner.scanEntry(sessionKey, entry);
-      inspectMergedEntry(sessionKey, entry);
+      sessionInspector.inspect(sessionKey, entry);
     }
+    let mainEntry = sessionInspector.mainEntry;
     const sessionPathOpts = resolveSessionFilePathOptions({ agentId, storePath });
     // Session SQLite migration owns legacy transcript validation and archival.
     // Repeating it here turns healthy pending imports into integrity warnings.

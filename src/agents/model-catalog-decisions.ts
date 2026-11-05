@@ -203,11 +203,13 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       }
     : params.snapshot;
   const selectedProfileId = params.preferredProfileId ?? params.pinnedProfileId;
+  // Missing personal locators carry no provider; inherited sessions still use their primary.
   const profileProvider =
     params.profileProvider ??
     (selectedProfileId
       ? (authStore.profiles[selectedProfileId]?.provider ??
-        params.cfg.auth?.profiles?.[selectedProfileId]?.provider)
+        params.cfg.auth?.profiles?.[selectedProfileId]?.provider ??
+        (isUserModelAuthProfileId(selectedProfileId) ? primary.provider : undefined))
       : undefined);
   if (
     snapshot.pendingProviders?.length &&

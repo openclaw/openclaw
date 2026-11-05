@@ -473,7 +473,7 @@ describe("captured model decisions", () => {
     expectAvailable(owner.evaluateEntry(entry, [entry], "openclaw"), "openai:chosen");
   });
 
-  it("keeps a stored credential available when an existing session personal pin is missing", () => {
+  it("keeps another provider's stored credential available when a personal pin is missing", () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "");
     const missingPin =
       "personal:00000000-0000-4000-8000-000000000001:00000000-0000-4000-8000-000000000002";
@@ -487,6 +487,7 @@ describe("captured model decisions", () => {
     const open = decisions({ preparedAuthStore, snapshot, preparedPersonalCatalog });
     expect(open.evaluateEntry(claude).availability).toBe(true);
     const pinned = decisions({
+      cfg: { agents: { defaults: { model: "openai/gpt-5.4" } } },
       preferredProfileId: missingPin,
       preparedAuthStore,
       snapshot,
@@ -497,6 +498,32 @@ describe("captured model decisions", () => {
       selectedProfileId: "anthropic:work",
     });
   });
+
+  it.each([undefined, "anthropic"])(
+    "keeps a missing personal pin strict only for its provider (%s)",
+    (profileProvider) => {
+      const missingPin =
+        "personal:00000000-0000-4000-8000-000000000001:00000000-0000-4000-8000-000000000002";
+      const claude = model("anthropic", "claude-opus-5-5");
+      const other = model("other-provider", "available-model");
+      const owner = decisions({
+        cfg: { agents: { defaults: { model: "anthropic/claude-opus-5-5" } } },
+        preferredProfileId: missingPin,
+        pinnedProfileId: missingPin,
+        profileProvider,
+        preparedAuthStore: authStore({
+          "anthropic:work": apiKey("anthropic"),
+          "other-provider:work": apiKey("other-provider"),
+        }),
+        preparedPersonalCatalog: { profiles: {}, links: [], isCurrent: () => true },
+      });
+      expect(owner.evaluateEntry(claude)).toMatchObject({
+        availability: false,
+        selectedProfileId: missingPin,
+      });
+      expectAvailable(owner.evaluateEntry(other), "other-provider:work");
+    },
+  );
 
   it("retains native provenance and mode without blessing a same-name bearer credential", () => {
     expect(
