@@ -228,6 +228,13 @@ If the provider rotates tokens or the authorization state gets stuck, run `openc
 
 `streamable-http` is an additional transport option alongside `sse` and `stdio`. It uses HTTP streaming for bidirectional communication with remote MCP servers.
 
+When OpenClaw owns the connection, initialization responses with HTTP 429 are
+retried up to twice within the existing connection timeout. OpenClaw waits for
+`Retry-After` (seconds or an HTTP date), or one then two seconds if the header is
+missing or invalid. Tool calls are not replayed. If a rejected initialization
+already allocated a session, OpenClaw disposes that session through its normal
+failure handling.
+
 | Field                       | Description                                                                            |
 | --------------------------- | -------------------------------------------------------------------------------------- |
 | `url`                       | HTTP or HTTPS URL of the remote server (required)                                      |
