@@ -53,7 +53,7 @@ adapter calls/state, not a Discord service or human observation.
 ## Native reproduction
 
 ```sh
-pnpm test test/plugins/discord-update-acknowledgement.integration.test.ts --maxWorkers=1
+pnpm test extensions/discord/discord-update-acknowledgement.integration.test.ts --maxWorkers=1
 ```
 
 Post-relocation native run: **3/3 passed**, 56.515 s wall (including SQLite worker

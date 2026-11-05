@@ -18,17 +18,19 @@ import {
 import { useSessionStoreTempDirs } from "../../src/test-utils/session-state-cleanup.js";
 const stateDirs = useSessionStoreTempDirs(afterAll, "discord-update-ack-");
 const gateway = vi.hoisted(() => ({ dispatch: vi.fn(), sendBatch: vi.fn(), context: {} }));
+// mock-isolation: keep external message transport synthetic while exercising real SQLite custody.
 vi.mock("../../src/channels/message/runtime.js", () => ({
   sendDurableMessageBatchCore: gateway.sendBatch,
 }));
+// mock-isolation: replace the running Gateway boundary with deterministic update.run responses.
 vi.mock("../../src/gateway/server-plugin-in-process-dispatch.js", () => ({
   dispatchGatewayMethodInProcess: gateway.dispatch,
   getInProcessGatewayRequestContext: () => gateway.context,
 }));
-let adapter: typeof import("../../extensions/discord/src/monitor/native-command-agent-reply.js").dispatchDiscordNativeAgentReply;
+let adapter: typeof import("./src/monitor/native-command-agent-reply.js").dispatchDiscordNativeAgentReply;
 beforeAll(async () => {
   await globalBeforeAll0();
-  adapter = (await import("../../extensions/discord/src/monitor/native-command-agent-reply.js"))
+  adapter = (await import("./src/monitor/native-command-agent-reply.js"))
     .dispatchDiscordNativeAgentReply;
 });
 beforeEach(() => {

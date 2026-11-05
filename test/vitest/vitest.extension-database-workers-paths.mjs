@@ -7,6 +7,7 @@ export const databaseWorkerExtensionTestRoots = [
 ];
 
 export const databaseWorkerExtensionTestFiles = [
+  "extensions/discord/discord-update-acknowledgement.integration.test.ts",
   "extensions/alibaba/video-generation-provider.test.ts",
   "extensions/mcp-events/src/service.test.ts",
   "extensions/codex/src/conversation-binding.test.ts",
