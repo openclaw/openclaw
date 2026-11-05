@@ -187,10 +187,16 @@ claiming those objectives as measured guarantees.
 Selected validation tests block the npm/ClawHub decision on failure. Native
 publication retains independent artifact and updater gates.
 
-Local proof is targeted: never mirror Full Release Validation locally. Run a
-lane locally only after it failed in CI, to separate flake from defect, bounded
-to 15 minutes per lane; a lane that needs longer reruns in CI through its
-focused `rerun_group`. Individual npm install/update phases cap at 300 seconds.
+Local proof is targeted: never mirror Full Release Validation locally or put
+redundant local suites ahead of remote dispatch. Follow the
+[FRV wall-time loop](../../release-openclaw-ci/SKILL.md#keep-frv-off-the-idle-path):
+after required preflight and known non-flake repairs, start remote FRV while
+useful local checks run concurrently. Favor checks that answer a concrete
+question or validate a repair, and reuse equivalent exact-SHA evidence.
+Local diagnosis or regression checks need not wait for a remote failure;
+avoid making optional extra confidence a prerequisite for dispatch. Bound local
+lane diagnosis to 15 minutes; a lane that needs longer reruns in CI through its focused
+`rerun_group`. Individual npm install/update phases cap at 300 seconds.
 On timeout, inspect the affected lane instead of leaving it running. Serialize
 build/package mutations before VM packing so a concurrent build cannot remove
 `dist`; avoid load-induced noise.
