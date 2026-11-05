@@ -1,4 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { SessionTranscriptActiveFacts } from "./session-transcript-active-facts.js";
+import type { PreparedTranscriptPayload } from "./transcript-payload.js";
 import {
   isCanonicalSessionTranscriptEntry,
   isSessionTranscriptLeafControl,
@@ -11,6 +13,15 @@ export type TranscriptIndexEntry = {
   role: "assistant" | "user";
   text: string;
   timestamp: number;
+};
+
+export type TranscriptIndexAppend = {
+  preparedPayload?: PreparedTranscriptPayload;
+  serializedBytes?: number;
+  seq: number;
+  event: unknown;
+  eventId: string | null;
+  createdAt: number;
 };
 
 export type SessionTranscriptProjectionCursor = {
@@ -30,6 +41,7 @@ export type PreparedSessionTranscriptProjectionAppend = {
     contextEligible: 0 | 1;
     eventSeq: number;
     messagePosition: number | null;
+    facts?: SessionTranscriptActiveFacts;
   };
   cursor: SessionTranscriptProjectionCursor;
   ftsRow?: TranscriptIndexEntry;
@@ -113,13 +125,9 @@ export function shouldProjectActiveEvent(event: unknown): boolean {
 }
 
 /** Resolves one append against an already-complete projection without mutating storage. */
-export function prepareSessionTranscriptProjectionAppend(params: {
-  createdAt: number;
-  cursor: SessionTranscriptProjectionCursor;
-  event: unknown;
-  eventId: string | null;
-  seq: number;
-}): PreparedSessionTranscriptProjectionAppend | undefined {
+export function prepareSessionTranscriptProjectionAppend(
+  params: TranscriptIndexAppend & { cursor: SessionTranscriptProjectionCursor },
+): PreparedSessionTranscriptProjectionAppend | undefined {
   const { cursor } = params;
   const treeEntry = parseSessionTranscriptTreeEntry(params.event);
   const isCanonicalEvent = isCanonicalSessionTranscriptEntry(params.event);

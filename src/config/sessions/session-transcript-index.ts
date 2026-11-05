@@ -25,6 +25,10 @@ import {
   writableSessionActorMap,
 } from "./session-actor-transaction.js";
 import {
+  createSessionTranscriptActiveFactsInserter,
+  prepareSessionTranscriptActiveFacts,
+} from "./session-transcript-active-facts.js";
+import {
   createSessionTranscriptFtsInserter,
   deleteSessionTranscriptFtsRowsInTransaction,
 } from "./session-transcript-fts.js";
@@ -36,6 +40,7 @@ import {
 import {
   prepareSessionTranscriptProjectionAppend,
   type SessionTranscriptProjectionState,
+  type TranscriptIndexAppend,
   type TranscriptIndexEntry,
 } from "./session-transcript-projection-append.js";
 import {
@@ -54,13 +59,6 @@ type TranscriptIndexDatabase = Pick<
 >;
 
 export type { SessionTranscriptProjectionState } from "./session-transcript-projection-append.js";
-
-type TranscriptIndexAppend = {
-  seq: number;
-  event: unknown;
-  eventId: string | null;
-  createdAt: number;
-};
 
 type SessionTranscriptIndexProjectionRow =
   PreparedSessionTranscriptProjection["activeRows"][number] & {
@@ -273,6 +271,7 @@ function createActiveEventInserter(db: EngineConnection, sessionId: string) {
         ),
     );
   const inserts = new Map<number, ReturnType<typeof prepare>>();
+  const insertFacts = createSessionTranscriptActiveFactsInserter(db, sessionId);
   return (rows: readonly ActiveRow[]) => {
     for (let offset = 0; offset < rows.length; offset += TRANSCRIPT_INSERT_BATCH_SIZE) {
       const chunk = rows.slice(offset, offset + TRANSCRIPT_INSERT_BATCH_SIZE);
@@ -280,7 +279,10 @@ function createActiveEventInserter(db: EngineConnection, sessionId: string) {
       if (!inserts.has(chunk.length)) {
         inserts.set(chunk.length, write);
       }
-      withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () => write(chunk));
+      withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () => {
+        write(chunk);
+        insertFacts(chunk);
+      });
     }
   };
 }
@@ -389,6 +391,13 @@ export function createTranscriptIndexAppenderInTransaction(
       pendingFtsRows.push(append.ftsRow);
     }
     if (append.activeRow) {
+      if (params.preparedPayload && params.serializedBytes !== undefined) {
+        append.activeRow.facts = prepareSessionTranscriptActiveFacts(
+          params.preparedPayload.payload,
+          append.activeRow.contextEligible,
+          params.serializedBytes,
+        );
+      }
       pendingActiveRows.push(append.activeRow);
       if (actor) {
         actor.transcript.active = writableSessionActorMap(actor.transcript.active);

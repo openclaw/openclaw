@@ -569,6 +569,48 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       payloads.every((row) => row.event_zstd === null && typeof row.event_json === "string"),
     ).toBe(true);
     expect(payloads.map((row) => JSON.parse(row.event_json))).toEqual(hydrated.snapshot.events);
+    const activeFacts = await queryRows<{
+      serialized_bytes: string;
+      dependency_navigation_json: string;
+      event_json: string;
+    }>(
+      `SELECT facts.serialized_bytes, facts.dependency_navigation_json, event.event_json
+       FROM "${facts.namespace}".session_transcript_active_event_facts facts
+       JOIN "${facts.namespace}".transcript_events event USING (session_id, seq)
+       WHERE facts.session_id = $1 ORDER BY facts.seq`,
+      [target.sessionId],
+    );
+    expect(activeFacts).toHaveLength(7);
+    for (const row of activeFacts) {
+      expect(Number(row.serialized_bytes)).toBe(Buffer.byteLength(row.event_json, "utf8") + 1);
+      expect(row.dependency_navigation_json).toBe("{}");
+    }
+    const pendingTarget = await createSession("postgres-pending-facts");
+    await appendTranscriptMessage(pendingTarget, {
+      message: {
+        role: "assistant",
+        content: "Pending automation output",
+        provider: "openclaw",
+        model: "automation-result",
+        excludeFromContext: true,
+        openclawModelPlacement: "pending",
+      },
+    });
+    const pendingFacts = await queryRows<(typeof activeFacts)[number]>(
+      `SELECT facts.serialized_bytes, facts.dependency_navigation_json, event.event_json
+       FROM "${facts.namespace}".session_transcript_active_event_facts facts
+       JOIN "${facts.namespace}".transcript_events event USING (session_id, seq)
+       WHERE facts.session_id = $1`,
+      [pendingTarget.sessionId],
+    );
+    expect(pendingFacts).toHaveLength(1);
+    expect(Number(pendingFacts[0]!.serialized_bytes)).toBe(
+      Buffer.byteLength(pendingFacts[0]!.event_json, "utf8") + 1,
+    );
+    expect(JSON.parse(pendingFacts[0]!.dependency_navigation_json)).toMatchObject({
+      type: "message",
+      message: { excludeFromContext: true, openclawModelPlacement: "pending", content: [] },
+    });
     let store = openContextEngineTurnOutboxWorkerStore({ agentId: "actor", path: database.path });
     const filter = { engineId: "postgres-fixture" };
     const enqueue = (boundary: TranscriptTurnBoundary) =>
