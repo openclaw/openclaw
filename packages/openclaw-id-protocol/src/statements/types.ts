@@ -1,5 +1,6 @@
 // Signed statement bodies (owner-key spec section 3). Field names are the wire names.
 import type { Ed25519PublicKey, IrohEndpointKey, KeyFingerprint } from "../keys.js";
+import type { StatementVersion } from "../version.js";
 
 /** Statement types. The type string is part of the signed domain-separation prefix. */
 export const STATEMENT_TYPES = [
@@ -213,7 +214,8 @@ export type StatementBodies = {
  * checked against the claw's current owner devices, which only the Gateway knows.
  */
 export type SignedStatement<T extends StatementType = StatementType> = {
-  v: 1;
+  /** Envelope version; selects the schema and the signing domain. */
+  v: StatementVersion;
   type: T;
   body: StatementBodies[T];
   signer: Ed25519PublicKey;

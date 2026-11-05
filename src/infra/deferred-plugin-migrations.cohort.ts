@@ -153,24 +153,28 @@ export function hasRestoredPluginCohortMigrationPublications(
   );
 }
 
-/** The lifecycle owner retains the lease, transaction and cache invalidation. */
+/**
+ * The lifecycle owner retains the lease, transaction and cache invalidation.
+ * Returns the plugin IDs whose later decision was kept instead of restored.
+ */
 export function restorePluginCohortMigrationRowsInDatabase(
   db: EngineConnection,
   rows: ReadonlyMap<string, PluginCohortMigrationPublication["rows"][number]>,
   assertCurrent: () => void,
   onRestored: (database: EngineConnection) => void,
-): void {
+): string[] {
   assertCurrent();
   const current = readCohortMigrationRows(db, [...rows.keys()]);
+  const preserved: string[] = [];
   const changes = [...rows.values()].filter((row) => {
     const present = current.get(row.pluginId);
     if (isDeepStrictEqual(present, row.before)) {
       return false;
     }
     if (!isDeepStrictEqual(present, row.after)) {
-      throw new Error(
-        `Plugin migration obligation changed after update publication: ${row.pluginId}. Recovery preserved the later decision.`,
-      );
+      // A later writer decided this obligation. Keep it; restore the others.
+      preserved.push(row.pluginId);
+      return false;
     }
     return true;
   });
@@ -201,4 +205,5 @@ export function restorePluginCohortMigrationRowsInDatabase(
     onRestored(db);
   }
   assertCurrent();
+  return preserved;
 }
