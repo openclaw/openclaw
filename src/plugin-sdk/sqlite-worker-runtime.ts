@@ -45,8 +45,8 @@ export const runSqliteSingleStatementSync: <Result>(
 ) => Result = runSingleStatement;
 
 // The schema owner only passes its synchronous void installer to transact.
-// Keep that private producer fact here; the released generic signature stays intact.
 export const ensureOpenClawAgentStandingIntentsSchema =
+  // SAFETY: Narrow only that private producer; its released generic signature stays intact.
   ensureStandingIntentsSchema as WorkerSchemaEnsure;
 
 export type { Generated, Selectable } from "kysely";
