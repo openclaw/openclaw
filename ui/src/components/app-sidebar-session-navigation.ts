@@ -60,7 +60,6 @@ import {
   projectSidebarVisibleMainSession,
   resolveLatestSidebarAgentSession,
   resolveSidebarMainSessionKey,
-  restoreSnapshotNavigation,
   type SidebarSessionNavigationState,
 } from "./app-sidebar-session-navigation-logic.ts";
 import type { SessionPullRequestIndicators } from "./app-sidebar-session-pr-indicators.ts";
@@ -107,7 +106,7 @@ import {
   sidebarRowsInputs,
   type SidebarProjectionHost,
 } from "./sidebar-projection-memo.ts";
-import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
+import { restoreSnapshotNavigation, type SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { mountedViewerSessionKeys } from "./solid/viewer-facepile.tsx";
 
 export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase {
@@ -492,6 +491,12 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     );
   }
 
+  get sidebarPresencePayload(): PresencePayload | undefined {
+    return this.sidebarSnapshot
+      ? this.readSnapshotNavigation(this.sidebarSnapshot).presence
+      : this.sessionData.presencePayload;
+  }
+
   reconciledSidebarZone(rows?: SidebarRecentSession[]) {
     if (this.sidebarSnapshot) {
       return this.readSnapshotNavigation(this.sidebarSnapshot).zone;
@@ -739,7 +744,9 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
 
   /** Header metadata follows session filters; Home navigation and child hydration do not. */
   visibleHomeSession(agentId: string): SidebarRecentSession | null {
-    return projectSidebarVisibleMainSession(this, agentId);
+    return this.sidebarSnapshot
+      ? this.readSnapshotNavigation(this.sidebarSnapshot).home
+      : projectSidebarVisibleMainSession(this, agentId);
   }
 
   /** Gateway row backing the identity card (unread/running state), if loaded. */

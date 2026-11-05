@@ -1,8 +1,9 @@
 import { isIncognitoSessionKey } from "../../../src/shared/incognito-session-key.js";
+import { parseSidebarEntry } from "../app-navigation.ts";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import type { SidebarRecentSession, SidebarSessionAttention } from "./app-sidebar-session-types.ts";
 import type { SidebarInboxEntry } from "./sidebar-attention-entries.ts";
-import type { SidebarSnapshotSession } from "./sidebar-snapshot-data.ts";
+import type { SidebarSnapshotModel, SidebarSnapshotSession } from "./sidebar-snapshot-data.ts";
 
 export {
   parseSidebarSnapshot,
@@ -69,7 +70,10 @@ export function snapshotSessions(
   rows: readonly SidebarRecentSession[],
   presentation?: (
     row: SidebarRecentSession,
-  ) => Pick<SidebarSnapshotSession, "snapshotSubtitle" | "childrenDisplayMode" | "state">,
+  ) => Pick<
+    SidebarSnapshotSession,
+    "snapshotSubtitle" | "childrenDisplayMode" | "state" | "owner" | "archivedBy" | "participants"
+  >,
 ): SidebarSnapshotSession[] {
   return rows
     .filter((row) => !row.incognito && !isIncognitoSessionKey(row.key))
@@ -109,6 +113,10 @@ export function snapshotSessions(
         key: row.key,
         label: row.label,
         agentId: row.agentId,
+        owner: display?.owner ?? row.owner,
+        archivedBy: display?.archivedBy ?? row.archivedBy,
+        participants: display?.participants ?? row.participants,
+        participantCount: row.participantCount,
         subtitle: row.subtitle,
         icon: row.icon,
         color: row.color,
@@ -198,5 +206,31 @@ export function restoreSnapshotSession(
     loadingChildren: false,
     containsActiveDescendant: false,
     runningChildCount: state?.runningChildCount ?? 0,
+  };
+}
+
+export function restoreSnapshotNavigation(model: SidebarSnapshotModel, selectedKey: string) {
+  const sections = model.sections.map((section) => ({
+    ...section,
+    rows: section.rows.map((row) => restoreSnapshotSession(row, selectedKey)),
+  }));
+  const visibleRows = sections.flatMap((section) => section.rows);
+  const pins = model.pinnedSessions.map((row) => restoreSnapshotSession(row, selectedKey));
+  const presence = model.onlineUsers.map((user) => ({
+    ts: 0,
+    user,
+    watchedSessions: user.watchedSessions,
+  }));
+  return {
+    sections,
+    visibleRows,
+    home: model.home && restoreSnapshotSession(model.home, selectedKey),
+    presence: { presence },
+    zone: {
+      entries: model.entries.flatMap((entry) => parseSidebarEntry(entry) ?? []),
+      sidebarEntries: model.entries,
+      sessionRows: new Map([...visibleRows, ...pins].map((row) => [row.key, row])),
+      pluginTabs: new Map(model.plugins.map(({ key, ...tab }) => [key, tab])),
+    },
   };
 }

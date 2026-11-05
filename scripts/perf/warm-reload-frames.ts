@@ -82,6 +82,38 @@ function clipped(region: ReloadRegion, width: number, height: number): ReloadReg
   };
 }
 
+/** A flat text region cannot establish painted content; variation still needs visual audit. */
+export async function reloadRegionHasVariation(
+  file: string,
+  region: ReloadRegion,
+): Promise<boolean> {
+  const image = photon.PhotonImage.new_from_byteslice(await readFile(file));
+  try {
+    const width = image.get_width();
+    const bounds = clipped(region, width, image.get_height());
+    if (bounds.width === 0 || bounds.height === 0) {
+      return false;
+    }
+    const pixels = image.get_raw_pixels();
+    const first = (bounds.y * width + bounds.x) * 4;
+    for (let y = bounds.y; y < bounds.y + bounds.height; y++) {
+      for (let x = bounds.x; x < bounds.x + bounds.width; x++) {
+        const offset = (y * width + x) * 4;
+        if (
+          pixels[offset] !== pixels[first] ||
+          pixels[offset + 1] !== pixels[first + 1] ||
+          pixels[offset + 2] !== pixels[first + 2]
+        ) {
+          return true;
+        }
+      }
+    }
+    return false;
+  } finally {
+    image.free();
+  }
+}
+
 function compare(
   a: Pixels,
   b: Pixels,

@@ -19,10 +19,7 @@ export function createSidebarSessionWindow(
   let list: HTMLDivElement;
   const [rowFloor, setRowFloor] = createSignal(32);
   const [focusedKey, setFocusedKey] = createSignal<string>();
-  const [view, setView] = createSignal<{ items: WindowItem[]; height: number }>({
-    items: [],
-    height: 0,
-  });
+  const [view, setView] = createSignal<{ items: WindowItem[]; height: number }>();
   const retained = (row: SidebarRecentSession, focused: string | undefined): boolean =>
     row.visuallyActive ||
     row.key === focused ||
@@ -114,7 +111,7 @@ export function createSidebarSessionWindow(
         retained(item.row, focusedKey()),
     );
     setView((previous) =>
-      previous.height === totalHeight &&
+      previous?.height === totalHeight &&
       previous.items.length === items.length &&
       previous.items.every(
         (item, index) =>
@@ -249,7 +246,22 @@ export function createSidebarSessionWindow(
       }
     }),
   );
-  const items = createMemo(() => new Map(view().items.map((item) => [item.row.key, item])));
+  const items = createMemo(() => {
+    const ready = view();
+    // A zero-height measurement still belongs to the previous empty row set.
+    if (ready && (ready.height > 0 || inputs().length === 0)) {
+      return new Map(ready.items.map((item) => [item.row.key, item]));
+    }
+    const keys = new Set(host().sidebarSnapshot?.windowKeys);
+    let top = 0;
+    return new Map(
+      inputs().flatMap((input, index) => {
+        const item = { row: input.row, index, top, height: input.height };
+        top += input.height;
+        return keys.has(input.row.key) ? [[input.row.key, item] as const] : [];
+      }),
+    );
+  });
   const fullHeight = createMemo(() => {
     view();
     return Math.max(
