@@ -381,65 +381,38 @@ describe("applyMediaUnderstanding", () => {
     });
   });
 
-  it.each([
-    [
-      401,
-      "invalid_authentication",
-      "provider rejected the credential (401 invalid_authentication)",
-    ],
-    [429, "insufficient_quota", "provider account is out of quota (429 insufficient_quota)"],
-    [429, undefined, "provider rate limited the request (429)"],
-    [400, "Bearer sk-reflected secret", "provider rejected the request (400)"],
-  ])("names the classified provider cause for HTTP %i %s", async (status, code, cause) => {
-    const ctx = await createAudioCtx();
-    const failure = new ProviderHttpError(`Audio transcription failed (HTTP ${status})`, {
+  const httpFailure = (status: number, code?: string) =>
+    new ProviderHttpError(`Audio transcription failed (HTTP ${status})`, {
       status,
       code,
       body: "provider prose that must not reach the agent",
     });
-    await applyAudio(ctx, vi.fn<TranscribeAudio>().mockRejectedValue(failure), {
-      cfg: createGroqAudioConfig(),
-    });
-    expect(ctx.Body).toBe(`[Audio attachment could not be analyzed: ${cause}]`);
-    const decision = ctx.MediaUnderstandingDecisions?.find((entry) => entry.capability === "audio");
-    expect(decision && formatDecisionSummary(decision)).toMatch(`reason=${cause}`);
-  });
-
-  it("names the fallback's cause in both the marker and the summary", async () => {
+  const quota = "provider account is out of quota (429 insufficient_quota)";
+  it.each([
+    [
+      [httpFailure(401, "invalid_authentication")],
+      "provider rejected the credential (401 invalid_authentication)",
+    ],
+    [[httpFailure(429, "insufficient_quota")], quota],
+    [[httpFailure(429)], "provider rate limited the request (429)"],
+    [[httpFailure(400, "Bearer sk-reflected secret")], "provider rejected the request (400)"],
+    // The fallback's failure explains the outcome in both the marker and the summary.
+    [[httpFailure(401, "invalid_api_key"), httpFailure(429, "insufficient_quota")], quota],
+    [[new Error("boom")], undefined],
+  ])("names the classified provider cause (case %#)", async (failures, cause) => {
     const ctx = await createAudioCtx();
-    const transcribeAudio = vi
-      .fn<TranscribeAudio>()
-      .mockRejectedValueOnce(
-        new ProviderHttpError("Audio transcription failed (HTTP 401)", {
-          status: 401,
-          code: "invalid_api_key",
-        }),
-      )
-      .mockRejectedValueOnce(
-        new ProviderHttpError("Audio transcription failed (HTTP 429)", {
-          status: 429,
-          code: "insufficient_quota",
-        }),
-      );
+    const transcribeAudio = vi.fn<TranscribeAudio>();
+    failures.forEach((failure) => transcribeAudio.mockRejectedValueOnce(failure));
+    const models = failures.map((_, index) => `whisper-${index}`);
     await applyAudio(ctx, transcribeAudio, {
-      cfg: configuredMedia([
-        { provider: "groq", model: "whisper-primary", capabilities: ["audio"] },
-        { provider: "groq", model: "whisper-fallback", capabilities: ["audio"] },
-      ]),
+      cfg: configuredMedia(
+        models.map((model) => ({ provider: "groq", model, capabilities: ["audio"] })),
+      ),
     });
-    const cause = "provider account is out of quota (429 insufficient_quota)";
-    expect(transcribeAudio).toHaveBeenCalledTimes(2);
-    expect(ctx.Body).toBe(`[Audio attachment could not be analyzed: ${cause}]`);
+    expect(transcribeAudio).toHaveBeenCalledTimes(failures.length);
+    expect(ctx.Body).toBe(`[Audio attachment could not be analyzed${cause ? `: ${cause}` : ""}]`);
     const decision = ctx.MediaUnderstandingDecisions?.find((entry) => entry.capability === "audio");
-    expect(decision && formatDecisionSummary(decision)).toMatch(`reason=${cause}`);
-  });
-
-  it("keeps the generic marker for an unclassified failure", async () => {
-    const ctx = await createAudioCtx();
-    await applyAudio(ctx, vi.fn<TranscribeAudio>().mockRejectedValue(new Error("boom")), {
-      cfg: createGroqAudioConfig(),
-    });
-    expect(ctx.Body).toBe("[Audio attachment could not be analyzed]");
+    expect(decision && formatDecisionSummary(decision)).toMatch(`reason=${cause ?? "boom"}`);
   });
 
   it("falls back to a CLI transcript after provider failure", async () => {
