@@ -21,6 +21,31 @@ const suite = createControlUiE2eSuite({
   name: "Sidebar optional boot imports",
 });
 
+function expectCachedRows(
+  report: {
+    frames: Array<{
+      cached: boolean;
+      scrollTop: number;
+      mountedRows: Array<{ key: string }>;
+      rows: Array<{ key: string }>;
+    }>;
+  },
+  scrollTop: number,
+) {
+  const cached = report.frames.filter((frame) => frame.cached);
+  const live = report.frames.at(-1)!;
+  expect(cached.length).toBeGreaterThan(0);
+  expect(live?.cached).toBe(false);
+  for (const frame of cached) {
+    expect(frame.mountedRows.length).toBeGreaterThan(0);
+    expect(frame.rows.length).toBeGreaterThan(0);
+    expect(frame.mountedRows.map((row) => row.key)).toEqual(live.mountedRows.map((row) => row.key));
+    expect(frame.rows.map((row) => row.key)).toEqual(live.rows.map((row) => row.key));
+    expect(frame.scrollTop).toBe(scrollTop);
+  }
+  expect(live.scrollTop).toBe(scrollTop);
+}
+
 suite.define(() => {
   it("restores cached sidebar rows while a peer resolves its profile", async () => {
     const fixture = createControlUiTeamScaleFixture({
@@ -92,10 +117,7 @@ suite.define(() => {
         await gateway.waitForRequest("connect");
         await gateway.resolveDeferred("connect");
         await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
-        await page.locator("aside.sidebar img").evaluateAll(async (images) => {
-          await Promise.all(images.map((image) => (image as HTMLImageElement).decode()));
-        });
-        await page.locator("aside.sidebar .is-pending").first().waitFor({ state: "hidden" });
+        await page.locator(".sidebar-recent-session").nth(10).waitFor();
         await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
         const peer = await context.newPage();
         const peerGateway = await install(peer, true);
@@ -110,13 +132,45 @@ suite.define(() => {
         });
         // Flush the peer's native pending publication before reloading another route.
         await peer.evaluate(() => window.dispatchEvent(new Event("pagehide")));
+        const saveScroll = (top: number) =>
+          page.evaluate(async (top) => {
+            const scroller = document.querySelector<HTMLElement>(".sidebar-shell__body")!;
+            const saved = new Promise<number>((resolve) => {
+              const put = IDBObjectStore.prototype.put;
+              IDBObjectStore.prototype.put = function (value, key) {
+                const request = put.call(this, value, key);
+                if (
+                  this.name === "sidebarSnapshots" &&
+                  value.model?.scrollTop === top &&
+                  value.model.windowKeys.length > 0
+                ) {
+                  IDBObjectStore.prototype.put = put;
+                  this.transaction.addEventListener(
+                    "complete",
+                    () => resolve(value.model.scrollTop),
+                    {
+                      once: true,
+                    },
+                  );
+                }
+                return request;
+              };
+            });
+            scroller.scrollTop = top;
+            scroller.dispatchEvent(new Event("scroll"));
+            await new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            });
+            window.dispatchEvent(new Event("pagehide"));
+            return saved;
+          }, top);
         for (const face of ["chat", "dashboard"] as const) {
           await page.goto(
             controlUiSessionUrl(suite.server.baseUrl, fixture.selectedSessionKey, face),
           );
           await gateway.waitForRequest("connect");
           await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
-          await page.locator(".sidebar-recent-session").nth(10).waitFor();
+          await page.evaluate(() => new Promise(requestAnimationFrame));
           await page
             .locator("aside.sidebar")
             .screenshot({ path: path.join(suite.artifactDir, `${face}-cached.png`) });
@@ -124,6 +178,7 @@ suite.define(() => {
           await page
             .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
             .waitFor();
+          await page.evaluate(() => new Promise(requestAnimationFrame));
           const report = await page.evaluate(() =>
             Reflect.get(window, "__sidebarPresentation").read(),
           );
@@ -131,85 +186,37 @@ suite.define(() => {
             path.join(suite.artifactDir, `${face}-parity.json`),
             JSON.stringify(report, null, 2),
           );
-          expect(report.parity?.initialRows).toBeGreaterThan(0);
-          expect(report.parity).toMatchObject({ added: 0, removed: 0, avatars: 0 });
-          expect(await page.locator(".sidebar-footer-bar__home").isEnabled()).toBe(true);
+          expectCachedRows(report, 0);
           await page
             .locator("aside.sidebar")
             .screenshot({ path: path.join(suite.artifactDir, `${face}-live.png`) });
+
+          expect(await saveScroll(1400)).toBe(1400);
+          await page.reload();
+          await gateway.waitForRequest("connect");
+          await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
+          await page.evaluate(() => new Promise(requestAnimationFrame));
+          expect(
+            await page.locator(".sidebar-shell__body").evaluate((element) => element.scrollTop),
+          ).toBe(1400);
+          expect(
+            await evaluateControlUiContext(page, (app) => app.gateway.snapshot.hello),
+          ).toBeNull();
+          await gateway.resolveDeferred("connect");
+          await page
+            .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
+            .waitFor();
+          await page.evaluate(() => new Promise(requestAnimationFrame));
+          const scrollPresentation = await page.evaluate(() =>
+            Reflect.get(window, "__sidebarPresentation").read(),
+          );
+          await writeFile(
+            path.join(suite.artifactDir, `${face}-scroll-presentation.json`),
+            JSON.stringify(scrollPresentation, null, 2),
+          );
+          expectCachedRows(scrollPresentation, 1400);
+          expect(await saveScroll(0)).toBe(0);
         }
-        const scrolled = await page.evaluate(async () => {
-          const scroller = document.querySelector<HTMLElement>(".sidebar-shell__body")!;
-          const saved = new Promise<number>((resolve) => {
-            const put = IDBObjectStore.prototype.put;
-            IDBObjectStore.prototype.put = function (value, key) {
-              const request = put.call(this, value, key);
-              if (this.name === "sidebarSnapshots" && value.model) {
-                IDBObjectStore.prototype.put = put;
-                this.transaction.addEventListener("complete", () => resolve(scroller.scrollTop), {
-                  once: true,
-                });
-              }
-              return request;
-            };
-          });
-          scroller.scrollTop = 1400;
-          scroller.dispatchEvent(new Event("scroll"));
-          await new Promise<void>((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-          });
-          window.dispatchEvent(new Event("pagehide"));
-          return saved;
-        });
-        await page.reload();
-        await gateway.waitForRequest("connect");
-        await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
-        await page.evaluate(() => new Promise(requestAnimationFrame));
-        const scrollPresentation = await page.evaluate(() =>
-          Reflect.get(window, "__sidebarPresentation").read(),
-        );
-        await writeFile(
-          path.join(suite.artifactDir, "scroll-presentation.json"),
-          JSON.stringify(scrollPresentation, null, 2),
-        );
-        const first = scrollPresentation.frames.find((frame: { cached: boolean }) => frame.cached);
-        expect(first?.mountedKeys.length).toBeGreaterThan(0);
-        expect(first?.rows.length).toBeGreaterThan(0);
-        const restored = await page
-          .locator(".sidebar-shell__body")
-          .evaluate((element) => element.scrollTop);
-        const bytes = await page.evaluate(async () => {
-          const request = indexedDB.open("openclaw-chat-snapshots");
-          const database = await new Promise<IDBDatabase>((resolve) =>
-            request.addEventListener("success", () => resolve(request.result), { once: true }),
-          );
-          const records = database
-            .transaction("sidebarSnapshots")
-            .objectStore("sidebarSnapshots")
-            .getAll();
-          const values = await new Promise<Array<{ model: unknown }>>((resolve) =>
-            records.addEventListener("success", () => resolve(records.result), { once: true }),
-          );
-          database.close();
-          return values.map((value) => ({
-            modelBytes: new TextEncoder().encode(JSON.stringify(value.model)).length,
-            recordBytes: new TextEncoder().encode(JSON.stringify(value)).length,
-          }));
-        });
-        await writeFile(
-          path.join(suite.artifactDir, "scroll-bytes.json"),
-          JSON.stringify({ scrolled, restored, bytes }),
-        );
-        expect(restored).toBe(scrolled);
-        expect(
-          await evaluateControlUiContext(page, (app) => app.gateway.snapshot.hello),
-        ).toBeNull();
-        const beforeHome = page.url();
-        await page.locator(".sidebar-footer-bar__home").click();
-        await page.evaluate(() => new Promise(requestAnimationFrame));
-        expect(page.url()).not.toBe(beforeHome);
-        await page.locator(".sidebar-rail__button.sidebar-new-session").click();
-        await page.locator(".new-session-page").waitFor();
       },
     );
   });

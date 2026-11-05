@@ -56,7 +56,7 @@ import {
 } from "./app-sidebar-session-types.ts";
 import { resolveCloudWorkerStopAction } from "./cloud-worker-stop.ts";
 import type { SidebarSessionRowProjection } from "./sidebar-projection-cache.ts";
-import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
+import { restoreSnapshotSession, type SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 type SessionRow = SessionsListResult["sessions"][number];
 
@@ -340,6 +340,28 @@ export function buildSidebarSessionNavigationState(input: {
     activeRowKey: navigation.activeRowKey,
     visibleSessionRows: navigation.visibleSessions,
     toSidebarSession,
+  };
+}
+
+export function restoreSnapshotNavigation(model: SidebarSnapshotModel, selectedKey: string) {
+  const sections = model.sections.map((section) => ({
+    ...section,
+    rows: section.rows.map((row) => restoreSnapshotSession(row, selectedKey)),
+  }));
+  const visibleRows = sections.flatMap((section) => section.rows);
+  const pins = model.pinnedSessions.map((row) => restoreSnapshotSession(row, selectedKey));
+  return {
+    sections,
+    visibleRows,
+    zone: {
+      entries: model.entries.flatMap((entry) => {
+        const parsed = parseSidebarEntry(entry);
+        return parsed ? [parsed] : [];
+      }),
+      sidebarEntries: model.entries,
+      sessionRows: new Map([...visibleRows, ...pins].map((row) => [row.key, row])),
+      pluginTabs: new Map(model.plugins.map(({ key, ...tab }) => [key, tab])),
+    },
   };
 }
 

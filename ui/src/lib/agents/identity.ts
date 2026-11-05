@@ -177,12 +177,10 @@ export function createAgentIdentityCapability(
   });
 
   const capability = {
-    get(this: void, agentId: string | null | undefined, includeBootIdentity = true) {
+    get(this: void, agentId: string | null | undefined) {
       const normalized = agentId?.trim();
       return normalized
-        ? (identities.get(normalized)?.identity ??
-            (includeBootIdentity ? readOfflineIdentity?.(normalized) : null) ??
-            null)
+        ? (identities.get(normalized)?.identity ?? readOfflineIdentity?.(normalized) ?? null)
         : null;
     },
     entries() {

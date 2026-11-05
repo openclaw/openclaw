@@ -198,7 +198,7 @@ it("admits the sidebar after the live roster grows beyond the boot window", () =
   expect(saved?.roster?.result.sessions).toEqual(sessions.slice(0, 200));
 });
 
-it("keeps display data without persisting authority, executable plugins, or incognito viewer membership", () => {
+it("keeps display data without persisting authority, executable plugins, or watched sessions", () => {
   const plugin = { key: "reports/main", pluginId: "reports", id: "main", label: "Reports" };
   const card = { id: "main", name: "Harbor", mainKey: "agent:main:main" };
   const admitted = parseSidebarSnapshot({
@@ -213,11 +213,7 @@ it("keeps display data without persisting authority, executable plugins, or inco
   expect(admitted?.cards).toEqual([card]);
   expect(admitted).not.toHaveProperty("token");
   expect(
-    parse({
-      onlineUsers: [
-        { id: "operator", watchedSessions: ["agent:main:dashboard:incognito-private"] },
-      ],
-    }),
+    parse({ onlineUsers: [{ id: "operator", watchedSessions: ["private-session"] }] }),
   ).toBeNull();
 });
 

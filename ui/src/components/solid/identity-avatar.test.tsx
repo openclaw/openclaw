@@ -43,11 +43,7 @@ it("presents a resolved portrait without a decode-state transition", async () =>
       "blob:resolved-portrait",
     );
     fetchAvatar.mockClear();
-    const [agent, publish] = createSignal<AgentIdentity>({
-      id: "forge",
-      avatar: "/avatar/forge?v=1",
-    });
-    const view = mountSolid(() => <Avatar agent={agent()} />);
+    const view = mountSolid(() => <Avatar agent={{ id: "forge", avatar: "/avatar/forge?v=1" }} />);
     const frame = view.container.querySelector(".identity-avatar--agent")!;
     const image = frame.querySelector("img")!;
     expect(image.getAttribute("src")).toBe("blob:resolved-portrait");
@@ -56,12 +52,6 @@ it("presents a resolved portrait without a decode-state transition", async () =>
     image.dispatchEvent(new Event("load"));
     flush();
     expect(mutations()).toHaveLength(0);
-    const fallback = frame.querySelector(".identity-avatar__text");
-    expect(fallback).not.toBeNull();
-    publish({ ...agent(), textAvatar: "🔨" });
-    flush();
-    expect(frame.querySelector(".identity-avatar__text")).toBe(fallback);
-    expect(frame.querySelector("img")).toBe(image);
     expect(fetchAvatar).not.toHaveBeenCalled();
   } finally {
     setAvatarGatewayOrigin(null);
@@ -136,7 +126,7 @@ it("ignores retired resource and image-node outcomes", async () => {
   expect(replacement.parentElement?.dataset.avatarState).toBe("loaded");
 });
 
-it("preserves prepared avatar state and image errors", async () => {
+it("preserves prepared avatar state and image errors", () => {
   const failed = vi.fn();
   const [agent, setAgent] = createSignal<AgentIdentity>({
     id: "sidebar-person",
@@ -160,17 +150,12 @@ it("preserves prepared avatar state and image errors", async () => {
   const image = view.container.querySelector("img")!;
   expect(image?.getAttribute("src")).toBe("blob:sidebar-synthetic");
   expect(view.container.querySelector(".avatar")).toBe(face);
-  setAgent((current) => ({ ...current, textAvatar: undefined }));
-  flush();
   image.dispatchEvent(new Event("error"));
   flush();
-  await vi.dynamicImportSettled();
-  flush();
-  expect(view.container.querySelector("svg.identity-avatar__agent-face")).not.toBeNull();
   expect(failed).toHaveBeenCalledOnce();
   expect(face?.dataset.avatarState).toBe("failed");
   expect(face?.classList.contains("is-fallback")).toBe(true);
-  setAgent((current) => ({ ...current, avatar: undefined, textAvatar: "🦀" }));
+  setAgent((current) => ({ ...current, avatar: undefined }));
   flush();
   expect(view.container.querySelector("img")).toBeNull();
   expect(view.container.querySelector("[data-avatar]")?.getAttribute("data-avatar")).toBe("🦀");

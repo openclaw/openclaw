@@ -106,10 +106,7 @@ class ProfileDirectory {
       profileAvatarUrl:
         identity.profileAvatarUrl?.trim() ||
         (self?.identity?.id === identity.identity.id ? self.avatarUrl : undefined) ||
-        profileAvatarUrl(this.get(identity.identity.id)) ||
-        this.gateway
-          .readPresence?.()
-          ?.find((entry) => entry.user?.identity?.id === identity.identity?.id)?.user?.avatarUrl,
+        profileAvatarUrl(this.get(identity.identity.id)),
     };
   }
 

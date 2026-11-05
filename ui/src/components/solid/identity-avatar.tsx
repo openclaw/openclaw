@@ -93,7 +93,7 @@ export function AgentIdentityAvatar(props: {
         </Show>
         <span class="identity-avatar__fallback">
           <Show
-            when={props.agent.textAvatar || (view().imageUrl && presentation.state() !== "failed")}
+            when={props.agent.textAvatar}
             fallback={
               <Errored fallback={<span class="identity-avatar__text" data-avatar="?" />}>
                 <Loading>
@@ -102,7 +102,7 @@ export function AgentIdentityAvatar(props: {
               </Errored>
             }
           >
-            <span class="identity-avatar__text" data-avatar={props.agent.textAvatar ?? "?"} />
+            <span class="identity-avatar__text" data-avatar={props.agent.textAvatar} />
           </Show>
         </span>
         <Show when={!props.agent.pending}>
