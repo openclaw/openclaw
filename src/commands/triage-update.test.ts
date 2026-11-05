@@ -21,9 +21,6 @@ describe("update failure triage diagnostics", () => {
     execFileSync("mkfifo", [inputPath]);
     const reading = readTriageUpdateFailure(inputPath, { env, stateDir });
     onTestFinished(async () => {
-      const home = tempDirs.make("openclaw-update-triage-");
-      const stateDir = path.join(home, ".openclaw");
-      const env = { HOME: home, OPENCLAW_STATE_DIR: stateDir };
       // Release a regressed blocking open after the deadline so cleanup can finish.
       const release = await fs.open(inputPath, fs.constants.O_RDWR | fs.constants.O_NONBLOCK);
       try {
@@ -40,6 +37,9 @@ describe("update failure triage diagnostics", () => {
   it.runIf(process.platform !== "win32")(
     "reads a symlink to a regular failure artifact",
     async () => {
+      const home = tempDirs.make("openclaw-update-triage-");
+      const stateDir = path.join(home, ".openclaw");
+      const env = { HOME: home, OPENCLAW_STATE_DIR: stateDir };
       const inputPath = path.join(home, "failure.json");
       const linkPath = path.join(home, "failure-link.json");
       await fs.writeFile(inputPath, JSON.stringify({ error: "synthetic update failure" }));
