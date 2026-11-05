@@ -355,7 +355,7 @@ function QuestionPageContent(
               }
             >
               <Show when={readPrompt()}>
-                {() => (
+                {(_prompt) => (
                   <Show
                     when={readPrompt()?.status === "pending"}
                     fallback={
