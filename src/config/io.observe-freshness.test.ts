@@ -12,6 +12,7 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import {
   findStartupMaintenanceRequiredError,
   StartupMaintenanceRequiredError,
@@ -376,6 +377,7 @@ describe("observation scope", () => {
     const { deps, configPath, capture, setSignature } = fixture();
     await closeDatabase();
     const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    const copies = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationAwaited");
     const selection = { effectiveEngines: createSqliteFamilyEngines() };
     const read = () => capture().read();
     const observe = () =>
@@ -394,16 +396,15 @@ describe("observation scope", () => {
     expect(reads).toHaveBeenCalledTimes(2);
 
     const owner = capture();
-    await expect(owner.update(signaturePatch("worker commit"), after)).resolves.toEqual({
-      status: "applied",
-    });
+    const applied = await owner.update(signaturePatch("worker commit"), after);
+    expect(applied).toEqual({ status: "applied" });
     const committed = await observe();
     expect(committed.state.entries?.[configPath]).toMatchObject(signaturePatch("worker commit"));
-    await expect(owner.update(signaturePatch("stale"), before)).resolves.toEqual({
-      status: "conflict",
-    });
+    const stale = await owner.update(signaturePatch("stale"), before);
+    expect(stale).toEqual({ status: "conflict" });
     expect(await observe()).toEqual(committed);
     expect(reads).toHaveBeenCalledTimes(3);
+    expect(copies).not.toHaveBeenCalled();
   });
 
   it("does not classify a failed read as a conditional-write conflict", async () => {
