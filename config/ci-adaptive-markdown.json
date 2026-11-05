@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "sourceRevision": "06d4059a3d06e1a34a3cacfd3f635b93fe803a38",
+  "common": [
+    ".npmrc",
+    "node-version.mjs",
+    "package.json",
+    "packages/markdown-core/package.json",
+    "packages/normalization-core/package.json",
+    "packages/terminal-core/package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "scripts/tsx.mjs",
+    "test/non-isolated-runner.ts",
+    "test/setup.env.ts",
+    "test/vitest/vitest.jsdom-preload.mts",
+    "test/vitest/vitest.node-policy.global-setup.ts",
+    "test/vitest/vitest.shared.config.ts",
+    "test/vitest/vitest.sqlite-preload.mts",
+    "test/vitest/vitest.unit-fast.config.ts",
+    "test/vitest/zod-runtime.ts",
+    "tsconfig.json"
+  ],
+  "commonHash": "7bd56d2f7cd4cad6c4946da8de3c662fd24337a1f4f4b8ebff46734ccebb947e",
+  "tests": {
+    "packages/markdown-core/src/chunk-text.test.ts": "9d0f0659316a70d09775199d8fe4fbc89439fee93dfe70871cd7bfd884e1ccc3",
+    "packages/markdown-core/src/code-spans.test.ts": "28f4dfb0c23ca7753576e07d41a7dd52d30dc59453219906522928a34298b0b6",
+    "packages/markdown-core/src/construct-fallbacks.test.ts": "e66c4ca3702a01201224be32c92463aa15ffed59831d94c740574ca1f2367fbf",
+    "packages/markdown-core/src/fences.test.ts": "96ab40f56311fe481e21a0eb27b0a54d38800f49d663fcd057910a56a2814177",
+    "packages/markdown-core/src/html-tags.test.ts": "9f7fe9431574ee8fcb81167718d89cc820639f3be55bfdf6163c3220736422d2",
+    "packages/markdown-core/src/image-spans.test.ts": "3521dd13113a6775e0382ec4ba4d03bea35a7b1587daf895cb16e5e5a1bda72a",
+    "packages/markdown-core/src/ir.test.ts": "843bcbfb8ec95385316a6ac2626e37b6a020b869e4aa1d6eca943d8d8b0ca0f4",
+    "packages/markdown-core/src/markdown-code-regions.test.ts": "8a70713535ada4887f6ea1aa75727dcbd025540a4ae92092d8b3094354f699f6",
+    "packages/markdown-core/src/render-aware-chunking.test.ts": "9667e492b2d6f651fecadb8b1698ef9636df8bdbbc24f481a4d00208a00beaf5"
+  }
+}
