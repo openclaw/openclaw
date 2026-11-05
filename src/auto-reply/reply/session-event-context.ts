@@ -309,6 +309,8 @@ export function buildSessionEventContext(params: {
       ctx.SenderE164 = requester.senderE164;
       ctx.SenderName = requester.senderName;
       ctx.SenderUsername = requester.senderUsername;
+      ctx.GroupSpace = requester.groupSpace;
+      ctx.GroupChannel = requester.groupChannel;
       ctx.ChatId = requester.conversationId;
     }
   }

@@ -31,32 +31,49 @@ const runEmbeddedAgentMock = vi.mocked(runEmbeddedAgent);
 
 // #177510: a background exec completion continues its requester's own work. The requester is
 // allowed only through toolsBySender (never a command owner) and the wildcard strips exec.
-// A Telegram DM's chat id is its sender id.
 const OWNER = "100001";
 const GUEST = "100002";
 const ACCOUNT = "owner-account";
-const scope = { agentId: "main", sessionKey: "agent:main:completion-reauthorize" };
-const route = { channel: "telegram", to: `telegram:${OWNER}`, accountId: ACCOUNT };
+const GUILD = "200001";
+const CHANNEL = "300001";
 
-// The real Telegram plugin owns the DM policy: channels.telegram.direct[chat].
-const { telegramPlugin } = await loadBundledPluginFacade<{ telegramPlugin: ChannelPlugin }>({
-  pluginId: "telegram",
-  artifactBasename: "channel-plugin-api.ts",
-});
-const dmRevocations = {
-  DM: { tools: { deny: ["exec"] } },
+// The real channel plugins own the conversation policy: a Telegram DM's entry under
+// channels.telegram.direct[chat] (its chat id is the sender id) and a Discord guild channel's
+// entry under channels.discord.guilds[guild], which Discord selects by guild id and channel name.
+const facade = <T extends object>(pluginId: string) =>
+  loadBundledPluginFacade<T>({ pluginId, artifactBasename: "channel-plugin-api.ts" });
+const { telegramPlugin } = await facade<{ telegramPlugin: ChannelPlugin }>("telegram");
+const { discordPlugin } = await facade<{ discordPlugin: ChannelPlugin }>("discord");
+const conversations = {
+  dm: {
+    sessionKey: "agent:main:completion-reauthorize",
+    chatType: "direct",
+    route: { channel: "telegram", to: `telegram:${OWNER}`, accountId: ACCOUNT },
+    origin: { conversationId: OWNER },
+  },
+  guild: {
+    sessionKey: `agent:main:discord:channel:${CHANNEL}`,
+    chatType: "channel",
+    route: { channel: "discord", to: `channel:${CHANNEL}`, accountId: ACCOUNT },
+    origin: { conversationId: CHANNEL, groupId: CHANNEL, groupSpace: GUILD, groupChannel: "ops" },
+  },
+} as const;
+const denyExec = { deny: ["exec"] };
+const direct = (entry: object) => ({ telegram: { direct: { [OWNER]: entry } } });
+const channelRevocations = {
+  DM: direct({ tools: denyExec }),
   // Keys on the requester's mutable username and display name, not on their id.
-  "DM username": { toolsBySender: { "username:alice": { deny: ["exec"] } } },
-  "DM name": { toolsBySender: { "name:Alice": { deny: ["exec"] } } },
+  "DM username": direct({ toolsBySender: { "username:alice": denyExec } }),
+  "DM name": direct({ toolsBySender: { "name:Alice": denyExec } }),
+  guild: { discord: { guilds: { [GUILD]: { tools: denyExec } } } },
+  "guild channel": { discord: { guilds: { [GUILD]: { channels: { ops: { tools: denyExec } } } } } },
 };
-type Revocation = "sender" | keyof typeof dmRevocations;
+type Revocation = "sender" | keyof typeof channelRevocations;
 
 function policy(revoke?: Revocation, commandOwner?: true): Partial<OpenClawConfig> {
   return {
     ...(commandOwner ? { commands: { ownerAllowFrom: [OWNER] } } : {}),
-    channels: {
-      telegram: revoke && revoke !== "sender" ? { direct: { [OWNER]: dmRevocations[revoke] } } : {},
-    },
+    channels: revoke && revoke !== "sender" ? channelRevocations[revoke] : {},
     tools: {
       profile: "coding",
       codeMode: false,
@@ -74,6 +91,7 @@ const retired = "agent harness host capability is no longer active";
 const rows: Array<{
   label: string;
   requester: string;
+  on?: "guild";
   revoke?: Revocation;
   after?: true;
   to?: string;
@@ -106,6 +124,15 @@ const rows: Array<{
     to: "telegram:-100200",
     outcome: "absent",
   },
+  { label: "Discord guild channel", requester: OWNER, on: "guild", outcome: "ran" },
+  { label: "guild revoked", requester: OWNER, on: "guild", revoke: "guild", outcome: "absent" },
+  {
+    label: "guild channel revoked",
+    requester: OWNER,
+    on: "guild",
+    revoke: "guild channel",
+    outcome: "absent",
+  },
   // Revoking publishes config, which retires the admitted turn's tool host before the call.
   {
     label: "sender revoked after admission",
@@ -124,25 +151,30 @@ const rows: Array<{
 ];
 
 it.for(rows)(
-  "runs completion-side exec only under the requester's current sender and DM policy: $label",
+  "runs completion-side exec only under the requester's current sender and conversation policy: $label",
   async (row, { signal, onTestFinished }) => {
+    const { sessionKey, chatType, route, origin } = conversations[row.on ?? "dm"];
+    const scope = { agentId: "main", sessionKey };
     await runEventFixture("session-event-completion-reauthorize", onTestFinished, async (state) => {
       const registry = captureActivePluginRegistrySnapshot();
       onTestFinished(() => restoreActivePluginRegistrySnapshot(registry));
       setActivePluginRegistry(
-        createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+        createTestRegistry([
+          { pluginId: "telegram", source: "test", plugin: telegramPlugin },
+          { pluginId: "discord", source: "test", plugin: discordPlugin },
+        ]),
       );
       const config = await configureEventState(state, policy(undefined, row.commandOwner));
       await replaceSessionEntry(scope, {
         sessionId: "completion-reauthorize",
         permissionMode: "full",
         updatedAt: Date.now(),
-        chatType: "direct",
+        chatType,
         delivery: {
           kind: "external",
-          route: { channel: "telegram", accountId: ACCOUNT, target: { to: route.to } },
+          route: { channel: route.channel, accountId: ACCOUNT, target: { to: route.to } },
           context: route,
-          origin: { provider: "telegram", chatType: "direct", accountId: ACCOUNT },
+          origin: { provider: route.channel, chatType, accountId: ACCOUNT },
         },
       });
       // The host-owned exec caller supplies the requester and conversation it spoke in.
@@ -151,10 +183,10 @@ it.for(rows)(
           ...scope,
           requesterOrigin: {
             ...scope,
-            messageProvider: "telegram",
+            ...origin,
+            messageProvider: route.channel,
             accountId: ACCOUNT,
-            chatType: "direct",
-            conversationId: OWNER,
+            chatType,
             senderId: row.requester,
             senderUsername: "alice",
             senderName: "Alice",
