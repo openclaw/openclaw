@@ -18,7 +18,7 @@ export function desktopCopyPath(
     label,
     closeOnSelect: false,
     render: (attributes) => (
-      <div class="session-diff-menu__copy-action">
+      <div class="session-diff-menu__copy-action oc-menu-group">
         <button
           {...attributes}
           ref={[attributes.ref, onButtonRef]}

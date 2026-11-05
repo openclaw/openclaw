@@ -289,15 +289,15 @@ describe.skipIf(!hasPopoverApi)("submenu parent highlight", () => {
   });
 });
 
-it("keeps inferred group spacing inside menus and direct row gaps outside", () => {
+it("spaces marked menu groups and standalone rows without inferring unrelated wrappers", () => {
   const style = document.head.appendChild(document.createElement("style"));
   style.textContent = overlayStyles;
   onTestFinished(() => style.remove());
   const host = document.body.appendChild(document.createElement("div"));
   host.style.setProperty("--menu-item-gap", "6px");
   const item = '<button class="oc-menu-item">Action</button>';
-  const group = `<section>${item}</section>`;
-  const submenu = `<div><button class="oc-menu-item oc-menu-item--submenu">More</button><div class="oc-overlay oc-menu">${item}</div></div>`;
+  const group = `<section class="oc-menu-group">${item}</section>`;
+  const submenu = `<div class="oc-menu-group"><button class="oc-menu-item oc-menu-item--submenu">More</button><div class="oc-overlay oc-menu">${item}</div></div>`;
   const overridden =
     '<button class="oc-menu-item" style="margin-block-start: 11px">Override</button>';
   for (const [name, first, second, menuClass, expected] of [
@@ -309,13 +309,13 @@ it("keeps inferred group spacing inside menus and direct row gaps outside", () =
     ["popup exclusion", item, `<div class="oc-overlay">${item}</div>`, "oc-menu", "4px"],
     ["row override", item, overridden, "oc-menu", "11px"],
     ["standalone rows", item, item, "", "6px"],
-    ["unrelated groups", group, group, "", "0px"],
+    ["unrelated groups", `<section>${item}</section>`, `<section>${item}</section>`, "", "0px"],
   ] as const) {
     host.innerHTML = `<div class="${menuClass}"><div><div class="spacing-pair">${first}${second}</div></div></div>`;
     const target = query(host, ".spacing-pair").lastElementChild!;
     expect(getComputedStyle(target).marginBlockStart, name).toBe(expected);
   }
-  host.innerHTML = `<div class="oc-menu"><div class="outer">${group}${group}</div><div class="oc-menu" style="--menu-item-gap: 9px"><div class="inner">${group}${group}</div></div></div><div class="outside">${group}${group}</div>`;
+  host.innerHTML = `<div class="oc-menu"><div class="outer">${group}${group}</div><div class="oc-menu" style="--menu-item-gap: 9px"><div class="inner">${group}${group}</div></div></div><div class="outside"><section>${item}</section><section>${item}</section></div>`;
   for (const [selector, expected] of [
     [".outer", "6px"],
     [".inner", "9px"],
@@ -338,7 +338,7 @@ it("spaces actual Menu groups around custom content", async () => {
         kind: "content",
         id: "custom",
         content: (
-          <section>
+          <section class="oc-menu-group">
             <button class="oc-menu-item">Custom</button>
           </section>
         ),

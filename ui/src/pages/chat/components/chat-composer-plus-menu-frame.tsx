@@ -60,7 +60,7 @@ export function ChatComposerPlusMenuFrame(props: ChatComposerPlusMenuFrameProps)
         body = element;
         props.onBody?.(element);
       }}
-      class="agent-chat__capability-menu-body"
+      class="agent-chat__capability-menu-body oc-menu-group"
       style={{ height: props.height === undefined ? undefined : `${props.height}px` }}
     >
       {props.renderItems(props.items)}

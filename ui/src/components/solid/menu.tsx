@@ -465,7 +465,9 @@ export function Menu(props: BranchProps): JSX.Element {
                 return mount.render ? (
                   mount.render(renderEntries)
                 ) : (
-                  <div class={group()?.class}>{renderEntries(() => group()?.items ?? [])}</div>
+                  <div class={["oc-menu-group", group()?.class]}>
+                    {renderEntries(() => group()?.items ?? [])}
+                  </div>
                 );
               }}
             </Show>
@@ -638,7 +640,10 @@ export function Menu(props: BranchProps): JSX.Element {
     </>
   );
   return (
-    <div class={props.class} dir={direction()}>
+    <div
+      class={[props.class, { "oc-menu-group": Boolean(initialIdentity.parent) }]}
+      dir={direction()}
+    >
       <button
         {...binding.trigger(initialIdentity.binding, props.disabled)}
         {...props.triggerAttributes}

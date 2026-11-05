@@ -302,17 +302,11 @@
   cursor: var(--cursor-action);
 }
 
-/* Standalone rows retain their gap; inferred wrappers belong to their menu scope.
-   Zero specificity lets a row's own margin win. */
-:where(.oc-menu-item) + :where(.oc-menu-item) {
+/* Only marked menu wrappers need boundary inference. A universal :has() here
+   makes unrelated typing pay for menu matching on every style pass. */
+:where(.oc-menu-item, .oc-menu-group:has(> .oc-menu-item--submenu, > .oc-menu-item:last-child))
+  + :where(.oc-menu-item, .oc-menu-group:has(> .oc-menu-item:first-child):not(.oc-overlay)) {
   margin-block-start: var(--menu-item-gap);
-}
-
-@scope (.oc-menu) {
-  :where(.oc-menu-item, :has(> .oc-menu-item--submenu, > .oc-menu-item:last-child))
-    + :where(.oc-menu-item, :has(> .oc-menu-item:first-child):not(.oc-overlay)) {
-    margin-block-start: var(--menu-item-gap);
-  }
 }
 
 a.oc-menu-item[href] {

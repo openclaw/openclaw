@@ -321,7 +321,7 @@ export function ChatComposerPlusMenuSubview(props: ChatComposerPlusMenuSubviewPr
               ...skillRows(menu.skills, menu, skillsQuery(), libraryItems().length > 0),
             ],
             render: (renderItems) => (
-              <div class="agent-chat__capability-menu-scroll">
+              <div class="agent-chat__capability-menu-scroll oc-menu-group">
                 {renderItems(libraryItems)}
                 <For each={[skillsOwner()]}>
                   {() => {
