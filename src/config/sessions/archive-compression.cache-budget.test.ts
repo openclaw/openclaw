@@ -3,130 +3,101 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type {
-  encodeSessionArchiveContent as EncodeSessionArchiveContent,
-  materializeSessionArchiveForRead as MaterializeSessionArchiveForRead,
-} from "./archive-compression.js";
+
+// The budget is a fixed production constant, so tests swap it through the module
+// mock instead of an env knob the repo would have to budget an OPENCLAW_* slot for.
+let budgetBytes = 256 * 1024 * 1024;
+vi.mock("./archive-cache-budget.js", () => ({
+  get materializedArchiveCacheBudgetBytes() {
+    return budgetBytes;
+  },
+}));
+
+type ArchiveModule = typeof import("./archive-compression.js");
+let archive: ArchiveModule;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-const CACHE_BUDGET_BYTES = "OPENCLAW_ARCHIVE_CACHE_MAX_BYTES";
-
-let savedBudget: string | undefined;
-let encodeSessionArchiveContent: typeof EncodeSessionArchiveContent;
-let materializeSessionArchiveForRead: typeof MaterializeSessionArchiveForRead;
-let SESSION_ARCHIVE_ZSTD_SUFFIX: ".jsonl.zst" | string;
+const CACHE_DIR = path.join(fs.realpathSync("/tmp"), "openclaw", "session-archive-read-cache");
 
 beforeEach(async () => {
-  savedBudget = process.env[CACHE_BUDGET_BYTES];
-  // The TTL sweep is rate limited by module state, so every case reloads the
-  // module to start from a clean sweep clock instead of inheriting a peer's.
+  fs.rmSync(CACHE_DIR, { recursive: true, force: true });
+  // The TTL sweep is rate limited by module state; reload so every case starts
+  // from a clean sweep clock instead of inheriting the previous case's.
   vi.resetModules();
-  const module = await import("./archive-compression.js");
-  encodeSessionArchiveContent = module.encodeSessionArchiveContent;
-  materializeSessionArchiveForRead = module.materializeSessionArchiveForRead;
-  SESSION_ARCHIVE_ZSTD_SUFFIX = module.SESSION_ARCHIVE_ZSTD_SUFFIX;
+  archive = await import("./archive-compression.js");
 });
 
-afterEach(() => {
-  if (savedBudget === undefined) {
-    delete process.env[CACHE_BUDGET_BYTES];
-  } else {
-    process.env[CACHE_BUDGET_BYTES] = savedBudget;
-  }
-});
-
-async function writeArchive(dir: string, name: string, content: string): Promise<string> {
-  const encoded = encodeSessionArchiveContent(content);
-  expect(encoded.suffix).toBe(SESSION_ARCHIVE_ZSTD_SUFFIX);
+function writeArchive(dir: string, name: string, content: string): string {
+  const encoded = archive.encodeSessionArchiveContent(content);
+  expect(encoded.suffix).toBe(archive.SESSION_ARCHIVE_ZSTD_SUFFIX);
   const archivePath = path.join(dir, `${name}.jsonl${encoded.suffix}`);
   fs.writeFileSync(archivePath, encoded.bytes);
   return archivePath;
 }
 
-function cacheDirSize(): number {
-  const cacheDir = path.join(fs.realpathSync("/tmp"), "openclaw", "session-archive-read-cache");
-  return fs
-    .readdirSync(cacheDir)
+const cacheDirSize = () =>
+  fs
+    .readdirSync(CACHE_DIR)
     .filter((name) => name.endsWith(".jsonl"))
-    .reduce((total, name) => total + fs.statSync(path.join(cacheDir, name)).size, 0);
-}
+    .reduce((total, name) => total + fs.statSync(path.join(CACHE_DIR, name)).size, 0);
+
+const body = (fill: string, bytes: number) =>
+  `${JSON.stringify({ type: "message", body: fill.repeat(bytes) })}\n`;
 
 describe("materialized archive cache aggregate budget", () => {
   it("evicts least-recently-materialized entries once total cache bytes exceed the budget", async () => {
-    // 4 archives x ~1 MiB plaintext each with a 2 MiB budget: reading all
-    // four must evict the oldest so the cache never exceeds the budget,
-    // and the newest reads must still be served from their cache paths.
-    process.env[CACHE_BUDGET_BYTES] = String(2 * 1024 * 1024);
+    // 4 x ~1 MiB with a 2 MiB budget: reading all four must evict the oldest, and
+    // the newest must still be served from its own cache path.
+    budgetBytes = 2 * 1024 * 1024;
     const dir = tempDirs.make("openclaw-archive-budget-");
-    const plaintext = `${JSON.stringify({ type: "message", body: "x".repeat(1024 * 1024) })}\n`;
-    const archives: string[] = [];
-    for (let index = 0; index < 4; index += 1) {
-      archives.push(await writeArchive(dir, `budget-${index}`, plaintext));
-    }
+    const plaintext = body("x", 1024 * 1024);
+    const archives = [0, 1, 2, 3].map((i) => writeArchive(dir, `budget-${i}`, plaintext));
     const cachePaths: string[] = [];
-    for (const archive of archives) {
-      cachePaths.push(await materializeSessionArchiveForRead(archive));
+    for (const file of archives) {
+      cachePaths.push(await archive.materializeSessionArchiveForRead(file));
     }
-    // Budget: total retained bytes must stay within the configured ceiling.
-    expect(cacheDirSize()).toBeLessThanOrEqual(2 * 1024 * 1024);
-    // LRU: the oldest materializations were evicted; the newest survive.
-    expect(fs.existsSync(cachePaths[0]!)).toBe(false);
-    expect(fs.existsSync(cachePaths[1]!)).toBe(false);
+    expect(cacheDirSize()).toBeLessThanOrEqual(budgetBytes);
+    expect(cachePaths.slice(0, 2).map((p) => fs.existsSync(p))).toEqual([false, false]);
     expect(fs.existsSync(cachePaths[3]!)).toBe(true);
-    // Re-reading an evicted archive still works (source identity survives eviction).
-    const rebuilt = await materializeSessionArchiveForRead(archives[0]!);
-    expect(fs.readFileSync(rebuilt, "utf8")).toBe(plaintext);
+    // An evicted archive still reads correctly: identity, not presence, gates a hit.
+    expect(
+      fs.readFileSync(await archive.materializeSessionArchiveForRead(archives[0]!), "utf8"),
+    ).toBe(plaintext);
   }, 120_000);
 
   it("keeps a materialized archive readable when it alone exceeds the budget", async () => {
-    // A single archive larger than the whole budget must not be evicted by the
-    // sweep it triggers: the returned path has to exist and hold its bytes.
-    process.env[CACHE_BUDGET_BYTES] = String(64 * 1024);
+    // The sweep must never delete the entry this call is about to hand back.
+    budgetBytes = 64 * 1024;
     const dir = tempDirs.make("openclaw-archive-oversize-");
-    const plaintext = `${JSON.stringify({ type: "message", body: "y".repeat(256 * 1024) })}\n`;
-    const archive = await writeArchive(dir, "oversize", plaintext);
-
-    const cachePath = await materializeSessionArchiveForRead(archive);
-
-    expect(fs.existsSync(cachePath)).toBe(true);
+    const plaintext = body("y", 256 * 1024);
+    const file = writeArchive(dir, "oversize", plaintext);
+    const cachePath = await archive.materializeSessionArchiveForRead(file);
     expect(fs.readFileSync(cachePath, "utf8")).toBe(plaintext);
-    // The second read is a cache hit and must stay readable for the same reason.
-    expect(await materializeSessionArchiveForRead(archive)).toBe(cachePath);
+    // The second call is a hit and must stay readable for the same reason.
+    expect(await archive.materializeSessionArchiveForRead(file)).toBe(cachePath);
     expect(fs.readFileSync(cachePath, "utf8")).toBe(plaintext);
   }, 120_000);
 
   it("expires aged entries while still serving the archive being read", async () => {
-    // The TTL sweep used to run only on the write path, so a warm cache whose
-    // archives stopped changing kept plaintext alive past its expiry.
-    process.env[CACHE_BUDGET_BYTES] = String(8 * 1024 * 1024);
+    // The TTL sweep used to run only on the write path, so a warm cache kept
+    // plaintext past its expiry whenever reads kept hitting it.
+    budgetBytes = 8 * 1024 * 1024;
     const dir = tempDirs.make("openclaw-archive-ttl-");
-    // Fill an unrelated stale entry first so the cache directory exists and the
-    // second read below is a pure hit on an aged directory.
     const aged = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
-    const cacheDir = path.join(fs.realpathSync("/tmp"), "openclaw", "session-archive-read-cache");
-    fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
-    const expiring = path.join(cacheDir, `${"f".repeat(32)}-expired-${process.pid}.jsonl`);
-    fs.writeFileSync(expiring, "stale");
-    fs.utimesSync(expiring, aged, aged);
+    fs.mkdirSync(CACHE_DIR, { recursive: true, mode: 0o700 });
+    const stale = path.join(CACHE_DIR, `${"f".repeat(32)}-expired-${process.pid}.jsonl`);
+    fs.writeFileSync(stale, "stale");
+    fs.utimesSync(stale, aged, aged);
 
-    const plaintext = `${JSON.stringify({ type: "message", body: "z".repeat(64 * 1024) })}\n`;
-    const archive = await writeArchive(dir, "aged", plaintext);
-    const cachePath = await materializeSessionArchiveForRead(archive);
-    expect(fs.existsSync(cachePath)).toBe(true);
-
-    // Age the whole cache directory past the 24h TTL, then read the same
-    // archive again: identity still matches, so this is a pure hit path.
-    for (const name of fs.readdirSync(cacheDir)) {
-      const entry = path.join(cacheDir, name);
-      fs.utimesSync(entry, aged, aged);
+    const plaintext = body("z", 64 * 1024);
+    const file = writeArchive(dir, "aged", plaintext);
+    await archive.materializeSessionArchiveForRead(file);
+    for (const name of fs.readdirSync(CACHE_DIR)) {
+      fs.utimesSync(path.join(CACHE_DIR, name), aged, aged);
     }
 
-    const served = await materializeSessionArchiveForRead(archive);
-
-    // Unrelated aged entries are reclaimed...
-    expect(fs.existsSync(expiring)).toBe(false);
-    // ...and the caller still gets readable bytes for the archive it asked for.
+    const served = await archive.materializeSessionArchiveForRead(file);
+    expect(fs.existsSync(stale)).toBe(false);
     expect(fs.readFileSync(served, "utf8")).toBe(plaintext);
   }, 120_000);
 });

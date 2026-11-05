@@ -10,6 +10,7 @@ import zlib from "node:zlib";
 import { walkDirectorySync } from "@openclaw/fs-safe/walk";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
+import { materializedArchiveCacheBudgetBytes } from "./archive-cache-budget.js";
 import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "./transcript-file-names.js";
 export { SESSION_ARCHIVE_ZSTD_SUFFIX } from "./transcript-file-names.js";
 
@@ -163,19 +164,6 @@ let lastMaterializedArchiveCacheSweepMs = 0;
 // busy gateway materialize every archive it touches within a day, which is how
 // /tmp filled with hundreds of decompressed copies (#193193). The budget bounds
 // total retained plaintext and evicts least-recently-materialized entries first.
-const DEFAULT_MATERIALIZED_ARCHIVE_CACHE_BUDGET_BYTES = 256 * 1024 * 1024;
-const MATERIALIZED_ARCHIVE_CACHE_BUDGET_ENV = "OPENCLAW_ARCHIVE_CACHE_MAX_BYTES";
-
-function resolveMaterializedArchiveCacheBudgetBytes(): number {
-  const raw = process.env[MATERIALIZED_ARCHIVE_CACHE_BUDGET_ENV]?.trim();
-  if (!raw) {
-    return DEFAULT_MATERIALIZED_ARCHIVE_CACHE_BUDGET_BYTES;
-  }
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) && parsed >= 0
-    ? parsed
-    : DEFAULT_MATERIALIZED_ARCHIVE_CACHE_BUDGET_BYTES;
-}
 
 function sweepMaterializedArchiveCache(cacheDir: string, keepName?: string): void {
   // An absent cache directory has nothing to reclaim; consuming the sweep slot
@@ -227,7 +215,7 @@ function enforceMaterializedArchiveCacheBudget(cacheDir: string, keepName?: stri
     }
   }
   let totalBytes = retained.reduce((sum, entry) => sum + entry.size, 0);
-  const budgetBytes = resolveMaterializedArchiveCacheBudgetBytes();
+  const budgetBytes = materializedArchiveCacheBudgetBytes;
   if (totalBytes <= budgetBytes) {
     return;
   }
