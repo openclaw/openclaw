@@ -88,21 +88,15 @@ export function registerGatewayCronPublicationTests({
   it("carries run liveness facts on cron-binding session pushes", async () => {
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const cfg = createCronConfig("server-cron-binding-liveness");
-      cfg.agents = { entries: { main: {} } };
-      const sessionStorePath = path.join(
-        os.tmpdir(),
-        `server-cron-binding-liveness-sessions-${Date.now()}`,
-        "sessions.json",
-      );
-      (cfg.session as { store?: string }).store = sessionStorePath;
-      const fs = await import("node:fs/promises");
-      await fs.mkdir(path.dirname(sessionStorePath), { recursive: true });
-      await fs.writeFile(
-        sessionStorePath,
-        JSON.stringify({
-          "agent:main:probe": { sessionId: "sess-probe", updatedAt: Date.now() },
-        }),
-        "utf-8",
+      cfg.agents = {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {} },
+      };
+      // The projection hydrates admitted store rows, not a raw sessions.json fixture.
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: "agent:main:probe" },
+        { sessionId: "sess-probe", updatedAt: 1 },
       );
 
       const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
@@ -128,12 +122,10 @@ export function registerGatewayCronPublicationTests({
             // phase-end hasActiveRun forever (issue #192398).
             const binding = await vi.waitFor(
               () => {
-                const call = broadcast.mock.calls
-                  .filter(
-                    ([event, payload]) =>
-                      event === "sessions.changed" && payload?.reason === "cron-binding",
-                  )
-                  .at(-1);
+                const call = broadcast.mock.calls.findLast(
+                  ([event, payload]) =>
+                    event === "sessions.changed" && payload?.reason === "cron-binding",
+                );
                 const record = requireRecord(call?.[1], "binding payload");
                 if (typeof record.hasActiveRun !== "boolean") {
                   throw new Error("binding payload not enriched with run liveness yet");
