@@ -15,6 +15,12 @@ const scope = resolveGlobalSingleton(
   Symbol.for("openclaw.runtimeWorkerGeneration"),
   () => new AsyncLocalStorage<GenerationScope>(),
 );
+/** Carry worker-code ownership through background work without retaining its originating turn. */
+export function captureRuntimeWorkerGenerationContext() {
+  const captured: GenerationScope = { generation: scope.getStore()?.generation };
+  return <T>(operation: () => T): T => scope.run(captured, operation);
+}
+
 /** Resolve through the carried generation; an absent generation stays unbound. */
 export function resolveRuntimeWorkerGenerationUrl(
   url: URL,

@@ -1,8 +1,10 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
+import { setInternalBeforeRequest } from "../../../packages/agent-core/src/internal-hooks.js";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model, ModelRequestHeaders } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { notifyListeners } from "../../shared/listeners.js";
+import { gateAgentToolExecution } from "../agent-tool-availability.js";
 import {
   getSteeringRuntimeContext,
   shouldRetainSteeringRuntimeContext,
@@ -25,6 +27,7 @@ import type {
 } from "./agent-session-types.js";
 import { replaceAgentMessageInPlace } from "./agent-session-utils.js";
 import { formatNoApiKeyFoundMessage } from "./auth-guidance.js";
+import { createBackgroundResultPlacement } from "./background-result-placement.js";
 import type { CompactionRequestBudget } from "./compaction/request-budget.js";
 import {
   type ExtensionCommandContextActions,
@@ -99,6 +102,7 @@ export abstract class AgentSessionBase {
   protected extensionErrorListener?: ExtensionErrorListener;
   protected extensionErrorUnsubscriber?: () => void;
   private readonly cleanupProviderSessionResourcesOnDispose: boolean;
+  private readonly disposeBackgroundResultPlacement: () => void;
 
   protected sessionModelRegistry: ModelRegistry;
 
@@ -126,6 +130,9 @@ export abstract class AgentSessionBase {
     this.resolveCompactionThinkingLevel = config.resolveCompactionThinkingLevel;
     this.cleanupProviderSessionResourcesOnDispose =
       config.cleanupProviderSessionResourcesOnDispose ?? true;
+    const placement = createBackgroundResultPlacement(this.sessionManager);
+    setInternalBeforeRequest(this.agent, placement.beforeRequest);
+    this.disposeBackgroundResultPlacement = placement.dispose;
   }
 
   get modelRegistry(): ModelRegistry {
@@ -314,12 +321,17 @@ export abstract class AgentSessionBase {
         prepareToolResult();
       });
     }
-    return this.handleAgentEventUnlocked(event, prepareToolResult);
+    return this.handleAgentEventUnlocked(
+      event,
+      prepareToolResult,
+      event.type === "message_update" ? false : undefined,
+    );
   };
 
   private async handleAgentEventUnlocked(
     event: AgentEvent,
     prepareToolResult: () => boolean,
+    hasExtensionHandlers?: boolean,
   ): Promise<void> {
     if (event.type === "agent_start") {
       this.lastAssistantEntryId = undefined;
@@ -333,7 +345,8 @@ export abstract class AgentSessionBase {
     }
 
     let messageChanged = false;
-    if (this.currentExtensionRunner.hasHandlers(event.type)) {
+    // Delta dispatch reaches here synchronously; user-message retirement can run callbacks.
+    if (hasExtensionHandlers ?? this.currentExtensionRunner.hasHandlers(event.type)) {
       messageChanged = await this.emitExtensionEvent(event);
     }
     // Turn numbering belongs to the session, including turns with no extension listeners.
@@ -543,6 +556,8 @@ export abstract class AgentSessionBase {
    * Call this when completely done with the session.
    */
   dispose(): void {
+    this.disposeBackgroundResultPlacement();
+    setInternalBeforeRequest(this.agent, undefined);
     notifyListeners(
       [() => this.abortRetry(), () => this.abortCompaction(), () => this.agent.abort()],
       undefined,
@@ -598,16 +613,25 @@ export abstract class AgentSessionBase {
   /**
    * Set active tools by name.
    * Only tools in the registry can be enabled. Unknown tool names are ignored.
+   * An execution cap preserves these definitions and refuses denied calls.
    * Refreshes extension prompt metadata while preserving the runtime-owned prompt.
    * Changes take effect on the next agent turn.
    */
-  setActiveToolsByName(toolNames: string[]): void {
+  setActiveToolsByName(toolNames: string[], callableToolNames?: readonly string[]): void {
     const tools: AgentTool[] = [];
     const validToolNames: string[] = [];
+    const callable = callableToolNames ? new Set(callableToolNames) : undefined;
     for (const name of toolNames) {
       const tool = this.toolRegistry.get(name);
       if (tool) {
-        tools.push(tool);
+        tools.push(
+          !callable || callable.has(name)
+            ? tool
+            : gateAgentToolExecution(
+                tool,
+                `${name} is not available in this turn. Do not retry ${name}.`,
+              ),
+        );
         validToolNames.push(name);
       }
     }

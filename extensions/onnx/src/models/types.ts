@@ -1,6 +1,3 @@
-import type { Tokenizer } from "@huggingface/tokenizers";
-import type { InferenceSession } from "onnxruntime-node";
-
 export type ClassificationInput = {
   text: string;
   labels: readonly string[];
@@ -10,12 +7,6 @@ export type ClassificationInput = {
 };
 
 export type ClassificationResult = { logits: number[]; inputTokens: number };
-
-export type ModelContext = {
-  session: Pick<InferenceSession, "run">;
-  tokenizer: Tokenizer;
-  maxTokens: number;
-};
 
 export interface ModelAdapter {
   classify(input: ClassificationInput): Promise<ClassificationResult>;

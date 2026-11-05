@@ -95,6 +95,10 @@ capture, worker accounting, the live-pool registry, and shared compute capacity.
 The package controls when those operations run and holds admission until their
 required settlement receipts arrive.
 
+Pools can set their own worker heap limits through `workerOptions.resourceLimits`.
+The Control UI asset reader uses a 16 MiB young generation to reduce committed
+nursery space between read bursts while keeping its workers warm.
+
 Each synchronous pool or rotation pass captures its native workers and asks the
 host to service them. OpenClaw's host binds a pool to one native source, so one
 service call advances that shared source. Nested calls capture a fresh pass;
@@ -152,6 +156,11 @@ releases execution capacity; terminal pool close also joins temporary-file
 cleanup. Failed retirement retains custody for a later retry. Neither a rejected
 result nor a cancellation request alone proves that execution or resources have
 settled.
+
+Workers without retained native resources use one supervisor receipt for execution
+and cleanup completion. The host still emits execution exit before final exit.
+Resource-owning workers retain separate receipts so execution capacity can be
+released while resource cleanup is pending or has failed.
 
 When queued work competes with a task waiting for a host response, `yieldSignal`
 requests a cooperative checkpoint. The host operation retains its own lifetime;

@@ -33,7 +33,7 @@ type LocalMutationScope = {
  * without an expected-owner parameter: the method's own guard (for example a config
  * baseHash) binds the effect, and owner identity is revalidated right before dispatch.
  */
-type OwnerRequest = <R>(method: string, params: Record<string, unknown>) => Promise<R>;
+export type OwnerRequest = <R>(method: string, params: Record<string, unknown>) => Promise<R>;
 
 class LocalStateOwnerError extends Error {
   constructor(

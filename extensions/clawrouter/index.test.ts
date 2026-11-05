@@ -1,5 +1,5 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
+import { createAssistantMessageEventStream, streamSimple } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
@@ -182,6 +182,91 @@ describe("ClawRouter plugin", () => {
     },
   );
 
+  it.each(["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const)(
+    "%s preserves the catalog model identity through an Anthropic response",
+    async (hook) => {
+      const selected = "anthropic/claude-sonnet-4-6";
+      const upstream = "claude-sonnet-4-6";
+      const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+        expect(await new Request(input, init).json()).toMatchObject({ model: upstream });
+        const events = [
+          {
+            type: "message_start",
+            message: {
+              id: "msg_fixture",
+              type: "message",
+              role: "assistant",
+              model: upstream,
+              content: [],
+              usage: { input_tokens: 1, output_tokens: 0 },
+            },
+          },
+          { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+          { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Hello" } },
+          { type: "content_block_stop", index: 0 },
+          {
+            type: "message_delta",
+            delta: { stop_reason: "end_turn" },
+            usage: { output_tokens: 1 },
+          },
+          { type: "message_stop" },
+        ];
+        return new Response(
+          events
+            .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+            .join(""),
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      });
+      vi.stubGlobal("fetch", fetch);
+      const model = streamModel({
+        api: "anthropic-messages",
+        id: selected,
+        params: {
+          clawrouterRoute: {
+            api: "anthropic-messages",
+            baseUrl: "https://clawrouter.example/v1/native/anthropic",
+            upstreamModel: upstream,
+          },
+        },
+      });
+      const wrapped = provider[hook]?.({
+        provider: "clawrouter",
+        modelId: selected,
+        streamFn: streamSimple,
+      });
+      if (!wrapped) {
+        throw new Error(`missing ClawRouter ${hook}`);
+      }
+      const stream = await wrapped(
+        model,
+        { messages: [{ role: "user", content: "Say hello.", timestamp: 0 }] },
+        { apiKey: "fixture-router-key", maxTokens: 64 },
+      );
+      if (hook === "wrapStreamFn") {
+        for await (const event of stream) {
+          const message =
+            event.type === "done"
+              ? event.message
+              : event.type === "error"
+                ? event.error
+                : event.partial;
+          if (message) {
+            expect(message.model).toBe(selected);
+          }
+        }
+      }
+      expect(await stream.result()).toMatchObject({
+        provider: "clawrouter",
+        model: selected,
+        responseModel: upstream,
+        content: [{ type: "text", text: "Hello" }],
+        stopReason: "stop",
+      });
+      expect(fetch).toHaveBeenCalledOnce();
+    },
+  );
+
   it("attaches bounded attribution without overriding configured metadata", () => {
     const longRunId = `run-${"r".repeat(300)}`;
     const first = captureHeaders(
@@ -350,6 +435,98 @@ describe("ClawRouter plugin", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("discovers Fusion only from its key's unified offer and executes the chat stream", async () => {
+    providerAuthRuntimeMocks.resolveApiKeyForProvider.mockResolvedValue({ apiKey: "fusion-key" });
+    const offer = {
+      modelId: "clawrouter/fusion",
+      endpoint: "chat_completions",
+      transport: "http",
+      routeKind: "unified",
+      route: "/v1/chat/completions",
+      eligible: true,
+    };
+    const row = {
+      id: "clawrouter",
+      displayName: "ClawRouter Fusion",
+      allowed: true,
+      executable: true,
+      openaiCompatible: true,
+      nativeBaseUrl: "/v1",
+      routes: [],
+      offers: [offer],
+      models: [
+        {
+          id: "clawrouter/fusion",
+          upstream: "clawrouter/fusion",
+          capabilities: ["llm.chat"],
+        },
+      ],
+    };
+    let advertisedOffer = offer;
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const request = new Request(input, init);
+      if (request.url.endsWith("/v1/catalog")) {
+        return Response.json({ providers: [{ ...row, offers: [advertisedOffer] }] });
+      }
+      expect(request.url).toBe("https://clawrouter.example/v1/chat/completions");
+      expect(request.headers.get("authorization")).toBe("Bearer fusion-key");
+      expect(await request.json()).toMatchObject({ model: "clawrouter/fusion", stream: true });
+      const chunk = {
+        id: "fixture",
+        object: "chat.completion.chunk",
+        created: 0,
+        model: "clawrouter/fusion",
+        choices: [
+          { index: 0, delta: { role: "assistant", content: "Hello" }, finish_reason: "stop" },
+        ],
+        usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+      };
+      return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
+        headers: { "content-type": "text/event-stream" },
+      });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const context = {
+      ...dynamicModelContext(),
+      modelId: "clawrouter/fusion",
+      providerConfig: { baseUrl: "https://clawrouter.example/v1", models: [] },
+    };
+    const model = await prepare(context);
+    expect(model).toMatchObject({ id: "clawrouter/fusion", api: "openai-completions" });
+    if (!model) {
+      throw new Error("Fusion was not discovered");
+    }
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "clawrouter",
+      modelId: model.id,
+      streamFn: streamSimple,
+    });
+    if (!wrapped) {
+      throw new Error("missing stream wrapper");
+    }
+    const result = await (
+      await wrapped(
+        model,
+        { messages: [{ role: "user", content: "Hello", timestamp: 0 }] },
+        { apiKey: "fusion-key", maxTokens: 64 },
+      )
+    ).result();
+    expect(result.content).toEqual([{ type: "text", text: "Hello" }]);
+    expect(result.usage).toMatchObject({ input: 2, output: 1 });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    for (const patch of [
+      { eligible: false },
+      { modelId: "other/model" },
+      { routeKind: "native" },
+      { route: "/v1/playground/v1/chat/completions" },
+      { endpoint: "responses" },
+    ]) {
+      clearLiveCatalogCacheForTests();
+      advertisedOffer = { ...offer, ...patch };
+      await expect(prepare(context)).resolves.toBeUndefined();
+    }
+  });
+
   it("surfaces catalog refresh failures", async () => {
     providerAuthRuntimeMocks.resolveApiKeyForProvider
       .mockResolvedValueOnce({ apiKey: "decoy-token" })
@@ -374,6 +551,13 @@ describe("ClawRouter plugin", () => {
     ],
     ["google-generative-ai", "google/gemini-3.5-flash", { validateGeminiTurns: true }],
     ["openai-completions", "deepseek/deepseek-v4-flash", { sanitizeToolCallIds: true }],
+    [
+      "openai-completions",
+      "mistral/mistral-large-latest",
+      { sanitizeToolCallIds: true, toolCallIdMode: "strict9" },
+    ],
+    ["openai-completions", "openrouter/mistralai/large", { toolCallIdMode: "strict" }],
+    ["openai-responses", "mistral/mistral-large-latest", { toolCallIdMode: "strict" }],
   ])("dispatches replay policy for %s", (modelApi, modelId, expected) => {
     expect(
       provider.buildReplayPolicy?.({ provider: "clawrouter", modelApi, modelId } as never),

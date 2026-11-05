@@ -184,7 +184,13 @@ export function registerGenerationRecoveryTests(
         expect(record.verification.serviceRunning).toBe(false);
         expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual(candidateConfig);
       } else {
-        expect(restores).toBe(1);
+        expect(
+          restores,
+          JSON.stringify({
+            result: error instanceof UpdateCommandFailure ? error.result : error,
+            ledgerReason: record.reason,
+          }),
+        ).toBe(1);
         expect(mocks.running).toBe(true);
         expect(mocks.stopAllowances).toEqual([undefined, "1"]);
         expect(record).toMatchObject({

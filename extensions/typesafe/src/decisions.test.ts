@@ -22,12 +22,22 @@ const row = (decision: Decision, id = pinned.id) => ({
 });
 const facts: Decision = {
   protocol: "typesafe-systemone",
-  input: ["text"],
-  limits: { maxRequestTokens: 64000, maxStateAndQuestionTokens: 32000 },
+  input: ["text", "image"],
+  limits: {
+    maxRequestTokens: 64000,
+    maxStateAndQuestionTokens: 32000,
+    image: { maxBytes: 4194304, mimeTypes: ["image/png", "image/jpeg"], remoteUrls: false },
+  },
   billing: { unit: "tokens", source: "provider-docs", usdPerMillion: { input: 0.042, output: 0 } },
 };
-const { limits: _limits, ...unlimited } = facts;
-const { billing: _billing, ...unbound } = unlimited;
+const {
+  maxRequestTokens: _request,
+  maxStateAndQuestionTokens: _question,
+  ...imageLimits
+} = facts.limits!;
+const unlimited = { ...facts, limits: imageLimits };
+const { billing: _billing, limits: _limits, ...customFacts } = facts;
+const unbound = { ...customFacts, input: ["text" as const] };
 const runtime = (overrides: Partial<ProviderConfig> = {}): RuntimeConfig => ({
   ...config,
   providerConfig: { baseUrl: hosted, models: [], ...overrides },
@@ -51,13 +61,40 @@ function catalog(settings: RuntimeConfig, entries = [row(facts)]) {
   return { provider, rows: provider.augmentModelCatalog!({ env: {}, entries }) };
 }
 
+it.each([
+  {
+    provider: "openrouter",
+    modelId: "deepseek/deepseek-v4.1-flash-1017",
+    baseUrl: "https://openrouter.ai/api/v1",
+  },
+  { provider: "openai", modelId: "gpt-4o-mini", baseUrl: "https://api.openai.com/v1" },
+])("leaves $provider transport unchanged", ({ provider, modelId, baseUrl }) => {
+  const { normalizeTransport } = createPreparedDecisionProvider(() => config).provider!;
+  expect(
+    normalizeTransport?.({
+      provider,
+      modelId,
+      api: "openai-completions",
+      baseUrl,
+    }),
+  ).toBeUndefined();
+});
+
 it.each<[RuntimeConfig, Decision, string?]>([
   [config, facts, hosted],
   [runtime({ baseUrl: "https://api.typesafe.ai" }), facts, hosted],
   [runtime({ baseUrl: "https://api.typesafe.ai/v1/" }), facts, hosted],
-  [{ baseUrl: "http://127.0.0.1:8765", timeoutMs: 2000 }, unbound],
-  [runtime({ baseUrl: "https://systemone.fixture.invalid/v1" }), unbound],
-  [runtime({ baseUrl: "https://api.typesafe.ai/custom/v1" }), unbound],
+  [{ baseUrl: "http://127.0.0.1:8765", timeoutMs: 2000 }, unbound, "http://127.0.0.1:8765/v1"],
+  [
+    runtime({ baseUrl: "https://systemone.fixture.invalid/v1" }),
+    unbound,
+    "https://systemone.fixture.invalid/v1",
+  ],
+  [
+    runtime({ baseUrl: "https://api.typesafe.ai/custom/v1" }),
+    unbound,
+    "https://api.typesafe.ai/custom/v1",
+  ],
   [runtime({ headers: enabled }), unlimited],
   [runtime({ headers: disabled, models: [model] }), unlimited],
   [runtime({ headers: disabled, request: { headers: enabled } }), unlimited],
@@ -91,6 +128,6 @@ it("preserves native catalog rows, enriches V1, and unbinds only hosted facts", 
   expect(result?.[2]?.inference?.decision?.protocol).toBe("typesafe-systemone");
   expect(result?.[0]?.inference).toEqual({
     chat: false,
-    decision: { ...decision, limits: { maxQuestions: 12 } },
+    decision: { ...decision, input: ["text"], limits: { maxQuestions: 12 } },
   });
 });

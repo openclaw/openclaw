@@ -1,7 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, expect, it, vi } from "vitest";
+import { listBuzzAccountIds, resolveDefaultBuzzAccountId } from "./account-config.js";
 import type { BuzzConfigInput } from "./config-schema.js";
-import { listBuzzAccountIds, resolveBuzzAccount, resolveDefaultBuzzAccountId } from "./types.js";
+import { resolveBuzzAccount } from "./types.js";
 
 const PRIVATE_KEY = "11".repeat(32);
 const ENV_PRIVATE_KEY = "22".repeat(32);

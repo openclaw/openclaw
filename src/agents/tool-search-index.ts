@@ -1,16 +1,18 @@
 import { createHash } from "node:crypto";
+import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { LruCache } from "../infra/lru-cache.js";
 import { buildLexicalIndex, readParameterText, tokenizeDocument } from "./tool-search-ranking.js";
 import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
 
 // Content is the revision: rebuilt tools, agents, and sessions share only lexical
 // data. Positions are rebound to the caller's current, policy-filtered inventory.
-// Indexes and document terms share one byte budget. Exact text owns tokenization;
+// Entry text, indexes and document terms share one byte budget. Exact text owns tokenization;
 // effective population and order still own each index's BM25 statistics.
 const lexicalData = new LruCache<
   { bytes: number } & (
     | { kind: "index"; index: ReturnType<typeof buildLexicalIndex<number>> }
     | { kind: "document"; terms: string[] }
+    | { kind: "entry"; text: string }
   )
 >(1024, { maxBytes: 8 * 1024 * 1024, sizeOf: (entry) => entry.bytes });
 // Eviction retires idle retention, never an index still held by an admitted view.
@@ -134,12 +136,28 @@ export function getToolSearchLexicalIndex(
  * tool-search tools index argument metadata for the same reason.
  */
 function toolSearchEntryText(entry: ToolSearchCatalogEntry): string {
+  // Only the schema owner's immutable publication can replace traversal across runs.
+  // Share text, never descriptors or their run-scoped executors/authority.
+  const schema =
+    entry.source === "openclaw" ? getPublishedRuntimeToolInputSchema(entry.parameters) : undefined;
+  const key =
+    entry.source !== "openclaw" || schema
+      ? `entry:${JSON.stringify([entry.name, entry.id, entry.label ?? "", entry.description, schema?.fingerprint])}`
+      : undefined;
+  const cached = key && lexicalData.get(key);
+  if (cached && cached.kind === "entry") {
+    return cached.text;
+  }
   // Only first-party schemas are walked. MCP and client parameters are untrusted
   // and deliberately never traversed: compactToolSearchCatalogEntry reports them
   // as "unknown" for the same reason, and a client may hand us a lazy object that
   // throws on property access.
   const parameters = entry.source === "openclaw" ? readParameterText(entry.parameters) : "";
-  return [entry.name, entry.id, entry.label ?? "", entry.description, parameters]
+  const text = [entry.name, entry.id, entry.label ?? "", entry.description, parameters]
     .filter(Boolean)
     .join(" ");
+  if (key) {
+    lexicalData.set(key, { kind: "entry", text, bytes: (key.length + text.length) * 2 + 64 });
+  }
+  return text;
 }

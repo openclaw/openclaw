@@ -151,9 +151,11 @@ describe("control UI session PR subscriptions", () => {
 
   it.each([
     { facts: "category", invalidated: undefined, refresh: false },
+    { facts: "participants", invalidated: undefined, refresh: false },
     { facts: undefined, invalidated: "category", refresh: false },
     { facts: "category", invalidated: true, refresh: true },
     { facts: "unchanged", invalidated: true, refresh: true },
+    { facts: "participants", invalidated: true, refresh: true },
   ] as const)(
     "refreshes=$refresh for facts=$facts, invalidated=$invalidated",
     async ({ facts, invalidated, refresh }) => {

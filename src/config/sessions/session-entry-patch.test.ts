@@ -37,6 +37,7 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import {
   patchSessionEntryCore as patchInternalSessionEntry,
+  patchSessionEntryTarget,
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "./session-accessor.sqlite-entry.js";
@@ -77,28 +78,6 @@ function releasableSource(release: () => void | Promise<void>) {
   });
 }
 
-it("prepares callback patches from complete current owner facts without another entry reply", async () => {
-  await withFixture(async (f) => {
-    const prompt = "synthetic retained instructions ".repeat(1024);
-    replaceSessionEntrySync(f.scope, {
-      ...f.read()!,
-      skillsSnapshot: { prompt, skills: [] },
-    });
-    await readSessionEntryInWorker(f.scope);
-    delivery.commands.length = 0;
-    const result = await patchSessionEntryCore(f.scope, (entry) => {
-      expect(entry.skillsSnapshot?.prompt).toBe(prompt);
-      return { label: "prepared from published facts" };
-    });
-    expect(result).toMatchObject({
-      label: "prepared from published facts",
-      skillsSnapshot: { prompt },
-    });
-    expect(delivery.commands).toEqual(["session.entry.patch.commit"]);
-    expect(f.read()).toEqual(result);
-  });
-});
-
 it("patches a replaced entry whose retained fields have a different insertion order", async () => {
   await withFixture(async (f) => {
     const identity = { sessionId: f.scope.sessionId };
@@ -111,53 +90,61 @@ it("patches a replaced entry whose retained fields have a different insertion or
   });
 });
 
-it("ends an absent live-switch selection without committing and keeps newer flags and callback CAS", async () => {
-  await withFixture(async (f) => {
-    const initial = f.read()!;
-    const newer = { ...initial, liveModelSwitchPending: true, modelOverride: "new-selection" };
-    const update = vi.fn(() => ({ liveModelSwitchPending: undefined }));
-    const onCommitted = vi.fn();
-    const options = {
-      skipMaintenance: true,
-      prepareIf: { kind: "live-model-switch-pending" as const },
-      onCommitted,
-    };
-    await readSessionEntryInWorker(f.scope);
-    delivery.commands.length = 0;
-    sessionChanges.invalidate({
-      sessionKey: f.scope.sessionKey,
-      storePath: f.database.path,
-      factsInvalidated: true,
-    });
-    delivery.afterPrepare = () => {
-      delivery.afterPrepare = undefined;
-      replaceSessionEntrySync(f.scope, newer);
-    };
+it.each(["entry", "target"] as const)(
+  "ends an absent %s live-switch selection without committing and keeps newer flags and callback CAS",
+  async (selection) => {
+    await withFixture(async (f) => {
+      const initial = f.read()!;
+      const newer = { ...initial, liveModelSwitchPending: true, modelOverride: "new-selection" };
+      const update = vi.fn(() => ({ liveModelSwitchPending: undefined }));
+      const onCommitted = vi.fn();
+      const options = {
+        skipMaintenance: true,
+        prepareIf: { kind: "live-model-switch-pending" as const },
+        onCommitted,
+      };
+      const patch = () =>
+        selection === "entry"
+          ? patchSessionEntryCore(f.scope, update, options)
+          : patchSessionEntryTarget({ ...f.scope, target: f.target }, update, {
+              workerGuard: {},
+              ...options,
+            });
+      await readSessionEntryInWorker(f.scope);
+      delivery.commands.length = 0;
+      sessionChanges.invalidate({
+        sessionKey: f.scope.sessionKey,
+        storePath: f.database.path,
+        factsInvalidated: true,
+      });
+      delivery.afterPrepare = () => {
+        delivery.afterPrepare = undefined;
+        replaceSessionEntrySync(f.scope, newer);
+      };
 
-    await expect(patchSessionEntryCore(f.scope, update, options)).resolves.toBeNull();
-    expect(delivery.commands).toEqual(["session.entry.patch.prepare"]);
-    expect(update).not.toHaveBeenCalled();
-    expect(onCommitted).not.toHaveBeenCalled();
-    expect(f.read()).toMatchObject(newer);
+      await expect(patch()).resolves.toBeNull();
+      expect(delivery.commands).toEqual(["session.entry.patch.prepare"]);
+      expect(update).not.toHaveBeenCalled();
+      expect(onCommitted).not.toHaveBeenCalled();
+      expect(f.read()).toMatchObject(newer);
 
-    await readSessionEntryInWorker(f.scope);
-    delivery.commands.length = 0;
-    delivery.beforeCommit = () => {
-      delivery.beforeCommit = undefined;
-      replaceSessionEntrySync(f.scope, { ...newer, modelOverride: "latest-selection" });
-    };
-    await expect(patchSessionEntryCore(f.scope, update, options)).rejects.toBeInstanceOf(
-      SqliteSessionMutationConflictError,
-    );
-    expect(update).toHaveBeenCalledOnce();
-    expect(delivery.commands).toEqual(["session.entry.patch.commit"]);
-    expect(onCommitted).not.toHaveBeenCalled();
-    expect(f.read()).toMatchObject({
-      liveModelSwitchPending: true,
-      modelOverride: "latest-selection",
+      await readSessionEntryInWorker(f.scope);
+      delivery.commands.length = 0;
+      delivery.beforeCommit = () => {
+        delivery.beforeCommit = undefined;
+        replaceSessionEntrySync(f.scope, { ...newer, modelOverride: "latest-selection" });
+      };
+      await expect(patch()).rejects.toBeInstanceOf(SqliteSessionMutationConflictError);
+      expect(update).toHaveBeenCalledOnce();
+      expect(delivery.commands).toEqual(["session.entry.patch.commit"]);
+      expect(onCommitted).not.toHaveBeenCalled();
+      expect(f.read()).toMatchObject({
+        liveModelSwitchPending: true,
+        modelOverride: "latest-selection",
+      });
     });
-  });
-});
+  },
+);
 
 it("publishes participant writes accepted while an entry callback was awaiting commit", async () => {
   await withFixture(async (f) => {

@@ -6,7 +6,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Cached composer display reconciliation" });
 
 suite.define(() => {
-  it("restores disabled composer facts before hello, then accepts changed and cleared live settings", async () => {
+  it("keeps cached composer controls visually settled without accepting input before live settings", async () => {
     await suite.withPage(
       { viewport: { width: 1719, height: 1000 }, serviceWorkers: "block" },
       async ({ page }) => {
@@ -18,6 +18,9 @@ suite.define(() => {
           modelOverrideSource: "user",
           thinkingLevel: "high",
           permissionMode: "full",
+          totalTokens: 14_000,
+          contextTokens: 100_000,
+          totalTokensFresh: true,
         });
         const thinkingLevels = [
           { id: "low", label: "Low" },
@@ -59,14 +62,79 @@ suite.define(() => {
         const model = pane.locator("[data-chat-model-select]");
         const effort = pane.locator("[data-chat-thinking-select]");
         const permission = pane.locator("[data-chat-permission-select]");
+        const ring = pane.locator(".context-ring");
         const flushSnapshot = () =>
           page.evaluate(async () => {
             const active = document.querySelector(".chat-pane-cache__pane--active");
             await Reflect.get(active!, "sessionSnapshotStore").flush();
           });
         await expect.poll(() => model.getAttribute("aria-disabled")).toBe("false");
+        await expect
+          .poll(() => model.getAttribute("data-chat-select-value"))
+          .toBe("example/reasoning-example");
         await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("high");
+        await expect.poll(() => permission.getAttribute("data-chat-select-value")).toBe("full");
         await flushSnapshot();
+
+        const appearance = () =>
+          pane
+            .locator(
+              "[data-chat-model-select], [data-chat-thinking-select], [data-chat-permission-select]",
+            )
+            .evaluateAll((controls) =>
+              controls.map((control) => {
+                const style = getComputedStyle(control);
+                return {
+                  class: control.className,
+                  opacity: style.opacity,
+                  color: style.color,
+                  cursor: style.cursor,
+                };
+              }),
+            );
+        const liveAppearance = await appearance();
+        await expect.poll(() => ring.getAttribute("aria-label")).toContain("14%");
+        await page.addInitScript(() => {
+          const sample = () => {
+            if (document.querySelector(".agent-chat__input")) {
+              const sampledRing = document.querySelector(".context-ring");
+              Reflect.set(window, "firstComposerContext", {
+                label: sampledRing?.getAttribute("aria-label"),
+                opacity: sampledRing ? getComputedStyle(sampledRing).opacity : null,
+              });
+            } else {
+              requestAnimationFrame(sample);
+            }
+          };
+          requestAnimationFrame(sample);
+        });
+        await page.reload();
+        await gateway.waitForRequest("connect");
+        await page.getByText(text, { exact: true }).waitFor();
+        expect(await appearance()).toEqual(liveAppearance);
+        expect(
+          await page.evaluate(async () => {
+            await new Promise(requestAnimationFrame);
+            return Reflect.get(window, "firstComposerContext");
+          }),
+        ).toEqual({
+          label: "Session context usage: 14k of 100k (14%)",
+          opacity: "1",
+        });
+        expect(await ring.getAttribute("aria-label")).toContain("14%");
+        for (const control of [model, effort, permission]) {
+          expect(await control.getAttribute("aria-disabled")).toBe("true");
+          expect(await control.getAttribute("aria-description")).toContain("Refreshing");
+          await control.click({ force: true });
+          await control.press("Enter");
+          await control.press("Space");
+        }
+        expect(await pane.locator("details[open], :popover-open").count()).toBe(0);
+        expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+        await gateway.resolveDeferred("connect");
+        await expect.poll(() => permission.isEnabled()).toBe(true);
+        expect(await appearance()).toEqual(liveAppearance);
+        expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
 
         const live = {
           ...cached,
@@ -74,6 +142,7 @@ suite.define(() => {
           model: "alternate-example",
           thinkingLevel: "low",
           permissionMode: "workspace",
+          totalTokens: 42_000,
         };
         await gateway.setSessionsListResponse({ sessions: [live] });
         await gateway.setMethodResponse("sessions.describe", { session: live });
@@ -87,6 +156,8 @@ suite.define(() => {
         expect(await effort.getAttribute("aria-disabled")).toBe("true");
         expect(await permission.getAttribute("data-chat-select-value")).toBe("full");
         expect(await permission.isDisabled()).toBe(true);
+        expect(await ring.getAttribute("aria-label")).toContain("14%");
+        const retainedRing = await ring.elementHandle();
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
@@ -99,6 +170,12 @@ suite.define(() => {
           .poll(() => permission.getAttribute("data-chat-select-value"))
           .toBe("workspace");
         await expect.poll(() => permission.isEnabled()).toBe(true);
+        await expect.poll(() => ring.getAttribute("aria-label")).toContain("42%");
+        expect(
+          await retainedRing!.evaluate(
+            (element) => element === document.querySelector(".context-ring"),
+          ),
+        ).toBe(true);
         await flushSnapshot();
 
         const cleared = {

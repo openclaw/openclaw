@@ -13,7 +13,6 @@ import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatCliCommand } from "../../src/cli/command-format.js";
-import { readSessionArchiveContentSync } from "../../src/config/sessions/archive-compression.js";
 import { formatSqliteSessionFileMarker } from "../../src/config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessage,
@@ -41,6 +40,7 @@ import {
 } from "./openclaw-test-instance.js";
 import { withinTest } from "./promise.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
+import { readSessionArchiveText } from "./session-archive.js";
 import { stopChildProcess } from "./stop-child-process.js";
 
 type DoctorMode = "fix" | "import" | "inspect" | "validate" | "restore";
@@ -275,6 +275,11 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
         await requireMockOpenAiRequest(context.mockOpenAiRequestLog);
         await record("after-full-agent-turn");
 
+        // Reuse the restart and later stopped-writer maintenance boundary for
+        // the reset proof instead of launching another Gateway just for it.
+        const resetSessionId = await resetSession(restartedClient, context.resetSessionKey);
+        await record("after-sessions-reset");
+
         abruptRestart = await runAbruptRestartProof(
           inst,
           context,
@@ -293,37 +298,23 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
         await record("after-sqlite-busy-contention");
 
         await inst.startGateway();
+        await record("after-second-startup-after-reset");
         ({ client: restartedClient, disconnect: disconnectRestartedClient } =
           await connectProofClient(
             inst,
             context,
             "sqlite-sessions-transcripts-flip-proof-maintained",
           ));
-        await runConcurrentMultiClientLifecycle(inst, context, restartedClient);
-        await record("after-concurrent-multi-client");
-
-        const resetSessionId = await resetSession(restartedClient, context.resetSessionKey);
-        await record("after-sessions-reset");
-
-        await disconnectRestartedClient();
-        await inst.stopGateway();
-        await inst.startGateway();
-        await record("after-second-startup-after-reset");
-
-        const { client: postResetClient, disconnect: disconnectPostResetClient } =
-          await connectProofClient(
-            inst,
-            context,
-            "sqlite-sessions-transcripts-flip-proof-post-reset-restart",
-          );
         secondStartupAfterReset = await runSecondStartupAfterResetProof(
-          postResetClient,
+          restartedClient,
           context,
           resetSessionId,
         );
         await record("after-transcript-append");
+        await runConcurrentMultiClientLifecycle(inst, context, restartedClient);
+        await record("after-concurrent-multi-client");
 
-        await deleteSession(postResetClient, context.deleteSessionKey);
+        await deleteSession(restartedClient, context.deleteSessionKey);
         await record("after-sessions-delete");
 
         const firstSharedSessionKey = expectDefined(
@@ -334,13 +325,13 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
           context.sharedSessionKeys[1],
           "second shared SQLite proof session key",
         );
-        await deleteSession(postResetClient, firstSharedSessionKey);
-        await requireTrackedSession(postResetClient, secondSharedSessionKey);
+        await deleteSession(restartedClient, firstSharedSessionKey);
+        await requireTrackedSession(restartedClient, secondSharedSessionKey);
         await record("after-shared-first-delete");
 
-        await deleteSession(postResetClient, secondSharedSessionKey);
+        await deleteSession(restartedClient, secondSharedSessionKey);
         await record("after-shared-final-delete");
-        await disconnectPostResetClient();
+        await disconnectRestartedClient();
 
         const finalInspectDoctor = await runDoctor(inst, "inspect", context.storePath);
         await record("after-final-doctor-inspect", finalInspectDoctor);
@@ -2060,7 +2051,7 @@ async function walkFiles(root: string, visit: (filePath: string) => Promise<void
 async function inventoryFile(filePath: string, relativeRoot: string) {
   const stat = await fs.stat(filePath);
   const text = await Promise.resolve()
-    .then(() => readSessionArchiveContentSync(filePath))
+    .then(() => readSessionArchiveText(filePath))
     .catch(() => undefined);
   const archive = parseArchiveArtifactName(path.basename(filePath));
   const jsonl = text !== undefined ? summarizeJsonl(text) : undefined;

@@ -10,12 +10,12 @@
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { registerHooks, stripTypeScriptTypes } from "node:module";
 import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
 import type { WorkerSessionPlacementRecord } from "../../src/gateway/worker-environments/placement-record.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -74,15 +74,20 @@ const records = Array.from({ length: 10_000 }, (_, i) => ({
   sessionKey: `agent:agent-${i % 40}:${i % 5 ? "subagent" : "dashboard"}:session-${i}`,
 }));
 const byId = new Map(records.map((record) => [record.sessionId, record]));
+const identities = records.map(({ sessionId, agentId, sessionKey }) => ({
+  sessionId,
+  agentId,
+  sessionKey,
+}));
 let passes = 0;
 let subjects = 0;
 let fullReads = 0;
 const createRetirement = () =>
   createPlacementSessionRetirement({
     placements: {
-      listAsync: async () => {
+      listSessionIdentitiesAsync: async () => {
         fullReads++;
-        return records;
+        return identities;
       },
       getAsync: async (id) => byId.get(id),
       getManyAsync: async (ids) => {
@@ -117,9 +122,6 @@ async function run(count: number) {
     await retirement.reconcile(); // No new receipt: no evidence work.
   }
 }
-function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
-}
 await run(100);
 passes = subjects = fullReads = 0;
 globalThis.gc?.();
@@ -150,7 +152,7 @@ console.log(
     fullReads,
     hostLoad,
     ...(allocation
-      ? { sampledBytes: allocated(allocation.profile.head) }
+      ? { sampledBytes: sumSampledHeapBytes(allocation.profile.head) }
       : {
           cpuMs: (cpu.user + cpu.system) / 1000,
           elapsedMs,

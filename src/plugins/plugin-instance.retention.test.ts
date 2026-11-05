@@ -1,5 +1,6 @@
 import { AsyncResource } from "node:async_hooks";
-import { expect, it } from "vitest";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { expect, it, onTestFinished } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
@@ -18,11 +19,125 @@ import {
   markPluginRecordBorrowed,
   markPluginRegistryActive,
 } from "./registry-lifecycle.js";
+import { disposePluginRegistryInstances } from "./runtime.js";
 import { getPluginRuntimeGatewayRequestScope as getScope } from "./runtime/gateway-request-scope.js";
 
 class RetainedRegistry {
   readonly fixtureLabel = "RetainedRegistry";
 }
+
+it("releases completed reload preludes while disposed instance signals remain reachable", async () => {
+  const stackTraceLimit = Error.stackTraceLimit;
+  Reflect.set(Error, "stackTraceLimit", 50);
+  onTestFinished(() => {
+    Reflect.set(Error, "stackTraceLimit", stackTraceLimit);
+  });
+  class ReloadRegistry {
+    readonly fixtureLabel = "ReloadRegistry";
+  }
+  async function retire() {
+    const { record, instance } = createOwnedInstance("retirement-stack");
+    const registry = selectRegistry(record, "retired", new ReloadRegistry());
+    expect(
+      (await disposePluginRegistryInstances(registry, undefined, { cfg: {} })).failures,
+    ).toEqual([]);
+    return instance;
+  }
+  const retired = [];
+  for (let generation = 0; generation < 20; generation++) {
+    retired.push(await retire());
+  }
+  // Inspect before error matchers render the lazy abort stack and hide the retained callback.
+  await expectLiveObjects(ReloadRegistry, 0);
+  for (const instance of retired) {
+    expect(instance.owner?.registry).toBeUndefined();
+    expect(instance.lifecycle.signal.aborted).toBe(true);
+    expect(instance.lifecycle.signal.reason).toMatchObject({
+      message: "Plugin retirement-stack is retiring",
+    });
+    expect(() => instance.run(() => "late")).toThrow(PluginInstanceUnavailableError);
+  }
+});
+
+it("keeps owner work independent of its caller and follows adopted registry custody", async () => {
+  const { record, instance } = createOwnedInstance("owner-work");
+  selectRegistry(record, "initial", new RetainedRegistry());
+  const caller = instance.retainConsumer();
+  const authority = caller.run(() => instance.retainOwnerWork());
+  caller.release();
+  selectRegistry(record, "successor");
+  try {
+    await expectLiveObjects(RetainedRegistry, 0);
+    instance.quiesce();
+    await instance.waitForIdle(new AbortController().signal);
+    expect(authority.run(readRegistryLabel)).toBe("successor");
+    authority.release();
+    expect(() => authority.run(readRegistryLabel)).toThrow(PluginInstanceUnavailableError);
+  } finally {
+    authority.release();
+    await instance.dispose();
+  }
+});
+
+it("joins physical owner callbacks after their retained admission closes", async () => {
+  const { instance } = createOwnedInstance("owner-work-settlement");
+  const authority = instance.retainOwnerWork();
+  const finish = createDeferredCore();
+  const pending = authority.run(() => finish.promise);
+  authority.release();
+  let disposed = false;
+  const disposal = instance.dispose().then((result) => {
+    disposed = true;
+    return result;
+  });
+  try {
+    await nextTurn();
+    expect(disposed).toBe(false);
+    finish.resolve();
+    await pending;
+    await expect(disposal).resolves.toEqual({ errors: [] });
+  } finally {
+    finish.resolve();
+    await Promise.allSettled([pending, disposal]);
+  }
+});
+
+it("drains physical owner work before disposal without awaiting its lifetime authority", async ({
+  signal,
+}) => {
+  const { instance } = createOwnedInstance("owner-pre-disposal-drain");
+  const authority = instance.retainOwnerWork();
+  const finish = createDeferredCore();
+  const pending = authority.run(() => finish.promise);
+  const settled: string[] = [];
+  const drain = instance.drain({ signal }).then((result) => {
+    settled.push("drain");
+    return result;
+  });
+  const retained = instance.waitForRetainedWork(signal, { includeCalls: true }).then(() => {
+    settled.push("retained");
+  });
+  const idle = instance.waitForIdle(signal).then(() => {
+    settled.push("idle");
+  });
+  try {
+    await instance.waitForAdmittedWork(signal);
+    await nextTurn();
+    expect(settled).toEqual([]);
+    finish.resolve();
+    await pending;
+    await expect(Promise.all([drain, retained, idle])).resolves.toEqual([
+      { errors: [] },
+      undefined,
+      undefined,
+    ]);
+    expect(authority.run(() => "owner still active")).toBe("owner still active");
+  } finally {
+    finish.resolve();
+    authority.release();
+    await Promise.allSettled([pending, drain, retained, idle, instance.dispose()]);
+  }
+});
 
 it("retains an adopted selection until a pending call rejects", async () => {
   const { record, instance } = createOwnedInstance("retention");

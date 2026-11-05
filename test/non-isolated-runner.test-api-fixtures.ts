@@ -192,13 +192,19 @@ it("loads a fresh real source after the partial mock retires", () => {
   expect(Reflect.get(globalThis, Symbol.for("openclaw.activeCronTaskRunTestApi"))).toBe(native.api);
 });
 `;
+  files["09-j-import-element.ts"] = `
+export class ImportElement extends HTMLElement {}
+customElements.define("openclaw-import-order-probe", ImportElement);
+`;
   files["09-j-test-api-mock-only.test.ts"] = `
 /* @vitest-environment jsdom */
 import { expect, it, vi } from "vitest";
+import { ImportElement } from "./09-j-import-element.ts";
 vi.mock(${sourcePath("agents/workspace-legacy-state.ts")}, () => ({ LEGACY_WORKSPACE_ATTESTATION_DIRNAME: "mock-only" }));
 const workspace = await import(${sourcePath("agents/workspace-legacy-state.ts")});
 it("does not execute the source behind a mock-only import", () => {
   expect(workspace.LEGACY_WORKSPACE_ATTESTATION_DIRNAME).toBe("mock-only");
+  expect(document.createElement("openclaw-import-order-probe")).toBeInstanceOf(ImportElement);
   const key = Symbol.for("openclaw.workspaceLegacyStateTestApi");
   expect(Object.hasOwn(globalThis, key)).toBe(false);
   Reflect.set(globalThis, key, "foreign");
@@ -207,10 +213,12 @@ it("does not execute the source behind a mock-only import", () => {
   files["09-k-test-api-mock-only-observer.test.ts"] = `
 /* @vitest-environment jsdom */
 import { expect, it } from "vitest";
+import { ImportElement } from "./09-j-import-element.ts";
 it("preserves a foreign slot when only a prior generation executed its known source", () => {
   const key = Symbol.for("openclaw.workspaceLegacyStateTestApi");
   expect(Reflect.get(globalThis, key)).toBe("foreign");
   Reflect.deleteProperty(globalThis, key);
+  expect(document.createElement("openclaw-import-order-probe")).toBeInstanceOf(ImportElement);
 });
 `;
   return files;

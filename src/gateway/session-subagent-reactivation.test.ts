@@ -95,7 +95,7 @@ it("skips ACP reads without an ended run and observes newly written ACP metadata
         sessionKey: childSessionKey,
         runId: "run-next",
         task: "  follow-up prompt text  ",
-        acpSession: { cfg, activeSessionAgentId: "main", sessionEntry: entry ?? undefined },
+        session: { cfg, activeSessionAgentId: "main", sessionEntry: entry ?? undefined },
       };
       const readMetadata = vi.spyOn(acpMetadata, "readAcpSessionMetaForEntries");
 
@@ -121,7 +121,7 @@ it("skips ACP reads without an ended run and observes newly written ACP metadata
         }),
       });
       expect(entry).not.toBeNull();
-      params.acpSession.sessionEntry = entry ?? undefined;
+      params.session.sessionEntry = entry ?? undefined;
       await expect(reactivateCompletedSubagentSession(params)).resolves.toBe(false);
       expect(replaceSubagentRunAfterSteerMock).toHaveBeenCalledOnce();
     },

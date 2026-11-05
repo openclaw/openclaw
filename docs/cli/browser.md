@@ -273,6 +273,11 @@ openclaw browser close t1
 
 `tabs` returns `suggestedTargetId` first, then the stable `tabId` (such as `t1`), the optional label, and the raw `targetId`. Pass `suggestedTargetId` back into `focus`, `close`, snapshots, and actions. Assign a label with `open --label`, `tab new --label`, or `tab label`. Labels, tab ids, raw target ids, and unique target-id prefixes are all accepted. The request field is still named `targetId` for compatibility, but it accepts any of these tab references.
 
+For HTTP CDP profiles, `close` confirms that the tab disappears before reporting
+success. If a page prompt keeps it open, resolve the prompt and retry. If the tab
+list cannot be read after the close request, confirm the tab's state in the
+browser before retrying; the close may already have succeeded.
+
 Profiles configured with `driver: "extension"` can additionally return a numeric
 `webExtensionTabId`. It is scoped to the current browser runtime and is intended
 only for calls into Chrome's WebExtensions API. It can change after the browser
@@ -290,6 +295,10 @@ Snapshot:
 openclaw browser snapshot
 openclaw browser snapshot --urls
 ```
+
+Page-text extraction through the browser API counts its character budget in UTF-16
+code units. If a limit falls inside a surrogate pair, extraction omits the whole
+pair rather than returning a broken character; the result remains truncated.
 
 Screenshot:
 
@@ -348,9 +357,16 @@ Managed Chrome profiles save ordinary click-triggered downloads into the OpenCla
 
 For remote browser nodes, OpenClaw stages private copies and normalizes filenames for portability, including Windows device names and trailing dots or spaces. File bytes remain unchanged.
 
+File-chooser uploads measure their completion timeout using elapsed time.
+Adjusting the Gateway host's wall clock does not shorten or extend that budget;
+the existing timeout and cancellation still apply.
+
 Explicit download paths and `trace stop --out` preserve filename whitespace where the filesystem supports it. Quote these paths, for example `openclaw browser download <ref> " report.pdf "`. Output paths must stay inside their managed download or trace directory.
 
 If saving a download fails, OpenClaw requests cancellation of the transfer and reports the original save error. Correct the output path or filesystem problem before starting a new download.
+
+If a page closes before its next download starts, the pending download wait rejects
+immediately. Accepted downloads keep their existing save and cancellation behavior.
 
 When an action opens a modal dialog, text output reports the block and pending dialog IDs. The JSON response returns `blockedByDialog` with `browserState.dialogs.pending`. Pass `--dialog-id` to answer it directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 

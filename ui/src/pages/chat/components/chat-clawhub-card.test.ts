@@ -6,10 +6,12 @@ import type { ClawHubRecommendation } from "../../../../../src/shared/clawhub-re
 import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
 import { i18n } from "../../../i18n/index.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
+import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
+  createInspectResult,
   createPluginCapabilities,
   createClient,
   createContext,
@@ -260,6 +262,40 @@ describe("ClawHub chat recommendations", () => {
     expect(part(card, "install")).toBeNull();
     expect(part(card, "dismiss")).toBeNull();
     expect(part(card, "listing")).not.toBeNull();
+  });
+
+  it("offers sign-in for an installed plugin until its account is connected", async () => {
+    let state: "requires-authorization" | "authorized" = "requires-authorization";
+    const { card, context, request, harness, client } = mount(async (method) =>
+      method === "plugins.inspect"
+        ? createInspectResult({ mcpAuth: [{ serverName: "whatsapp", state }] })
+        : detail(true, {}, { pluginId: "whatsapp" }),
+    );
+    // Without the sign-in method there is nowhere to send the operator.
+    await vi.waitFor(() => expect(part(card, "installed")?.textContent).toContain("Installed"));
+    expect(request.mock.calls.some(([method]) => method === "plugins.inspect")).toBe(false);
+
+    const hello = gatewayHelloForMethods(["plugins.inspect", "mcp.authLogin"]);
+    harness.emit(client, false);
+    harness.emit(client, true, { hello });
+    await vi.waitFor(() => expect(part(card, "sign-in")?.textContent?.trim()).toBe("Sign in"));
+    expect(request).toHaveBeenCalledWith(
+      "plugins.inspect",
+      { pluginId: "whatsapp" },
+      expect.anything(),
+    );
+    expect(part(card, "installed")).toBeNull();
+    part(card, "sign-in")!.click();
+    expect(context.navigate).toHaveBeenLastCalledWith("plugins", {
+      pathname: `/plugins/${recommendation.id}`,
+      search: "",
+    });
+
+    state = "authorized";
+    harness.emit(client, false);
+    harness.emit(client, true, { hello });
+    await vi.waitFor(() => expect(part(card, "installed")?.textContent).toContain("Installed"));
+    expect(part(card, "sign-in")).toBeNull();
   });
 
   it("rechecks official status before offering installation from an old card", async () => {

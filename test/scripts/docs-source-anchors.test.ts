@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseDocsDocument, resolveDocsFragment } from "../../scripts/lib/docs-markdown.mjs";
+import { collectNavPageEntries } from "../../scripts/lib/docs-published-routes.mts";
 
 const docsRoot = path.resolve(import.meta.dirname, "../../docs");
 
@@ -10,6 +11,19 @@ function readDocument(file: string) {
 }
 
 describe("authored docs section links", () => {
+  it("makes Jetson headless setup discoverable and links to the Linux SSH instructions", () => {
+    const navigation = JSON.parse(fs.readFileSync(path.join(docsRoot, "docs.json"), "utf8"));
+    expect(collectNavPageEntries(navigation.navigation)).toContain("install/jetson");
+
+    const source = readDocument("install/jetson.md");
+    const target = readDocument("platforms/linux.md");
+    const href = "/platforms/linux#cli-and-ssh-alternative";
+    expect(source.links).toContain(href);
+    expect(resolveDocsFragment(href.split("#")[1], new Set(target.ids))).toBe(
+      "cli-and-ssh-alternative",
+    );
+  });
+
   it("links Codex Computer Use to the Windows and Linux fulfiller section", () => {
     const source = readDocument("plugins/codex-computer-use.md");
     const target = readDocument("nodes/computer-use.md");

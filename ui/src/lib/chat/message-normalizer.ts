@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { stripUserEnvelopeForDisplay } from "../../../../src/auto-reply/reply/user-envelope-display.js";
 import {
@@ -22,10 +23,14 @@ import { projectChatWorkContextForDisplay } from "../../../../src/chat/work-cont
 import { splitMediaFromOutput } from "../../../../src/media/parse.js";
 import { readClawHubRecommendation } from "../../../../src/shared/clawhub-recommendations.js";
 import { readPluginInlineViewBlock } from "../../../../src/shared/plugin-inline-view.js";
-import { getMediaFileExtension } from "../media-file-extension.ts";
+import { getMediaFileExtension, labelForMediaPath } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem, MessageImageSource } from "./chat-types.ts";
 import { normalizeAttachmentContentBlock } from "./message-normalizer-attachments.ts";
-import { resolveMessageSender, resolveMessageSenderLabel } from "./sender-label.ts";
+import {
+  resolveMessageSender,
+  resolveMessageSenderLabel,
+  type SenderIdentity,
+} from "./sender-label.ts";
 
 function imageDataUrl(data: unknown, mimeType: unknown): string | undefined {
   return typeof data === "string"
@@ -128,6 +133,25 @@ function readMessageDelivery(value: unknown): MessageDelivery | undefined {
     replyToCurrent: delivery.replyToCurrent,
     replyToId: readStringField(delivery, "replyToId"),
   };
+}
+
+// Session creation records its agent-written opening as inter-session
+// provenance; the transcript sender stays an opaque id without an identity.
+/** Identifies the agent that wrote a session's opening message. */
+function resolveAgentOpeningSender(message: Record<string, unknown>): SenderIdentity | null {
+  const provenance = asOptionalRecord(message.provenance);
+  const sourceTool = provenance?.sourceTool;
+  if (
+    message.role !== "user" ||
+    provenance?.kind !== "inter_session" ||
+    (sourceTool !== "sessions_create" && sourceTool !== "sessions_spawn")
+  ) {
+    return null;
+  }
+  const agentId = parseAgentSessionKeyParts(
+    readStringField(provenance, "sourceSessionKey") ?? "",
+  )?.agentId;
+  return agentId ? { identity: { type: "agent", id: agentId } } : null;
 }
 
 export function readMessageSenderSession(value: unknown): NormalizedMessage["senderSession"] {
@@ -423,19 +447,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
           !inferredKind || inferredKind === "sticker" || inferredKind === "unknown"
             ? "document"
             : inferredKind;
-        const label = (() => {
-          try {
-            if (/^https?:\/\//i.test(url)) {
-              const parsedUrl = new URL(url);
-              const name = parsedUrl.pathname.split("/").pop()?.trim();
-              return name || parsedUrl.hostname || url;
-            }
-          } catch {
-            // Malformed URLs still get a filename label from the original path below.
-          }
-          const name = url.split(/[\\/]/).pop()?.trim();
-          return name || url;
-        })();
+        const label = labelForMediaPath(url);
         parts.push({
           type: "attachment",
           attachment: {
@@ -546,10 +558,12 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       if (
         text !== undefined &&
         (type === "text" ||
-          (role === "user" && type === "input_text") ||
-          (role === "assistant" && (type === "input_text" || type === "output_text")))
+          (type === "input_text" && (role === "user" || isAssistantMessage)) ||
+          (type === "output_text" && isAssistantMessage))
       ) {
-        return normalizeText(text, true);
+        return isAssistantMessage && item.openclawFallback === true
+          ? []
+          : normalizeText(text, true);
       }
       return [
         {
@@ -576,7 +590,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const replyPreviewRecord = asOptionalRecord(openClawMeta?.replyToPreview);
   const replyPreviewText = readStringField(replyPreviewRecord, "text")?.trim() ?? "";
   const replyPreviewSender = readStringField(replyPreviewRecord, "senderLabel")?.trim() ?? "";
-  const metaSender = resolveMessageSender(openClawMeta);
+  const metaSender = resolveAgentOpeningSender(m) ?? resolveMessageSender(openClawMeta);
   const senderLabel = resolveMessageSenderLabel(m, metaSender);
   const sender = metaSender ?? (senderLabel ? { name: senderLabel } : null);
   const sourceClients = role === "user" ? readMessageClientSources(m) : [];

@@ -4,7 +4,10 @@ import type { SessionGitHubPublicationResult } from "../../../packages/gateway-p
 import { withinTest } from "../../../test/helpers/promise.js";
 import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
 import * as events from "../../auto-reply/reply/session-event-handoff.js";
-import { readSessionEventTargetOperatorAuthority } from "../../auto-reply/reply/session-event-target.js";
+import {
+  readSessionEventTargetOperatorAuthority,
+  readSessionEventTargetOwnerContinuation,
+} from "../../auto-reply/reply/session-event-target.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -13,7 +16,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareGitHubPublicationRequesterV2 } from "../../gateway/github-publication-requester.js";
 import type { OperatorScope } from "../../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../../gateway/server-methods/types.js";
-import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
+import * as gatewayContinuation from "../../gateway/server-plugin-in-process-dispatch.js";
 import {
   createContext,
   createOperatorClient,
@@ -42,6 +45,7 @@ import {
   captureGatewayToolCallerAssertion,
   createAdmittedGatewayToolCallerIdentity,
   getGatewayToolCallerIdentity,
+  resolveGatewayToolOperatorSelection,
   withGatewayToolCallerIdentity,
 } from "./gateway-caller-context.js";
 import { createGitHubPublishTool } from "./github-publish-tool.js";
@@ -70,6 +74,7 @@ it.for([
   "failed",
   "stop",
   "undelivered",
+  "interrupted",
   "reset",
 ] as const)(
   "hands PR preparation to its registered owner after cleanup: %s",
@@ -150,6 +155,11 @@ it.for([
               : { sessionKey, action: "prepare_pr" },
           );
           expect(getGatewayToolCallerIdentity()?.workspacePrAdoptionSessionId).toBe(sessionId);
+          if (!localPublication) {
+            const selected = resolveGatewayToolOperatorSelection();
+            expect(selected.operatorAuthority).toMatchObject({ profileId, scopes });
+            selected.assertCurrent();
+          }
           expect(getSessionControllerEntryForOperation(operation).successorBarrier).toBeDefined();
           order.push("prepare");
           if (outcome === "failed") {
@@ -200,7 +210,7 @@ it.for([
           [
             ["sessions.github.action", "operator.sessions.write", "sessions", endpoint],
             ["sessions.github.publish", "operator.sessions.write", "sessions", publish],
-            ["tools.effective", "operator.read", "tools", forbidden],
+            ["tools.catalog", "operator.read", "tools", forbidden],
             ["plugins.reload", "operator.admin", "plugins", forbidden],
           ],
           () => config,
@@ -228,7 +238,7 @@ it.for([
               ).toMatchObject({ status: "requested", requestId: "synthetic-publication" });
               await expect(
                 callAgentToolGatewayRequest({
-                  method: "tools.effective",
+                  method: "tools.catalog",
                   params: scope,
                 }),
               ).rejects.toThrow("operator.read");
@@ -243,6 +253,23 @@ it.for([
         const enqueueReal = events.enqueueSessionEventForHost;
         let resumedCaller: { identity: unknown; error?: unknown } | undefined;
         const noticed = createDeferredCore();
+        const released = createDeferredCore();
+        if (outcome === "interrupted") {
+          const capture = gatewayContinuation.captureOperatorToolGatewayContinuationContext;
+          vi.spyOn(
+            gatewayContinuation,
+            "captureOperatorToolGatewayContinuationContext",
+          ).mockImplementation((...args) =>
+            capture(...args)?.then((captured) => {
+              const release = captured.release;
+              captured.release = () => {
+                release();
+                released.resolve(undefined);
+              };
+              return captured;
+            }),
+          );
+        }
         const appendNotice = transcript.appendAssistantMessageToSessionTranscript;
         const notice = vi
           .spyOn(transcript, "appendAssistantMessageToSessionTranscript")
@@ -257,12 +284,16 @@ it.for([
         const enqueue = vi
           .spyOn(events, "enqueueSessionEventForHost")
           .mockImplementation((text, options) => {
-            expect(options).toMatchObject({ sessionKey, expectedTarget: { sessionId } });
+            expect(options).toMatchObject({
+              sessionKey,
+              source: "tool_handoff",
+              expectedTarget: { sessionId },
+            });
             const authority =
               options.expectedTarget &&
               readSessionEventTargetOperatorAuthority(options.expectedTarget);
-            expect(authority?.profileId).toBe(profileId);
-            expect(authority?.scopes).toEqual(scopes);
+            expect(authority).toMatchObject({ profileId, scopes });
+            expect(readSessionEventTargetOwnerContinuation(options.expectedTarget!)).toBe(false);
             expect(text.length).toBeLessThan(4096);
             expect(
               getSessionControllerEntryForOperation(operation).successorBarrier,
@@ -298,9 +329,12 @@ it.for([
                   : { ok: true as const };
               })(),
               settled: Promise.resolve({
-                status: "completed",
+                status: outcome === "interrupted" ? "failed" : "completed",
                 executionStarted: true,
                 delivered: false,
+                ...(outcome === "interrupted"
+                  ? { error: "Session event execution aborted", interruptedByRestart: true }
+                  : {}),
               }),
             };
           });
@@ -394,6 +428,9 @@ it.for([
               expect(publish).toHaveBeenCalledOnce();
             }
           }
+          if (outcome === "interrupted") {
+            await withinTest(released.promise, signal);
+          }
           if (outcome === "undelivered" || outcome === "reset") {
             await noticed.promise;
             const history = await readSessionMessagesAsync(
@@ -431,7 +468,7 @@ it.for([
               isWebchatConnect: () => false,
             },
             () =>
-              withOperatorToolGatewayAuthority({ scopes }, () =>
+              gatewayContinuation.withOperatorToolGatewayAuthority({ scopes }, () =>
                 exec.withExecRequestTurn({ identity: { ...scope, sessionId, runId } }, () =>
                   // Production callers carry the turn batch receipt and the run abort signal.
                   withGatewayToolCallerIdentity(

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { gatewayCredentialScope, gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
@@ -15,6 +16,8 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { chatMessage } from "./chat-flow.test-support.ts";
@@ -37,9 +40,12 @@ type RpcMetric = {
   sessionKey?: string;
   agentId?: string;
   shortId?: string;
+  resolveParams?: Record<string, unknown>;
   limit?: number;
   maxBytes?: number;
   offset?: number;
+  cursor?: string;
+  olderCursor?: string;
   messages?: number;
   historyBytes?: number;
   initialHistory?: boolean;
@@ -244,7 +250,12 @@ suite.define(() => {
     url.hash = new URL(String(handoff.browserUrl)).hash;
     const rpc: RpcMetric[] = [];
     const olderHistoryRequests = (metrics: readonly RpcMetric[]) =>
-      selectRpc(metrics, "chat.history", selectedKey).filter((metric) => (metric.offset ?? 0) > 0);
+      selectRpc(metrics, "chat.history", selectedKey).filter(
+        (metric) =>
+          metric.cursor !== undefined &&
+          metric.historyKind !== "delta" &&
+          metric.historyKind !== "reset",
+      );
     let measuring = false;
     let startedAt = 0;
     await suite.withPage(
@@ -335,11 +346,13 @@ suite.define(() => {
                 : {}),
               ...(typeof params.agentId === "string" ? { agentId: params.agentId } : {}),
               ...(typeof params.shortId === "string" ? { shortId: params.shortId } : {}),
+              ...(frame.method === "sessions.resolve" ? { resolveParams: params } : {}),
               ...(typeof historyParams.limit === "number" ? { limit: historyParams.limit } : {}),
               ...(typeof historyParams.maxBytes === "number"
                 ? { maxBytes: historyParams.maxBytes }
                 : {}),
               ...(typeof historyParams.offset === "number" ? { offset: historyParams.offset } : {}),
+              ...(typeof historyParams.cursor === "string" ? { cursor: historyParams.cursor } : {}),
             };
             rpc.push(metric);
             pending.set(frame.id, metric);
@@ -367,6 +380,9 @@ suite.define(() => {
                 : undefined
               : body;
             metric.historyOk = frame.ok === true && history !== undefined;
+            if (typeof history?.olderCursor === "string") {
+              metric.olderCursor = history.olderCursor;
+            }
             if (history?.kind === "delta" || history?.kind === "reset") {
               metric.historyKind = history.kind;
             } else if (Array.isArray(history?.messages)) {
@@ -433,6 +449,10 @@ suite.define(() => {
         // Freeze only completed payloads; keep the earlier visibility timings unchanged.
         await waitForStartupResponses();
         const startupMetrics = structuredClone(rpc);
+        await writeFile(
+          path.join(suite.artifactDir, "startup-rpc.json"),
+          JSON.stringify(startupMetrics, null, 2),
+        );
         const images = await page
           .locator(".sidebar-agent-card__avatar img")
           .evaluateAll((elements) =>
@@ -523,18 +543,23 @@ suite.define(() => {
         expect(olderPages).toHaveLength(olderPageCommits);
         expect(olderPages.length).toBeGreaterThan(1);
         expect(olderPages.map((metric) => metric.messages)).toEqual(olderPageMessageCounts);
-        let nextOffset = initialLoadedMessages;
+        let coveredMessages = initialLoadedMessages;
+        let olderCursor = selectStartupHistory(startupMetrics, selectedKey)[0]?.olderCursor;
         for (const metric of olderPages) {
           expect(metric.receivedMs).toBeDefined();
-          expect(metric.offset).toBe(nextOffset);
+          expect(olderCursor).toEqual(expect.any(String));
+          expect(metric.cursor).toBe(olderCursor);
+          expect(metric.offset).toBeUndefined();
           expect(metric.maxBytes).toBe(3 * 1024 * 1024);
           expect(metric.historyBytes).toBeLessThanOrEqual(metric.maxBytes!);
           const messages = metric.messages ?? 0;
           expect(messages).toBeGreaterThan(0);
           // This fixture has one visible message per source row.
-          nextOffset += messages;
+          coveredMessages += messages;
+          olderCursor = metric.olderCursor;
         }
-        expect(nextOffset).toBe(transcriptLength);
+        expect(coveredMessages).toBe(transcriptLength);
+        expect(olderCursor).toBeUndefined();
         const selectedStartup = selectStartupHistory(startupMetrics, selectedKey)[0];
         expect(selectedStartup).toBeDefined();
         expect(olderHistoryRequests(startupMetrics)).toHaveLength(0);
@@ -573,11 +598,53 @@ suite.define(() => {
           sessionKey: selectedKey,
           sidebarView: "sessions",
         };
+        // Sidebar persistence has its own writer; transcript settlement does not flush it.
+        await page
+          .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
+          .waitFor();
         const warmState = await page.evaluate(persistColdLoadWarmState, warmInput);
         const storedSnapshot: unknown = warmState.storage.records.snapshots.find((record) =>
           record.sessionKey.endsWith(`\u0000${selectedKey}`),
         )?.snapshot;
+        const currentOwner = await evaluateControlUiContext(page, ({ gateway }) => ({
+          gatewayUrl: gateway.connection.gatewayUrl,
+          sessionKey: gateway.snapshot.sessionKey,
+          recoveryScope: gateway.snapshot.client?.recoveryScope ?? null,
+          recoveryScopeReady: gateway.snapshot.client?.recoveryScopeReady ?? false,
+          profileId: gateway.snapshot.selfUser?.id ?? null,
+        }));
+        const gatewayScope = gatewayCredentialScope(currentOwner.gatewayUrl);
+        const originScope = gatewayOriginScope(currentOwner.gatewayUrl);
+        const bootRecord: unknown = JSON.parse(
+          warmState.storage.local.find(
+            ([key]) => key === `openclaw.control.bootRecord.v1:${gatewayScope}`,
+          )?.[1] ?? "null",
+        );
+        const savedSettings: unknown = JSON.parse(
+          warmState.storage.local.find(
+            ([key]) => key === `openclaw.control.settings.v1:${originScope}`,
+          )?.[1] ?? "null",
+        );
+        const savedSelection =
+          isRecord(savedSettings) && isRecord(savedSettings.sessionsByGateway)
+            ? savedSettings.sessionsByGateway[originScope]
+            : null;
         const cacheBeforeReload = {
+          currentSessionMatches: currentOwner.sessionKey === selectedKey,
+          savedSessionMatches:
+            isRecord(savedSelection) && savedSelection.sessionKey === selectedKey,
+          recoveryScopeReady: currentOwner.recoveryScopeReady,
+          bootScopeMatches: isRecord(bootRecord) && bootRecord.scope === gatewayScope,
+          bootOwnerMatches:
+            isRecord(bootRecord) &&
+            currentOwner.recoveryScope !== null &&
+            bootRecord.recoveryScope === currentOwner.recoveryScope,
+          bootProfileMatches:
+            isRecord(bootRecord) && bootRecord.profileId === currentOwner.profileId,
+          bootFromCurrentDocument:
+            isRecord(bootRecord) &&
+            typeof bootRecord.savedAt === "number" &&
+            bootRecord.savedAt >= startedAt,
           messages: warmState.messages,
           cursorPresent: isRecord(storedSnapshot) && typeof storedSnapshot.deltaCursor === "string",
           bootRecordPresent: warmState.storage.local.some(([key]) =>
@@ -609,6 +676,18 @@ suite.define(() => {
           ),
         );
         const warmHistory = selectStartupHistory(rpc.slice(warmStart), selectedKey);
+        recordControlUiE2eFailureFacts(page, {
+          warmCache: cacheBeforeReload,
+          warmMessages: warmMessageNumbers.length,
+          warmHistoryRequests: warmHistory.length,
+          warmHistory: warmHistory.slice(0, 3).map((metric) => ({
+            cursorPresent: metric.cursorPresent ?? false,
+            kind: metric.historyKind ?? "missing",
+            messages: metric.messages ?? null,
+            sentMs: metric.sentMs,
+            receivedMs: metric.receivedMs ?? null,
+          })),
+        });
         await writeFile(
           path.join(suite.artifactDir, "warm-history-payload.json"),
           JSON.stringify(

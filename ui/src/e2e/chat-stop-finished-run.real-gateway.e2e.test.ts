@@ -370,7 +370,7 @@ suite.define(() => {
             const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
             await composer.fill("Finish this fixture turn.");
             await page.getByRole("button", { name: "Send message", exact: true }).click();
-            const stop = page.getByRole("button", { name: "Stop generating", exact: true });
+            const stop = page.getByRole("button", { name: "Stop", exact: true });
             await stop.waitFor({ state: "visible" });
             const send = sent.find((frame) => frame.method === "chat.send");
             const sessionId = send?.params?.sessionId;
@@ -519,7 +519,6 @@ suite.define(() => {
             await page
               .getByRole("button", { name: "Send message", exact: true })
               .waitFor({ state: "visible" });
-            await page.screenshot({ path: path.join(artifactDir, "03-send-restored.png") });
             expect(
               await page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase),
             ).toBe("connected");
@@ -527,6 +526,7 @@ suite.define(() => {
             expect(sent.filter((frame) => frame.method === "connect")).toHaveLength(1);
             expect(sent.filter((frame) => frame.method === "chat.abort")).toHaveLength(1);
             expect(await composer.inputValue()).toBe("Next draft");
+            await page.screenshot({ path: path.join(artifactDir, "03-send-restored.png") });
           },
         );
       },

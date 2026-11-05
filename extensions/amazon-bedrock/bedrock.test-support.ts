@@ -36,6 +36,8 @@ export const wireUser = (...content: Record<string, unknown>[]) => ({ role: "use
 export const checkpoint = { cachePoint: { type: "default" } };
 export const png =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+// Any declared tool makes toolConfig present for native-block replay tests.
+export const readTool = { name: "read", description: "Read a file", parameters: {} };
 export function toolResult(
   toolCallId: string,
   content: ToolResultMessage["content"],

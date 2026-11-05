@@ -1,0 +1,2 @@
+# Existing CJK success/failure coverage verifies real-file cleanup at the Microsoft synthesis boundary.
+23

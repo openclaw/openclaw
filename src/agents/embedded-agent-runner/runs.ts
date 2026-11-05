@@ -43,8 +43,8 @@ import {
   sessionTargetOwnersMatch,
   type SessionTarget,
 } from "../../sessions/session-controller.target.js";
-import { beginNativeRuntimeLivenessWait } from "../../sessions/session-controller.watchdog.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import { settlesWithin } from "../../shared/settle-within.js";
 import { SessionControllerAdmissionRequiredError } from "../harness/errors.js";
 import {
@@ -722,7 +722,7 @@ async function abortAndDrainCapturedEmbeddedAgentRun(
   registration: ActiveEmbeddedRunAttachment | undefined,
 ): Promise<AbortAndDrainEmbeddedAgentRunResult> {
   const settleMs = params.settleMs ?? 15_000;
-  const settleDeadline = Date.now() + resolveTimerTimeoutMs(settleMs, 100, 100);
+  const settleDeadline = monotonicNow() + resolveTimerTimeoutMs(settleMs, 100, 100);
   const handle = registration?.handle;
   let aborted = false;
   if (params.reason === "stuck_recovery" && operation) {
@@ -763,7 +763,7 @@ async function abortAndDrainCapturedEmbeddedAgentRun(
       diag.warn(`abort failed: sessionId=${params.sessionId} err=${String(err)}`);
     }
   }
-  const remainingMs = Math.max(0, settleDeadline - Date.now());
+  const remainingMs = Math.max(0, settleDeadline - monotonicNow());
   const nativeSettlement = waitForCapturedSessionNativeAttemptEnd(
     params.sessionId,
     remainingMs,
@@ -962,15 +962,19 @@ export function attachActiveEmbeddedRun(
   attachNativeAttempt(attachment);
   handle[embeddedRunCleanupAttachment] = attachment;
   if (watchdogAttempt && handle.ownsLiveness) {
-    const wait = beginNativeRuntimeLivenessWait(watchdogAttempt, () => {
-      if (
-        getEmbeddedRunAttachment(handle) !== attachment ||
-        (operation && getSessionControllerEntryForOperation(operation).attachment !== attachment)
-      ) {
-        return false;
-      }
-      toolAuthority?.assertActive();
-      return handle.ownsLiveness?.() === true && !handle.isAborted?.() && !handle.isStopped?.();
+    const wait = watchdogAttempt.beginWait({
+      kind: "runtime_owned",
+      releaseStartsSemanticWindow: true,
+      isCurrent: () => {
+        if (
+          getEmbeddedRunAttachment(handle) !== attachment ||
+          (operation && getSessionControllerEntryForOperation(operation).attachment !== attachment)
+        ) {
+          return false;
+        }
+        toolAuthority?.assertActive();
+        return handle.ownsLiveness?.() === true && !handle.isAborted?.() && !handle.isStopped?.();
+      },
     });
     attachment.closeWatchdogWait = () => wait.close();
   }

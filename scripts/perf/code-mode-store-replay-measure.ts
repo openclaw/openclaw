@@ -13,6 +13,9 @@
  * Native Node 26 total_allocated_bytes measures allocation without heap tracing.
  * Fixture construction, full-result verification and stringify instrumentation
  * are outside the measured replay loop. Every iteration binds a fresh catalog.
+ * --durable uses an isolated SQLite transcript and an admitted actor, including
+ * fresh worker-decoded entries per request. Use --entries 22 --keys 22 for 20 sets
+ * and two deletes, and --iterations 100 for the repeated-turn cache workload.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -33,13 +36,16 @@ const { values } = parseArgs({
     keys: { type: "string", default: "200" },
     "value-bytes": { type: "string", default: "4096" },
     iterations: { type: "string", default: "200" },
+    warmup: { type: "string", default: "5" },
+    durable: { type: "boolean", default: false },
   },
 });
 const entries = Number(values.entries);
 const keys = Number(values.keys);
 const valueBytes = Number(values["value-bytes"]);
 const iterations = Number(values.iterations);
-for (const value of [entries, keys, valueBytes, iterations]) {
+const warmup = Number(values.warmup);
+for (const value of [entries, keys, valueBytes, iterations, warmup]) {
   assert(Number.isSafeInteger(value) && value > 0, "Fixture arguments must be positive integers");
 }
 assert(
@@ -70,155 +76,178 @@ const {
 }: typeof import("../../src/agents/code-mode-session-store.js") = await import(ownerUrl.href);
 assert(replaced, "Native owner source was not loaded");
 const { SessionManager } = await import("../../src/agents/sessions/session-manager.js");
-const manager = SessionManager.inMemory();
-const payloadBytes =
-  valueBytes -
-  JSON.stringify({ syntheticReplay: true, revision: "0000000000", payload: "" }).length;
-assert(payloadBytes >= 0, "--value-bytes must fit the fixture envelope");
-const payload = "x".repeat(payloadBytes);
-const expected = new Map<string, { value: unknown; networkContent: boolean }>();
-let sets = 0;
-for (let index = 0; index < entries; index++) {
-  const key = `key-${index % keys}`;
-  const deleted = index % 11 === 10;
-  const value = { syntheticReplay: true, revision: String(index).padStart(10, "0"), payload };
-  const networkContent = index % 3 === 0;
-  await manager.appendCustomEntryAsync("openclaw.code-mode-store", {
-    set: deleted ? {} : { [key]: value },
-    delete: deleted ? [key] : [],
-    networkContent: deleted ? {} : { [key]: networkContent },
-  });
-  if (deleted) {
-    expected.delete(key);
-  } else {
-    sets++;
-    expected.set(key, { value, networkContent });
+async function measure(manager: ReturnType<typeof SessionManager.inMemory>) {
+  const payloadBytes =
+    valueBytes -
+    JSON.stringify({ syntheticReplay: true, revision: "0000000000", payload: "" }).length;
+  assert(payloadBytes >= 0, "--value-bytes must fit the fixture envelope");
+  const payload = "x".repeat(payloadBytes);
+  const expected = new Map<string, { value: unknown; networkContent: boolean }>();
+  let sets = 0;
+  for (let index = 0; index < entries; index++) {
+    const key = `key-${index % keys}`;
+    const deleted = index % 11 === 10;
+    const value = { syntheticReplay: true, revision: String(index).padStart(10, "0"), payload };
+    const networkContent = index % 3 === 0;
+    await manager.appendCustomEntryAsync("openclaw.code-mode-store", {
+      set: deleted ? {} : { [key]: value },
+      delete: deleted ? [key] : [],
+      networkContent: deleted ? {} : { [key]: networkContent },
+    });
+    if (deleted) {
+      expected.delete(key);
+    } else {
+      sets++;
+      expected.set(key, { value, networkContent });
+    }
   }
-}
 
-function access() {
-  const owner: ToolSearchCatalogRef = {
-    current: {
-      entries: [],
-      counterScope: "replay-measure",
-      searchCount: 0,
-      describeCount: 0,
-      callCount: 0,
-    },
-  };
-  bindCodeModeSessionStore(owner, manager);
-  const cell = createCodeModeSessionStoreAccess(
-    { catalogRef: owner, sessionId: manager.getSessionId(), runId: "replay-measure" },
-    new AbortController().signal,
-  );
-  return {
-    cell,
-    close() {
-      cell.close();
-      owner.current = undefined;
-      disposeCodeModeSessionStore(owner);
-    },
-  };
-}
+  function access() {
+    const owner: ToolSearchCatalogRef = {
+      current: {
+        entries: [],
+        counterScope: "replay-measure",
+        searchCount: 0,
+        describeCount: 0,
+        callCount: 0,
+      },
+    };
+    bindCodeModeSessionStore(owner, manager);
+    const cell = createCodeModeSessionStoreAccess(
+      { catalogRef: owner, sessionId: manager.getSessionId(), runId: "replay-measure" },
+      new AbortController().signal,
+    );
+    return {
+      cell,
+      close() {
+        cell.close();
+        owner.current = undefined;
+        disposeCodeModeSessionStore(owner);
+      },
+    };
+  }
 
-async function replay() {
-  const run = access();
+  async function replay() {
+    const run = access();
+    try {
+      await run.cell.load("missing-key");
+    } finally {
+      run.close();
+    }
+  }
+
+  const verified = access();
+  const checksum = createHash("sha256");
   try {
-    await run.cell.load("missing-key");
+    for (let index = 0; index < keys; index++) {
+      const key = `key-${index}`;
+      const result = await verified.cell.load(key);
+      assert.deepEqual(result, expected.get(key) ?? { networkContent: false });
+      checksum.update(JSON.stringify([key, result]));
+    }
   } finally {
-    run.close();
+    verified.close();
   }
+  for (let index = 0; index < warmup; index++) {
+    await replay();
+  }
+  globalThis.gc?.();
+  await nextTurn();
+  const pauses: number[] = [];
+  const observer = new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) {
+      pauses.push(entry.duration);
+    }
+  });
+  observer.observe({ entryTypes: ["gc"] });
+  const beforeMemory = process.memoryUsage();
+  const beforeLoad = loadavg();
+  const beforeAllocated = getHeapStatistics().total_allocated_bytes;
+  const beforeCpu = process.cpuUsage();
+  const beforeThreadCpu = process.threadCpuUsage();
+  const start = performance.now();
+  for (let index = 0; index < iterations; index++) {
+    await replay();
+  }
+  const elapsedMs = performance.now() - start;
+  const threadCpu = process.threadCpuUsage(beforeThreadCpu);
+  const cpu = process.cpuUsage(beforeCpu);
+  const allocatedBytes = getHeapStatistics().total_allocated_bytes - beforeAllocated;
+  const afterMemory = process.memoryUsage();
+  await nextTurn();
+  await nextTurn();
+  observer.disconnect();
+
+  let stringifyCalls = 0;
+  let valueStringifies = 0;
+  const stringify = JSON.stringify;
+  JSON.stringify = (value: unknown, replacer, space) => {
+    stringifyCalls++;
+    if (
+      value !== null &&
+      typeof value === "object" &&
+      "syntheticReplay" in value &&
+      value.syntheticReplay === true
+    ) {
+      valueStringifies++;
+    }
+    return typeof replacer === "function"
+      ? stringify(value, replacer, space)
+      : stringify(value, replacer, space);
+  };
+  try {
+    await replay();
+  } finally {
+    JSON.stringify = stringify;
+  }
+  console.log(
+    JSON.stringify({
+      storeModule,
+      durable: values.durable,
+      sourceSha256: createHash("sha256").update(source).digest("hex"),
+      entries,
+      keys,
+      valueBytes,
+      sets,
+      survivingKeys: expected.size,
+      iterations,
+      warmup,
+      elapsedMs,
+      cpuMs: (cpu.user + cpu.system) / 1000,
+      mainThreadCpuMs: (threadCpu.user + threadCpu.system) / 1000,
+      allocatedBytes,
+      allocatedBytesPerReplay: allocatedBytes / iterations,
+      cpuMsPerReplay: (cpu.user + cpu.system) / 1000 / iterations,
+      mainThreadCpuMsPerReplay: (threadCpu.user + threadCpu.system) / 1000 / iterations,
+      stringifyCallsPerReplay: stringifyCalls,
+      valueStringifiesPerReplay: valueStringifies,
+      gcCount: pauses.length,
+      gcTotalMs: pauses.reduce((sum, pause) => sum + pause, 0),
+      gcMaxMs: Math.max(0, ...pauses),
+      beforeMemory,
+      afterMemory,
+      hostLoad: { before: beforeLoad, after: loadavg() },
+      checksum: checksum.digest("hex"),
+    }),
+  );
 }
 
-const verified = access();
-const checksum = createHash("sha256");
-try {
-  for (let index = 0; index < keys; index++) {
-    const key = `key-${index}`;
-    const result = await verified.cell.load(key);
-    assert.deepEqual(result, expected.get(key) ?? { networkContent: false });
-    checksum.update(JSON.stringify([key, result]));
-  }
-} finally {
-  verified.close();
+if (values.durable) {
+  const { withOpenClawTestState } = await import("../../src/test-utils/openclaw-test-state.js");
+  const { upsertSessionEntryCore } = await import("../../src/config/sessions/session-accessor.js");
+  const { withSelectedTranscriptReader } =
+    await import("../../src/agents/sessions/session-manager-reader.test-support.js");
+  await withOpenClawTestState({ label: "code-mode-replay-measure" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionId: "replay-measure",
+      sessionKey: "agent:main:replay-measure",
+      storePath: state.path("sessions.json"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const manager = await SessionManager.openAsync(target, state.root);
+    await withSelectedTranscriptReader(target, () => measure(manager), true);
+  });
+} else {
+  await measure(SessionManager.inMemory());
 }
-for (let warmup = 0; warmup < 5; warmup++) {
-  await replay();
-}
-globalThis.gc?.();
-await nextTurn();
-const pauses: number[] = [];
-const observer = new PerformanceObserver((list) => {
-  for (const entry of list.getEntries()) {
-    pauses.push(entry.duration);
-  }
-});
-observer.observe({ entryTypes: ["gc"] });
-const beforeMemory = process.memoryUsage();
-const beforeLoad = loadavg();
-const beforeAllocated = getHeapStatistics().total_allocated_bytes;
-const beforeCpu = process.cpuUsage();
-const beforeThreadCpu = process.threadCpuUsage();
-const start = performance.now();
-for (let index = 0; index < iterations; index++) {
-  await replay();
-}
-const elapsedMs = performance.now() - start;
-const threadCpu = process.threadCpuUsage(beforeThreadCpu);
-const cpu = process.cpuUsage(beforeCpu);
-const allocatedBytes = getHeapStatistics().total_allocated_bytes - beforeAllocated;
-const afterMemory = process.memoryUsage();
-await nextTurn();
-await nextTurn();
-observer.disconnect();
-
-let stringifyCalls = 0;
-let valueStringifies = 0;
-const stringify = JSON.stringify;
-JSON.stringify = (value: unknown, replacer, space) => {
-  stringifyCalls++;
-  if (
-    value !== null &&
-    typeof value === "object" &&
-    "syntheticReplay" in value &&
-    value.syntheticReplay === true
-  ) {
-    valueStringifies++;
-  }
-  return typeof replacer === "function"
-    ? stringify(value, replacer, space)
-    : stringify(value, replacer, space);
-};
-try {
-  await replay();
-} finally {
-  JSON.stringify = stringify;
-}
-console.log(
-  JSON.stringify({
-    storeModule,
-    sourceSha256: createHash("sha256").update(source).digest("hex"),
-    entries,
-    keys,
-    valueBytes,
-    sets,
-    survivingKeys: expected.size,
-    iterations,
-    elapsedMs,
-    cpuMs: (cpu.user + cpu.system) / 1000,
-    mainThreadCpuMs: (threadCpu.user + threadCpu.system) / 1000,
-    allocatedBytes,
-    allocatedBytesPerReplay: allocatedBytes / iterations,
-    cpuMsPerReplay: (cpu.user + cpu.system) / 1000 / iterations,
-    mainThreadCpuMsPerReplay: (threadCpu.user + threadCpu.system) / 1000 / iterations,
-    stringifyCallsPerReplay: stringifyCalls,
-    valueStringifiesPerReplay: valueStringifies,
-    gcCount: pauses.length,
-    gcTotalMs: pauses.reduce((sum, pause) => sum + pause, 0),
-    gcMaxMs: Math.max(0, ...pauses),
-    beforeMemory,
-    afterMemory,
-    hostLoad: { before: beforeLoad, after: loadavg() },
-    checksum: checksum.digest("hex"),
-  }),
-);

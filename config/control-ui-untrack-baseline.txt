@@ -16,7 +16,6 @@ ui/src/pages/chat/components/chat-composer-regions.tsx	1
 ui/src/pages/chat/components/chat-composer.tsx	2
 ui/src/pages/chat/components/chat-diff-render.solid.tsx	1
 ui/src/pages/chat/components/chat-message-bubble-view.tsx	1
-ui/src/pages/chat/components/chat-message-images-solid.tsx	1
 ui/src/pages/chat/components/chat-question-panel.tsx	1
 ui/src/pages/chat/components/file-draft-recovery-dialog-view.tsx	1
 ui/src/pages/chat/components/widget-card-view.tsx	1

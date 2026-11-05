@@ -45,6 +45,7 @@ describe("managed gateway service lifecycle product proof", () => {
       const gateway = await gatewayOwner.start({
         repoRoot,
         useRepoCli: true,
+        initializeCurrentRuntimeState: true,
         providerBaseUrl: `${provider.baseUrl}/v1`,
         providerMode: "mock-openai",
         transportBaseUrl: "http://127.0.0.1",

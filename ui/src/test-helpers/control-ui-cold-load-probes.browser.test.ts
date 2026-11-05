@@ -1,8 +1,58 @@
 import { describe, expect, it } from "vitest";
 import { resolveColdLoadLatency } from "../../../scripts/lib/control-ui-bench-latency.ts";
 import { createColdLoadProbeInitScript } from "./control-ui-cold-load-probes.ts";
+import { sidebarPresentationProbe } from "./control-ui-sidebar-presentation-probe.test-support.ts";
 
 describe("serialized cold-load probes", () => {
+  it.each([true, false])(
+    "rejects an incomplete sidebar handoff (blank frame: %s)",
+    async (blank) => {
+      const iframe = document.createElement("iframe");
+      document.body.append(iframe);
+      try {
+        const target = iframe.contentWindow;
+        const doc = iframe.contentDocument;
+        if (!target || !doc) {
+          throw new Error("Probe realm was not created");
+        }
+        const script = doc.createElement("script");
+        script.textContent = `
+        const __name = fn => fn;
+        const frames = [];
+        window.requestAnimationFrame = callback => { frames.push(callback); return frames.length; };
+        const aside = document.createElement("aside");
+        aside.className = "sidebar";
+        aside.dataset.snapshotState = "cached";
+        const row = '<div class="sidebar-recent-session" data-session-key="synthetic" style="height:20px;width:100px"></div>';
+        aside.innerHTML = '<div class="sidebar-shell__body sidebar-session-content" style="height:80px">'+row+'</div>';
+        document.body.append(aside);
+        (${sidebarPresentationProbe.toString()})();
+        window.sidebarProof = (async () => {
+          frames.shift()(0);
+          if (${blank}) {
+            aside.firstElementChild.innerHTML = "";
+            await Promise.resolve();
+            frames.shift()(0);
+            aside.dataset.snapshotState = "live";
+            aside.firstElementChild.innerHTML = row;
+            await Promise.resolve();
+            frames.shift()(0);
+          }
+          return __sidebarPresentation.read();
+        })();
+      `;
+        doc.body.append(script);
+        const proof = await Reflect.get(target, "sidebarProof");
+        expect(proof.handoffChanges).toBeNull();
+        expect(proof.frames.map((frame: { rows: unknown[] }) => frame.rows.length)).toEqual(
+          blank ? [1, 0, 1] : [1],
+        );
+      } finally {
+        iframe.remove();
+      }
+    },
+  );
+
   it("preserves event order in separate tasks when timers wake out of order", () => {
     const iframe = document.createElement("iframe");
     document.body.append(iframe);

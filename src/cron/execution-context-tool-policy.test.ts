@@ -44,6 +44,7 @@ vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
   captureResidentUserProfileAccess: () => ({ assertCurrent: () => {} }),
 }));
 
+const { consumeCronNextCheckProposal } = await import("../infra/agent-run-registry.automation.js");
 const { claimAgentRunContext, releaseAgentRunContext } =
   await import("../infra/agent-run-registry.js");
 const { resolveAdmittedRunActiveAssertion } = await import("../agents/admitted-run-context.js");
@@ -58,7 +59,6 @@ const RUN_KEY = "agent:main:cron:job-1:run:s1";
 const PROFILE = { type: "human", source: "profile", id: "profile-requester" } as const;
 const CFG: OpenClawConfig = {};
 const SCOPE_ERROR = "Automations tool is restricted to the current automation.";
-const YIELD_ERROR = "Automation turns cannot use sessions_yield";
 const dispatched = () => gateway.dispatches.map((call) => call.method);
 
 function job(overrides: Partial<CronStoredJob>): CronStoredJob {
@@ -183,19 +183,22 @@ async function admitRun(stored: CronStoredJob, runKey: string, toolsAllow: strin
 
 type Run = Awaited<ReturnType<typeof admitRun>>;
 
-async function embeddedTools(run: Run) {
+async function embeddedTools(
+  run: Run,
+  onYield = () => {},
+  turn: { trigger?: "cron" | "event"; jobId?: string } = { trigger: "cron", jobId: "job-1" },
+) {
   return await createOpenClawCodingToolsInternalAsync({
     config: CFG,
     agentId: "main",
     sessionKey: run.runKey,
     sessionId: "run-session",
     runId: "run-1",
-    trigger: "cron",
-    jobId: "job-1",
+    ...turn,
     operationalRunInstance: run.admitted.operationalRunInstance,
     ...(run.senderIsOwner !== undefined ? { senderIsOwner: run.senderIsOwner } : {}),
     runtimeToolAllowlist: run.toolsAllow,
-    onYield: () => {},
+    onYield,
     toolConstructionPlan: {
       includeBaseCodingTools: false,
       includeShellTools: false,
@@ -208,7 +211,7 @@ async function embeddedTools(run: Run) {
 
 // The CLI grant coerces an absent bit to `false`; the loopback takes the run's
 // bit from its context.
-async function cliTools(run: Run) {
+async function cliTools(run: Run, onYield = () => {}) {
   const scoped = await resolveGatewayScopedTools({
     cfg: CFG,
     sessionKey: run.runKey,
@@ -218,7 +221,7 @@ async function cliTools(run: Run) {
     surface: "loopback",
     admittedRunContext: run.admitted,
     toolsAllow: run.toolsAllow,
-    onYield: () => {},
+    onYield,
   });
   return scoped.tools;
 }
@@ -226,13 +229,13 @@ async function cliTools(run: Run) {
 // Registers the run's automation invocation the way the cron runner does before
 // the runtime starts (src/cron/isolated-agent/run.ts). The returned close settles
 // it the same way: the invocation is marked closed, then the context released.
-function claimAutomationRun(run: Run) {
+function claimAutomationRun(run: Run, nextCheckEnabled = false) {
   const assertAdmitted = resolveAdmittedRunActiveAssertion(run.admitted);
   if (!assertAdmitted) {
     throw new Error("expected an admitted run assertion");
   }
   const invocation: { nextCheckEnabled: boolean; assertCurrent: () => void; closed?: boolean } = {
-    nextCheckEnabled: false,
+    nextCheckEnabled,
     assertCurrent: assertAdmitted,
   };
   const claim = claimAgentRunContext(
@@ -268,6 +271,30 @@ async function callError(tool: AnyAgentTool, params: Record<string, unknown>) {
 }
 
 describe("scheduled automations scope", () => {
+  it("keeps next_check and self scope when a session continuation carries only admitted job identity", async () => {
+    const run = await admitRun(
+      job({
+        sessionTarget: `session:${PARENT_KEY}`,
+        schedule: { kind: "at", at: "2026-11-01T18:00:00Z" },
+      }),
+      PARENT_KEY,
+      ["*"],
+    );
+    claimAutomationRun(run, true);
+    // Embedded session turns carry the admission but no separate jobId projection.
+    const automations = (await embeddedTools(run, undefined, { trigger: "cron" })).find(
+      (tool) => tool.name === AUTOMATIONS_TOOL_NAME,
+    )!;
+    await expect(
+      automations.execute("next", { action: "next_check", in: "5m" }),
+    ).resolves.toMatchObject({ details: { ok: true, delayMs: 300_000 } });
+    expect(await callError(automations, { action: "runs", jobId: "sibling-job" })).toContain(
+      SCOPE_ERROR,
+    );
+    expect(dispatched()).toEqual([]);
+    expect(consumeCronNextCheckProposal("run-1", "job-1")).toBe(300_000);
+  });
+
   describe.each(RUNS)("$name", (entry) => {
     it.each(["embedded", "cli"] as const)("%s run acts only on its own job", async (runtime) => {
       const run = await admitRun(entry.job, entry.runKey, ["*"]);
@@ -276,9 +303,9 @@ describe("scheduled automations scope", () => {
       expect(automations, "automations tool offered").toBeDefined();
       const actions = readActionEnum(automations!);
       expect(actions).toEqual(expect.arrayContaining(["status", "list", "get", "remove", "runs"]));
-      // No creation, edits, forced runs or wake: the parent wake action is not offered yet.
+      // Conversation schemas stay stable; execution enforces the scheduled scope.
       for (const action of ["add", "update", "run", "wake", "bind"]) {
-        expect(actions).not.toContain(action);
+        expect(await callError(automations!, { action })).toContain(SCOPE_ERROR);
       }
       for (const action of ["get", "remove", "runs"]) {
         expect(await callError(automations!, { action, jobId: "sibling-job" })).toContain(
@@ -292,19 +319,19 @@ describe("scheduled automations scope", () => {
       expect(dispatched()).toEqual(["cron.list"]);
     });
 
-    it.each(["embedded", "cli"] as const)("%s run cannot yield", async (runtime) => {
+    it.each(["embedded", "cli"] as const)("%s run ends on yield", async (runtime) => {
       const run = await admitRun(entry.job, entry.runKey, ["*"]);
-      const tools = runtime === "embedded" ? await embeddedTools(run) : await cliTools(run);
+      const onYield = vi.fn();
+      const tools =
+        runtime === "embedded" ? await embeddedTools(run, onYield) : await cliTools(run, onYield);
       const yieldTool = tools.find((tool) => tool.name === "sessions_yield");
-      if (entry.placement !== "in-session") {
-        expect(yieldTool).toBeUndefined();
-        return;
-      }
-      // An in-session run keeps the definition so its session's tool catalog is
-      // stable, and the call is refused.
       expect(yieldTool).toBeDefined();
       const result = await yieldTool!.execute("yield", {}, undefined, undefined);
-      expect(JSON.stringify(result.details)).toContain(YIELD_ERROR);
+      expect(result.details).toMatchObject({
+        status: "yielded",
+        note: expect.stringContaining("scheduler"),
+      });
+      expect(onYield).toHaveBeenCalledExactlyOnceWith("Turn yielded.", undefined, undefined);
     });
   });
 

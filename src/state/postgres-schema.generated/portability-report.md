@@ -13,17 +13,17 @@
 
 | Database | Object        | Total | Translated | Reported |
 | -------- | ------------- | ----: | ---------: | -------: |
-| state    | table         |   133 |        133 |        0 |
-| state    | column        |  1402 |       1400 |        2 |
-| state    | index         |   288 |        288 |        0 |
+| state    | table         |   136 |        136 |        0 |
+| state    | column        |  1419 |       1417 |        2 |
+| state    | index         |   291 |        291 |        0 |
 | state    | foreignKey    |    33 |         33 |        0 |
-| state    | check         |   297 |        297 |        0 |
+| state    | check         |   299 |        299 |        0 |
 | state    | trigger       |     0 |          0 |        0 |
 | state    | virtualTable  |     0 |          0 |        0 |
 | state    | internalTable |     1 |          0 |        1 |
-| agent    | table         |    46 |         46 |        0 |
-| agent    | column        |   430 |        394 |       36 |
-| agent    | index         |   103 |         99 |        4 |
+| agent    | table         |    47 |         47 |        0 |
+| agent    | column        |   438 |        402 |       36 |
+| agent    | index         |   107 |        103 |        4 |
 | agent    | foreignKey    |    29 |         29 |        0 |
 | agent    | check         |    73 |         73 |        0 |
 | agent    | trigger       |     8 |          4 |        4 |
@@ -35,8 +35,6 @@
 - audit_events.sequence: rowid alias becomes identity; AUTOINCREMENT/sqlite_sequence never-reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
 - audit_identity_keys.id: rowid alias becomes identity; rowid reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
 - capture_events.id: rowid alias becomes identity; rowid reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
-- claw_mcp_server_refs.independent_owner: 0/1 boolean candidate retained as bigint.
-- claw_package_refs.independent_owner: 0/1 boolean candidate retained as bigint.
 - config_revision_keys.id: rowid alias becomes identity; rowid reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
 - cron_job_runtime_authorities.recovery_required: 0/1 boolean candidate retained as bigint.
 - macos_port_guardian_records.pid: rowid alias becomes identity; rowid reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
@@ -46,6 +44,8 @@
 - outbound_message_progress.sequence: rowid alias becomes identity; AUTOINCREMENT/sqlite_sequence never-reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
 - session_repository_workspaces.run_setup_script: 0/1 boolean candidate retained as bigint.
 - session_state_events.sequence: rowid alias becomes identity; AUTOINCREMENT/sqlite_sequence never-reuse semantics differ: PostgreSQL sequences are nontransactional and explicit values do not advance them.
+- template_mcp_server_refs.independent_owner: 0/1 boolean candidate retained as bigint.
+- template_package_refs.independent_owner: 0/1 boolean candidate retained as bigint.
 - internalTable `sqlite_sequence.sqlite_sequence`: SQLite-owned storage is not translated. Source: `CREATE TABLE sqlite_sequence(name,seq)`
 - column `sqlite_sequence.name`: Parent table omitted. Source: ``
 - column `sqlite_sequence.seq`: Parent table omitted. Source: ``
