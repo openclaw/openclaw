@@ -1,29 +1,23 @@
-// Gateway routing regression: an unsupported A2A descendant must not be served
-// as the root Control UI document.
+// Gateway dispatch proof lives with the A2A plugin. Core type graphs must not
+// import bundled extension files, and this is the route that otherwise falls
+// through to the root Control UI document.
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  createPluginRuntimeMock,
-  createStartAccountContext,
-} from "openclaw/plugin-sdk/channel-test-helpers";
-import {
-  createTestRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { resetPluginRuntimeStateForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import {
-  a2aChannelPlugin,
-  setA2aChannelRuntime,
-  type ResolvedA2aChannelAccount,
-} from "../../extensions/a2a/api.js";
-import type { createSubsystemLogger } from "../logging/subsystem.js";
-import { withTempDir } from "../test-utils/temp-dir.js";
-import { AUTH_NONE, sendRequest, withGatewayServer } from "./server-http.test-harness.js";
+  AUTH_NONE,
+  sendRequest,
+  withGatewayServer,
+} from "../../../src/gateway/server-http.test-harness.js";
 import {
   createGatewayPluginRequestHandler,
   shouldEnforceGatewayAuthForPluginPath,
-} from "./server/plugins-http.js";
+} from "../../../src/gateway/server/plugins-http.js";
+import type { createSubsystemLogger } from "../../../src/logging/subsystem.js";
+import { withTempDir } from "../../../src/test-utils/temp-dir.js";
+import { a2aChannelPlugin } from "./channel.js";
+import { createA2aGatewayFixture } from "./gateway.test-support.js";
 
 const CONTROL_UI_DOCUMENT = "<!doctype html><html>spa fallback</html>\n";
 const JSON_NOT_FOUND = JSON.stringify({ error: "Not found" });
@@ -34,30 +28,7 @@ afterEach(() => {
 });
 
 it("returns JSON 404 for unsupported /a2a/v1 descendants instead of the Control UI", async () => {
-  const registry = createTestRegistry();
-  setActivePluginRegistry(registry);
-  const runtime = createPluginRuntimeMock();
-  vi.mocked(runtime.state.openKeyedStoreV2).mockImplementation(
-    () =>
-      ({
-        entries: async () => [],
-        register: async () => {},
-      }) as never,
-  );
-  setA2aChannelRuntime(runtime);
-  const controller = new AbortController();
-  const account: ResolvedA2aChannelAccount = {
-    accountId: "default",
-    enabled: true,
-    configured: true,
-    config: { peers: { hermes: { token: "test-token" } } },
-    unresolvedPeers: [],
-    unresolvedOutboundPeers: [],
-  };
-  const ctx = createStartAccountContext({
-    account,
-    abortSignal: controller.signal,
-  });
+  const fixture = createA2aGatewayFixture();
   const log = { warn: vi.fn() } as unknown as ReturnType<typeof createSubsystemLogger>;
 
   await withTempDir("openclaw-a2a-namespace-", async (directory) => {
@@ -70,14 +41,17 @@ it("returns JSON 404 for unsupported /a2a/v1 descendants instead of the Control 
         controlUiEnabled: true,
         controlUiBasePath: "",
         controlUiRoot: { kind: "resolved", path: root },
-        handlePluginRequest: createGatewayPluginRequestHandler({ registry, log }),
+        handlePluginRequest: createGatewayPluginRequestHandler({
+          registry: fixture.registry,
+          log,
+        }),
         shouldEnforcePluginGatewayAuth: (pathContext) =>
-          shouldEnforceGatewayAuthForPluginPath(registry, pathContext),
+          shouldEnforceGatewayAuthForPluginPath(fixture.registry, pathContext),
         isStartupPluginRuntimeReady: () => true,
       },
       run: async (server) => {
-        const lifecycle = a2aChannelPlugin.gateway!.startAccount!(ctx);
-        await vi.waitFor(() => expect(ctx.getStatus().lifecycle).toBe("ready"));
+        const lifecycle = a2aChannelPlugin.gateway!.startAccount!(fixture.ctx);
+        await vi.waitFor(() => expect(fixture.ctx.getStatus().lifecycle).toBe("ready"));
         try {
           for (const accept of [undefined, "*/*"] as const) {
             const response = await sendRequest(server, {
@@ -128,7 +102,7 @@ it("returns JSON 404 for unsupported /a2a/v1 descendants instead of the Control 
             expect(spa.getBody(), spaPath).toContain("spa fallback");
           }
         } finally {
-          controller.abort();
+          fixture.controller.abort();
           await lifecycle;
         }
 

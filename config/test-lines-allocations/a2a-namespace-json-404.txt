@@ -1,0 +1,3 @@
+# Unsupported /a2a/v1 descendants need a Gateway routing regression beside the A2A plugin.
+# The CI base still had slack; this allocation covers only the 49 lines past that slack.
+49
