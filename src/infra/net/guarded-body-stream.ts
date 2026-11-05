@@ -153,21 +153,30 @@ export function responseWithAbortSignal(response: Response, signal?: AbortSignal
       headers: response.headers,
     },
   );
-  const applyMetadata = (target: Response): Response => {
-    Object.defineProperties(target, {
-      headers: { value: response.headers },
-      url: { value: response.url },
-      redirected: { value: response.redirected },
-      type: { value: response.type },
-      clone: {
-        configurable: true,
-        value: (): Response => applyMetadata(Response.prototype.clone.call(target)),
-        writable: true,
-      },
-    });
-    return target;
-  };
-  return applyMetadata(wrapped);
+  return preserveResponseMetadata(response, wrapped, response.headers);
+}
+
+function preserveResponseMetadata(
+  response: Response,
+  target: Response,
+  headers?: Headers,
+): Response {
+  // Abort wrappers retain the original header guard; release wrappers keep native header copies.
+  if (headers) {
+    Object.defineProperty(target, "headers", { value: headers });
+  }
+  Object.defineProperties(target, {
+    url: { value: response.url },
+    redirected: { value: response.redirected },
+    type: { value: response.type },
+    clone: {
+      configurable: true,
+      value: (): Response =>
+        preserveResponseMetadata(response, Response.prototype.clone.call(target), headers),
+      writable: true,
+    },
+  });
+  return target;
 }
 
 const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
@@ -184,9 +193,12 @@ export function responseWithRelease(response: Response, release: () => Promise<v
     });
     return response;
   }
-  return new Response(wrapBodyStream({ body: response.body, cleanup: release }, "release"), {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
+  return preserveResponseMetadata(
+    response,
+    new Response(wrapBodyStream({ body: response.body, cleanup: release }, "release"), {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    }),
+  );
 }
