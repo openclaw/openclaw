@@ -113,14 +113,17 @@ final class RemotePortTunnel: @unchecked Sendable {
             hostKeyPolicy: settings.sshHostKeyPolicy,
             preferredLocalPort: UInt16(ports.local),
             reservedLocalPorts: Self.reservedLocalPorts(
-                root: root, tunnelLocalPort: ports.local, localGatewayPort: GatewayEnvironment.gatewayPort(root: root)))
+                root: root,
+                hostsLocalGateway: AppDefaults.standard.bool(forKey: hostsLocalGatewayWithRemotePrimaryKey),
+                localGatewayPort: GatewayEnvironment.gatewayPort(root: root)))
     }
 
-    /// A Gateway hosted on this Mac next to the tunnel owns its port and its widget sandbox port,
-    /// even while stopped or before its sandbox listener starts lazily. A shared legacy port means
-    /// no local Gateway can run beside the tunnel, so nothing is reserved.
-    static func reservedLocalPorts(root: [String: Any], tunnelLocalPort: Int, localGatewayPort: Int) -> Set<Int> {
-        guard localGatewayPort != tunnelLocalPort else { return [] }
+    /// While hosting beside the remote primary is on, this Mac's Gateway owns its port and its widget
+    /// sandbox port, even while stopped or before its sandbox listener starts lazily. Turning hosting
+    /// off keeps the separated port settings, so the preference, not the port split, decides. The
+    /// preference is part of Configuration, so toggling it replaces the tunnel.
+    static func reservedLocalPorts(root: [String: Any], hostsLocalGateway: Bool, localGatewayPort: Int) -> Set<Int> {
+        guard hostsLocalGateway else { return [] }
         let apps = (root["mcp"] as? [String: Any])?["apps"] as? [String: Any]
         let sandboxPort = (apps?["sandboxPort"] as? NSNumber)?.intValue ?? localGatewayPort + 1
         return [localGatewayPort, sandboxPort]

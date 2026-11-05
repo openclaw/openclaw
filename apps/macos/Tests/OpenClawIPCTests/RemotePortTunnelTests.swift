@@ -45,9 +45,8 @@ struct RemotePortTunnelTests {
         Darwin.close(sandbox.fd)
         let remotePort = Int(sandbox.port) - 1
         // Hosting repair moves this Mac's Gateway next to the tunnel port; its listener may not be bound yet.
-        let root: [String: Any] = ["gateway": ["port": Int(sandbox.port)]]
         let reserved = RemotePortTunnel.reservedLocalPorts(
-            root: root, tunnelLocalPort: remotePort, localGatewayPort: Int(sandbox.port))
+            root: [:], hostsLocalGateway: true, localGatewayPort: Int(sandbox.port))
 
         let options = RemotePortTunnel.sshOptions(
             localPort: UInt16(remotePort), remotePort: remotePort, hostKeyPolicy: .strict,
@@ -55,8 +54,30 @@ struct RemotePortTunnelTests {
 
         #expect(reserved == [Int(sandbox.port), Int(sandbox.port) + 1])
         #expect(options.count(where: { $0 == "-L" }) == 1)
-        #expect(RemotePortTunnel.reservedLocalPorts(
-            root: root, tunnelLocalPort: remotePort, localGatewayPort: remotePort).isEmpty)
+    }
+
+    @MainActor
+    @Test(arguments: [(18790, 18789), (18789, 28789)])
+    func `split local port reserves nothing once hosting is off`(ports: (gateway: Int, tunnel: Int)) async throws {
+        let configPath = TestIsolation.tempConfigPath()
+        defer { try? FileManager().removeItem(atPath: configPath) }
+        try await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_CONFIG_PATH": configPath, "OPENCLAW_GATEWAY_PORT": nil],
+            defaults: ["gatewayPort": nil, hostsLocalGatewayWithRemotePrimaryKey: nil])
+        {
+            // Hosting on and then off leaves gateway.port separated from the tunnel port.
+            try #require(OpenClawConfigFile.saveDict(["gateway": [
+                "mode": "remote", "port": ports.gateway,
+                "remote": [
+                    "transport": "ssh", "sshTarget": "operator@gateway.example",
+                    "url": "ws://127.0.0.1:\(ports.tunnel)", "remotePort": 18789,
+                ],
+            ]]))
+            #expect(try RemotePortTunnel.configuration().reservedLocalPorts.isEmpty)
+
+            AppDefaults.standard.set(true, forKey: hostsLocalGatewayWithRemotePrimaryKey)
+            #expect(try RemotePortTunnel.configuration().reservedLocalPorts == [ports.gateway, ports.gateway + 1])
+        }
     }
 
     private static func bindLoopbackPort() throws -> (fd: Int32, port: UInt16) {
