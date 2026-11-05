@@ -85,6 +85,7 @@ describe("normalizeMessageActionInput", () => {
     [makeInput("send", { target: "channel:C1", messageThreadId: 99 }), { threadId: "99" }, []],
     [makeInput("send", { target: "channel:C1", message_thread_id: 99 }), { threadId: "99" }, []],
     [makeInput("send", { target: "channel:C1", thread_id: "99" }), { threadId: "99" }, []],
+    [makeInput("send", { target: "channel:C1", threadId: 99 }), { threadId: "99" }, []],
     [
       makeInput("send", { target: "channel:C1", threadId: "99", messageThreadId: 99 }),
       { threadId: "99" },
