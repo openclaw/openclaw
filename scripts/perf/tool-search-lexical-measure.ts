@@ -323,10 +323,13 @@ if (values.views) {
   );
   process.exit(0);
 }
-const documents = [...skills, ...tools].map((text, value) => ({
-  value,
-  terms: tokenizeDocument(text),
-}));
+const documents = [...skills, ...tools].map((text, value) => {
+  const terms = new Map<string, number>();
+  for (const term of tokenizeDocument(text)) {
+    terms.set(term, (terms.get(term) ?? 0) + 1);
+  }
+  return { value, terms };
+});
 if (values.lifecycle) {
   const { getTextLexicalIndex } = (await import(
     pathToFileURL(path.resolve(values["index-owner"])).href
@@ -461,7 +464,10 @@ console.log(
     sampled: values.allocations,
     documents: documents.length,
     skillBodies: skills.length,
-    terms: documents.reduce((n, doc) => n + doc.terms.length, 0),
+    terms: documents.reduce(
+      (n, doc) => n + [...doc.terms.values()].reduce((sum, frequency) => sum + frequency, 0),
+      0,
+    ),
     retainedIndexes: retained.length,
     retainedHeapBytes: after.heapUsed - before.heapUsed,
     retainedExternalBytes: after.external - before.external,
