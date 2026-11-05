@@ -10,6 +10,7 @@ import {
 } from "../../lib/chat/message-normalizer.ts";
 import { pluginInlineViewItems } from "../../lib/chat/plugin-inline-views.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
+import type { ChatMessageRecovery } from "./chat-message-recovery.ts";
 import {
   buildCompactionDividerItem,
   buildResetDividerItem,
@@ -21,7 +22,6 @@ import {
   createSubmittedModelNoticeProjector,
   projectChatSystemNotice,
 } from "./chat-system-notice.ts";
-import type { BuildChatItemsProps } from "./chat-thread-build.ts";
 import { canvasAssistantItemKey, collectCanvasTurns } from "./chat-thread-canvas.ts";
 import { displayChatHistory, type ChatItemsFacts } from "./chat-thread-facts.ts";
 import {
@@ -36,6 +36,7 @@ import {
   transcriptPositionTimestamp,
 } from "./chat-thread-items.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
+import type { CompactionStatus } from "./tool-stream-contract.ts";
 
 export function permissionInMessage(message: unknown): boolean {
   return extractToolCardsCached(message).some((card) =>
@@ -44,7 +45,15 @@ export function permissionInMessage(message: unknown): boolean {
 }
 
 export function prepareChatHistory(
-  props: BuildChatItemsProps,
+  props: {
+    messages: unknown[];
+    persistCommentary?: boolean;
+    showToolCalls: boolean;
+    compactionStatus?: CompactionStatus | null;
+    searchOpen?: boolean;
+    searchQuery?: string;
+    messageRecovery?: ChatMessageRecovery;
+  },
   activeCommentaryRunId?: string,
   probe?: unknown,
 ) {

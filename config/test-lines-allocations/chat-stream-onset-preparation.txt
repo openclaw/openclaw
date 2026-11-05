@@ -1,0 +1,5 @@
+# PR #193479: 93 net regression-test lines for persisted preparation reuse.
+# Covers onset work count (fails on base), display-input invalidation, and
+# live canvas addition/removal without mutating frozen retained history.
+# Extends the existing incremental suite; no new browser or process setup.
+93
