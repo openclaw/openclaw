@@ -209,12 +209,17 @@ Its failed CI remains failed; no current-head CI success is claimed. PR189510 re
 
 ## Current qualification
 
-Batch108, pinned main `4671dd463e04`: qualify removal of seven unseeded
-Run Inspector privacy-list entries. Current fixtures never supply these values;
-all ten declarations/cases and eight injected privacy values remain in scope.
-The primary is unchanged for native dependency qualification and baseline proof.
-Runtime, scoped checks and fresh review are pending; no removal or case credit
-is claimed. Production is outside this change.
+Batch108, pinned main `4671dd463e04`: remove seven unseeded Run Inspector
+privacy-list entries. All ten declarations/cases and every injected command, path,
+token, payload, receipt, resolution and event privacy check remain. The official
+unchanged and candidate browser runs each pass all ten cases with identical
+inventories; seven fewer test lines, no production changes or case-removal credit.
+Scoped types, typed lint, formatting, MDX, whitespace and the line ratchet pass.
+Both unused-file scans and the separately completed full-tree scan pass. The
+unlisted `tokenjuice` dependency reproduces with the original primary and unchanged
+source inputs. All three export scans timed out; their duration reports disagree
+with the outer elapsed timer, so no export success is claimed. The PR records
+fresh review and exact-head CI/security evidence; no unrelated repair is included.
 
 Prior qualified batches remain unlanded: [192672](https://github.com/openclaw/openclaw/pull/192672)
 has two HTTP502 landing responses and retained checkouts; [192719](https://github.com/openclaw/openclaw/pull/192719)
