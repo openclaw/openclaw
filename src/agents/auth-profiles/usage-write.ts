@@ -137,7 +137,11 @@ export async function withAuthProfileUsage<T>(
     const ownership = ownershipResult.value;
     const sharedPath =
       ownership.location === "state-db" ? context.admission.databasePath : legacyPath;
-    const main = Boolean(mode) || !selectedDir || localPath === sharedPath;
+    // The main agent's own database remains at the legacy path even after the
+    // shared store relocates to the state database; comparing against the
+    // legacy path keeps main-agent successes out of inherited recording.
+    const main =
+      Boolean(mode) || !selectedDir || localPath === legacyPath || localPath === sharedPath;
     const read = (databasePath: string) =>
       databasePath === context.admission.databasePath
         ? readSharedAuthProfileRows(context)
