@@ -31,6 +31,7 @@ const enBoard = {
       waitingForResult: "Waiting for the widget result…",
       runtimeError: "Couldn’t run this widget. Try again. {message}",
       waitingForConnection: "Disconnected. This view reconnects automatically.",
+      linkFailed: "Couldn’t open this link. Try clicking it again.",
       resourceUnavailable: "Couldn’t load a widget resource. Reconnect and try again.",
       frameAuthorizationFailed: "Widget authorization failed after repeated refresh attempts.",
       sandboxOriginRequired:
