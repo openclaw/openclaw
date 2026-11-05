@@ -1155,6 +1155,14 @@ const enSettings = {
       replace: "Replace",
       replaceNamed: "Replace API key",
       saved: "API key saved.",
+      verified: "API key saved and verified.",
+      checking: "Checking…",
+      checkFailed:
+        "API key saved, but the provider didn’t accept it. {reason} Enter a different key.",
+      checkInconclusive:
+        "API key saved, but the check didn’t finish. {reason} Use Test access to try again.",
+      checkUnavailable:
+        "API key saved, but OpenClaw couldn’t check it. Use Test access to try again.",
       authModeBlocked: "API key changes aren’t available with the current sign-in method.",
     },
     probe: {
@@ -1214,6 +1222,7 @@ const enSettings = {
       selectProvider: "Select a provider",
       save: "Save provider",
       saved: "Added {provider}",
+      verified: "Added {provider}. Access verified.",
     },
     defaults: {
       title: "Defaults for all agents",
