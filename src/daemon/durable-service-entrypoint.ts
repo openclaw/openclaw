@@ -404,14 +404,28 @@ async function stageDurableCopy(env: NodeJS.ProcessEnv, replacement: DurableServ
   }
   // Service installs have no update-run fence; the package lock orders them among themselves.
   const unfenced = () => undefined;
-  // `openclaw update` does not take the package lock and can publish its own copy meanwhile,
-  // so a restore first checks that the live copy is still the one this install published.
-  let published: { dev: bigint; ino: bigint } | undefined;
-  const liveIdentity = () =>
-    fs.lstat(replacement.packageRoot, { bigint: true }).then(
-      ({ dev, ino }) => ({ dev, ino }),
-      () => undefined,
-    );
+  // `openclaw update` does not take the package lock and can publish its own copy meanwhile.
+  // The rollback calls its authority check synchronously right before each rename, so the
+  // check admits only trees this install owns: the copy it published, the backup it restores
+  // (renames keep identity), or none while the copy is moved aside.
+  type Identity = { dev: bigint; ino: bigint };
+  let published: Identity | undefined;
+  let replacedByAnotherInstall = false;
+  const identityOf = (entry: string): Identity | undefined => {
+    const stat = fsSync.lstatSync(entry, { bigint: true, throwIfNoEntry: false });
+    return stat ? { dev: stat.dev, ino: stat.ino } : undefined;
+  };
+  const sameIdentity = (a: Identity | undefined, b: Identity | undefined) =>
+    a !== undefined && b !== undefined && a.dev === b.dev && a.ino === b.ino;
+  const restoreAuthority = (backup: Identity | undefined) => () => {
+    const live = identityOf(replacement.packageRoot);
+    if (live && !sameIdentity(live, published) && !sameIdentity(live, backup)) {
+      replacedByAnotherInstall = true;
+      throw new Error(
+        `The durable OpenClaw copy at ${replacement.packageRoot} was replaced by another install before this failed install could restore it; keeping the current copy.`,
+      );
+    }
+  };
   return {
     activate: async () => {
       gate.resolve(true);
@@ -419,7 +433,7 @@ async function stageDurableCopy(env: NodeJS.ProcessEnv, replacement: DurableServ
       if (result.failedStep) {
         throw failure(result.failedStep);
       }
-      published = await liveIdentity();
+      published = identityOf(replacement.packageRoot);
     },
     cancel: async (): Promise<string[]> => {
       gate.resolve(false);
@@ -441,24 +455,25 @@ async function stageDurableCopy(env: NodeJS.ProcessEnv, replacement: DurableServ
         return [];
       }
       const warnings: string[] = [];
-      if (decision === "restore" && published) {
-        const live = await liveIdentity();
-        if (live?.dev !== published.dev || live.ino !== published.ino) {
-          // Another owner replaced the copy after this install published it. Restoring would
-          // overwrite that copy, so keep it; the transaction then keeps this install's backup.
-          warnings.push(
-            `The durable OpenClaw copy at ${replacement.packageRoot} was replaced by another install before this failed install could restore it; keeping the current copy.`,
-          );
-          const retention = await transaction.complete({ activationVerified: false }, unfenced);
-          if (retention && retention.exitCode !== 0) {
-            warnings.push(retention.stderrTail ?? retention.name);
+      if (decision === "restore") {
+        // The transaction keeps this authority for the rest of its restore and retirement.
+        const authority = published
+          ? restoreAuthority(identityOf(transaction.backupRoot))
+          : unfenced;
+        const restored = await transaction.rollback(authority).catch((error: unknown) => {
+          if (!replacedByAnotherInstall) {
+            throw error;
           }
+          return undefined;
+        });
+        if (replacedByAnotherInstall) {
+          // The other owner's copy stays live; this install's backup stays for inspection.
+          warnings.push(
+            `The durable OpenClaw copy at ${replacement.packageRoot} was replaced by another install before this failed install could restore it; keeping the current copy and the previous copy's backup at ${transaction.backupRoot}.`,
+          );
           return warnings;
         }
-      }
-      if (decision === "restore") {
-        const restored = await transaction.rollback(unfenced);
-        if (restored.exitCode !== 0) {
+        if (restored && restored.exitCode !== 0) {
           warnings.push(
             `Could not restore the previous durable OpenClaw copy: ${restored.stderrTail ?? restored.name}`,
           );

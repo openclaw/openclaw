@@ -8,13 +8,30 @@ import { swapStagedPackageInstall } from "../infra/package-update-swap.js";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../infra/update-npm-prefix.js";
 import { installDurableServiceCli } from "./durable-service-entrypoint.js";
 
-const { runGlobalPackageUpdateSteps } = vi.hoisted(() => ({
+const { runGlobalPackageUpdateSteps, duringBackupVerification } = vi.hoisted(() => ({
   runGlobalPackageUpdateSteps: vi.fn(),
+  duringBackupVerification: { run: undefined as (() => Promise<void>) | undefined },
 }));
 
 // mock-isolation: npm staging is replaced by a prepared stage; the real package swap and its
 // rollback still run against the durable copy on disk.
 vi.mock("../infra/package-update-steps.js", () => ({ runGlobalPackageUpdateSteps }));
+// mock-isolation: the real backup verification runs; this only lets a competing update publish
+// while a rollback awaits it, after any earlier identity check and before the rollback's renames.
+vi.mock("../infra/package-update-npm-root.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/package-update-npm-root.js")>();
+  return {
+    ...actual,
+    verifyRetainedNpmRootRecovery: async (
+      ...args: Parameters<typeof actual.verifyRetainedNpmRootRecovery>
+    ) => {
+      const competing = duringBackupVerification.run;
+      duringBackupVerification.run = undefined;
+      await competing?.();
+      return actual.verifyRetainedNpmRootRecovery(...args);
+    },
+  };
+});
 // mock-isolation: no npm prefix probe may spawn on the test host.
 vi.mock("../infra/update-global.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-global.js")>()),
@@ -28,6 +45,7 @@ beforeEach(() => {
 afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
   runGlobalPackageUpdateSteps.mockReset();
+  duringBackupVerification.run = undefined;
 });
 
 const env = () => ({ OPENCLAW_STATE_DIR: path.join(root, "state") });
@@ -67,7 +85,15 @@ async function publish(
   expect(result.status, result.step.stderrTail ?? "").toBe("committed");
 }
 
-it("keeps a copy that openclaw update published when a failed install would restore its own", async () => {
+it.each([
+  ["restores the previous copy when no update intervenes", "none", "1.0.0"],
+  ["keeps an update published before the restore starts", "before-restore", "3.0.0"],
+  [
+    "keeps an update published while the restore verifies its backup",
+    "during-backup-verification",
+    "3.0.0",
+  ],
+] as const)("a failed install %s", async (_name, when, expected) => {
   await writePackageRoot(packageRoot(), "1.0.0");
   fs.mkdirSync(durable().binDir, { recursive: true });
   fs.writeFileSync(path.join(durable().binDir, "openclaw"), "launcher 1.0.0\n");
@@ -83,8 +109,8 @@ it("keeps a copy that openclaw update published when a failed install would rest
   );
   const warn = vi.fn();
 
-  // A node install publishes 2.0.0; `openclaw update` then publishes 3.0.0 before the node
-  // install's activation fails.
+  // A node install publishes 2.0.0 and its activation fails; `openclaw update` publishes 3.0.0
+  // either before the restore starts or while the rollback verifies its backup.
   await expect(
     installDurableServiceCli({
       env: env(),
@@ -97,7 +123,12 @@ it("keeps a copy that openclaw update published when a failed install would rest
       install: async (beforeMutation) => {
         await beforeMutation?.();
         expect(liveVersion()).toBe("2.0.0");
-        await publish("update-stage", "3.0.0");
+        const update = () => publish("update-stage", "3.0.0");
+        if (when === "before-restore") {
+          await update();
+        } else if (when === "during-backup-verification") {
+          duringBackupVerification.run = update;
+        }
         throw new Error("node activation failed");
       },
       verify: async () => true,
@@ -105,6 +136,11 @@ it("keeps a copy that openclaw update published when a failed install would rest
     }),
   ).rejects.toThrow("node activation failed");
 
-  expect(liveVersion()).toBe("3.0.0");
-  expect(warn).toHaveBeenCalledWith(expect.stringContaining("replaced by another install"));
+  expect(duringBackupVerification.run).toBeUndefined();
+  expect(liveVersion()).toBe(expected);
+  if (when === "none") {
+    expect(warn).not.toHaveBeenCalled();
+  } else {
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("replaced by another install"));
+  }
 });
