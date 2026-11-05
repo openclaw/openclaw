@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   classifyReleaseSnapshot,
+  releaseChildSpec,
   terminalPolicyPass,
 } from "../../scripts/full-release-validation-policy.mjs";
 import { readChild } from "../../scripts/full-release-validation-state.mjs";
@@ -267,14 +268,16 @@ describe("checked-in release-tooling waivers", () => {
           .filter((entry) => entry.runId)
           .map((entry) => [
             entry.runId,
-            githubRun(entry, {
+            githubRun(child(entry.key, entry), {
               id: Number(entry.runId),
-              path: `.github/workflows/${entry.workflow}`,
+              path: `.github/workflows/${releaseChildSpec(entry.key).workflow}`,
               conclusion: entry.runId === "303" ? "failure" : "success",
+              ...(failure === "provenance" && entry.runId === "303"
+                ? { head_sha: "c".repeat(40) }
+                : {}),
             }),
           ]),
       );
-      if (failure === "provenance") runs["303"].head_sha = "c".repeat(40);
       writeFileSync(planPath, JSON.stringify(sealed));
       writeFileSync(callsPath, "");
       writeFileSync(
