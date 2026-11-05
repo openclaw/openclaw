@@ -154,15 +154,9 @@ export class TranscriptInitialRange {
   }
 
   private normalIndexes(range: Range): number[] {
-    // Large jumps skip these neighbours on the next frame. Spend their mount
-    // budget preparing the arriving viewport instead.
-    const jumping =
-      this.isReaderMoving() &&
-      this.scrollSample.distance >= (this.virtualizer().scrollRect?.height ?? 600);
-    return this.normalRange(
-      this.viewportOnly || jumping ? { ...range, overscan: 0 } : range,
-      this.rowIndexes,
-    );
+    // Estimated rows can shrink as they enter, especially collapsed work.
+    // Keep the boundary neighbours even when a fast gesture skips viewports.
+    return this.normalRange(this.viewportOnly ? { ...range, overscan: 0 } : range, this.rowIndexes);
   }
 
   private endIndexes(): number[] {

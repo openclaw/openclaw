@@ -453,11 +453,11 @@ it.each([600, 1400])(
   },
 );
 
-it("budgets large jumps and cancels queued scroll warming when hidden", async () => {
+it("keeps large-jump boundary rows and cancels queued scroll warming when hidden", async () => {
   const view = await transcriptFixture(0, true, false, true);
   const indexes = () => transcriptRows(view.container).map((row) => Number(row.dataset.index));
   await view.scrollTo(60);
-  expect(indexes()).toEqual([60, 61, 62, 63, 64, 65]);
+  expect(indexes()).toEqual([59, 60, 61, 62, 63, 64, 65, 66]);
   await view.scrollTo(61);
   expect(indexes()).toEqual([60, 61, 62, 63, 64, 65, 66, 67]);
   await view.frame();

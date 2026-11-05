@@ -1,8 +1,39 @@
-import { Virtualizer } from "@tanstack/virtual-core";
+import { defaultRangeExtractor, Virtualizer } from "@tanstack/virtual-core";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { TranscriptInitialRange } from "./chat-transcript-initial-range.ts";
 
 afterEach(() => vi.unstubAllGlobals());
+
+it("keeps boundary rows during a viewport-sized jump past shorter-than-estimated rows", () => {
+  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+    count: 20,
+    initialRect: { width: 800, height: 300 },
+    getScrollElement: () => null,
+    estimateSize: () => 120,
+    scrollToFn: () => {},
+    observeElementRect: () => () => {},
+    observeElementOffset: () => () => {},
+  });
+  const range = new TranscriptInitialRange(
+    0,
+    () => virtualizer,
+    defaultRangeExtractor,
+    () => {},
+    () => 0,
+    () => true,
+    () => 120,
+    queueMicrotask,
+    () => false,
+  );
+  onTestFinished(() => range.disconnect());
+  range.recordReaderMovement(1000);
+
+  // A collapsed work summary can shrink from its 120px estimate to 32.5px.
+  // Keep the adjacent row available to fill the arriving viewport immediately.
+  const indexes = range.extract({ startIndex: 10, endIndex: 12, count: 20, overscan: 1 });
+  expect(indexes).toContain(9);
+  expect(indexes).toContain(13);
+});
 
 it("yields between destination-size corrections and waits for a stable end before scrolling", async () => {
   let nextFrame = 0;
