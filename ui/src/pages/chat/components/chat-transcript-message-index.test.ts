@@ -1034,7 +1034,8 @@ it.each([
     const expanded = new Map<string, boolean>();
     const previews = projectTranscriptWorkPreviews(chain.workGroups, { sessionKey, expanded });
     const rows = projectTranscriptRows(indexFor(chain, expanded).rows, previews, []);
-    const [firstFrame] = framesOf(chain);
-    expect(rows.map((row) => row.key)).toContain(`work-previews:${firstFrame!.key}`);
+    const frame = framesOf(chain)[0]!;
+    expect(rows.map((row) => row.key)).not.toContain(`work-previews:${frame.key}`);
+    expect(previews.get(frame.parts.find((part) => part.kind === "group")!.key)).toHaveLength(1);
   },
 );

@@ -139,9 +139,10 @@ export class TranscriptReaderAnchor {
       this.columnShift += correction;
       this.syncColumn();
     } else {
-      // Grow the native range before the write so the end cannot clamp it.
+      // Keep the pre-shrink offset: committing a smaller extent can clamp it first.
+      const offset = element.scrollTop;
       this.shiftVirtual(-correction);
-      this.scrollBy(correction);
+      this.scrollBy(correction, offset);
     }
   };
 
@@ -278,13 +279,13 @@ export class TranscriptReaderAnchor {
     }
   }
 
-  private scrollBy(delta: number): void {
+  private scrollBy(delta: number, offset?: number): void {
     const element = this.host.scrollElement;
     if (!element) {
       return;
     }
     const before = element.scrollTop;
-    element.scrollTo({ top: before + delta, behavior: "instant" });
+    element.scrollTo({ top: (offset ?? before) + delta, behavior: "instant" });
     // Maintenance provenance keeps offset observers from reading the write as reader movement.
     this.host.offsetState.recordProgrammaticScroll?.(before, element.scrollTop, true);
   }

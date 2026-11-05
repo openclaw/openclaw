@@ -664,15 +664,15 @@ export function projectTranscriptRows(
     const result: TranscriptRow<ChatRenderItem>[] = take(null);
     for (const row of rows) {
       result.push(row);
-      // Work outside a run frame can anchor its previews to an answer inside
-      // one; that answer renders as part of the frame row.
-      const anchors =
-        row.kind === "item" && row.item.kind === "agent-run-frame"
-          ? [row.key, ...row.item.parts.map((part) => part.key)]
-          : [row.key];
-      const anchored = anchors.flatMap((anchor) => workPreviews.get(anchor) ?? []);
-      const previews = anchored.length > 0 ? anchored : undefined;
-      if (previews && !(row.kind === "item" && row.item.kind === "work-group")) {
+      const previews = workPreviews.get(row.key);
+      // Work groups and run frames render their previews inline.
+      if (
+        previews &&
+        !(
+          row.kind === "item" &&
+          (row.item.kind === "work-group" || row.item.kind === "agent-run-frame")
+        )
+      ) {
         const content: NativeTranscriptView = { kind: "work-previews", previews };
         result.push({
           kind: "content",

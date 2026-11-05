@@ -561,7 +561,8 @@ it("parks retained rows without layout and restores their resized geometry and n
     );
     expect(virtualizer.itemSizeCache.get(key)).toBeCloseTo(resizedHeight, 1);
     row.style.height = "0px";
-    expect(virtualizer.options.measureElement(row, parkedReceipt, virtualizer)).toBe(0);
+    // A visible zero-height row needs its own fresh receipt, not the parked one.
+    await expect.poll(() => virtualizer.itemSizeCache.get(key)).toBe(0);
   } finally {
     observer.disconnect();
   }
