@@ -166,9 +166,8 @@ describe("long completed runs", () => {
           continue;
         }
         // Only middle fragments can restore geometry without reading source-run edge chrome.
-        expect(row.revision !== undefined).toBe(
-          !row.item.fragment.first && !row.item.fragment.last,
-        );
+        const edge = row.item.fragment.first || row.item.fragment.last;
+        expect(row.revision === undefined).toBe(edge);
       }
       expect(index.messageRowKeysById.get("step-0")).not.toBe(
         index.messageRowKeysById.get("step-299"),

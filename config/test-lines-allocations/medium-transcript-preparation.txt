@@ -1,4 +1,4 @@
 # Preserve ordered 400/512/514-message coverage, final-answer identity, and paired-row bounds.
 # Extend the existing prepared-row tests for data-only idle warming and live-tail navigation.
 # Net regression-test growth against ec702e8338827dee1ef3ec28a931842c6be9826b.
-13
+12
