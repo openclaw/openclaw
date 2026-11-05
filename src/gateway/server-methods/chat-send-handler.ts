@@ -60,7 +60,7 @@ export async function handleProviderReviewContinuationChat(
 /** Operator Resume admits one hidden internal continuation with the Goal transition. */
 export async function handleSessionGoalResumeChat(
   options: GatewayRequestHandlerOptions,
-  operation: SessionGoalOperation & { action: "resume" },
+  operation: SessionGoalOperation & { action: "resume" | "restart" },
 ): Promise<void> {
   await handleChatSendWithOptions(options, undefined, undefined, { goalResume: operation });
 }

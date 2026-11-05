@@ -218,8 +218,11 @@ export async function executeChatGoalOperation(
       );
       // A newer event or a replacement goal wins over a delayed mutation response.
       if (
-        row?.goal?.id === params.goalId &&
-        (!result.goal || result.goal.updatedAt >= row.goal.updatedAt)
+        row?.goal &&
+        (row.goal.id === params.goalId || row.goal.id === result.goalId) &&
+        (!result.goal ||
+          result.goal.id !== row.goal.id ||
+          result.goal.updatedAt >= row.goal.updatedAt)
       ) {
         if (rowAgentId && sessionId) {
           host.sessions.patchRowLocal(
@@ -230,7 +233,7 @@ export async function executeChatGoalOperation(
         }
         if (result.status === "started" && result.runId) {
           adoptStartedChatRun(host, result.runId, Date.now());
-          operations.recordStartedExecution(params.goalId, result.runId, targetIsCurrent);
+          operations.recordStartedExecution(result.goalId, result.runId, targetIsCurrent);
         }
       }
     }
@@ -298,7 +301,13 @@ export async function confirmChatGoalReplacement(
   }
   const confirmed = await showConfirmDialog({
     title: t("chat.goals.replaceTitle"),
-    message: t(expectedRunId ? "chat.goals.replaceRunningMessage" : "chat.goals.replaceMessage"),
+    message: t(
+      status === "complete"
+        ? "chat.goals.replaceCompletedMessage"
+        : expectedRunId
+          ? "chat.goals.replaceRunningMessage"
+          : "chat.goals.replaceMessage",
+    ),
     details: objective,
     confirmLabel: t("chat.goals.replace"),
   });
@@ -323,8 +332,10 @@ export async function confirmChatGoalReplacement(
   }
   return await mutateChatGoal(
     host,
-    expectedRunId
-      ? { action: "replace", goalId, objective, expectedRunId, expectedGoalUpdatedAt: updatedAt }
-      : { action: "edit", goalId, objective },
+    status === "complete"
+      ? { action: "restart", goalId, objective, expectedGoalUpdatedAt: updatedAt }
+      : expectedRunId
+        ? { action: "replace", goalId, objective, expectedRunId, expectedGoalUpdatedAt: updatedAt }
+        : { action: "edit", goalId, objective },
   );
 }
