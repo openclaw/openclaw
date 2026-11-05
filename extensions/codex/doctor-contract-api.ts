@@ -1,6 +1,5 @@
 import { statSync } from "node:fs";
 import path from "node:path";
-import { safePathSegmentHashed } from "@openclaw/fs-safe/advanced";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -14,48 +13,31 @@ type LegacyConfigRule = {
 };
 
 function isStaleManagedCodexGenerationCommand(command: unknown): boolean {
+  if (typeof command !== "string") {
+    return false;
+  }
+  const trimmed = command.trim();
+  if (!path.isAbsolute(trimmed) && !/^~[/\\]/u.test(trimmed)) {
+    return false;
+  }
   try {
-    if (typeof command !== "string") {
-      return false;
-    }
-    const trimmed = command.trim();
-    const hasHomePrefix = trimmed === "~" || trimmed.startsWith("~/") || trimmed.startsWith("~\\");
-    if (!trimmed || (!path.isAbsolute(trimmed) && !hasHomePrefix)) {
-      return false;
-    }
-
-    const resolved = resolveUserPath(trimmed);
     const projectsDir = path.join(resolveConfigDir(process.env), "npm", "projects");
-    const relative = path.relative(projectsDir, resolved);
-    const [name, ...remainingSegments] = relative.split(path.sep);
-    if (!name || remainingSegments.length === 0) {
-      return false;
-    }
-    const projectDir = path.join(projectsDir, name);
-    if (path.dirname(projectDir) !== projectsDir) {
-      return false;
-    }
-
-    // The generation directory shape is owned by src/plugins/install-paths.ts.
-    const generationPrefix = `${safePathSegmentHashed("@openclaw/codex")}__openclaw-generation__`;
+    const [name, child] = path.relative(projectsDir, resolveUserPath(trimmed)).split(path.sep);
+    // Recovery for the historical layout from src/plugins/install-paths.ts, not
+    // a parser for future installs. Cleanup now preserves configured generations.
     if (
-      !name.startsWith(generationPrefix) ||
-      !/^g-[a-f0-9]{16}$/u.test(name.slice(generationPrefix.length))
+      !name ||
+      !child ||
+      !/^openclaw-codex-8902d781d4__openclaw-generation__g-[a-f0-9]{16}$/u.test(name)
     ) {
       return false;
     }
-
-    try {
-      statSync(projectDir);
-      return false;
-    } catch (error) {
-      const code =
-        typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
-      return code === "ENOENT" || code === "ENOTDIR";
-    }
-  } catch {
-    return false;
+    statSync(path.join(projectsDir, name));
+  } catch (error) {
+    const code = asNullableRecord(error)?.code;
+    return code === "ENOENT" || code === "ENOTDIR";
   }
+  return false;
 }
 
 function hasRetiredDynamicToolsProfile(value: unknown): boolean {
