@@ -275,9 +275,10 @@ export function createApplicationTheme(
   syncSystemThemeListener();
   // Offer only the canonical local preference, once per document. The native owner
   // chooses the foreground migration and never overwrites an existing zoom choice.
-  if (usesHostContentZoom()) {
-    void nativeContentZoomHost()
-      ?.adoptLegacyTextScale?.(initialPreferences.textScale ?? 100)
+  const contentZoomHost = nativeContentZoomHost();
+  if (contentZoomHost && usesHostContentZoom()) {
+    void contentZoomHost
+      .adoptLegacyTextScale?.(initialPreferences.textScale ?? 100)
       .catch((error: unknown) => {
         console.warn(
           "Could not adopt the saved text size into native zoom; reload to retry.",

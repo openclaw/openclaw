@@ -98,15 +98,12 @@ suite.define(() => {
     const search = header.locator(".topbar-search");
     await toggle.waitFor({ state: "visible" });
     await search.waitFor({ state: "visible" });
-    if (captureProof) {
-      const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [], {
-        animations: "disabled",
-      });
-      await writeFile(path.join(suite.artifactDir, "native-content-zoom-header.png"), frame.png);
-    }
+    // Native chrome styles load with the shell; measure the final scaled row.
+    await expect
+      .poll(async () => ((await header.boundingBox())?.height ?? 0) * 2)
+      .toBeCloseTo(58, 0);
     const row = await header.boundingBox();
     expect(row).not.toBeNull();
-    expect(row!.height * 2).toBeCloseTo(58, 0);
     const content = await header.locator(".topnav-shell").boundingBox();
     expect(content).not.toBeNull();
     expect(content!.x * 2).toBeCloseTo(92, 0);
