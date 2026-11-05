@@ -130,6 +130,51 @@ describe("nextcloud talk room info", () => {
     await expect(lookup(account)).resolves.toBeUndefined();
     expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
+
+  it("refreshes the cached room kind on elapsed time even when the wall clock is stepped back", async () => {
+    let perfNow = 0;
+    let wallNow = Date.UTC(2026, 7, 31);
+    vi.spyOn(performance, "now").mockImplementation(() => perfNow);
+    vi.spyOn(Date, "now").mockImplementation(() => wallNow);
+
+    const account = lookupAccount("elapsed-scope");
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuard
+      .mockResolvedValueOnce({ response: roomResponse(1), release })
+      .mockResolvedValueOnce({ response: roomResponse(3), release });
+
+    await expect(lookup(account)).resolves.toBe("direct");
+    expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+
+    // The host clock is adjusted backward while the process keeps running; the
+    // room-kind window (elapsed time) still expires and re-looks up the room.
+    wallNow -= 10 * 60_000;
+    perfNow += 10 * 60_000;
+
+    await expect(lookup(account)).resolves.toBe("group");
+    expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
+    expect(release).toHaveBeenCalledTimes(2);
+  });
+
+  it("serves the cached room kind within the window regardless of the wall clock", async () => {
+    let perfNow = 0;
+    let wallNow = Date.UTC(2026, 7, 31);
+    vi.spyOn(performance, "now").mockImplementation(() => perfNow);
+    vi.spyOn(Date, "now").mockImplementation(() => wallNow);
+
+    const account = lookupAccount("window-scope");
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuard.mockResolvedValueOnce({ response: roomResponse(1), release });
+
+    await expect(lookup(account)).resolves.toBe("direct");
+    expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+
+    // The wall clock jumps forward but elapsed time stays within the 5-minute window.
+    wallNow += 10 * 60_000;
+
+    await expect(lookup(account)).resolves.toBe("direct");
+    expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+  });
 });
 
 const { probeNextcloudTalkBotResponseFeature } = await import("./bot-preflight.js");
