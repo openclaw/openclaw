@@ -401,6 +401,15 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     return source - sourceIndexOffset === previewEpoch;
   };
 
+  // An earlier message's block that an accepted card already shows is consumed there, not appended.
+  let earlierRest = "";
+  const consumeEarlierBlock = (text: string) => {
+    const rest = earlierRest.startsWith(text) ? earlierRest : earlierRest.trimStart();
+    const shown = rest.startsWith(text);
+    earlierRest = shown ? rest.slice(text.length) : earlierRest;
+    return shown;
+  };
+
   const queueStreamingUpdate = (nextText: string, mode: "snapshot" | "delta" | "append") => {
     if (!nextText) {
       return;
@@ -1417,7 +1426,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               const consumedBefore = previewBlockOffset;
               // An earlier message's block is mirrored, but may not consume this message's preview.
               const mode = isCurrentSource(info.assistantMessageIndex) ? "delta" : "append";
-              queueStreamingUpdate(text, mode);
+              if (mode === "delta" || !consumeEarlierBlock(text)) {
+                queueStreamingUpdate(text, mode);
+              }
               if (previewBlockOffset > consumedBefore) {
                 previewCovered = {
                   text: previewText.slice(0, previewBlockOffset),
@@ -1573,6 +1584,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             // A close still in flight credited its preview provisionally, and its settlement cannot
             // correct a card opened after this start. Freeze the earlier prose without that credit.
             undoProvisionalCredit?.();
+            if (closedPreviewText) {
+              earlierRest = closedPreviewText.slice(previewBlockOffset);
+            }
             // Snapshots cover one assistant message. Freeze earlier prose at the
             // source boundary so tool continuations cannot replace it.
             snapshotBaseText = streamText ? `${streamText}\n\n` : "";
