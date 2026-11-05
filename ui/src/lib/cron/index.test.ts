@@ -484,6 +484,10 @@ it.each([
     },
   },
   { failureAlert: { channel: "last", includeSkipped: false } },
+  {
+    failureAlert: { channel: "telegram", to: "123", threadId: 41 },
+    delivery: { mode: "announce", channel: "telegram", to: "123", threadId: 7, bestEffort: false },
+  },
   { failureAlert: false },
 ] as const)("clones exact persisted fields: %j", async (fields) => {
   const sourceJob = createCronJob("source", "Source", { ...fields, agentId: "writer" });

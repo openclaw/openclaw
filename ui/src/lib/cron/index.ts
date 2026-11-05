@@ -173,6 +173,8 @@ function buildFailureAlert(
         : {}),
     mode: form.failureAlertDeliveryMode || (existingConfig?.mode !== undefined ? null : undefined),
     accountId: accountId || (existingConfig?.accountId ? null : undefined),
+    threadId:
+      form.failureAlertThreadId ?? (existingConfig?.threadId !== undefined ? null : undefined),
     includeSkipped: sourceConfig?.includeSkipped,
   };
 }
