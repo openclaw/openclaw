@@ -145,7 +145,7 @@ const legacyStateCheck: CoreHealthCheck = {
   async detect(ctx) {
     const { detectLegacyStateMigrations } = await import("../infra/state-migrations.doctor.js");
     const { prepareLegacySessionSurfaces } = await import("../plugins/legacy-session-surfaces.js");
-    const legacySessionSurfaces = prepareLegacySessionSurfaces({ config: ctx.cfg });
+    const legacySessionSurfaces = await prepareLegacySessionSurfaces({ config: ctx.cfg });
     const detected = await detectLegacyStateMigrations({
       cfg: ctx.cfg,
       doctorOnlyStateMigrations: true,

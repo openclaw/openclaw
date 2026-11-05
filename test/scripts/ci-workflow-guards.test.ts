@@ -89,7 +89,7 @@ const manifestSource = readFileSync(
 const parser = createNativeTypeScriptParser();
 afterAll(() => parser.close());
 
-const SETUP_GRADLE_V6 = "gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6";
+const SETUP_GRADLE_V6 = "gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c";
 const CREATE_GITHUB_APP_TOKEN_V3_3 =
   "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510";
 const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";

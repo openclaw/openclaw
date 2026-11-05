@@ -11,6 +11,7 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { formatSchemaMigrationFailure } from "../infra/schema-migration-diagnostics.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { revokeSqliteDatabaseAdmissions } from "../infra/sqlite-database-admission.js";
+import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import {
   repairDoctorSqliteIndexCorruption,
   prepareDoctorSqliteIndexCorruption,
@@ -138,7 +139,7 @@ export function repairDoctorStateSchema(options: DoctorRepairOptions, scope: Doc
 export async function repairDoctorStateSchemaAsync(
   options: DoctorRepairOptions,
   scope: DoctorRepairScope,
-) {
+): Promise<{ changes: string[]; warnings: string[]; failure?: unknown }> {
   const target = resolveDoctorRepairTarget(options, scope);
   return target
     ? withStateDatabaseSchemaMaintenanceAsync({ databasePath: target.pathname }, () =>
@@ -220,7 +221,9 @@ export async function repairStateSchemaAsync(
       },
     );
   try {
-    let step = await resume();
+    // Native reads can recover a journal or rebuild retained WAL evidence before yielding.
+    const capture = (scope !== "doctor" && scope !== "version") || existsSync(`${pathname}-wal`);
+    let step = capture || existsSync(`${pathname}-journal`) ? await resume() : operation.next();
     while (!step.done) {
       let failure: { error: unknown } | undefined;
       let prepared: void | (() => void) = undefined;
@@ -259,7 +262,7 @@ function* repairOpenedStateSchemaSteps(
   preparation: { credentialCustody?: ClientCredentialCustody | null } = {},
 ): Generator<
   StateSchemaRepairStep,
-  { changes: string[]; warnings: string[] },
+  { changes: string[]; warnings: string[]; failure?: unknown },
   void | (() => void)
 > {
   const rebuiltIndexNames = new Set<string>();
@@ -715,6 +718,8 @@ function* repairOpenedStateSchemaSteps(
     return {
       changes: indexChanges,
       warnings: [`${diagnostic}${reason}`],
+      // Warnings stay text; a caller refusing on them can still tell blocked from failed.
+      ...(isSqliteLockError(err) ? { failure: err } : {}),
     };
   } finally {
     if (!ownershipRefused) {
