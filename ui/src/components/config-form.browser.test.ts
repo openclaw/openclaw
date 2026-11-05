@@ -152,7 +152,15 @@ describe("config form renderer", () => {
     }
   });
 
-  it("appends complete sections without replacing focused edits or hiding later fields", async () => {
+  it("defers first sections and appends without replacing focused edits or hiding later fields", async () => {
+    const yields: Array<() => void> = [];
+    vi.stubGlobal("scheduler", {
+      yield: () =>
+        new Promise<void>((resolve) => {
+          yields.push(resolve);
+        }),
+    });
+    onTestFinished(() => vi.unstubAllGlobals());
     const properties = Object.fromEntries(
       Array.from({ length: 8 }, (_, index) => [
         `part${index}`,
@@ -164,14 +172,19 @@ describe("config form renderer", () => {
     );
     const props = { schema: object(properties), value, progressive: true };
     renderRaw(props);
-    const first = query("input.settings-input", HTMLInputElement);
-    expect(all("input.settings-input")).toHaveLength(1);
+    expect(all("input.settings-input")).toHaveLength(0);
     expect(container.querySelector('[aria-busy="true"]')).not.toBeNull();
+    yields.shift()!();
+    await waitForSolid(() => expect(all("input.settings-input")).toHaveLength(1));
+    const first = query("input.settings-input", HTMLInputElement);
     first.focus();
     edit(first, "Editing the first field");
     first.setSelectionRange(2, 8);
 
-    await waitForSolid(() => expect(all("input.settings-input")).toHaveLength(8));
+    for (let count = 2; count <= 8; count++) {
+      yields.shift()!();
+      await waitForSolid(() => expect(all("input.settings-input")).toHaveLength(count));
+    }
     expect(container.querySelector('[aria-busy="true"]')).toBeNull();
     expect(query("input.settings-input", HTMLInputElement)).toBe(first);
     expect(document.activeElement).toBe(first);
@@ -188,6 +201,41 @@ describe("config form renderer", () => {
     expect(query("input.settings-input", HTMLInputElement)).toBe(first);
     expect(first.value).toBe("Editing the first field");
     expect([first.selectionStart, first.selectionEnd]).toEqual([2, 8]);
+  });
+
+  it("yields a large map while retaining its edited first entry", async () => {
+    const yields: Array<() => void> = [];
+    vi.stubGlobal("scheduler", {
+      yield: () =>
+        new Promise<void>((resolve) => {
+          yields.push(resolve);
+        }),
+    });
+    onTestFinished(() => vi.unstubAllGlobals());
+    const entries = Object.fromEntries(
+      Array.from({ length: 12 }, (_, index) => [`entry${index}`, `Value ${index}`]),
+    );
+    renderRaw({
+      schema: object({ entries: { type: "object", additionalProperties: { type: "string" } } }),
+      value: { entries },
+      progressive: true,
+    });
+    yields.shift()!();
+    const values = () => all<HTMLInputElement>('.cfg-map input:not([aria-label^="Key:"])');
+    await waitForSolid(() => expect(values()).toHaveLength(2));
+    const first = values()[0]!;
+    first.focus();
+    edit(first, "Edited first entry");
+    first.setSelectionRange(1, 5);
+    for (const count of [7, 12]) {
+      yields.shift()!();
+      await waitForSolid(() => expect(values()).toHaveLength(count));
+    }
+    expect(values()[0]).toBe(first);
+    expect(first.value).toBe("Edited first entry");
+    expect(document.activeElement).toBe(first);
+    expect([first.selectionStart, first.selectionEnd]).toEqual([1, 5]);
+    expect(container.querySelector('.cfg-map[aria-busy="true"]')).toBeNull();
   });
 
   it.each(["Ingress", "Portals"])(

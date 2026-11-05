@@ -67,10 +67,10 @@ const controlUiPerformanceBudgets = {
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
-  // Profile's mobile reservation eliminates 0.114 CLS for 86 B gzip / 398 B raw.
-  // Exact head is 323,604 B gzip / 1,668,829 B raw; retain 64 B headroom.
+  // Profile, Systems and Approvals reserve their first-visit layout.
+  // Systems/Approvals add 52 B gzip / 176 B raw; retain the gzip cap and 64 B raw headroom.
   totalCssGzipBytes: 323_668,
-  totalCssRawBytes: 1_668_893,
+  totalCssRawBytes: 1_669_069,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
