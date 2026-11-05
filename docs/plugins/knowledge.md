@@ -167,6 +167,10 @@ Markdown-only or Git-only copy is not a complete backup.
 
 ## Writes and authority
 
+Warm storage workers check live authority in each operation’s own calling context,
+so a retired earlier turn does not prevent a current turn from using Knowledge.
+Revocation during an operation still prevents unauthorized publication.
+
 - Agents publish through journaled operations with revision/hash preconditions
   and exact-retry semantics. A `published` receipt means files were written.
 - Claims and relationships require retained, hash-verified evidence. Pages may
