@@ -220,7 +220,8 @@ export async function repairStateSchemaAsync(
       },
     );
   try {
-    let step = await resume();
+    // Doctor/version first yield before writing; only their later phases need capture.
+    let step = scope === "doctor" || scope === "version" ? operation.next() : await resume();
     while (!step.done) {
       let failure: { error: unknown } | undefined;
       let prepared: void | (() => void) = undefined;
