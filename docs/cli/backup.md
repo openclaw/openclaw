@@ -848,6 +848,13 @@ If an entry disappears during traversal or before it can be opened, the archive 
 
 Chromium singleton entries coordinate one running browser on one host and are recreated when that profile starts; the rest of the profile's `user-data/` remains in the archive. Sandbox skills workspaces are generated copies of current skill sources and are materialized again when OpenClaw prepares the next sandbox context after restore; adjacent sandbox registry and other durable state remain included.
 
+On Windows, SQLite discovery retries busy or access-denied reads twice with short
+backoff and logs a warning when the retry succeeds. If a retained file still
+cannot be read, backup capture refuses with its path and error code. Check read
+permissions or close the program using that file, then retry the backup or
+update. Unreadable files are never assumed to be non-SQLite or silently skipped;
+an update must capture them safely before replacing the installation.
+
 Managed SQLite snapshots cover the shared OpenClaw database, the quarantine and
 integrity-verification store, and per-agent databases declared by configuration,
 recorded in the captured durable agent registry, or discovered at
