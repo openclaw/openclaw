@@ -292,7 +292,7 @@ it("keeps the sidebar and unrelated chats when a deleted session is pruned from 
   );
   assert(removed && retained);
   const parent = { ...retained, childLoadParentKeys: [removed.key], children: [removed] };
-  const saved = {
+  const saved: typeof sidebarSnapshot = {
     ...sidebarSnapshot,
     home: parent,
     windowKeys: [removed.key, retained.key],

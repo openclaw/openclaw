@@ -216,18 +216,18 @@ export function restoreSnapshotNavigation(model: SidebarSnapshotModel, selectedK
   }));
   const visibleRows = sections.flatMap((section) => section.rows);
   const pins = model.pinnedSessions.map((row) => restoreSnapshotSession(row, selectedKey));
+  const presence = model.onlineUsers.map((user) => ({
+    ts: 0,
+    user,
+    watchedSessions: user.watchedSessions,
+  }));
   return {
     sections,
     visibleRows,
     home: model.home && restoreSnapshotSession(model.home, selectedKey),
-    presence: {
-      presence: model.onlineUsers.map((user) => ({ user, watchedSessions: user.watchedSessions })),
-    },
+    presence: { presence },
     zone: {
-      entries: model.entries.flatMap((entry) => {
-        const parsed = parseSidebarEntry(entry);
-        return parsed ? [parsed] : [];
-      }),
+      entries: model.entries.flatMap((entry) => parseSidebarEntry(entry) ?? []),
       sidebarEntries: model.entries,
       sessionRows: new Map([...visibleRows, ...pins].map((row) => [row.key, row])),
       pluginTabs: new Map(model.plugins.map(({ key, ...tab }) => [key, tab])),

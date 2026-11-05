@@ -491,7 +491,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     );
   }
 
-  get sidebarPresencePayload() {
+  get sidebarPresencePayload(): PresencePayload | undefined {
     return this.sidebarSnapshot
       ? this.readSnapshotNavigation(this.sidebarSnapshot).presence
       : this.sessionData.presencePayload;
