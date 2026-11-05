@@ -116,8 +116,8 @@ it.each([
 ] as const)(
   "$mode: $cleanup cleanup with readError=$readError",
   async (scenario) => {
-    const { mode } = scenario;
-    const fixture = path.join(root, `${scenario.cleanup}-${scenario.readError}`);
+    const { mode, cleanup } = scenario;
+    const fixture = path.join(root, `${cleanup}-${scenario.readError}`);
     const stateDir = path.join(fixture, "source");
     const source = path.join(stateDir, "state", "openclaw.sqlite");
     const cache = path.join(fixture, "cache");
@@ -160,7 +160,7 @@ it.each([
       const removeAsync = fs.promises.rm;
       const stagingRoot = ${JSON.stringify(stagingRoot)};
       const attemptsPath = ${JSON.stringify(attemptsPath)};
-      const fault = ${JSON.stringify(scenario.cleanup)};
+      const fault = ${JSON.stringify(cleanup)};
       const removeDirectory = ${JSON.stringify(removeDirectory)};
       let attempts = 0;
       const prepareRemoval = (location) => {
@@ -221,11 +221,11 @@ it.each([
     const retained = (await fs.readdir(stagingRoot)).filter((name) =>
       name.startsWith("openclaw-sqlite-readonly-"),
     );
-    expect(attempts).toHaveLength(scenario.cleanup === "healthy" ? 1 : 2);
+    expect(attempts).toHaveLength(cleanup === "healthy" ? 1 : 2);
     expect(attempts.every((attempt) => attempt.before)).toBe(true);
-    expect(attempts.at(-1)?.after).toBe(scenario.cleanup === "persistent");
+    expect(attempts.at(-1)?.after).toBe(cleanup === "persistent");
     // A copy that could not be removed waits for the Gateway sweep; it never fails the read.
-    expect(retained).toHaveLength(scenario.cleanup === "persistent" ? 1 : 0);
+    expect(retained).toHaveLength(cleanup === "persistent" ? 1 : 0);
     expect(result.code, result.stderr.toString()).toBe(scenario.readError ? 1 : 0);
     expect(result.stderr.toString()).not.toContain("snapshot cleanup failed");
     if (!scenario.readError) {
@@ -246,7 +246,7 @@ it.each([
       expect(recorded?.detail?.length).toBeLessThanOrEqual(300);
     }
     const logged = fsSync.existsSync(log) ? await fs.readFile(log, "utf8") : "";
-    expect(logged.includes(attempts[0]!.directory)).toBe(scenario.cleanup !== "healthy");
+    expect(logged.includes(JSON.stringify(attempts[0]!.directory))).toBe(cleanup !== "healthy");
   },
   30_000,
 );
