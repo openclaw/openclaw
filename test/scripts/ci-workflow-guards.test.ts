@@ -2737,15 +2737,10 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     writeFileSync(path.join(source, "base.txt"), "base\n");
     mkdirSync(path.join(source, "config"));
     writeFileSync(path.join(source, "config/test-lines-baseline.txt"), "0\n");
-    for (const file of [
-      "scripts/check-test-lines-ratchet.mts",
-      "scripts/lib/check-limits.mts",
-      "scripts/lib/release-context.mjs",
-      "scripts/lib/release-version.mjs",
-      "scripts/lib/shrink-ratchet.mts",
-    ]) {
-      mkdirSync(path.dirname(path.join(source, file)), { recursive: true });
-      copyFileSync(file, path.join(source, file));
+    const ratchet =
+      "check-test-lines-ratchet.mts lib/check-limits.mts lib/release-context.mjs lib/release-version.mjs lib/shrink-ratchet.mts";
+    for (const file of ratchet.split(" ")) {
+      cpSync(`scripts/${file}`, path.join(source, "scripts", file));
     }
     git(source, "add", ".");
     git(source, "commit", "-m", "base");
