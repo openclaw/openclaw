@@ -355,7 +355,12 @@ export function recordPluginCohortRetentionMarker(
 
 /** Restore only matching cohort deltas. A later writer keeps its values and blocks old-core readiness. */
 export async function settleUpdatePluginCohort(
-  params: CohortOptions & { runId: string; action: "commit" | "rollback" },
+  params: CohortOptions & {
+    runId: string;
+    action: "commit" | "rollback";
+    /** Repair proved the candidate serves; a rollback with no settled publication may commit. */
+    supersedeUnsettledRollback?: true;
+  },
 ): Promise<{ configPaths: string[] }> {
   params.fence.assertCurrent();
   // A cold candidate must not migrate a database just restored for its older core.
@@ -386,7 +391,16 @@ export async function settleUpdatePluginCohort(
         publication.kind === "config" ? [publication.file.filePath] : [],
       );
       assertSource(pair, options);
-      if (pair.cohort.disposition !== "pending" && pair.cohort.disposition !== params.action) {
+      const unsettledRollback =
+        params.supersedeUnsettledRollback === true &&
+        params.action === "commit" &&
+        pair.cohort.disposition === "rollback" &&
+        pair.cohort.settledPublications === 0;
+      if (
+        pair.cohort.disposition !== "pending" &&
+        pair.cohort.disposition !== params.action &&
+        !unsettledRollback
+      ) {
         throw new Error("Plugin cohort already selected a different settlement.");
       }
       pair = writePluginCohortRecovery(

@@ -2,6 +2,7 @@ import { readPackageVersion } from "../../infra/package-json.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import type { PluginCohortRecoveryPair } from "../../infra/update-plugin-cohort-schema.js";
+import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import {
   assertUpdateRecoveryAdmission,
   inspectPluginCohortRecoveryAdmission,
@@ -15,8 +16,9 @@ import {
 
 /**
  * Settle an interrupted run's saved plugin cohort under the caller's installation
- * ownership. A pending cohort rolls back; finalization then converges plugins to
- * whichever core is installed. A recorded commit requires its candidate.
+ * ownership. Without a verified candidate, a pending cohort rolls back; finalization
+ * then converges plugins to whichever core is installed. A recorded commit requires
+ * its candidate.
  */
 export async function settleInterruptedUpdatePluginCohort(params: {
   expected: PluginCohortRecoveryPair;
@@ -35,26 +37,38 @@ export async function settleInterruptedUpdatePluginCohort(params: {
   ) {
     throw new Error("Plugin cohort recovery changed before repair acquired ownership.");
   }
-  if (current.cohort.disposition === "commit") {
-    const [version, buildId] = await Promise.all([
-      readPackageVersion(params.root),
-      readBuiltGatewayBuildId(params.root),
-    ]);
-    assertCurrent();
-    if (
-      version !== current.reservation.to.version ||
-      (buildId ?? null) !== current.reservation.to.buildId
-    ) {
-      throw new Error(
-        "Plugin cohort commit does not match the installed candidate version and build.",
-      );
-    }
+  const [version, buildId] = await Promise.all([
+    readPackageVersion(params.root),
+    readBuiltGatewayBuildId(params.root),
+  ]);
+  assertCurrent();
+  const installed = (core: { version: string; buildId: string | null }) =>
+    version === core.version && (buildId ?? null) === core.buildId;
+  const { from, to } = current.reservation;
+  if (current.cohort.disposition === "commit" && !installed(to)) {
+    throw new Error(
+      "Plugin cohort commit does not match the installed candidate version and build.",
+    );
   }
+  // Once the candidate is installed and verified serving, rollback would only be
+  // converged forward again, and it refuses obligations its Doctor later decided.
+  // A rollback that has settled no publication has not changed candidate state.
+  const verification = getUpdateRun(current.cohort.runId, options)?.verification;
+  const forward =
+    current.cohort.disposition !== "commit" &&
+    current.cohort.settledPublications === 0 &&
+    installed(to) &&
+    !installed(from) &&
+    verification?.serviceRunning === true &&
+    verification.versionMatch === true &&
+    verification.runningVersion === to.version &&
+    (to.buildId === null || verification.runningBuildId === to.buildId);
   const { settleUpdatePluginCohort } = await import("../../plugins/update-cohort-recovery.js");
   assertCurrent();
   await settleUpdatePluginCohort({
     runId: current.cohort.runId,
-    action: current.cohort.disposition === "commit" ? "commit" : "rollback",
+    action: current.cohort.disposition === "commit" || forward ? "commit" : "rollback",
+    ...(forward ? { supersedeUnsettledRollback: true as const } : {}),
     env: options.env,
     fence: { assertCurrent },
   });
