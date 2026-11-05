@@ -289,21 +289,20 @@ function recordQuestionResolution(
     const revision = currentPrompt.revision;
     // Receipt invalidation must not reinstall stale question records or start
     // recovery for an unmatched outcome; reconnect hydration owns those reads.
-    void Promise.all([
-      requestQuestionGateway(client, "question.list", { includeContinuation: true }),
-      import("./question-prompt-continuation.ts"),
-    ])
-      .then(([result, { attachCurrentQuestionContinuationReceipt }]) =>
-        attachCurrentQuestionContinuationReceipt(
-          result,
-          state,
-          client,
-          currentPrompt,
-          generation,
-          revision,
-        ),
-      )
-      .catch(() => {});
+    void (async () => {
+      const [result, { attachCurrentQuestionContinuationReceipt }] = await Promise.all([
+        requestQuestionGateway(client, "question.list", { includeContinuation: true }),
+        import("./question-prompt-continuation.ts"),
+      ]);
+      attachCurrentQuestionContinuationReceipt(
+        result,
+        state,
+        client,
+        currentPrompt,
+        generation,
+        revision,
+      );
+    })().catch(() => {});
   }
 }
 
@@ -374,9 +373,14 @@ async function refreshPendingQuestions(
     invalidateQuestionList(client);
     return false;
   }
-  const continuation = listResult.continuations?.length
-    ? await import("./question-prompt-continuation.ts")
-    : undefined;
+  let attachReceipts:
+    | typeof import("./question-prompt-continuation.ts").attachQuestionContinuationReceipts
+    | undefined;
+  if (listResult.continuations?.length) {
+    const { attachQuestionContinuationReceipts } =
+      await import("./question-prompt-continuation.ts");
+    attachReceipts = attachQuestionContinuationReceipts;
+  }
   if (!isCurrentClient()) {
     return false;
   }
@@ -387,7 +391,7 @@ async function refreshPendingQuestions(
       storeQuestionRecord(state, record.id, record, previous);
     }
   }
-  continuation?.attachQuestionContinuationReceipts(
+  attachReceipts?.(
     listResult,
     (id) => state.prompts.get(id),
     (prompt) => {
