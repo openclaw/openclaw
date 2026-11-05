@@ -34,7 +34,7 @@ export const cronInferenceCheck: CoreHealthCheck = {
       path: resolveOpenClawStateSqlitePath(ctx.env),
       requirement: "cron-inference-account",
       fixHint:
-        "Run openclaw doctor --fix for eligible unambiguous accounts; otherwise follow the account selection command in the finding.",
+        "Run openclaw doctor --fix to record the planned eligible account; otherwise follow the account selection command in the finding.",
     }));
   },
 };

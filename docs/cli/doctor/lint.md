@@ -15,7 +15,7 @@ Bare `openclaw doctor --json` is read-only and non-interactive: no prompts, repa
 
 Explicit `openclaw doctor --lint` is the deployment-preflight posture. Add `--json` for machine-readable output without changing lint's threshold-based exit code. Policy findings reported here are documented in [`openclaw policy`](/cli/policy).
 
-The default `core/doctor/cron-inference-accounts` check reports older automations that need an explicit or unambiguous inference account. Add `--all` to include auth-profile health checks, including saved account-order entries whose credentials are missing.
+The default `core/doctor/cron-inference-accounts` check reports older automations that need a recorded inference account and names the account that `doctor --fix` would record. Add `--all` to include auth-profile health checks, including saved account-order entries whose credentials are missing.
 
 The setup assistant's `doctor` action runs bounded diagnostics in an isolated
 process: core configuration, Gateway configuration, command ownership, Node runtime,

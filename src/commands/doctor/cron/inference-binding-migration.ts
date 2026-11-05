@@ -325,19 +325,43 @@ export async function maybeRepairCronInferenceBindings(params: {
             }
           }
         }
-        if (
-          candidates.length === 0 &&
-          !explicitProfileId &&
-          hasSyntheticLocalProviderAuthConfig({
-            cfg,
+        if (candidates.length === 0 && !explicitProfileId) {
+          const prepared = prepareAgentRuntimeAuth({
+            ...runtimeAuth,
+            config: cfg,
             provider: selected.provider,
-            route: resolveMergedModelProviderConfig(cfg, selected.provider),
-          })
-        ) {
-          continue;
+            modelId: selected.model,
+            agentId,
+            agentDir: selected.owner.agentDir,
+            authProfileStore: store,
+          });
+          if (
+            prepared.attempts.every(
+              ({ plan }) =>
+                plan.credentialSource?.kind === "direct" &&
+                plan.credentialSource.evidence === "synthetic",
+            ) ||
+            hasSyntheticLocalProviderAuthConfig({
+              cfg,
+              provider: selected.provider,
+              route: resolveMergedModelProviderConfig(cfg, selected.provider),
+            })
+          ) {
+            continue;
+          }
         }
-        // Account order is a preference, not evidence of a legacy job's authorization.
-        const candidate = candidates.length === 1 ? candidates[0] : undefined;
+        // Several eligible accounts: record the one a run would take now. With auth.order that is the
+        // account every earlier run used; without it, runs rotated by last use. The log names the others.
+        const plannedProfileId =
+          currentAuth.attempts[0]?.kind === "profile"
+            ? currentAuth.attempts[0].profileId
+            : undefined;
+        const candidate =
+          candidates.length === 1
+            ? candidates[0]
+            : explicitProfileId
+              ? undefined
+              : candidates.find((c) => c.profileId === plannedProfileId);
         if (!candidate) {
           throw new Error(
             candidates.length > 1
@@ -345,12 +369,15 @@ export async function maybeRepairCronInferenceBindings(params: {
               : "No available stored inference account can be retained.",
           );
         }
+        const alternatives = candidates
+          .filter((c) => c.profileId !== candidate.profileId)
+          .map((c) => c.profileId);
         if (isUserModelAuthProfileId(candidate.profileId)) {
           throw new Error(
             "A personal inference account requires explicit adoption by its authorized owner.",
           );
         }
-        const description = `Automation ${label}: retain ${candidate.profileId} for ${modelRef}; model/default/fallback selections stay unchanged.`;
+        const description = `Automation ${label}: retain ${candidate.profileId} for ${modelRef}; model/default/fallback selections stay unchanged.${alternatives.length > 0 ? ` Also eligible: ${alternatives.join(", ")}; to change, run openclaw automations edit ${quoteCliArg(stored.id)} --model ${quoteCliArg(`${modelRef}@<profileId>`)}.` : ""}`;
         if (!params.shouldRepair) {
           warnings.push(
             `${description} Its runs are refused until it records this account. Run openclaw doctor --fix to record it.`,
