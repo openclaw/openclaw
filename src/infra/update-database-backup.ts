@@ -47,12 +47,12 @@ import {
   readUpdateStateDatabaseSizes,
   readUpdateStateDatabaseSizesInProcess,
 } from "./update-candidate-state.sizes.js";
+import { rereadUpdatePhysicalDatabaseGeneration } from "./update-database-backup-generation.js";
 import { checkUpdateDatabaseBackupSpace } from "./update-database-backup-space.js";
 import type { SqliteDatabaseGenerationReceipt } from "./update-database-generations.js";
 import {
   readUpdatePhysicalDatabaseObservation,
   readUpdatePostgresDatabaseGenerations,
-  rereadUpdatePhysicalDatabaseGeneration,
 } from "./update-physical-database-generations.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 

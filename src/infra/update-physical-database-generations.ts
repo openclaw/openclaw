@@ -5,7 +5,6 @@ import type { DatabasePortPluginOwners } from "./database-engine/port-descriptor
 import { SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
 import type { PreparedSqliteSnapshotSource } from "./sqlite-readonly-location.types.js";
 import {
-  readUnchangedUpdateDatabaseGeneration,
   readUpdateDatabaseGeneration,
   readUpdateDatabaseGenerationPair,
   type SqliteDatabaseGenerationReceipt,
@@ -106,29 +105,6 @@ export async function readUpdatePhysicalDatabaseGenerations(
     }
   }
   return Object.assign(result, await readUpdatePostgresDatabaseGenerations(postgres, pluginOwners));
-}
-
-/** Re-reads after capture; a matching receipt avoids a private image. */
-export async function rereadUpdatePhysicalDatabaseGeneration(
-  pathname: string,
-  receipt?: SqliteDatabaseGenerationReceipt,
-  pluginOwners?: DatabasePortPluginOwners,
-): Promise<{ generation?: string; emptyReaderAlternate?: string }> {
-  // A failed reuse propagates: the caller keeps manual recovery instead of copying again.
-  const unchanged = receipt && readUnchangedUpdateDatabaseGeneration(pathname, receipt);
-  if (unchanged) {
-    return { generation: unchanged };
-  }
-  const alternates: Record<string, string> = {};
-  const generations = await readUpdatePhysicalDatabaseGenerations(
-    [pathname],
-    pluginOwners,
-    alternates,
-  );
-  return {
-    generation: generations[pathname] ?? undefined,
-    emptyReaderAlternate: alternates[pathname],
-  };
 }
 
 export async function readUpdatePhysicalDatabaseGenerationPair(
