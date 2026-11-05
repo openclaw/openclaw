@@ -843,7 +843,7 @@ function readObservation(directory, spec = {}) {
       .map((row) =>
         lifetimeBounds.has(row)
           ? Object.assign({}, row, {
-              ...(lifetimeBounds.has(row) ? { lifetimeBound: lifetimeBounds.get(row) } : {}),
+              lifetimeBound: lifetimeBounds.get(row),
             })
           : row,
       )
