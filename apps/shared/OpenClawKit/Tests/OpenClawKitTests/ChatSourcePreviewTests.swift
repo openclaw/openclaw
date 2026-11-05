@@ -339,6 +339,50 @@ struct ChatSourcePreviewTests {
         #expect(cards == [[], [self.first, self.second], []])
     }
 
+    @Test @MainActor func `split rows parse citations once per part text until that text changes`() {
+        func split(_ text: String, id: UUID = UUID(), run: String? = nil) -> OpenClawChatMessage {
+            OpenClawChatMessage(id: id, role: "assistant", content: [
+                .init(type: "toolCall", id: "call", name: "read"),
+                .init(type: "tool_result", text: "Recorded", id: "call"),
+                .init(type: "text", text: text),
+            ], timestamp: 3, transcriptRunID: run ?? self.runID, phase: "final_answer")
+        }
+        var parsed: [String] = []
+        let state = ChatSourcePreviewState { message in
+            parsed.append(ChatMessageVisibleText.visibleText(in: message))
+            return ChatSourcePreviewProjector.citations(in: message)
+        }
+        let cited = split("Read \(self.first).")
+        let uncited = split("Read \(self.first).", run: "other-run")
+        let search = self.search([self.row(self.first), self.row(self.second)])
+        state.update([search, cited, uncited])
+        let render = { (messages: [OpenClawChatMessage]) in
+            messages.flatMap(\.workPresentationParts).map { state.previews(for: $0).map(\.url.absoluteString) }
+        }
+        for _ in 0..<3 {
+            #expect(render([cited, uncited]) == [[], [self.first], [], []])
+        }
+        #expect(parsed == ["", "Read \(self.first)."])
+
+        let revised = split("Read \(self.second).", id: cited.id)
+        #expect(render([revised]) == [[], []])
+        state.update([search, revised])
+        #expect(render([revised]) == [[], [self.second]])
+        #expect(parsed == ["", "Read \(self.first).", "Read \(self.second)."])
+
+        // Same row and content; only the footer's stop reason changes, which surfaces its cited error text.
+        func footer(_ stopReason: String?) -> OpenClawChatMessage {
+            var part = OpenClawChatMessage(
+                id: cited.id, role: "assistant", content: [.init(type: "text", text: "")], timestamp: 3,
+                transcriptRunID: self.runID, stopReason: stopReason, errorMessage: "See \(self.second).")
+            part.presentationBlockIndex = 5
+            return part
+        }
+        #expect(state.previews(for: footer(nil)).isEmpty)
+        #expect(state.previews(for: footer("error")).map(\.url.absoluteString) == [self.second])
+        #expect(parsed.suffix(2) == ["", "See \(self.second)."])
+    }
+
     private func answer(_ text: String) -> OpenClawChatMessage {
         OpenClawChatMessage(
             role: "assistant", content: [.init(type: "text", text: text, mimeType: nil, fileName: nil, content: nil)],
