@@ -32,6 +32,11 @@ export function registerAccessProgramNoticeCases({
         model: "claude",
         cyberAccessProgram: "daybreak_blue",
       });
+      // An intentionally silent turn must not use up the notice.
+      state.runEmbeddedAgentMock.mockResolvedValueOnce({
+        payloads: [],
+        meta: { terminalReply: { disposition: "silent" } },
+      });
       state.runEmbeddedAgentMock.mockResolvedValue({
         payloads: [{ text: "final" }],
         meta: {},
@@ -43,6 +48,7 @@ export function registerAccessProgramNoticeCases({
           runOverrides: { cyberAccessProgram: "daybreak_blue" },
         }).run();
 
+      await runOnce();
       expect(await runOnce()).toEqual([
         expect.objectContaining({
           text: "Daybreak Blue applies only to OpenAI models, so anthropic/claude used Standard access. Your Daybreak Blue choice is kept for when this chat returns to an OpenAI model.",

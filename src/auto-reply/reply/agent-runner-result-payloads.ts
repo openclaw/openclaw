@@ -487,7 +487,10 @@ export async function prepareReplyAgentPayloads(state: {
       });
     }
   }
-  fallbackNoticeText = appendCyberAccessProgramNotice(fallbackNoticeText, context, accounting);
+  // Silent finals drop notices, so leave the one-time claim for a visible reply.
+  if (!authoredSilence && !automationNoChange) {
+    fallbackNoticeText = appendCyberAccessProgramNotice(fallbackNoticeText, context, accounting);
+  }
   const fallbackNoticePayloads: ReplyPayload[] = fallbackNoticeText
     ? [
         setReplyPayloadMetadata(
