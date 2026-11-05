@@ -156,6 +156,8 @@ describe("Gateway service readiness", () => {
     { outcome: "auth-rejected", code: 1, message: "Gateway start failed: the Gateway rejected" },
   ])("reports managed start $outcome with exit $code", async (testCase) => {
     const { outcome, runtime = "running", code, message } = testCase;
+    // The 45s timeout message is the non-Windows startup deadline.
+    mockProcessPlatform("linux");
     const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
     vi.spyOn(defaultRuntime, "exit").mockImplementation((exitCode) => {
       throw new Error(`exit ${exitCode}`);
