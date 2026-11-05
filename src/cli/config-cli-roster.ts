@@ -26,10 +26,11 @@ export function resolveAgentEntryKeyCase(
   }
   const requested = path[2].toLowerCase();
   const matches = Object.keys(entries).filter((key) => key.toLowerCase() === requested);
-  if (matches.length !== 1) {
+  const stored = matches.length === 1 ? matches[0] : undefined;
+  if (stored === undefined) {
     return [...path];
   }
-  return [...path.slice(0, 2), matches[0], ...path.slice(3)];
+  return [...path.slice(0, 2), stored, ...path.slice(3)];
 }
 
 /** Keeps the documented list input and keyed input on one mutable roster. */
