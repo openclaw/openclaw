@@ -389,6 +389,7 @@ it.each(["sidebar", "dashboard"] as const)(
 
 it("keeps a sidebar page revision across off-page facts and replaces it for selected facts", () =>
   withListReader("page-reader", async ({ context, client }) => {
+    vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
     const keys = ["agent:main:off-page", "agent:main:selected-page"];
     for (const [index, sessionKey] of keys.entries()) {
       writeListEntry(sessionKey, {
@@ -402,8 +403,15 @@ it("keeps a sidebar page revision across off-page facts and replaces it for sele
       readList(context, client, { rowMode: "sidebar", limit: 1, ifRowsRevision });
     const first = await read();
     expect(first.sessions.map((row) => row.key)).toEqual([keys[1]]);
-    sessionChanges.emit({ sessionKey: keys[0]!, scope: "runtime" });
+    const before = wire(await read(first.rowsRevision));
+    writeListEntry(keys[0]!, {
+      sessionId: keys[0]!,
+      updatedAt: 1,
+      visibility: "shared",
+      label: "Off-page metadata change",
+    });
     const unchanged = await read(first.rowsRevision);
+    expect(wire(unchanged)).toBe(before);
     expect(unchanged).toMatchObject({
       rowsRevision: first.rowsRevision,
       rowsUnchanged: true,
