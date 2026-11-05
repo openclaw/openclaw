@@ -5,6 +5,10 @@ description = "OpenClaw desktop companion for Linux"
 edition = "2021"
 rust-version = "1.97.1"
 
+[profile.release]
+# AppImage packaging skips its strip pass, so remove static symbols at build time.
+strip = "symbols"
+
 [[bin]]
 name = "openclaw-desktop"
 path = "src/main.rs"
