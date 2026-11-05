@@ -1024,6 +1024,7 @@ describe("authorized beta focused evidence", () => {
       expect(evidenceMode.options).toEqual([
         "full-release-validation",
         "authorized-beta-focused-v1",
+        "emergency-patch-v1",
       ]);
       expect(inputs.focused_release_evidence_run_id).toBeDefined();
       expect(inputs.focused_release_evidence_run_attempt).toBeDefined();

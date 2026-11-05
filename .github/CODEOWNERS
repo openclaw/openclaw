@@ -33,3 +33,6 @@
 /scripts/openclaw-npm-publish.sh @openclaw/openclaw-release-managers
 /scripts/openclaw-npm-release-check.ts @openclaw/openclaw-release-managers
 /scripts/release-check.ts @openclaw/openclaw-release-managers
+
+# Emergency admission is a release-manager policy decision.
+/scripts/release-emergency-patch* @openclaw/openclaw-release-managers
