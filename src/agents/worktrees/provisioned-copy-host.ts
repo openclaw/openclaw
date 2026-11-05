@@ -8,6 +8,7 @@ import { WorkerTaskError, WorkerTaskPool } from "../../infra/worker-task-pool.js
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   recordWorktreePreparationFailure,
+  setWorktreePreparationCopyDetails,
   startWorktreePreparationPhase,
 } from "./preparation-timing.js";
 
@@ -62,6 +63,8 @@ export async function copyProvisionedPathsInWorker(
   // and filesystem preflight. Do not report it as time spent copying file bytes.
   const finishWait = startWorktreePreparationPhase("provisionCopyWait");
   let finishCopy: (() => void) | undefined;
+  const startedAt = performance.now();
+  let roundTripMs: number | undefined;
   try {
     const reply = await pool.run(
       { type: "provision", source, destination, paths, decision: decision.buffer },
@@ -87,6 +90,20 @@ export async function copyProvisionedPathsInWorker(
         },
       },
     );
+    roundTripMs = performance.now() - startedAt;
+    if (reply.type === "provisioned" || reply.type === "failed") {
+      setWorktreePreparationCopyDetails({
+        ...reply.diagnostics,
+        roundTripMs,
+        // Approximation includes admission/startup/delivery and clock/measurement overhead.
+        // It is not a queue duration, and is unavailable without a worker receipt.
+        ...(reply.diagnostics?.workerMs === undefined
+          ? {}
+          : {
+              roundTripResidualApproxMs: Math.max(0, roundTripMs - reply.diagnostics.workerMs),
+            }),
+      });
+    }
     if (failure) {
       throw failure.error;
     }
@@ -99,6 +116,9 @@ export async function copyProvisionedPathsInWorker(
     }
     return reply.paths;
   } catch (error) {
+    setWorktreePreparationCopyDetails({
+      roundTripMs: roundTripMs ?? performance.now() - startedAt,
+    });
     const cause = failure ? failure.error : error;
     recordWorktreePreparationFailure(finishCopy ? "provisionCopy" : "provisionCopyWait", cause);
     throw cause;
