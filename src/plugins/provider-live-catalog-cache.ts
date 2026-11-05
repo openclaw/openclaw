@@ -5,6 +5,7 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { estimateRetainedDataSize } from "../infra/retained-data-size.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
 import {
   consumeLiveCatalogRefresh,
@@ -13,7 +14,15 @@ import {
 } from "./provider-catalog-expiry.js";
 
 type LiveCatalogCacheEntry<T> = {
+  /** Elapsed-time deadline; wall-clock steps must not extend or shorten a catalog's TTL. */
   expiresAt: number;
+  /**
+   * Deadline published to catalog expiries, which compare it against the same clock.
+   * Producers without an explicit clock publish the wall clock.
+   */
+  publishedExpiresAt: number;
+  /** Selects the clock for {@link publishedExpiresAt}. */
+  publishedNow: () => number;
   result: { state: "pending"; value: Promise<T> } | { state: "fulfilled"; value: T };
   retained: boolean;
   now?: () => number;
@@ -42,7 +51,7 @@ function clearLiveCatalogCache(owner: LiveCatalogCache): void {
 }
 
 function armLiveCatalogExpiry(delayMs: number): void {
-  const at = Date.now() + Math.max(1, delayMs);
+  const at = monotonicNow() + Math.max(1, delayMs);
   if (cache.expiry && cache.expiry.at <= at) {
     return;
   }
@@ -51,14 +60,14 @@ function armLiveCatalogExpiry(delayMs: number): void {
   cache.expiry = {
     at,
     cancel: runInDetachedAsyncContext(() =>
-      scheduleAbsoluteDeadline(at, expireLiveCatalogs, undefined, { unref: true }),
+      scheduleAbsoluteDeadline(at, expireLiveCatalogs, monotonicNow, { unref: true }),
     ),
   };
 }
 
 function expireLiveCatalogs(): void {
   cache.expiry = undefined;
-  const now = Date.now();
+  const now = monotonicNow();
   let next = Infinity;
   for (const [key, entry] of liveCatalogCache) {
     if (entry.result.state !== "fulfilled") {
@@ -84,7 +93,7 @@ async function consumeLiveCatalog<T>(entry: LiveCatalogCacheEntry<T>, signal?: A
     (aborted) => aborted.reason,
   );
   if (entry.retained) {
-    recordLiveCatalogExpiry(entry.expiresAt);
+    recordLiveCatalogExpiry(entry.publishedExpiresAt);
   }
   return value;
 }
@@ -103,11 +112,14 @@ export async function getCachedLiveCatalogValue<T>(params: {
   shouldCache?: (value: T) => boolean;
   /** Successful-value cache lifetime in milliseconds; defaults to a short discovery TTL. */
   ttlMs?: number;
-  /** Test hook for deterministic cache expiry. */
+  /** Test hook: replaces the clock behind cache expiry and the published deadline. */
   now?: () => number;
 }): Promise<T> {
   params.signal?.throwIfAborted();
-  const rawNow = params.now?.() ?? Date.now();
+  // Production expiry runs on elapsed time; the published deadline keeps the
+  // wall clock its consumers compare against.
+  const entryNow = params.now ?? monotonicNow;
+  const rawNow = entryNow();
   const ttlMs = params.ttlMs ?? 30_000;
   // Uncached callers must neither reuse nor disturb an existing entry.
   if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) {
@@ -136,6 +148,8 @@ export async function getCachedLiveCatalogValue<T>(params: {
   const pending = { state: "pending" as const, value: params.load() };
   const entry: LiveCatalogCacheEntry<T> = {
     expiresAt: rawNow + ttlMs,
+    publishedExpiresAt: (params.now ?? Date.now)() + ttlMs,
+    publishedNow: params.now ?? Date.now,
     retained: false,
     result: pending,
     now: params.now,
@@ -145,7 +159,8 @@ export async function getCachedLiveCatalogValue<T>(params: {
     .then((resolved) => {
       if (params.shouldCache?.(resolved) ?? true) {
         // A slow success gets a complete TTL without reviving an evicted entry.
-        entry.expiresAt = (params.now?.() ?? Date.now()) + ttlMs;
+        entry.expiresAt = entryNow() + ttlMs;
+        entry.publishedExpiresAt = entry.publishedNow() + ttlMs;
         entry.retained = true;
       }
       completed = { state: "fulfilled", value: resolved };

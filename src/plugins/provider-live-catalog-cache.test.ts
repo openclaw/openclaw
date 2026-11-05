@@ -73,4 +73,19 @@ describe("live catalog cache lifecycle", () => {
     ]);
     expect(load).toHaveBeenCalledOnce();
   });
+
+  it("expires cached catalogs on elapsed time when the wall clock steps backwards", async () => {
+    vi.useFakeTimers();
+    const load = vi.fn(async () => ["fixture/model"]);
+    const read = () => getCachedLiveCatalogValue({ keyParts: ["clock-step"], ttlMs: 100, load });
+
+    await read();
+    expect(load).toHaveBeenCalledOnce();
+
+    vi.setSystemTime(Date.now() - 60 * 60 * 1000);
+    await vi.advanceTimersByTimeAsync(150);
+    await read();
+
+    expect(load).toHaveBeenCalledTimes(2);
+  });
 });

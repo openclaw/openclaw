@@ -262,3 +262,30 @@ it("preserves a standalone feed's zero timer without sharing a finite pending lo
   expect(await noTimer).toMatchObject({ id: "opencode" });
   expect(await bounded).toMatchObject({ id: "opencode" });
 });
+
+it("reloads the upstream provider catalog after the wall clock steps backwards", async () => {
+  vi.useFakeTimers();
+  try {
+    const { fetchGuard } = buildFetchGuard({ opencode: makeProvider() });
+    const read = () =>
+      getCachedUpstreamProviderCatalog({
+        endpoint,
+        providerId: "opencode",
+        fetchGuard,
+        ttlMs: 300_000,
+      });
+
+    await read();
+    expect(fetchGuard).toHaveBeenCalledTimes(1);
+
+    // The cache TTL runs on elapsed time, so a backwards wall-clock step past the
+    // TTL must still reload instead of serving the stale feed for the step's length.
+    vi.setSystemTime(Date.now() - 60 * 60 * 1000);
+    await vi.advanceTimersByTimeAsync(301_000);
+    await read();
+
+    expect(fetchGuard).toHaveBeenCalledTimes(2);
+  } finally {
+    vi.useRealTimers();
+  }
+});

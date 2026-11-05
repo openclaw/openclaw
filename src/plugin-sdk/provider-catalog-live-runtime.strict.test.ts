@@ -299,7 +299,8 @@ describe("strict catalog acquisition", () => {
   });
 
   it("preserves failure, caches authoritative empty until expiry and supports bypass", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
+    // Cache expiry runs on elapsed time, so the fake clock must drive both.
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
     vi.setSystemTime(0);
     const release = vi.fn(async () => {});
     const failure = new Error("catalog transport unavailable");
