@@ -146,7 +146,7 @@ export function registerGatewayStartupFailureSettlementTests(
     });
   });
 
-  it("completes deferred prerequisite boot accounting when restart interrupts close", async () => {
+  it("completes deferred prerequisite boot accounting when stop interrupts close", async () => {
     const { runGatewayLoop } = await import("./run-loop.js");
     const { TailscaleBackendAuthenticationRequiredError } =
       await import("../../infra/tailscale-backend-ready.js");
@@ -161,12 +161,13 @@ export function registerGatewayStartupFailureSettlementTests(
     await withIsolatedSignals(async ({ captureSignal }) => {
       const loop = runGatewayLoop({
         start: async () =>
-          createGatewayServer(async () => captureSignal("SIGUSR2")(), Promise.reject(failure)),
+          createGatewayServer(async () => captureSignal("SIGINT")(), Promise.reject(failure)),
         completeBoot,
         onRestartStartupFailure,
       });
       await expect(loop).rejects.toBe(failure);
-      expect(completeBoot).toHaveBeenCalledExactlyOnceWith({
+      // Stop records its own clean_stop; the failed startup must still be accounted for.
+      expect(completeBoot).toHaveBeenCalledWith({
         outcome: "startup_failed",
         reason: failure.message,
       });

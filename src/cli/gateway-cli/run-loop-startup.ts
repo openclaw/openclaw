@@ -154,6 +154,7 @@ export function createGatewayRestartRecovery(
 }
 
 export function createGatewayStartupOperations(): {
+  signal: AbortSignal;
   run: GatewayStartupOperation;
   close(): void;
   cancelledWith(error: unknown): boolean;
