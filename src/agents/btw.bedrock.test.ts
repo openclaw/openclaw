@@ -50,3 +50,19 @@ it("merges unanswered Bedrock input with the side question before streaming", as
   expect(content).toContain("New question");
   expect(content).toContain(btw.DEFAULT_QUESTION);
 });
+
+it("keeps visible side-question context when a merged row has a saved model prompt", async () => {
+  btw.resolveModelWithRegistryMock.mockReturnValue({
+    provider: "amazon-bedrock",
+    id: "us.anthropic.claude-sonnet-4-5-v1:0",
+    api: "bedrock-converse-stream",
+  });
+  const stored = btw.createUserTranscriptMessage([{ type: "text", text: "Stored question" }]);
+  const modelPromptProjection = { version: 1, text: "Saved main-turn prompt" };
+  btw.mockActiveTranscript([{ ...stored, __openclaw: { modelPromptProjection } }]);
+  btw.mockDoneAnswer("Bedrock answer.");
+  await btw.runSideQuestion({ provider: "amazon-bedrock" });
+  const content = JSON.stringify(btw.contextMessages(btw.streamContext()));
+  expect(content).toContain("Stored question");
+  expect(content).not.toContain("Saved main-turn prompt");
+});

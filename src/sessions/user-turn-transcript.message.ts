@@ -145,6 +145,18 @@ export function readModelPromptProjection(message: unknown): string | undefined 
   return projection.text;
 }
 
+/** For a reader that uses visible content, such as a side question. */
+export function omitRecordedModelPrompt<T extends Extract<AgentMessage, { role: "user" }>>(
+  message: T,
+): T {
+  const metadata = readOpenClawMessageMeta(message);
+  if (!metadata || !Object.hasOwn(metadata, "modelPromptProjection")) {
+    return message;
+  }
+  const { modelPromptProjection: _projection, ...retained } = metadata;
+  return { ...message, __openclaw: retained };
+}
+
 export function prepareModelPromptProjection(
   message: unknown,
   text: string,
