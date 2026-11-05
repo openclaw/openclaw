@@ -330,7 +330,7 @@ export function tokenizeQuery(input: string): WeightedTerm[] {
   return [...weights].map(([term, weight]) => ({ term, weight }));
 }
 
-type RankedDocument<T> = { value: T; terms: readonly string[] };
+type RankedDocument<T> = { value: T; terms: ReadonlyMap<string, number> };
 
 type IndexedDocument<T> = { readonly value: T; readonly length: number };
 
@@ -342,23 +342,21 @@ type LexicalIndex<T> = {
 
 export function buildLexicalIndex<T>(documents: ReadonlyArray<RankedDocument<T>>): LexicalIndex<T> {
   const postings = new Map<string, number[]>();
-  const indexed = documents.map(({ value, terms }) => ({ value, length: terms.length }));
+  const indexed: IndexedDocument<T>[] = [];
   let totalLength = 0;
   documents.forEach((document, position) => {
-    for (const term of document.terms) {
+    let length = 0;
+    for (const [term, frequency] of document.terms) {
       let matches = postings.get(term);
       if (!matches) {
         matches = [];
         postings.set(term, matches);
       }
-      // Documents arrive in order, so a repeated term updates its last position/frequency pair.
-      if (matches[matches.length - 2] === position) {
-        matches[matches.length - 1]! += 1;
-      } else {
-        matches.push(position, 1);
-      }
+      matches.push(position, frequency);
+      length += frequency;
     }
-    totalLength += document.terms.length;
+    indexed.push({ value: document.value, length });
+    totalLength += length;
   });
   return {
     postings,

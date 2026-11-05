@@ -580,6 +580,7 @@ describe("Claude native stdio boundary", () => {
     ["approval", "assertPrivateInputCurrent", "allow"],
     ["initialize", "assertCurrent", undefined],
     ["initialize", "assertPrivateInputCurrent", undefined],
+    ["initialize", "prepareCredentialUse", undefined],
     ["prompt", "assertPrivateInputCurrent", undefined],
   ] as const)(
     "revalidates authority at %s with %s",
@@ -588,14 +589,15 @@ describe("Claude native stdio boundary", () => {
       const reason = new Error("Synthetic admitted owner was released.");
       const approvalStarted = createDeferred<void>();
       const approval = createDeferred<CliBackendToolPermissionResult>();
+      const assertActive = () => {
+        if (!active) {
+          throw reason;
+        }
+      };
       const context = await createContext(`revoked-${stage}`, {
         prompt: "Remember orange.",
         promptContext: { prependContext: "saved private context" },
-        [check]: () => {
-          if (!active) {
-            throw reason;
-          }
-        },
+        [check]: check === "prepareCredentialUse" ? async () => assertActive() : assertActive,
         requestToolPermission: async () => {
           approvalStarted.resolve();
           return stage === "approval" ? approval.promise : denied();

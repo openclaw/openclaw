@@ -33,6 +33,7 @@
 // Paint/CLS and static-shell geometry are recorded in presentation; --filmstrip-only saves frames.
 // --transcript-witness distinguishes native saved/live text paint in warm Chat reloads.
 // --transcript-witness-hold also holds startup for saved paint: correctness only, never timing.
+// --details-processes observes populated warm Details with one synthetic running process.
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { loadavg } from "node:os";
@@ -124,6 +125,7 @@ import {
   GATEWAY_HEAP_SAMPLE_INTERVAL,
   readGatewayHeapProfile,
 } from "./lib/gateway-bench-profile.ts";
+import { summarizeDetailsGeometry } from "./perf/warm-reload-browser-probe.ts";
 
 function readRigProbeSnapshot() {
   const perf = Reflect.get(window, "__perf");
@@ -289,6 +291,7 @@ const { values } = parseArgs({
     "pane-chrome-facts": { type: "boolean", default: false },
     "archived-session": { type: "boolean", default: false },
     "details-session-facts": { type: "boolean", default: false },
+    "details-processes": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
     "dashboard-widget": { type: "boolean", default: false },
     "connect-not-before-ms": { type: "string" },
@@ -387,6 +390,12 @@ if (values["late-row-facts"]) {
   }
   values["row-facts"] = true;
   values["transcript-avatars"] = true;
+}
+if (values["details-processes"]) {
+  if (!values["warm-reload"]) {
+    throw new Error("details-processes requires warm-reload for the populated Details boundary");
+  }
+  values["pane-chrome-probe"] = true;
 }
 if (values["pane-chrome-probe"] && !values["warm-reload"]) {
   throw new Error("pane-chrome-probe requires warm-reload for the first transcript paint boundary");
@@ -1070,6 +1079,11 @@ try {
       : undefined;
   const prepared = await prepareControlUiMockGatewayScenario({
     ...fixture.scenario,
+    ...(values["details-processes"]
+      ? {
+          featureMethods: [...fixture.scenario.featureMethods!, "sessions.processes.list"],
+        }
+      : {}),
     ...(streamingSplitLayout
       ? {
           sessionTranscripts: Object.fromEntries(
@@ -1086,6 +1100,28 @@ try {
     subscriptionInitialHistory: true,
     methodResponses: {
       ...fixture.scenario.methodResponses,
+      ...(values["details-processes"]
+        ? {
+            "sessions.processes.list": {
+              sessionId: fixture.scenario.sessions!.find(
+                (row) => row.key === fixture.selectedSessionKey,
+              )!.sessionId,
+              processes: [
+                {
+                  processId: "verification",
+                  instanceId: "verification-1",
+                  name: "Synthetic verifier",
+                  status: "running",
+                  startedAt: fixtureNowMs ?? Date.now(),
+                  tail: "ready",
+                  truncated: false,
+                  canStop: true,
+                },
+              ],
+              truncated: false,
+            },
+          }
+        : {}),
       ...(workerAgents ? { "agents.list": workerAgents } : {}),
       ...(settingsCoreSchema ? { "config.schema": settingsCoreSchema } : {}),
     },
@@ -1961,6 +1997,20 @@ try {
     offRosterSession: values["off-roster-route"],
     sidebarView: sidebarView === "online" ? "online" : "sessions",
   };
+  const qualifyDetailsProcess = async () => {
+    if (!values["details-processes"]) {
+      return;
+    }
+    const details = page.locator(".chat-details:visible");
+    if (!(await details.count())) {
+      await page.locator(".chat-details-toggle:visible").first().click();
+    }
+    await details.locator('[data-details-group="processes"] [data-process-id]').waitFor();
+    await details
+      .locator('[data-details-group="automations"] .chat-summary__automation')
+      .first()
+      .waitFor();
+  };
   const qualifyLateRowFacts = async () => {
     if (!fixture.lateRowFacts) {
       return;
@@ -2097,6 +2147,7 @@ try {
     }
     await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor({ state: "attached" });
     await qualifyLateRowFacts();
+    await qualifyDetailsProcess();
     const { storage: warmStorage, ...snapshotSave } = await page.evaluate(
       persistColdLoadWarmState,
       warmInput,
@@ -2123,6 +2174,7 @@ try {
         }
         await expandSidebar();
         await qualifyLateRowFacts();
+        await qualifyDetailsProcess();
         const { storage: captured, ...saved } = await page.evaluate(
           persistColdLoadWarmState,
           warmInput,
@@ -2812,6 +2864,10 @@ try {
     const sidebarPresentation = values["sidebar-presentation-probe"]
       ? await page.evaluate(() => Reflect.get(window, "__sidebarPresentation").read())
       : undefined;
+    const detailsGeometry =
+      values["details-processes"] && paneChrome
+        ? summarizeDetailsGeometry(paneChrome.detailsFrames)
+        : undefined;
     if (cpuProfile) {
       await writeFile(
         path.join(artifactDir, `run-${run + 1}.cpu-clock.json`),
@@ -3882,6 +3938,7 @@ try {
       warmReload,
       transcriptWitnessReload: witnessReload,
       paneChrome,
+      detailsGeometry,
       sidebarPresentation,
       historyValidatorRequests: historyValidatorRequests - validatorRequestsBeforeReload,
       snapshotSave: snapshotSaves[bundleIndex],

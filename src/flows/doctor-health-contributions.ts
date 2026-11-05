@@ -220,7 +220,10 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
 async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   // Settle retired-plugin state cleanup (may replace ctx.cfg) before the
   // legacy-state detect/migrate pair reads the config.
-  await runCoreContributionHealth(ctx, ["core/doctor/removed-workspaces-state"]);
+  await runCoreContributionHealth(ctx, [
+    "core/doctor/removed-workspaces-state",
+    "core/doctor/session-archive-read-cache",
+  ]);
   const doctorOnlyStateMigrations = ctx.options.repair === true || ctx.options.yes === true;
   if (
     !doctorOnlyStateMigrations ||
@@ -629,7 +632,7 @@ async function runDoctorHealthContributionList(
           return;
         }
         if (retirementOnly && !ctx.retirementOnly) {
-          ctx.runtime.log(`Retirement-only Doctor widened: ${contribution.id}`);
+          ctx.runtime.error(`Retirement-only Doctor widened: ${contribution.id}`);
           return;
         }
       } catch (error) {
@@ -656,7 +659,7 @@ async function runDoctorHealthContributionList(
         recordDoctorHealthWarnings(ctx, [], [message]);
         if (retirementOnly) {
           ctx.retirementOnly = false;
-          ctx.runtime.log(`Retirement-only Doctor widened: ${contribution.id}.failed`);
+          ctx.runtime.error(`Retirement-only Doctor widened: ${contribution.id}.failed`);
           return;
         }
       }
@@ -698,7 +701,7 @@ export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext)
       (Boolean(ctx.updateWarnings?.length) && "startup-warnings");
     if (blocker) {
       ctx.retirementOnly = false;
-      ctx.runtime.log(`Retirement-only Doctor widened: ${blocker}`);
+      ctx.runtime.error(`Retirement-only Doctor widened: ${blocker}`);
     }
   }
   if (ctx.retirementOnly) {
