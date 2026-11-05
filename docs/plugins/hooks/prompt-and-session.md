@@ -396,11 +396,13 @@ The event is `{ payload, provider, model, messages }`:
 - `payload` is the provider-specific request body. Return `{ payload }` to
   replace it, or return nothing to send it unchanged. Handlers run in priority
   order and each one sees the previous replacement.
-- A replacement may rewrite content but not the tool surface. If `tools`,
-  `tool_choice`, `toolConfig`, `functions`, or `function_call` (top level or
-  under `config`) differ from the original, the request fails. Tool and
-  provider-hosted tool authorization is settled before this hook, and hosted
-  tools have no later local gate.
+- A replacement may rewrite content but not the tool surface, model, or
+  Access program. If `tools`, `tool_choice`, `toolConfig`, `functions`,
+  `function_call`, `model`, or `access_programs` (top level or under `config`)
+  differ from the request as it was before any handler ran, the request fails.
+  The check also covers in-place edits to `payload` when a handler returns
+  nothing. Tool, model, and Access-program authorization is settled before this
+  hook, and provider-hosted tools have no later local gate.
 - `messages` is a detached copy of the model-facing history, including
   host-owned metadata such as `__openclaw.senderIsOwner`. Editing it does not
   change the request. Use that metadata, not text inside a message, to decide
@@ -417,8 +419,9 @@ handler runs, the request is not sent.
 
 The hook is off by default. Enable it per plugin with
 `plugins.entries.<id>.hooks.allowModelRequest: true`; bundled plugins need the
-same opt-in. Without it the registration is ignored and `openclaw doctor` and
-`openclaw plugins inspect <id>` show a warning naming the key:
+same opt-in. Without it the registration is ignored, and Gateway startup logs
+and `openclaw plugins inspect <id> --runtime --json` show a diagnostic naming
+the key:
 
 ```json5
 {

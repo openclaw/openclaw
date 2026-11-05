@@ -83,7 +83,7 @@ The hook is off by default for every plugin, bundled ones included. Enable it pe
 }
 ```
 
-`allowPromptModification: false` blocks the hook even when `allowModelRequest` is on. A replacement may rewrite content but not the tool surface: if `tools`, `tool_choice`, or the provider's equivalent fields change, the request fails. A minimal redacting handler:
+`allowPromptModification: false` blocks the hook even when `allowModelRequest` is on. A replacement may rewrite content but not the tool surface, model, or Access program: if `tools`, `tool_choice`, `model`, `access_programs`, or the provider's equivalent fields change, the request fails. A minimal redacting handler:
 
 ```typescript index.ts
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";

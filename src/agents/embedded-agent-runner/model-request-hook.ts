@@ -4,19 +4,27 @@ import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
 import { buildEmbeddedAgentHookContext } from "./run/agent-hook-context.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 
-// Provider-hosted tools run remotely with no later local gate, and their authorization
-// is settled before this hook. Content policy may rewrite messages, never the tool surface.
-const TOOL_SURFACE_FIELDS = ["tools", "tool_choice", "toolConfig", "functions", "function_call"];
+// Tool, model, and Access-program authorization is settled before this hook; provider-hosted
+// tools have no later local gate. Content policy may rewrite messages, never these fields.
+const PROTECTED_FIELDS = [
+  "tools",
+  "tool_choice",
+  "toolConfig",
+  "functions",
+  "function_call",
+  "model",
+  "access_programs",
+];
 
-/** Wire view of the tool fields: JSON drops undefined members a cloned replacement loses. */
-function readToolSurface(payload: unknown): string {
+/** Wire view of the protected fields: JSON drops undefined members a cloned replacement loses. */
+function readProtectedFields(payload: unknown): string {
   if (typeof payload !== "object" || payload === null) {
     return "[]";
   }
   const config: unknown = Reflect.get(payload, "config");
   const nested = typeof config === "object" && config !== null ? config : {};
   const fields = [payload, nested].flatMap((owner) =>
-    TOOL_SURFACE_FIELDS.map((field) => Reflect.get(owner, field)),
+    PROTECTED_FIELDS.map((field) => Reflect.get(owner, field)),
   );
   return JSON.stringify(fields);
 }
@@ -28,6 +36,8 @@ export function createModelRequestTransformer(hookContext: PluginHookAgentContex
     if (!hooks?.hasHooks("before_model_request")) {
       return payload;
     }
+    // Snapshot before dispatch: handlers receive the payload by reference and may mutate it.
+    const admitted = readProtectedFields(payload);
     const result = await hooks.runBeforeModelRequest(
       {
         payload,
@@ -37,13 +47,13 @@ export function createModelRequestTransformer(hookContext: PluginHookAgentContex
       },
       hookContext,
     );
-    if (!result) {
-      return payload;
+    const effective = result ? result.payload : payload;
+    if (readProtectedFields(effective) !== admitted) {
+      throw new Error(
+        "before_model_request must not change the provider tool surface, model, or access programs",
+      );
     }
-    if (readToolSurface(result.payload) !== readToolSurface(payload)) {
-      throw new Error("before_model_request replacement must not change the provider tool surface");
-    }
-    return result.payload;
+    return effective;
   };
 }
 
