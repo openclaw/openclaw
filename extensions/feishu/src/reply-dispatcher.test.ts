@@ -152,10 +152,11 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   type ReplyDispatcherArgs = Parameters<typeof createFeishuReplyDispatcher>[0];
   type ReplyDispatcherPlan = ReturnType<typeof createFeishuReplyDispatcher>;
   type DeliveryPayload = Parameters<ReplyDispatcherPlan["delivery"]["deliver"]>[0];
+  type Delivered = ReturnType<ReplyDispatcherPlan["delivery"]["deliver"]>;
   type TypingDispatcherOptions = ReplyDispatcherPlan["dispatcherOptions"] &
     ReplyDispatcherPlan["delivery"] & {
-      final: (payload: DeliveryPayload) => ReturnType<ReplyDispatcherPlan["delivery"]["deliver"]>;
-      block: (payload: DeliveryPayload) => ReturnType<ReplyDispatcherPlan["delivery"]["deliver"]>;
+      final: (payload: DeliveryPayload) => Delivered;
+      block: (payload: DeliveryPayload, source?: number) => Delivered;
     };
   beforeEach(() => {
     vi.clearAllMocks();
@@ -187,7 +188,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
   function useNonStreamingAutoAccount() {
     resolveFeishuAccountMock.mockReturnValue(createReplyAccount("auto", "off", "feishu"));
   }
-
   it("honors the account response prefix over channel and global defaults", async () => {
     useNonStreamingAutoAccount();
     const { result } = createDispatcherHarness({
@@ -349,7 +349,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       ...result.dispatcherOptions,
       ...result.delivery,
       final: (payload) => result.delivery.deliver(payload, { kind: "final" }),
-      block: (payload) => result.delivery.deliver(payload, { kind: "block" }),
+      block: (payload, source) =>
+        result.delivery.deliver(payload, { kind: "block", assistantMessageIndex: source }),
     };
   }
   function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -544,7 +545,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       (call) => requireRecord(call[0], "native card send").card,
     );
   }
-
   it("delivers changed legacy controls even without prose", async () => {
     useNonStreamingAutoAccount();
     const { options } = createDispatcherHarness();
@@ -612,7 +612,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
     },
   );
-
   it("includes the required peer-bot mention after sanitizing presentation content", async () => {
     useNonStreamingAutoAccount();
     const { options } = createDispatcherHarness({
@@ -762,7 +761,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
     },
   );
-
   it("suppresses discarded block prose while retaining accepted media", async () => {
     sendMediaFeishuMock.mockResolvedValue({ messageId: "om-block-media" });
     sendCardFeishuMock.mockResolvedValue({ messageId: "om-final-controls" });
@@ -928,7 +926,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       }
     },
   );
-
   it("suppresses internal block payload delivery", async () => {
     const { options } = createDispatcherHarness();
     await options.block({ text: "internal reasoning chunk" });
@@ -1028,9 +1025,10 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     },
   );
 
-  // Strings preview, [text] blocks, [text, true] error finals. null idles, true holds, false rejects.
-  // Numbers close invisibly: 0 fails recovery, 1 succeeds, 3 throws. 2 starts a message. Chunks end
-  // after a digit. Static sends in failing reject (false) or accept only that part of their text.
+  // Strings preview, [text] blocks, [text, n] blocks of message n, [text, true] error finals. null
+  // idles, true holds, false rejects. Numbers close invisibly: 0 fails recovery, 1 succeeds, 3
+  // throws. 2 starts a message. Chunks end after a digit. Static sends in failing reject (false) or
+  // accept only that part of their text.
   const failing: Record<string, string | false> = { "A2.": false, "G.": "G. A1.", "F.": "F." };
   it.each([
     ["delta blocks", ["hello", ["lo world"]], ["hellolo world"]],
@@ -1081,6 +1079,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["idle start", ["A. X.", null, "A. X. E.", 2, "N."], ["A. X.", "E.\n\nN."]],
     ["fence cr indent", ["~~~\rx\r", null, "~~~\rx\r  y"], ["~~~\rx\r", "~~~\n  y"]],
     ["partial 2", ["P", null, "PA", true, "PAE", 2, "PN", 2, false], ["P", "A", "AE\n\nPN"]],
+    ["old block", ["X.", 3, 2, "X. Y.", ["X.", 0], 3, "X. Y. Z."], ["X.", "X. Y.X.", "X. Y. Z."]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
@@ -1127,6 +1126,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         await options.onIdle?.();
       } else if (typeof event === "string") {
         result.replyOptions.onPartialReply?.({ text: event });
+      } else if (typeof event[1] === "number") {
+        void (await options.block({ text: event[0] }, event[1]))?.finalization?.catch(() => {});
       } else {
         const deliver = event[1] ? options.final : options.block;
         void (await deliver({ text: event[0], isError: event[1] }))?.finalization?.catch(() => {});
@@ -1304,7 +1305,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(2);
     },
   );
-
   it("does not retry degraded-voice fallback as a failed media send", async () => {
     useNonStreamingAutoAccount();
     sendMediaFeishuMock.mockResolvedValueOnce({

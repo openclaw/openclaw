@@ -390,14 +390,25 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
   };
 
-  const queueStreamingUpdate = (nextText: string, mode: "snapshot" | "delta") => {
+  // Core moves a block's assistantMessageIndex with every message start, so it runs at previewEpoch
+  // plus an offset that delivered blocks reveal. A block behind it comes from an earlier message.
+  let sourceIndexOffset = 0;
+  const isCurrentSource = (source: number | undefined) => {
+    if (source === undefined) {
+      return true;
+    }
+    sourceIndexOffset = Math.max(sourceIndexOffset, source - previewEpoch);
+    return source - sourceIndexOffset === previewEpoch;
+  };
+
+  const queueStreamingUpdate = (nextText: string, mode: "snapshot" | "delta" | "append") => {
     if (!nextText) {
       return;
     }
     if (mode === "snapshot" && nextText === lastPartial) {
       return;
     }
-    if (mode === "delta") {
+    if (mode !== "snapshot") {
       // Consume completed blocks in preview order, never by suffix overlap.
       let offset = previewBlockOffset;
       // Sentence chunks can omit the gap retained in the cumulative preview.
@@ -406,7 +417,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           offset++;
         }
       }
-      if (previewText.startsWith(nextText, offset)) {
+      if (mode === "delta" && previewText.startsWith(nextText, offset)) {
         previewBlockOffset = offset + nextText.length;
         return;
       }
@@ -1404,7 +1415,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               // Some runtimes emit block payloads without onPartial/final callbacks.
               // Mirror block text into streamText so onIdle close still sends content.
               const consumedBefore = previewBlockOffset;
-              queueStreamingUpdate(text, "delta");
+              // An earlier message's block is mirrored, but may not consume this message's preview.
+              const mode = isCurrentSource(info.assistantMessageIndex) ? "delta" : "append";
+              queueStreamingUpdate(text, mode);
               if (previewBlockOffset > consumedBefore) {
                 previewCovered = {
                   text: previewText.slice(0, previewBlockOffset),
