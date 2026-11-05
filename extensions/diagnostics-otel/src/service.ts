@@ -509,7 +509,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const tracer = active.traceProvider
         ? active.traceProvider.getTracer("openclaw")
         : trace.getTracer("openclaw");
-      const diagnosticsTrace = createDiagnosticsTraceRuntime(tracer, { captureContent });
+      const diagnosticsTrace = createDiagnosticsTraceRuntime(tracer, {
+        captureContent,
+        serviceIdentity: serviceName,
+      });
       active.stopActiveTrustedSpans = diagnosticsTrace.stopActiveTrustedSpans;
       const diagnosticMetrics = createDiagnosticsMetrics(meter, otel.metricNamePrefix);
 

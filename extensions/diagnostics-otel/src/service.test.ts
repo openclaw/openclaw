@@ -2439,7 +2439,10 @@ describe("diagnostics-otel service", () => {
   });
 
   test("exports session identity on run-scoped spans only when content capture is on", async () => {
-    await startServiceFixture(["traces"], { captureContent: true });
+    await startServiceFixture(["traces"], (ctx) => {
+      ctx.config.diagnostics!.otel!.serviceName = "qa-gateway";
+      ctx.config.diagnostics!.otel!.captureContent = true;
+    });
 
     emitEvent("run.completed", {
       sessionKey: "agent:forge:main",
@@ -2458,15 +2461,15 @@ describe("diagnostics-otel service", () => {
     });
 
     expect(startedSpanOptions("openclaw.run")?.attributes).toMatchObject({
-      "gen_ai.conversation.id": "agent:forge:main",
+      "gen_ai.conversation.id": "qa-gateway:agent:forge:main",
       "openclaw.session.id": "agent:forge:main",
     });
     expect(startedSpanOptions("openclaw.model.call")?.attributes).toMatchObject({
-      "gen_ai.conversation.id": "agent:forge:main",
+      "gen_ai.conversation.id": "qa-gateway:agent:forge:main",
       "openclaw.session.id": "agent:forge:main",
     });
     expect(startedSpanOptions("openclaw.tool.execution")?.attributes).toMatchObject({
-      "gen_ai.conversation.id": "agent:forge:main",
+      "gen_ai.conversation.id": "qa-gateway:agent:forge:main",
       "openclaw.session.id": "agent:forge:main",
     });
     expectAbsent(startedSpanOptions("openclaw.run")?.attributes, "openclaw.sessionKey");

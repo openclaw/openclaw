@@ -65,14 +65,22 @@ handoff tokens.
 Trace backends group spans into conversations by a session attribute, which the
 default redaction removes. When `diagnostics.otel.captureContent` is `true`,
 run-scoped spans (run, message and prompt processing, model call, model usage,
-harness, tool execution, and skill use) carry `gen_ai.conversation.id` and
-`openclaw.session.id` with the session key (for example `agent:main:main`) —
-the GenAI semantic-conventions spelling plus the OpenClaw-native one, so
-Langfuse, LangWatch, Phoenix, and other vendor-neutral backends group turns
-per conversation. Session keys are stable identifiers of a person or chat and
-can include channel peer ids; the shared `captureContent` gate exists so
-identity travels only to a collector already trusted with raw prompt and tool
-content. Metric attributes never carry session identifiers.
+harness, tool execution, and skill use) carry:
+
+- `gen_ai.conversation.id`: the GenAI semantic-conventions attribute that
+  Langfuse, LangWatch, Phoenix, and other vendor-neutral backends read for
+  grouping, valued as the OTel service name joined with the session key
+  (`<service.name>:<session key>`, for example `openclaw:agent:main:main`) so
+  concurrent Gateways exporting to one backend keep separate conversations.
+  Set a distinct `diagnostics.otel.serviceName` per Gateway when they share a
+  collector.
+- `openclaw.session.id`: the raw session key (`agent:main:main`) for backend
+  joins back to the unnamespaced identity.
+
+Session keys are stable identifiers of a person or chat and can include channel
+peer ids; the shared `captureContent` gate exists so identity travels only to a
+collector already trusted with raw prompt and tool content. Metric attributes
+never carry session identifiers.
 
 Skill-use spans can include a SHA-256 fingerprint of the instructions actually
 delivered while tracing is active, even with content capture disabled. This
