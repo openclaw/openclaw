@@ -440,17 +440,10 @@ function checkNativeEvidence(plan) {
 }
 
 function requireLock(plan, ref, oid) {
-  if (ref && git(plan.root, "rev-parse", "--verify", ref).trim() === oid) {
-    return;
-  }
   if (
-    ref ||
-    git(
-      plan.root,
-      "for-each-ref",
-      "--format=%(refname)",
-      `refs/openclaw/pr-operation-locks/${plan.pr}`,
-    ).trim()
+    ref !== `refs/openclaw/pr-operation-locks/${plan.pr}` ||
+    !oid ||
+    git(plan.root, "rev-parse", "--verify", ref).trim() !== oid
   ) {
     throw new Error("Native operation ownership changed");
   }
