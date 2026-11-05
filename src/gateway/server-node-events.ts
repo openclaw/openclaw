@@ -926,7 +926,11 @@ async function handlePreparedNodeEvent(
           reason: "unmatched_exec_event",
         };
       }
-      if (cfg.tools?.exec?.notifyOnExit === false || obj.suppressNotifyOnExit === true) {
+      if (
+        (typeof auth === "object" && auth.resultDelivered) ||
+        cfg.tools?.exec?.notifyOnExit === false ||
+        obj.suppressNotifyOnExit === true
+      ) {
         return undefined;
       }
       if (evt.event === "exec.denied") {

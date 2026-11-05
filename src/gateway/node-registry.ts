@@ -132,6 +132,7 @@ type AuthorizedSystemRunEvent = PendingSystemRunEvent & {
   nodeId: string;
   connId: string;
   expiresAtMs: number | null;
+  resultDelivered?: boolean;
 };
 
 export type NodeConnectivityResult =
@@ -216,9 +217,9 @@ export class NodeRegistry {
           })
         : false;
     },
-    onFailedResult: (pending) => {
+    onSettledResult: (pending, delivered) => {
       if (pending.systemRunEvent) {
-        this.forgetAuthorizedSystemRunEvent({
+        this.settleAuthorizedSystemRunEvent(delivered, {
           nodeId: pending.nodeId,
           connId: pending.connId,
           ...pending.systemRunEvent,
@@ -1105,6 +1106,7 @@ export class NodeRegistry {
   }):
     | (Pick<PendingSystemRunEvent, "invocationDeliveryContext"> & {
         holdNotice?: (notify: () => void) => void;
+        resultDelivered?: true;
       })
     | null {
     if (!params.connId || !params.sessionKey) {
@@ -1135,6 +1137,11 @@ export class NodeRegistry {
     let waiting: PendingInvoke | undefined;
     if (params.terminal) {
       this.authorizedSystemRunEvents.delete(match);
+    }
+    if (event?.resultDelivered) {
+      return { resultDelivered: true };
+    }
+    if (params.terminal) {
       // The node reports completion before its result; a still-waiting caller receives that output.
       waiting = [...this.pendingInvokes.values()].find(
         (pending) =>
@@ -1170,6 +1177,22 @@ export class NodeRegistry {
       expiresAtMs: authorizedSystemRunEventExpiresAt(event.timeoutMs),
     };
     this.authorizedSystemRunEvents.set(authorizedSystemRunEventKey(authorized), authorized);
+  }
+
+  /** A bridged node may report completion after the caller already received its result. */
+  private settleAuthorizedSystemRunEvent(
+    delivered: boolean,
+    event: Omit<AuthorizedSystemRunEvent, "expiresAtMs">,
+  ): void {
+    if (!delivered) {
+      this.forgetAuthorizedSystemRunEvent(event);
+      return;
+    }
+    const authorized = this.authorizedSystemRunEvents.get(authorizedSystemRunEventKey(event));
+    if (authorized) {
+      // Retain correlation until the terminal event or normal expiry, not another notice.
+      authorized.resultDelivered = true;
+    }
   }
 
   private forgetAuthorizedSystemRunEvent(

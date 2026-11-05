@@ -267,6 +267,82 @@ describe("node exec events", () => {
     },
   );
 
+  it.each([
+    { settle: "result", notified: false },
+    { settle: "timeout", notified: true },
+  ] as const)(
+    "notifies a late exec.finished only after an undelivered invocation ($settle)",
+    async ({ settle, notified }) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      const registry = new NodeRegistry();
+      const connId = "late-mac-conn";
+      try {
+        const frames: string[] = [];
+        const client = makeNodeClient(connId, "late-mac-node");
+        Object.assign(client.socket, { send: (frame: string) => frames.push(frame) });
+        registry.register(client, { pairingIdentity: "late-mac-identity" });
+        const runId = `late-${settle}`;
+        const sessionKey = "agent:main:late";
+        const invocation = registry.invoke({
+          nodeId: "late-mac-node",
+          command: "system.run",
+          params: { runId, sessionKey },
+          timeoutMs: 60_000,
+        });
+        await waitForFast(() => expect(frames).toHaveLength(1));
+        if (settle === "result") {
+          registry.handleInvokeResult({
+            id: JSON.parse(frames[0]!).payload.id,
+            nodeId: "late-mac-node",
+            connId,
+            ok: true,
+            payloadJSON: JSON.stringify({ exitCode: 0, stdout: "late" }),
+          });
+        } else {
+          vi.advanceTimersByTime(60_000);
+        }
+        await expect(invocation).resolves.toMatchObject({ ok: settle === "result" });
+        const ctx = buildCtx({
+          authorizeNodeSystemRunEvent: (params) =>
+            registry.authorizeSystemRunEventWithState({
+              ...params,
+              terminal: params.event !== "exec.started",
+            }) ?? false,
+        });
+        const payload = { runId, sessionKey, exitCode: 0, output: "late" };
+        if (!notified) {
+          await expect(
+            handleNodeEvent(ctx, "late-mac-node", nodeEvent("exec.started", payload), { connId }),
+          ).resolves.toBeUndefined();
+          expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+          expect(requestHeartbeatMock).not.toHaveBeenCalled();
+        }
+        await expect(
+          handleNodeEvent(ctx, "late-mac-node", nodeEvent("exec.finished", payload), { connId }),
+        ).resolves.toBeUndefined();
+        if (notified) {
+          expect(enqueueSystemEventMock).toHaveBeenCalledExactlyOnceWith(
+            `Exec finished (node=late-mac-node id=${runId}, code 0)
+late`,
+            { sessionKey, contextKey: `exec:${runId}` },
+          );
+          expect(requestHeartbeatMock).toHaveBeenCalledExactlyOnceWith(
+            execEventHeartbeatOptions(sessionKey),
+          );
+        } else {
+          expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+          expect(requestHeartbeatMock).not.toHaveBeenCalled();
+        }
+        await expect(
+          handleNodeEvent(ctx, "late-mac-node", nodeEvent("exec.finished", payload), { connId }),
+        ).resolves.toEqual(eventResult("exec.finished", "unmatched_exec_event"));
+      } finally {
+        registry.unregister(connId);
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("stores sandbox relay APNs registrations from node events", async () => {
     const ctx = buildCtx();
     await handleNodeEvent(
