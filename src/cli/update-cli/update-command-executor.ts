@@ -3,7 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
-import { captureManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
+import {
+  captureManagedUpdateLeaseDatabaseIdentity,
+  prepareManagedHandoffLeaseDatabaseIdentity,
+} from "../../infra/update-managed-service-handoff-database.js";
 import {
   prepareManagedHandoffLeaseStore,
   resolveManagedUpdateLeaseDatabasePath,
@@ -11,9 +14,14 @@ import {
   type ManagedHandoffLease,
   type ManagedHandoffParent,
 } from "../../infra/update-managed-service-handoff-lease.js";
+import {
+  fenceLegacyGatewayCustody,
+  resolveLegacyGatewayManagedUpdateLeaseDatabasePath,
+} from "../../infra/update-managed-service-handoff-legacy-store.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
+import { formatCliCommand } from "../command-format.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import {
   requestUpdateCommandExecutorCancellation,
@@ -352,10 +360,47 @@ export async function withUpdateCommandExecutor<T>(
             borrowed = true;
             managedHandoff = true;
           } else {
-            const acquired = requireUpdateCommandAcquisition(
-              store.acquire(key, randomUUID(), { kind: "update" }),
-              "Another update executor owns this installation.",
+            // An earlier macOS Gateway's store still fences its unsettled custody.
+            const legacyDatabasePath = resolveLegacyGatewayManagedUpdateLeaseDatabasePath();
+            if (
+              legacyDatabasePath &&
+              fs.existsSync(legacyDatabasePath) &&
+              fs.existsSync(databasePath)
+            ) {
+              // Earn and retain the current store's pin before legacy discovery
+              // awaits, so deduplicating an alias cannot adopt a replaced database.
+              existingIdentity ??= await prepareManagedHandoffLeaseDatabaseIdentity(databasePath);
+              databasePath = existingIdentity.databasePath;
+              store = await openStore(existingIdentity, key);
+            }
+            const legacyFence = await fenceLegacyGatewayCustody(
+              key,
+              legacyDatabasePath,
+              existingIdentity,
             );
+            if ("refusal" in legacyFence) {
+              throw new UpdateCommandRecoveryPendingError(legacyFence.refusal);
+            }
+            const admissionStore = store;
+            let acquired: ReturnType<typeof requireUpdateCommandAcquisition>;
+            try {
+              activation.assertCurrent();
+              if (!active) {
+                throw new UpdateCommandRecoveryPendingError("Update executor admission is closed.");
+              }
+              acquired = requireUpdateCommandAcquisition(
+                store.acquire(key, randomUUID(), { kind: "update" }),
+                () => {
+                  const retained = admissionStore.read(key);
+                  // Only explicit repair settles a cancelled original after its updater exits.
+                  return retained.kind === "current" && retained.lease.version === 4
+                    ? `Another update executor owns this installation. It retains cancelled update custody (owner ${retained.lease.owner}, lease version 4, last activity ${new Date(retained.lease.updatedAt).toISOString()}). If that update has exited, run ${formatCliCommand("openclaw update repair")} to settle it.`
+                    : "Another update executor owns this installation.";
+                },
+              );
+            } finally {
+              legacyFence.release();
+            }
             lease = acquired.lease;
             if (acquired.originalDatabaseIdentity) {
               existingIdentity = acquired.originalDatabaseIdentity;

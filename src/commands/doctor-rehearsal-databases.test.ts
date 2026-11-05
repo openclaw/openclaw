@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi, type Mock } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
@@ -49,15 +49,15 @@ function fixture() {
   return { root, shared, agent, env, backups };
 }
 
-async function owned<T>(run: () => Promise<T> | T) {
+async function owned<T>(run: (admission: Mock<() => void>) => Promise<T> | T) {
   const owner = acquireGatewayStateOwner({ databasePath: f.shared });
   const scope = createOpenClawDatabaseMaintenanceScope({
     schemaMaintenance: true,
-    assertOwnerCurrent: owner.assertCurrent,
+    assertOwnerCurrent: vi.spyOn(owner, "assertCurrent"),
     assertDatabaseAccess: owner.assertDatabaseAccess,
   });
   try {
-    return await scope.run(run);
+    return await scope.run(() => run(vi.mocked(owner.assertCurrent)));
   } finally {
     await scope.close();
     owner.release();
@@ -147,17 +147,26 @@ it("requires a known bigint inode before omitting an image", async () => {
   });
 });
 
-it("invalidates admitted coverage on physical replacement or owner release", async () => {
+it.each(["replacement", "companion"])("revokes %s coverage", async (kind) => {
   expect(createDoctorRehearsalDatabaseCoverage(f.env)).toBeUndefined();
   let coverage: ReturnType<typeof createDoctorRehearsalDatabaseCoverage>;
-  await owned(() => {
+  await owned((admission) => {
+    admission.mockClear();
     coverage = createDoctorRehearsalDatabaseCoverage(f.env)!;
     expect(coverage.admit([f.agent])).toEqual([f.agent]);
-    fs.renameSync(f.agent, `${f.agent}.held`);
-    seed(f.agent);
+    coverage.assertCurrent();
+    expect(admission).toHaveBeenCalledTimes(4);
+    if (kind === "replacement") {
+      fs.renameSync(f.agent, `${f.agent}.held`);
+      seed(f.agent);
+    } else {
+      fs.writeFileSync(`${f.agent}-journal`, "new journal");
+    }
     expect(coverage.assertCurrent).toThrow(/identity changed/);
-    fs.unlinkSync(f.agent);
-    fs.renameSync(`${f.agent}.held`, f.agent);
+    fs.rmSync(kind === "replacement" ? f.agent : `${f.agent}-journal`);
+    if (kind === "replacement") {
+      fs.renameSync(`${f.agent}.held`, f.agent);
+    }
     coverage.assertCurrent();
   });
   expect(coverage!.assertCurrent).toThrow(/closed|current/);
@@ -172,15 +181,6 @@ it.skipIf(process.platform === "win32")(
     });
   },
 );
-
-it("invalidates coverage when an absent companion appears", async () => {
-  await owned(() => {
-    const coverage = createDoctorRehearsalDatabaseCoverage(f.env)!;
-    expect(coverage.admit([f.agent])).toEqual([f.agent]);
-    fs.writeFileSync(`${f.agent}-journal`, "new journal");
-    expect(coverage.assertCurrent).toThrow(/identity changed/);
-  });
-});
 
 it.each([false, true])(
   "requires canonical discovery before excluding a migration alias: %s",

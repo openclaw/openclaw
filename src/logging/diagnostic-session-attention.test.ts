@@ -27,7 +27,6 @@ describe("classifySessionAttention", () => {
           : {
               eventType: "session.long_running",
               reason: "provider_retry_wait",
-              recoveryEligible: false,
             },
       );
     },
@@ -41,7 +40,6 @@ describe("classifySessionAttention", () => {
         eventType: "session.stuck",
         reason: "queued_work_without_active_run",
         classification: "stale_session_state",
-        recoveryEligible: true,
       },
     },
     {
@@ -56,7 +54,6 @@ describe("classifySessionAttention", () => {
         reason: "queued_behind_active_work",
         classification: "long_running",
         activeWorkKind: "embedded_run",
-        recoveryEligible: false,
       },
     },
     {
@@ -73,7 +70,6 @@ describe("classifySessionAttention", () => {
         reason: "active_work_without_progress",
         classification: "stalled_agent_run",
         activeWorkKind: "model_call",
-        recoveryEligible: false,
       },
     },
   ])("$name", ({ activity, expected, queueDepth, state }) => {

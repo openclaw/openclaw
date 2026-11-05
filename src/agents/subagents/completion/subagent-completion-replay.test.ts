@@ -4,6 +4,7 @@ import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import * as config from "../../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { throwCollectedErrors } from "../../../infra/error-graph-internal.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
@@ -64,12 +65,7 @@ afterEach(async () => {
       env.restore();
     });
   }
-  if (failures.length === 1) {
-    throw failures[0];
-  }
-  if (failures.length > 1) {
-    throw new AggregateError(failures, "Subagent completion replay cleanup failed");
-  }
+  throwCollectedErrors(failures, "Subagent completion replay cleanup failed");
 });
 
 async function reopenOwners() {
@@ -133,21 +129,22 @@ async function runningOwner(signal: AbortSignal, holdTail = false) {
   return { input, driver, reported, complete, close };
 }
 
-it("persists a blocked completion across the announce tail and reopen", async ({ signal }) => {
+it("does not replay a blocked announcement", async ({ signal }) => {
   const { input, driver, reported, complete, close } = await runningOwner(signal, true);
+  const expectedDelivery = {
+    status: "suspended",
+    suspendedReason: "permanent_failure",
+    lastDropReason: "message_tool_delivery_missing",
+    enqueuedAt: input.subagent.createdAt,
+    generation: 1,
+    payload: { childRunId: input.subagent.runId, task: input.subagent.task },
+  };
   try {
     await complete(true);
     await withinTest(reported.promise, signal);
     const stored = loadSubagentRegistryFromSqlite().get(input.subagent.runId)!;
     expect(stored.execution).toMatchObject({ status: "terminal", outcome: { status: "ok" } });
-    expect(stored.delivery).toMatchObject({
-      status: "suspended",
-      suspendedReason: "permanent_failure",
-      lastDropReason: "message_tool_delivery_missing",
-      enqueuedAt: input.subagent.createdAt,
-      generation: 1,
-      payload: { childRunId: input.subagent.runId, task: input.subagent.task },
-    });
+    expect(stored.delivery).toMatchObject(expectedDelivery);
     expect(stored.requesterSettleWake).toBeUndefined();
     expect(stored.suppressCompletionDelivery).not.toBe(true);
     expect(driver.wake).not.toHaveBeenCalled();
@@ -203,10 +200,10 @@ it("rechecks blocked completion after wake admission", async ({ signal }) => {
   driver.controller.runRequesterSettleWake = (entry, run, isCurrent) =>
     runWake(
       entry,
-      async () => {
+      async (releasePreparation) => {
         admitted.resolve(undefined);
         await release.promise;
-        return run();
+        return run(releasePreparation);
       },
       isCurrent,
     );

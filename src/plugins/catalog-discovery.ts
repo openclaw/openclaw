@@ -79,7 +79,7 @@ function encodeDiscoveryId(prefix: string, identity: string): string {
   return `${prefix}${Buffer.from(normalized, "utf8").toString("base64url")}`;
 }
 
-export function encodePluginDiscoveryId(packageName: string): string {
+function encodePluginDiscoveryId(packageName: string): string {
   const normalized = packageName.trim();
   if (!normalized) {
     throw new Error("Cannot encode an empty ClawHub package identity.");
@@ -87,8 +87,15 @@ export function encodePluginDiscoveryId(packageName: string): string {
   return encodeDiscoveryId(DISCOVERY_ID_PREFIX, normalized);
 }
 
-export function encodeLocalPluginDiscoveryId(identity: string): string {
+function encodeLocalPluginDiscoveryId(identity: string): string {
   return encodeDiscoveryId(LOCAL_DISCOVERY_ID_PREFIX, identity);
+}
+
+/** Discovery identity that joins an installed inventory row to its catalog entry. */
+export function pluginCatalogId(plugin: Pick<PluginCatalogEntry, "id" | "clawhubPackage">): string {
+  return plugin.clawhubPackage
+    ? encodePluginDiscoveryId(plugin.clawhubPackage)
+    : encodeLocalPluginDiscoveryId(plugin.id);
 }
 
 export function resolvePluginDiscoveryIdentity(
@@ -165,7 +172,8 @@ export function joinClawHubPluginCatalog(params: {
   const publishedPackages = new Set(
     params.remote.map((plugin) => normalizedAlias(plugin.packageName)),
   );
-  const query = normalizedAlias(params.query);
+  // Normalize search comparisons only; catalog identities and display text retain their bytes.
+  const query = normalizedAlias(params.query)?.normalize("NFC");
   const localOnly = params.local.plugins
     .filter(
       (plugin) =>
@@ -190,7 +198,7 @@ export function joinClawHubPluginCatalog(params: {
         return true;
       }
       return [plugin.id, plugin.packageName, plugin.name, plugin.description, ...categories]
-        .flatMap((value) => (value ? [value.toLowerCase()] : []))
+        .flatMap((value) => (value ? [value.toLowerCase().normalize("NFC")] : []))
         .some((value) => value.includes(query));
     })
     .toSorted((left, right) => left.name.localeCompare(right.name))
@@ -306,6 +314,11 @@ export function joinLocalPluginDetail(params: {
           : {}),
       ...(params.plugin.packageName ? { packageName: params.plugin.packageName } : {}),
       topics: [],
+      ...(params.plugin.recommendedPrompts !== undefined
+        ? { recommendedPrompts: params.plugin.recommendedPrompts }
+        : inspection?.overview?.recommendedPrompts !== undefined
+          ? { recommendedPrompts: inspection.overview.recommendedPrompts }
+          : {}),
       ...(inspection?.overview?.readme ? { readme: inspection.overview.readme } : {}),
       ...(inspection?.overview?.repositoryUrl
         ? { repositoryUrl: inspection.overview.repositoryUrl }
@@ -359,6 +372,9 @@ export function joinClawHubPluginDetail(params: {
     ...(params.remote.channels ? { channels: params.remote.channels } : {}),
     ...(params.remote.uiCapabilities !== undefined
       ? { uiCapabilities: params.remote.uiCapabilities }
+      : {}),
+    ...(params.remote.recommendedPrompts !== undefined
+      ? { recommendedPrompts: params.remote.recommendedPrompts }
       : {}),
     configuration: params.remote.configFields,
     mcpServers: params.remote.mcpServers,
@@ -419,6 +435,9 @@ export function projectClawHubPluginInspection(params: {
     declaredSurfaceStatus: remote.metadata.manifest === "available" ? "partial" : "unavailable",
     components: emptyInstalledPluginComponents(),
     overview: {
+      ...(remote.recommendedPrompts !== undefined
+        ? { recommendedPrompts: remote.recommendedPrompts }
+        : {}),
       ...(remote.metadata.manifest === "available"
         ? {
             capabilities: projectPluginOverviewCapabilities(

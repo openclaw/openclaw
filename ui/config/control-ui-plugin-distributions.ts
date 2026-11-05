@@ -47,7 +47,14 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
       });
     },
     async buildStart() {
-      await prepareControlUiSettings(repoRoot);
+      // The build wrapper prepares before hashing cache inputs; other entry points own preparation.
+      if (
+        serving ||
+        this.meta.watchMode ||
+        process.env.OPENCLAW_CONTROL_UI_PREPARED_SETTINGS_ROOT !== repoRoot
+      ) {
+        await prepareControlUiSettings(repoRoot);
+      }
       const directory = path.join(repoRoot, "dist/extensions");
       const required = process.env.OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS === "1";
       const promised = required
@@ -130,7 +137,15 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
         if (build.directory !== `dist/control-ui/${generation}`) {
           throw new Error(`Incomplete or invalid packaged native UI generation for ${id}`);
         }
-        const revision = pluginControlUiRevision(controlUi, uiCapabilities, build.assets);
+        if (controlUi.panelIcon) {
+          consume(path.join(rootDir, controlUi.panelIcon));
+        }
+        const revision = pluginControlUiRevision(
+          controlUi,
+          uiCapabilities,
+          build.assets,
+          build.panelIcon?.dataUrl,
+        );
         const urls = new Map<string, string>();
         for (const [name, asset] of build.assets) {
           consume(path.join(rootDir, build.directory, name));
@@ -166,8 +181,11 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
       }
       source = `export const controlUiPluginDistributions = [${modules.join(",")}];`;
     },
-    transform(_code, id) {
-      return id.split("?")[0] === inventoryModule ? { code: source, map: null } : null;
+    transform: {
+      filter: { id: /\/ui\/src\/plugins\/control-ui-distribution\.ts(?:\?.*)?$/ },
+      handler(_code, id) {
+        return id.split("?")[0] === inventoryModule ? { code: source, map: null } : null;
+      },
     },
   };
 }

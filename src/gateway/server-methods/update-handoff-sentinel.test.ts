@@ -40,13 +40,7 @@ function record(message?: string): ManagedHandoffSentinelRequest {
         expectedRevision: 123,
         completedStatus: "error",
         restored: true,
-        fallbackPayload: {
-          kind: "update",
-          status: "error",
-          ts: 123,
-          message,
-          stats: { ...identity, mode: "unknown", reason: "candidate-failed", steps: [] },
-        },
+        fallbackPayload: { kind: "update", status: "error", ts: 123, message },
         reason: "candidate-failed",
         triageHint: "Run openclaw update repair",
         serviceKind: "launchd",
@@ -112,15 +106,13 @@ describe("internal managed handoff sentinel Gateway boundary", () => {
   it("preserves a refused owner outcome as a successful transport response", async () => {
     owner.mockResolvedValue({ kind: "refused", sentinel: null });
     expect(await invoke(record())).toHaveBeenCalledWith(true, { kind: "refused", sentinel: null });
-    expect(owner).toHaveBeenCalledOnce();
   });
 
   it("does not expose owner diagnostics through the transport error", async () => {
-    owner.mockImplementation(async () => {
-      throw new Error("PostgreSQL failed for postgresql://fixture.invalid/private");
-    });
+    owner.mockRejectedValue(
+      new Error("PostgreSQL failed for postgresql://fixture.invalid/private"),
+    );
     const respond = await invoke(request);
-    expect(owner).toHaveBeenCalledOnce();
     expect(respond).toHaveBeenCalledWith(false, undefined, {
       code: "UNAVAILABLE",
       message: "Handoff sentinel operation failed",

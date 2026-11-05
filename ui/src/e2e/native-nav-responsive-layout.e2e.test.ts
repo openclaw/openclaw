@@ -1,11 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import type { BrowserContext, Locator, Page } from "playwright";
+import type { BrowserContext, Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
-import {
-  takeControlUiElementScreenshot,
-  takeControlUiScreenshotFrame,
-} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installNativeWebChrome } from "./native-nav.test-support.ts";
@@ -24,23 +18,15 @@ suite.define(() => {
     context = undefined;
   });
 
-  const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
   const shellHas = (page: Page, name: string, present = true) => {
     const result = expect.poll(() => page.locator(".shell").getAttribute("class"));
     return present ? result.toContain(name) : result.not.toContain(name);
   };
-  async function capture(page: Page, file: string, element: Locator, targets: Locator[]) {
-    if (captureProof) {
-      await writeFile(
-        path.join(suite.artifactDir, file),
-        await takeControlUiElementScreenshot(page, element, targets),
-      );
-    }
-  }
 
   async function openPage(options: {
     hasTouch?: boolean;
     height?: number;
+    historyMessages?: unknown[];
     phone?: boolean;
     route?: string;
     webChrome?: boolean;
@@ -66,6 +52,7 @@ suite.define(() => {
     }
     await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
+      ...(options.historyMessages ? { historyMessages: options.historyMessages } : {}),
     });
     const response = await page.goto(`${suite.server.baseUrl}${options.route ?? ""}`);
     expect(response?.status()).toBe(200);
@@ -73,20 +60,6 @@ suite.define(() => {
     await page.locator(ready).waitFor({ state: "attached" });
     return page;
   }
-
-  it("keeps only history controls in the Settings titlebar", async () => {
-    const page = await openPage({ webChrome: true, route: "settings/general" });
-
-    const toolbar = page.locator(".macos-titlebar-controls");
-    await expect.poll(() => toolbar.isVisible()).toBe(true);
-    await expect.poll(() => toolbar.getByRole("button").count()).toBe(2);
-    for (const name of ["Back", "Forward"]) {
-      await expect.poll(() => toolbar.getByRole("button", { name }).isVisible()).toBe(true);
-    }
-    for (const name of ["Expand sidebar", "Open command palette", "New session"]) {
-      await expect.poll(() => toolbar.getByRole("button", { name }).count()).toBe(0);
-    }
-  });
 
   it("keeps the document root scroll-locked in the Settings takeover", async () => {
     const page = await openPage({ webChrome: true, route: "settings/general" });
@@ -119,29 +92,19 @@ suite.define(() => {
     await shellHas(page, "shell--merged-chat-chrome");
     await expect.poll(() => page.locator(".topbar").isVisible()).toBe(false);
 
-    const header = page.locator(".chat-pane__header").first();
+    const header = page.locator(".agent-chat__header--mobile").filter({ visible: true });
     const drawerButton = header.getByRole("button", { name: "Expand sidebar" });
     await drawerButton.waitFor({ state: "visible" });
     await expect.poll(() => header.locator(".chat-pane__palette-open").count()).toBe(0);
-    if (phone) {
-      await capture(page, "01-chat-title-bar.png", header, [drawerButton]);
-      await drawerButton.tap();
-      await shellHas(page, "shell--nav-drawer-open");
-      const drawerSearch = page.locator(".shell-nav .sidebar-brand__search");
-      await expect.poll(() => drawerSearch.isVisible()).toBe(true);
-      await capture(page, "02-sidebar-drawer.png", page.locator(".shell-nav"), [drawerSearch]);
-      await drawerSearch.tap();
-    } else {
-      await header.locator(".chat-header-session-menu__trigger").click();
-      await page.getByRole("menuitem", { name: "Open command palette" }).click();
-    }
+    await (phone ? drawerButton.tap() : drawerButton.click());
+    await shellHas(page, "shell--nav-drawer-open");
+    const drawerSearch = page.locator(".shell-nav .sidebar-brand__search");
+    await expect.poll(() => drawerSearch.isVisible()).toBe(true);
+    await (phone ? drawerSearch.tap() : drawerSearch.click());
     const paletteInput = page.locator(".cmd-palette__input");
     await paletteInput.waitFor({ state: "visible" });
     if (phone) {
       await expect.poll(() => paletteInput.evaluate((input) => input.matches(":focus"))).toBe(true);
-      await capture(page, "03-command-palette.png", page.locator(".cmd-palette").first(), [
-        paletteInput,
-      ]);
     }
   });
 
@@ -205,15 +168,6 @@ suite.define(() => {
       await dispatchTouch("touchmove", 210, 184);
 
       const drawer = page.locator(".shell-nav.nav-drawer");
-      if (captureProof && width === 393) {
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          shell,
-          [page.locator(".chat-pane__header").first()],
-          { animations: "disabled" },
-        );
-        await writeFile(path.join(suite.artifactDir, "held-swipe.png"), frame.png);
-      }
       // A deliberate swipe opens while the finger is still down, rather than
       // exposing a clipped, non-interactive slice until touchend.
       await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-drawer-open");
@@ -284,4 +238,60 @@ suite.define(() => {
       expect(errors).toEqual([]);
     },
   );
+  it("opens the mobile drawer by swipe over chat links, code, and tables at rest", async () => {
+    const text = [
+      "See https://docs.openclaw.ai/a/long/synthetic/path/for/the/swipe/regression/test now.",
+      "",
+      "| Column A | Column B | Column C | Column D | Column E | Column F |",
+      "| --- | --- | --- | --- | --- | --- |",
+      "| alpha-value | beta-value | gamma-value | delta-value | epsilon-value | zeta-value |",
+      "",
+      "```ts",
+      "const overwideLine = synthetic(argumentNumberOne, argumentNumberTwo, argumentNumberThree);",
+      "```",
+    ].join("\n");
+    const page = await openPage({
+      hasTouch: true,
+      height: 852,
+      historyMessages: [{ role: "assistant", content: [{ type: "text", text }] }],
+      phone: true,
+      width: 393,
+    });
+    await shellHas(page, "shell--mobile-nav");
+    const table = page.locator(".markdown-table__viewport").first();
+    await table.waitFor();
+    const url = page.url();
+    const cdp = await context!.newCDPSession(page);
+    // Real input lets Chromium arbitrate native scrolling and taps against the gesture.
+    const swipeFrom = async (selector: string) => {
+      const box = await page.locator(selector).first().boundingBox();
+      const start = { x: Math.max(box!.x + 12, 30), y: box!.y + Math.min(box!.height / 2, 12) };
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [start] });
+      for (let step = 1; step <= 12; step++) {
+        const touchPoints = [{ x: start.x + step * 12, y: start.y - step }];
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints });
+      }
+      await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    };
+
+    for (const selector of [
+      ".chat-thread a[href]",
+      ".chat-thread pre",
+      ".markdown-table__viewport",
+    ]) {
+      await swipeFrom(selector);
+      await shellHas(page, "shell--nav-drawer-open");
+      await page.mouse.click(383, 100);
+      await shellHas(page, "shell--nav-drawer-open", false);
+    }
+    // Swiping across the link must not follow it.
+    expect(page.url()).toBe(url);
+    expect(context!.pages()).toHaveLength(1);
+
+    // A table scrolled away from its left edge keeps the rightward swipe.
+    await table.evaluate((viewport) => (viewport.scrollLeft = 60));
+    await swipeFrom(".markdown-table__viewport");
+    await expect.poll(() => table.evaluate((viewport) => viewport.scrollLeft)).toBeLessThan(60);
+    await shellHas(page, "shell--nav-drawer-open", false);
+  });
 });

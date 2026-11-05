@@ -1,7 +1,13 @@
 import type { JSX } from "@solidjs/web";
-import { onCleanup } from "solid-js";
+import { Errored, Loading, onSettled } from "solid-js";
+import {
+  isStaleChunkImportError,
+  retryStaleChunkReloadWhenReachable,
+} from "../../app/stale-chunk-reload.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
+import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 
@@ -17,13 +23,15 @@ export function SessionPicker(props: {
   > & { [name: `data-${string}`]: string | undefined };
   params: NewSessionPlaceControlsOptions;
   children: JSX.Element;
+  lazy?: boolean;
+  onBeforeShow?: (event: Event) => void;
   onAfterHide?: () => void;
   ref?: (handle: PopoverHandle) => void;
 }) {
   let trigger!: HTMLButtonElement;
   let popover!: PopoverHandle;
   let cleanup: (() => void) | undefined;
-  onCleanup(() => cleanup?.());
+  onSettled(() => () => cleanup?.());
   return (
     <>
       <span
@@ -76,6 +84,8 @@ export function SessionPicker(props: {
         </button>
       </span>
       <Popover
+        lazy={props.lazy}
+        onBeforeShow={props.onBeforeShow}
         id={`new-session-${props.kind}-popover`}
         label={props.label}
         anchor={trigger}
@@ -118,8 +128,46 @@ export function SessionPicker(props: {
           props.ref?.(handle);
         }}
       >
-        {props.children}
+        <Errored
+          fallback={(error, retry) => (
+            <PickerLoadError
+              error={error()}
+              retry={retry}
+              isOpen={() => props.params.place.browser.popoverOpen(props.kind)}
+            />
+          )}
+        >
+          <Loading fallback={<div role="status">{t("common.loading")}</div>}>
+            {props.children}
+          </Loading>
+        </Errored>
       </Popover>
     </>
+  );
+}
+
+function PickerLoadError(props: { error: unknown; retry: () => void; isOpen: () => boolean }) {
+  let active = true;
+  onSettled(() => () => {
+    active = false;
+  });
+  const retry = async () => {
+    const stale = isStaleChunkImportError(props.error);
+    const reloading =
+      stale &&
+      (await retryStaleChunkReloadWhenReachable({
+        canReload: () => active && props.isOpen(),
+      }));
+    if (active && props.isOpen() && !reloading) {
+      props.retry();
+    }
+  };
+  return (
+    <LazyViewError
+      error={props.error}
+      stale={isStaleChunkImportError(props.error)}
+      onRetry={() => void retry()}
+      inline
+    />
   );
 }

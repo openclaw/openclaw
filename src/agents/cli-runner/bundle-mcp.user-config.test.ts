@@ -1,12 +1,12 @@
 /** Tests merging user OpenClaw MCP server config into Claude bundle-MCP overlays. */
 import fs from "node:fs/promises";
-import http from "node:http";
 import path from "node:path";
 import { text } from "node:stream/consumers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { writeClaudeBundleManifest } from "../../plugins/bundle-mcp.test-support.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { peekSessionMcpRuntime, retireSessionMcpRuntime } from "../agent-bundle-mcp-manager-api.js";
+import { startCompletionServer } from "../simple-completion.test-support.js";
 import {
   type CliMcpParams,
   loopbackConfig,
@@ -36,31 +36,16 @@ setupCliBundleMcpTestHarness();
 const catalogTools = (sessionId: string) =>
   peekSessionMcpRuntime({ sessionId })?.peekCatalog()?.tools;
 
-async function prepareClaudeConfig(
-  params: Omit<CliMcpParams, "enabled" | "mode" | "backend" | "workspaceDir"> & {
-    backend?: CliMcpParams["backend"];
-    workspaceDir?: string;
-  },
-  close?: () => Promise<void>,
-) {
-  return prepareMcp(
-    async () => ({
-      mode: "claude-config-file",
-      workspaceDir:
-        params.workspaceDir ??
-        (await cliBundleMcpHarness.tempHarness.createTempDir("openclaw-cli-user-mcp-")),
-      ...params,
-    }),
-    async () => {
-      if (params.nativeMcpPolicy) {
-        await retireSessionMcpRuntime({
-          sessionId: params.nativeMcpPolicy.sessionId,
-          reason: "test-complete",
-        });
-      }
-      await close?.();
-    },
-  );
+async function prepareClaudeConfig(params: Partial<CliMcpParams>, close?: () => Promise<void>) {
+  return prepareMcp({ mode: "claude-config-file", ...params }, async () => {
+    if (params.nativeMcpPolicy) {
+      await retireSessionMcpRuntime({
+        sessionId: params.nativeMcpPolicy.sessionId,
+        reason: "test-complete",
+      });
+    }
+    await close?.();
+  });
 }
 
 async function readServers(prepared: Awaited<ReturnType<typeof prepareClaudeConfig>>) {
@@ -69,7 +54,7 @@ async function readServers(prepared: Awaited<ReturnType<typeof prepareClaudeConf
 
 async function startOAuthMcpProofServer() {
   const authorizationHeaders: Array<string | undefined> = [];
-  const httpServer = http.createServer((request, response) => {
+  const server = await startCompletionServer((request, response) => {
     void (async () => {
       const body = await text(request);
       authorizationHeaders.push(request.headers.authorization);
@@ -113,23 +98,10 @@ async function startOAuthMcpProofServer() {
       }
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    httpServer.once("error", reject);
-    httpServer.listen(0, "127.0.0.1", resolve);
-  });
-  const address = httpServer.address();
-  if (!address || typeof address === "string") {
-    throw new Error("OAuth MCP proof server did not acquire a loopback port");
-  }
   return {
     authorizationHeaders,
-    url: `http://127.0.0.1:${address.port}/mcp`,
-    close: async () => {
-      httpServer.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        httpServer.close((error) => (error ? reject(error) : resolve()));
-      });
-    },
+    url: `${server.origin}/mcp`,
+    close: () => server[Symbol.asyncDispose](),
   };
 }
 
@@ -272,9 +244,7 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
           },
         },
       }),
-      "utf-8",
     );
-
     await withEnvAsync({ HOME: cliBundleMcpHarness.bundleProbeHomeDir }, async () => {
       const prepared = await prepareClaudeConfig({
         config: userConfig(

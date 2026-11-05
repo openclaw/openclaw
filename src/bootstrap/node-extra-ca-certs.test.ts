@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveNodeStartupTlsEnvironment } from "./node-startup-env.js";
+import { allowOnly } from "./node-startup-env.test-support.js";
 
 const GENERIC_CA_BUNDLE_PATH = "/etc/ssl/ca-bundle.pem";
 afterEach(() => vi.restoreAllMocks());
@@ -17,14 +18,6 @@ const VERSION_MANAGER_EXEC_PATHS = [
   ["nvs", "/home/test/nvs/node/22.14.0/x64/bin/node"],
   ["raw path before normalization", "/home/test/.nvm/../system/bin/node"],
 ] as const;
-
-function allowOnly(path: string) {
-  return (candidate: Parameters<typeof fs.accessSync>[0]) => {
-    if (candidate !== path) {
-      throw new Error("ENOENT");
-    }
-  };
-}
 
 describe("Node startup Linux CA defaults", () => {
   it.each(VERSION_MANAGER_EXEC_PATHS)("detects %s via execPath", (_manager, execPath) => {

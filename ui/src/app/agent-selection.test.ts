@@ -26,13 +26,11 @@ function createGateway(assistantAgentId: string | null = "Main") {
   const snapshot = publisher({ assistantAgentId });
   const connection = { gatewayUrl: "ws://gateway-a.test" };
   return {
-    gateway: {
-      connection,
-      get snapshot() {
-        return snapshot.read();
-      },
-      subscribe: snapshot.subscribe,
+    connection,
+    get snapshot() {
+      return snapshot.read();
     },
+    subscribe: snapshot.subscribe,
     publish: snapshot.publish,
     switchGateway(url: string) {
       connection.gatewayUrl = url;
@@ -44,12 +42,10 @@ function createGateway(assistantAgentId: string | null = "Main") {
 function createRoster() {
   const state = publisher({ agentsList: null as AgentsListResult | null });
   return {
-    roster: {
-      get state() {
-        return state.read();
-      },
-      subscribe: state.subscribe,
+    get state() {
+      return state.read();
     },
+    subscribe: state.subscribe,
     publish: (agentsList: AgentsListResult | null) => state.publish({ agentsList }),
   };
 }
@@ -114,8 +110,8 @@ function defaultSelection(
     roster.publish(options.agents);
   }
   const selection = createAgentSelectionCapability(
-    gateway.gateway,
-    roster.roster,
+    gateway,
+    roster,
     options.persistence,
     undefined,
     options.configured ? { requireConfiguredAgent: true } : {},
@@ -132,7 +128,7 @@ function selectionFixture(assistantAgentId: string | null = "Main") {
     roster,
     preferences,
     select: (persistence = preferences.persistence) =>
-      createAgentSelectionCapability(gateway.gateway, roster.roster, persistence, preferences),
+      createAgentSelectionCapability(gateway, roster, persistence, preferences),
   };
 }
 
@@ -145,8 +141,8 @@ describe("agent selection", () => {
   it("restores the pre-team scope after chat navigation and a preference reload", () => {
     const scopeId = "research";
     let preferences = createPreferences();
-    const gateway = createGateway().gateway;
-    const roster = createRoster().roster;
+    const gateway = createGateway();
+    const roster = createRoster();
     const select = () =>
       createAgentSelectionCapability(gateway, roster, preferences.persistence, preferences);
     let selection = select();
@@ -170,7 +166,7 @@ describe("agent selection", () => {
 
   it("restores each gateway's own pre-team scope after switching away and back", () => {
     const { gateway: harness, preferences, select } = selectionFixture();
-    harness.gateway.subscribe(() => preferences.refresh(harness.gateway.connection.gatewayUrl));
+    harness.subscribe(() => preferences.refresh(harness.connection.gatewayUrl));
     const selection = select();
     selection.setScope("research");
     preferences.setMode("roster");
@@ -192,8 +188,8 @@ describe("agent selection", () => {
     const preferences = createPreferences("roster");
     const roster = createRoster();
     const selection = createAgentSelectionCapability(
-      createGateway("stale").gateway,
-      roster.roster,
+      createGateway("stale"),
+      roster,
       { load: () => "research", save: vi.fn() },
       preferences,
     );
@@ -227,13 +223,12 @@ describe("agent selection", () => {
   });
 
   it("clears selection and remembered roster scope when the loaded roster becomes empty", () => {
-    const mode = "roster";
     const { gateway, roster, preferences, select } = selectionFixture("main");
     const selection = select();
     const result = { ...agentRoster("main"), agents: [{ id: "shared" }] };
     roster.publish(result);
     selection.set("shared");
-    preferences.setMode(mode);
+    preferences.setMode("roster");
 
     roster.publish(null);
     expect(selection.state.selectedId).toBe("shared");
@@ -276,12 +271,7 @@ describe("agent selection", () => {
     "publishes %s intent before notifying scope observers",
     (action) => {
       const { gateway, roster, preferences } = selectionFixture(null);
-      const selection = createAgentSelectionCapability(
-        gateway.gateway,
-        roster.roster,
-        undefined,
-        preferences,
-      );
+      const selection = createAgentSelectionCapability(gateway, roster, undefined, preferences);
       const observed = vi.fn(() => selection.intentRevision);
       selection.subscribe(observed);
       const revision = selection.intentRevision;
@@ -357,16 +347,8 @@ describe("configured Settings agent selection", () => {
     defaultSelection(assistantAgentId, { configured: true });
 
   it("keeps a cold link private until the roster confirms it, independently of chat", () => {
-    const gateway = createGateway(null);
-    const roster = createRoster();
-    const chat = createAgentSelectionCapability(gateway.gateway, roster.roster);
-    const settings = createAgentSelectionCapability(
-      gateway.gateway,
-      roster.roster,
-      undefined,
-      undefined,
-      { requireConfiguredAgent: true },
-    );
+    const { gateway, roster, selection: settings } = settingsFixture(null);
+    const chat = createAgentSelectionCapability(gateway, roster);
     settings.set("Research");
     expect(settings.state).toEqual({ selectedId: null, scopeId: null });
     gateway.publish({ assistantAgentId: "main" });
@@ -413,14 +395,10 @@ describe("configured Settings agent selection", () => {
   it("does not carry pending intent to another Gateway and stops observing after disposal", () => {
     const gateway = createGateway();
     const roster = createRoster();
-    gateway.gateway.subscribe(() => roster.publish(null));
-    const settings = createAgentSelectionCapability(
-      gateway.gateway,
-      roster.roster,
-      undefined,
-      undefined,
-      { requireConfiguredAgent: true },
-    );
+    gateway.subscribe(() => roster.publish(null));
+    const settings = createAgentSelectionCapability(gateway, roster, undefined, undefined, {
+      requireConfiguredAgent: true,
+    });
     settings.set("research");
     const revision = settings.intentRevision;
     gateway.switchGateway("ws://gateway-b.test");

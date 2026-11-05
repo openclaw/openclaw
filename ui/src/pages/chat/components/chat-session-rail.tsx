@@ -1,6 +1,6 @@
 import "../../../styles/chat/session-rail.css";
 import "../../../styles/chat/working-indicator.css";
-import { createMemo, For, onSettled, Show } from "solid-js";
+import { createMemo, For, lazy, onSettled, Show } from "solid-js";
 import type { SessionObserverDigest } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
@@ -10,22 +10,82 @@ import { markdownBlocksRef } from "../../../components/markdown-element-refs-sol
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
-import { formatTimeMs } from "../../../lib/format.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
+import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
+import type { SidebarPanelDefinitionParams } from "../chat-pane-embedded-types.ts";
+import { usePanePresentation } from "../chat-pane-presentation.ts";
+import { createSideChatModelControlProps } from "../chat-session-companion-model-controls.ts";
 import type {
   ChatSessionCompanionThread,
   ChatSessionCompanionTurn,
 } from "../chat-session-companion.ts";
+import { resolveChatAttachmentLimits } from "./chat-attachment-admission.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { createChatAttachmentDropHandlers } from "./chat-attachments.ts";
 import { ChatCommentController } from "./chat-comment-controller.ts";
-import { MessageMarkdown } from "./chat-message-text-view.tsx";
-import type { ChatModelControlsProps } from "./chat-model-controls.tsx";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { MessageGroup } from "./chat-message-group-view.tsx";
+import type { ChatModelControlsProps } from "./chat-model-controls.types.ts";
 import { SessionRailComposer, sessionRailQuestion } from "./chat-session-rail-composer.tsx";
-import { ChatWorkingIndicator } from "./chat-working-indicator.tsx";
+import type { SidebarPanelHostRegistration } from "./chat-sidebar-region-types.ts";
+
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
+
+const StreamGroup = lazy(() => import("./chat-message-stream-view.tsx"), {
+  export: "StreamGroup",
+});
+
+/** Adapt pane facts only after Side Chat's first presentation loads this module. */
+export function ChatSessionRailPanel(
+  props: SidebarPanelDefinitionParams & { registerPanelHost?: SidebarPanelHostRegistration },
+) {
+  const presented = usePanePresentation(() => props.companionPresented);
+  const modelControls = createParkedProjection(
+    () =>
+      props.onCompanionModelSelect
+        ? createSideChatModelControlProps({
+            state: props.state,
+            companion: props.companion,
+            onSelect: (patch) => props.onCompanionModelSelect?.(patch),
+          })
+        : undefined,
+    presented,
+  );
+  return (
+    <ChatSessionRail
+      presentation={props.presentation}
+      data-sidebar-panel-host
+      ref={[elementRef((element: ChatSessionRailElement) => props.registerPanelHost?.(element))]}
+      presented={presented()}
+      focusRequest={props.companionFocusRequest}
+      sessionKey={props.state.sessionKey}
+      agentId={props.agentId}
+      assistantName={props.state.assistantName}
+      digest={props.digest}
+      running={Boolean(props.activeRunId)}
+      activeRunId={props.activeRunId}
+      pullRequests={props.pullRequests}
+      companion={props.companion}
+      modelControls={modelControls()}
+      client={props.state.connected ? props.state.client : null}
+      connected={props.state.connected}
+      sendShortcut={props.state.settings.chatSendShortcut ?? "enter"}
+      inputDeviceId={props.state.settings.realtimeTalkInputDeviceId}
+      onSubmit={props.onCompanionSubmit}
+      onDraftChange={props.onCompanionDraftChange}
+      onAttachmentsChange={props.onCompanionAttachmentsChange}
+      onOpenImage={props.state.handleOpenImage}
+      uploadConfig={props.state.uploadConfig}
+      attachmentLimits={resolveChatAttachmentLimits(props.state.hello?.policy)}
+    />
+  );
+}
 
 function checksSummary(pullRequest: ControlUiSessionPullRequest): string | null {
   const checks = pullRequest.checks;
@@ -53,8 +113,35 @@ const COMPANION_HINT_KEYS = {
   Parameters<typeof t>[0]
 >;
 
+// Questions and answers render as main-transcript groups, so bubbles, footer
+// identity, relative timestamps and message actions share one owner.
+function companionGroup(
+  role: "user" | "assistant",
+  content: string,
+  timestamp: number,
+): MessageGroupData {
+  const key = `side-chat:${role}:${timestamp}`;
+  return {
+    kind: "group",
+    key,
+    role,
+    messages: [{ key, message: { role, content, timestamp }, hasVisibleContent: true }],
+    visibleContent: "text",
+    timestamp,
+    isStreaming: false,
+  };
+}
+
+// Side chat history records one time per exchange; local turns keep their send time.
+function companionQuestionTime(turn: ChatSessionCompanionTurn): number {
+  return turn.status === "answered" ? turn.ts : turn.startedAt;
+}
+
 type ChatSessionRailProps = {
+  presentation?: "desktop" | "mobile";
   sessionKey: string;
+  agentId?: string | null;
+  assistantName?: string;
   digest: SessionObserverDigest | null;
   running: boolean;
   activeRunId: string | null;
@@ -70,6 +157,7 @@ type ChatSessionRailProps = {
   onAttachmentsChange?: ChatAttachmentControlsProps["onAttachmentsChange"];
   attachmentLimits?: ChatAttachmentControlsProps["attachmentLimits"];
   uploadConfig?: ChatAttachmentControlsProps["uploadConfig"];
+  onOpenImage?: ChatAttachmentControlsProps["onOpenImage"];
   presented: boolean;
   focusRequest?: () => boolean;
 };
@@ -108,6 +196,7 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
       imagesOnly: true,
       disabled: !props.connected,
       onAttachmentsChange: props.onAttachmentsChange,
+      onOpenImage: props.onOpenImage,
       onPendingReadsChange: (delta) => {
         if (readSignal) {
           reads?.updatePending(readSignal, delta);
@@ -152,7 +241,8 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
       if (nextScrollKey !== scrollKey) {
         scrollKey = nextScrollKey;
         scheduleLayout(thread, () => {
-          const bottom = thread.scrollHeight;
+          const bottom =
+            host.companion.loading && !host.companion.turns.length ? 0 : thread.scrollHeight;
           return () => {
             thread.scrollTop = bottom;
           };
@@ -167,6 +257,16 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
       cancelLayout(thread);
     };
   });
+  const groupOptions = createMemo(() => ({
+    showReasoning: false,
+    showToolCalls: false,
+    // Side chat is one person and one agent: identity sits in the footer, as in
+    // direct main chats without an avatar gutter, and own questions stay unnamed.
+    avatarPlacement: "footer" as const,
+    showOwnSenderName: false,
+    assistantName: props.assistantName,
+    agentId: props.agentId ?? undefined,
+  }));
   const showPullRequests = () =>
     props.digest &&
     (!props.running || (props.activeRunId && props.digest.runId === props.activeRunId));
@@ -204,6 +304,9 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
       )}
       <div
         class="chat-session-rail__thread"
+        style={{
+          padding: props.companion.loading && !props.companion.turns.length ? "0" : undefined,
+        }}
         aria-live="polite"
         onClick={handleMarkdownCodeBlockClick}
         ref={(element) => {
@@ -216,6 +319,7 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
         )}
         {!props.companion.loading && !props.companion.turns.length && (
           <PanelEmptyState
+            presentation={props.presentation}
             icon={<Icon name="bot" />}
             heading={t("chat.sidePanel.companion")}
             description={t("chat.rail.empty")}
@@ -245,33 +349,35 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
                   },
                 ]}
               >
-                <div class="chat-group user chat-session-rail__message">
-                  <div class="chat-bubble chat-session-rail__question">
-                    <MessageMarkdown
-                      markdown={turn().question}
-                      messageKey={turn().question}
-                      options={{ role: "user", isStreaming: false }}
-                      markdownOptions={{ codeBlockChrome: "none", codeBlockInteraction: "static" }}
-                    />
-                  </div>
-                </div>
+                <MessageGroup
+                  group={companionGroup("user", turn().question, companionQuestionTime(turn()))}
+                  options={groupOptions()}
+                />
                 <Show
                   when={answered()}
                   fallback={
                     <>
                       <Show when={working()}>
                         {(waiting) => (
-                          // Same working indicator the main transcript shows while a run has no output yet.
-                          <div class="chat-group assistant chat-session-rail__message">
-                            <ChatWorkingIndicator
-                              part={{
-                                kind: "reading-indicator",
-                                key: `side-chat:${waiting().startedAt}`,
-                                startedAt: waiting().startedAt,
-                              }}
+                          // The main transcript's working group, shown while a run has no output yet.
+                          <ChatLazyBoundary
+                            fallback={
+                              <div class="chat-group" role="status">
+                                {t("common.loading")}
+                              </div>
+                            }
+                          >
+                            <StreamGroup
+                              parts={[
+                                {
+                                  kind: "reading-indicator",
+                                  key: `side-chat:${waiting().startedAt}`,
+                                  startedAt: waiting().startedAt,
+                                },
+                              ]}
                               options={{}}
                             />
-                          </div>
+                          </ChatLazyBoundary>
                         )}
                       </Show>
                       <Show when={failed()}>
@@ -297,30 +403,10 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
                   }
                 >
                   {(answer) => (
-                    <>
-                      <div class="chat-group assistant chat-session-rail__message">
-                        <div class="chat-bubble chat-session-rail__answer">
-                          <MessageMarkdown
-                            markdown={answer().answer}
-                            messageKey={String(answer().ts)}
-                            options={{ role: "assistant", isStreaming: false }}
-                            markdownOptions={{ codeBlockInteraction: "interactive" }}
-                          />
-                        </div>
-                      </div>
-                      <time
-                        class="chat-session-rail__timestamp"
-                        datetime={new Date(answer().ts).toISOString()}
-                      >
-                        {t("chat.rail.asOf", {
-                          time: formatTimeMs(
-                            answer().ts,
-                            { hour: "numeric", minute: "2-digit" },
-                            "",
-                          ),
-                        })}
-                      </time>
-                    </>
+                    <MessageGroup
+                      group={companionGroup("assistant", answer().answer, answer().ts)}
+                      options={groupOptions()}
+                    />
                   )}
                 </Show>
               </article>
@@ -355,30 +441,38 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
   );
 }
 
-defineSolidBridge<ChatSessionRailProps>("openclaw-chat-session-rail", ChatSessionRailContent, {
-  propertyChanged: (host, key) => {
-    if (key === "companion" || key === "focusRequest") {
-      inputHandlers.get(host)?.();
-    }
+export const ChatSessionRail = defineSolidBridge<ChatSessionRailProps>(
+  "openclaw-chat-session-rail",
+  ChatSessionRailContent,
+  {
+    propertyChanged: (host, key) => {
+      if (key === "companion" || key === "focusRequest") {
+        inputHandlers.get(host)?.();
+      }
+    },
+    properties: {
+      presentation: { default: undefined, attribute: false },
+      sessionKey: { default: "", attribute: false },
+      agentId: { default: undefined, attribute: false },
+      assistantName: { default: undefined, attribute: false },
+      digest: { default: null, attribute: false },
+      running: { default: false, attribute: false },
+      activeRunId: { default: null, attribute: false },
+      pullRequests: { default: [], attribute: false },
+      companion: { default: { turns: [], loading: false, draft: "" }, attribute: false },
+      modelControls: { default: undefined, attribute: false },
+      client: { default: null, attribute: false },
+      connected: { default: false, attribute: false },
+      sendShortcut: { default: "enter", attribute: false },
+      inputDeviceId: { default: undefined, attribute: false },
+      onSubmit: { default: undefined, attribute: false },
+      onDraftChange: { default: undefined, attribute: false },
+      onAttachmentsChange: { default: undefined, attribute: false },
+      onOpenImage: { default: undefined, attribute: false },
+      attachmentLimits: { default: undefined, attribute: false },
+      uploadConfig: { default: undefined, attribute: false },
+      presented: { default: false, type: Boolean },
+      focusRequest: { default: undefined, attribute: false },
+    },
   },
-  properties: {
-    sessionKey: { default: "", attribute: false },
-    digest: { default: null, attribute: false },
-    running: { default: false, attribute: false },
-    activeRunId: { default: null, attribute: false },
-    pullRequests: { default: [], attribute: false },
-    companion: { default: { turns: [], loading: false, draft: "" }, attribute: false },
-    modelControls: { default: undefined, attribute: false },
-    client: { default: null, attribute: false },
-    connected: { default: false, attribute: false },
-    sendShortcut: { default: "enter", attribute: false },
-    inputDeviceId: { default: undefined, attribute: false },
-    onSubmit: { default: undefined, attribute: false },
-    onDraftChange: { default: undefined, attribute: false },
-    onAttachmentsChange: { default: undefined, attribute: false },
-    attachmentLimits: { default: undefined, attribute: false },
-    uploadConfig: { default: undefined, attribute: false },
-    presented: { default: false, type: Boolean },
-    focusRequest: { default: undefined, attribute: false },
-  },
-});
+);

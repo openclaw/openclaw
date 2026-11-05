@@ -63,6 +63,7 @@ function validateRetainedLayout() {
         "config.local.json",
         "owned-test-group.json",
         "owned-test-forum.json",
+        "owned-test-dm-topic.json",
         "db",
         "files",
       ]),
@@ -136,7 +137,7 @@ runTelegramCli(async (signal) => {
               TELEGRAM_USER_DRIVER_SUT_ID: credential.sutBotId,
               TELEGRAM_USER_DRIVER_SUT_USERNAME: credential.sutUsername,
             },
-            timeoutMs: 60_000,
+            timeoutMs: driverCommand === "cleanup-dm-topic" ? 180_000 : 60_000,
           },
         );
         scope.assertActive();
@@ -149,13 +150,14 @@ runTelegramCli(async (signal) => {
       };
       if (command === "status") return { ...(await runDriver("status")), leaseReleased: false };
       // Each driver cleanup is a no-op when its fixture was never recorded.
+      const dmTopic = await runDriver("cleanup-dm-topic");
       const forum = await runDriver("cleanup-forum");
       const group = await runDriver("cleanup-group");
       validateRetainedLayout();
       fs.rmSync(stateRoot, { recursive: true, force: true });
       await lease.release();
       removeReleasedReceipt();
-      return { ok: true, forum, group, leaseReleased: true };
+      return { ok: true, dmTopic, forum, group, leaseReleased: true };
     },
     {
       signal,

@@ -1,17 +1,13 @@
 import { createComponent, createSignal, flush, merge } from "solid-js";
 import { expect, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
-import { EMPTY_SESSION_MENU_DATA } from "../../../components/session-menu-actions.ts";
+import { EMPTY_SESSION_MENU_DATA } from "../../../components/session-menu-data.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import {
-  ChatPaneHeader,
-  PaneHeaderView,
-  type ChatPaneHeaderPresentation,
-} from "./chat-pane-header.tsx";
-import type { ChatSessionSharingProps } from "./chat-session-sharing.solid.tsx";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { ChatPaneHeader, PaneHeaderView } from "./chat-pane-header.tsx";
+import type { ChatPaneHeaderPresentation, ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 import "./chat-header-session-menu.ts";
-
-export type ChatPaneHeaderProps = Parameters<typeof ChatPaneHeader>[0];
+import type { ChatSessionSharingProps } from "./chat-session-sharing-shared.tsx";
 
 export function chatPaneHeaderSessionMenu(): NonNullable<ChatPaneHeaderProps["sessionMenuAction"]> {
   return {
@@ -86,7 +82,7 @@ async function settleNativeMenu() {
   flush();
 }
 
-export async function openNativeMenu(menu: Element) {
+export async function openNativeMenu(menu: Element, readyValue?: string) {
   await settleNativeMenu();
   const panel = menu.querySelector<HTMLElement>(".oc-menu")!;
   if (!panel.matches(":popover-open")) {
@@ -94,10 +90,16 @@ export async function openNativeMenu(menu: Element) {
     await settleNativeMenu();
   }
   expect(panel.matches(":popover-open")).toBe(true);
+  if (readyValue) {
+    await vi.dynamicImportSettled();
+    await waitForSolid(() =>
+      expect(menu.querySelector(`button[data-value="${readyValue}"]`)).not.toBeNull(),
+    );
+  }
 }
 
 export async function selectNativeMenu(menu: Element, value: string) {
-  await openNativeMenu(menu);
+  await openNativeMenu(menu, value);
   const item = menu.querySelector<HTMLButtonElement>(`button[data-value="${value}"]`);
   if (!item) {
     throw new Error(`Expected native menu action: ${value}`);

@@ -126,13 +126,23 @@ export class TelegramPollingSession {
           continue;
         }
 
-        if ((await this.#ensureWebhookCleanup(bot)) === "exit") {
-          return;
-        }
+        try {
+          if ((await this.#ensureWebhookCleanup(bot)) === "exit") {
+            return;
+          }
 
-        const state = await this.#runPollingCycle(bot, cycleAbortController);
-        if (state === "exit") {
-          return;
+          const state = await this.#runPollingCycle(bot, cycleAbortController);
+          if (state === "exit") {
+            return;
+          }
+        } finally {
+          cycleAbortController.abort();
+          // Bot construction owns binding registrations before polling is initialized.
+          await waitForGracefulStop(() =>
+            Promise.resolve(bot.stop())
+              .then(() => undefined)
+              .catch(() => undefined),
+          );
         }
       }
     } finally {
@@ -173,7 +183,7 @@ export class TelegramPollingSession {
     if (this.opts.abortSignal?.aborted) {
       return "exit";
     }
-    if (!isRecoverableTelegramNetworkError(err, { context: "unknown" })) {
+    if (!isRecoverableTelegramNetworkError(err)) {
       throw err;
     }
     return this.#waitBeforeRestart(
@@ -264,7 +274,7 @@ export class TelegramPollingSession {
       this.#webhookCleared = true;
       return "ready";
     } catch (err) {
-      if (isRecoverableTelegramNetworkError(err, { context: "unknown" })) {
+      if (isRecoverableTelegramNetworkError(err)) {
         this.opts.log(
           `[telegram] deleteWebhook failed with a recoverable network error; continuing to polling so getUpdates can confirm webhook state: ${formatErrorMessage(err)}`,
         );
@@ -286,7 +296,8 @@ export class TelegramPollingSession {
       cycleAbortController.abort();
     };
     try {
-      await bot.init();
+      // SAFETY: grammY types a legacy signal; init only uses aborted and abort event listeners.
+      await bot.init(this.opts.abortSignal as Parameters<(typeof bot)["init"]>[0]);
     } catch (err) {
       abortMedia();
       return await this.#waitBeforeRetryOnRecoverableSetupError(err, "Telegram bot init failed");
@@ -518,7 +529,7 @@ export class TelegramPollingSession {
           this.#transportState.markDirty();
         } else if (
           pollState.error &&
-          !isRecoverableTelegramNetworkError(new Error(pollState.error), { context: "polling" })
+          !isRecoverableTelegramNetworkError(new Error(pollState.error))
         ) {
           this.#status.noteError(
             pollState.error,
@@ -566,13 +577,6 @@ export class TelegramPollingSession {
       await waitForGracefulStop(() => ingressMonitor.stop());
       // Accepted replay writes and introductions keep ownership after transport grace expires.
       await ingressMonitor.waitForDeferredClaims();
-      // Fail closed when the spool stops making progress: keeping any claim live would
-      // prevent a healthy process from recovering a wedged drain.
-      await waitForGracefulStop(() =>
-        Promise.resolve(bot.stop())
-          .then(() => undefined)
-          .catch(() => undefined),
-      );
     }
   }
 }

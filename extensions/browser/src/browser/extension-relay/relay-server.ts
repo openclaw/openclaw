@@ -184,7 +184,6 @@ export async function startExtensionRelayServer(params: {
   profileName?: string;
   token: string;
   allowLegacyAuth?: boolean;
-  onStateChange?: () => void;
 }): Promise<ExtensionRelayHandle> {
   const allowLegacyAuth = params.allowLegacyAuth ?? true;
   const internalToken = crypto.randomBytes(32).toString("base64url");
@@ -193,7 +192,7 @@ export async function startExtensionRelayServer(params: {
   if (readExtensionRelayToken() === params.token) {
     getBrowserRelayAuthV2Authority(params.token);
   }
-  const bridge = new ExtensionRelayBridge({ onStateChange: params.onStateChange });
+  const bridge = new ExtensionRelayBridge();
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: EXTENSION_RELAY_MAX_PAYLOAD_BYTES,
@@ -231,8 +230,7 @@ export async function startExtensionRelayServer(params: {
     return (grant: HttpAuthGrant, authority: BrowserRelayAuthV2Authority, payload: unknown) => {
       res.once("finish", () => {
         if (!socket.destroyed && httpStates.get(socket) === pending) {
-          const timer = setTimeout(() => socket.destroy(), BROWSER_RELAY_CHALLENGE_TTL_MS);
-          timer.unref?.();
+          const timer = setTimeout(() => socket.destroy(), BROWSER_RELAY_CHALLENGE_TTL_MS).unref();
           httpStates.set(socket, { ...grant, authority, timer });
         }
       });

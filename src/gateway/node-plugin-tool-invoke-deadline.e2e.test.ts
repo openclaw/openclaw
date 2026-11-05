@@ -1,18 +1,20 @@
 // A real paired node accepts but never answers: the Gateway must return dispatch provenance.
 import assert from "node:assert/strict";
-import { expect, it } from "vitest";
-import { createNodePluginTools } from "../agents/node-plugin-tools.js";
+import { afterEach, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveOpenClawPluginToolsForOptions } from "../agents/openclaw-plugin-tools.js";
 import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { pairDeviceIdentity } from "./device-authz.test-helpers.js";
-import { replaceConnectedNodePluginTools } from "./node-plugin-tool-snapshot.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 import { installGatewayTestHooks } from "./test-helpers.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 installGatewayTestHooks({ scope: "suite" });
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const NODE_DISPLAY_NAME = "Slow Studio Node";
 const NODE_COMMAND = "remote.echo";
@@ -90,25 +92,28 @@ it(
     const gatewayUrlEnv = captureEnv(["OPENCLAW_GATEWAY_URL"]);
 
     try {
-      replaceConnectedNodePluginTools({
-        nodeId,
-        displayName: NODE_DISPLAY_NAME,
+      await node.request("node.pluginTools.update", {
         tools: [
           {
-            descriptor: {
-              pluginId: "remote-demo",
-              name: "remote_echo",
-              description: "Echo through a remote node",
-              parameters: { type: "object", properties: { text: { type: "string" } } },
-              command: NODE_COMMAND,
-            },
-            registered: false,
+            pluginId: "remote-demo",
+            name: "remote_echo",
+            description: "Echo through a remote node",
+            parameters: { type: "object", properties: { text: { type: "string" } } },
+            command: NODE_COMMAND,
           },
         ],
       });
       setTestEnvValue("OPENCLAW_GATEWAY_URL", `ws://127.0.0.1:${port}`);
 
-      const tool = createNodePluginTools({})[0];
+      const config = { plugins: { enabled: false } };
+      const tool = resolveOpenClawPluginToolsForOptions({
+        resolvedConfig: config,
+        options: {
+          config,
+          workspaceDir: tempDirs.make("node-tool-invoke-deadline-"),
+          senderIsOwner: true,
+        },
+      }).find((entry) => entry.name === "remote_echo");
       assert(tool, "expected a materialized node plugin tool");
       // A client timeout lacks the Gateway's message and dispatch provenance.
       await expect(tool.execute("deadline-proof-call", { text: "ping" })).rejects.toMatchObject({

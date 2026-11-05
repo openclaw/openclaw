@@ -20,14 +20,7 @@ function jsonRoundTrip(value: unknown): unknown {
 }
 
 describe("slackOutbound", () => {
-  const cfg = {
-    channels: {
-      slack: {
-        botToken: "xoxb-test",
-        appToken: "xapp-test",
-      },
-    },
-  };
+  const cfg = { channels: { slack: { botToken: "xoxb-test", appToken: "xapp-test" } } };
 
   beforeEach(() => {
     sendMessageSlackMock.mockReset();
@@ -266,7 +259,6 @@ describe("slackOutbound", () => {
 
   it("forwards forced-media intent through the core outbound adapter", async () => {
     sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-media" });
-
     await slackOutbound.sendMedia!({
       cfg,
       to: "C123",

@@ -1,10 +1,7 @@
 // Irc tests cover normalize plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  buildIrcAllowlistCandidates,
-  normalizeIrcAllowEntry,
-  resolveIrcOutboundSessionRoute,
-} from "./normalize.js";
+import { createIrcIngressSubject } from "./ingress-identity.js";
+import { normalizeIrcAllowEntry, resolveIrcOutboundSessionRoute } from "./normalize.js";
 
 describe("irc normalize", () => {
   it("builds canonical channel and direct session routes", () => {
@@ -53,20 +50,34 @@ describe("irc normalize", () => {
     expect(normalizeIrcAllowEntry("IRC:User:Alice!u@h")).toBe("alice!u@h");
   });
 
-  it("matches senders by nick/user/host candidates", () => {
-    const message = {
-      messageId: "m1",
-      target: "#chan",
-      senderNick: "Alice",
-      senderUser: "ident",
-      senderHost: "example.org",
-      text: "hi",
-      timestamp: Date.now(),
-      isGroup: true,
-    };
+  it.each([
+    ["ident", "example.org", "alice!ident@example.org", "alice!ident", "alice@example.org"],
+    [undefined, "example.org", "alice@example.org", undefined, "alice@example.org"],
+    ["ident", undefined, "alice", "alice!ident", undefined],
+    [undefined, undefined, "alice", undefined, undefined],
+    ["ident", "host!suffix", "alice!ident@host!suffix", "alice!ident", undefined],
+  ])(
+    "projects sender user=%s host=%s into ingress identities",
+    (user, host, stableId, nickUser, nickHost) => {
+      const message = {
+        messageId: "m1",
+        target: "#chan",
+        senderNick: "Alice",
+        senderUser: user,
+        senderHost: host,
+        text: "hi",
+        timestamp: Date.now(),
+        isGroup: true,
+      };
 
-    expect(buildIrcAllowlistCandidates(message)).toContain("alice!ident@example.org");
-    expect(buildIrcAllowlistCandidates(message)).not.toContain("alice");
-    expect(buildIrcAllowlistCandidates(message, { allowNameMatching: true })).toContain("alice");
-  });
+      expect(createIrcIngressSubject(message)).toEqual({
+        stableId,
+        aliases: {
+          "irc-id-nick-user": nickUser,
+          "irc-id-nick-host": nickHost,
+          "irc-nick": "alice",
+        },
+      });
+    },
+  );
 });

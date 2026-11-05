@@ -50,7 +50,7 @@ function setCachedProbeResult(
   result: FeishuProbeResult,
   ttlMs: number,
 ): FeishuProbeResult {
-  probeCache.set(cacheKey, { result, expiresAt: Date.now() + ttlMs });
+  probeCache.set(cacheKey, { result, expiresAt: performance.now() + ttlMs });
   pruneMapToMaxSize(probeCache, MAX_PROBE_CACHE_SIZE);
   return result;
 }
@@ -81,7 +81,7 @@ export async function probeFeishu(
     setCachedProbeResult(cacheKey, { ok: false, appId: creds.appId, error }, PROBE_ERROR_TTL_MS);
   const cached = probeCache.get(cacheKey);
   if (cached) {
-    if (cached.expiresAt > Date.now()) {
+    if (cached.expiresAt > performance.now()) {
       return cached.result;
     }
     probeCache.delete(cacheKey);
@@ -152,7 +152,7 @@ export async function probeFeishu(
  */
 export async function registerFeishuAiAgent(
   creds?: FeishuClientCredentials,
-  options: ProbeFeishuOptions = {},
+  options: Pick<ProbeFeishuOptions, "abortSignal"> = {},
 ): Promise<FeishuAiAgentRegistrationResult> {
   if (!creds?.appId || !creds?.appSecret) {
     return { ok: false, reason: "missing-credentials" };
@@ -161,7 +161,6 @@ export async function registerFeishuAiAgent(
     return { ok: false, reason: "aborted" };
   }
 
-  const timeoutMs = options.timeoutMs ?? FEISHU_PROBE_REQUEST_TIMEOUT_MS;
   try {
     const client = createFeishuClient(creds);
     const responseResult = await raceWithTimeoutAndAbort(
@@ -169,9 +168,9 @@ export async function registerFeishuAiAgent(
         method: "POST",
         url: "/open-apis/bot/v1/openclaw_bot/ping",
         data: { needBotInfo: true },
-        timeout: timeoutMs,
+        timeout: FEISHU_PROBE_REQUEST_TIMEOUT_MS,
       }),
-      { timeoutMs, abortSignal: options.abortSignal },
+      { timeoutMs: FEISHU_PROBE_REQUEST_TIMEOUT_MS, abortSignal: options.abortSignal },
     );
     if (responseResult.status === "aborted" || options.abortSignal?.aborted) {
       return { ok: false, reason: "aborted" };

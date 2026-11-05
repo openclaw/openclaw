@@ -99,19 +99,22 @@ const startWatchRun = async ({
 }: Pick<WatchRunParams, "args" | "env" | "fs" | "pathClassifier" | "sleep"> & {
   spawn: NonNullable<WatchRunParams["spawn"]>;
 }) => {
-  const { watcher, createWatcher, fakeProcess } = createWatcherHarness();
-  const runPromise = runWatch({
+  const harness = createWatchHarness();
+  const runPromise = harness.run({
     args,
-    createWatcher,
     env,
     fs: { existsSync: () => true },
-    process: fakeProcess,
     spawn,
     ...overrides,
   });
   await watchReady();
-  return { watcher, createWatcher, fakeProcess, runPromise };
+  return { ...harness, runPromise };
 };
+
+async function stopWatch(fakeProcess: NodeJS.Process, run: Promise<unknown>) {
+  fakeProcess.emit("SIGINT");
+  expect(await run).toBe(130);
+}
 
 function deferredBuild() {
   let ready = false;
@@ -291,8 +294,7 @@ it("starts the runner before loading fs-safe", async () => {
   loading.resolve(watch);
   await nextTurn();
   expect(watch).toHaveBeenCalledTimes(1);
-  fakeProcess.emit("SIGINT");
-  expect(await runPromise).toBe(130);
+  await stopWatch(fakeProcess, runPromise);
   expect(child.kill).toHaveBeenCalledWith("SIGTERM");
   expect(watcher.close).toHaveBeenCalledTimes(1);
 });
@@ -314,8 +316,7 @@ it("refreshes generated assets before each start", async () => {
   await nextTurn();
   expect(spawn).toHaveBeenCalledTimes(2);
   expect(pathClassifier.refreshGeneratedPluginAssetPaths).toHaveBeenCalledTimes(2);
-  fakeProcess.emit("SIGINT");
-  expect(await runPromise).toBe(130);
+  await stopWatch(fakeProcess, runPromise);
 });
 
 it("repairs a failed Gateway with Doctor and restarts", async () => {
@@ -343,8 +344,7 @@ it("repairs a failed Gateway with Doctor and restarts", async () => {
   expect(restartedGatewaySpawnCall[0]).toBe("/usr/local/bin/node");
   expect(restartedGatewaySpawnCall[1]).toEqual(["scripts/run-node.mjs", "gateway", "--force"]);
   expect(requireSpawnOptions(spawn, 2).stdio).toBe("inherit");
-  fakeProcess.emit("SIGINT");
-  expect(await runPromise).toBe(130);
+  await stopWatch(fakeProcess, runPromise);
   expect(gatewayB.kill).toHaveBeenCalledWith("SIGTERM");
   expect(watcher.close).toHaveBeenCalledTimes(1);
 });
@@ -369,8 +369,7 @@ it("restarts on unexpected exit code 143", async () => {
   childA.emit("exit", 143, null);
   await nextTurn();
   expect(spawn).toHaveBeenCalledTimes(2);
-  fakeProcess.emit("SIGINT");
-  expect(await runPromise).toBe(130);
+  await stopWatch(fakeProcess, runPromise);
   expect(childB.kill).toHaveBeenCalledWith("SIGTERM");
   expect(watcher.close).toHaveBeenCalledTimes(1);
 });
@@ -405,8 +404,7 @@ it("filters edits before restarting", async () => {
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
     expect(spawn).toHaveBeenCalledTimes(index + 2);
   }
-  fakeProcess.emit("SIGINT");
-  expect(await runPromise).toBe(130);
+  await stopWatch(fakeProcess, runPromise);
 });
 
 it("keeps the healthy child alive during rebuild", async () => {
@@ -423,8 +421,7 @@ it("keeps the healthy child alive during rebuild", async () => {
   await nextTurn();
   expect(childA.kill).toHaveBeenCalledWith("SIGTERM");
   expect(spawn).toHaveBeenCalledTimes(2);
-  fakeProcess.emit("SIGINT");
-  expect(await runPromise).toBe(130);
+  await stopWatch(fakeProcess, runPromise);
 });
 
 it("does not resurrect a child after shutdown", async () => {
@@ -433,8 +430,7 @@ it("does not resurrect a child after shutdown", async () => {
   const build = deferredBuild();
   const { watcher, fakeProcess, runPromise } = await startWatchRun({ ...build.options, spawn });
   watcher.emit("change", "src/infra/restart.ts");
-  fakeProcess.emit("SIGINT");
-  expect(await runPromise).toBe(130);
+  await stopWatch(fakeProcess, runPromise);
   build.restore();
   await nextTurn();
   expect(spawn).toHaveBeenCalledTimes(1);
@@ -453,11 +449,10 @@ it("waits for the build when a deferred child exits", async () => {
   build.restore();
   await nextTurn();
   expect(spawn).toHaveBeenCalledTimes(2);
-  fakeProcess.emit("SIGINT");
-  expect(await runPromise).toBe(130);
+  await stopWatch(fakeProcess, runPromise);
 });
 
-it("replaces the prior lock holder before starting", async () => {
+it.for([0, 9_000])("replaces the prior lock holder after its %dms drain", async (drainMs) => {
   const { child, spawn, watcher, fakeProcess, run } = createWatchHarness();
   await withTestDir({ prefix: "openclaw-watch-node-lock-" }, async (cwd) => {
     const lockPath = resolveTestWatchLockPath(cwd, ["gateway", "--force"]);
@@ -474,6 +469,7 @@ it("replaces the prior lock holder before starting", async () => {
       "utf8",
     );
     let existingWatcherAlive = true;
+    let elapsedMs = 0;
     const signalProcess = vi.fn<NonNullable<WatchRunParams["signalProcess"]>>((pid, signal) => {
       if (signal === 0) {
         if (pid === 2121 && existingWatcherAlive) {
@@ -482,16 +478,21 @@ it("replaces the prior lock holder before starting", async () => {
         throw Object.assign(new Error("ESRCH"), { code: "ESRCH" });
       }
       if (pid === 2121 && signal === "SIGTERM") {
-        existingWatcherAlive = false;
+        existingWatcherAlive = drainMs > 0;
         return;
       }
       throw new Error(`unexpected signal ${signal} for pid ${pid}`);
     });
     const runPromise = run({
       cwd,
-      now: () => 1_700_000_000_000,
+      now: () => 1_700_000_000_000 + elapsedMs,
       signalProcess,
-      sleep: async () => {},
+      sleep: async (ms) => {
+        elapsedMs += ms;
+        if (elapsedMs >= drainMs) {
+          existingWatcherAlive = false;
+        }
+      },
     });
     await watchReady();
     await nextTurn();
@@ -503,8 +504,7 @@ it("replaces the prior lock holder before starting", async () => {
       command: "gateway --force",
       watchSession: "1700000000000-4242",
     });
-    fakeProcess.emit("SIGINT");
-    expect(await runPromise).toBe(130);
+    await stopWatch(fakeProcess, runPromise);
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
     expect(fs.existsSync(lockPath)).toBe(false);
     expect(watcher.close).toHaveBeenCalledTimes(1);

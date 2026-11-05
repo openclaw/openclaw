@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { UserProfile } from "../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { makeChatHost } from "../pages/chat/chat-host.test-support.ts";
 import { handleSendChat } from "../pages/chat/chat-send-submit.ts";
 import { installOutboxBrowserStorage } from "../pages/chat/outbox-browser.test-support.ts";
@@ -38,7 +38,7 @@ function presence(user: AuthenticatedUser) {
   return { presence: [{ ts: 0, instanceId: current().instanceId, user }] };
 }
 function publishPresence(user: AuthenticatedUser) {
-  current().opts.onEvent?.(
+  current().testOptions.onEvent?.(
     createGatewayEvent("presence", {
       ...presence(user),
       reset: true,
@@ -64,25 +64,46 @@ afterEach(() => {
 });
 
 describe("Gateway self-profile ownership", () => {
+  it("keeps verified GitHub names consistent after loading the editable self profile", async () => {
+    const person: UserProfile = {
+      ...profile,
+      displayName: null,
+      githubIdentity: {
+        login: "octocat",
+        profileUrl: "https://github.com/octocat",
+        avatarUrl: "https://avatars.githubusercontent.com/u/42?v=4",
+      },
+    };
+    gateway.start();
+    current().request.mockResolvedValue({ profile: person });
+    current().testOptions.onHello?.(hello());
+    expect(await gateway.loadSelfProfile()).toEqual(person);
+    expect(gateway.snapshot.selfUser).toMatchObject({
+      name: "octocat",
+      identity: { type: "profile", id: person.id },
+    });
+    expect(person.displayName).toBeNull();
+  });
+
   it.each([false, true])(
     "retains only resolved profileless identity through same-connection drops (retry: %s)",
     async (willRetry) => {
       expect(gateway.snapshot.selfUser).toBeUndefined();
       gateway.start();
       expect(gateway.snapshot.selfUser).toBeUndefined();
-      current().opts.onHello?.(hello([]));
+      current().testOptions.onHello?.(hello([]));
       expect(gateway.snapshot.selfUser).toBeNull();
-      current().opts.onClose?.({ code: 1006, reason: "lost", willRetry });
+      current().testOptions.onClose?.({ code: 1006, reason: "lost", willRetry });
       expect(gateway.snapshot.phase).toBe(willRetry ? "reconnecting" : "offline");
       expect(gateway.snapshot.selfUser).toBeNull();
       gateway.connect();
       expect(gateway.snapshot.selfUser).toBeNull();
       const pending = createDeferred<{ profile: UserProfile }>();
       current().request.mockReturnValue(pending.promise);
-      current().opts.onHello?.(hello());
+      current().testOptions.onHello?.(hello());
       const read = gateway.loadSelfProfile();
       expect(gateway.snapshot.selfUser).toBeUndefined();
-      current().opts.onClose?.({ code: 1006, reason: "lost", willRetry: true });
+      current().testOptions.onClose?.({ code: 1006, reason: "lost", willRetry: true });
       expect(gateway.snapshot.selfUser).toBeUndefined();
       pending.reject(
         new GatewayRequestError({ code: "FORBIDDEN", message: "Old profileless result" }),
@@ -101,11 +122,11 @@ describe("Gateway self-profile ownership", () => {
     { gatewayUrl: "ws://other.test" },
   ])("retires profileless identity when connection credentials change: %j", (replacement) => {
     gateway.start();
-    current().opts.onHello?.(hello([]));
+    current().testOptions.onHello?.(hello([]));
     expect(gateway.snapshot.selfUser).toBeNull();
     gateway.connect(replacement);
     expect(gateway.snapshot.selfUser).toBeUndefined();
-    current().opts.onClose?.({ code: 1006, reason: "lost", willRetry: true });
+    current().testOptions.onClose?.({ code: 1006, reason: "lost", willRetry: true });
     expect(gateway.snapshot.selfUser).toBeUndefined();
   });
 
@@ -113,7 +134,7 @@ describe("Gateway self-profile ownership", () => {
     "retires profileless identity on %s",
     (retirement) => {
       gateway.start();
-      current().opts.onHello?.(hello([]));
+      current().testOptions.onHello?.(hello([]));
       expect(gateway.snapshot.selfUser).toBeNull();
       if (retirement === "stop") {
         gateway.stop();
@@ -121,7 +142,7 @@ describe("Gateway self-profile ownership", () => {
         if (retirement === "retired recovery") {
           Object.defineProperty(current(), "offlineRecoveryRetired", { value: true });
         }
-        current().opts.onClose?.({
+        current().testOptions.onClose?.({
           code: 1008,
           reason: "Access retired",
           willRetry: false,
@@ -144,7 +165,7 @@ describe("Gateway self-profile ownership", () => {
       gateway.start();
       const deferred = createDeferred<{ profile: UserProfile }>();
       current().request.mockReturnValue(deferred.promise);
-      current().opts.onHello?.({
+      current().testOptions.onHello?.({
         ...hello(["operator.read"]),
         snapshot: presence({
           id: profile.id,
@@ -196,7 +217,7 @@ describe("Gateway self-profile ownership", () => {
     "keeps self reads unidentified on %s and permits retry",
     async (code) => {
       gateway.start();
-      current().opts.onHello?.(hello([]));
+      current().testOptions.onHello?.(hello([]));
       expect(await gateway.loadSelfProfile()).toBeNull();
       expect(current().request).not.toHaveBeenCalled();
       current().request.mockRejectedValueOnce(
@@ -206,7 +227,7 @@ describe("Gateway self-profile ownership", () => {
           retryable: code === "UNAVAILABLE",
         }),
       );
-      current().opts.onHello?.(hello());
+      current().testOptions.onHello?.(hello());
       const read = gateway.loadSelfProfile();
       if (code === "FORBIDDEN") {
         expect(await read).toBeNull();
@@ -231,7 +252,9 @@ describe("Gateway self-profile ownership", () => {
       const pending = createDeferred<{ profile: UserProfile }>();
       const nextRead = createDeferred<{ profile: UserProfile }>();
       current().request.mockReturnValueOnce(pending.promise).mockReturnValueOnce(nextRead.promise);
-      current().opts.onHello?.(hello(replacement === "reconnect" ? undefined : ["operator.read"]));
+      current().testOptions.onHello?.(
+        hello(replacement === "reconnect" ? undefined : ["operator.read"]),
+      );
       const oldRead = gateway.loadSelfProfile();
       const attached = {
         id: "profile-2",
@@ -239,9 +262,9 @@ describe("Gateway self-profile ownership", () => {
         name: "Second Person",
       };
       if (replacement === "reconnect") {
-        current().opts.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
+        current().testOptions.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
         expect(gateway.snapshot.selfUser).toBeUndefined();
-        current().opts.onHello?.(hello());
+        current().testOptions.onHello?.(hello());
         const read = gateway.loadSelfProfile();
         const nextProfile = { ...profile, id: attached.id, displayName: attached.name };
         nextRead.resolve({ profile: nextProfile });
@@ -261,7 +284,7 @@ describe("Gateway self-profile ownership", () => {
   it("refreshes canonical profile and avatar via profile events", async () => {
     gateway.start();
     current().request.mockResolvedValue({ profile });
-    current().opts.onHello?.(hello());
+    current().testOptions.onHello?.(hello());
     await gateway.loadSelfProfile();
     expect(gateway.snapshot.selfUser?.avatarUrl).toContain("?v=2");
     const changed = {
@@ -271,7 +294,7 @@ describe("Gateway self-profile ownership", () => {
       updatedAt: 3,
     };
     current().request.mockResolvedValue({ profile: changed });
-    current().opts.onEvent?.(
+    current().testOptions.onEvent?.(
       createGatewayEvent("sessions.changed", { reason: "profile-identity" }),
     );
     await gateway.loadSelfProfile();
@@ -287,7 +310,7 @@ describe("Gateway self-profile ownership", () => {
   it("preserves current-profile display events and upload revisions through a pending self read", async () => {
     gateway.start();
     current().request.mockResolvedValue({ profile });
-    current().opts.onHello?.(hello(["operator.read"]));
+    current().testOptions.onHello?.(hello(["operator.read"]));
     await gateway.loadSelfProfile();
     const pending = createDeferred<{ profile: UserProfile }>();
     current().request.mockReturnValueOnce(pending.promise);
@@ -322,7 +345,7 @@ describe("Gateway self-profile ownership", () => {
         gateway.stop();
       }
     });
-    current().opts.onHello?.(hello());
+    current().testOptions.onHello?.(hello());
     expect(await gateway.loadSelfProfile()).toBeNull();
     expect(gateway.snapshot.selfUser).toBeUndefined();
   });

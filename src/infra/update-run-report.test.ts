@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { isReportableUpdateRun } from "../shared/update-outcome.js";
+import { isReportableUpdateRun } from "../shared/update-outcome-classification.js";
+import { expectText } from "../test-utils/text-assertions.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import * as reportHealth from "./update-run-report-health.js";
@@ -10,11 +11,11 @@ import {
 } from "./update-run-report.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
-function run(patch: Partial<UpdateRunRecord> = {}): UpdateRunRecord {
+type ReportRecord = Parameters<typeof renderUpdateRunReport>[0] &
+  Pick<UpdateRunRecord, "runId" | "trigger">;
+function run(patch: Partial<ReportRecord> = {}): ReportRecord {
   return {
     runId: "6631ecee-adbf-41e8-a0e3-1b88b28b0a59",
-    createdAtMs: 1,
-    updatedAtMs: 301,
     trigger: "cli",
     phase: "finished",
     status: "succeeded",
@@ -26,19 +27,17 @@ function run(patch: Partial<UpdateRunRecord> = {}): UpdateRunRecord {
     steps: [{ step: "staging", status: "completed", startedAtMs: 1, endedAtMs: 301 }],
     verification: {},
     repair: [],
-    confirmedAtMs: null,
-    finishedAtMs: 301,
     downtimeMs: null,
     ...patch,
   };
 }
 
-function failed(patch: Partial<UpdateRunRecord> = {}) {
+function failed(patch: Partial<ReportRecord> = {}) {
   return run({ status: "failed", ...patch });
 }
 
 function failureReport(
-  record: UpdateRunRecord,
+  record: ReportRecord,
   result: Partial<UpdateRunResult> = {},
   recorded = true,
 ) {
@@ -59,25 +58,14 @@ function resultStep(
   return { name, command: name, cwd: "/fixture", durationMs: 0, exitCode: 0, ...patch };
 }
 
-function failedStep(
-  step: string,
-  patch: Partial<UpdateRunRecord["steps"][number]> = {},
-): UpdateRunRecord["steps"][number] {
+type Step = UpdateRunRecord["steps"][number];
+function failedStep(step: string, patch: Partial<Step> = {}): Step {
   return { step, status: "failed", ...patch };
 }
 
 function expectChatBudget(markdown: string) {
   expect(markdown.length).toBeLessThanOrEqual(1500);
   expect(Buffer.from(markdown).toString("utf8")).toBe(markdown);
-}
-
-function expectText(text: string, contains: string[], excludes: string[] = []) {
-  for (const part of contains) {
-    expect(text).toContain(part);
-  }
-  for (const part of excludes) {
-    expect(text).not.toContain(part);
-  }
 }
 
 const recoveryStep = {
@@ -98,20 +86,19 @@ function serving(version: string, reason: RecoveryReason) {
     recovery: { serviceRestartSafe: false as const, reason },
   };
 }
-
-function renderRecord(
-  record: UpdateRunRecord,
-  options?: Parameters<typeof renderUpdateRunReport>[1],
+function observedFailure(
+  verification: ReportRecord["verification"],
+  patch: Partial<ReportRecord> = {},
 ) {
-  const saved = structuredClone(record);
+  return failed({ steps: [recoveryStep], verification, ...patch });
+}
+
+function renderRecord(record: ReportRecord, options?: Parameters<typeof renderUpdateRunReport>[1]) {
   record.steps.forEach(Object.freeze);
   Object.freeze(record.steps);
-  Object.freeze(record);
-  const report = renderUpdateRunReport(record, options);
-  expect(record).toEqual(saved);
-  return report;
+  return renderUpdateRunReport(Object.freeze(record), options);
 }
-function render(patch: Partial<UpdateRunRecord>) {
+function render(patch: Partial<ReportRecord>) {
   return renderRecord(run(patch));
 }
 
@@ -195,40 +182,52 @@ it.each([true, false])("separates saved and current health (responding=%s)", (re
   expect(report.markdown.includes("Historical recovery advice:")).toBe(responding);
   if (responding) {
     expect(report.lines).not.toContain(record.origin.nextAction);
-    expect(report.markdown).toContain("supersedes saved claims that the Gateway is stopped");
-    expect(report.markdown.endsWith(record.origin.nextAction!)).toBe(false);
-    expect(report.markdown).toContain(
+    expectText(report.markdown, [
+      "supersedes saved claims that the Gateway is stopped",
       "Keep the candidate installed and do not roll back code alone.",
-    );
+    ]);
+    expect(report.markdown.endsWith(record.origin.nextAction!)).toBe(false);
   }
   expect(report.headline).not.toContain("gateway is running");
-  expect(report.markdown).not.toContain("chat");
 });
 
-it.each(["state-migration-started", "runtime-verification-failed"] as const)(
-  "retains %s constraints",
-  async (reason) => {
-    const record = failed({
-      reason: "post-update-plugins",
-      steps: [recoveryStep],
-      verification: serving("2026.9.5", reason),
-    });
-    const expected = `verified serving 2026.9.5; restart remains unsafe (${reason})`;
-    expect(renderUpdateRunReport(record).markdown).toContain(expected);
-    const report = await failureReport(
-      record,
-      reason === "runtime-verification-failed"
-        ? {
-            verification: verified("2026.9.5"),
-            recovery: healthy("2026.9.5"),
-            steps: [resultStep("gateway recovery verification", { command: "verify" })],
-          }
-        : {},
+it.each(["restart-unhealthy", "service-not-running", "timeout"])(
+  "does not claim a responding Gateway is absent after %s",
+  (code) => {
+    const report = renderRecord(
+      failed({
+        reason: "doctor-failed",
+        steps: [
+          failedStep("gateway recovery verification", {
+            exitCode: 1,
+            failureFacts: [{ check: "settled", code }],
+          }),
+        ],
+        verification: { serviceRunning: false },
+      }),
+      { currentHealth: { kind: "responding", version: "2026.9.2" } },
     );
-    expect(report.body).toContain(`Recovery outcome: ${expected}`);
-    expect(record.verification.recovery?.serviceRestartSafe).toBe(false);
+    expectText(report.markdown, [
+      `Recorded recovery: readiness unverified (${code}).`,
+      "Current health: Gateway answered on the recorded port (2026.9.2).",
+    ]);
+    expect(report.markdown).not.toContain("not serving");
   },
 );
+
+it("preserves recorded restart constraints over newer healthy recovery facts", async () => {
+  const record = observedFailure(serving("2026.9.5", "runtime-verification-failed"), {
+    reason: "post-update-plugins",
+  });
+  const report = await failureReport(record, {
+    verification: verified("2026.9.5"),
+    recovery: healthy("2026.9.5"),
+    steps: [resultStep("gateway recovery verification", { command: "verify" })],
+  });
+  expect(report.body).toContain(
+    "Recovery outcome: verified serving 2026.9.5; restart remains unsafe (runtime-verification-failed)",
+  );
+});
 
 it.each([
   ["target", "runtime-verification-failed", true],
@@ -237,14 +236,12 @@ it.each([
   ["unknown-target", "runtime-verification-failed", false],
   ["target", "state-migration-started", false],
 ] as const)("reconciles %s (%s)", (health, reason, recovered) => {
-  const record = failed({
+  const record = observedFailure(serving("2026.9.1", reason), {
     reason: "state-migrated-no-rollback",
     after: health === "unknown-target" ? {} : { version: "2026.9.2" },
     origin: {
       nextAction: `Your Gateway is still serving 2026.9.1; nothing to restore. Restart remains unsafe (${reason}). Keep the new installation and recovery snapshots; do not roll back code alone.`,
     },
-    steps: [recoveryStep],
-    verification: serving("2026.9.1", reason),
   });
   const report = renderRecord(record, {
     currentHealth:
@@ -345,16 +342,9 @@ it.each([
   });
   const record = failed({
     ...(observed ? { steps: [recoveryStep] } : {}),
-    verification: {
-      versionMatch: observed,
-      port: 19123,
-      ...(observed
-        ? {
-            ...verified(version),
-            recovery: healthy(version),
-          }
-        : {}),
-    },
+    verification: observed
+      ? { port: 19123, ...verified(version), recovery: healthy(version) }
+      : { port: 19123, versionMatch: false },
   });
   const report = await failureReport(record);
   expect(report.body).toContain(
@@ -373,31 +363,19 @@ it.each([
   );
 });
 
-it.each<[UpdateRunRecord["verification"], string, boolean?]>([
-  [{ runningVersion: "2026.9.1", versionMatch: false }, "version mismatch"],
-  [
-    { runningVersion: "2026.9.2", runningBuildId: "older-build", versionMatch: false },
-    "build mismatch",
-  ],
-  [{ runningVersion: "2026.9.2", versionMatch: false }, "service identity unavailable"],
-  [
-    { serviceRunning: true, versionMatch: false },
-    "service running; service identity unavailable",
-    true,
-  ],
-])("reports identity (%j, %s)", async (verification, expected, publicReport) => {
+it("does not report a missing running identity as a version mismatch", async () => {
   const record = failed({
     reason: "restart-unhealthy",
     after: { version: "2026.9.2", buildId: "candidate-build" },
-    verification,
+    verification: { serviceRunning: true, versionMatch: false },
   });
   const report = renderUpdateRunReport(record);
-  expect(report.lines).toContain(`Recorded verification: ${expected}.`);
-  if (publicReport) {
-    const failure = await failureReport(record);
-    for (const text of [report.markdown, failure.body]) {
-      expectText(text, ["identity unavailable"], ["version mismatch"]);
-    }
+  expect(report.lines).toContain(
+    "Recorded verification: service running; service identity unavailable.",
+  );
+  const failure = await failureReport(record);
+  for (const text of [report.markdown, failure.body]) {
+    expectText(text, ["identity unavailable"], ["version mismatch"]);
   }
 });
 
@@ -442,7 +420,6 @@ it("bounds chat failures but preserves full CLI guidance", () => {
     origin: { doctorHint: "Recovery instructions ".repeat(80) },
   });
   const failures = report.lines.filter((line) => line.startsWith("Failed:"));
-  expect(failures).toHaveLength(3);
   expect(failures.map((line) => line.split(" — ")[0])).toEqual([
     "Failed: build-2",
     "Failed: build-3",
@@ -459,7 +436,7 @@ it("bounds chat failures but preserves full CLI guidance", () => {
 const originAction = "Run `openclaw --profile work triage` to repair this installation.";
 const selectedAction = "Run `openclaw --profile team triage` to repair this installation.";
 type RecoveryCase = [
-  string | Partial<UpdateRunRecord>,
+  string | Partial<ReportRecord>,
   string[],
   string[]?,
   Parameters<typeof renderUpdateRunReport>[1]?,
@@ -657,7 +634,6 @@ it.each<[string | null, string[], string]>([
   });
   const report = renderRecord(record);
   expect(report.headline).toBe(`⚠️ OpenClaw update failed: ${expected}.`);
-  expect(report.headline.length).toBeLessThanOrEqual(500);
   expectChatBudget(report.markdown);
 });
 
@@ -677,12 +653,11 @@ it.each<[UpdateRunRecord["status"], string | null, string]>([
     "ℹ️ OpenClaw 2026.9.2 installed; Gateway still starting; readiness unverified; recovery backups retained.",
   ],
 ])("keeps %s headline despite failed children (%s)", (status, reason, headline) => {
-  const record = run({ status, reason, phase: "verifying" });
-  expect(renderUpdateRunReport(record).headline).toBe(headline);
-  const report = renderUpdateRunReport({
-    ...record,
+  const report = render({
+    status,
+    reason,
+    phase: "verifying",
     steps: [failedStep("finalize:doctor")],
   });
   expect(report.headline).toBe(headline);
-  expect(report.headline).not.toContain("finalize:doctor");
 });

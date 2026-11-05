@@ -13,8 +13,7 @@ function receive(probe: EventEmitter, failure = () => "Probe exited before reply
   });
 }
 
-async function probeChild(file: string, input: object, check: (result: unknown) => void) {
-  const url = new URL(file, import.meta.url);
+async function probeChild(url: URL, input: object, check: (result: unknown) => void) {
   const child = fork(url, [], {
     execArgv: resolveRuntimeWorkerThreadExecArgv(url),
     stdio: ["ignore", "ignore", "pipe", "ipc"],
@@ -45,12 +44,16 @@ it.each([
   { role: "gateway", allowed: false, changeRefused: true },
   { role: "cli-oneshot", allowed: true, changeRefused: true },
 ])("enforces the immutable main-thread role: $role", async ({ role, ...expected }) => {
-  await probeChild("./admission-role.test-support.ts", { role }, (result) => {
-    expect(result).toEqual({
-      ...expected,
-      ...(role === "cli-oneshot" ? { gatewayRefused: true } : {}),
-    });
-  });
+  await probeChild(
+    new URL("./admission-role.test-support.ts", import.meta.url),
+    { role },
+    (result) => {
+      expect(result).toEqual({
+        ...expected,
+        ...(role === "cli-oneshot" ? { gatewayRefused: true } : {}),
+      });
+    },
+  );
 });
 
 it("allows worker execution without a process role", async () => {
@@ -77,7 +80,7 @@ it("ends synchronous admission when a callback returns or throws", () => {
 it("refuses main-thread construction and use after boot admission", async () => {
   const connection = getEnvironmentData("openclaw.test.workboard.connection");
   await probeChild(
-    "./admission-main.test-support.ts",
+    new URL("./admission-main.test-support.ts", import.meta.url),
     { connection: typeof connection === "string" ? connection : undefined },
     (result) =>
       expect(result).toMatchObject({

@@ -10,6 +10,7 @@ import {
 } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import { resolveSandboxedBridgeMediaPath } from "../agents/sandbox-media-paths.js";
+import { canUploadGitHubPublicationEvidence } from "../agents/sandbox/github-publication.js";
 import type { SandboxContext } from "../agents/sandbox/types.js";
 import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-response-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
@@ -42,12 +43,10 @@ export async function uploadGitHubPublicationEvidence(params: {
 }): Promise<NonNullable<SessionGitHubActionResult["evidence"]>> {
   const { evidence, sandbox, identity } = params;
   params.assertCurrent();
-  if (
-    !sandbox?.enabled ||
-    sandbox.sessionKey !== params.sessionKey ||
-    !sandbox.fsBridge?.readFileWithSource
-  ) {
-    throw new Error("Upload evidence from this conversation's active sandbox workspace.");
+  if (!canUploadGitHubPublicationEvidence(sandbox) || sandbox.sessionKey !== params.sessionKey) {
+    throw new Error(
+      "upload_evidence needs this conversation's active sandbox workspace; it is not offered to sessions that run directly on the host.",
+    );
   }
   if ((identity.host ?? "github.com") !== "github.com") {
     throw new Error(

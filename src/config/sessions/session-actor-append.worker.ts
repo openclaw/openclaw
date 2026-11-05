@@ -1,4 +1,3 @@
-import { serialize } from "node:v8";
 import {
   decodeMetadataAppendEvent,
   sessionMetadataAppendNeedsReload,
@@ -11,7 +10,7 @@ import {
   runWithMetadataMessageAdmission,
   type MetadataWorkerAdmission,
 } from "../../agents/sessions/session-manager-message-admission.worker.js";
-import { readSessionManagerReload } from "../../agents/sessions/session-manager-reload.js";
+import { readSessionManagerReload } from "../../agents/sessions/session-manager-reload.kernel.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { isUserMessage } from "../../sessions/user-turn-transcript.message.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
@@ -24,6 +23,8 @@ import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { createTranscriptAppendBatch } from "./session-accessor.sqlite-transcript-batch.js";
+import { touchTranscriptMutationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import type { SessionActorAppend, SessionActorAppendCommitted } from "./session-actor-contract.js";
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
 import { hydrateSessionActorState } from "./session-actor-hydration.worker.js";
@@ -132,10 +133,42 @@ export function applySessionActorAppend(
     }
     return { ...bound, ...initialEntry?.fence };
   };
+  // Complete actor identities admit the initializer without re-reading its pending rows.
+  const initializationBatch =
+    append.header &&
+    append.kind === "metadata" &&
+    append.input.initialModel &&
+    state.transcript.complete
+      ? createTranscriptAppendBatch(
+          database,
+          resolveSqliteTranscriptScope(scopeForAppend(append.input.scope)),
+          [],
+          { scheduleProjectionReconcile: false },
+        )
+      : undefined;
   let modelPromptProjection: SessionActorAppendCommitted["modelPromptProjection"];
+  const finalizeProjection = (snapshot: SessionActorAppendCommitted["value"]["snapshot"]) => {
+    if (!modelPromptProjection) {
+      return;
+    }
+    if (!snapshot.ok) {
+      throw new SessionTranscriptWriterClaimReboundError(snapshot.error);
+    }
+    // A fresh carrier publishes the rewrite's watermark in the same transaction.
+    // A duplicate carrier leaves the changed prompt as the only mutation.
+    if (
+      !modelPromptProjection.result.unchanged &&
+      snapshot.value.after.updatedAt === modelPromptProjection.before.updatedAt
+    ) {
+      touchTranscriptMutationInTransaction(database, append.input.scope.sessionId);
+      snapshot.value.after = { ...state.hot.transcript.version };
+    }
+    snapshot.value.before = modelPromptProjection.before;
+  };
   const metadata = (
     input: SessionMetadataOperations["session.metadata.append"]["input"],
     scope = scopeForAppend(input.scope),
+    persistActorMutation = !initializationBatch,
   ) => {
     const scoped = {
       ...input,
@@ -155,19 +188,30 @@ export function applySessionActorAppend(
         : undefined,
       () =>
         runWithMetadataMessageAdmission(messageContext, input.message, (authorize, beforeFresh) => {
-          const value = applySessionMetadataAppendInTransaction(database, scoped, beforeFresh);
+          const value = applySessionMetadataAppendInTransaction(
+            database,
+            scoped,
+            beforeFresh,
+            undefined,
+            persistActorMutation,
+            initializationBatch?.cursor,
+          );
+          if (initializationBatch && input.initialModel) {
+            // Each append already advanced the actor; settlement only persists that watermark.
+            initializationBatch.settle(
+              true,
+              initializationBatch.cursor.batch.events.length,
+              value.projectionNeedsReconcile,
+              { steps: 0, adjustedTime: 0 },
+            );
+          }
           authorize("commit");
           value.pendingInputReceipt = readSessionPendingInputWorkerReceipt(database);
           return value;
         }),
     );
     const value = result.value;
-    if (modelPromptProjection) {
-      if (!value.snapshot.ok) {
-        throw new SessionTranscriptWriterClaimReboundError(value.snapshot.error);
-      }
-      value.snapshot.value.before = modelPromptProjection.before;
-    }
+    finalizeProjection(value.snapshot);
     if (input.view && sessionMetadataAppendNeedsReload(input, value)) {
       try {
         value.reload = {
@@ -181,7 +225,6 @@ export function applySessionActorAppend(
             ),
           ),
         };
-        serialize(value);
       } catch (error) {
         value.reload = {
           ok: false,
@@ -196,7 +239,12 @@ export function applySessionActorAppend(
     if (decodeMetadataAppendEvent(append.header).type !== "session") {
       throw new Error("Session actor header must be a session event");
     }
-    header = metadata(append.header);
+    // The required thinking append publishes the whole initialization transaction.
+    header = metadata(
+      append.header,
+      undefined,
+      !(append.kind === "metadata" && append.input.initialModel),
+    );
     if (!header.snapshot.ok) {
       throw new Error("Session actor header was refused");
     }
@@ -244,6 +292,7 @@ export function applySessionActorAppend(
           rows: [row],
         };
       },
+      { touchMutation: false },
     );
   }
   if (append.kind === "metadata") {
@@ -273,11 +322,6 @@ export function applySessionActorAppend(
         return value;
       }),
   );
-  if (modelPromptProjection) {
-    if (!result.value.snapshot.ok) {
-      throw new SessionTranscriptWriterClaimReboundError(result.value.snapshot.error);
-    }
-    result.value.snapshot.value.before = modelPromptProjection.before;
-  }
+  finalizeProjection(result.value.snapshot);
   return { kind: "message", value: result.value, initialEntry, header, modelPromptProjection };
 }

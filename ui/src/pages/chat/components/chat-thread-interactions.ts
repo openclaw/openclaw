@@ -2,7 +2,11 @@ import type { MessageReactionSummary } from "../../../../../packages/gateway-pro
 import type { ChatPendingInputsPage } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ThemeBranding } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.ts";
+import type {
+  GatewaySessionRow,
+  ModelCatalogEntry,
+  SessionsListResult,
+} from "../../../api/types.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
@@ -28,7 +32,8 @@ import type { SubagentRoster } from "../chat-spawned-subagent.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { ChatTranscriptMetadata } from "../chat-transcript-metadata.ts";
 import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
-import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
+import type { FailedMessageEditSource } from "../failed-message-edit.ts";
+import type { RealtimeTalkConversationEntry } from "../talk/conversation-state.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
 import type { createAsyncQuestionPresentation } from "./chat-async-question.ts";
 import type { ChatCommentPinsHandle } from "./chat-comment-pins.tsx";
@@ -63,9 +68,9 @@ export type ChatThreadState = Parameters<typeof createAsyncQuestionPresentation>
   search: TranscriptSearchState;
   transcriptRenderDependencies: readonly unknown[];
   transcriptRenderContext: {
-    turnVideoMessages?: ReadonlyMap<
+    turnMediaMessages?: ReadonlyMap<
       string,
-      readonly import("./chat-turn-video-gallery.ts").TurnVideoMessage[]
+      readonly import("./chat-turn-media-gallery.ts").TurnMediaMessage[]
     >;
     onSetReply?: (target: MessageReplyTarget) => void;
     onOpenReply?: (replyToId: string) => void;
@@ -90,13 +95,23 @@ export type ChatThreadProps = Omit<
   | "presented"
   | "agentId"
   | "mediaPolicyKey"
-  | "getTurnVideoMessages"
+  | "getTurnMediaMessages"
   | "onOpenWorkspaceFile"
 > &
-  ChatWelcomeIdentityProps &
+  Pick<
+    ChatWelcomeIdentityProps,
+    | "currentAgentId"
+    | "agents"
+    | "assistantName"
+    | "assistantAvatar"
+    | "assistantAvatarUrl"
+    | "assistantAvatarSource"
+    | "sessionHost"
+  > &
   ChatSendStatusActions &
   SubagentRoster & {
     applicationContext?: ApplicationContext;
+    onScrollPortRef?: (element: HTMLElement) => void | (() => void);
     messageReactions?: ReadonlyMap<string, MessageReactionSummary[]>;
     onReact?: (messageId: string, emoji: string, remove: boolean) => void;
     branding?: ThemeBranding;
@@ -110,9 +125,11 @@ export type ChatThreadProps = Omit<
     transcriptVisible?: PresentationValue;
     gatewayClient?: GatewayBrowserClient | null;
     selectedSession: GatewaySessionRow | undefined;
+    modelCatalog?: ModelCatalogEntry[];
     transcriptMetadata?: ChatTranscriptMetadata;
     announceTranscript?: boolean;
     loading: boolean;
+    restoring?: boolean;
     routeLoadingSkeleton?: boolean;
     /** Older-history pagination: renders the auto-load sentinel plus the in-flow boundary row. */
     historyPagination?: ChatHistoryBoundaryProps;
@@ -139,7 +156,9 @@ export type ChatThreadProps = Omit<
     startupLabel?: string;
     retryAt?: number;
     onRetryRun?: (runId: string) => void;
+    failedMessageEditSource?: FailedMessageEditSource;
     failureActionsRunId?: string;
+    onDismissPendingInput?: (inputId: string) => void;
     waitingApproval?: boolean;
     questionPrompts?: readonly QuestionPrompt[];
     sessions: SessionsListResult | null;
@@ -156,14 +175,15 @@ export type ChatThreadProps = Omit<
     loadFullAssistantMessage?: SidebarFullMessageLoader | null;
     mediaPolicyEpoch?: number;
     autoExpandToolCalls?: boolean;
-    realtimeTalkConversation?: RealtimeTalkConversationEntry[];
+    /** Live captions update their retained row independently of the pane frame. */
+    readRealtimeTalkConversation?: () => readonly RealtimeTalkConversationEntry[];
     typingActors?: readonly ChatTypingActorView[];
     typingOverflow?: ChatTypingOverflow;
     onOpenSidebar?: (content: SidebarContent) => void;
     onOpenWorkspaceFile?: (target: MarkdownFileLinkTarget) => void;
+    onOpenManagedArtifact?: (href: string) => boolean;
     onOpenSessionLink?: (target: SessionLinkTarget) => void;
     onNavigate?: (routeId: "cron", options: { search: string }) => void;
-    onChatScroll?: (event: Event) => void;
     onHistoryIntent?: (event: Event) => void;
     onHistorySentinelRef?: (element: HTMLElement) => void | (() => void);
     onTranscriptAnnouncementRef?: (element: HTMLElement) => void | (() => void);
@@ -255,8 +275,6 @@ export function resetTranscriptSession(paneId: string, owner?: ParentNode): void
   }
   if (state) {
     state.asyncQuestionDrafts = new Map();
-    // Parked rows must commit fresh bindings on return even when visible props match.
-    state.transcriptRenderDependencies = [];
     // Search input belongs to the outgoing transcript; pane preferences survive.
     state.search.reset();
   }
@@ -361,6 +379,74 @@ function toggleTouchMessageMeta(event: PointerEvent, messageElements: Iterable<H
   } else {
     revealedMessages.delete(transcript);
   }
+}
+
+export function handleTranscriptSelectionMouseDown(event: MouseEvent) {
+  const thread = event.currentTarget;
+  const target = event.target;
+  if (
+    event.button !== 0 ||
+    event.detail < 2 ||
+    !(thread instanceof HTMLElement) ||
+    !(target instanceof Element) ||
+    target.closest("a, button, input, select, textarea, summary, [contenteditable]")
+  ) {
+    return undefined;
+  }
+  const bubble = target.closest(".chat-bubble");
+  const view = thread.ownerDocument.defaultView;
+  if (!bubble || !thread.contains(bubble) || !view) {
+    return undefined;
+  }
+  // Capture the pressed message before mouseup/dblclick can target a common
+  // ancestor, including when the drag is released outside this transcript.
+  const listeners = new AbortController();
+  const stop = () => listeners.abort();
+  listen(
+    view,
+    "mouseup",
+    () => {
+      stop();
+      if (thread.isConnected && thread.contains(bubble)) {
+        boundMessageSelection(bubble);
+      }
+    },
+    { once: true, signal: listeners.signal },
+  );
+  listen(view, "blur", stop, { once: true, signal: listeners.signal });
+  return stop;
+}
+
+function boundMessageSelection(bubble: Element) {
+  const selection = bubble.ownerDocument.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount !== 1) {
+    return;
+  }
+  const range = selection.getRangeAt(0);
+  if (
+    !range.intersectsNode(bubble) ||
+    (bubble.contains(range.startContainer) && bubble.contains(range.endContainer))
+  ) {
+    return;
+  }
+  // Intersect only this multi-click gesture; ordinary drags and Select All stay native.
+  const backwards =
+    selection.anchorNode === range.endContainer && selection.anchorOffset === range.endOffset;
+  const bounded = range.cloneRange();
+  const contents = bubble.ownerDocument.createRange();
+  contents.selectNodeContents(bubble);
+  if (bounded.compareBoundaryPoints(Range.START_TO_START, contents) < 0) {
+    bounded.setStart(contents.startContainer, contents.startOffset);
+  }
+  if (bounded.compareBoundaryPoints(Range.END_TO_END, contents) > 0) {
+    bounded.setEnd(contents.endContainer, contents.endOffset);
+  }
+  selection.setBaseAndExtent(
+    backwards ? bounded.endContainer : bounded.startContainer,
+    backwards ? bounded.endOffset : bounded.startOffset,
+    backwards ? bounded.startContainer : bounded.endContainer,
+    backwards ? bounded.startOffset : bounded.endOffset,
+  );
 }
 
 export function handleTranscriptPointerUp(

@@ -1,5 +1,7 @@
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import type { Command } from "commander";
+import { readRegularFile } from "openclaw/plugin-sdk/file-access-runtime";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -8,6 +10,7 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeTerminalText, terminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation } from "./apply.js";
@@ -35,12 +38,8 @@ import {
 } from "./obsidian.js";
 import { formatOkfImportSummary, importMemoryWikiOkfBundle } from "./okf.js";
 import { renderWikiMutationSummary, renderWikiSearchResults } from "./presentation.js";
-import {
-  getMemoryWikiPage,
-  searchMemoryWiki,
-  WIKI_SEARCH_MODES,
-  type WikiSearchMode,
-} from "./query.js";
+import { WIKI_SEARCH_MODES, type WikiSearchMode } from "./query-scoring.js";
+import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import type { MemoryWikiImportedSourceSyncResult } from "./source-sync.js";
 import {
@@ -314,7 +313,34 @@ async function resolveWikiApplyBody(params: { body?: string; bodyFile?: string }
     return params.body;
   }
   if (params.bodyFile?.trim()) {
-    return await fs.readFile(params.bodyFile, "utf8");
+    // Keep symlinked body files working while the SDK refuses special files.
+    const { buffer: bytes } = await readRegularFile({
+      filePath: await fs.realpath(params.bodyFile),
+    }).catch((error: unknown) => {
+      // SDK admission errors are unclassified; structured I/O errors retain
+      // their original identity and code for callers.
+      if (!(error instanceof Error) || "code" in error) {
+        throw error;
+      }
+      throw new Error(
+        `wiki apply synthesis --body-file could not be read: ${params.bodyFile}. ${error.message}. Supply a regular UTF-8 file (or use --body), then retry.`,
+        { cause: error },
+      );
+    });
+    // Reject before mutation: blank files would wipe an existing synthesis, and
+    // replacement decoding would turn Latin-1 bytes into U+FFFD in the vault.
+    if (!isUtf8(bytes)) {
+      throw new Error(
+        `wiki apply synthesis --body-file must be valid UTF-8: ${params.bodyFile}. Save the file as UTF-8, then retry.`,
+      );
+    }
+    const text = bytes.toString("utf8");
+    if (!text.trim()) {
+      throw new Error(
+        `wiki apply synthesis --body-file is empty: ${params.bodyFile}. Supply nonempty UTF-8 text (or use --body), then retry.`,
+      );
+    }
+    return text;
   }
   throw new Error("wiki apply synthesis requires --body or --body-file.");
 }
@@ -322,9 +348,9 @@ async function resolveWikiApplyBody(params: { body?: string; bodyFile?: string }
 function formatJsonOrText<T>(
   result: T,
   json: boolean | undefined,
-  render: (result: T) => string,
+  render: (result: T, text: (value: string) => string) => string,
 ): string {
-  return json ? JSON.stringify(result, null, 2) : render(result);
+  return json ? JSON.stringify(result, null, 2) : render(result, sanitizeTerminalText);
 }
 
 function formatGatewayJsonOrText<T>(
@@ -431,7 +457,7 @@ async function runWikiBridgeImport(params: {
   json?: boolean;
 }) {
   const render = (value: MemoryWikiImportedSourceSyncResult) =>
-    `Bridge import synced ${value.artifactCount} artifacts across ${value.workspaces} workspaces (${value.importedCount} new, ${value.updatedCount} updated, ${value.skippedCount} unchanged, ${value.removedCount} removed). Indexes ${value.indexesRefreshed ? `refreshed (${value.indexUpdatedFiles.length} files)` : `not refreshed (${value.indexRefreshReason})`}.`;
+    terminalText`Bridge import synced ${value.artifactCount} artifacts across ${value.workspaces} workspaces (${value.importedCount} new, ${value.updatedCount} updated, ${value.skippedCount} unchanged, ${value.removedCount} removed). Indexes ${value.indexesRefreshed ? `refreshed (${value.indexUpdatedFiles.length} files)` : `not refreshed (${value.indexRefreshReason})`}.`;
   if (shouldRouteBridgeRuntimeThroughGateway(params.config)) {
     const result = await callWikiGateway("wiki.bridge.import", params.agentId);
     writeOutput(formatGatewayJsonOrText(result, params.json, render));
@@ -446,21 +472,21 @@ async function runWikiBridgeImport(params: {
 
 function formatChatGptImportSummary(result: ChatGptImportResult): string {
   if (result.dryRun) {
-    return `ChatGPT import dry run scanned ${result.conversationCount} conversations (${result.createdCount} new, ${result.updatedCount} updated, ${result.skippedCount} unchanged).`;
+    return terminalText`ChatGPT import dry run scanned ${result.conversationCount} conversations (${result.createdCount} new, ${result.updatedCount} updated, ${result.skippedCount} unchanged).`;
   }
-  const runSuffix = result.runId ? ` Run id: ${result.runId}.` : "";
-  return `ChatGPT import applied ${result.conversationCount} conversations (${result.createdCount} new, ${result.updatedCount} updated, ${result.skippedCount} unchanged). Refreshed ${result.indexUpdatedFiles.length} index file${result.indexUpdatedFiles.length === 1 ? "" : "s"}.${runSuffix}`;
+  const runSuffix = result.runId ? terminalText` Run id: ${result.runId}.` : "";
+  return terminalText`ChatGPT import applied ${result.conversationCount} conversations (${result.createdCount} new, ${result.updatedCount} updated, ${result.skippedCount} unchanged). Refreshed ${result.indexUpdatedFiles.length} index file${result.indexUpdatedFiles.length === 1 ? "" : "s"}.${runSuffix}`;
 }
 
 function formatChatGptRollbackSummary(result: ChatGptRollbackResult): string {
   const preservedNote =
     result.preservedPaths.length > 0
-      ? ` Preserved ${result.preservedPaths.length} page${result.preservedPaths.length === 1 ? "" : "s"} edited after import: ${result.preservedPaths.map((entry) => entry.recoveryPath).join(", ")}.`
+      ? terminalText` Preserved ${result.preservedPaths.length} page${result.preservedPaths.length === 1 ? "" : "s"} edited after import: ${result.preservedPaths.map((entry) => entry.recoveryPath).join(", ")}.`
       : "";
   if (result.alreadyRolledBack) {
-    return `ChatGPT import run ${result.runId} was already rolled back.${preservedNote}`;
+    return terminalText`ChatGPT import run ${result.runId} was already rolled back.${preservedNote}`;
   }
-  return `Rolled back ChatGPT import run ${result.runId} (${result.removedCount} removed, ${result.restoredCount} restored).${preservedNote} Refreshed ${result.indexUpdatedFiles.length} index file${result.indexUpdatedFiles.length === 1 ? "" : "s"}.`;
+  return terminalText`Rolled back ChatGPT import run ${result.runId} (${result.removedCount} removed, ${result.restoredCount} restored).${preservedNote} Refreshed ${result.indexUpdatedFiles.length} index file${result.indexUpdatedFiles.length === 1 ? "" : "s"}.`;
 }
 
 export function registerWikiCli(program: Command, registration: MemoryWikiCliRegistration) {
@@ -544,7 +570,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
         await initializeMemoryWikiVault(config),
         opts.json,
         (value) =>
-          `Initialized wiki vault at ${value.rootDir} (${value.createdDirectories.length} dirs, ${value.createdFiles.length} files).`,
+          terminalText`Initialized wiki vault at ${value.rootDir} (${value.createdDirectories.length} dirs, ${value.createdFiles.length} files).`,
       );
     });
 
@@ -557,7 +583,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
         await compileMemoryWikiVault(config),
         opts.json,
         (value) =>
-          `Compiled wiki vault at ${value.vaultRoot} (${value.pages.length} pages, ${value.updatedFiles.length} indexes updated).`,
+          terminalText`Compiled wiki vault at ${value.vaultRoot} (${value.pages.length} pages, ${value.updatedFiles.length} indexes updated).`,
       );
     });
 
@@ -570,7 +596,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
         await lintMemoryWikiVault(config),
         opts.json,
         (value) =>
-          `Linted wiki vault at ${value.vaultRoot} (${value.issueCount} issues, report: ${value.reportPath}).`,
+          terminalText`Linted wiki vault at ${value.vaultRoot} (${value.issueCount} issues, report: ${value.reportPath}).`,
       );
     });
 
@@ -584,7 +610,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
         await ingestMemoryWikiSource({ config, inputPath, title: opts.title }),
         opts.json,
         (value) =>
-          `Ingested ${value.sourcePath} into ${value.pagePath}. Refreshed ${value.indexUpdatedFiles.length} index file${value.indexUpdatedFiles.length === 1 ? "" : "s"}.`,
+          terminalText`Ingested ${value.sourcePath} into ${value.pagePath}. Refreshed ${value.indexUpdatedFiles.length} index file${value.indexUpdatedFiles.length === 1 ? "" : "s"}.`,
       );
     });
 
@@ -659,7 +685,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
       });
       const summary = opts.json
         ? JSON.stringify(result, null, 2)
-        : (result?.content ?? `Wiki page not found: ${lookup}`);
+        : (result?.content ?? terminalText`Wiki page not found: ${lookup}`);
       writeOutput(summary);
     });
 
@@ -750,7 +776,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
         await syncMemoryWikiImportedSources({ config, appConfig }),
         opts.json,
         (value) =>
-          `Unsafe-local import synced ${value.artifactCount} artifacts (${value.importedCount} new, ${value.updatedCount} updated, ${value.skippedCount} unchanged, ${value.removedCount} removed). Indexes ${value.indexesRefreshed ? `refreshed (${value.indexUpdatedFiles.length} files)` : `not refreshed (${value.indexRefreshReason})`}.`,
+          terminalText`Unsafe-local import synced ${value.artifactCount} artifacts (${value.importedCount} new, ${value.updatedCount} updated, ${value.skippedCount} unchanged, ${value.removedCount} removed). Indexes ${value.indexesRefreshed ? `refreshed (${value.indexUpdatedFiles.length} files)` : `not refreshed (${value.indexRefreshReason})`}.`,
       );
     });
 
@@ -797,7 +823,7 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
       requireCommandContext();
       printWikiResult(await probeObsidianCli(), opts.json, (value) =>
         value.available
-          ? `Obsidian CLI available at ${value.command}`
+          ? terminalText`Obsidian CLI available at ${value.command}`
           : "Obsidian CLI is not available on PATH.",
       );
     });
@@ -810,10 +836,10 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
     const run = async (value: string | undefined, opts: WikiJsonOptions) => {
       const { config } = requireCommandContext();
       assertOfficialObsidianCliSupported(config);
-      printWikiResult(
-        await runObsidianAction({ config, action, value }),
-        opts.json,
-        (result) => result.stdout.trim() || action.success,
+      const result = await runObsidianAction({ config, action, value });
+      // External command stdout is raw output, rather than a Wiki report.
+      writeOutput(
+        opts.json ? JSON.stringify(result, null, 2) : result.stdout.trim() || action.success,
       );
     };
     if (action.argument) {

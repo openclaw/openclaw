@@ -1,6 +1,6 @@
-import { once } from "node:events";
 import { buildControlUiPublicSessionSharePath } from "@openclaw/session-url-contract/public-share";
 import { expect, it, vi } from "vitest";
+import * as httpFixtures from "../../test/helpers/gateway-integration-fixtures.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   patchSessionEntryCore,
@@ -90,17 +90,11 @@ it("serves public text and images through real publication, isolation, and revoc
     });
     try {
       await projection.ensureMaterialized();
-      server.listen(0, "127.0.0.1");
-      await once(server, "listening");
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("HTTP fixture has no address");
-      }
+      const origin = await httpFixtures.listenLoopback(server);
       const codec = await loadPublicSessionShareTokenCodec();
       const token = codec.mint(locator);
       const otherToken = codec.mint(other);
       const path = buildControlUiPublicSessionSharePath({ token });
-      const origin = `http://127.0.0.1:${address.port}`;
       const mediaUrl = (shareToken: string, entry: string) =>
         `${origin}/share/session/media?${new URLSearchParams({ token: shareToken, entry, attachment: "content-0" })}`;
       const paths = [path, "/chat/main/public-concurrency-bbbbbbbbaaaa40008000000000000001"];

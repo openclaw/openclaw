@@ -19,7 +19,9 @@ import {
 } from "../../config/runtime-snapshot.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import * as logger from "../../logger.js";
+import { createEmptyPluginSetupRegistry } from "../../plugins/setup-registry.test-support.js";
 import * as statusText from "../../status/status-text.js";
+import { expectText } from "../../test-utils/text-assertions.js";
 import { buildStatusPluginsReply, buildStatusText } from "./commands-status.js";
 import { buildKiraStatusReply, buildStatusReplyForTest } from "./commands-status.test-support.js";
 import { baseCommandTestConfig, buildCommandTestParams } from "./commands.test-harness.js";
@@ -116,15 +118,6 @@ const statusDefaults = {
 
 async function renderStatus(params: Partial<StatusTextParams>) {
   return normalizeTestText(await buildStatusText({ ...statusDefaults, ...params }));
-}
-
-function expectText(text: string, includes: string[], excludes: string[] = []) {
-  for (const part of includes) {
-    expect(text).toContain(part);
-  }
-  for (const part of excludes) {
-    expect(text).not.toContain(part);
-  }
 }
 
 function expectSelectedUsage(text: string, extra: string[] = []) {
@@ -249,13 +242,7 @@ describe("buildStatusReply subagent summary", () => {
   beforeEach(async () => {
     setRuntimeConfigSnapshot(baseCfg);
     cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupRegistry: () => ({
-        providers: [],
-        cliBackends: [],
-        configMigrations: [],
-        autoEnableProbes: [],
-        diagnostics: [],
-      }),
+      resolvePluginSetupRegistry: () => createEmptyPluginSetupRegistry(),
       resolveRuntimeCliBackends: () => [
         {
           id: "claude-cli",
@@ -433,11 +420,7 @@ describe("buildStatusReply subagent summary", () => {
     });
 
     const text = await renderStatus({
-      sessionEntry: {
-        sessionId: "sess-status-kimi-k3",
-        updatedAt: 0,
-        thinkingLevel: "off",
-      },
+      sessionEntry: { sessionId: "sess-status-kimi-k3", updatedAt: 0, thinkingLevel: "off" },
       provider: "moonshot",
       model: "kimi-k3",
       contextTokens: 262_144,
@@ -492,9 +475,7 @@ it("shows per-agent thinkingDefault in the status card", async () => {
     ...kiraConfig,
     agents: {
       ...kiraConfig.agents,
-      entries: {
-        kira: { model: "openai/gpt-5.4", thinkingDefault: "xhigh" },
-      },
+      entries: { kira: { model: "openai/gpt-5.4", thinkingDefault: "xhigh" } },
     },
   } satisfies OpenClawConfig;
 

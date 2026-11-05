@@ -107,10 +107,8 @@ describe("CORE_HEALTH_CHECKS", () => {
         checkId: "gateway.bind_no_auth",
         severity: "critical",
         title: "CRITICAL",
-        detail:
-          'Gateway bound to "lan" (0.0.0.0) without authentication.\nAnyone on your network can fully control your agent.',
-        remediation:
-          "Fix: openclaw config set gateway.bind loopback\nFix: openclaw doctor --fix to generate a token",
+        detail: "Gateway is exposed.\nAnyone can control it.",
+        remediation: "Bind to loopback.\nGenerate a token.",
       },
     ]);
     const check = getCheck(createCoreHealthChecks(), "core/doctor/security");
@@ -120,9 +118,8 @@ describe("CORE_HEALTH_CHECKS", () => {
       expect.objectContaining({
         checkId: "core/doctor/security",
         severity: "error",
-        message: 'CRITICAL: Gateway bound to "lan" (0.0.0.0) without authentication.',
-        fixHint:
-          "Anyone on your network can fully control your agent.\nFix: openclaw config set gateway.bind loopback\nFix: openclaw doctor --fix to generate a token",
+        message: "CRITICAL: Gateway is exposed.",
+        fixHint: "Anyone can control it.\nBind to loopback.\nGenerate a token.",
       }),
     ]);
   });
@@ -132,10 +129,8 @@ describe("CORE_HEALTH_CHECKS", () => {
       enabled: false,
       config: { appServer: { command: "node -e process.exit(99)" } },
     };
-    const findings = await check.detect({
-      mode: "lint",
-      runtime,
-      cfg: {
+    const findings = await check.detect(
+      context({
         plugins: { entries: { codex } },
         agents: {
           defaults: {
@@ -143,8 +138,8 @@ describe("CORE_HEALTH_CHECKS", () => {
             params: { temperature: 0.7 },
           },
         },
-      } as unknown as OpenClawConfig,
-    });
+      } as unknown as OpenClawConfig),
+    );
     expect(findings.map((finding) => finding.message)).toEqual(
       expect.arrayContaining([
         expect.stringContaining("Codex plugin is disabled by config"),
@@ -247,18 +242,13 @@ describe("CORE_HEALTH_CHECKS", () => {
   });
 
   it("converts workspace suggestions into info findings", async () => {
-    mocks.collectWorkspaceSuggestionNotes.mockReturnValue([
-      "- Back up the workspace.",
-      "Memory system not found in workspace.",
-    ]);
+    const messages = ["Back up the workspace.", "Memory system not found in workspace."] as const;
+    mocks.collectWorkspaceSuggestionNotes.mockReturnValue([`- ${messages[0]}`, messages[1]]);
     const check = getCheck(createCoreHealthChecks(), "core/doctor/workspace-suggestions");
-    const findings = await check.detect({
-      mode: "lint",
-      runtime,
-      cfg: { agents: { defaults: { workspace: "/tmp/openclaw-test-workspace" } } },
-      cwd: "/tmp/openclaw-test-workspace",
-    });
-    for (const message of ["Back up the workspace.", "Memory system not found in workspace."]) {
+    const findings = await check.detect(
+      context({ agents: { defaults: { workspace: "/tmp/openclaw-test-workspace" } } }),
+    );
+    for (const message of messages) {
       expectFinding(findings, {
         checkId: "core/doctor/workspace-suggestions",
         severity: "info",
@@ -269,41 +259,45 @@ describe("CORE_HEALTH_CHECKS", () => {
 
   it("distinguishes migratable model refs from unknown providers and unconfirmed models", async () => {
     const check = getCheck(createCoreHealthChecks(), "core/doctor/model-references");
-
+    const migrations = [
+      ["openai-codex/gpt-5.6-sol", "openai/gpt-5.6-sol", "warning"],
+      ["codex-cli/gpt-5.6-sol", "openai/gpt-5.6-sol", "warning"],
+      ["google-gemini-cli/gemini-2.5-pro", "google/gemini-2.5-pro", "info"],
+    ] as const;
+    const unconfirmed = [
+      "groq/llama3-70b-8192",
+      "groq/llama-3.3-70b-versatile",
+      "openai/not-in-the-local-catalog",
+      "google/not-in-the-local-catalog",
+    ];
+    // OpenRouter's decision-only seed rows do not establish a conversational catalog.
+    const accepted = [
+      "groq/openai/gpt-oss-120b",
+      "google/gemini-2.5-flash",
+      "google/gemini-3.8-flash",
+      "openrouter/auto",
+      "openrouter/deepseek/deepseek-v4-pro",
+    ];
     const findings = await check.detect({
-      mode: "doctor",
-      runtime,
-      cfg: {
+      ...context({
         agents: {
           defaults: {
             model: {
-              primary: "openai-codex/gpt-5.6-sol",
+              primary: migrations[0][0],
               fallbacks: [
-                "codex-cli/gpt-5.6-sol",
-                "groq/llama3-70b-8192",
-                "groq/llama-3.3-70b-versatile",
-                "groq/openai/gpt-oss-120b",
-                "openai/not-in-the-local-catalog",
-                "google/gemini-2.5-flash",
-                "google/gemini-3.8-flash",
-                "google/not-in-the-local-catalog",
-                "google-gemini-cli/gemini-2.5-pro",
-                "openrouter/auto",
-                "openrouter/deepseek/deepseek-v4-pro",
+                ...migrations.slice(1).map(([source]) => source),
+                ...unconfirmed,
+                ...accepted,
               ],
             },
             imageModel: { primary: "no-such-provider/no-such-model" },
           },
         },
-      },
+      }),
+      mode: "doctor",
     });
 
-    for (const [source, target, severity] of [
-      ["openai-codex/gpt-5.6-sol", "openai/gpt-5.6-sol", "warning"],
-      ["codex-cli/gpt-5.6-sol", "openai/gpt-5.6-sol", "warning"],
-      ["groq/llama3-70b-8192", "groq/llama-3.3-70b-versatile", "info"],
-      ["google-gemini-cli/gemini-2.5-pro", "google/gemini-2.5-pro", "info"],
-    ] as const) {
+    for (const [source, target, severity] of migrations) {
       expectFinding(findings, {
         severity,
         target: source,
@@ -311,11 +305,7 @@ describe("CORE_HEALTH_CHECKS", () => {
         fixHint: `Run \`openclaw doctor --fix\` to migrate this model reference to "${target}".`,
       });
     }
-    for (const target of [
-      "groq/llama-3.3-70b-versatile",
-      "openai/not-in-the-local-catalog",
-      "google/not-in-the-local-catalog",
-    ]) {
+    for (const target of unconfirmed) {
       expectFinding(findings, {
         severity: "info",
         target,
@@ -329,14 +319,9 @@ describe("CORE_HEALTH_CHECKS", () => {
       fixHint:
         "Install a plugin that declares this provider, configure it under models.providers, or remove the model reference.",
     });
-    // OpenRouter's decision-only seed rows do not establish a conversational catalog.
-    for (const target of [
-      "groq/openai/gpt-oss-120b",
-      "google/gemini-2.5-flash",
-      "google/gemini-3.8-flash",
-      "openrouter/openrouter/auto",
-      "openrouter/deepseek/deepseek-v4-pro",
-    ]) {
+    for (const target of accepted.map((ref) =>
+      ref === "openrouter/auto" ? "openrouter/openrouter/auto" : ref,
+    )) {
       expect(findings).not.toContainEqual(expect.objectContaining({ target }));
     }
   });

@@ -77,16 +77,22 @@ function spawnSecret(script: string, createData: () => Buffer) {
 }
 
 describe("Windows secret input delivery", () => {
-  it("completes on accepted bytes and consumes late errors until the pipe closes", async () => {
+  it.each([false, true])("settles writes and consumes late errors (failed=%s)", async (failed) => {
     const stream = new ControlledSecretStream();
     const write = writeSecret(stream);
     expect(stream.written?.toString()).toBe("selected-secret");
-    stream.finishWrite();
-    await expect(write).resolves.toBeUndefined();
-    expect(stream.destroyed).toBe(true);
-    expect(stream.written?.every((byte) => byte === 0)).toBe(true);
-    const reset = Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
-    expect(() => stream.emit("error", reset)).not.toThrow();
+    const error = failed
+      ? new Error("secret delivery failed")
+      : Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+    stream.finishWrite(failed ? error : undefined);
+    if (failed) {
+      await expect(write).rejects.toBe(error);
+    } else {
+      await expect(write).resolves.toBeUndefined();
+      expect(stream.destroyed).toBe(true);
+      expect(stream.written?.every((byte) => byte === 0)).toBe(true);
+    }
+    expect(() => stream.emit("error", error)).not.toThrow();
     expect(stream.listenerCount("error")).toBe(1);
     stream.emit("close");
     expect(stream.listenerCount("error")).toBe(0);
@@ -98,19 +104,6 @@ describe("Windows secret input delivery", () => {
     const write = writeSecret(stream, abort.signal);
     abort.abort();
     await expect(write).rejects.toThrow("secret delivery aborted");
-  });
-
-  it("rejects delivery errors before consuming their later stream event", async () => {
-    const stream = new ControlledSecretStream();
-    const write = writeSecret(stream);
-    const deliveryError = new Error("secret delivery failed");
-
-    stream.finishWrite(deliveryError);
-    await expect(write).rejects.toBe(deliveryError);
-    expect(() => stream.emit("error", deliveryError)).not.toThrow();
-
-    stream.emit("close");
-    expect(stream.listenerCount("error")).toBe(0);
   });
 });
 

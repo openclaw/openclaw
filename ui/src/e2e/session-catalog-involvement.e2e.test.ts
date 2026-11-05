@@ -7,6 +7,7 @@ import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-d
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { ownerRoster, sessionPerson } from "./session-ownership-fixtures.test-support.ts";
 import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 import {
   chooseSidebarMenuOption,
@@ -20,14 +21,8 @@ suite.define(() => {
   it("keeps only Gateway-admitted catalog conversations under Involving me", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const sidebar = page.locator(".sidebar");
-      const actor = (id: string, label: string) => ({
-        type: "human" as const,
-        id,
-        label,
-        identity: { type: "profile" as const, id },
-      });
-      const viewer = actor("profile-ada", "Ada");
-      const other = actor("profile-bob", "Bob");
+      const viewer = sessionPerson("profile-ada", "Ada");
+      const other = sessionPerson("profile-bob", "Bob");
       const session = (sessionId: string, label: string, updatedAt: number, owner = other) => ({
         key: `agent:main:${sessionId === "own" ? sessionId : `${sessionId}-catalog`}`,
         sessionId,
@@ -41,14 +36,9 @@ suite.define(() => {
       const involved = session("involved", "Collaborative coding", 2);
       const unrelated = session("unrelated", "Another person's coding", 1);
       const response = {
-        ts: 1,
-        path: "",
-        count: 3,
+        ...ownerRoster([native, involved, unrelated], [viewer, other]),
         hasMore: false,
         nextOffset: null,
-        defaults: { contextTokens: null, model: null, modelProvider: null },
-        owners: [viewer, other],
-        sessions: [native, involved, unrelated],
       };
       const entry = (threadId: string, name: string, sessionKey?: string) => ({
         threadId,
@@ -60,43 +50,25 @@ suite.define(() => {
         canArchive: false,
         createdActor: other,
       });
-      const catalog = (
-        id: string,
-        label: string,
-        hostId: string,
-        hostLabel: string,
-        sessions: ReturnType<typeof entry>[],
-        continueSession = false,
-      ) => ({
-        id,
-        label,
-        capabilities: { continueSession, archive: false },
-        hosts: [
-          {
-            hostId,
-            label: hostLabel,
-            kind: hostId.startsWith("node:") ? "node" : "gateway",
-            connected: true,
-            sessions,
-          },
-        ],
-      });
       const catalogs = [
-        catalog("session-share", "OpenClaw sessions", "node:remote", "Remote", [
-          entry("shared", "Remote shared conversation"),
-        ]),
-        catalog("beam", "Beam", "gateway", "Imported", [entry("imported", "Imported meeting")]),
-        catalog(
-          "codex",
-          "Coding",
-          "gateway:local",
-          "Local",
-          [
-            entry("involved", involved.label, involved.key),
-            entry("unrelated", unrelated.label, unrelated.key),
+        {
+          id: "codex",
+          label: "Coding",
+          capabilities: { continueSession: true, archive: false },
+          hosts: [
+            {
+              hostId: "gateway:local",
+              label: "Local",
+              kind: "gateway",
+              connected: true,
+              sessions: [
+                entry("unlinked", "Unlinked conversation"),
+                entry("involved", involved.label, involved.key),
+                entry("unrelated", unrelated.label, unrelated.key),
+              ],
+            },
           ],
-          true,
-        ),
+        },
       ];
       const gateway = await installMockGateway(page, {
         sessionKey: native.key,
@@ -127,20 +99,18 @@ suite.define(() => {
       await selectAllSidebarSessions(page);
       await chooseSidebarMenuOption(page, "Status", "All");
       await closeSidebarMenu(page);
-      // Coding starts collapsed; open each source so filter assertions inspect actual rows.
+      // Open the source so filter assertions inspect actual rows.
       const coding = page.getByRole("button", { name: "Coding", exact: true });
       if (await coding.count()) {
         await coding.click();
       }
-      for (const id of ["session-share", "beam", "codex"]) {
-        const toggle = page
-          .locator(`[data-session-section="catalog:${id}"] .sidebar-session-group-toggle`)
-          .first();
-        if ((await toggle.count()) && (await toggle.getAttribute("aria-expanded")) === "false") {
-          await toggle.click();
-        }
+      const toggle = page
+        .locator('[data-session-section="catalog:codex"] .sidebar-session-group-toggle')
+        .first();
+      if ((await toggle.count()) && (await toggle.getAttribute("aria-expanded")) === "false") {
+        await toggle.click();
       }
-      await expectVisible("Remote shared conversation", "Imported meeting", involved.label);
+      await expectVisible("Unlinked conversation", involved.label);
       await chooseSidebarOwner(page, "involving-me");
       await expect
         .poll(
@@ -159,11 +129,10 @@ suite.define(() => {
         );
         await writeFile(path.join(directory, "involving-me.png"), frame.png);
       }
-      await expectBrowser(text("Remote shared conversation")).toHaveCount(0);
-      await expectBrowser(text("Imported meeting")).toHaveCount(0);
+      await expectBrowser(text("Unlinked conversation")).toHaveCount(0);
       await expectBrowser(text(unrelated.label)).toHaveCount(0);
       await selectAllSidebarSessions(page);
-      await expectVisible("Remote shared conversation", "Imported meeting", unrelated.label);
+      await expectVisible("Unlinked conversation", unrelated.label);
     });
   });
 });

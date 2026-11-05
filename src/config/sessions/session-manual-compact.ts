@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
+import { createSessionIdentityResultPublisher } from "./session-accessor.sqlite-identity.js";
 import {
   toDatabaseOptions,
   type ResolvedTranscriptScope,
@@ -73,17 +73,6 @@ export function trimSessionTranscriptInWorker(
           },
         }),
       ),
-    onCommitted(candidate, published, identity) {
-      if (published) {
-        publishCommittedSessionIdentity(
-          scope.agentId,
-          identity,
-          published.previous,
-          published.current,
-          published.prepared,
-        );
-      }
-      return candidate.result;
-    },
+    onCommitted: createSessionIdentityResultPublisher(scope),
   });
 }

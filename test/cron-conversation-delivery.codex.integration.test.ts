@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
@@ -28,7 +29,7 @@ describe("Codex conversation delivery and cron retry", () => {
       const params = makeIsolatedAgentParamsFixture();
       setRuntimeConfigSnapshot(params.cfg);
       const { createCodexDynamicToolBridge } = await import("../extensions/codex/test-api.js");
-      const { createConversationsSendTool } =
+      const { createHostedConversationTools } =
         await import("../src/agents/tools/conversation-tools.js");
       const gateway = await import("../src/agents/tools/in-process-gateway.js");
       pickLastNonEmptyTextFromPayloadsMock.mockImplementation(
@@ -42,7 +43,12 @@ describe("Codex conversation delivery and cron retry", () => {
         messageId: "prepared-id",
       });
       runEmbeddedAgentMock.mockImplementationOnce(async () => {
-        const tool = createConversationsSendTool({ agentId: "main" });
+        const tool = expectDefined(
+          createHostedConversationTools(undefined, "main", {}).find(
+            (entry) => entry.name === "conversations_send",
+          ),
+          "conversation send tool",
+        );
         const bridge = createCodexDynamicToolBridge({
           tools: [tool],
           signal: new AbortController().signal,

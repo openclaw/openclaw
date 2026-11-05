@@ -67,7 +67,6 @@ export type MediaGenerateToolOptions = {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   sandbox?: MediaToolSandbox;
   fsPolicy?: ToolFsPolicy;
-  scheduleBackgroundWork?: MediaGenerateBackgroundScheduler;
 };
 
 const GENERATION_LABELS = {
@@ -96,7 +95,6 @@ export function resolveMediaGenerateToolContext<K extends keyof typeof GENERATIO
         agentDir: options?.agentDir,
         workspaceDir: options?.workspaceDir,
         authStore: options?.authProfileStore,
-        authProfileStoreSource: options?.authProfileStoreSource,
         modelConfig: cfg.agents?.defaults?.mediaModels?.[GENERATION_LABELS[providerKey]],
         providerKey,
         providers: preparedProviders,
@@ -105,12 +103,10 @@ export function resolveMediaGenerateToolContext<K extends keyof typeof GENERATIO
   ) {
     return null;
   }
-  const scheduleBackgroundWork =
-    options?.scheduleBackgroundWork ??
-    createDefaultMediaGenerateBackgroundScheduler({
-      toolName: `${GENERATION_LABELS[providerKey]}_generate`,
-      onCrash: (message, meta) => logger.error(message, meta),
-    });
+  const scheduleBackgroundWork = createDefaultMediaGenerateBackgroundScheduler({
+    toolName: `${GENERATION_LABELS[providerKey]}_generate`,
+    onCrash: (message, meta) => logger.error(message, meta),
+  });
   const outputSandbox = options?.sandbox;
   const sandboxSessionKey = options?.sandboxSessionKey ?? options?.agentSessionKey;
   const readOutputPolicy = (config: OpenClawConfig) => ({

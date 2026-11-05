@@ -148,18 +148,23 @@ export function getCustomProviderApiKey(
   return (ref.source === "env" && ref.id.trim()) || NON_ENV_SECRETREF_MARKER;
 }
 
-type ResolvedCustomProviderApiKey = {
-  apiKey: string;
-  source: string;
-};
-
 /** Resolves custom provider API keys that are usable without mutating secret stores. */
 export function resolveUsableCustomProviderApiKey(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   env?: NodeJS.ProcessEnv;
   secretSentinels?: boolean;
-}): ResolvedCustomProviderApiKey | null {
+  authStore?: AuthProfileStore;
+}): {
+  apiKey: string;
+  source: string;
+} | null {
+  if (
+    params.authStore &&
+    (resolveInlineProviderApiKeyCooldownUntil(params.authStore, params.provider) ?? 0) > Date.now()
+  ) {
+    return null;
+  }
   const input = resolveProviderConfigSecretInput(params.cfg, params.provider);
   const { providerConfig: customProviderConfig, ref: apiKeyRef } = input;
   if (apiKeyRef) {

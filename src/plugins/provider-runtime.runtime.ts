@@ -10,10 +10,6 @@ export const augmentModelCatalogWithProviderPlugins = bindProviderRuntime(
   (runtime) => runtime.augmentModelCatalogWithProviderPlugins,
 );
 
-export const buildProviderAuthDoctorHintWithPlugin = bindProviderRuntime(
-  (runtime) => runtime.buildProviderAuthDoctorHintWithPlugin,
-);
-
 export const formatProviderAuthProfileApiKeyWithPlugin = bindProviderRuntime(
   (runtime) => runtime.formatProviderAuthProfileApiKeyWithPlugin,
 );

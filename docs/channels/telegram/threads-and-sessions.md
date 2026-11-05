@@ -48,12 +48,16 @@ How forum topics map to sessions, agents, and ACP bindings.
 
     **Thread-bound ACP spawn from chat**: `/acp spawn <agent> --thread here|auto` binds the current topic to a new ACP session; follow-ups route there directly, and OpenClaw pins the spawn confirmation in-topic. Controlled by `session.threadBindings.spawnSessions` (default: `true`).
 
+    Bindings to ordinary OpenClaw sessions retain their target after reload or restart and are not checked as ACP sessions during startup cleanup. Idle and maximum-age expiry still apply.
+
     Startup waits for stored thread bindings before accepting updates. Shutdown drains accepted binding changes before a replacement bot reloads them. Bundled Telegram handlers persist bindings through the shared SQLite worker so storage does not block message handling. Deprecated synchronous Plugin SDK touch and lifecycle setters keep their immediate behavior on the same binding owner until the next SDK major.
 
     Disabling `threadBindings.enabled` globally, for Telegram, or for one account leaves ordinary Telegram messages working.
 
-    Template context exposes `MessageThreadId` and `IsForum`. DM chats with `message_thread_id` keep reply metadata but only use thread-aware session keys when Telegram `getMe` reports `has_topics_enabled: true`.
+    Template context exposes `MessageThreadId` and `IsForum`. DM chats with `message_thread_id` use thread-aware session keys when Telegram reports topics enabled. Native private-topic messages and title updates also establish topic scope when startup `getMe` data is stale.
     The retired `dm.threadReplies` and `direct.*.threadReplies` overrides are gone; BotFather threaded mode is the single source of truth. Run `openclaw doctor --fix` to remove stale config keys.
+
+    Observed private-topic creation and rename events update the existing session's name in the connected Control UI without starting an agent turn. A manually chosen session label keeps priority over the native topic name. Renaming an unmessaged topic does not create a session.
 
     Some Telegram clients create a DM topic in threaded mode but deliver the user's first message to the root chat: the bot sees a `forum_topic_created` service message with the new `message_thread_id`, then the message itself without one. When the same user's root message arrives within 3 seconds of a topic they created, OpenClaw treats it as the first message of that topic, so the session and the reply land in the topic instead of leaving it empty. Topics created by the bot and group chats are not affected.
 

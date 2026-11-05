@@ -5,56 +5,21 @@ import {
   createMockChatLog,
   makeTuiState,
 } from "./tui-event-test-support.js";
+import type { ChatEvent } from "./tui-types.js";
 
 afterEach(() => vi.useRealTimers());
+const cancellationNotice = "Cancellation requested; the local model may still be finishing.";
 
-it("renders local model waits with verbosity off and clears each wait", () => {
+function createHarness(modelWait = false, sideQuestion = false) {
   vi.useFakeTimers();
-  const state = makeTuiState({ activeChatRunId: "run-1", sessionInfo: { verboseLevel: "off" } });
-  const setActivityStatus = vi.fn();
-  const handlers = createEventHandlers({
-    state,
-    setActivityStatus,
-    chatLog: createMockChatLog(),
-    btw: createMockBtwPresenter(),
-    tui: { requestRender: vi.fn() },
-    updateFooter: vi.fn(),
-    loadHistory: async () => ({ loaded: true, runOutcome: { state: "completed" } }),
+  const state = makeTuiState({
+    activeChatRunId: "run-1",
+    ...(modelWait ? { sessionInfo: { verboseLevel: "off" } } : {}),
   });
-  onTestFinished(handlers.dispose);
-  const status = (phase: string, reason?: "slot" | "response") =>
-    handlers.handleAgentEvent({
-      runId: "run-1",
-      stream: "run_status",
-      data: { phase, reason },
-    });
-  status("waiting_for_model", "slot");
-  expect(setActivityStatus).toHaveBeenLastCalledWith("Waiting for a free model slot");
-  status("starting_model");
-  expect(setActivityStatus).toHaveBeenLastCalledWith("running");
-  status("waiting_for_model", "response");
-  expect(setActivityStatus).toHaveBeenLastCalledWith("Waiting for the local model to respond");
-  handlers.handleChatEvent({
-    runId: "run-1",
-    sessionKey: state.currentSessionKey,
-    state: "delta",
-    message: { role: "assistant", content: "First response" },
-  });
-  expect(setActivityStatus).toHaveBeenLastCalledWith("streaming");
-  status("waiting_for_model", "slot");
-  handlers.handleChatEvent({
-    runId: "run-1",
-    sessionKey: state.currentSessionKey,
-    state: "aborted",
-  });
-  expect(setActivityStatus).toHaveBeenLastCalledWith("aborted");
-});
-
-function createCancellationHarness(isLocalBtwRunId?: (runId: string) => boolean) {
-  vi.useFakeTimers();
-  const state = makeTuiState({ activeChatRunId: "run-1" });
   const setActivityStatus = vi.fn((status: string) => {
-    state.activityStatus = status;
+    if (!modelWait) {
+      state.activityStatus = status;
+    }
   });
   const chatLog = createMockChatLog();
   const handlers = createEventHandlers({
@@ -64,104 +29,96 @@ function createCancellationHarness(isLocalBtwRunId?: (runId: string) => boolean)
     btw: createMockBtwPresenter(),
     tui: { requestRender: vi.fn() },
     updateFooter: vi.fn(),
-    loadHistory: async () => ({ loaded: false }),
-    isLocalBtwRunId,
+    loadHistory: async () =>
+      modelWait ? { loaded: true, runOutcome: { state: "completed" } } : { loaded: false },
+    isLocalBtwRunId: sideQuestion ? (id) => id === "side-run" : undefined,
   });
   onTestFinished(handlers.dispose);
-  const aborted = {
-    runId: "run-1",
-    sessionKey: state.currentSessionKey,
-    state: "aborted",
-    localModelMayStillBeFinishing: true,
-  };
-  return { state, setActivityStatus, chatLog, handlers, aborted };
+  const chat = (event: Omit<ChatEvent, "runId" | "sessionKey"> & { runId?: string }) =>
+    handlers.handleChatEvent({ runId: "run-1", sessionKey: state.currentSessionKey, ...event });
+  const abort = () => chat({ state: "aborted", localModelMayStillBeFinishing: true });
+  const status = (phase: string, reason?: "slot" | "response") =>
+    handlers.handleAgentEvent({ runId: "run-1", stream: "run_status", data: { phase, reason } });
+  const expectStatus = (value: string) => expect(setActivityStatus).toHaveBeenLastCalledWith(value);
+  return { state, setActivityStatus, chatLog, handlers, chat, abort, status, expectStatus };
 }
 
-it("bounds the terminal cancellation caveat without rearming it on replay", () => {
-  const { state, setActivityStatus, chatLog, handlers, aborted } = createCancellationHarness();
-  handlers.handleChatEvent(aborted);
-  expect(state.activeChatRunId).toBeNull();
-  expect(setActivityStatus).toHaveBeenLastCalledWith(
-    "Cancellation requested; the local model may still be finishing.",
-  );
-  expect(chatLog.addSystem).toHaveBeenCalledExactlyOnceWith("run aborted");
-  vi.advanceTimersByTime(4_000);
-  handlers.handleChatEvent(aborted);
-  vi.advanceTimersByTime(1_000);
-  expect(setActivityStatus).toHaveBeenLastCalledWith("aborted");
+it("renders local model waits with verbosity off and clears each wait", () => {
+  const h = createHarness(true);
+  h.status("waiting_for_model", "slot");
+  h.expectStatus("Waiting for a free model slot");
+  h.status("starting_model");
+  h.expectStatus("running");
+  h.status("waiting_for_model", "response");
+  h.expectStatus("Waiting for the local model to respond");
+  h.chat({ state: "delta", message: { role: "assistant", content: "First response" } });
+  h.expectStatus("streaming");
+  h.status("waiting_for_model", "slot");
+  h.chat({ state: "aborted" });
+  h.expectStatus("aborted");
 });
 
-it("preserves the cancellation caveat while a surviving side question completes", () => {
-  const { state, handlers, aborted } = createCancellationHarness((runId) => runId === "side-run");
-  handlers.handleChatEvent(aborted);
-  vi.advanceTimersByTime(4_000);
-  handlers.handleChatEvent({
-    runId: "side-run",
-    sessionKey: state.currentSessionKey,
-    state: "final",
-  });
-  expect(state.activityStatus).toBe(
-    "Cancellation requested; the local model may still be finishing.",
-  );
-  vi.advanceTimersByTime(1_000);
-  expect(state.activityStatus).toBe("aborted");
-});
-
-it("preserves the terminal caveat when the cancelled session reports idle", () => {
-  const { state, setActivityStatus, handlers, aborted } = createCancellationHarness();
-  handlers.handleChatEvent(aborted);
-  handlers.handleAgentEvent({
-    runId: aborted.runId,
-    stream: "run_status",
-    data: { phase: "starting_model" },
-  });
-  handlers.handleAgentEvent({
-    runId: aborted.runId,
-    stream: "lifecycle",
-    data: { phase: "end", status: "cancelled", aborted: true },
-  });
-  handlers.handleSessionsChangedEvent({
-    sessionKey: state.currentSessionKey,
-    sessionId: state.currentSessionId,
-    reason: "agent.input.settled",
-    activeRunIds: [],
-  });
-  expect(setActivityStatus).toHaveBeenLastCalledWith(
-    "Cancellation requested; the local model may still be finishing.",
-  );
-  expect(state.activityStatus).toBe(
-    "Cancellation requested; the local model may still be finishing.",
-  );
-  vi.advanceTimersByTime(5_000);
-  expect(setActivityStatus).toHaveBeenLastCalledWith("aborted");
-});
+it.each(["replayed abort", "side question", "session idle"] as const)(
+  "preserves the cancellation caveat and its deadline through %s",
+  (event) => {
+    const h = createHarness(false, event === "side question");
+    h.abort();
+    expect(h.state.activeChatRunId).toBeNull();
+    h.expectStatus(cancellationNotice);
+    expect(h.chatLog.addSystem).toHaveBeenCalledExactlyOnceWith("run aborted");
+    const elapsed = event === "session idle" ? 0 : 4_000;
+    vi.advanceTimersByTime(elapsed);
+    if (event === "replayed abort") {
+      h.abort();
+    } else if (event === "side question") {
+      h.chat({ runId: "side-run", state: "final" });
+    } else {
+      h.status("starting_model");
+      h.handlers.handleAgentEvent({
+        runId: "run-1",
+        stream: "lifecycle",
+        data: { phase: "end", status: "cancelled", aborted: true },
+      });
+      h.handlers.handleSessionsChangedEvent({
+        sessionKey: h.state.currentSessionKey,
+        sessionId: h.state.currentSessionId,
+        reason: "agent.input.settled",
+        activeRunIds: [],
+      });
+    }
+    h.expectStatus(cancellationNotice);
+    expect(h.state.activityStatus).toBe(cancellationNotice);
+    vi.advanceTimersByTime(5_000 - elapsed);
+    h.expectStatus("aborted");
+    expect(h.state.activityStatus).toBe("aborted");
+  },
+);
 
 it.each(["new run", "pending run", "session change", "dispose"] as const)(
   "clears the cancellation notice on %s without overwriting later activity",
   (change) => {
-    const { state, setActivityStatus, handlers, aborted } = createCancellationHarness();
-    handlers.handleChatEvent(aborted);
+    const h = createHarness();
+    h.abort();
     if (change === "new run") {
-      handlers.handleChatEvent({
+      h.chat({
         runId: "run-2",
-        sessionKey: state.currentSessionKey,
         state: "delta",
         message: { role: "assistant", content: "New answer" },
       });
     } else if (change === "pending run") {
-      state.pendingSubmit = { phase: "sending", runId: "run-2", draftText: "Next question" };
-      setActivityStatus("sending");
+      h.state.pendingSubmit = { phase: "sending", runId: "run-2", draftText: "Next question" };
+      h.setActivityStatus("sending");
     } else if (change === "session change") {
-      state.currentSessionKey = "agent:main:other";
-      handlers.handleChatEvent({ runId: "other", sessionKey: "old-session", state: "aborted" });
+      h.state.currentSessionKey = "agent:main:other";
+      h.handlers.handleChatEvent({ runId: "other", sessionKey: "old-session", state: "aborted" });
     } else {
-      handlers.dispose();
+      h.handlers.dispose();
     }
-    const expected =
-      change === "new run" ? "streaming" : change === "pending run" ? "sending" : "idle";
-    expect(setActivityStatus).toHaveBeenLastCalledWith(expected);
-    setActivityStatus.mockClear();
+    h.expectStatus(
+      change === "new run" ? "streaming" : change === "pending run" ? "sending" : "idle",
+    );
+    h.setActivityStatus.mockClear();
     vi.advanceTimersByTime(5_000);
-    expect(setActivityStatus).not.toHaveBeenCalled();
+    expect(h.setActivityStatus).not.toHaveBeenCalled();
   },
 );

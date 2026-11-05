@@ -138,6 +138,13 @@ and full producer frontmatter. Internal OKF links rewrite to the generated
 wiki concept pages and also emit structured `relationships` entries with
 `kind: okf-link`.
 
+Keep handwritten notes in the page's `## Notes` slot, between
+`<!-- openclaw:human:start -->` and `<!-- openclaw:human:end -->`. Re-import
+preserves that marked block exactly; text outside it is producer-owned and
+can be replaced. Legacy OKF pages without a marked block regenerate with an
+empty Notes slot. If a marker is missing from an existing block, restore it
+before retrying the import. Existing-page read failures leave that page unchanged.
+
 ## Structured claims and evidence
 
 Pages carry structured `claims` frontmatter, not just freeform text. Each
@@ -241,6 +248,9 @@ When automatic compilation is enabled, source synchronization for status and
 wiki tools checks for a valid externally published cache before rebuilding a
 missing in-process snapshot. An unchanged vault reuses that publication;
 changed imports, missing indexes, or an invalid cache still require compilation.
+Explicit compilation retains a valid cached publication when both the source
+identity and compiled output are unchanged. Changed sources or output, missing
+rows, and corrupt rows still produce a replacement publication.
 ChatGPT import rollback records post-import edits before compile and keeps
 their recovery paths in plugin state, so an interrupted rollback can reconcile
 the recovery directory and report the same preserved pages on retry. Target
@@ -316,6 +326,18 @@ includes compact `Claim:` and `Evidence:` lines when available.
 `wiki_search` has a 30-second deadline and honors turn cancellation. A timeout
 or cancellation returns a tool error rather than an empty result, and stops
 the ongoing page scan. For a known page, use `wiki_get` with its id or path.
+The page scan itself (reading, parsing and scoring every page when the compiled
+digest cannot narrow the search, resolving `wiki_get` id lookups and misses,
+and `wiki_apply` metadata updates) runs in a plugin-owned pool of two worker
+threads, so the gateway event loop stays responsive while a large vault is
+scanned. Every 64 pages a scan checks whether another task is waiting for its
+shared compute slot or its worker, such as `memory_search` retrieval on a small
+host or a third concurrent scan, and if so hands it over and resumes afterwards
+instead of making it wait for the whole scan. The pool adds no deadline of its
+own: `wiki_search` keeps its 30-second deadline and turn
+cancellation, and CLI, RPC and lookup scans run to completion as before.
+Single-page reads (`wiki_get` by exact path or claim id) stay on the calling
+thread and never wait behind a scan.
 
 The plugin also registers a non-exclusive memory corpus supplement, so shared
 `memory_search` and `memory_get` can reach the wiki when the active memory
@@ -424,6 +446,7 @@ Key toggles:
 | `vault.path`                               | global default `<state-dir>/wiki/main`         | exact vault globally; agent-scope parent defaults to `<state-dir>/wiki`                    |
 | `vault.renderMode`                         | `native` (default), `obsidian`                 | `obsidian` writes Obsidian-friendly pages instead of native output                         |
 | `bridge.readMemoryArtifacts`               | default `true`                                 | import active memory plugin public artifacts                                               |
+| `bridge.ownership`                         | `sandboxed-only` (default), `owner`            | scope bridge-page reads only for sandboxed callers, or for every caller                    |
 | `bridge.followMemoryEvents`                | default `true`                                 | include event logs in bridge mode                                                          |
 | `unsafeLocal.allowPrivateMemoryCoreAccess` | default `false`                                | required to run `unsafe-local` imports                                                     |
 | `unsafeLocal.paths`                        | default `[]`                                   | explicit local paths to import in `unsafe-local` mode                                      |
@@ -439,6 +462,24 @@ set, default wiki vaults use that directory instead. Explicit `vault.path`
 values keep their configured location, and `~/` still expands against the home
 directory.
 
+### Bridge page visibility in a shared vault
+
+For agents that share one global wiki but should retrieve only their own imported
+memory notes, set `bridge.ownership` to `owner`. `wiki_search` and `wiki_get`
+then apply the existing sandbox ownership filter to non-sandboxed callers too.
+Bridge pages without ownership metadata are hidden. Native wiki pages remain
+shared, including aggregate pages that may mention other agents' material.
+
+The default, `sandboxed-only`, preserves today's behavior: non-sandboxed callers
+can read every bridge page, while sandboxed callers see only their own. Neither
+setting widens sandboxed reads. CLI reads use the configured default agent unless
+`--agent` is passed; a caller without a resolved agent cannot read bridge pages
+in `owner` mode.
+
+This setting filters wiki query results, not filesystem access or compiled prompt
+digests. Use per-agent vaults when the whole wiki, including native pages and
+digests, should be separate.
+
 ### Per-agent vaults
 
 Set `vault.scope` to `agent` to give every configured agent a separate wiki.
@@ -450,7 +491,6 @@ normalized agent id:
   agents: {
     ownership: "explicit",
     defaults: {
-      heartbeat: { agentId: "support" },
       systemAgent: { agentId: "support" },
       authInheritance: { agentId: "support" },
     },

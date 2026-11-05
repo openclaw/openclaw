@@ -30,7 +30,14 @@ import type {
   PreparedAuthProfileStoreReads,
 } from "./runtime-read.types.js";
 import { readAuthProfileStoreInWorker } from "./runtime-read.worker.js";
-import { getWorkerAuthProfileWrites } from "./runtime-scope.js";
+import {
+  authProfileRuntimeMode,
+  captureAuthProfileStoreScope,
+  getScopedAuthProfileEnv,
+  getWorkerAuthProfileWrites,
+  isEnvOnlyAuthProfileRuntime,
+  resolveRuntimeAuthProfileAgentDir,
+} from "./runtime-scope.js";
 import { createEmptyAuthProfileStore } from "./runtime-snapshot-owner.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import {
@@ -52,6 +59,16 @@ export type {
   LoadAuthProfileStoreOptions,
   PreparedAuthProfileStoreReads,
 } from "./runtime-read.types.js";
+
+export function resolveRuntimeAuthProfileLoadOptions(
+  options?: LoadAuthProfileStoreOptions,
+): LoadAuthProfileStoreOptions | undefined {
+  const mode = authProfileRuntimeMode.getStore();
+  if (mode?.kind !== "agent-dir") {
+    return options;
+  }
+  return { ...options, inheritedAuthDir: mode.agentDir };
+}
 
 export function resolveExternalCliOverlayOptions(
   options: LoadAuthProfileStoreOptions | undefined,
@@ -86,12 +103,6 @@ export function resolveExternalCliOverlayOptions(
 }
 
 type RuntimeReadHost = {
-  isEnvOnlyAuthProfileRuntime: () => boolean;
-  getScopedAuthProfileEnv: () => NodeJS.ProcessEnv | undefined;
-  resolveRuntimeAuthProfileAgentDir: (agentDir?: string) => string | undefined;
-  resolveRuntimeAuthProfileLoadOptions: (
-    options?: LoadAuthProfileStoreOptions,
-  ) => LoadAuthProfileStoreOptions | undefined;
   loadAuthProfileStoreForAgent: (
     agentDir?: string,
     options?: LoadAuthProfileStoreOptions,
@@ -105,10 +116,6 @@ type RuntimeReadHost = {
     readPreparedStore?: (databasePath: string) => AuthProfileStore,
   ) => AuthProfileStore;
   withPreparedExternalAuthProfiles: WithPreparedExternalAuthProfiles;
-  captureScope: () => {
-    isolated: boolean;
-    run: <T>(agentDir: string | undefined, env: NodeJS.ProcessEnv, run: () => T) => T;
-  };
 };
 
 type AsyncAuthProfileStoreOptions = Omit<
@@ -147,14 +154,9 @@ function captureReadOptions(
 
 /** Bind to the canonical store scope; this reader owns no mutable runtime or lifecycle state. */
 export function createAuthProfileStoreRuntimeReader({
-  isEnvOnlyAuthProfileRuntime,
-  getScopedAuthProfileEnv,
-  resolveRuntimeAuthProfileAgentDir,
-  resolveRuntimeAuthProfileLoadOptions,
   loadAuthProfileStoreForAgent,
   loadRuntimeAuthProfileStore,
   withPreparedExternalAuthProfiles,
-  captureScope,
 }: RuntimeReadHost) {
   /** Capture sources once; the store owner decides which persisted facts it needs. */
   function withPreparedAuthProfileStoreReads(
@@ -177,7 +179,7 @@ export function createAuthProfileStoreRuntimeReader({
     suppliedEnv?: NodeJS.ProcessEnv,
     effect = false,
   ): Promise<T | AuthProfileStore> {
-    const scope = captureScope();
+    const scope = captureAuthProfileStoreScope();
     const env = cloneEnvWithPlatformSemantics(
       getScopedAuthProfileEnv() ?? suppliedEnv ?? process.env,
     );

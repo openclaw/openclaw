@@ -1,5 +1,4 @@
 import type { JSX } from "@solidjs/web";
-import { createUniqueId, onCleanup } from "solid-js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import {
   isPluginsHubRoute,
@@ -7,112 +6,7 @@ import {
   isSettingsNavigationRoute,
   type NavigationRouteId,
 } from "../app-navigation.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import { listen } from "../lib/reactive/listener.ts";
-import type { IconName } from "./icon-data.ts";
-import { Icon } from "./solid/icon.tsx";
-import { pointMenuTriggerAttributes } from "./solid/menu-trigger.tsx";
-import {
-  Menu,
-  type MenuControls,
-  type MenuEntry,
-  type MenuHandle,
-  type MenuItem,
-} from "./solid/menu.tsx";
-
-type SidebarMenuPosition = { x: number; y?: number; top?: number; bottom?: number };
-
-export function renderSidebarMenuAction(
-  value: string,
-  label: string,
-  icon: IconName,
-  options: { disabled?: boolean; title?: string; className?: string; details?: JSX.Element } = {},
-): MenuItem {
-  return {
-    id: value,
-    label,
-    class: ["sidebar-customize-menu__item", options.className],
-    disabled: options.disabled,
-    attributes: { title: options.title },
-    icon: (
-      <span class="nav-item__icon" aria-hidden="true">
-        <Icon name={icon} />
-      </span>
-    ),
-    content: <span class="sidebar-customize-menu__text">{label}</span>,
-    details: options.details,
-  };
-}
-
-export type SidebarDropdownProps = {
-  controls?: MenuControls;
-  position: SidebarMenuPosition;
-  class: JSX.ClassValue;
-  label: string;
-  anchor?: HTMLElement;
-  items: readonly MenuEntry[];
-  onSelect: (id: string) => void;
-  tabFocusTarget?: (backward: boolean) => HTMLElement | undefined;
-  onClose: (restoreFocus: boolean) => void;
-  onAfterShow?: (event: Event) => void;
-  onOpenChange?: (open: boolean) => void;
-  onPointerEnter?: () => void;
-  onPointerLeave?: () => void;
-  panelStyle?: JSX.CSSProperties;
-  focusOnOpen?: boolean;
-  ref?: (handle: MenuHandle) => void;
-};
-
-export function SidebarDropdown(params: SidebarDropdownProps): JSX.Element {
-  const id = createUniqueId();
-  let removeListeners: (() => void)[] = [];
-  onCleanup(() => removeListeners.forEach((stop) => stop()));
-  return (
-    <Menu
-      controls={params.controls}
-      id={`sidebar-menu-${id}`}
-      panelClass={params.class}
-      label={params.label}
-      open
-      items={params.items}
-      placement={params.position.bottom === undefined ? "bottom-start" : "top-start"}
-      triggerAttributes={pointMenuTriggerAttributes(
-        {
-          x: params.position.x,
-          y: params.position.bottom ?? params.position.top ?? params.position.y,
-        },
-        params.position.bottom === undefined ? "top" : "bottom",
-      )}
-      ref={(handle) => {
-        params.ref?.(handle);
-        const { overlay } = handle;
-        overlay.surface.dataset.chatAutotypeExempt = "";
-        if (params.anchor) {
-          overlay.setReturnTarget(params.anchor);
-        }
-        if (params.panelStyle) {
-          for (const [property, value] of Object.entries(params.panelStyle)) {
-            overlay.surface.style.setProperty(property, String(value));
-          }
-        }
-        removeListeners = [
-          listen(overlay.surface, "pointerenter", () => params.onPointerEnter?.()),
-          listen(overlay.surface, "pointerleave", () => params.onPointerLeave?.()),
-        ];
-        overlay.request(true, params.focusOnOpen === false ? "none" : "first");
-      }}
-      tabFocusTarget={params.tabFocusTarget}
-      onSelect={(item) => params.onSelect(item.id)}
-      onAfterShow={params.onAfterShow}
-      onOpenChange={(open) => {
-        params.onOpenChange?.(open);
-        if (!open) {
-          params.onClose(false);
-        }
-      }}
-    />
-  );
-}
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 
 /** Settings routes highlight Settings; hub tabs highlight their hub entry. */
 export function isSidebarRouteActive(
@@ -150,10 +44,7 @@ export function renderSidebarNavLink(params: {
   icon: JSX.Element;
   label: string;
   onNavigate: () => void;
-  onPreload?: (event: Event, immediate?: boolean) => void;
-  onCancelPreload?: (event: Event) => void;
 }): JSX.Element {
-  const onPreload = params.onPreload;
   return (
     <a
       ref={(element) => params.ref?.(element)}
@@ -161,18 +52,7 @@ export function renderSidebarNavLink(params: {
       href={params.href}
       class={["nav-item", { "nav-item--active": params.active }]}
       aria-current={params.active ? "page" : undefined}
-      onFocus={onPreload ? (event: Event) => onPreload(event) : undefined}
-      onBlur={params.onCancelPreload}
-      onPointerEnter={onPreload ? (event: Event) => onPreload(event) : undefined}
-      onPointerLeave={params.onCancelPreload}
-      onTouchStart={onPreload ? (event: TouchEvent) => onPreload(event, true) : undefined}
-      onClick={(event: MouseEvent) => {
-        if (!shouldHandleNavigationClick(event)) {
-          return;
-        }
-        event.preventDefault();
-        params.onNavigate();
-      }}
+      onClick={(event: MouseEvent) => handleNavigationClick(event, () => params.onNavigate())}
     >
       <span class="nav-item__icon" aria-hidden="true">
         {params.icon}

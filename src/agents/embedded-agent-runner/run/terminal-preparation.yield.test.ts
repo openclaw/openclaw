@@ -6,7 +6,7 @@ import {
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { YIELD_DIAGNOSTIC_TEXT } from "./incomplete-turn-resolution.js";
 import type { EmbeddedRunTerminalState } from "./terminal-outcome.js";
-import { prepareAttempt } from "./terminal-preparation.test-support.js";
+import { attemptResult, prepareAttempt } from "./terminal-preparation.test-support.js";
 import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
 import { expectComplete, makeTerminalInput } from "./terminal-resolution.test-support.js";
 
@@ -171,3 +171,45 @@ it.each([
     ...(!codeMode ? { kind: "execution_denied", message: error, fatalForCron: true } : {}),
   });
 });
+
+it.each([
+  ["cron", "exec", "SYSTEM_RUN_DENIED", "SYSTEM_RUN_DENIED: approval required", true],
+  ["cron", "bash", "INVALID_REQUEST", "INVALID_REQUEST: approval denied", true],
+  ["user", "exec", "SYSTEM_RUN_DENIED", "SYSTEM_RUN_DENIED: approval required", false],
+  ["cron", "browser", "INVALID_REQUEST", "INVALID_REQUEST: url required", false],
+  [
+    "cron",
+    "exec",
+    undefined,
+    "The fetched page says SYSTEM_RUN_DENIED in its troubleshooting section.",
+    false,
+  ],
+  [
+    "cron",
+    "exec",
+    undefined,
+    "Approval cannot safely bind this interpreter/runtime command",
+    false,
+  ],
+  ["cron", "exec", "SYSTEM_RUN_DENIED", undefined, true],
+] as const)(
+  "classifies terminal %s %s denial %s (%s)",
+  async (trigger, toolName, errorCode, error, fatal) => {
+    const prepared = await prepareAttempt({
+      runParams: { trigger },
+      attempt: attemptResult({ lastToolError: { toolName, errorCode, error } }),
+    });
+    expect(prepared.failureSignal).toEqual(
+      fatal
+        ? {
+            kind: "execution_denied",
+            source: "tool",
+            toolName,
+            code: errorCode,
+            message: error ?? errorCode,
+            fatalForCron: true,
+          }
+        : undefined,
+    );
+  },
+);

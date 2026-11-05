@@ -1,24 +1,18 @@
-// Stopped queued input must not become a missing-reply warning at finalization.
 import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { MISSING_REPLY_NOTICE_TEXT } from "../../agents/reply-completion.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { TemplateContext } from "../templating.js";
 import { createDispatcher, emptyConfig } from "./dispatch-from-config.shared.test-harness.js";
-import {
-  describe0BeforeEach0,
-  dispatchReplyFromConfig,
-  globalBeforeAll0,
-  setNoAbort,
-} from "./dispatch-from-config.test-support.js";
+import * as dispatch from "./dispatch-from-config.test-support.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { buildTestCtx } from "./test-ctx.js";
-import type { TypingController } from "./typing.js";
+import { createMockTypingController } from "./test-helpers.js";
 
-beforeAll(globalBeforeAll0);
+beforeAll(dispatch.globalBeforeAll0);
 beforeEach(() => {
-  describe0BeforeEach0();
-  setNoAbort();
+  dispatch.describe0BeforeEach0();
+  dispatch.setNoAbort();
 });
 
 it.each([
@@ -35,23 +29,12 @@ it.each([
     abortCutoffTimestamp: 1000,
     abortedLastRun: true,
   };
-  const sessionStore = { [sessionKey]: sessionEntry };
-  const typing: TypingController = {
-    onReplyStart: async () => {},
-    startTypingLoop: async () => {},
-    startTypingOnText: async () => {},
-    refreshTypingTtl: () => {},
-    isActive: () => false,
-    markRunComplete: () => {},
-    markDispatchIdle: () => {},
-    cleanup: vi.fn(),
-  };
+  const typing = createMockTypingController();
   const dispatcher = createDispatcher();
   const continueTurn = vi.fn(async () => undefined);
   const ctx = buildTestCtx({
     Provider: "discord",
     Surface: "discord",
-    ChatType: "direct",
     SessionKey: sessionKey,
     Body: "queued input",
     CommandBody: "queued input",
@@ -59,7 +42,7 @@ it.each([
   });
   // Exercise the production inline owner with dispatch's actual options/state,
   // then let the real finalizer decide whether a fallback is owed.
-  const result = await dispatchReplyFromConfig({
+  const result = await dispatch.dispatchReplyFromConfig({
     ctx,
     cfg: emptyConfig,
     dispatcher,
@@ -71,7 +54,7 @@ it.each([
         agentId: "main",
         sessionKey,
         sessionEntry,
-        sessionStore,
+        sessionStore: { [sessionKey]: sessionEntry },
         workspaceDir: "/unused",
         isGroup: false,
         opts,
@@ -112,22 +95,19 @@ it.each([
     },
   });
 
+  expect(continueTurn).toHaveBeenCalledTimes(cancelled ? 0 : 1);
+  expect(result.deliberateSilentTerminalReply).toBe(cancelled ? true : undefined);
+  expect(result.noVisibleReplyFallbackDelivered).toBe(cancelled ? undefined : true);
   if (cancelled) {
-    expect(continueTurn).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledOnce();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    expect(result.deliberateSilentTerminalReply).toBe(true);
-    expect(result.noVisibleReplyFallbackDelivered).toBeUndefined();
     expect(sessionEntry.abortCutoffMessageSid).toBe("42");
   } else {
-    expect(continueTurn).toHaveBeenCalledOnce();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith({
       text: MISSING_REPLY_NOTICE_TEXT,
       isError: true,
       isStatusNotice: true,
     });
-    expect(result.noVisibleReplyFallbackDelivered).toBe(true);
-    expect(result.deliberateSilentTerminalReply).toBeUndefined();
     expect(sessionEntry.abortCutoffMessageSid).toBeUndefined();
     expect(sessionEntry.abortCutoffTimestamp).toBeUndefined();
   }

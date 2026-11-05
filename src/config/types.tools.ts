@@ -59,6 +59,7 @@ export type ToolProfileId = NonNullable<SchemaToolsConfig["profile"]>;
 export type ToolLoopDetectionConfig = NonNullable<SchemaToolsConfig["loopDetection"]>;
 
 export type ToolSearchConfig = NonNullable<SchemaToolsConfig["toolSearch"]>;
+export type ToolSearchSelector = NonNullable<Exclude<ToolSearchConfig, boolean>["include"]>[number];
 
 export type CodeModeConfig = NonNullable<SchemaToolsConfig["codeMode"]>;
 
@@ -67,6 +68,8 @@ export type ToolAllowDenyPolicyConfig = NonNullable<z.input<typeof ToolPolicySch
 export type ToolPolicyConfig = ToolAllowDenyPolicyConfig & {
   /** Built-in profile used as the base policy before allow/deny merges. */
   profile?: ToolProfileId;
+  /** Provider/model exec ceiling (`tools.byProvider` only); tightens, never loosens. */
+  exec?: { mode?: ExecToolConfig["mode"] };
 };
 
 export type GroupToolPolicyConfig = ToolAllowDenyPolicyConfig;
@@ -141,3 +144,6 @@ export type ToolsConfig = Omit<
 };
 
 export type MessageToolsConfig = NonNullable<SchemaToolsConfig["message"]>;
+
+/** Required Gateway model-tool ceiling, separate from ordinary additive tool grants. */
+export type GatewayToolPolicyConfig = NonNullable<SchemaToolsConfig["gatewayPolicy"]>;

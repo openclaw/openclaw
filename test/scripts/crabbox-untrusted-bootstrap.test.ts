@@ -1,9 +1,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildCrabboxGateTransport } from "../../scripts/pr-lib/crabbox-gate-transport.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const source = readFileSync("scripts/crabbox-untrusted-bootstrap.sh", "utf8");
@@ -12,8 +11,7 @@ const historicalPnpmSpec =
 const roots = useAutoCleanupTempDirTracker(afterEach);
 
 function executable(path: string, body: string) {
-  writeFileSync(path, body);
-  chmodSync(path, 0o755);
+  writeFileSync(path, body, { mode: 0o755 });
 }
 
 function fixture() {
@@ -74,9 +72,9 @@ esac
     return createHash(algorithm).update(bytes).digest("hex");
   }
   const hashes = {
-    node: archive("node", "node-v24.21.0-linux-x64.tar.xz", "sha256"),
-    wrapper: archive("wrapper", "pnpm-12.12.1.tgz", "sha512"),
-    native: archive("native", "exe.linux-x64-12.12.1.tgz", "sha512"),
+    node: archive("node", "node-v24.22.1-linux-x64.tar.xz", "sha256"),
+    wrapper: archive("wrapper", "pnpm-12.15.0.tgz", "sha512"),
+    native: archive("native", "exe.linux-x64-12.15.0.tgz", "sha512"),
   };
   const productionSpec = source.match(/^pnpm_spec="([^"]+)"$/mu)?.[1] ?? "";
   const spec = `${productionSpec.split("+")[0]}+sha512.${hashes.wrapper}`;
@@ -92,7 +90,7 @@ esac
 echo node-download >> ${JSON.stringify(join(root, "downloads"))}
 while [[ $# -gt 0 ]]; do
   if [[ "$1" == "-o" ]]; then
-    cp ${JSON.stringify(join(origin, "node-v24.21.0-linux-x64.tar.xz"))} "$2"
+    cp ${JSON.stringify(join(origin, "node-v24.22.1-linux-x64.tar.xz"))} "$2"
     exit
   fi
   shift
@@ -107,12 +105,8 @@ exit 1
     executable(join(bin, `sha${algorithm}sum`), `#!/bin/sh\nexec shasum -a ${algorithm} "$@"\n`);
   }
   let script = source
-    .replaceAll("/usr/bin/curl", join(bin, "curl"))
-    .replaceAll("/usr/bin/git", join(bin, "git"))
-    .replaceAll("/usr/bin/uname", join(bin, "uname"))
-    .replaceAll("/usr/bin/sha", join(bin, "sha"))
-    .replaceAll("/usr/bin/mkdir", "/bin/mkdir")
-    .replaceAll("/usr/bin/ln", "/bin/ln")
+    .replaceAll(/\/usr\/bin\/(curl|git|uname|sha)/gu, (_, binary: string) => join(bin, binary))
+    .replaceAll(/\/usr\/bin\/(mkdir|ln)/gu, "/bin/$1")
     .replaceAll("/usr/local/bin", bin)
     .replaceAll("sudo ", `${JSON.stringify(join(bin, "sudo"))} `)
     .replace(
@@ -124,9 +118,9 @@ exit 1
   // Only the trusted fixture's anchors change; candidate/image state never supplies them.
   script = script
     .replace(productionSpec, spec)
-    .replaceAll("fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6", hashes.node)
+    .replaceAll("6c172a9ab6718f7b801fb5a7bd486af2ee5e32758086a04b84fcce2aa77095e6", hashes.node)
     .replaceAll(
-      "ddb27792f3227fb7257f178fa01678d051af539e0684bc10f9e6f18f11ae2981f0ac3c9231fca0815191d20618729aeae883c6cba0ab4cf8aa80fe533932c2e7",
+      "c9cf9095947ef7e9ebdbd2787d1ce13286a98314c10e776affea5eca8ab55d4b9f9d01677db5d4305b9d0c82b31e2e78e658a71aa98e9977e7d0da2e7cd81c3a",
       hashes.native,
     );
   const scriptPath = join(root, "bootstrap.sh");
@@ -142,26 +136,22 @@ exit 1
     install,
     corepack,
     spec,
-    run(extraEnv: NodeJS.ProcessEnv = {}, head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") {
+    run(
+      extraEnv: NodeJS.ProcessEnv = {},
+      head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      exit = 0,
+    ) {
       return spawnSync(
         "bash",
-        [scriptPath, head, "/bin/sh", "-c", `echo ran >> ${JSON.stringify(join(root, "ran"))}`],
+        [
+          scriptPath,
+          head,
+          "/bin/sh",
+          "-c",
+          `echo ran >> ${JSON.stringify(join(root, "ran"))}; exit ${exit}`,
+        ],
         { cwd: root, encoding: "utf8", env: { ...process.env, ...extraEnv } },
       );
-    },
-    runGate(command: string) {
-      const transport = buildCrabboxGateTransport({
-        bootstrap: script,
-        command,
-        headSha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      });
-      const launcher = join(root, "launcher.sh");
-      writeFileSync(launcher, transport.input);
-      return spawnSync("/bin/bash", [launcher, ...transport.args], {
-        cwd: root,
-        encoding: "utf8",
-        env: process.env,
-      });
     },
     downloads: () => (exists("downloads") ? read("downloads") : ""),
   };
@@ -169,10 +159,10 @@ exit 1
 
 describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
   it.skipIf(process.platform !== "linux").each([37])(
-    "streams the full bootstrap with child exit %i and removes its isolated home",
+    "preserves child exit %i and removes its isolated home",
     (exitCode) => {
       const f = fixture();
-      const result = f.runGate(`set -euo pipefail; /bin/bash -c 'exit ${exitCode}'`);
+      const result = f.run({}, undefined, exitCode);
       expect(result.status, result.stderr).toBe(exitCode);
       expect(f.read("install-log")).toBe("frozen\n");
       expect(existsSync(f.read("install-home"))).toBe(false);
@@ -206,8 +196,8 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
     for (let run = 0; run < 2; run++) {
       mkdirSync(join(f.install, "bin"), { recursive: true });
       executable(join(f.install, "bin", "node"), "#!/bin/sh\nexit 91\n");
-      mkdirSync(join(f.corepack, "v1", "pnpm", "12.12.1"), { recursive: true });
-      writeFileSync(join(f.corepack, "v1", "pnpm", "12.12.1", ".corepack"), '{"bin":"bad"}');
+      mkdirSync(join(f.corepack, "v1", "pnpm", "12.15.0"), { recursive: true });
+      writeFileSync(join(f.corepack, "v1", "pnpm", "12.15.0", ".corepack"), '{"bin":"bad"}');
       const result = f.run();
       expect(result.status, result.stderr).toBe(0);
     }
@@ -234,10 +224,10 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
       const f = fixture();
       const archive =
         kind === "node"
-          ? "node-v24.21.0-linux-x64.tar.xz"
+          ? "node-v24.22.1-linux-x64.tar.xz"
           : kind === "wrapper"
-            ? "pnpm-12.12.1.tgz"
-            : "exe.linux-x64-12.12.1.tgz";
+            ? "pnpm-12.15.0.tgz"
+            : "exe.linux-x64-12.15.0.tgz";
       const bytes = Buffer.from("substituted archive");
       writeFileSync(join(f.image, archive), bytes);
       writeFileSync(
@@ -278,7 +268,7 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
   it("refuses an invalid download after rejecting the image archive", () => {
     const f = fixture();
     for (const directory of [f.image, f.origin]) {
-      writeFileSync(join(directory, "node-v24.21.0-linux-x64.tar.xz"), "invalid");
+      writeFileSync(join(directory, "node-v24.22.1-linux-x64.tar.xz"), "invalid");
     }
     const result = f.run();
     expect(result.status).toBe(1);

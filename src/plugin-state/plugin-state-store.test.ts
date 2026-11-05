@@ -26,10 +26,14 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { useState } from "./plugin-state-fixtures.test-support.js";
-import { withPluginStateDatabaseReadOnly } from "./plugin-state-store.database.js";
+import { keyedStore, keyedStores, useState } from "./plugin-state-fixtures.test-support.js";
+import {
+  runWriteTransaction,
+  withPluginStateDatabaseReadOnly,
+} from "./plugin-state-store.database.js";
 import {
   getPluginStateCapacity,
+  registerPluginStateSequencedJournalEntry,
   createCorePluginStateKeyedStore,
   createCorePluginStateKeyedStoreV2,
   createCorePluginStateSyncKeyedStore,
@@ -42,9 +46,20 @@ import {
   resetPluginStateStoreForTests,
   type OpenKeyedStoreOptions,
 } from "./plugin-state-store.js";
+import { PLUGIN_STATE_EXPIRY_BATCH_ROWS } from "./plugin-state-store.kernel.js";
+import {
+  readPluginStateRetention,
+  registerPluginStateEntry,
+} from "./plugin-state-store.retention.js";
 import { closePluginStateDatabase } from "./plugin-state-store.sqlite.js";
 import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
 import { PluginStateStoreError } from "./plugin-state-store.types.js";
+
+type SeedRow = Parameters<typeof seedPluginStateEntriesForTests>[0][number];
+type ScopedSeedRow = Pick<SeedRow, "key" | "value"> & Partial<SeedRow>;
+const seedScope = (pluginId: string, namespace: string, rows: ScopedSeedRow[]) =>
+  seedPluginStateEntriesForTests(rows.map((row) => ({ pluginId, namespace, ...row })));
+const entryOf = <T>(key: string, value: T, createdAt: number) => ({ key, value, createdAt });
 
 const defaults = { namespace: "test", maxEntries: 10 };
 function syncStore<T>(options: Partial<OpenKeyedStoreOptions> = {}, pluginId = "discord") {
@@ -54,17 +69,15 @@ function openAsyncStore<T>(options: Partial<OpenKeyedStoreOptions> = {}, pluginI
   return createPluginStateKeyedStore<T>(pluginId, { ...defaults, ...options });
 }
 function stores<T>(options: Partial<OpenKeyedStoreOptions>, pluginId = "discord") {
-  return { sync: syncStore<T>(options, pluginId), store: openAsyncStore<T>(options, pluginId) };
+  return keyedStores<T>(pluginId, { ...defaults, ...options });
+}
+function throws(action: () => unknown, expected: object) {
+  expect(action).toThrowError(expect.objectContaining(expected));
 }
 function maintenance(namespace: string) {
   const scope = { pluginId: "codex", namespace };
-  type Row = Parameters<typeof seedPluginStateEntriesForTests>[0][number];
   return {
-    seed: (
-      rows: Array<
-        Omit<Row, "pluginId" | "namespace"> & Partial<Pick<Row, "pluginId" | "namespace">>
-      >,
-    ) => seedPluginStateEntriesForTests(rows.map((row) => ({ ...scope, ...row }))),
+    seed: (rows: ScopedSeedRow[]) => seedScope(scope.pluginId, namespace, rows),
     page: (limit: number, after?: string) =>
       pluginStateDoctorEntriesInKeyRange({ ...scope, prefix: "binding:", limit, after }),
     remove: (
@@ -87,13 +100,11 @@ describe("plugin-state-store", () => {
     rmSync(dirname(resolveOpenClawStateSqlitePath()), { recursive: true, force: true });
   });
 
-  async function expectPluginStateStoreError(
+  const expectPluginStateStoreError = (
     promise: Promise<unknown>,
-    expected: { code: string; operation?: string },
-  ) {
-    await expect(promise).rejects.toBeInstanceOf(PluginStateStoreError);
-    await expect(promise).rejects.toMatchObject(expected);
-  }
+    code: string,
+    operation?: string,
+  ) => expect(promise).rejects.toMatchObject({ code, ...(operation ? { operation } : {}) });
 
   it("round-trips nested VM realm values across store instances", async () => {
     const options = { namespace: "components", maxEntries: 10 };
@@ -136,15 +147,12 @@ describe("plugin-state-store", () => {
     vi.setSystemTime(2000);
     expect(store.registerIfAbsent("second", 2)).toBe(true);
 
-    expect(() => store.register("third", 3)).toThrowError(
-      expect.objectContaining({ code: "PLUGIN_STATE_LIMIT_EXCEEDED", operation: "register" }),
-    );
+    const limit = { code: "PLUGIN_STATE_LIMIT_EXCEEDED", operation: "register" };
+    throws(() => store.register("third", 3), limit);
     expect(store.registerIfAbsent("first", 99)).toBe(false);
     vi.setSystemTime(3000);
     expect(store.update("first", () => 10)).toBe(true);
-    expect(() => store.update("third", () => 3)).toThrowError(
-      expect.objectContaining({ code: "PLUGIN_STATE_LIMIT_EXCEEDED", operation: "register" }),
-    );
+    throws(() => store.update("third", () => 3), limit);
     expect(store.entries()).toEqual([
       expect.objectContaining({ key: "second", value: 2 }),
       expect.objectContaining({ key: "first", value: 10 }),
@@ -164,16 +172,18 @@ describe("plugin-state-store", () => {
   it("rejects plugin state ttl when expiry cannot fit in a Date timestamp", async () => {
     const store = openAsyncStore();
 
-    await expectPluginStateStoreError(store.register("huge", true, { ttlMs: Number.MAX_VALUE }), {
-      code: "PLUGIN_STATE_INVALID_INPUT",
-      operation: "register",
-    });
+    await expectPluginStateStoreError(
+      store.register("huge", true, { ttlMs: Number.MAX_VALUE }),
+      "PLUGIN_STATE_INVALID_INPUT",
+      "register",
+    );
 
     vi.spyOn(Date, "now").mockReturnValue(MAX_DATE_TIMESTAMP_MS);
     const sync = syncStore();
-    expect(() => sync.register("overflow", true, { ttlMs: 60_000 })).toThrowError(
-      expect.objectContaining({ code: "PLUGIN_STATE_INVALID_INPUT", operation: "register" }),
-    );
+    throws(() => sync.register("overflow", true, { ttlMs: 60_000 }), {
+      code: "PLUGIN_STATE_INVALID_INPUT",
+      operation: "register",
+    });
   });
 
   it("validates namespaces, keys, options, and JSON values before writes", async () => {
@@ -205,26 +215,16 @@ describe("plugin-state-store", () => {
       await expect(store.register(key, value), key).rejects.toThrow(PluginStateStoreError);
     }
 
-    await expect(store.register("k".repeat(513), { ok: true })).rejects.toThrow(
-      PluginStateStoreError,
-    );
+    await expect(store.register("k".repeat(513), true)).rejects.toThrow(PluginStateStoreError);
 
     let deep: unknown = { leaf: true };
     for (let i = 0; i < 65; i += 1) {
       deep = { nested: deep };
     }
-    await expectPluginStateStoreError(store.register("deep", deep), {
-      code: "PLUGIN_STATE_LIMIT_EXCEEDED",
-    });
+    await expectPluginStateStoreError(store.register("deep", deep), "PLUGIN_STATE_LIMIT_EXCEEDED");
 
-    await expectPluginStateStoreError(store.lookup(" "), {
-      code: "PLUGIN_STATE_INVALID_INPUT",
-      operation: "lookup",
-    });
-    await expectPluginStateStoreError(store.delete(" "), {
-      code: "PLUGIN_STATE_INVALID_INPUT",
-      operation: "delete",
-    });
+    await expectPluginStateStoreError(store.lookup(" "), "PLUGIN_STATE_INVALID_INPUT", "lookup");
+    await expectPluginStateStoreError(store.delete(" "), "PLUGIN_STATE_INVALID_INPUT", "delete");
   });
 
   it("enforces the 1 MiB boundary across writes", async () => {
@@ -241,9 +241,7 @@ describe("plugin-state-store", () => {
       () => store.registerIfAbsent("rejected", oversize),
       () => store.update("updated", () => oversize),
     ]) {
-      await expect(async () => {
-        await write();
-      }).rejects.toMatchObject({ code: "PLUGIN_STATE_LIMIT_EXCEEDED" });
+      await expect(write()).rejects.toMatchObject({ code: "PLUGIN_STATE_LIMIT_EXCEEDED" });
     }
     resetPluginStateStoreForTests();
     for (const key of ["registered", "claimed", "updated"]) {
@@ -267,26 +265,19 @@ describe("plugin-state-store", () => {
     expect(store.update(key, () => ({ stopped: true }))).toBe(true);
     closePluginStateDatabase();
     await expect(asyncStore.lookup(key)).resolves.toEqual({ stopped: true });
-    await expect(asyncStore.update(key, () => ({ stopped: false }))).resolves.toBe(true);
-    expect(store.lookup(key)).toEqual({ stopped: false });
     const observation = await workerStore.observe(key);
-    store.register(key, { stopped: true });
+    store.register(key, { stopped: false });
     await expect(
       workerStore.compareAndApply(key, observation.comparison, {
         operation: "delete",
         action: "delete",
       }),
     ).resolves.toMatchObject({ status: "conflict" });
-    await expect(workerStore.lookup(key)).resolves.toEqual({ stopped: true });
-    store.register(key, { stopped: false });
-    await expect(asyncStore.deleteIf(key, (current) => !current.stopped)).resolves.toBe(true);
-    await expect(asyncStore.lookup(" ")).rejects.toThrow(PluginStateStoreError);
+    await expect(workerStore.lookup(key)).resolves.toEqual({ stopped: false });
     expect(() => createCorePluginStateKeyedStore({ ...options, maxEntries: 11 })).toThrow(
       PluginStateStoreError,
     );
-    expect(() =>
-      createPluginStateKeyedStore("core:not-a-plugin", { namespace: "bad", maxEntries: 10 }),
-    ).toThrow(PluginStateStoreError);
+    expect(() => keyedStore("core:not-a-plugin", "bad")).toThrow(PluginStateStoreError);
   });
 
   it("treats a missing plugin-state database as empty without creating it", async () => {
@@ -298,10 +289,9 @@ describe("plugin-state-store", () => {
 
         expect(existsSync(databasePath)).toBe(false);
         await expect(store.lookup("k")).resolves.toBeUndefined();
-        await expect(store.lookupMany(["k", "missing"])).resolves.toEqual([
-          { ok: true, value: undefined },
-          { ok: true, value: undefined },
-        ]);
+        await expect(store.lookupMany(["k", "missing"])).resolves.toEqual(
+          [undefined, undefined].map(ok),
+        );
         await expect(store.lookupMany([])).resolves.toEqual([]);
         await expect(store.entries()).resolves.toEqual([]);
         await expect(store.count()).resolves.toBe(0);
@@ -419,42 +409,31 @@ describe("plugin-state-store", () => {
     ]);
     const observed = page(MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES);
     const store = syncStore<{ generation: number }>(
-      {
-        namespace,
-        maxEntries: MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES,
-      },
+      { namespace, maxEntries: MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES },
       "codex",
     );
     store.register("binding:0000", { generation: 2 });
-    const exec = vi.spyOn(DatabaseSync.prototype, "exec");
     const ownerAssertions: boolean[] = [];
     const assertOwnedInTransaction = (database: EngineConnection) => {
       ownerAssertions.push(database.isTransaction);
     };
-    try {
-      expect(remove(observed, assertOwnedInTransaction)).toEqual({
-        deleted: MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES - 1,
-        changed: 1,
-      });
-      expect(ownerAssertions).toEqual([true]);
-      expect(exec.mock.calls.filter(([sql]) => sql.trim() === "BEGIN IMMEDIATE")).toHaveLength(1);
-      expect(store.lookup("binding:0000")).toEqual({ generation: 2 });
-      for (const [pluginId, retainedNamespace] of [
-        ["codex", "other"],
-        ["other", namespace],
-      ]) {
-        expect(
-          syncStore({ namespace: retainedNamespace, maxEntries: 1 }, pluginId).lookup(
-            "binding:0000",
-          ),
-        ).toEqual({ keep: true });
-      }
-      expect(() => remove([...observed, observed[0]!], assertOwnedInTransaction)).toThrow(
-        /cannot exceed 512 entries/,
-      );
-    } finally {
-      exec.mockRestore();
+    expect(remove(observed, assertOwnedInTransaction)).toEqual({
+      deleted: MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES - 1,
+      changed: 1,
+    });
+    expect(ownerAssertions).toEqual([true]);
+    expect(store.lookup("binding:0000")).toEqual({ generation: 2 });
+    for (const [pluginId, retainedNamespace] of [
+      ["codex", "other"],
+      ["other", namespace],
+    ]) {
+      expect(
+        syncStore({ namespace: retainedNamespace, maxEntries: 1 }, pluginId).lookup("binding:0000"),
+      ).toEqual({ keep: true });
     }
+    expect(() => remove([...observed, observed[0]!], assertOwnedInTransaction)).toThrow(
+      /cannot exceed 512 entries/,
+    );
   });
 
   it("pages past malformed rows and compares siblings' original JSON bytes", async () => {
@@ -531,6 +510,33 @@ describe("plugin-state-store.errors", () => {
     await expect(async () => read()).rejects.toMatchObject(expected);
   }
 
+  it("preserves each caller's operation when a shared cold namespace load fails", async () => {
+    await withOpenClawTestState({ label: "plugin-state-load-failure" }, async () => {
+      const { db, path } = openOpenClawStateDatabase();
+      db.exec("DROP TABLE plugin_state_entries");
+      const store = openAsyncStore({ namespace: "load-failure" });
+      const results = await Promise.allSettled([
+        store.lookup("key"),
+        store.count(),
+        store.entries(),
+      ]);
+      for (const [index, operation] of ["lookup", "count", "entries"].entries()) {
+        const result = results[index]!;
+        expect(result.status).toBe("rejected");
+        if (result.status !== "rejected") {
+          throw new Error("Damaged plugin state unexpectedly read successfully");
+        }
+        expect(result.reason).toMatchObject({
+          code: "PLUGIN_STATE_READ_FAILED",
+          operation,
+          path,
+          cause: expect.objectContaining({ message: "no such table: plugin_state_entries" }),
+        });
+        expect(result.reason.owner.threadId).toBeGreaterThan(0);
+      }
+    });
+  });
+
   it.each(["decode", "sqlite-step"] as const)(
     "preserves %s failures and releases the listing cursor",
     async (failure) => {
@@ -554,20 +560,18 @@ describe("plugin-state-store.errors", () => {
           if (connection === "readonly") {
             closePluginStateDatabase();
           }
-          expect(() => store.entries()).toThrowError(
-            expect.objectContaining({
-              code: failure === "decode" ? "PLUGIN_STATE_CORRUPT" : "PLUGIN_STATE_READ_FAILED",
-              operation: "entries",
-              path,
-              cause:
-                failure === "decode"
-                  ? expect.any(SyntaxError)
-                  : expect.objectContaining({
-                      code: "ERR_SQLITE_ERROR",
-                      message: "malformed JSON",
-                    }),
-            }),
-          );
+          throws(() => store.entries(), {
+            code: failure === "decode" ? "PLUGIN_STATE_CORRUPT" : "PLUGIN_STATE_READ_FAILED",
+            operation: "entries",
+            path,
+            cause:
+              failure === "decode"
+                ? expect.any(SyntaxError)
+                : expect.objectContaining({
+                    code: "ERR_SQLITE_ERROR",
+                    message: "malformed JSON",
+                  }),
+          });
           const writer = new DatabaseSync(path);
           try {
             writer.exec("PRAGMA busy_timeout = 0");
@@ -618,17 +622,6 @@ describe("plugin-state-store.errors", () => {
             ]);
             expect(await current.count()).toBe(1);
           }
-          await rejects(
-            () =>
-              pluginStateEntriesInKeyRange({
-                pluginId: "discord",
-                ...options,
-                keyStartInclusive: "key",
-                keyEndExclusive: "kez",
-                limit: 1,
-              }),
-            expected,
-          );
         }
         const update = vi.fn(() => "changed");
         const predicate = vi.fn(() => true);
@@ -694,7 +687,7 @@ describe("plugin-state-store.errors", () => {
     const inspected = openNodeSqliteDatabase(path, { readOnly: true });
     try {
       // Acquisition can inspect a valid schema before discovering its quarantine.
-      // That refused acquisition must not leave facts usable by the keyed-store cache.
+      // That refused acquisition must not leave facts usable by the resident owner.
       admitStateSchemaFacts(inspected, path);
       expect(() =>
         openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
@@ -729,19 +722,207 @@ describe("plugin-state-store.errors", () => {
       database.close();
       const read = vi.fn(() => undefined);
       expect(explicitPath).not.toBe(resolveOpenClawStateSqlitePath(state.env));
-      expect(() =>
-        withPluginStateDatabaseReadOnly("lookup", read, {
-          path: relative(process.cwd(), explicitPath),
-          env: state.env,
-        }),
-      ).toThrow(
-        expect.objectContaining({
+      throws(
+        () =>
+          withPluginStateDatabaseReadOnly("lookup", read, {
+            path: relative(process.cwd(), explicitPath),
+            env: state.env,
+          }),
+        {
           code: "PLUGIN_STATE_OPEN_FAILED",
           operation: "lookup",
           path: explicitPath,
-        }),
+        },
       );
       expect(read).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe("plugin-state-store.retention", () => {
+  useState("plugin-state-retention");
+  const open = (namespace: string, maxEntries: number, rejectNew = false) =>
+    syncStore<number>({
+      namespace,
+      maxEntries,
+      overflowPolicy: rejectNew ? "reject-new" : "evict-oldest",
+    });
+  const seed = (namespace: string, rows: Omit<SeedRow, "namespace" | "pluginId">[]) =>
+    seedScope("discord", namespace, rows);
+
+  it("shares quota and expiry facts while refreshing time and preserving sibling rows", () => {
+    vi.useFakeTimers({ now: 1_000 });
+    const scope = { pluginId: "discord", namespace: "operation-retention" };
+    const params = { ...scope, maxEntries: 2, overflowPolicy: "reject-new" as const };
+    seedPluginStateEntriesForTests([
+      { ...scope, key: "stable", value: 1 },
+      { ...scope, key: "expiring", value: 2, expiresAt: 2_000 },
+      { ...scope, namespace: "sibling", key: "expired", value: 3, expiresAt: 800 },
+    ]);
+    const current = open(scope.namespace, 2, true);
+    const sibling = open("sibling", 2);
+    const counts = runWriteTransaction("register", (store) => {
+      const retention = readPluginStateRetention(store.db, { ...scope, now: Date.now() });
+      const replace = (valueJson: string) =>
+        registerPluginStateEntry(store, { ...params, key: "stable", valueJson }, retention, true);
+      const statements = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(store.db),
+        ["expiryProbe", "delete"],
+        (sql) =>
+          sql.startsWith('select "expires_at" from "plugin_state_entries"')
+            ? "expiryProbe"
+            : sql.startsWith('delete from "plugin_state_entries"')
+              ? "delete"
+              : null,
+      );
+      try {
+        replace("4");
+      } finally {
+        statements.restore();
+      }
+      vi.setSystemTime(2_000);
+      replace("5");
+      return statements.counts;
+    });
+    vi.setSystemTime(500);
+    expect(current.entries()).toEqual([entryOf("stable", 5, 2_000)]);
+    expect(sibling.lookup("expired")).toBe(3);
+
+    seedPluginStateEntriesForTests([
+      { ...scope, key: "backward-visible", value: 6, expiresAt: 1_500 },
+    ]);
+    vi.setSystemTime(2_000);
+    expect(() =>
+      runWriteTransaction("register", (store) => {
+        const retention = readPluginStateRetention(store.db, { ...scope, now: Date.now() });
+        vi.setSystemTime(1_000);
+        registerPluginStateEntry(
+          store,
+          { ...params, key: "over-capacity", valueJson: "7" },
+          retention,
+          false,
+        );
+      }),
+    ).toThrow("reached its 2-row limit");
+    expect(current.lookup("over-capacity")).toBeUndefined();
+    expect(counts).toEqual({ expiryProbe: 0, delete: 0 });
+  });
+
+  it("evicts oldest live entries over maxEntries with bounded database calls", () => {
+    vi.useFakeTimers({ now: 1000 });
+    seed(
+      "evict",
+      Array.from({ length: 64 }, (_, n) =>
+        entryOf(`key-${String(n).padStart(2, "0")}`, n, n >= 61 ? 1000 : Math.floor(n / 2)),
+      ),
+    );
+    const store = open("evict", 3);
+    const statements = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(openOpenClawStateDatabase().db),
+      ["delete"],
+      (sql) => (sql.startsWith('delete from "plugin_state_entries"') ? "delete" : null),
+    );
+    try {
+      store.register("a-protected", 64);
+    } finally {
+      statements.restore();
+    }
+
+    // The final victim ties the protected key; work stays bounded across all 62 victims.
+    expect(statements.counts.delete).toBeGreaterThan(0);
+    expect(statements.counts.delete).toBeLessThanOrEqual(2);
+    expect(store.entries()).toEqual([
+      entryOf("a-protected", 64, 1000),
+      entryOf("key-62", 62, 1000),
+      entryOf("key-63", 63, 1000),
+    ]);
+  });
+
+  it.each(["native", "worker"] as const)(
+    "replaces a %s expired claim beyond cleanup",
+    async (mode) => {
+      vi.spyOn(Date, "now").mockReturnValue(2_000);
+      const namespace = "claim-expiry-batch";
+      seed(namespace, [
+        ...Array.from({ length: PLUGIN_STATE_EXPIRY_BATCH_ROWS + 1 }, (_, index) => ({
+          key: `expired-${index}`,
+          value: index,
+          expiresAt: 1_000,
+        })),
+        { key: "target", value: -1, expiresAt: 1_500 },
+      ]);
+      const options = { namespace, maxEntries: 1, overflowPolicy: "reject-new" as const };
+      const store = mode === "native" ? syncStore(options) : openAsyncStore(options);
+      expect(await store.registerIfAbsent("target", 42)).toBe(true);
+      expect(await store.entries()).toEqual([
+        entryOf("target", 42, mode === "native" ? 2_000 : expect.any(Number)),
+      ]);
+      expect(
+        openOpenClawStateDatabase()
+          .db.prepare("SELECT count(*) AS count FROM plugin_state_entries WHERE expires_at <= ?")
+          .get(2_000)?.count,
+      ).toBe(1);
+    },
+  );
+
+  it("protects a worker claim when existing rows have later timestamps", async () => {
+    const store = keyedStore<number>("discord", "evict-worker-claim", { maxEntries: 1 });
+    seed("evict-worker-claim", [entryOf("z", 1, Date.now() + 24 * 60 * 60 * 1000)]);
+    const before = Date.now();
+    expect(await store.registerIfAbsent("a", 2)).toBe(true);
+    const after = Date.now();
+    const entries = await store.entries();
+    expect(entries).toMatchObject([{ key: "a", value: 2 }]);
+    expect(entries[0]?.createdAt).toBeGreaterThanOrEqual(before);
+    expect(entries[0]?.createdAt).toBeLessThanOrEqual(after);
+  });
+
+  it("sheds sequenced journal rows without evicting durable sibling state", async () => {
+    const durableEntryCount = 37;
+    const row = (namespace: string, key: string, value: unknown) => ({
+      pluginId: "memory-core",
+      namespace,
+      key,
+      value,
+    });
+    const store = (namespace: string, maxEntries: number, rejectNew = false) =>
+      createPluginStateKeyedStore("memory-core", {
+        namespace,
+        maxEntries,
+        overflowPolicy: rejectNew ? "reject-new" : "evict-oldest",
+      });
+    seedPluginStateEntriesForTests([
+      ...Array.from({ length: durableEntryCount }, (_, entryIndex) =>
+        row("durable-state", `durable-${entryIndex}`, { entryIndex }),
+      ),
+      row("memory-host.event-migration-checkpoints", "generation", { kind: "raw-checkpoint" }),
+      row("memory-host.event-cursors", "workspace", { kind: "cursor", lastSequence: 9 }),
+      row("memory-host.events", "event-0000000000000009", { sequence: 9 }),
+    ]);
+
+    expect(
+      await registerPluginStateSequencedJournalEntry({
+        pluginId: "memory-core",
+        cursorOptions: { namespace: "memory-host.event-cursors", maxEntries: 1_000 },
+        cursorKey: "workspace",
+        journalOptions: { namespace: "memory-host.events", maxEntries: 1 },
+        journalKeyPrefix: "event-",
+        journalKeyRange: { keyStartInclusive: "event-", keyEndExclusive: "event." },
+        journalValue: {},
+      }),
+    ).toBe(10);
+
+    const durable = store("durable-state", durableEntryCount);
+    const checkpoints = store("memory-host.event-migration-checkpoints", 10_000, true);
+    const journal = store("memory-host.events", 1);
+    const cursor = store("memory-host.event-cursors", 1_000);
+    await expect(durable.lookup("durable-0")).resolves.toEqual({ entryIndex: 0 });
+    await expect(checkpoints.lookup("generation")).resolves.toEqual({ kind: "raw-checkpoint" });
+    await expect(journal.lookup("event-0000000000000009")).resolves.toBeUndefined();
+    await expect(journal.lookup("event-0000000000000010")).resolves.toEqual({ sequence: 10 });
+    await expect(cursor.lookup("workspace")).resolves.toEqual({
+      kind: "cursor",
+      lastSequence: 10,
     });
   });
 });

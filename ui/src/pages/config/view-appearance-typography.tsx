@@ -1,6 +1,6 @@
 import { createMemo, For } from "solid-js";
+import { normalizeTextScale, TEXT_SCALE_STOPS, type TextScaleStop } from "../../app/settings.ts";
 import { normalizeTerminalFontFamily } from "../../app/terminal-font.ts";
-import { currentThemeBranding, subscribeThemeBranding } from "../../app/theme-branding.ts";
 import type { ThemeName } from "../../app/theme.ts";
 import {
   loadTypefaceSpecimens,
@@ -8,16 +8,24 @@ import {
   resolveTypefaces,
   TYPEFACES,
 } from "../../app/typography.ts";
-import { SettingsRow } from "../../components/solid/settings-ui.tsx";
+import { SettingsRow, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import "../../components/select-picker.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { themeBrandingProjection } from "../../lib/reactive/theme-branding.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 import { SettingsSectionHeader } from "./settings-section-header.tsx";
-import { serverUiPrefProvenanceHint } from "./view-appearance-preferences.tsx";
+import { LanguageRow, serverUiPrefsScopeHint } from "./view-appearance-preferences.tsx";
 import type { ConfigProps } from "./view-types.ts";
 
-export function Typography(
+const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
+  90: "configView.textSizes.small",
+  100: "configView.textSizes.default",
+  110: "configView.textSizes.large",
+  125: "configView.textSizes.xl",
+  140: "configView.textSizes.xxl",
+};
+
+export function TextSection(
   props: ConfigProps & {
     presentedTheme: {
       id: ThemeName;
@@ -25,11 +33,7 @@ export function Typography(
     };
   },
 ) {
-  const branding = projectSource(undefined, {
-    read: currentThemeBranding,
-    subscribe: (_source, notify) => subscribeThemeBranding(notify),
-    equality: Object.is,
-  });
+  const branding = themeBrandingProjection;
   const options = createMemo(() =>
     Object.entries(TYPEFACES).map(([face, metadata]) => ({
       value: face,
@@ -43,8 +47,28 @@ export function Typography(
   const terminalFontFamily = createMemo(() => props.terminalFontFamily ?? "");
   return (
     <section id={APPEARANCE_SETTINGS_TARGET_IDS.typography} class="settings-section">
-      <SettingsSectionHeader title={t("configView.appearance.typography")} />
+      <SettingsSectionHeader title={t("configView.appearance.languageAndText")} />
       <div class="settings-group">
+        <LanguageRow {...props} />
+        <div id={APPEARANCE_SETTINGS_TARGET_IDS.textSize}>
+          <SettingsRow
+            title={t("configView.appearance.textSize")}
+            description={t("quickSettings.personal.browserOnly")}
+            stackedOnNarrow={true}
+            control={
+              <SettingsSegmented
+                value={String(props.textScale)}
+                ariaLabel={t("configView.appearance.textSize")}
+                options={TEXT_SCALE_STOPS.map((stop) => ({
+                  value: String(stop),
+                  label: `${stop}%`,
+                  title: t(TEXT_SCALE_LABELS[stop]),
+                }))}
+                onChange={(value) => props.setTextScale(normalizeTextScale(Number(value)))}
+              />
+            }
+          />
+        </div>
         <For each={["ui", "chat"] as const}>
           {(slot) => {
             const isUi = slot === "ui";
@@ -53,9 +77,6 @@ export function Typography(
             return (
               <SettingsRow
                 title={title()}
-                description={serverUiPrefProvenanceHint(
-                  isUi ? props.fontUiProvenance : props.fontChatProvenance,
-                )}
                 stackedOnNarrow={true}
                 control={
                   <openclaw-select-picker
@@ -74,7 +95,10 @@ export function Typography(
                           label: t("configView.appearance.fonts.themeDefault"),
                           description: t("configView.appearance.fonts.themeFace", {
                             theme: props.presentedTheme.label,
-                            face: TYPEFACES[face()].label,
+                            face:
+                              face() === "system"
+                                ? t("configView.appearance.fonts.system")
+                                : TYPEFACES[face()].label,
                           }),
                           labelStyle: `font-family: ${TYPEFACES[face()].stack}`,
                         },
@@ -96,12 +120,12 @@ export function Typography(
           title={t("configView.appearance.fonts.terminal")}
           description={
             <>
-              {t("configView.appearance.fonts.terminalHint")}
-              <br />
-              {t("configView.appearance.fonts.terminalLigatures")}
+              {t("configView.appearance.fonts.terminalHint")}{" "}
+              {t("configView.appearance.fonts.terminalLigatures")}{" "}
+              {t("quickSettings.personal.browserOnly")}
             </>
           }
-          stacked={true}
+          stackedOnNarrow={true}
           control={
             <>
               <input
@@ -153,6 +177,13 @@ export function Typography(
           </div>
         </div>
       </div>
+      <p class="settings-section__desc settings-section__scope">
+        {serverUiPrefsScopeHint([
+          props.localeProvenance,
+          props.fontUiProvenance,
+          props.fontChatProvenance,
+        ])}
+      </p>
     </section>
   );
 }
