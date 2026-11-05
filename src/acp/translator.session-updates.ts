@@ -104,6 +104,18 @@ export class AcpTranslatorSessionUpdates {
     }
   }
 
+  async readLedgerSessionKey(sessionId: string): Promise<string | undefined> {
+    if (this.stopped) {
+      return undefined;
+    }
+    try {
+      return await this.track(this.options.eventLedger.readSessionKey({ sessionId }));
+    } catch (err) {
+      this.options.log(`event ledger session-key lookup failed for ${sessionId}: ${String(err)}`);
+      return undefined;
+    }
+  }
+
   readLedgerReplay(params: {
     sessionId: string;
     sessionKey: string;

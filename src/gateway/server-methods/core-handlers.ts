@@ -77,6 +77,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "mcp-events": () => import("./mcp-events.js").then((module) => module.mcpEventsHandlers),
   "mcp-auth-login": () =>
     import("./mcp-auth-login.js").then((module) => module.mcpAuthLoginHandlers),
+  "mcp-auth-logout": () =>
+    import("./mcp-auth-logout.js").then((module) => module.mcpAuthLogoutHandlers),
   "models-auth-order": () =>
     import("./models-auth-order.js").then((module) => module.modelsAuthOrderHandlers),
   models: () => import("./models.js").then((module) => module.modelsHandlers),
@@ -117,8 +119,6 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./sessions-create.js").then((module) => module.sessionCreateHandlers),
   "sessions-title": () =>
     import("./sessions-title.js").then((module) => module.sessionTitleHandlers),
-  "sessions-recover": () =>
-    import("./sessions-recover.js").then((module) => module.sessionRecoverHandlers),
   "sessions-delete": () =>
     import("./sessions-delete.js").then((module) => module.sessionDeleteHandlers),
   "sessions-dispatch": () =>

@@ -89,20 +89,20 @@ function expectReady(store: Store) {
   expect(readBackupEngine(store.local)).toEqual({ engine: "sqlite" });
 }
 
-function bytes(state: OpenClawTestState, stores: Store[], extraFiles: string[] = []) {
+function captureBytes(state: OpenClawTestState, stores: Store[], extraFiles: string[] = []) {
   return [
     state.configPath,
     ...stores.flatMap((store) => [store.shared, store.local]),
     ...extraFiles,
-  ].map((file) => fs.readFileSync(file));
+  ].map((file) => ({ file, bytes: fs.readFileSync(file) }));
 }
 
-async function expectRefusal(state: OpenClawTestState, stores: Store[], file: string) {
-  const before = bytes(state, stores, [file]);
+async function expectRefusal(state: OpenClawTestState, stores: Store[], target: string) {
+  const before = captureBytes(state, stores, [target]);
   await expect(doctorDatabasePort({ family: "state", to: "sqlite", dryRun: true })).rejects.toThrow(
-    file,
+    target,
   );
-  expect(bytes(state, stores, [file])).toEqual(before);
+  before.forEach(({ file, bytes }) => assert(fs.readFileSync(file).equals(bytes), file));
   expect(fs.existsSync(recovery.databasePortManifestPath(state.stateDir))).toBe(false);
 }
 
@@ -118,20 +118,20 @@ describe("database port local credential ownership", () => {
       fs.copyFileSync(store.shared, `${store.shared}.copy`);
       fs.renameSync(`${store.shared}.copy`, store.shared);
       expect(fs.statSync(store.shared, { bigint: true }).ino).not.toBe(original.ino);
-      const before = bytes(state, stores);
+      const before = captureBytes(state, stores);
       await expect(
         doctorDatabasePort({ family: "state", to: "postgres", dryRun: true }),
       ).rejects.toMatchObject({
         message: `Database port preflight: ${store.local}; Database port credentials do not match the captured shared database. Restore the archive with openclaw backup restore before retrying.`,
       });
-      expect(bytes(state, stores)).toEqual(before);
+      before.forEach(({ file, bytes }) => assert(fs.readFileSync(file).equals(bytes), file));
       expect(fs.existsSync(state.statePath("recovery"))).toBe(false);
     });
   });
 
   it("keeps bound companions in backup and out of portable state without changing a dry run", async () => {
     await fixture(async (state, stores) => {
-      const before = bytes(state, stores);
+      const before = captureBytes(state, stores);
       const result = await doctorDatabasePort({ family: "state", to: "sqlite", dryRun: true });
       expect(result.stores.toSorted()).toEqual(stores.map((store) => store.shared).toSorted());
       expect(result.remainingSqlite.toSorted()).toEqual(
@@ -148,7 +148,7 @@ describe("database port local credential ownership", () => {
       expect(discovered).toEqual(
         expect.arrayContaining(stores.flatMap((store) => [store.shared, store.local])),
       );
-      expect(bytes(state, stores)).toEqual(before);
+      before.forEach(({ file, bytes }) => assert(fs.readFileSync(file).equals(bytes), file));
       for (const store of stores) {
         expectReady(store);
       }

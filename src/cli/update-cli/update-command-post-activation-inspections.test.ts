@@ -52,6 +52,7 @@ it("includes nondefault inspections in the retry command after advisory findings
     ["core/doctor/hooks-model"],
   );
   expect(observed.status).toBe("ok");
+  expect(observed.steps.at(-1)?.deferredInspectionCheckIds).toEqual([]);
   expect(observed.steps.at(-1)?.advisory?.message).toContain(
     "openclaw doctor --lint --all --severity-min info",
   );
@@ -74,6 +75,7 @@ process.exitCode = 1;
   );
   expect(JSON.parse(await fs.readFile(argvPath, "utf8"))).toContain(`--only=${selector}`);
   expect(observed.status).toBe("ok");
+  expect(observed.steps.at(-1)?.deferredInspectionCheckIds).toBeUndefined();
   expect(observed.steps.at(-1)).toMatchObject({
     exitCode: 1,
     advisory: { message: expect.stringContaining("did not run every deferred inspection") },

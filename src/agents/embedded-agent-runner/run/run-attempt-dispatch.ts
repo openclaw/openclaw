@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import * as sourceTurn from "../../../auto-reply/reply/source-turn-id.js";
-import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
@@ -28,6 +27,7 @@ import { createAttemptContinuationRetryCount } from "./attempt-continuation-retr
 import { withPreparedEmbeddedGatewayTools } from "./attempt-gateway-tools.js";
 import { resolveEmbeddedAttemptMemoryAudience } from "./attempt-memory-audience.js";
 import { applyResolvedToolPromptFinalizer } from "./attempt-prompt-support.js";
+import { createPreparedSessionTargetAssertion } from "./attempt-session-target.js";
 import { EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE } from "./attempt-stage-timing.js";
 import { prepareAttemptSystemPromptAdditions } from "./attempt-system-prompt-additions.js";
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush.js";
@@ -336,17 +336,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     },
   });
   const pluginRefresh = captureAgentPluginRuntimeRefresh();
-  const assertTargetCurrent = () => {
-    if (
-      !attemptControls.isAttemptCurrent() ||
-      sessionPromptState.sessionId !== sessionId ||
-      (["agentId", "sessionId", "sessionKey", "storePath", "threadId"] as const).some(
-        (field) => sessionPromptState.sessionTarget?.[field] !== selectedPromptTarget[field],
-      )
-    ) {
-      throw new Error("Session target preparation outlived its attempt");
-    }
-  };
   const preparedSessionTarget =
     (!sessionManager || params.sessionPersistence === "detached") &&
     resolvedSessionTarget?.agentId &&
@@ -361,16 +350,13 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
             sessionKey: resolvedSessionTarget.sessionKey,
             storePath: resolvedSessionTarget.storePath,
           }),
-          assertCurrent: composeSessionSourceAssertion([assertActiveRun], (assertSource) => {
-            assertTargetCurrent();
-            try {
-              assertSource();
-            } catch {
-              throw new Error("Session target preparation outlived its attempt");
-            }
-            // Source callbacks can retire this attempt or replace its selected target.
-            assertTargetCurrent();
-            assertActiveRun.assertScopeCurrent();
+          assertCurrent: createPreparedSessionTargetAssertion({
+            runId: params.runId,
+            sessionId,
+            sessionPromptState,
+            selectedPromptTarget,
+            isAttemptCurrent: () => attemptControls.isAttemptCurrent(),
+            assertActiveRun,
           }),
         }
       : undefined;
@@ -619,7 +605,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     streamParams: params.streamParams,
     modelRun: params.modelRun,
     disableTrajectory: params.disableTrajectory,
-    skillWorkshopReviewOf: params.skillWorkshopReviewOf,
     skillLibraryAuthoring: params.skillLibraryAuthoring,
     promptMode: params.promptMode,
     ownerNumbers: params.ownerNumbers,
@@ -646,8 +631,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     disableMessageTool: params.disableMessageTool,
     swarmCollector: params.swarmCollector,
     swarmOutputSchema: params.swarmOutputSchema,
-    forceRestartSafeTools: params.forceRestartSafeTools,
-    forceCodeModeTools: params.forceCodeModeTools,
     codeModeOverride: params.codeModeOverride,
     disableToolSearch: params.disableToolSearch,
     compactionForbidden: params.disableCompactionRecovery,

@@ -42,6 +42,7 @@ const excludedHandles = new Set([
   "codex",
   "hugin-bot",
   "roboclaw-bot",
+  "tideclaw-bot",
   "steipete-oai",
 ]);
 const nonEditorialTypes = new Set([
@@ -244,6 +245,34 @@ function gitIsAncestor(base, target) {
   }
   return fail(
     `could not validate release range ancestry for ${base}..${target}: ${
+      result.stderr?.trim() || result.signal || result.status
+    }`,
+  );
+}
+
+function gitMergeBase(base, target) {
+  const result = spawnSync("git", ["merge-base", base, target], {
+    encoding: "utf8",
+    env: { ...process.env, NO_COLOR: "1" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.status === 0 && result.stdout.trim()) {
+    return result.stdout.trim();
+  }
+
+  const shallow = spawnSync("git", ["rev-parse", "--is-shallow-repository"], {
+    encoding: "utf8",
+    env: { ...process.env, NO_COLOR: "1" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (shallow.status === 0 && shallow.stdout.trim() === "true") {
+    return fail(
+      `could not resolve release range merge base for ${base}..${target}: this checkout is shallow; fetch complete history (for example, git fetch --unshallow origin) and retry`,
+    );
+  }
+
+  return fail(
+    `could not resolve release range merge base for ${base}..${target}: ${
       result.stderr?.trim() || result.signal || result.status
     }`,
   );
@@ -532,10 +561,8 @@ export function renderContributionRecordEntry(entry) {
     appendUnique(references, [`#${issue.number}`]);
   }
   const related = references.length > 0 ? ` Related ${references.join(", ")}.` : "";
-  const attribution =
-    entry.thanks.length > 0
-      ? ` Thanks ${entry.thanks.map((handle) => `@${handle}`).join(" and ")}.`
-      : "";
+  const credits = formatInitialCredits(entry.thanks);
+  const attribution = credits ? ` ${credits}` : "";
   return `- **PR #${entry.number}**${related}${attribution}`;
 }
 
@@ -676,11 +703,13 @@ function verifiedMultiRevertedHashes(hash, subject, body) {
 }
 
 function handlesIn(text) {
-  const thanksStart = text.lastIndexOf(" Thanks ");
-  if (thanksStart < 0) {
+  const creditStarts = [text.lastIndexOf(" Authored by "), text.lastIndexOf(" Thanks ")].filter(
+    (index) => index >= 0,
+  );
+  if (creditStarts.length === 0) {
     return [];
   }
-  return [...text.slice(thanksStart).matchAll(/@([A-Za-z0-9-]+)/g)]
+  return [...text.slice(Math.min(...creditStarts)).matchAll(/@([A-Za-z0-9-]+)/g)]
     .map((match) => match[1])
     .filter(isEligibleHandle);
 }
@@ -2072,6 +2101,19 @@ function formatThanks(handles) {
   return `${mentions.slice(0, -1).join(", ")}, and ${mentions.at(-1)}`;
 }
 
+function formatInitialCredits(handles) {
+  const authors = handles.filter((handle) => handle.toLowerCase() === "steipete");
+  const thanked = handles.filter((handle) => handle.toLowerCase() !== "steipete");
+  const parts = [];
+  if (authors.length > 0) {
+    parts.push(`Authored by ${formatThanks(authors)}.`);
+  }
+  if (thanked.length > 0) {
+    parts.push(`Thanks ${formatThanks(thanked)}.`);
+  }
+  return parts.join(" ");
+}
+
 function directCommitTitleTokens(subject) {
   const title = subject.replace(/^\s*[a-z]+(?:\([^)]*\))?!?:\s*/i, "");
   return [...new Set(title.toLowerCase().match(/[a-z0-9][a-z0-9-]{3,}/g) ?? [])].filter(
@@ -2146,15 +2188,17 @@ function completeEditorialCredits(prose, pullRequests, directCommits, nodes) {
       if (contributors === undefined) {
         return line;
       }
-      const thanksStart = line.lastIndexOf(" Thanks ");
-      const rawContent = thanksStart >= 0 ? line.slice(0, thanksStart) : line;
+      const creditStarts = [line.lastIndexOf(" Authored by "), line.lastIndexOf(" Thanks ")].filter(
+        (index) => index >= 0,
+      );
+      const creditStart = creditStarts.length > 0 ? Math.min(...creditStarts) : -1;
+      const rawContent = creditStart >= 0 ? line.slice(0, creditStart) : line;
       const content =
         referencesIn(rawContent).length === 0
           ? withSentenceEnding(rawContent)
           : rawContent.replace(/[.!?]$/, "");
-      return contributors.length > 0
-        ? `${content} Thanks ${formatThanks(contributors)}.`
-        : withSentenceEnding(content);
+      const credits = formatInitialCredits(contributors);
+      return credits ? `${content} ${credits}` : withSentenceEnding(content);
     })
     .join("\n");
 }
@@ -2733,7 +2777,7 @@ function main() {
     if (!options.shippedRefs.includes(options.base)) {
       options.shippedRefs.push(options.base);
     }
-    options.base = git(["merge-base", options.base, options.target]);
+    options.base = gitMergeBase(options.base, options.target);
   }
   const rootDir = process.cwd();
   if (options.releaseBranch && !gitIsAncestor(options.target, options.releaseBranch)) {

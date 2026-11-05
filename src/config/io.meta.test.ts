@@ -87,4 +87,26 @@ describe("config write metadata stamping", () => {
       ).toEqual(["bare"]);
     },
   );
+
+  it("extends only pre-split skill_workshop policy once, then records the split", () => {
+    const previous: OpenClawConfig = {
+      tools: { allow: ["skill_workshop"], deny: ["exec"] },
+      agents: { entries: { main: { tools: { allow: ["read"] } } } },
+    };
+    const next: OpenClawConfig = {
+      tools: previous.tools,
+      // Authored in this write, after the split: not pre-split policy.
+      agents: { entries: { main: { tools: { deny: ["skill_workshop"] } } } },
+    };
+    const stamped = stampConfigWriteMetadata(next, undefined, previous);
+    expect(stamped.tools?.allow).toEqual(["skill_workshop", "skill_library"]);
+    expect(stamped.agents?.entries?.main?.tools?.deny).toEqual(["skill_workshop"]);
+    expect(stamped.meta?.migrations?.skillLibraryToolSplit).toBe(true);
+    const fresh = stampConfigWriteMetadata(previous, undefined, null);
+    expect(fresh.tools?.allow).toEqual(["skill_workshop"]);
+    expect(fresh.meta?.migrations?.skillLibraryToolSplit).toBe(true);
+    const restamped = stampConfigWriteMetadata({ tools: previous.tools }, undefined, stamped);
+    expect(restamped.tools?.allow).toEqual(["skill_workshop"]);
+    expect(restamped.meta?.migrations?.skillLibraryToolSplit).toBe(true);
+  });
 });

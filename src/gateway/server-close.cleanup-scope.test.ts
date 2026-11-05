@@ -2,6 +2,7 @@ import "./server-worker-free.test-support.js";
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createOwnedInstance } from "../plugins/plugin-instance.test-support.js";
 import { retainGatewayPluginMetadata } from "../plugins/plugin-metadata-lifecycle.js";
@@ -12,11 +13,14 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
+import { runWithProcessCleanupBudget } from "../process/supervisor/cleanup-budget.js";
 import { registerActiveDebugProxyCapture } from "../proxy-capture/runtime-cleanup.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
+import { sleep } from "../utils/sleep.js";
 import { completeGatewayClose, prepareGatewayClose } from "./server-close.js";
 import { createGatewayCloseTestDepsFactory } from "./server-close.test-support.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
@@ -58,8 +62,65 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
+});
+
+it.each(
+  ["session persistence", "subagent settlement"].flatMap((step) =>
+    ["rejected", "slow", "timed out"].map((outcome) => ({ step, outcome })),
+  ),
+)("closes its listener and resources after $step $outcome", async ({ step, outcome }) => {
+  const { listener, releaseListener, claim } = await reserveTestPortListener({
+    offsets: [0],
+    createListener: () => createServer(),
+  });
+  const committed = createDeferredCore();
+  const settle = async (signal?: AbortSignal) => {
+    if (outcome === "rejected") {
+      throw new Error("store refused");
+    }
+    await committed.promise;
+    signal?.throwIfAborted();
+  };
+  const marker = step === "session persistence";
+  const params = createGatewayCloseTestDeps({
+    httpServer: listener,
+    channelIds: ["telegram"],
+    persistRunningSessionsForRestart: marker ? settle : () => sleep(500),
+    terminateRunningSubagentsForShutdown: marker ? undefined : settle,
+  });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+  const markerOverrun = marker && outcome === "timed out";
+  const closing = runWithProcessCleanupBudget(
+    { deadline: performance.now() + (markerOverrun ? 85_000 : 3_000), warn() {} },
+    () => closeGateway(params).catch((error: unknown) => error),
+  );
+  try {
+    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(
+      markerOverrun ? 9_500 : outcome === "timed out" ? 2_500 : 1_500,
+    );
+    committed.resolve();
+    const expected =
+      outcome === "rejected"
+        ? "store refused"
+        : `Shutdown ${step} did not settle within ${marker ? 10_000 : 2_500}ms`;
+    expect(await closing).toMatchObject(
+      outcome === "slow" ? { warnings: [] } : new Error(expected),
+    );
+    expect(listener.listening).toBe(false);
+    expect(params.stopChannel).toHaveBeenCalledWith("telegram");
+    expect(sharedStateLifecycle.size).toBe(0);
+  } finally {
+    committed.resolve();
+    vi.useRealTimers();
+    if (listener.listening) {
+      await releaseListener();
+    }
+    await claim.release();
+  }
 });
 
 it("finalizes capture after media drains even when stopping media cleanup fails", async () => {

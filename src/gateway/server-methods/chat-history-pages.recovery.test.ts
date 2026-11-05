@@ -165,7 +165,7 @@ describe("historical page recovery context", () => {
         expect(settled.messages.map(readRunFailureNotice).filter(Boolean)).toEqual([
           {
             runId: "recovered-run",
-            summary: "Your request couldn't be completed: All model attempts failed",
+            summary: "Your request couldn't be completed.",
           },
         ]);
         expect(settled.messages[1]).toMatchObject({ content: partial.content });

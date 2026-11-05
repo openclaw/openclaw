@@ -573,15 +573,8 @@ export async function monitorMSTeamsProvider(opts: MonitorMSTeamsOpts): Promise<
         log: (message) => log.warn?.(message),
       }),
     );
-    // Only the Gateway alias yields: compatibility listeners still reach the forwarder above.
+    // Only the Gateway alias yields; compatibility listeners retain their forwarder.
     const legacyMessagesOwner = resolveMSTeamsLegacyMessagesOwner(accountPolicyCfg);
-    if (
-      accountId === DEFAULT_ACCOUNT_ID &&
-      legacyMessagesOwner &&
-      legacyMessagesOwner !== accountId
-    ) {
-      log.info(`Gateway route /api/messages is configured for account ${legacyMessagesOwner}`);
-    }
     if (accountId === DEFAULT_ACCOUNT_ID && !legacyMessagesOwner) {
       unregisterRoutes.push(
         registerPluginHttpRoute({
