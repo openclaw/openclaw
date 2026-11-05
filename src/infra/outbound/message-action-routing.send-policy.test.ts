@@ -148,6 +148,7 @@ describe("runMessageAction core send routing", () => {
     action?: ChannelMessageActionName;
     params: Record<string, unknown>;
     denied?: boolean;
+    boundToChat?: boolean;
   }>([
     { name: "the chat id with the current topic id", params: { threadId: "42" } },
     { name: "the chat id inheriting the current topic", params: {} },
@@ -199,6 +200,32 @@ describe("runMessageAction core send routing", () => {
       params: { name: "New topic", threadId: "42" },
       denied: true,
     },
+    // Naming the current topic does not move a new topic out of the base chat.
+    {
+      name: "a new topic through the current topic target",
+      action: "topic-create",
+      params: { target: "-1001234567890:topic:42", name: "New topic" },
+      denied: true,
+    },
+    {
+      name: "a new topic through the current topic target and id",
+      action: "topic-create",
+      params: { target: "-1001234567890:topic:42", threadId: "42", name: "New topic" },
+      denied: true,
+    },
+    {
+      name: "a new topic in the chat its turn is bound to",
+      action: "topic-create",
+      params: { name: "New topic" },
+      boundToChat: true,
+    },
+    {
+      name: "a new topic through another topic target of the chat its turn is bound to",
+      action: "topic-create",
+      params: { target: "-1001234567890:topic:99", name: "New topic" },
+      boundToChat: true,
+      denied: true,
+    },
     {
       name: "a rename of the current topic through the chat id",
       action: "topic-edit",
@@ -216,7 +243,7 @@ describe("runMessageAction core send routing", () => {
       params: { target: "-1001234567890:topic:42", threadId: "99", name: "Renamed" },
       denied: true,
     },
-  ])("judges a restricted Telegram topic turn's request for $name", async (scenario) => {
+  ])("judges a restricted Telegram turn's request for $name", async (scenario) => {
     const { telegramPlugin } = await loadBundledPluginFacade<{ telegramPlugin: ChannelPlugin }>({
       pluginId: "telegram",
       artifactBasename: "api.ts",
@@ -244,8 +271,10 @@ describe("runMessageAction core send routing", () => {
         },
         toolContext: {
           currentChannelProvider: "telegram",
-          currentChannelId: "telegram:-1001234567890:topic:42",
-          currentThreadTs: "42",
+          // Every other row is bound to topic 42 of the same chat.
+          ...(scenario.boundToChat
+            ? { currentChannelId: "telegram:-1001234567890" }
+            : { currentChannelId: "telegram:-1001234567890:topic:42", currentThreadTs: "42" }),
           currentChatType: "group",
         },
         dryRun: true,

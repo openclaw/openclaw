@@ -3,6 +3,7 @@ import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
 import { readToolStringParam } from "../../agents/tools/common.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { resolveChannelMessageActionFacts } from "../../channels/plugins/message-action-names.js";
+import { resolveSessionConversation } from "../../channels/plugins/session-conversation.js";
 import type {
   ChannelId,
   ChannelMessageActionName,
@@ -59,6 +60,19 @@ function isCrossContextTarget(params: {
 // The runner delivers send and poll into the thread it resolves. Other actions only hand that
 // thread to the plugin, which may act on the base chat instead (Telegram's topic-create).
 const THREAD_DELIVERY_ACTIONS: ReadonlySet<ChannelMessageActionName> = new Set(["send", "poll"]);
+// A new topic is a sibling conversation in the parent chat, whatever topic or thread the request
+// names, so that parent chat must be the current conversation too.
+const PARENT_CONVERSATION_ACTIONS: ReadonlySet<ChannelMessageActionName> = new Set([
+  "topic-create",
+]);
+
+/** Names a target's parent conversation with the channel's own conversation grammar. */
+function resolveParentConversationTarget(channel: ChannelId, target: string): string {
+  return (
+    resolveSessionConversation({ channel, kind: "group", rawId: target })?.baseConversationId ??
+    target
+  );
+}
 
 /** Names the conversation an action's thread selects where threads are their own conversations. */
 function resolveThreadedTarget(params: {
@@ -87,6 +101,22 @@ function resolveThreadedTarget(params: {
   return threadId
     ? (threading.resolveCurrentChannelId({ to: params.target, threadId }) ?? params.target)
     : params.target;
+}
+
+/** Lists the conversations an action's effect can reach; each must be the current one. */
+function resolveJudgedTargets(
+  params: Parameters<typeof enforceCrossContextPolicy>[0],
+  requestedTarget: string,
+): string[] {
+  if (PARENT_CONVERSATION_ACTIONS.has(params.action)) {
+    return [resolveParentConversationTarget(params.channel, requestedTarget), requestedTarget];
+  }
+  const threadedTarget = resolveThreadedTarget({ ...params, target: requestedTarget });
+  // An inherited thread is not authority for an effect outside it: other actions must also
+  // request the current conversation, and a thread they carry can only narrow that.
+  return THREAD_DELIVERY_ACTIONS.has(params.action)
+    ? [threadedTarget]
+    : [requestedTarget, threadedTarget];
 }
 
 function mergeMessagePolicy<T extends object>(global: T | undefined, agent: T | undefined) {
@@ -223,19 +253,7 @@ export function enforceCrossContextPolicy(params: {
   if (!requestedTarget) {
     return;
   }
-  const threadedTarget = resolveThreadedTarget({
-    channel: params.channel,
-    target: requestedTarget,
-    args: params.args,
-    toolContext: params.toolContext,
-    cfg: params.cfg,
-  });
-  // An inherited thread is not authority for an effect outside it: other actions must also
-  // request the current conversation, and a thread they carry can only narrow that.
-  const judgedTargets = THREAD_DELIVERY_ACTIONS.has(params.action)
-    ? [threadedTarget]
-    : [requestedTarget, threadedTarget];
-  const target = judgedTargets.find((candidate) =>
+  const target = resolveJudgedTargets(params, requestedTarget).find((candidate) =>
     isCrossContextTarget({ ...params, target: candidate }),
   );
   if (!target) {
