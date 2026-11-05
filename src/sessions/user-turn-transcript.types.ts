@@ -68,6 +68,7 @@ export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> &
       timeoutMs?: number;
     };
     requesterOrigin?: RequesterOrigin;
+    pendingInputCancelledByUser?: true;
   };
 };
 
@@ -264,7 +265,7 @@ export type UserTurnTranscriptRecorder = {
   withPendingInput?: <T>(run: () => T) => T;
   withPendingInputCurrent?: <T>(run: () => T) => Promise<Awaited<T>>;
   assertPendingInputLifetimeCurrent?: () => void;
-  finishPendingInput?: (disposition: "cancelled" | "interrupted") => void;
+  finishPendingInput?: (disposition: "cancelled" | "interrupted", userInitiated?: true) => void;
   /** Join accepted completion and disposition writes before releasing the turn's admission. */
   waitForPendingInputSettlement?: () => Promise<void>;
   /** Replaces generated current-turn text before runtime persistence/provider submission. */

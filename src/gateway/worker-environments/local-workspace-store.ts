@@ -1,6 +1,7 @@
 import { promisify } from "node:util";
 import { deserialize, serialize } from "node:v8";
 import { deflateRaw, deflateRawSync, inflateRawSync } from "node:zlib";
+import { startWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import {
   captureWorktreeRunEndContext,
   retainWorktreeRunEndFailure,
@@ -94,8 +95,9 @@ export function withLocalWorkspaceStore<T>(
   if (context.admission.coordinationKey !== captured.admission.coordinationKey) {
     throw new Error("Local workspace lease belongs to another database");
   }
-  return withWorktreeRunEnd(env, () =>
-    withOpenClawStateLeaseAsync(
+  return withWorktreeRunEnd(env, () => {
+    const finishWait = startWorktreePreparationPhase("workspaceWait");
+    return withOpenClawStateLeaseAsync(
       {
         scope: "workspace.local-reconciliation",
         key: params.worktreeId,
@@ -107,6 +109,7 @@ export function withLocalWorkspaceStore<T>(
       },
       context,
       (lease) => {
+        finishWait();
         const leases = [...(inherited?.leases ?? []), lease];
         return withOpenClawStateLeasesWorkerAdmission(leases, context, async (authority) => {
           let active = true;
@@ -469,6 +472,6 @@ export function withLocalWorkspaceStore<T>(
           }
         });
       },
-    ),
-  );
+    ).finally(finishWait);
+  });
 }

@@ -40,15 +40,18 @@ describe("cron protocol schema", () => {
     expect(patchStateProperties.streamSourceIdentity).toBeUndefined();
   });
 
-  it("reports schedule activation without accepting it in state patches", () => {
-    const stateProperties = (CronJobStateSchema as SchemaLike).properties ?? {};
-    expect(stateProperties.scheduleActivatedAtMs).toBeDefined();
+  it.each(["scheduleActivatedAtMs", "admissionDeferred"])(
+    "reports %s without accepting it in state patches",
+    (field) => {
+      const stateProperties = (CronJobStateSchema as SchemaLike).properties ?? {};
+      expect(stateProperties[field]).toBeDefined();
 
-    const updateProperties = (CronUpdateParamsSchema as SchemaLike).properties ?? {};
-    const patchProperties = (updateProperties.patch as SchemaLike | undefined)?.properties ?? {};
-    const patchState = patchProperties.state as SchemaLike | undefined;
-    expect(patchState?.properties?.scheduleActivatedAtMs).toBeUndefined();
-  });
+      const updateProperties = (CronUpdateParamsSchema as SchemaLike).properties ?? {};
+      const patchProperties = (updateProperties.patch as SchemaLike | undefined)?.properties ?? {};
+      const patchState = patchProperties.state as SchemaLike | undefined;
+      expect(patchState?.properties?.[field]).toBeUndefined();
+    },
+  );
 
   it("documents that pacing requires at least one bound", () => {
     expect((CronPacingSchema as SchemaLike).description).toContain(

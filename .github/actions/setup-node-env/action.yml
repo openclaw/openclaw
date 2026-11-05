@@ -330,11 +330,11 @@ runs:
       if: inputs.cache-mode != 'off' && (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
-        path: /var/tmp/openclaw-vitest-fs-cache
-        # v4 seeds config-owned leaves shared by single and mixed-config jobs.
-        key: ${{ github.repository }}-vitest-fs-v4-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.vitest-cache-generation.outputs.value }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .cache/openclaw-vitest-fs-cache
+        # v5 uses workspace-relative archive members across runner layouts.
+        key: ${{ github.repository }}-vitest-fs-v5-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.vitest-cache-generation.outputs.value }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          ${{ github.repository }}-vitest-fs-v4-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.vitest-cache-generation.outputs.value }}-
+          ${{ github.repository }}-vitest-fs-v5-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.vitest-cache-generation.outputs.value }}-
 
     - name: Configure Vitest transform cache
       if: inputs.cache-mode != 'off' && (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
@@ -348,7 +348,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        cache_root=/var/tmp/openclaw-vitest-fs-cache
+        cache_root="$GITHUB_WORKSPACE/.cache/openclaw-vitest-fs-cache"
         generation_file="$cache_root/.openclaw-transform-generation"
         mkdir -p "$cache_root"
         cache_generation=""
@@ -381,19 +381,19 @@ runs:
       if: inputs.cache-mode != 'off' && (inputs.node-compile-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
-        path: /var/tmp/openclaw-node-compile-cache
+        path: .cache/openclaw-node-compile-cache
         # The warmer compiles build tools and test orchestration into one seed.
-        # Retain its existing namespace so readers can reuse published archives.
-        key: ${{ github.repository }}-node-compile-v3-test-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ github.run_id }}-${{ github.run_attempt }}
+        # v4 uses workspace-relative archive members across runner layouts.
+        key: ${{ github.repository }}-node-compile-v4-test-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          ${{ github.repository }}-node-compile-v3-test-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
+          ${{ github.repository }}-node-compile-v4-test-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
 
     - name: Configure Node compile cache
       if: inputs.cache-mode != 'off' && (inputs.node-compile-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       shell: bash
       run: |
         set -euo pipefail
-        cache_root=/var/tmp/openclaw-node-compile-cache
+        cache_root="$GITHUB_WORKSPACE/.cache/openclaw-node-compile-cache"
         mkdir -p "$cache_root"
         echo "NODE_COMPILE_CACHE=$cache_root" >> "$GITHUB_ENV"
         echo "NODE_COMPILE_CACHE_PORTABLE=1" >> "$GITHUB_ENV"

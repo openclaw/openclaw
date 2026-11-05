@@ -99,16 +99,13 @@ function readMemorySearchToolCooldown(key: string): MemoryCorpusFailure | undefi
   if (!entry) {
     return undefined;
   }
+  const { until, ...failure } = entry;
   // A configuration change may retain the previous failure for this one-minute pause.
-  if (entry.until <= Date.now()) {
+  if (until <= Date.now()) {
     memorySearchToolCooldowns.delete(key);
     return undefined;
   }
-  return {
-    error: entry.error,
-    deadline: entry.deadline,
-    ...(entry.code ? { code: entry.code } : {}),
-  };
+  return failure;
 }
 
 function recordMemorySearchToolCooldown(key: string, failure: MemoryCorpusFailure): void {
@@ -348,7 +345,9 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                     ...(attempted.code ? { code: attempted.code } : {}),
                   }
                 : { error: "memory search unavailable", deadline: false };
-            recordMemorySearchToolCooldown(agentId, failure);
+            if (!failure.deadline) {
+              recordMemorySearchToolCooldown(agentId, failure);
+            }
             return {
               corpus: "memory",
               outcome: "unavailable",
@@ -550,7 +549,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
             throw resolveMemorySearchAbortError(callerSignal);
           }
           const failed = unavailableMemoryCorpus("memory", null, error);
-          if (requestedCorpus !== "wiki") {
+          if (requestedCorpus !== "wiki" && !failed.deadline) {
             recordMemorySearchToolCooldown(agentId, failed);
           }
           return jsonResult(

@@ -37,6 +37,7 @@ import {
 import {
   captureSqliteReaderOwner,
   currentSqliteOperationTiming,
+  readSqliteOperationHoldContext,
 } from "./sqlite-reader-lifecycle.js";
 import { runSqliteReadOperationSync } from "./sqlite-schema-facts.js";
 import type { SqliteWorkerDatabaseContext } from "./sqlite-worker-database-context.js";
@@ -526,8 +527,8 @@ function settleSqliteTransactionSync<T>(
           pid: process.pid,
           threadId,
           ...transactionDiagnosticLabels(db, options),
-          ...(timing?.holdContext
-            ? { context: { ...options?.diagnosticContext, ...timing.holdContext } }
+          ...(timing?.holdContext || (hydration && timing?.hydrationActiveEvents !== undefined)
+            ? { context: readSqliteOperationHoldContext(options?.diagnosticContext, hydration) }
             : {}),
           elapsedMs,
           phases: {
@@ -561,6 +562,9 @@ function settleSqliteTransactionSync<T>(
     } finally {
       if (timing) {
         timing.preparedAtMs = Date.now();
+        if (timing.hydrationActiveEvents !== undefined) {
+          timing.hydrationActiveEvents = undefined;
+        }
       }
     }
   }

@@ -350,7 +350,7 @@ export async function loadMemorySessionMetadataBatchAsync(params: {
       )
     : (
         await listSessionTranscriptInstancesInWorker(
-          { ...scope, projection: "list" },
+          { ...scope, projection: "list", includeParticipants: false },
           { includeAllWindows: true, sessionIds },
         )
       ).map((instance) => projectSessionMetadata(instance));

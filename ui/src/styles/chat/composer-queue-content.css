@@ -49,6 +49,56 @@
   color: var(--warn);
 }
 
+.chat-queue__paused {
+  display: grid;
+  grid-template-columns: var(--chat-stack-icon-size) [copy] minmax(0, 1fr) [actions] auto;
+  align-items: center;
+  column-gap: 8px;
+  min-height: 36px;
+  padding-block: 4px;
+  padding-inline: var(--chat-stack-leading-inset) var(--chat-stack-trailing-inset);
+  border-bottom: 1px solid var(--chat-queue-divider);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* Solid glyphs: the outlined pause and play shapes read as hollow at this size. */
+.chat-queue__paused svg :is(rect, polygon) {
+  fill: currentColor;
+  stroke: none;
+}
+
+.chat-queue__paused .chat-queue__leading svg {
+  width: 11px;
+  height: 11px;
+}
+
+.chat-queue__paused-copy {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.chat-queue__paused-title {
+  flex: none;
+  color: var(--chat-text);
+  font-weight: 500;
+}
+
+.chat-queue__paused-reason {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+}
+
+.chat-queue__paused-reason::before {
+  margin-inline-end: 6px;
+  content: "·";
+}
+
 .chat-queue__scroll[data-scrollable="true"] {
   height: calc(3.55 * var(--chat-queue-row-height));
   overflow-y: auto;
@@ -378,6 +428,16 @@
 .chat-queue__action:disabled {
   color: color-mix(in srgb, var(--muted) 48%, transparent);
   cursor: default;
+}
+
+.chat-queue__clear,
+.chat-queue__resume {
+  color: var(--muted);
+}
+
+.chat-queue__clear:hover,
+.chat-queue__resume:hover {
+  color: var(--text);
 }
 
 .chat-queue__remove,
