@@ -6,6 +6,7 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import type { UpdateRuns } from "../state/openclaw-state-db.generated.js";
+import { parseDoctorRetirementWideningLine } from "./doctor-progress.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
 import { normalizeUpdateFailureFacts } from "./update-failure-facts.js";
 import { UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
@@ -148,7 +149,10 @@ export function isRetainedStep(item: unknown): boolean {
     typeof item.step === "string" &&
     (item.termination === "signal" ||
       item.step.startsWith("finalize:") ||
-      RETAINED_STEP_NAMES.some((name) => name === item.step))
+      RETAINED_STEP_NAMES.some((name) => name === item.step) ||
+      (item.step.startsWith("diagnostic:") &&
+        typeof item.detail === "string" &&
+        parseDoctorRetirementWideningLine(item.detail) !== undefined))
   );
 }
 
@@ -179,6 +183,7 @@ function boundedJson(
           item.step !== "warning:reconcile:driver-lost-after-verification" &&
           item.step !== "diagnostic:database rollback" &&
           item.step !== "finalize:data-at-risk" &&
+          !(typeof item.detail === "string" && parseDoctorRetirementWideningLine(item.detail)) &&
           !(typeof item.step === "string" && item.step.startsWith("finalize:doctor-lint:"))
             ? {
                 ...item,
