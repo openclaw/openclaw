@@ -52,6 +52,12 @@
   }
 }
 
+.plugin-catalog-detail[aria-labelledby="template-catalog-detail-title"]
+  .plugin-capabilities
+  .settings-row__desc {
+  -webkit-line-clamp: 1;
+}
+
 .templates-workspace-file {
   position: relative;
 }
