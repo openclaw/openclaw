@@ -269,8 +269,10 @@ pre-commit run zizmor --all-files
 Release branches keep line limits non-blocking and skip line-count ratchets, except explicit pruning.
 Oxlint emits line-limit warnings rather than disabling the rules, so existing
 size suppressions remain valid while unused non-size suppressions still fail.
-Release prepush carries its validated destination into detached checks with
-`OPENCLAW_RELEASE_CONTEXT_REF`; checks without a release destination remain strict.
+Checks can carry an explicit release destination with `OPENCLAW_RELEASE_CONTEXT_REF`;
+checks without a release destination remain strict. Release prepush runs only
+exact-SHA whitespace and changelog checks; PR CI and Full Release Validation own
+the broader gates.
 Size, length, count, and measured performance limits are errors locally and
 warnings in GitHub Actions. `scripts/lib/check-limits.mts` owns this decision
 using GitHub's `GITHUB_ACTIONS=true` signal. `CI=1` alone does not soften checks:
