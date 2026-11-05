@@ -323,23 +323,12 @@ describe("cron.runs session visibility", () => {
               nextOffset: null,
             });
             const page = respond.mock.calls[0]?.[1];
+            const note = { summary: "Diagnostic-only search", entries: [] };
+            const entry = page.entries?.[0] ?? {};
             for (const field of ["delivery", "failureNotificationDelivery"]) {
-              if (view === "summary") {
-                expect(page).not.toHaveProperty(`entries.0.${field}`);
-              } else {
-                expect(page).toHaveProperty(`entries.0.${field}`);
-              }
+              expect(Object.hasOwn(entry, field)).toBe(view !== "summary");
             }
-            if (view === "summary") {
-              // Bounded diagnostic note survives without entries or delivery traces.
-              expect(page).toHaveProperty(
-                "entries.0.diagnostics.summary",
-                "Diagnostic-only search",
-              );
-              expect(page).toHaveProperty("entries.0.diagnostics.entries", []);
-            } else {
-              expect(page).toHaveProperty("entries.0.diagnostics");
-            }
+            expect(entry.diagnostics).toEqual(view === "summary" ? note : expect.anything());
           }
         }
       }
