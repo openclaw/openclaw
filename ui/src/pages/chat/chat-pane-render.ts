@@ -84,7 +84,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const providerPaused = Boolean(selectedSession?.providerReview);
     const childRoster = this.projectChildRoster(this.resolveChatReadTarget());
     const progressPresentation = this.progressCardPresentation;
-    const cachedSession = this.cachedSessionStatePending() ? this.cachedSessionState() : undefined;
+    const cachedSessionStatePending = Boolean(this.cachedSessionStatePending());
+    const cachedSession = cachedSessionStatePending ? this.cachedSessionState() : undefined;
     const selectedSessionArchived = cachedSession?.archived ?? this.isCurrentSessionArchived(state);
     const mutationAccess = readChatPaneMutationAccess(
       this.context.gateway.snapshot,
@@ -230,7 +231,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       : renderChatPaneComposerControls({
           state,
           selectedSession,
-          cachedSessionStatePending: Boolean(this.cachedSessionStatePending()),
+          cachedSessionStatePending,
           agentDefaultModel,
           modelAccess: mutationAccess.model,
           effortAccess: mutationAccess.effort,
