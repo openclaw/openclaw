@@ -10,12 +10,15 @@ import {
   observeUpdateParentDatabaseWrites,
   recordUpdateDatabaseWrites,
 } from "../cli/update-cli/update-command-database-receipts.js";
+import * as serviceMaintenance from "../cli/update-cli/update-command-service-maintenance.js";
 import { runDoctorConfigPreflight } from "../commands/doctor-config-preflight.js";
+import { resolveDoctorUpdateAdmission } from "../commands/doctor-maintenance-admission.js";
 import { repairAuthProfileMigration } from "../commands/doctor/auth-profile-repair.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { stateNativeProcessEntrypoints } from "../state/native-process-runtime.test-support.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -25,9 +28,16 @@ import {
 } from "../state/openclaw-state-db.js";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { runClientCredentialOperation } from "./client-credential-store.js";
+import { readExecApprovalsConfigRow } from "./exec-approvals-sqlite.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import * as sqliteReadOnlyWorker from "./sqlite-readonly-worker.js";
+import {
+  detectLegacyExecApprovals,
+  migrateLegacyExecApprovals,
+} from "./state-migrations.exec-approvals.js";
 import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-support.js";
+import { stopSupervisedPredecessorGateway } from "./update-candidate-predecessor-stop.js";
 import {
   runUpdateStateInspectionWorker,
   parseUpdateStateInspectionWorker,
@@ -394,13 +404,16 @@ async function withCapture(
   operation: () => Promise<void>,
   assertDatabaseAccess?: (requested: string) => void,
   assertOwnerCurrent: () => void = () => {},
+  existingCapture?: ReturnType<typeof createUpdateDoctorDatabaseWriteCapture>,
 ) {
   const warnings: string[] = [];
-  const capture = createUpdateDoctorDatabaseWriteCapture(generations, {
-    env,
-    signal: new AbortController().signal,
-    warn: (message) => warnings.push(message),
-  })!;
+  const capture =
+    existingCapture ??
+    createUpdateDoctorDatabaseWriteCapture(generations, {
+      env,
+      signal: new AbortController().signal,
+      warn: (message) => warnings.push(message),
+    })!;
   const scope = createOpenClawDatabaseMaintenanceScope({
     schemaMaintenance: true,
     assertOwnerCurrent,
@@ -420,6 +433,49 @@ async function withCapture(
     }
   }
 }
+
+it("migrates captured legacy approvals after a current update-admission read", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const { env, stateDir } = state;
+    writeConfigMachineState("stable-fixture", { retained: true }, { env });
+    const pathname = openOpenClawStateDatabase({ env }).path;
+    const sourcePath = state.statePath("exec-approvals.json");
+    fs.writeFileSync(
+      sourcePath,
+      JSON.stringify({
+        version: 1,
+        defaults: { security: "deny" },
+        agents: {},
+        socket: { path: "/tmp/fixture.sock", token: "synthetic-token" },
+      }),
+    );
+    await closeOpenClawStateDatabaseAsync();
+    const generations = readUpdateDatabaseGenerations([
+      pathname,
+      state.statePath("client", "credentials.sqlite"),
+    ]);
+    const { receipt, warnings } = await withCapture(env, generations, async () => {
+      await openOpenClawStateDatabaseForDoctor({ env });
+      resolveDoctorUpdateAdmission(env).assertCurrent();
+      const result = await migrateLegacyExecApprovals({
+        env,
+        stateDir,
+        detected: detectLegacyExecApprovals({ stateDir, doctorOnlyStateMigrations: true }),
+      });
+      expect(result.warnings).toEqual([]);
+      expect(fs.existsSync(sourcePath)).toBe(false);
+    });
+    expect(warnings).toEqual([]);
+    expect(receipt?.unchanged).toBe(true);
+    expect(
+      JSON.parse(readExecApprovalsConfigRow(openOpenClawStateDatabase({ env }).db)!.raw_json),
+    ).toMatchObject({ defaults: { security: "deny" } });
+    expect(runClientCredentialOperation(env, { kind: "socket.read" })).toMatchObject({
+      kind: "socket",
+      socket: { socket_path: "/tmp/fixture.sock", socket_token: "synthetic-token" },
+    });
+  });
+});
 
 it.each(["native", "worker"] as const)(
   "completes retirement after Doctor migrations and %s parent bookkeeping",
@@ -710,5 +766,132 @@ it.each(["captured-generation", null, undefined])(
     expect(backup).toHaveBeenCalledTimes(generation === undefined ? 1 : 0);
     expect(refuse).toHaveBeenCalledTimes(generation === undefined ? 1 : 0);
     expect(hasUpdateDoctorMigrationCapture()).toBe(false);
+  },
+);
+
+it("migrates legacy exec approvals after Doctor detection retained a shared-state reader", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const { env, stateDir } = state;
+    const pathname = openOpenClawStateDatabase({ env }).path;
+    await closeOpenClawStateDatabaseAsync();
+    await state.writeJson("exec-approvals.json", {
+      version: 1,
+      socket: { path: "/tmp/synthetic-approvals.sock", token: "synthetic-token" },
+      defaults: { security: "deny" },
+      agents: {},
+    });
+    const generations = readUpdateDatabaseGenerations([
+      pathname,
+      state.statePath("client", "credentials.sqlite"),
+    ]);
+    let result: Awaited<ReturnType<typeof migrateLegacyExecApprovals>> | undefined;
+    const { warnings } = await withCapture(env, generations, async () => {
+      await openOpenClawStateDatabaseForDoctor({ env });
+      // Doctor detection reads live plugin state; maintenance keeps that worker reader warm.
+      await executeExistingOpenClawStateRead(
+        { env },
+        { type: "updateRuns.recoveryAdmission" },
+        { live: true },
+      );
+      result = await migrateLegacyExecApprovals({
+        env,
+        stateDir,
+        detected: detectLegacyExecApprovals({ stateDir, doctorOnlyStateMigrations: true }),
+      });
+    });
+    expect(warnings).toEqual([]);
+    expect(result).toMatchObject({
+      warnings: [],
+      changes: ["Imported legacy exec approvals policy and local socket credentials."],
+    });
+  });
+});
+
+it.runIf(process.platform !== "win32").each(["none", "before", "after"])(
+  "retains the original capture through a predecessor stop receipt (outside write: %s)",
+  async (interference) => {
+    await withOpenClawTestState({ scenario: "minimal", applyEnv: true }, async ({ env }) => {
+      const pathname = openOpenClawStateDatabase({ env }).path;
+      const { runId } = createUpdateRun({ trigger: "cli" }, { env });
+      await closeOpenClawStateDatabaseAsync();
+      const generations = readUpdateDatabaseGenerations([pathname]);
+      const unrelatedWrite = () => {
+        using database = new DatabaseSync(pathname);
+        database.exec("CREATE TABLE unrelated_write(value);");
+      };
+      vi.spyOn(serviceMaintenance, "maybeStopManagedServiceBeforeMutableUpdate").mockImplementation(
+        async (options) => {
+          options.assertCurrent?.();
+          if (interference === "before") {
+            unrelatedWrite();
+          }
+          const stopped = {
+            stopped: true,
+            inspected: true,
+            runtimeInspected: true,
+            running: false,
+            servicePid: 631,
+            serviceManagerUid: 1000,
+            stoppedAtMs: 7,
+            serviceUpdateVerdict: {
+              kind: "owned" as const,
+              root: process.cwd(),
+              fingerprint: "sealed",
+              refreshDefinition: false,
+            },
+          };
+          options.onStopped?.(stopped);
+          return stopped;
+        },
+      );
+      const capture = createUpdateDoctorDatabaseWriteCapture(generations, {
+        env,
+        signal: new AbortController().signal,
+        warn: vi.fn(),
+      })!;
+      await capture.admit();
+      const preparing = stopSupervisedPredecessorGateway(
+        { runId, repair: true },
+        { root: process.cwd(), assertCurrent() {}, warn: vi.fn(), databaseWriteCapture: capture },
+      );
+      if (interference === "before") {
+        await expect(preparing).rejects.toThrow("source changed after update capture");
+      } else {
+        expect(await preparing).toBe(true);
+        await closeOpenClawStateDatabaseAsync();
+        if (interference === "after") {
+          unrelatedWrite();
+        }
+        const { receipt } = await withCapture(
+          env,
+          generations,
+          async () => {
+            using database = new DatabaseSync(pathname);
+            const migrateCaptured = () =>
+              runUpdateSqliteMigration(database, pathname, () =>
+                database.exec("CREATE TABLE predecessor_repaired(value);"),
+              );
+            if (interference === "after") {
+              expect(migrateCaptured).toThrow("source changed after update capture");
+            } else {
+              migrateCaptured();
+            }
+          },
+          undefined,
+          undefined,
+          capture,
+        );
+        expect(receipt).toMatchObject({
+          unchanged: interference === "none",
+          fromGenerations: generations,
+        });
+      }
+      expect(getUpdateRun(runId, { env })?.steps).toContainEqual(
+        expect.objectContaining({
+          step: "finalize:predecessor-stop:7:1000:631:sealed",
+          status: "completed",
+        }),
+      );
+    });
   },
 );

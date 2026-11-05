@@ -61,6 +61,21 @@ approval, command, URL, web-app, question, callback, and model-picker actions
 distinguishable until that encoding boundary; never infer picker intent from a
 raw callback string. Actor and source-message checks remain channel-owned.
 
+## Native mention display
+
+A channel can provide `mentions.readDisplayMentions(text)` for native user references.
+Return ordered, non-overlapping UTF-16 `start`/`end` ranges, the channel's canonical `senderId`, and an optional
+`fallbackLabel` already present in the source text. Include the whole native
+ID/name form in the range so it can be displayed as one name. Keep this parser
+pure: the Gateway resolves verified profile links using the captured channel
+and account, and applies the reader's existing session and profile-visibility
+policy. References inside Markdown code remain literal.
+
+This is a read-time display projection, not a recipient selection. It does not
+rewrite stored/model text, change routing or authorization, or create mention
+notifications. Missing source scope stays unchanged; an unlinked or invisible
+profile uses only the source fallback, or keeps the raw ID if none is available.
+
 ## Opted-in public child sessions
 
 The ingress resolver accepts an optional host-invocation intent,
@@ -1073,6 +1088,12 @@ upgrade OpenClaw and the plugin, implement the request and retry checks above,
 declare only the covered actions, and load the updated registration. Existing
 direct-operator and interactive actions retain their admission rules. Upgrading
 the plugin does not grant additional authority to an existing job.
+
+`ChannelMessageActionContext.abortSignal` is the host-owned cancellation for the
+originating invocation. Canceling it may drop work that was never issued, such as
+a request still waiting in a rate-limit queue or retry backoff. A provider request
+already dispatched must still settle and keep its outcome, so an accepted write is
+never reported as unsent or replayed.
 
 ## Advanced topics
 

@@ -197,11 +197,16 @@ struct DashboardWindowSmokeTests {
             token: nil,
             password: "rotated")
 
+        let reacceptedAuth = DashboardWindowAuth.nativeDevice(
+            gatewayUrl: "ws://127.0.0.1:18789/control/", token: nil, password: "secret",
+            legacyCredentials: ["password": "secret"])
+        // A fresh accepted socket changes authority, not the owner of live page state.
+        #expect(auth != reacceptedAuth)
         #expect(!DashboardWindowController.shouldReloadDashboard(
             currentURL: current,
             newURL: current,
             currentAuth: auth,
-            newAuth: auth,
+            newAuth: reacceptedAuth,
             hasUsableDocument: true,
             isShowingFailurePage: false))
         #expect(DashboardWindowController.shouldReloadDashboard(
@@ -218,14 +223,24 @@ struct DashboardWindowSmokeTests {
             newAuth: auth,
             hasUsableDocument: true,
             isShowingFailurePage: false))
-        // Password-only auth keeps the URL identical; rotation must reload.
-        #expect(DashboardWindowController.shouldReloadDashboard(
-            currentURL: current,
-            newURL: current,
-            currentAuth: auth,
-            newAuth: rotatedAuth,
-            hasUsableDocument: true,
-            isShowingFailurePage: false))
+        // Configured credentials and auth-kind changes still replace the document.
+        for changedAuth in [
+            rotatedAuth,
+            .nativeDevice(
+                gatewayUrl: "ws://127.0.0.1:18789/control/",
+                token: "new-token",
+                password: "secret"),
+            .browserIdentity(gatewayUrl: "ws://127.0.0.1:18789/control/"),
+            .unauthenticated,
+        ] {
+            #expect(DashboardWindowController.shouldReloadDashboard(
+                currentURL: current,
+                newURL: current,
+                currentAuth: auth,
+                newAuth: changedAuth,
+                hasUsableDocument: true,
+                isShowingFailurePage: false))
+        }
         // An in-flight failure page is never a usable document to keep.
         #expect(DashboardWindowController.shouldReloadDashboard(
             currentURL: current,

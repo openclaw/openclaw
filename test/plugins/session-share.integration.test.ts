@@ -545,8 +545,16 @@ describe("session-share receiver identity integration", () => {
         }
         const page = await catalog.read({ hostId, threadId: nativeSession.threadId });
         expect(page.items.map((item) => item.sender)).toEqual([
-          { identity: { type: "profile", id: profile.id }, label: "Catalog Person" },
-          { identity: { type: "profile", id: profile.id }, label: "Catalog Person" },
+          {
+            identity: { type: "profile", id: profile.id },
+            label: "Catalog Person",
+            avatarUrl: "/api/users/" + profile.id + "/avatar?v=" + profile.updatedAt,
+          },
+          {
+            identity: { type: "profile", id: profile.id },
+            label: "Catalog Person",
+            avatarUrl: "/api/users/" + profile.id + "/avatar?v=" + profile.updatedAt,
+          },
           { identity: { ...namespacedIdentity, id: "9999" }, label: "Remote Person" },
         ]);
       } finally {

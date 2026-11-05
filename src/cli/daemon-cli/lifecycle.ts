@@ -62,6 +62,7 @@ import {
   runServiceUninstall,
 } from "./lifecycle-core.js";
 import {
+  assertNativeRestartFlags,
   runSafeGatewayRestart,
   resolveGatewayRestartIntentOptions,
 } from "./lifecycle-safe-restart.js";
@@ -453,13 +454,8 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   let preserveDefinition = Boolean(opts.preserveDefinition);
   if (preserveDefinition) {
     assertGatewayServiceMutationAllowed("restart the gateway");
-    if (opts.safe) {
-      throw new Error("--preserve-definition requires a native restart without --safe");
-    }
   }
-  if (opts.skipDeferral && !opts.safe) {
-    throw new Error("--skip-deferral requires --safe");
-  }
+  assertNativeRestartFlags(opts);
   if (isGatewayExternallySupervised()) {
     assertGatewayServiceFallbackAllowed("external-supervisor restart");
     return await runExternalSupervisorRestart(opts);

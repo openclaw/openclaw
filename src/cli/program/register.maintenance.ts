@@ -52,7 +52,7 @@ export function registerMaintenanceCommands(
     .option("--non-interactive", "Run without prompts (safe migrations only)", false)
     .option(
       "--client-credentials",
-      "Prepare only local client credentials (requires --repair --non-interactive)",
+      "Prepare local client credentials and runtime intent (requires --repair --non-interactive)",
       false,
     )
     .option("--generate-gateway-token", "Generate and configure a gateway token", false)
@@ -233,6 +233,7 @@ export function registerMaintenanceCommands(
             await prepareStartupClientCredentials({
               env: process.env,
               runtime: defaultRuntime,
+              prepareRuntimePins: true,
             });
           } catch (error) {
             if (opts.json === true && error instanceof ClientCredentialGatewayHeldError) {

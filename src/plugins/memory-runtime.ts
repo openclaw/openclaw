@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { MemorySearchManager } from "../../packages/memory-host-sdk/src/host/search-manager.types.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
 import { loadPluginRegistryHandle } from "./loader.js";
@@ -307,6 +308,7 @@ export function isActiveMemoryProviderNative(params: {
 export async function getActiveMemoryProviderCore(
   params: MemoryProviderOpenParams,
 ): Promise<ActiveMemoryProviderResult> {
+  using phases = observeDiagnosticsTimelinePhases("memory.provider-open.authority");
   if (typeof params.context.assertCurrent !== "function") {
     throw new Error("memory provider requires caller authority with assertCurrent");
   }
@@ -329,6 +331,7 @@ export async function getActiveMemoryProviderCore(
     await racePromiseWithAbortSignal(before, context.signal);
   }
   context.assertCurrent();
+  phases.mark("memory.provider-open.runtime");
   const owner = ensureMemoryRuntime(params);
   if (!owner?.runtime && !owner?.providerRuntime) {
     return { provider: null, error: owner?.error ?? "memory plugin unavailable" };
@@ -341,10 +344,12 @@ export async function getActiveMemoryProviderCore(
     return { provider: null, error: "memory provider identity unavailable" };
   }
   const adapter = owner.providerRuntime ? "native" : "legacy";
+  phases.mark("memory.provider-open.open");
   const result = owner.providerRuntime
     ? await owner.providerRuntime.open(openParams)
     : await adaptLegacyMemoryProvider(owner.runtime!, providerId, openParams);
   try {
+    phases.mark("memory.provider-open.revalidate");
     const after = prepareMemoryCallerRead(context);
     if (after) {
       await racePromiseWithAbortSignal(after, context.signal);
@@ -366,10 +371,12 @@ export async function getActiveMemoryProviderCore(
     }
   } catch (error) {
     if (result.provider && typeof result.provider.close === "function") {
+      phases.mark("memory.provider-open.close");
       await runPluginCleanup(result.provider, () => result.provider!.close());
     }
     throw error;
   }
+  phases.mark("memory.provider-open.bind");
   return {
     ...result,
     providerId,

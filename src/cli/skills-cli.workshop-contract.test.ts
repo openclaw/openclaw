@@ -2,7 +2,7 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type * as GatewayCallModule from "../gateway/call.js";
 import { handleGatewayRequest } from "../gateway/server-methods.js";
@@ -10,8 +10,12 @@ import type { GatewayRequestOptions } from "../gateway/server-methods/types.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { acquireGatewayLock, type GatewayLockHandle } from "../infra/gateway-lock.js";
 import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
+import { workshopPluginConfig } from "../skills/test-support/workshop-config.test-support.js";
+import {
+  activateWorkshopPluginForTest,
+  shareCoreWithWorkshopPluginForTest,
+} from "../skills/test-support/workshop-plugin.test-support.js";
 import { historicalWorkshopChangesSchema } from "../skills/test-support/workshop-schema.test-support.js";
-import { workshopPluginConfig } from "../skills/workshop/config.test-support.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
@@ -204,9 +208,12 @@ async function fixture(run: (state: OpenClawTestState, config: OpenClawConfig) =
       } finally {
         await seedLock.release();
       }
+      // The Gateway serves skills.workshop.* from the plugin it loaded at startup.
+      const plugins = await activateWorkshopPluginForTest(config);
       try {
         await run(state, config);
       } finally {
+        plugins.reset();
         await closeSkillsWatchers(true);
         await closeStateDatabaseForTest();
       }
@@ -229,6 +236,9 @@ async function persistedChanges(state: OpenClawTestState) {
     database.close();
   }
 }
+
+// The skill-workshop plugin owns `openclaw skills workshop`; it must reach the mocked transport.
+beforeAll(shareCoreWithWorkshopPluginForTest);
 
 afterEach(() => {
   transport.call.mockReset();

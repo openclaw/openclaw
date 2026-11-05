@@ -57,10 +57,10 @@ function query(owner: ParentNode, selector: string): HTMLElement {
   return owner.querySelector<HTMLElement>(selector)!;
 }
 
-function interactiveOwner(content = table) {
+function interactiveOwner(content = table, options = interactiveOptions) {
   const owner = document.createElement("div");
   owner.className = "chat-thread";
-  owner.innerHTML = `<div class="chat-text">${toSanitizedMarkdownHtml(content, interactiveOptions)}</div>`;
+  owner.innerHTML = `<div class="chat-text">${toSanitizedMarkdownHtml(content, options)}</div>`;
   document.body.append(owner);
   const shell = query(owner, ".markdown-table");
   const viewport = query(owner, ".markdown-table__viewport");
@@ -121,19 +121,31 @@ describe("Markdown table interactions", () => {
     restoreDialogPolyfill();
   });
 
-  it("tracks hidden columns in both scroll directions", () => {
+  it("copies rendered breaks and delimiter characters within their table cells", async () => {
+    vi.useFakeTimers();
+    const { owner, copy } = interactiveOwner(
+      '| Label | Value | Empty |\n| --- | --- | --- |\n| **Alpha**<br>Beta | One | |\n| Quote "here"<br>next | Comma, kept | |\n| `A\tB` | End | |\n| Quote "only" | Plain | |',
+      { ...interactiveOptions, progressBars: false },
+    );
+    await copyTable(copy, "Copied");
+    expect(writeText).toHaveBeenLastCalledWith(
+      'Label\tValue\tEmpty\n"Alpha\nBeta"\tOne\t\n"Quote ""here""\nnext"\tComma, kept\t\n"A\tB"\tEnd\t\n"Quote ""only"""\tPlain\t',
+    );
+    expect(owner.querySelectorAll("br")).toHaveLength(2);
+  });
+
+  it.each(["ltr", "rtl"])("tracks physical hidden edges in %s tables", (direction) => {
     const { shell, viewport } = interactiveOwner();
     const canScroll = (side: string) =>
       shell.classList.contains(`markdown-table--can-scroll-${side}`);
-    for (const [offset, left, right] of [
+    viewport.style.direction = direction;
+    for (const [position, left, right] of [
       [0, false, true],
       [100, true, true],
       [200, true, false],
     ] as const) {
-      viewport.scrollLeft = offset;
-      if (offset) {
-        viewport.dispatchEvent(new Event("scroll"));
-      }
+      viewport.scrollLeft = direction === "rtl" ? position - 200 : position;
+      viewport.dispatchEvent(new Event("scroll"));
       expect([canScroll("left"), canScroll("right")]).toEqual([left, right]);
     }
   });
@@ -221,25 +233,25 @@ describe("Markdown table interactions", () => {
     stubProperty(document, "execCommand", legacyCopy);
     const { shell, copy } = interactiveOwner();
     const statusText = () => shell.querySelector('[role="status"]')?.textContent;
-    await copyTable(copy, "Copied!");
-    expect(statusText()).toBe("Copied!");
+    await copyTable(copy, "Copied");
+    expect(statusText()).toBe("Copied");
 
     writeText.mockRejectedValueOnce(new DOMException("Clipboard access denied", "NotAllowedError"));
-    await copyTable(copy, "Copy failed");
-    expect(statusText()).toBe("Copy failed");
+    await copyTable(copy, "Couldn’t copy. Try again.");
+    expect(statusText()).toBe("Couldn’t copy. Try again.");
 
     expect(writeText).toHaveBeenLastCalledWith("Name\tValue\nAlpha\tOne");
     expect(legacyCopy).toHaveBeenCalledExactlyOnceWith("copy");
     await vi.advanceTimersByTimeAsync(1500);
-    expect(copy.getAttribute("aria-label")).toBe("Copy failed");
+    expect(copy.getAttribute("aria-label")).toBe("Couldn’t copy. Try again.");
 
-    await copyTable(copy, "Copied!");
+    await copyTable(copy, "Copied");
     await vi.advanceTimersByTimeAsync(500);
-    expect(copy.getAttribute("aria-label")).toBe("Copied!");
+    expect(copy.getAttribute("aria-label")).toBe("Copied");
     await vi.advanceTimersByTimeAsync(1000);
     expectCopy(copy, "Copy table");
     writeText.mockRejectedValueOnce(new DOMException("Clipboard access denied", "NotAllowedError"));
-    await copyTable(copy, "Copy failed");
+    await copyTable(copy, "Couldn’t copy. Try again.");
     await vi.advanceTimersByTimeAsync(2000);
     expect(statusText()).toBe("");
   });

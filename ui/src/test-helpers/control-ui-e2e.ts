@@ -1213,9 +1213,7 @@ function installControlUiMockGateway(
     if (method === "sessions.patchMany") {
       return recordSessionsPatchMany(params, response);
     }
-    if (method === "sessions.create" || method === "sessions.catalog.continue") {
-      sessions.materializeResponse(params, response);
-    }
+    sessions.materializeResponse(method, params, response);
     return response;
   }
 
@@ -1439,10 +1437,7 @@ function installControlUiMockGateway(
                   recoveryScope: "e2e-recovery-scope",
                   role: "operator",
                   scopes: scenario.operatorScopes,
-                  roleAllowsAdmin: scenario.roleAllowsAdmin,
-                  ...(scenario.operatorSessionCap
-                    ? { sessionCap: scenario.operatorSessionCap }
-                    : {}),
+                  ...scenario.operatorRolePolicy,
                 },
               }),
           features: {
@@ -2129,15 +2124,11 @@ function installControlUiMockGateway(
           this,
           preferenceScope,
         );
-        const mockError =
-          isRecord(payload) && isRecord(payload["__mockError"]) ? payload["__mockError"] : null;
-        if (!mockError) {
-          this.sessionMessageSubscriptions.recordRequest(method, frame.params, payload);
-        }
-        this.deliver(
-          mockError
-            ? { id, ok: false, error: mockError, type: "res" }
-            : { id, ok: true, payload, type: "res" },
+        const mockError = responseFixtures.deliver(
+          { id, method, params: frame.params },
+          payload,
+          this,
+          MockWebSocket.OPEN,
         );
         if (!mockError) {
           emitTerminalOutput(this, method, frame.params, payload);
@@ -2198,6 +2189,9 @@ function installControlUiMockGateway(
   }
 
   const exposed: ControlUiMockGateway = {
+    get sessionListResponseFacts() {
+      return responseFixtures.sessionListResponseFacts;
+    },
     get online() {
       return online;
     },
