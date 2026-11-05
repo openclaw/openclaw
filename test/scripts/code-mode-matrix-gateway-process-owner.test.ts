@@ -86,7 +86,9 @@ async function runOwner(
 describe.skipIf(process.platform !== "linux")("matrix prepared process owner", () => {
   it("rejects the original source-loaded owner before the command runs", async () => {
     const receipt = await runOwner(repoRoot, "unbound");
-    expect(receipt.error).toContain("native owner closed without kernel descendant extinction");
+    expect(receipt.error).toContain(
+      "Linux child ownership requires a process owner without source-loader hooks",
+    );
     expect(receipt.result).toBeUndefined();
     expect(receipt.cleanup).toEqual([
       expect.objectContaining({ status: "rejected" }),

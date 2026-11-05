@@ -335,7 +335,16 @@ it("sweeps unreachable content while retaining baseline, previous and pending ro
   expect(beginLocalWorkspaceSweepInDatabase(db)).toBe(1);
   const epoch = beginLocalWorkspaceSweepInDatabase(db);
   expect(epoch).toBe(2);
+  const packCount = Number(
+    db.prepare("SELECT count(*) AS n FROM local_workspace_tree_packs").get()!.n,
+  );
+  const reads = trackSqliteStatementExecutions(db, ["packs"], (sql) =>
+    /^select\b/i.test(sql) && sql.includes('from "local_workspace_tree_packs"') ? "packs" : null,
+  );
   const candidates = readLocalWorkspaceSweepCandidates(db, epoch);
+  reads.restore();
+  // Every old digest is returned by candidate discovery; traversal already knows its lookup keys.
+  expect(reads.blobBytes.packs).toBe(packCount * 32);
   expect(candidates.packs).toHaveLength(4);
   expect(candidates.paths).toHaveLength(2);
   // A writer reusing content after the snapshot protects it with the current epoch.
