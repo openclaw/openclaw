@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { serialize } from "node:v8";
 import { expect, it, vi } from "vitest";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import {
   appendTranscriptEventInTransaction,
@@ -12,7 +13,9 @@ import {
   createSessionActorCommittedOutcome,
   projectSessionActorCommittedOutcome,
   restoreSessionActorCommittedOutcome,
+  type SessionActorEntryReference,
 } from "./session-actor-receipt.js";
+import { createSessionActorReplica } from "./session-actor-replica.js";
 import { withActor, type Fixture, type Mutation } from "./session-actor-worker.test-support.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
 import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
@@ -403,10 +406,24 @@ it.each(["append", "tool", "patch", "adopt"] as const)(
   "bounds receipts against the exact preimage held by a %s command",
   (phase) =>
     withActor(async (f) => {
+      f.participant({ identity: { type: "agent", id: "peer" }, promptedAt: 1 });
       const prompt = "synthetic instructions ".repeat(1600);
       f.writeEntry({ ...f.nativeEntry()!, skillsSnapshot: { prompt, skills: [] } });
-      for (const mode of ["matching", "stale", "changed"] as const) {
+      assert(f.target.database.kind === "file");
+      const handle = createSessionActorReplica({
+        target: { ...f.target, database: f.target.database },
+        lifetime: { assertCurrent() {}, assertReadable() {} },
+        currentGeneration: () => readOpenClawAgentDatabaseIdentity(f.database).incarnation,
+      });
+      using replica = { ...handle, [Symbol.dispose]: () => handle.close() };
+      for (const mode of ["matching", "stale", "changed", "entry-only"] as const) {
         const before = f.read();
+        let reference: SessionActorEntryReference | undefined = before;
+        if (mode === "entry-only") {
+          expect(replica.beginRead()(before)).toBe(true);
+          f.writeEntry({ ...before.entry!, label: "published entry without actor snapshot" });
+          reference = replica.beginCommand().preimage;
+        }
         const updatedAt = mode === "changed" ? 20 : before.entry!.updatedAt;
         const input = {
           target: f.target,
@@ -415,7 +432,7 @@ it.each(["append", "tool", "patch", "adopt"] as const)(
           lifecycle: {},
           commandId: `resident-${phase}-${mode}`,
           phaseId: "turn",
-          entryReference: mode === "stale" ? "stale-token" : before.writeToken,
+          entryReference: mode === "stale" ? "stale-token" : reference?.writeToken,
           reducers: [{ kind: "activity" as const, updatedAt }],
         };
         const selected: Mutation =
@@ -462,11 +479,10 @@ it.each(["append", "tool", "patch", "adopt"] as const)(
         assert(outcome.kind === "committed");
         if (mode !== "stale") {
           expect(serialize(outcome).byteLength).toBeLessThan(16 * 1024);
-          const restored = restoreSessionActorCommittedOutcome(outcome, before);
-
+          const restored = restoreSessionActorCommittedOutcome(outcome, reference);
           expect(restored.receipt.postimage).toEqual(f.read());
           expect(restored.receipt.postimage.entry?.skillsSnapshot).toBe(
-            before.entry?.skillsSnapshot,
+            reference?.entry?.skillsSnapshot,
           );
         } else {
           expect(outcome.receipt.postimage).toEqual(f.read());

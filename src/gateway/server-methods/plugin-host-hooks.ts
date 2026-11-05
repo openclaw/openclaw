@@ -1,5 +1,7 @@
+import { performance } from "node:perf_hooks";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ErrorCodes,
   formatValidationErrors,
@@ -28,6 +30,7 @@ import { resolveOperatorRoleAgents } from "../operator-role-policy.js";
 import { WRITE_SCOPE } from "../operator-scopes.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
+import type { RespondFn } from "./response-types.js";
 import { respondError } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -69,7 +72,30 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
     "plugins.sessionAction",
     validatePluginsSessionActionParams,
     async (options) => {
-      const { params, client, respond, context } = options;
+      const { params, client, context } = options;
+      let actionIdentity: { pluginId: string; actionId: string } | undefined;
+      let handlerMs = 0;
+      let reloadWaitMs = 0;
+      // Response metadata is logs-only: retain registered identities and timings,
+      // never request/result content or caller/session identities.
+      const respond: RespondFn = (ok, payload, error) =>
+        options.respond(
+          ok,
+          payload,
+          error,
+          actionIdentity
+            ? {
+                ...actionIdentity,
+                actionOutcome: !ok
+                  ? "dispatch-error"
+                  : isRecord(payload) && payload.ok === false
+                    ? "application-error"
+                    : "success",
+                handlerMs: Math.max(0, Math.round(handlerMs)),
+                reloadWaitMs: Math.max(0, Math.round(reloadWaitMs)),
+              }
+            : undefined,
+        );
       // A reload can refuse the selected action between quiesce and publish. Wait
       // for it once, then select and authorize again from the current registry.
       const dispatch = async (afterReplacement: boolean): Promise<void> => {
@@ -120,6 +146,10 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        actionIdentity = {
+          pluginId: truncateUtf16Safe(registration.pluginId, 240),
+          actionId: truncateUtf16Safe(registration.action.id, 240),
+        };
         const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
         const requiredScopes =
           registration.action.requiredScopes && registration.action.requiredScopes.length > 0
@@ -134,6 +164,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
           respond(false, undefined, missingScopeErrorShape({ missingScope, requiredScopes }));
           return;
         }
+        let handlerStartedAt: number | undefined;
         try {
           if (params.payload !== undefined && !isPluginJsonValue(params.payload)) {
             reject("plugin session action payload must be JSON-compatible");
@@ -152,6 +183,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
               return;
             }
           }
+          handlerStartedAt = performance.now();
           const result = await registration.action.handler({
             pluginId,
             actionId,
@@ -174,6 +206,8 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
               assertCurrent: () => readGatewayRequestMutationAuthority(options).assertCurrent(),
             },
           });
+          handlerMs += performance.now() - handlerStartedAt;
+          handlerStartedAt = undefined;
           if (result !== undefined && !isRecord(result)) {
             reject("plugin session action result must be an object");
             return;
@@ -219,9 +253,14 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
             ...(wireResult.reply !== undefined ? { reply: wireResult.reply } : {}),
           });
         } catch (error) {
+          if (handlerStartedAt !== undefined) {
+            handlerMs += performance.now() - handlerStartedAt;
+          }
           if (isPluginReloadingError(error)) {
             if (!afterReplacement) {
+              const replacementStartedAt = performance.now();
               await error.replacement;
+              reloadWaitMs += performance.now() - replacementStartedAt;
               return dispatch(true);
             }
             respondError(respond, ErrorCodes.UNAVAILABLE, `plugin ${pluginId} is reloading`, {

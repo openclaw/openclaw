@@ -106,6 +106,8 @@ To keep the API as the primary route and use Claude Code only when it fails, pin
 
 Configured fallbacks remain eligible when the primary model fails (auth, rate limits, timeouts), even when they are not in `agents.defaults.modelPolicy.allow`. Add the fallback model to that policy only when people should also be able to select it directly. Direct selection means `/model`, a session override, or `--model`. `agents.defaults.models` only owns per-model aliases, parameters, runtime, and metadata.
 
+The runtime pin applies to the model, not to one position in the list, so an `anthropic/*` primary and fallback cannot name the same model on two routes. Existing configs that use a `claude-cli/<model>` fallback for the API primary's own model keep that ref after an update; see [Claude CLI model routing](/gateway/doctor/config-migrations#claude-cli-model-routing).
+
 ## Configuration
 
 Users choose a registered backend through the model and runtime policy. Keep
@@ -259,7 +261,14 @@ requester cap, refuses the call before it reaches the server. Every request to a
 configured server (tool calls, resource reads, prompt fetches) rechecks the turn's
 grant just before it is sent. Each listed server's `initialize` instructions are
 passed to the CLI whole, in server-name order.
-Requester-scoped servers need a verified sender and are not offered on these turns.
+Requester-scoped servers (per-requester OAuth or a plugin connection resolver) are
+listed on every turn once the session has seen their tools. Before that, a
+per-requester OAuth server is listed as its sign-in tool; a resolver-based server
+appears after the first turn whose verified sender the plugin resolves. Each call
+uses the current turn's verified sender. A turn without one, such as a completion,
+an automation or a subagent run, refuses the call with an explicit error and never
+uses another account. A call also stops before any request to the server if the
+turn's grant ends while it waits, for example during an OAuth token refresh.
 
 Existing sessions that stored the implicit automatic policy also retain continuity.
 OpenClaw records the current policy when the next turn completes.
@@ -490,6 +499,8 @@ Native login makes the Claude CLI route available; it does not supply an Anthrop
 New sessions select saved subscription credentials through the configured account
 order and forward them to the CLI through a protected file descriptor. Existing
 sessions keep their account until you select another or remove its saved profile.
+Saved accounts are checked again before starting a CLI process and sending its first input.
+If the account was removed during preparation, the reply and saved history explain that the turn was not submitted. Select a connected account or sign in again under **Models**, then retry. Group replies omit account identifiers; personal account storage identifiers are never included in this notice.
 Explicit account selections and empty account orders remain authoritative. API keys saved
 for the `anthropic` provider require an explicit selection; they do not replace
 native subscription login automatically.
@@ -638,12 +649,15 @@ JSON examples inside double-quoted banner text are not treated as response or er
 For JSONL, banner scanning starts fresh on each line.
 
 Claude streaming limits discount recognized partial-message envelopes while
-counting their text, thinking, and tool-input payloads. Cumulative snapshots and
-tool results still count toward the output budget. Forwarded subagent assistant
+counting their text, thinking, and tool-input payloads. Pure tool-result records
+hand payloads to consumers without retaining them, so those payloads do not count
+toward the output budget; IDs, metadata, padding, and frames still do. Mixed user
+records and cumulative snapshots still count. Forwarded subagent assistant
 messages and tool-result messages that the parser discards are charged a fixed
-allowance for their parent progress id. Child attribution alone does not earn
-that discount: retained stream-event text still counts toward the same 8 MiB
-output limit. Single-line limits and bounded frame counts remain active.
+allowance for their parent progress id.
+Child attribution alone does not earn that discount: retained stream-event text
+still counts toward the same 8 MiB output limit. Single-line limits and bounded
+frame counts remain active.
 
 Input modes:
 

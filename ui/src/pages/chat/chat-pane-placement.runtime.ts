@@ -6,6 +6,7 @@ import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runti
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { resolveUiSessionRowAgentId } from "../../lib/sessions/session-key.ts";
@@ -65,16 +66,18 @@ export async function reclaimChatPanePlacement(params: {
         ? "device"
         : "profile"
       : params.placementStartup.get(key)?.targetKind;
+  const copyKind =
+    targetKind === "profile"
+      ? "Cloud"
+      : targetKind === "device" || targetKind === "auto-device"
+        ? "Device"
+        : "";
   const agentId = resolveUiSessionRowAgentId(params.row, params.fallbackAgentId);
   await showSessionWorkerStopDialog({
-    machineName: targetKind === "device" ? params.machineName : undefined,
-    description: t(
-      targetKind === "device" && params.machineName
-        ? "sessionsView.workerStopDeviceDescription"
-        : targetKind === "profile"
-          ? "sessionsView.workerStopCloudDescription"
-          : "sessionsView.workerStopDescription",
-    ),
+    title: t(`sessionsView.workerStop${copyKind}Title`),
+    description: t(`sessionsView.workerStop${copyKind}Description`, {
+      device: params.machineName || t("sessionsView.workerStopDeviceFallback"),
+    }),
     confirm: async () => {
       if (!params.isCurrent()) {
         params.publishError(t("sessionsView.actionUnavailable"));
@@ -128,7 +131,7 @@ export async function reclaimChatPanePlacement(params: {
           if (outcome.status === "failed" && params.isCurrent()) {
             params.publishError(outcome.error);
           } else if (params.isCurrent()) {
-            showToast({ message: t("sessionsView.workerStopped"), icon: "check" });
+            showToast({ message: t("sessionsView.workerStopped"), severity: "success" });
           }
         }
         return "close";
@@ -138,8 +141,8 @@ export async function reclaimChatPanePlacement(params: {
         }
         params.publishError(error);
         showToast({
-          message: error instanceof Error ? error.message : String(error),
-          icon: "alertTriangle",
+          message: formatUiError(error),
+          severity: "error",
         });
         // A refresh failure must not offer to repeat a successful stop.
         return stopped ? "close" : "retry";

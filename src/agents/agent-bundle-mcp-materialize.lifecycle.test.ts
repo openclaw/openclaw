@@ -1,7 +1,8 @@
 import { expect, it, vi } from "vitest";
+import type { McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import { staticRuntime } from "./agent-bundle-mcp-fixture.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
-import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 
 // The manager may be loaded by acquisition, but a new importer still needs its file.
 vi.mock("./agent-bundle-mcp-manager-api.js", () => {

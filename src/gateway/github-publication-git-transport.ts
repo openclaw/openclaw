@@ -4,7 +4,6 @@ import path from "node:path";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { githubRepositoryUrl } from "../agents/github-host.js";
 import type { WorktreeGitPolicy } from "../agents/worktrees/checkout-git-config.js";
-import { splitNullBuffer } from "../agents/worktrees/git-path-inventory.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { gitNullConfigPath, gitReadOnlyEnvironment } from "../infra/git-exec.js";
 import { appendGitConfig, gitMaintenanceEnvironment } from "../infra/git-maintenance-env.js";
@@ -12,17 +11,12 @@ import { retryableGitNetworkOperation, withGitNetworkRetry } from "../infra/git-
 import { createCommandError } from "../process/command-error.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
-import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   githubPublicationUnsafeConfigArgs,
   parseGitHubPublicationBaseRef,
 } from "./github-publication-base.js";
 import { createGitHubPublicationGitError } from "./github-publication-git-error.js";
-import {
-  hasUnapprovedGitHubPublicationWorkflowChanges,
-  isGitHubPublicationWorkflowPath,
-} from "./github-publication-workflows.js";
 
 type GitCommandOptions = {
   cwd?: string;
@@ -258,67 +252,7 @@ export async function requireGitHubPublicationCommit(
 
 // Recursive inventories scale with repository size, far past the default
 // per-command cap. Keep an explicit bound for tree and missing-object listings.
-const TREE_LISTING_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
-
-export async function hasGitHubPublicationWorkflowChanges(params: {
-  cwd: string;
-  comparisonCommit: string;
-  ancestryCommit: string;
-  targetCommit: string;
-  workspaceTree: string;
-  run: typeof runPublicationCommand;
-}): Promise<boolean> {
-  const trees = new Map<string, Promise<Map<string, string>>>();
-  const workflows = (tree: string) =>
-    getOrCreatePromise(trees, tree, async () => {
-      const listing = await params.run(
-        ["git", "ls-tree", "-r", "-z", "--full-tree", tree, "--", ".github/workflows"],
-        { cwd: params.cwd, maxOutputBytes: TREE_LISTING_MAX_OUTPUT_BYTES },
-      );
-      if (listing.code !== 0) {
-        throw new Error("GitHub publication workspace workflows could not be verified.");
-      }
-      const entries = new Map<string, string>();
-      for (const record of listing.stdout.toString("latin1").split("\0").filter(Boolean)) {
-        const tab = record.indexOf("\t");
-        const [mode, , sha] = record.slice(0, tab).split(" ");
-        if (tab < 0 || !mode || !sha) {
-          throw new Error("GitHub publication workspace workflows could not be verified.");
-        }
-        const file = record.slice(tab + 1);
-        if (isGitHubPublicationWorkflowPath(file)) {
-          entries.set(file, mode + ":" + sha);
-        }
-      }
-      return entries;
-    });
-  const [before, accepted] = await Promise.all([
-    workflows(params.comparisonCommit),
-    workflows(params.workspaceTree),
-  ]);
-  return await hasUnapprovedGitHubPublicationWorkflowChanges({
-    before,
-    accepted,
-    readUpstream: async () => {
-      const result = await params.run(
-        ["git", "merge-base", "--all", params.ancestryCommit, params.targetCommit],
-        { cwd: params.cwd },
-      );
-      if (result.code !== 0) {
-        throw new Error("GitHub publication workflow ancestry could not be verified.");
-      }
-      const bases = result.stdout.toString("utf8").trim().split(/\s+/u);
-      if (bases.length !== 1 || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(bases[0]!)) {
-        return undefined;
-      }
-      const [ancestor, target] = await Promise.all([
-        workflows(bases[0]!),
-        workflows(params.targetCommit),
-      ]);
-      return { ancestor, target };
-    },
-  });
-}
+export const TREE_LISTING_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 
 export async function assertSafeGitPublicationWorkspace(
   cwd: string,
@@ -611,17 +545,25 @@ export async function captureSettledGitHubPublicationWorkspaceSnapshot(
       const staged = await step(() =>
         readGitHubPublicationTree(params.cwd, workspaceTree, runPublicationCommand),
       );
-      const admitted = new Set(
-        [...admittedPaths].map((entry) => Buffer.from(entry).toString("hex")),
-      );
-      const excluded = splitNullBuffer(staged)
-        .map((record) => record.subarray(record.indexOf(9) + 1))
-        .filter((entry) => !admitted.has(entry.toString("hex")));
+      const excluded: Buffer[] = [];
+      let start = 0;
+      for (let end = staged.indexOf(0); end !== -1; end = staged.indexOf(0, start)) {
+        const pathStart = staged.indexOf(9, start) + 1;
+        const entry = staged.toString("utf8", pathStart, end);
+        // Invalid UTF-8 must not alias an admitted literal replacement character.
+        if (
+          !admittedPaths.has(entry) ||
+          (entry.includes("\uFFFD") && !Buffer.from(entry).equals(staged.subarray(pathStart, end)))
+        ) {
+          excluded.push(staged.subarray(pathStart, end + 1));
+        }
+        start = end + 1;
+      }
       if (excluded.length) {
         await git(
           ["update-index", "--force-remove", "-z", "--stdin"],
           env,
-          Buffer.concat(excluded.flatMap((entry) => [entry, Buffer.from([0])])),
+          Buffer.concat(excluded),
         );
         workspaceTree = await git(["write-tree"], env);
       }

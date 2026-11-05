@@ -248,7 +248,18 @@ async function assertSupportedPodmanConnection(remoteSocketPath: string): Promis
   };
 }
 
-export async function resolvePodmanSandboxRuntimeInfo(): Promise<PodmanSandboxRuntimeInfo> {
+let processRuntimeInfo: Promise<PodmanSandboxRuntimeInfo> | undefined;
+
+export function resolvePodmanSandboxRuntimeInfo(): Promise<PodmanSandboxRuntimeInfo> {
+  // Discovery also scans every container's state. Keep the process-owned facts;
+  // bound commands pin this endpoint instead of following later context changes.
+  return (processRuntimeInfo ??= probePodmanSandboxRuntimeInfo().catch((error: unknown) => {
+    processRuntimeInfo = undefined;
+    throw error;
+  }));
+}
+
+async function probePodmanSandboxRuntimeInfo(): Promise<PodmanSandboxRuntimeInfo> {
   const result = await probePodman([
     "info",
     "--format",
@@ -282,8 +293,7 @@ export async function validateSandboxContainerEngineTarget(
     );
   }
   if (engine.id === "podman") {
-    // Podman resolves its active connection for every invocation. Validate once
-    // at the start of each lifecycle sequence so context changes cannot reuse stale approval.
+    // Recorded resources must belong to the endpoint captured by this process.
     const runtimeInfo = await resolvePodmanSandboxRuntimeInfo();
     assertPodmanSandboxTarget(expectedTarget, runtimeInfo.target);
   }
@@ -310,7 +320,8 @@ export function bindPodmanSandboxEngine(
 ): SandboxContainerEngine {
   return {
     ...PODMAN_SANDBOX_ENGINE,
-    globalArgs: target.globalArgs,
+    // Native execution must not follow later CONTAINER_HOST/CONNECTION changes.
+    globalArgs: target.globalArgs.length ? target.globalArgs : ["--remote=false"],
   };
 }
 

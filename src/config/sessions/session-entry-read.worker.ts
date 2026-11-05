@@ -53,6 +53,7 @@ import {
 } from "./session-canonical-key.js";
 import { prepareSessionColdSourceGuard } from "./session-cold-storage-source-guard.worker.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
+import { readSessionCreationReceipt } from "./session-creation-receipts.js";
 import { createSessionEntryReadScope } from "./session-entry-cohort.worker.js";
 import { captureSessionEntryReadSource } from "./session-entry-read-source.js";
 import type {
@@ -415,6 +416,17 @@ export function readExactSessionEntriesWithLifecycle(
         : withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
             snapshot(database, () => {
               assertCanonicalRead(database, request.expectedIdentity);
+              if (request.projection === "creation-receipt") {
+                if (!request.creationDigest) {
+                  throw new Error("Creation receipt lookup requires its digest");
+                }
+                return {
+                  kind: "session-exact-entries" as const,
+                  entries: [],
+                  lifecycleTimestamps: {},
+                  creationReceipt: readSessionCreationReceipt(database, request.creationDigest),
+                };
+              }
               if (request.projection === "creation") {
                 const { identity, canonicalPath } = readOpenClawAgentDatabaseIdentity(database);
                 const sessionKey = request.sessionKeys[0];

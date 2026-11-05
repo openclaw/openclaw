@@ -291,7 +291,7 @@
   gap: 6px;
   width: 100%;
   min-height: var(--menu-item-height);
-  padding: 5px var(--oc-menu-item-padding-inline, 8px);
+  padding: 4px var(--oc-menu-item-padding-inline, 8px);
   border: 0;
   border-radius: var(--menu-item-radius);
   background: transparent;
@@ -302,17 +302,16 @@
   cursor: var(--cursor-action);
 }
 
-/* Standalone rows retain their gap; inferred wrappers belong to their menu scope.
+/* Standalone rows retain their gap; the menu owner marks custom row wrappers.
    Zero specificity lets a row's own margin win. */
 :where(.oc-menu-item) + :where(.oc-menu-item) {
   margin-block-start: var(--menu-item-gap);
 }
 
-@scope (.oc-menu) {
-  :where(.oc-menu-item, :has(> .oc-menu-item--submenu, > .oc-menu-item:last-child))
-    + :where(.oc-menu-item, :has(> .oc-menu-item:first-child):not(.oc-overlay)) {
-    margin-block-start: var(--menu-item-gap);
-  }
+:where(.oc-menu)
+  :where(.oc-menu-item, [data-menu-row-end])
+  + :where(.oc-menu-item, [data-menu-row-start]) {
+  margin-block-start: var(--menu-item-gap);
 }
 
 a.oc-menu-item[href] {

@@ -1065,60 +1065,40 @@ private actor LocalFixtureChatStore {
             ]
         }
         if ProcessInfo.processInfo.arguments.contains("--openclaw-voice-consult-rows-fixture") {
-            return self.voiceConsultSeedMessages(now: now)
-        }
-        if ProcessInfo.processInfo.arguments.contains("--openclaw-anthropic-work-chunks-fixture") {
-            return self.workChunkSeedMessages(now: now)
-        }
-        if ProcessInfo.processInfo.arguments.contains("--openclaw-step-labels-fixture") {
+            // Persisted realtime-voice renditions beside consult answers, in both arrival orders.
+            let voice = OpenClawChatInputProvenance(kind: "realtime_voice", sourceChannel: "talk")
+            func row(_ text: String, at offset: Double, spoken: Bool) -> OpenClawChatMessage {
+                OpenClawChatMessage(
+                    role: "assistant",
+                    content: [OpenClawChatMessageContent(type: "text", text: text)],
+                    timestamp: now + offset,
+                    model: spoken ? "realtime-voice" : "consult-model",
+                    stopReason: "stop",
+                    provenance: spoken ? voice : nil,
+                    phase: spoken ? nil : "final_answer")
+            }
             return [
                 self.message(
                     role: "user",
-                    text: "Check local readiness.",
+                    text: "Which build is on my phone?",
                     timestamp: now,
-                    transcriptMessageID: "fixture-step-prompt"),
-                OpenClawChatMessage(
-                    role: "assistant",
-                    content: [
-                        OpenClawChatMessageContent(
-                            type: "toolCall",
-                            id: "fixture-exec",
-                            name: "exec",
-                            arguments: AnyCodable(["command": "printf ready"])),
-                        OpenClawChatMessageContent(
-                            type: "toolCall",
-                            id: "fixture-no-result",
-                            name: "exec",
-                            arguments: AnyCodable(["command": "printf missing"])),
-                        OpenClawChatMessageContent(
-                            type: "toolCall",
-                            id: "fixture-success",
-                            name: "exec",
-                            arguments: AnyCodable(["command": "printf complete"])),
-                    ],
-                    timestamp: now + 1,
-                    transcriptMessageID: "fixture-step-call",
-                    stopReason: "toolUse"),
-                OpenClawChatMessage(
-                    role: "toolResult",
-                    content: [OpenClawChatMessageContent(type: "text", text: "ready")],
-                    timestamp: now + 2,
-                    transcriptMessageID: "fixture-step-result",
-                    toolCallId: "fixture-exec",
-                    toolName: "exec"),
-                OpenClawChatMessage(
-                    role: "toolResult",
-                    content: [OpenClawChatMessageContent(type: "text", text: "complete")],
-                    timestamp: now + 3,
-                    transcriptMessageID: "fixture-success-result",
-                    toolCallId: "fixture-success",
-                    toolName: "exec"),
+                    transcriptMessageID: "fixture-voice-prompt-1"),
+                row("VOICE_SPOKEN_FIRST: The latest build is on your phone.", at: 1, spoken: true),
+                row("CONSULT_AFTER: The build went on at about 14:15.", at: 2, spoken: false),
                 self.message(
-                    role: "assistant",
-                    text: "Local readiness checked.",
-                    timestamp: now + 4,
-                    transcriptMessageID: "fixture-step-answer"),
+                    role: "user",
+                    text: "And the one before?",
+                    timestamp: now + 3,
+                    transcriptMessageID: "fixture-voice-prompt-2"),
+                row("CONSULT_FIRST: The previous build went on yesterday.", at: 4, spoken: false),
+                row("VOICE_SPOKEN_AFTER: The one before went on yesterday.", at: 5, spoken: true),
             ]
+        }
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-anthropic-work-chunks-fixture") {
+            return self.anthropicWorkChunkMessages(now: now)
+        }
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-step-labels-fixture") {
+            return self.stepLabelMessages(now: now)
         }
         if ProcessInfo.processInfo.arguments.contains("--openclaw-long-chat-fixture") {
             return [
@@ -1160,38 +1140,7 @@ private actor LocalFixtureChatStore {
         }
     }
 
-    private static func voiceConsultSeedMessages(now: Double) -> [OpenClawChatMessage] {
-        // Persisted realtime-voice renditions beside consult answers, in both arrival orders.
-        let voice = OpenClawChatInputProvenance(kind: "realtime_voice", sourceChannel: "talk")
-        func row(_ text: String, at offset: Double, spoken: Bool) -> OpenClawChatMessage {
-            OpenClawChatMessage(
-                role: "assistant",
-                content: [OpenClawChatMessageContent(type: "text", text: text)],
-                timestamp: now + offset,
-                model: spoken ? "realtime-voice" : "consult-model",
-                stopReason: "stop",
-                provenance: spoken ? voice : nil,
-                phase: spoken ? nil : "final_answer")
-        }
-        return [
-            self.message(
-                role: "user",
-                text: "Which build is on my phone?",
-                timestamp: now,
-                transcriptMessageID: "fixture-voice-prompt-1"),
-            row("VOICE_SPOKEN_FIRST: The latest build is on your phone.", at: 1, spoken: true),
-            row("CONSULT_AFTER: The build went on at about 14:15.", at: 2, spoken: false),
-            self.message(
-                role: "user",
-                text: "And the one before?",
-                timestamp: now + 3,
-                transcriptMessageID: "fixture-voice-prompt-2"),
-            row("CONSULT_FIRST: The previous build went on yesterday.", at: 4, spoken: false),
-            row("VOICE_SPOKEN_AFTER: The one before went on yesterday.", at: 5, spoken: true),
-        ]
-    }
-
-    private static func workChunkSeedMessages(now: Double) -> [OpenClawChatMessage] {
+    private static func anthropicWorkChunkMessages(now: Double) -> [OpenClawChatMessage] {
         // Synthetic Anthropic-style envelopes: narration and tool_use share each
         // assistant message; tool results separate the two narration boundaries.
         [
@@ -1245,6 +1194,57 @@ private actor LocalFixtureChatStore {
                 text: "All checks passed.",
                 timestamp: now + 5,
                 transcriptMessageID: "work-chunks-final"),
+        ]
+    }
+
+    private static func stepLabelMessages(now: Double) -> [OpenClawChatMessage] {
+        [
+            self.message(
+                role: "user",
+                text: "Check local readiness.",
+                timestamp: now,
+                transcriptMessageID: "fixture-step-prompt"),
+            OpenClawChatMessage(
+                role: "assistant",
+                content: [
+                    OpenClawChatMessageContent(
+                        type: "toolCall",
+                        id: "fixture-exec",
+                        name: "exec",
+                        arguments: AnyCodable(["command": "printf ready"])),
+                    OpenClawChatMessageContent(
+                        type: "toolCall",
+                        id: "fixture-no-result",
+                        name: "exec",
+                        arguments: AnyCodable(["command": "printf missing"])),
+                    OpenClawChatMessageContent(
+                        type: "toolCall",
+                        id: "fixture-success",
+                        name: "exec",
+                        arguments: AnyCodable(["command": "printf complete"])),
+                ],
+                timestamp: now + 1,
+                transcriptMessageID: "fixture-step-call",
+                stopReason: "toolUse"),
+            OpenClawChatMessage(
+                role: "toolResult",
+                content: [OpenClawChatMessageContent(type: "text", text: "ready")],
+                timestamp: now + 2,
+                transcriptMessageID: "fixture-step-result",
+                toolCallId: "fixture-exec",
+                toolName: "exec"),
+            OpenClawChatMessage(
+                role: "toolResult",
+                content: [OpenClawChatMessageContent(type: "text", text: "complete")],
+                timestamp: now + 3,
+                transcriptMessageID: "fixture-success-result",
+                toolCallId: "fixture-success",
+                toolName: "exec"),
+            self.message(
+                role: "assistant",
+                text: "Local readiness checked.",
+                timestamp: now + 4,
+                transcriptMessageID: "fixture-step-answer"),
         ]
     }
 
