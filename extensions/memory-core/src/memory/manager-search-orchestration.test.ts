@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { DatabaseSearchCapabilityUnavailableError } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl, WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { recordMemoryEntryOrigins } from "../memory-entry-origins.js";
@@ -122,6 +123,16 @@ describe("memory index", () => {
     serving(manager).syncPublishedIndexInBackground({ reason: "search" });
   const writeMemory = (name: string, content: string) =>
     fs.writeFile(path.join(fixture.paths.memory, name), content);
+
+  it("propagates CLI capability failures before retrying bootstrap", async () => {
+    const manager = await getFreshManager(createCfg({}), "cli");
+    const failure = new DatabaseSearchCapabilityUnavailableError("vector", "pgvector is missing");
+    using sync = vi
+      .spyOn(manager as unknown as MaintenanceFields, "syncMemoryFiles")
+      .mockRejectedValueOnce(failure);
+    await expect(manager.search("alpha")).rejects.toBe(failure);
+    expect(sync).toHaveBeenCalledOnce();
+  });
 
   it.each(["bootstrap", "recovery"])("keeps nested %s failure details redacted", async (mode) => {
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });

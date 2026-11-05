@@ -37,6 +37,13 @@ const SEARCH_CANDIDATE_UNIVERSE = 200;
 const log = createSubsystemLogger("memory");
 type MemoryIndexSearchOptions = NonNullable<Parameters<MemorySearchManager["search"]>[1]>;
 
+function shouldPropagateSearchSyncError(error: unknown): boolean {
+  return (
+    (error instanceof WorkerTaskError && error.code === "overloaded") ||
+    readErrorName(error) === "DatabaseSearchCapabilityUnavailableError"
+  );
+}
+
 export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
   async search(query: string, opts?: MemoryIndexSearchOptions): Promise<MemorySearchResult[]> {
     const normalizedQuery = query.trim();
@@ -189,6 +196,9 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
           { reason: "cli-search" },
           { allowEmbeddingBootstrapFallback: true },
         ).catch((error: unknown) => {
+          if (shouldPropagateSearchSyncError(error)) {
+            throw error;
+          }
           log.warn(`memory sync failed (cli-search): ${formatErrorMessage(error)}`);
         });
       }
@@ -209,10 +219,7 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
             { allowEmbeddingBootstrapFallback: true },
           );
         } catch (err) {
-          if (err instanceof WorkerTaskError && err.code === "overloaded") {
-            throw err;
-          }
-          if (readErrorName(err) === "DatabaseSearchCapabilityUnavailableError") {
+          if (shouldPropagateSearchSyncError(err)) {
             throw err;
           }
           if (
@@ -229,10 +236,7 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
             this.markEmbeddingBootstrapFailure(err, { provider: failedProvider });
             await this.syncAdmitted({ reason: "search-bootstrap" }).catch(
               (fallbackErr: unknown) => {
-                if (fallbackErr instanceof WorkerTaskError && fallbackErr.code === "overloaded") {
-                  throw fallbackErr;
-                }
-                if (readErrorName(fallbackErr) === "DatabaseSearchCapabilityUnavailableError") {
+                if (shouldPropagateSearchSyncError(fallbackErr)) {
                   throw fallbackErr;
                 }
                 const message = redactSensitiveText(formatErrorMessage(fallbackErr), {
@@ -331,11 +335,7 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
           { reason: "search" },
           { allowEmbeddingBootstrapFallback: true },
         ).catch((err: unknown) => {
-          if (
-            shouldUpgradeProviderKey ||
-            (err instanceof WorkerTaskError && err.code === "overloaded") ||
-            readErrorName(err) === "DatabaseSearchCapabilityUnavailableError"
-          ) {
+          if (shouldUpgradeProviderKey || shouldPropagateSearchSyncError(err)) {
             throw err;
           }
           log.warn(`memory sync failed (search-identity-repair): ${formatErrorMessage(err)}`);
