@@ -1,0 +1,2 @@
+# Wait for the existing native submenu readiness signal before owner-search interactions.
+1
