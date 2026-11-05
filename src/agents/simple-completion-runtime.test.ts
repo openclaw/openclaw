@@ -271,7 +271,15 @@ describe("prepareSimpleCompletionModel", () => {
       mode: "api-key",
     });
     const cfg = {
-      models: { providers: { anthropic: { authHeader: true } } },
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            models: [{ id: "claude-opus-4-6" }],
+            authHeader: true,
+          },
+        },
+      },
     };
 
     const result = await prepareSimpleCompletionModel({
