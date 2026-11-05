@@ -164,18 +164,15 @@ it.each([false, true])(
 it("applies the aggregate byte budget before hydrating omitted message bodies", async () => {
   await withHistory("context-byte-limit", async ({ scope, source, verifyRead }) => {
     for (let index = 0; index < 8; index++) {
-      source.appendMessage(makeUserMessage(`body-payload-${index}:` + "x".repeat(4096), index));
+      source.appendMessage(
+        makeUserMessage(`body-payload-${index}:` + "x".repeat(1024 * 1024), index),
+      );
     }
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
-    expect(
-      database.db
-        .prepare(
-          "SELECT count(*) AS count FROM transcript_events WHERE session_id = ? AND event_zstd IS NOT NULL",
-        )
-        .get(scope.sessionId),
-    ).toEqual({ count: 8 });
     const full = source.buildSessionContext().messages;
-    await verifyRead(() => {
+    await verifyRead(async () => {
+      await expect(SessionManager.openModelContextAsync(scope)).rejects.toThrow(
+        "Model context exceeds",
+      );
       const hydrated = new Set<string>();
       const decompress = vi.spyOn(resolveZstdCodec()!, "decompress");
       const parse = JSON.parse;
@@ -188,7 +185,7 @@ it("applies the aggregate byte budget before hydrating omitted message bodies", 
       let messages: typeof full;
       try {
         messages = SessionManager.openModelContext(scope, {
-          limits: { maxBytes: 16_384, maxEvents: 20 },
+          limits: { maxBytes: 4 * 1024 * 1024, maxEvents: 20 },
         }).buildSessionContext().messages;
         expect(decompress).toHaveBeenCalledTimes(messages.length);
       } finally {
@@ -198,7 +195,7 @@ it("applies the aggregate byte budget before hydrating omitted message bodies", 
       expect(messages.length).toBeGreaterThan(0);
       expect(messages.length).toBeLessThan(full.length);
       expect(messages).toEqual(full.slice(-messages.length));
-      expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThanOrEqual(16_384);
+      expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThanOrEqual(4 * 1024 * 1024);
       expect(hydrated).toEqual(
         new Set(
           messages.flatMap((message) => {

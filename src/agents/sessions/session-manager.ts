@@ -647,7 +647,7 @@ export class SessionManager extends SessionManagerBranching {
     return SessionManager.fromSelectedEntries(context.events, options.cwd, context.version);
   }
 
-  /** The same detached model view, with durable transcript scanning off the event loop. */
+  /** Detached model view; implicit full reads reject above 8 MiB or 20000 events. */
   static async openModelContextAsync(
     target: SessionTranscriptRuntimeTarget,
     options: {

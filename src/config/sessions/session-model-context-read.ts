@@ -76,6 +76,19 @@ export function projectSessionModelContext(
 ): SessionTranscriptModelContext {
   const requests = prepared?.requests ?? collectSessionModelContextRequests(entries);
   const pending = collectSessionPendingBackgroundResultRequests(entries);
+  // Full reads must fail before hydration rather than silently change replay semantics.
+  if (
+    !limits &&
+    (requests.length + pending.length > 20_000 ||
+      [...readModelEntrySizes([...requests, ...pending]).values()].reduce(
+        (total, bytes) => total + bytes,
+        0,
+      ) > 8_388_608)
+  ) {
+    throw new RangeError(
+      "Model context exceeds the implicit 8 MiB / 20000-event limit; pass explicit context limits.",
+    );
+  }
   const pendingBytes =
     limits && pending.length
       ? [...readModelEntrySizes(pending).values()].reduce((total, bytes) => total + bytes, 0)
