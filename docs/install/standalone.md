@@ -158,8 +158,13 @@ do not match their declared types. Type errors still stop compilation.
 
 AOT-only options apply to either input mode:
 
-- `--trim` removes unused compiler/runtime features. `--trim-locales <locale,...>`
-  requires `--trim` or `--trim-allow` and retains the selected locales.
+- `--trim` removes unused compiler/runtime features. Trimmed AOT builds retain
+  the interpreter and the password, TOML, YAML, JSON5, and JSONC APIs for fetched
+  plugins and same-executable children. The builder supplies these
+  `compile.trim.allow` entries because code loaded after compilation cannot
+  retain the features it needs. No API is called eagerly to keep it alive.
+  `--trim-locales <locale,...>` requires `--trim` or `--trim-allow` and retains
+  the selected locales.
 - `--trim-allow run[,jit]` enables trimming while retaining Bun's subprocess runner
   and, optionally, its JIT. Both AOT modes pass these retention options through
   the compiler's build API. The JIT support companion does not inherit AOT options.
@@ -169,13 +174,11 @@ AOT-only options apply to either input mode:
   `=strict` also denies VM string execution. The strict option breaks host NodeVM
   execution. These settings do not prohibit every guest interpreter.
 - `--explain[=<report>]` writes compiler diagnostics. It can be repeated.
-- `--aot-disable <name,...>` forwards Bun's supported compiler-step opt-outs and
-  can be repeated. For large graphs whose whole-program analysis exceeds the
-  build's memory budget, `--aot-disable=flow-results` skips that analysis and its
-  optimizations. Code still compiles ahead of time, with the same runtime behavior
-  and hardening options; the executable can be larger or slower. Bun validates
-  the names. Qualify the resulting artifact and record this option in build
-  comparisons.
+- Compiler analysis uses Bun's defaults. `--aot-disable <name,...>` is an explicit
+  diagnostic opt-out and can be repeated. Bun defines and validates the names;
+  a name supported by one compiler revision may not exist in another. Use an
+  opt-out only for a measured build limitation, then qualify the resulting
+  artifact and record the option in build comparisons.
 - `--aot-log-type-mismatches` inventories mismatches and changes generated code;
   rebuild without it for performance measurements.
 

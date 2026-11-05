@@ -1,0 +1,103 @@
+# Run with Prometheus v3.2.1: promtool test rules this-file.yml.
+# These are the body's queries, evaluated by Prometheus rather than a JSON stub.
+evaluation_interval: 30s
+tests:
+  - name: fresh live target, idle sessions, and sampled heap
+    interval: 30s
+    input_series:
+      - series: 'up{job="openclaw",instance="127.0.0.1:18789"}'
+        values: "1+0x10"
+      - series: 'openclaw_gateway_event_loop_observed_seconds_total{job="openclaw",instance="127.0.0.1:18789"}'
+        values: "0+30x10"
+      - series: 'openclaw_sessions_active{job="openclaw",instance="127.0.0.1:18789",state="running"}'
+        values: "0+0x10"
+      - series: 'openclaw_sessions_active{job="openclaw",instance="127.0.0.1:18789",state="queued"}'
+        values: "3+0x10"
+      - series: 'openclaw_memory_bytes{job="openclaw",instance="127.0.0.1:18789",kind="heap_used"}'
+        values: "1073741824+0x10"
+    promql_expr_test:
+      - expr: &event_query "(increase(openclaw_gateway_event_loop_observed_seconds_total[5m])) and (timestamp(openclaw_gateway_event_loop_observed_seconds_total) > time() - 120) and on(job,instance) (up == 1)"
+        eval_time: 5m
+        exp_samples:
+          - labels: '{job="openclaw",instance="127.0.0.1:18789"}'
+            value: 300
+      - expr: '(openclaw_sessions_active{state="running"}) and (timestamp(openclaw_sessions_active{state="running"}) > time() - 120) and on(job,instance) (up == 1)'
+        eval_time: 5m
+        exp_samples:
+          - labels: 'openclaw_sessions_active{job="openclaw",instance="127.0.0.1:18789",state="running"}'
+            value: 0
+      - expr: '(openclaw_sessions_active{state="queued"}) and (timestamp(openclaw_sessions_active{state="queued"}) > time() - 120) and on(job,instance) (up == 1)'
+        eval_time: 5m
+        exp_samples:
+          - labels: 'openclaw_sessions_active{job="openclaw",instance="127.0.0.1:18789",state="queued"}'
+            value: 3
+      - expr: '(openclaw_memory_bytes{kind="heap_used"}) and (timestamp(openclaw_memory_bytes{kind="heap_used"}) > time() - 120) and on(job,instance) (up == 1)'
+        eval_time: 5m
+        exp_samples:
+          - labels: 'openclaw_memory_bytes{job="openclaw",instance="127.0.0.1:18789",kind="heap_used"}'
+            value: 1073741824
+  - name: stale cached metric is excluded even with live up
+    interval: 30s
+    input_series:
+      - series: 'up{job="openclaw",instance="127.0.0.1:18789"}'
+        values: "1+0x10"
+      - series: 'openclaw_gateway_event_loop_observed_seconds_total{job="openclaw",instance="127.0.0.1:18789"}'
+        values: "0+30x6 _ _ _ _"
+    promql_expr_test:
+      - expr: *event_query
+        eval_time: 5m
+        exp_samples: []
+  - name: down target is excluded despite cached progressing metric
+    interval: 30s
+    input_series:
+      - series: 'up{job="openclaw",instance="127.0.0.1:18789"}'
+        values: "1+0x9 0"
+      - series: 'openclaw_gateway_event_loop_observed_seconds_total{job="openclaw",instance="127.0.0.1:18789"}'
+        values: "0+30x10"
+    promql_expr_test:
+      - expr: *event_query
+        eval_time: 5m
+        exp_samples: []
+  - name: another target cannot supply this target's up
+    interval: 30s
+    input_series:
+      - series: 'up{job="openclaw",instance="127.0.0.1:18790"}'
+        values: "1+0x10"
+      - series: 'openclaw_gateway_event_loop_observed_seconds_total{job="openclaw",instance="127.0.0.1:18789"}'
+        values: "0+30x10"
+    promql_expr_test:
+      - expr: *event_query
+        eval_time: 5m
+        exp_samples: []
+  - name: multiple fresh targets stay ambiguous for the body to reject
+    interval: 30s
+    input_series:
+      - series: 'up{job="openclaw",instance="127.0.0.1:18789"}'
+        values: "1+0x10"
+      - series: 'up{job="openclaw",instance="127.0.0.1:18790"}'
+        values: "1+0x10"
+      - series: 'openclaw_gateway_event_loop_observed_seconds_total{job="openclaw",instance="127.0.0.1:18789"}'
+        values: "0+30x10"
+      - series: 'openclaw_gateway_event_loop_observed_seconds_total{job="openclaw",instance="127.0.0.1:18790"}'
+        values: "0+30x10"
+    promql_expr_test:
+      - expr: *event_query
+        eval_time: 5m
+        exp_samples:
+          - labels: '{job="openclaw",instance="127.0.0.1:18789"}'
+            value: 300
+          - labels: '{job="openclaw",instance="127.0.0.1:18790"}'
+            value: 300
+  - name: stalled event-loop observations remain zero for the body to reject
+    interval: 30s
+    input_series:
+      - series: 'up{job="openclaw",instance="127.0.0.1:18789"}'
+        values: "1+0x10"
+      - series: 'openclaw_gateway_event_loop_observed_seconds_total{job="openclaw",instance="127.0.0.1:18789"}'
+        values: "300+0x10"
+    promql_expr_test:
+      - expr: *event_query
+        eval_time: 5m
+        exp_samples:
+          - labels: '{job="openclaw",instance="127.0.0.1:18789"}'
+            value: 0
