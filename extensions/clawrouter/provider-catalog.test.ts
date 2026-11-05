@@ -1,3 +1,4 @@
+import { streamSimple, type Model } from "openclaw/plugin-sdk/llm";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
@@ -139,6 +140,7 @@ describe("ClawRouter provider catalog", () => {
       max: "max",
     });
     expect(openai?.compat).toEqual({
+      supportsStrictMode: true,
       supportsReasoningEffort: true,
       supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
     });
@@ -331,6 +333,49 @@ describe("ClawRouter provider catalog", () => {
     for (const model of provider.models) {
       expect(model).toMatchObject({ input: ["text"], contextWindow: 200_000, maxTokens: 32_768 });
     }
+  });
+
+  it("keeps optional tool inputs optional on the discovered OpenAI Responses route", async () => {
+    buildFetchGuard();
+    const provider = await buildClawRouterProviderConfig({
+      apiKey: "synthetic-router-key",
+      baseUrl: "https://clawrouter.example",
+    });
+    const row = provider.models.find((model) => model.id === "openai/gpt-5.6")!;
+    const model = { ...row, provider: "clawrouter" } as Model<"openai-responses">;
+    let payload: Record<string, unknown> | undefined;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      payload = (await new Request(input, init).json()) as Record<string, unknown>;
+      return new Response(
+        `data: ${JSON.stringify({
+          type: "response.completed",
+          response: {
+            status: "completed",
+            output: [],
+            usage: { input_tokens: 1, output_tokens: 0 },
+          },
+        })}\n\n`,
+        { headers: { "Content-Type": "text/event-stream" } },
+      );
+    });
+    const parameters = {
+      type: "object",
+      properties: { document: { type: "string" }, recommendation: { type: "string" } },
+      required: ["document"],
+      additionalProperties: false,
+    };
+    const result = await streamSimple(
+      model,
+      {
+        messages: [{ role: "user", content: "Send the synthetic document", timestamp: 1 }],
+        tools: [{ name: "send_report", description: "Send a document", parameters }],
+      },
+      { apiKey: "synthetic-router-key", cacheRetention: "none" },
+    ).result();
+    expect(result.stopReason).toBe("stop");
+    expect(payload).toMatchObject({
+      tools: [{ type: "function", name: "send_report", strict: false, parameters }],
+    });
   });
 
   it("rewrites only native protocol model ids at the request boundary", async () => {

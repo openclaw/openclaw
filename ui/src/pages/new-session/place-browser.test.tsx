@@ -69,7 +69,9 @@ it("keeps the focused folder input and retained rows through a failed refresh an
   refresh.reject(new Error("Unavailable"));
   await navigating;
   await waitForSolid(() =>
-    expect(mounted.getByRole("alert").textContent).toContain("Couldn't list that folder."),
+    expect(mounted.getByRole("alert").textContent).toContain(
+      "Couldn’t list that folder. Try again.",
+    ),
   );
   expect(mounted.queryByRole("status")).toBeNull();
   expect(document.activeElement).toBe(input);
@@ -85,7 +87,9 @@ it("keeps the focused folder input and retained rows through a failed refresh an
   concurrentRead.reject(new Error("Unavailable"));
   await browsingWhileRegistering;
   await waitForSolid(() =>
-    expect(mounted.getByRole("alert").textContent).toContain("Couldn't list that folder."),
+    expect(mounted.getByRole("alert").textContent).toContain(
+      "Couldn’t list that folder. Try again.",
+    ),
   );
   expect(mounted.queryByRole("status")).toBeNull();
   expect(document.activeElement).toBe(input);

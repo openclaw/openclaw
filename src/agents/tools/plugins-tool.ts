@@ -156,6 +156,8 @@ export function createPluginsTool(options?: {
           return await handoffSessionTool({
             ...options,
             name: "Plugin reload",
+            terminal: true,
+            fenceSuccessors: true,
             operation,
             requestOwners,
             signal,

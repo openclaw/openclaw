@@ -510,6 +510,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/transcript-commit.lazy.test.ts",
   "src/gateway/worker-environments/transcript-commit.test.ts",
   "src/gateway/worker-environments/worker-exec-approval.test.ts",
+  "src/gateway/worker-environments/worker-github-binding.authority-wire.test.ts",
   "src/gateway/worker-environments/worker-portal-tool-executor.test.ts",
   "src/gateway/worker-environments/worker-session-tool-executor.send.test.ts",
   "src/gateway/worker-environments/worker-session-tool-executor.test.ts",

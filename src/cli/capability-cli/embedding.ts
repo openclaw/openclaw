@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Option, type Command } from "commander";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { collectOption } from "../program/helpers.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText, providerSummaryText } from "./output.js";
@@ -77,11 +78,10 @@ export function registerEmbeddingCapabilityCommands(capability: Command): void {
           throw new Error(result.providerUnavailableReason ?? "No embedding provider available.");
         }
         const provider = result.provider;
+        const signal = getAsyncWorkSignal();
         let embeddings: number[][];
         try {
-          embeddings = await provider.embedBatch(texts, {
-            inputType: opts.inputType,
-          });
+          embeddings = await provider.embedBatch(texts, { inputType: opts.inputType, signal });
         } catch (err) {
           // Cleanup failure must not replace the embedding error.
           await Promise.resolve()

@@ -283,13 +283,13 @@ describe("chat pane composer controls", () => {
       cached: true,
       connected: false,
       error: "metadata unavailable",
-      message: "Offline",
+      message: "Disconnected",
     },
     {
       label: "failed with a snapshot",
       cached: true,
       error: "metadata unavailable",
-      message: "Some models could not be refreshed. Open Models to try again.",
+      message: "Couldn’t refresh some models. Open Models to try again.",
     },
     {
       label: "failed without a snapshot",
@@ -417,7 +417,7 @@ describe("chat pane composer controls", () => {
     const defaultOption = container.querySelector<HTMLElement>(
       '[data-chat-permission-option="default"]',
     );
-    expect(defaultOption?.textContent).toContain("Uses this agent's settings.");
+    expect(defaultOption?.textContent).toContain("Uses this agent’s settings.");
     expect(
       container.querySelector('[data-chat-permission-option="guarded"]')?.textContent,
     ).toContain("Default");
