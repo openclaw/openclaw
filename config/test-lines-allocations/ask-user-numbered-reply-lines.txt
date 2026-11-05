@@ -1,2 +1,3 @@
-# Numbered ask_user reply lines bind to their questions without inventing answers.
-59
+# Numbered ask_user reply lines bind to their questions without inventing answers,
+# and multi-question prompts number options per question.
+94

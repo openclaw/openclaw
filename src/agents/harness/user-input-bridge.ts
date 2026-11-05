@@ -57,7 +57,9 @@ export function formatAgentHarnessUserInputPrompt(
   const formatText = options.formatText ?? ((text: string) => text);
   const lines = [options.intro ?? "Agent needs input:"];
   questions.forEach((question, index) => {
-    const prefix = questions.length > 1 ? `${index + 1}. ` : "";
+    // A numbered header would let markdown renderers merge it and the option
+    // lines below into one renumbered list; options number from 1 per question.
+    const prefix = questions.length > 1 ? `Question ${index + 1}: ` : "";
     lines.push("", `${prefix}${formatText(question.header)}`, formatText(question.question));
     if (question.isSecret) {
       lines.push(
