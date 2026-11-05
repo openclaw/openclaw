@@ -592,7 +592,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
 
   // Retain normalized source facts before retirement removes heartbeat settings.
-  const modelBillingRouteConfig = state.candidate;
   const preRetiredConfigState = state;
   state = await applyRetiredConfigStep({
     state,
@@ -644,7 +643,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   const migrationResult = await finalizeMigrationResult({
     cfg,
-    modelBillingRouteConfig,
+    modelBillingRouteConfig: preRetiredConfigState.candidate,
     shouldWriteConfig,
     pluginInventoryChanged: pluginMetadataSnapshotState.inventoryChanged,
     metadataSnapshot: pluginMetadataSnapshotState.current,
@@ -692,11 +691,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     (migrationResult.postSessionPluginMigrationPlanBound !== true && "session-plan-unbound") ||
     (Boolean(migrationResult.postSessionPluginMigration?.step.refusal) && "session-plan-refused");
 
-  return {
+  const configResult = {
     [Symbol.asyncDispose]: () => resources.disposeAsync(),
     ...finalized,
     cfg,
-    heartbeatMigrationSource: modelBillingRouteConfig,
+    heartbeatMigrationSource: preRetiredConfigState.candidate,
     ...(shouldWriteConfig && sessionStoreOwnerRecovery.changes.length > 0
       ? {
           confirmedConfigSource: {
@@ -739,4 +738,5 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     runWithPluginMetadataSnapshot,
     invalidatePluginMetadataSnapshot,
   };
+  return configResult;
 }
