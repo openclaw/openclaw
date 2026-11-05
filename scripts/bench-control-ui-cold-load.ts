@@ -6,7 +6,7 @@
 // javaScriptResources includes completed modulepreloads absent from V8 coverage.
 // --cpu-profile-compare <baseline cpu-profile.json>: profile and diff against that report.
 // --selector-stats: ranked boot CSS selectors (instrumentation overhead included).
-// --viewport desktop|mobile: 1719×1179 (default) or 390×844 browser viewport.
+// --viewport desktop|mobile|1720x1180: default desktop, phone, or warm-reload proof size.
 // --allocations --untraced --live-events: collected-object renderer bytes per event.
 // --streaming-allocations: sampled allocation bytes including collected objects during deltas.
 // --streaming-content tool-code grows an expanded tool card and code fence together.
@@ -491,11 +491,15 @@ if (colorScheme !== undefined && colorScheme !== "light" && colorScheme !== "dar
   throw new Error("Expected color-scheme light or dark");
 }
 const viewportName = values.viewport;
-if (viewportName !== "desktop" && viewportName !== "mobile") {
-  throw new Error("Expected viewport desktop or mobile");
+if (!["desktop", "mobile", "1720x1180"].includes(viewportName)) {
+  throw new Error("Expected viewport desktop, mobile, or 1720x1180");
 }
 const viewport =
-  viewportName === "mobile" ? { width: 390, height: 844 } : { width: 1719, height: 1179 };
+  viewportName === "mobile"
+    ? { width: 390, height: 844 }
+    : viewportName === "1720x1180"
+      ? { width: 1720, height: 1180 }
+      : { width: 1719, height: 1179 };
 if (values["filmstrip-only"] && cpuProfile) {
   throw new Error("filmstrip-only excludes CPU profiling");
 }
