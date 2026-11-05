@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import crabboxPlugin from "../../extensions/crabbox/index.js";
@@ -191,15 +192,18 @@ it.each([
       },
     };
     const service = support.createService(provider, {
-      prepareNodeEnrollment: async () => ({
-        mode: "connect",
-        setupCode: "synthetic-setup",
-        setupId: "setup-authority",
-        openclawVersion: support.NODE_BOOTSTRAP.openclawVersion,
-        displayName: "Synthetic worker",
-        nodeBootstrap: support.NODE_BOOTSTRAP,
-        waitForDeviceId: async () => "node-authority",
-      }),
+      prepareNodeEnrollment: async (record) => {
+        const enrollment = await support.testState.store.ensureNodeEnrollment(record.environmentId);
+        return {
+          mode: "connect",
+          setupCode: "synthetic-setup",
+          setupId: expectDefined(enrollment.nodeSetupId, "reserved enrollment setup"),
+          openclawVersion: support.NODE_BOOTSTRAP.openclawVersion,
+          displayName: "Synthetic worker",
+          nodeBootstrap: support.NODE_BOOTSTRAP,
+          waitForDeviceId: async () => "node-authority",
+        };
+      },
       ensureNodeWorkerBundle: async () => support.BOOTSTRAP_RECEIPT,
     });
     try {
