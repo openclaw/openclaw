@@ -8,7 +8,7 @@ import {
   isCountedSourcePath,
   main as checkEnvVarCount,
 } from "./check-env-var-count.mts";
-import { reportLimitViolations } from "./lib/check-limits.mts";
+import { releaseBranchForChecks, reportLimitViolations } from "./lib/check-limits.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import {
   compareRatchetSets,
@@ -195,6 +195,22 @@ export function main(
     const args = parseRatchetArgs(argv);
     if (args.staged && args.prune) {
       throw new Error("--prune cannot be combined with --staged");
+    }
+    if (!args.prune && releaseBranchForChecks(root)) {
+      // Keep the blanket-disable guard and env-name collection; only size debt is exempt.
+      const { allRules } = collectCurrentSuppressionState(root, {
+        staged: args.staged,
+        envVarNames,
+      });
+      console.log("Max-lines baseline skipped for release branch.");
+      return reportRatchetFailures([
+        {
+          entries: allRules,
+          title: "All-rule lint disables are forbidden; name only the required rules:",
+        },
+      ])
+        ? 1
+        : 0;
     }
 
     let baseline;

@@ -494,6 +494,36 @@ describe("oxlint config", () => {
     expect(tsconfig.exclude ?? []).not.toContain("**/*.mts");
   });
 
+  it("disables release line limits while retaining correctness and other limits", () => {
+    const { root, write } = makeFixture("release-limits", {
+      categories: { correctness: "off" },
+      overrides: [
+        {
+          files: ["*.ts"],
+          rules: {
+            "max-lines": ["error", { max: 1 }],
+            "max-lines-per-function": ["error", { max: 1 }],
+            "max-params": ["error", 1],
+            "no-var": "error",
+          },
+        },
+      ],
+    });
+    linkDependencies(root);
+    write(
+      "fixture.ts",
+      "export function f(a: number, b: number) {\n  var c = a;\n  return c + b;\n}\n",
+    );
+    const env = { GITHUB_ACTIONS: "false", OPENCLAW_RELEASE_CONTEXT_REF: "release/2026.11.4" };
+    const report = parseReport(checked(runFocused(root, ["fixture.ts"], env), 1));
+    expect(report.diagnostics.map(({ code }) => code).toSorted()).toEqual([
+      "eslint(max-params)",
+      "eslint(no-var)",
+    ]);
+    write("fixture.ts", "export function f(a: number) {\n  const c = a;\n  return c;\n}\n");
+    expect(parseReport(checked(runFocused(root, ["fixture.ts"], env), 0)).diagnostics).toEqual([]);
+  });
+
   it("keeps native cap scopes and correctness while warning on untouched local line debt", () => {
     const root = fs.realpathSync(createTempDir("openclaw-oxlint-ci-limits-"));
     // Keep transient-config ownership inside this synthetic checkout.

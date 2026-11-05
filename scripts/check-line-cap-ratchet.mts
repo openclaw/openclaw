@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import JSON5 from "json5";
 import type { OxlintConfig } from "oxlint";
-import { reportLimitViolations } from "./lib/check-limits.mts";
+import { releaseBranchForChecks, reportLimitViolations } from "./lib/check-limits.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
 import { createManagedCommandInvocation } from "./lib/managed-child-process.mts";
@@ -126,6 +126,10 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     const args = parseRatchetArgs(argv);
     if (args.prune) {
       throw new Error("Line caps have no baseline to prune; extract a coherent sibling module.");
+    }
+    if (releaseBranchForChecks(root)) {
+      console.log("Line-cap ratchet skipped for release branch.");
+      return 0;
     }
     const base = resolveRatchetBase(root, args);
     if (!base) {

@@ -10,7 +10,11 @@ import { fileURLToPath } from "node:url";
 import JSON5 from "json5";
 import type { DummyRuleMap, OxlintConfig } from "oxlint";
 import { ensureKyselyTypes } from "./generate-kysely-types.mts";
-import { limitsAreAdvisory, reportLimitViolations } from "./lib/check-limits.mts";
+import {
+  limitsAreAdvisory,
+  releaseBranchForChecks,
+  reportLimitViolations,
+} from "./lib/check-limits.mts";
 import { parseStaticDiagnostics } from "./lib/ci-static-check-evidence.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
@@ -116,13 +120,18 @@ function oxlintOption(args: string[], name: string, short: string) {
   };
 }
 
-function advisoryLimitRules(rules: DummyRuleMap | undefined, onlyMaxLines = false) {
+function advisoryLimitRules(
+  rules: DummyRuleMap | undefined,
+  onlyMaxLines = false,
+  release = false,
+) {
   const overrides: DummyRuleMap = {};
   const originalRules: DummyRuleMap = {};
   let enabled = false;
   for (const [name, rule] of Object.entries(rules ?? {})) {
     const id = name.startsWith("eslint/") ? name.slice("eslint/".length) : name;
-    if (!LIMIT_RULES.has(id) || (onlyMaxLines && id !== "max-lines")) {
+    const disabled = release && (id === "max-lines" || id === "max-lines-per-function");
+    if (!LIMIT_RULES.has(id) || (onlyMaxLines && id !== "max-lines" && !disabled)) {
       continue;
     }
     originalRules[name] = rule;
@@ -140,7 +149,11 @@ function advisoryLimitRules(rules: DummyRuleMap | undefined, onlyMaxLines = fals
     ) {
       continue;
     }
-    overrides[name] = Array.isArray(rule) ? ["warn", ...rule.slice(1)] : "warn";
+    overrides[name] = Array.isArray(rule)
+      ? [disabled ? "off" : "warn", ...rule.slice(1)]
+      : disabled
+        ? "off"
+        : "warn";
     enabled = true;
   }
   return { rules: overrides, originalRules, enabled };
@@ -167,11 +180,12 @@ async function runWithAdvisoryLimits(
     /^[\w:-]{1,160}$/u.test(evidenceId) &&
     !args.some((arg) => /^(?:--output-file|--fix(?:-suggestions|-dangerously)?)(?:=|$)/u.test(arg));
   const githubAdvisory = limitsAreAdvisory(env);
-  let untouchedExclusions = githubAdvisory
+  const release = Boolean(releaseBranchForChecks(process.cwd(), env));
+  let untouchedExclusions = githubAdvisory || release
     ? undefined
     : resolveUntouchedOxlintExclusions(configPath, env);
   if (
-    (!githubAdvisory && !untouchedExclusions && !evidenceEnabled) ||
+    (!githubAdvisory && !release && !untouchedExclusions && !evidenceEnabled) ||
     args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg.replace(/[=][\s\S]*$/u, ""))) ||
     !fs.existsSync(configPath)
   ) {
@@ -182,7 +196,7 @@ async function runWithAdvisoryLimits(
   if (!githubAdvisory && config.extends?.length) {
     untouchedExclusions = undefined;
   }
-  const rootRules = advisoryLimitRules(config.rules, !githubAdvisory);
+  const rootRules = advisoryLimitRules(config.rules, !githubAdvisory, release);
   let enabled = rootRules.enabled;
   const overrides: NonNullable<OxlintConfig["overrides"]> = [];
   if (untouchedExclusions && rootRules.enabled) {
@@ -193,7 +207,7 @@ async function runWithAdvisoryLimits(
     });
   }
   for (const scope of config.overrides ?? []) {
-    const scopedRules = advisoryLimitRules(scope.rules, !githubAdvisory);
+    const scopedRules = advisoryLimitRules(scope.rules, !githubAdvisory, release);
     enabled ||= scopedRules.enabled;
     if (Object.keys(scopedRules.rules).length === 0) {
       continue;
@@ -213,7 +227,7 @@ async function runWithAdvisoryLimits(
       rules: scopedRules.rules,
     });
   }
-  enabled &&= githubAdvisory || Boolean(untouchedExclusions);
+  enabled &&= githubAdvisory || release || Boolean(untouchedExclusions);
   if (!enabled && !evidenceEnabled) {
     return { status: await runManagedCommand(command) };
   }
@@ -241,7 +255,7 @@ async function runWithAdvisoryLimits(
       advisoryConfig,
       JSON.stringify({
         extends: [configPath],
-        rules: githubAdvisory ? rootRules.rules : undefined,
+        rules: githubAdvisory || release ? rootRules.rules : undefined,
         overrides,
         plugins: config.plugins,
         categories: config.categories,
