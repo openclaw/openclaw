@@ -11,13 +11,28 @@ import {
   publishInstalledTerminalEvidence,
   readInstalledTerminalEvents,
 } from "../../scripts/e2e/lib/upgrade-survivor/installed-terminal-observer.mjs";
-import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { execNodeEvalSync, resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { readJsonLines, runProcess, writeJson } from "./upgrade-survivor-shard.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const node = resolveTestNodeExecPath();
 const observer = path.resolve("scripts/e2e/lib/upgrade-survivor/installed-terminal-observer.mjs");
+
+function captureNodeProcessAbsence(directory: string): InstalledTerminalProcessAbsence[] {
+  const receipts: InstalledTerminalProcessAbsence[] = JSON.parse(
+    execNodeEvalSync(
+      `import {captureInstalledTerminalProcessAbsence} from ${JSON.stringify(observer)};
+       process.stdout.write(JSON.stringify(captureInstalledTerminalProcessAbsence(${JSON.stringify(directory)})));`,
+      {
+        env: { ...process.env, NODE_OPTIONS: "", OPENCLAW_INSTALLED_TERMINAL_OBSERVER: "" },
+        timeout: 10_000,
+      },
+    ),
+  );
+  expect(receipts.every((receipt) => receipt.observerPid !== process.pid)).toBe(true);
+  return receipts;
+}
 
 function fixture() {
   const root = fs.realpathSync(dirs.make("installed-terminal-observer-"));
@@ -332,7 +347,12 @@ it.skipIf(process.platform !== "linux")(
       { spawned: true, code: null, signal: "SIGKILL", errorCode: "ETIMEDOUT" },
       { spawned: false, child: null, code: null, signal: null, errorCode: "ENOENT" },
     ]);
-    expect(captureInstalledTerminalProcessAbsence(f.spec.directory)).toEqual([]);
+    if (process.versions.bun) {
+      expect(() => captureInstalledTerminalProcessAbsence(f.spec.directory)).toThrow(
+        "Kernel absence capture requires the Node monotonic clock",
+      );
+    }
+    expect(captureNodeProcessAbsence(f.spec.directory)).toEqual([]);
   },
 );
 
@@ -549,7 +569,7 @@ it("requires parent-native process exit when IPC disconnect suppresses aggregate
       events.map((row, sequence) => JSON.stringify({ ...row, sequence })).join("\n") + "\n",
     );
   writeParent(withoutExit);
-  const processAbsence = captureInstalledTerminalProcessAbsence(f.spec.directory);
+  const processAbsence = captureNodeProcessAbsence(f.spec.directory);
   expect(processAbsence).toHaveLength(1);
   const receipt = processAbsence[0];
   assert(receipt);
@@ -579,7 +599,7 @@ it("requires parent-native process exit when IPC disconnect suppresses aggregate
       row.event === "spawn" ? Object.assign({}, row, { child: process.pid }) : row,
     ),
   );
-  expect(captureInstalledTerminalProcessAbsence(f.spec.directory)[0]?.errorCode).toBe(null);
+  expect(captureNodeProcessAbsence(f.spec.directory)[0]?.errorCode).toBe(null);
   writeParent(withoutExit);
   const childLog = path.join(f.spec.directory, `${receipt.child}-0.jsonl`);
   const childRows = readJsonLines<Record<string, unknown>>(childLog);
@@ -793,7 +813,7 @@ it.skipIf(process.platform !== "linux")(
         expect(() => readInstalledTerminalEvents(f.spec.directory)).toThrow(
           "no unique native exit",
         );
-        const processAbsence = captureInstalledTerminalProcessAbsence(f.spec.directory);
+        const processAbsence = captureNodeProcessAbsence(f.spec.directory);
         expect(processAbsence).toHaveLength(1);
         expect(processAbsence[0]).toMatchObject({
           child: pid,
