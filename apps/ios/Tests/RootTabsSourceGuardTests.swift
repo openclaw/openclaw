@@ -50,6 +50,28 @@ struct RootTabsSourceGuardTests {
         #expect(lifecycle.contains("self.stopScannerCapture()"))
     }
 
+    @Test func `sessions screen keeps partial rosters visible with a retry path`() throws {
+        let source = try Self.source("Sources/Design/CommandCenterTab.swift")
+        let screen = try Self.extract(
+            source,
+            from: "struct CommandSessionsScreen: View {",
+            to: "\nextension NodeAppModel {")
+
+        // The retained-row notice is fed by the shared snapshot message, rendered
+        // alongside the rows (never replacing them), and retried in-screen through
+        // refreshID. Removing any leg of that wiring must fail this guard.
+        #expect(screen.contains("self.partialLoadText = roster.incompleteLoadMessage"))
+        #expect(screen.contains("if let partialLoadText {"))
+        #expect(screen.contains("self.refreshNonce += 1"))
+        #expect(screen.contains("Sessions.PartialLoad.Refresh"))
+        let refreshID = try Self.extract(screen, from: "private var refreshID: String {", to: "}")
+        #expect(refreshID.contains("self.refreshNonce"))
+
+        // A full failure replaces the list with the cached fallback, so the stale
+        // partial notice must be cleared on that path.
+        #expect(screen.contains("self.partialLoadText = nil"))
+    }
+
     @Test @MainActor func `credential fields stay scoped to exact gateway owners`() throws {
         let instanceID = "credential-fields-\(UUID().uuidString)"
         defer { GatewaySettingsStore.deleteAllGatewayCredentials(instanceId: instanceID) }
