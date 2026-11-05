@@ -12,14 +12,29 @@ The three hook layers around a Codex turn and the events each one owns. Part of 
 ## Hook boundaries
 
 For ordinary persistent conversations, a `before_prompt_build` result containing
-`systemPrompt` replaces the complete OpenClaw generic developer policy. An explicit
-empty string withdraws that policy. Unchanged, configuration-proven warm threads
-stay warm, with the retained subscription and host authority rechecked after plugin
+`systemPrompt` replaces the complete OpenClaw generic developer policy in native
+configuration. An explicit empty string clears that configured policy. Unchanged,
+configuration-proven warm threads stay warm, with the retained subscription and host authority rechecked after plugin
 policy awaits. A closed or archived thread cannot be reused merely because its
 connection is still open. Cold resumes and changed-policy resumes preserve the native thread and
 history, verify that Codex unloaded the previous configuration, then append a
-complete superseding policy message before admitting the turn. Historical policy
-text can remain in the transcript; the later policy explicitly supersedes it.
+complete superseding policy message before admitting the turn. Earlier delimited
+policy blocks can remain in the transcript; the later block explicitly supersedes
+them.
+
+The complete native-thread carrier is delimited by `<openclaw_thread_policy>` on
+initial creation and refresh. The replacement notice targets only earlier blocks
+with the same delimiters. Unlabelled historical text is outside its scope, as are
+the enclosing native developer message and all preceding context outside those
+blocks. Separately supplied parent-request persona, skills, memory and conversation
+instructions, independent native/project
+instructions, and user requests retain their authority. On connections without
+the inference relay, eligible workspace and refreshable instructions remain part
+of this native carrier and follow its existing replacement/removal semantics.
+
+Unchanged warm reuse adds no policy message. Explicit cold resumes still reassert
+the policy even when its text has not changed: the configuration fingerprint does
+not attest which policy remains in reconstructed model-visible history.
 
 Ordinary conversations use the same unsubscribe-and-resume flow over local stdio,
 WebSocket, Unix-socket, and stdio-proxy connections. The native conversation ID

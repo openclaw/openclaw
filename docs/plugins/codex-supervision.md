@@ -444,11 +444,15 @@ source, or fork an original imported message while that source remains
 available, then create new OpenClaw turns. OpenClaw does not backfill old rows.
 
 OpenClaw message forks use the shipping Codex App Server's developer-message
-API. OpenClaw keeps the complete current generic instructions in native thread
-configuration and appends one developer message that replaces earlier
-OpenClaw-supplied generic policy, including removed sections or an explicit
-empty policy. Independent native managed, guardian, security, collaboration,
-and project instructions retain their authority. This is textual supersession.
+API. OpenClaw keeps its complete current policy in native thread configuration,
+delimited by `<openclaw_thread_policy>`, and appends one developer message that
+replaces only earlier blocks with the same delimiters. Omitted rules are withdrawn
+only from those earlier blocks, and an empty block withdraws their policy. Text
+outside those blocks is not replaced. Separately supplied parent-request
+instructions and independent native managed, guardian, security,
+collaboration and project instructions retain their authority. The notice does
+not supersede the whole enclosing developer message or cancel user requests.
+This is textual supersession.
 It does not delete earlier history or change native permission enforcement.
 
 The refresh is session configuration recorded before the next native user turn.

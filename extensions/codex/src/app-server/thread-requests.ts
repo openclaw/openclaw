@@ -12,7 +12,7 @@ import {
   readCodexEffectiveConfig,
 } from "./config-layer-policy.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
-import { joinPresentSections } from "./developer-instruction-sections.js";
+import { renderCodexThreadPolicy } from "./developer-instruction-sections.js";
 import {
   isMessageOnlyCodexSourceReply,
   isSystemAgentOnlyCodexDynamicToolAllowlist,
@@ -174,7 +174,7 @@ export function buildCodexThreadConfiguration(
     // Catalog-owned collaboration messages replace caller collaboration instructions
     // (codex-rs/core/src/context/world_state/collaboration_mode.rs), so refreshable
     // workspace instructions ride the thread developer carrier after the immutable generic policy.
-    developerInstructions: joinPresentSections(
+    developerInstructions: renderCodexThreadPolicy(
       options.developerInstructions ??
         buildDeveloperInstructions(params, {
           dynamicTools: options.dynamicTools,

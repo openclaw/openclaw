@@ -694,7 +694,10 @@ function renderModelBoundPromptLayers(params: {
     typeof params.codexSnapshot.threadStartParams.config.instructions === "string"
       ? params.codexSnapshot.threadStartParams.config.instructions
       : "";
-  const openClawDeveloperInstructions = params.codexSnapshot.developerInstructions;
+  const openClawDeveloperInstructions =
+    typeof params.codexSnapshot.threadStartParams.developerInstructions === "string"
+      ? params.codexSnapshot.threadStartParams.developerInstructions
+      : "";
   const parentLocalInstructions = params.codexSnapshot.parentLocalInstructions ?? "";
   const codexCollaborationModeInstructions =
     typeof params.codexSnapshot.turnStartParams.collaborationMode?.settings
