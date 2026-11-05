@@ -360,11 +360,17 @@ suite.define(() => {
   it("paints the cached app within 1000 ms of the warm pane without any board skeleton", async () => {
     const page = await newPage({ viewport: { width: 1440, height: 1000 } });
     const gateway = await installApp(page, appLease("first-live-view"), {
+      awaitInitialRoster: false,
+      authMethod: "trusted-proxy",
+      authMode: "trusted-proxy",
+      presenceUsers: [{ id: "fixture-operator", name: "Fixture operator", self: true }],
       heldMethods: ["board.widget.appView"],
-      app: appViewPayload(`<script>
+      app: appViewPayload(`<button id="access">Refresh access</button><output id="access-status"></output><script>
         const send = message => parent.postMessage({jsonrpc:"2.0", ...message}, "*");
+        document.getElementById("access").onclick = () => send({id:2,method:"ui/request-display-mode",params:{mode:"inline"}});
         addEventListener("message", ({source, data}) => {
           if (source !== parent) return;
+          if (data.id === 2) document.getElementById("access-status").textContent = data.result ? "Live access ready" : data.error.message;
           if (data.id === 1 && data.result) send({method:"ui/notifications/initialized"});
           if (data.method === "ui/notifications/tool-result") {
             document.querySelector("output").textContent = data.params.content[0].text;
@@ -411,11 +417,15 @@ suite.define(() => {
     expect(elapsed.skeletonFrames).toBe(0);
     expect(elapsed.elapsed).toBeLessThan(1000);
     await readBoardIdentity(page, true);
+    await appFrame(page).getByRole("button", { name: "Refresh access" }).click();
+    await appFrame(page).getByText("Reconnect and try again", { exact: false }).waitFor();
     await gateway.setOnline(true);
     await waitForControlUiGatewayReady(page);
     await gateway.waitForRequest("board.widget.appView");
     await gateway.resolveDeferred("board.widget.appView", appLease("fresh-live-view"));
     await gateway.waitForRequest("mcp.app.view");
+    await appFrame(page).getByRole("button", { name: "Refresh access" }).click();
+    await appFrame(page).getByText("Live access ready", { exact: true }).waitFor();
     await expect
       .poll(() => readBoardIdentity(page))
       .toEqual({ connected: true, hidden: false, inert: false, same: true });

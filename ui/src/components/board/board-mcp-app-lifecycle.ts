@@ -26,6 +26,7 @@ type AppViewCallbacks = {
 export function createBoardMcpAppLifecycle(host: {
   active: () => boolean;
   connected: () => boolean;
+  requestable?: () => boolean;
   sessionKey: () => string;
   widget: () => BoardWidget | undefined;
 }) {
@@ -135,7 +136,7 @@ export function createBoardMcpAppLifecycle(host: {
     requestCallbacks: AppViewCallbacks,
     mode: AppViewMode,
   ): Promise<void> {
-    if (!host.active() || loading || !visibility.nearVisible) {
+    if (!host.active() || loading || !visibility.nearVisible || host.requestable?.() === false) {
       return;
     }
     const requestKey = appViewKey(host.sessionKey(), widget);

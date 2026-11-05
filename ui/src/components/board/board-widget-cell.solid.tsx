@@ -155,6 +155,7 @@ function BoardWidgetCellContent(
       const appView = createBoardMcpAppLifecycle({
         active,
         connected: () => connected,
+        requestable: () => !context || context.gateway.snapshot.phase === "connected",
         sessionKey: () => props.sessionKey ?? "",
         widget: () => props.widget,
       });
