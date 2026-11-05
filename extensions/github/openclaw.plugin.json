@@ -20,5 +20,9 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
-  }
+  },
+  "recommendedPrompts": [
+    "Summarize a public GitHub issue, pull request, commit, or completed Actions job without making changes.",
+    "Find relevant open issues or pull requests in a public GitHub repository."
+  ]
 }

@@ -268,6 +268,8 @@ const runSetup = (command, workspaceDir, homeDir) => {
   if (fresh) {
     fs.mkdirSync(path.join(directory, "home"), { mode: 0o700 });
     fs.cpSync(seed, path.join(directory, "workspace"), { recursive: true, errorOnExist: true, force: false, verbatimSymlinks: true });
+    // The copy has new inodes but the seed's index. A stale index makes the next forced checkout rewrite every file.
+    git(path.join(directory, "workspace"), ["update-index", "-q", "--refresh"]);
   }
   const workspaceDir = ownedDirectory(directory, "workspace");
   const homeDir = ownedDirectory(directory, "home");
@@ -283,6 +285,8 @@ const runSetup = (command, workspaceDir, homeDir) => {
     // onCreate is not repeated for a content refresh; retain its generated artifacts.
     if (recipe.source !== "devcontainer") removeSetupOutputs(workspaceDir, previous);
     git(workspaceDir, ["fetch", "--depth=1", "--no-tags", "--no-write-fetch-head", "--update-shallow", seed, input.baseCommit]);
+    // Images captured with a stale index must not rewrite unchanged files on this forced checkout.
+    git(workspaceDir, ["update-index", "-q", "--refresh"]);
     git(workspaceDir, ["checkout", "--detach", "--force", input.baseCommit]);
   } else if (!fresh && previous.sourceManifestRef !== sourceManifestRef) {
     throw new Error("Prepared project pristine baseline changed");
@@ -321,6 +325,9 @@ const runSetup = (command, workspaceDir, homeDir) => {
   if (fresh || changed) {
     const completed = new Map([[sourceManifestRef, sourceBytes], [preparedManifestRef, preparedBytes]]);
     for (const [ref, bytes] of completed) fs.writeFileSync(path.join(manifestRoot, ref.slice(7) + ".json"), bytes, { flag: "wx", mode: 0o600 });
+    // Carry the prepared tree's stat hashes into the captured home; seed inodes differ.
+    try { fs.copyFileSync(path.join(workerRoot, "manifests", preparedManifestRef.slice(7) + ".memo"), path.join(manifestRoot, preparedManifestRef.slice(7) + ".memo")); }
+    catch { /* Optional cache: registration can always hash the tree. */ }
     const completionDirectory = ownedDirectory(completionRoot, sourceManifestRef.slice(7), true);
     // Publish this content-addressed pair last. Root B/P artifacts alone cannot
     // turn an interrupted setup into a reusable completed environment.
