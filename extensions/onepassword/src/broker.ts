@@ -176,6 +176,8 @@ export class OnePasswordBroker {
   private readonly stores: BrokerStores;
   private readonly cache = new Map<string, CacheEntry>();
   private lastConfigFingerprint: string | null | undefined;
+  // Secret cache expiry runs on elapsed time so a wall-clock step cannot extend a TTL.
+  private readonly secretNow = (): number => performance.now();
 
   constructor(options: BrokerOptions) {
     this.resolveConfig = options.resolveConfig;
@@ -532,7 +534,7 @@ export class OnePasswordBroker {
     const targetFingerprint = fingerprintOnePasswordTarget(item);
     if (
       cached &&
-      cached.expiresAtMs > Date.now() &&
+      cached.expiresAtMs > this.secretNow() &&
       cached.targetFingerprint === targetFingerprint
     ) {
       await this.audit(authorization, "cache-hit");
@@ -552,7 +554,7 @@ export class OnePasswordBroker {
         this.cache.set(input.slug, {
           ...secret,
           targetFingerprint,
-          expiresAtMs: Date.now() + config.cacheTtlSeconds * 1000,
+          expiresAtMs: this.secretNow() + config.cacheTtlSeconds * 1000,
         });
       }
       return { slug: input.slug, ...secret };

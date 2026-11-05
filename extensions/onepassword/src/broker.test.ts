@@ -43,6 +43,9 @@ function config() {
 function setup(configured: OnePasswordConfig = config()) {
   let now = 1_000;
   vi.spyOn(Date, "now").mockImplementation(() => now);
+  let elapsed = 1_000;
+  // Secret cache expiry runs on elapsed time; the fake clock drives both readings.
+  vi.spyOn(performance, "now").mockImplementation(() => elapsed);
   let currentConfig: OnePasswordConfig | undefined = configured;
   const audit = new MemoryKeyedStore<AuditRow>(() => now);
   const grants = new MemoryKeyedStore<StandingGrant>(() => now);
@@ -71,6 +74,10 @@ function setup(configured: OnePasswordConfig = config()) {
       currentConfig = next;
     },
     advance: (ms: number) => {
+      now += ms;
+      elapsed += ms;
+    },
+    stepWallClock: (ms: number) => {
       now += ms;
     },
   };
@@ -276,6 +283,21 @@ it("rechecks live policy after awaiting pending consumption", async () => {
   release.resolve();
   await expectToolError(execution, "POLICY_CHANGED");
   expect(getItem).not.toHaveBeenCalled();
+});
+
+it("expires cached secrets on elapsed time when the wall clock steps backwards", async () => {
+  const { broker, getItem, advance, stepWallClock } = setup();
+  await expect((await prepareGet(broker, "clock-1", "automatic")).get()).resolves.toMatchObject({
+    value: "secret",
+  });
+
+  // A backwards wall-clock step must not keep a cached secret past its TTL.
+  stepWallClock(-60 * 60 * 1000);
+  advance(300_001);
+  await expect((await prepareGet(broker, "clock-2", "automatic")).get()).resolves.toMatchObject({
+    value: "secret",
+  });
+  expect(getItem).toHaveBeenCalledTimes(2);
 });
 
 it("correlates reused call ids across sessions despite asymmetric execution context", async () => {
