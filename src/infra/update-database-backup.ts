@@ -48,14 +48,11 @@ import {
   readUpdateStateDatabaseSizesInProcess,
 } from "./update-candidate-state.sizes.js";
 import { checkUpdateDatabaseBackupSpace } from "./update-database-backup-space.js";
+import type { SqliteDatabaseGenerationReceipt } from "./update-database-generations.js";
 import {
-  readUnchangedUpdateDatabaseGeneration,
-  type SqliteDatabaseGenerationReceipt,
-} from "./update-database-generations.js";
-import {
-  readUpdatePhysicalDatabaseGenerations,
   readUpdatePhysicalDatabaseObservation,
   readUpdatePostgresDatabaseGenerations,
+  rereadUpdatePhysicalDatabaseGeneration,
 } from "./update-physical-database-generations.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 
@@ -303,27 +300,24 @@ export async function createUpdateDatabaseBackupInProcess(
     file: string,
     observation?: ReturnType<typeof readUpdatePhysicalDatabaseObservation>,
     receipt?: SqliteDatabaseGenerationReceipt,
-  ) => {
+  ): Promise<{ generation?: string; emptyReaderAlternate?: string }> => {
     try {
       if (observation) {
         if (!observation.generation.ok) {
           throw observation.generation.error;
         }
-        return observation.engine?.engine === "postgres"
-          ? (await readUpdatePostgresDatabaseGenerations([file], input.pluginOwners))[file]
-          : (observation.generation.value ?? undefined);
+        const generation =
+          observation.engine?.engine === "postgres"
+            ? (await readUpdatePostgresDatabaseGenerations([file], input.pluginOwners))[file]
+            : (observation.generation.value ?? undefined);
+        return { generation, emptyReaderAlternate: observation.emptyReaderAlternate };
       }
-      const unchanged = receipt && readUnchangedUpdateDatabaseGeneration(file, receipt);
-      return (
-        unchanged ??
-        (await readUpdatePhysicalDatabaseGenerations([file], input.pluginOwners))[file] ??
-        undefined
-      );
+      return await rereadUpdatePhysicalDatabaseGeneration(file, receipt, input.pluginOwners);
     } catch (error) {
       warnings.push(
         `Database write generation unavailable for ${file}: ${formatErrorMessageWithCode(error)}`,
       );
-      return undefined;
+      return {};
     }
   };
   const { readBackupEngine, readBackupEngineImage } =
@@ -468,8 +462,14 @@ export async function createUpdateDatabaseBackupInProcess(
               undefined,
               observations.get(sourcePath)?.sqliteReceipt,
             );
-            if (after !== undefined && before === after) {
-              sourceGenerations[sourcePath] = after;
+            // Like Doctor admission, a non-writing open or close between the reads is no write.
+            const expected = before?.generation;
+            if (
+              expected !== undefined &&
+              after.generation !== undefined &&
+              (expected === after.generation || expected === after.emptyReaderAlternate)
+            ) {
+              sourceGenerations[sourcePath] = after.generation;
             } else {
               warnings.push(
                 `Database changed during capture; its snapshot requires manual recovery: ${sourcePath}`,

@@ -21,8 +21,8 @@ function ownedTreeSpawn(cwd: string, script: string, initiateSpawn?: SpawnInput[
     cwd,
     stdinMode: "pipe-closed",
     timeoutMs: 10_000,
-    // Host exec sets a memory limit, which routes through the owned-tree service-child relay.
-    memoryLimitBytes: 2 * 1024 * 1024 * 1024,
+    executionIntent: "agent-tool",
+    scopeKey: "prelaunch-initiation",
     ...(initiateSpawn ? { initiateSpawn } : {}),
   } satisfies SpawnInput;
 }
@@ -33,6 +33,7 @@ it.skipIf(process.platform === "win32")(
     const cwd = tempDirs.make("openclaw-prelaunch-initiation-");
     const ran = path.join(cwd, "ran");
     const supervisor = createProcessSupervisor();
+    supervisor.acquireScopeCleanup("prelaunch-initiation", { processTree: "required-all" });
     let launches = 0;
 
     const refused = supervisor.spawn(
@@ -68,6 +69,7 @@ it.skipIf(process.platform === "win32")(
   async () => {
     const cwd = tempDirs.make("openclaw-postlaunch-initiation-");
     const supervisor = createProcessSupervisor();
+    supervisor.acquireScopeCleanup("prelaunch-initiation", { processTree: "required-all" });
 
     await expect(
       supervisor.spawn(
