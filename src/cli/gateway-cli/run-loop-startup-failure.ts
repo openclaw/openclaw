@@ -101,6 +101,8 @@ export async function settleGatewayStartupFailure({
   // Keep TCC recovery after clean restart failures (#35862), but never reuse a
   // generation whose startup cleanup failed. The outer CLI exits nonzero.
   if (startupFailureEndsLoop() || err instanceof GatewayStartupCleanupError) {
+    // A signal during close can turn deferred prerequisite recovery into terminal cleanup.
+    completeStartupFailure(maintenanceRequired?.code);
     await cleanup.waitForCleanup();
     if (!cleanup.failed && !cleanup.drained && !cleanup.retained) {
       try {
