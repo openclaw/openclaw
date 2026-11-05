@@ -190,8 +190,11 @@ in SQLite before loading them and selects a recent context with its latest
 compaction or reset boundary. It preserves
 tool-result ownership and rejects a limit that cannot retain the newest complete
 frame or required boundary. Stored transcripts stay unchanged. Omitting `limits`
-keeps the full selected context. Async reads retain admission, anchor, and
-cancellation checks.
+keeps the full selected context only when it fits within 8 MiB and 20,000 events;
+larger reads throw a `RangeError` before payload hydration. To read a larger view,
+pass explicit `maxBytes` and `maxEvents` budgets. Explicit limits select a bounded
+recent context, so they do not guarantee a full-history read. Async reads retain
+admission, anchor, and cancellation checks.
 
 For a temporary model-only view, callers may explicitly add
 `toolResultOverflow: "omit"` to `limits`. Under byte pressure, the reader replaces
