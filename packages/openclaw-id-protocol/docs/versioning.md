@@ -62,9 +62,34 @@ able to read it while the claw supports both an old and a new protocol. Rules:
   replacing v1. Both views come from one authority state; each signed part in them is signed by
   its own signer (R for the binding, K_gw for snapshots). Discovery stores and serves them and
   cannot create or convert signed data.
-- Choosing a protocol version after bootstrap uses a Gateway-signed list of supported versions
-  and a minimum version. That negotiation is specified separately; until it exists, every party
-  speaks v1.
+- After bootstrap, a client chooses versions as described next.
+
+## Choosing a version
+
+The Gateway lists the versions it accepts for new input in its MembershipSnapshot:
+
+```json
+"protocols": { "statement": [1], "descriptor": [1] }
+```
+
+Each list is non-empty, ascending and contains only versions the Gateway implements
+(`SUPPORTED_*_VERSIONS`). A retired version is simply absent; there is no separate minimum.
+
+- **Where the list comes from.** A client takes `protocols` only from a snapshot that passed
+  `assessFreshness` (statements.md, "Pins and rollback"): signed by the verified binding's K_gw,
+  recent, and not older than a snapshot already seen. Discovery therefore cannot drop a newer
+  version from the list (the signature breaks) or replay an older list (freshness refuses it).
+  A list from anywhere else, including an unsigned Discovery field, is never used.
+- **Choosing.** `selectVersion(advertised, local)` returns the highest version both sides
+  implement. With nothing in common it returns `update_required` (the Gateway only accepts newer
+  versions than this client implements) or `gateway_outdated` (only older ones).
+- **Without fresh evidence** (report policy, or before the first snapshot) a client uses the oldest
+  version it implements, which every Gateway inside the support window accepts. If the Gateway
+  has retired it, the Gateway refuses with `unsupported_version` and the client asks for an update.
+- **The Gateway enforces its own list.** It parses input with its own version table, so a client
+  that ignores the list gains nothing: an unlisted version is refused with `unsupported_version`.
+- **The tunnel is not listed.** Its version is the QUIC ALPN (`openclaw/tunnel/<n>`), chosen
+  inside the TLS handshake that K_srv authenticates, so the relay cannot change it.
 
 ## Support window
 

@@ -264,6 +264,7 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
       ].toSorted((a, b) => a.device_pub.localeCompare(b.device_pub)),
       owner_peer_keys: [iroh("device-1"), iroh("device-2")],
       members: [{ account_id: "acct_bob", role: "operator", peer_keys: [iroh("invitee")] }],
+      protocols: { statement: [1], descriptor: [1] },
       issued_at: VECTOR_ISSUED_AT,
     },
     signers.gateway,
