@@ -48,7 +48,7 @@ import {
   type PathSegment,
   unsetAtPath,
 } from "./config-cli-path.js";
-import { ConfigMutationAgentRoster } from "./config-cli-roster.js";
+import { ConfigMutationAgentRoster, resolveStoredAgentsEntryKey } from "./config-cli-roster.js";
 import {
   assertStrictConfigForMutation,
   loadValidConfigForWrite,
@@ -257,6 +257,9 @@ export async function runConfigOperations(params: {
     ) {
       throw new Error("conditional config set requires a direct, non-redirected config path");
     }
+    // Address a mixed-case stored agents.entries key by its normalized id; the
+    // expectation check above still sees the exact authored path.
+    operation.setPath = resolveStoredAgentsEntryKey(next, operation.setPath);
     if (operation.mutation === "delete") {
       const writePath = recordOperation(operation);
       // Capture identity before the splice changes legacy roster positions.

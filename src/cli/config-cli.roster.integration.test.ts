@@ -50,6 +50,40 @@ describe("config cli roster integration", () => {
     });
   });
 
+  it("addresses a mixed-case stored agents.entries key by its normalized id", async () => {
+    const raw = JSON.stringify({
+      agents: { ownership: "explicit", entries: { main: {}, Work: { name: "Work Agent" } } },
+    });
+    await withConfig(raw, async ({ configPath }) => {
+      await set("agents.entries.work.name", '"Renamed"', "--strict-json");
+      const saved = load(configPath);
+      expect(saved.agents.entries.Work).toEqual({ name: "Renamed" });
+      expect(Object.keys(saved.agents.entries)).toEqual(["main", "Work"]);
+
+      logs.length = 0;
+      await invoke(["config", "get", "agents.entries.work.name"]);
+      expect(logs.join("\n")).toContain("Renamed");
+
+      await invoke(["config", "unset", "agents.entries.work.name"]);
+      const unsetSaved = load(configPath);
+      expect(unsetSaved.agents.entries.Work).toEqual({});
+      expect(Object.keys(unsetSaved.agents.entries)).toEqual(["main", "Work"]);
+      expect(errors).toEqual([]);
+    });
+  });
+
+  it("never matches agents.entries ids that differ beyond casing", async () => {
+    const raw = JSON.stringify({
+      agents: { ownership: "explicit", entries: { main: { name: "Main" } } },
+    });
+    await withConfig(raw, async ({ configPath }) => {
+      await reject(invoke(["config", "unset", 'agents.entries["!!!"].name']));
+      expect(read(configPath)).toBe(raw);
+      await reject(invoke(["config", "unset", "agents.entries.work!.name"]));
+      expect(read(configPath)).toBe(raw);
+    });
+  });
+
   it("validates a surviving SecretRef after its agent is renamed within the batch", async () => {
     const raw = JSON.stringify({
       agents: { entries: { main: {} } },
