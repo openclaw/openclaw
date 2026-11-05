@@ -1,0 +1,3 @@
+# The regression must create a stored-account agent turn through the service handle and read the
+# recorded binding back; no existing plugin-cron case configures a stored profile.
+117

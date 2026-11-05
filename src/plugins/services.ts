@@ -25,6 +25,8 @@ import type { PluginRegistry, PluginServiceRegistration } from "./registry-types
 import { getGatewayContextResolver } from "./runtime/gateway-request-scope.js";
 import { runOutsidePluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
 import { pluginRuntimeLoaderLogger } from "./runtime/load-context.js";
+import { captureCronInferenceBinding } from "../cron/inference-binding.runtime.js";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { createPluginServiceAutomationCapabilities } from "./service-automation-capabilities.js";
 import { createPluginServiceControlUiIngress } from "./service-control-ui-ingress.js";
 import { createPluginServiceDiagnostics } from "./service-diagnostics.js";
@@ -530,6 +532,19 @@ async function startPreparedPluginServices({
       lease,
       getCronService,
       resolveGatewayContext,
+      // Service-created agent turns run later without this call's scope; record the account
+      // they will use now, mirroring Gateway cron.add for its own callers.
+      captureCronInference: async (job) => {
+        if (job.payload.kind !== "agentTurn" || job.sessionTarget === "main") {
+          return undefined;
+        }
+        const inferenceBinding = await captureCronInferenceBinding({
+          cfg: config,
+          agentId: job.agentId ?? resolveDefaultAgentId(config),
+          model: job.payload.model,
+        });
+        return inferenceBinding ? { inferenceBinding } : undefined;
+      },
       isStopping: () => ownedService.owner.closed || ownedService.stopRequested,
     });
     const nodeInvoker = record

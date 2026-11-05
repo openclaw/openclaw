@@ -10,12 +10,14 @@ export function createPluginServiceAutomationCapabilities(params: {
   isStopping: () => boolean;
   resolveGatewayContext?: GatewayContextResolver;
   getCronService?: () => PluginServiceCronHost | null | undefined;
+  captureCronInference?: Parameters<typeof createPluginServiceCronGetter>[0]["captureInference"];
 }) {
   const common = {
     pluginId: params.pluginId,
     lease: params.lease,
     isStopping: params.isStopping,
     resolveGatewayContext: params.resolveGatewayContext,
+    captureInference: params.captureCronInference,
   };
   const getCron = params.getCronService
     ? createPluginServiceCronGetter({ ...common, getCron: params.getCronService })

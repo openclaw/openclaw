@@ -1,3 +1,4 @@
+import type { CronJobCreate } from "../cron/types.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../cron/normalize.js";
 import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
 import type { GatewayCronServiceContract } from "../gateway/server-cron-contract.js";
@@ -9,6 +10,8 @@ import type { OpenClawPluginServiceContext } from "./plugin-registration.types.j
 type PluginServiceCron = NonNullable<
   ReturnType<NonNullable<OpenClawPluginServiceContext["getCron"]>>
 >;
+
+import type { CronInferenceBinding } from "../cron/inference-binding.js";
 
 export type PluginServiceCronHost = Pick<
   GatewayCronServiceContract,
@@ -26,6 +29,10 @@ export function createPluginServiceCronGetter(params: {
   isStopping: () => boolean;
   pluginId: string;
   resolveGatewayContext?: GatewayContextResolver;
+  /** Captures creation-time inference ownership, as Gateway cron.add does for its callers. */
+  captureInference?: (
+    job: CronJobCreate,
+  ) => Promise<{ inferenceBinding?: CronInferenceBinding } | undefined>;
 }): () => PluginServiceCron | undefined {
   const runScheduled = createScheduledGatewayRunner(params.resolveGatewayContext);
   let current: { cron: PluginServiceCronHost; service: PluginServiceCron } | undefined;
@@ -108,7 +115,11 @@ export function createPluginServiceCronGetter(params: {
         if (!normalized) {
           throw new Error("Plugin service cron create input is invalid");
         }
-        return await cron.add(normalized, { commitGuard });
+        // Service-created agent turns have no Gateway caller, so capture the account
+        // they will run as instead of leaving stored-profile auth without an owner.
+        const binding = await params.captureInference?.(normalized);
+        commitGuard();
+        return await cron.add(normalized, { commitGuard, ...binding });
       },
       update: async (id, patch) => {
         commitGuard();
