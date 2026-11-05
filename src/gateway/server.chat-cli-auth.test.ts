@@ -372,7 +372,9 @@ async function executeHookAuthCase(fixture: CliAuthFixture, signal: AbortSignal)
       });
     const terminalEvents: unknown[] = [];
     const stopEvents = onAgentEvent((event) => {
-      if (event.stream === "lifecycle") terminalEvents.push(event.data);
+      if (event.stream === "lifecycle") {
+        terminalEvents.push(event.data);
+      }
     });
     let revoked: Awaited<ReturnType<typeof post>>;
     try {

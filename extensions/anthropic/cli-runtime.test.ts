@@ -590,7 +590,9 @@ describe("Claude native stdio boundary", () => {
       const approvalStarted = createDeferred<void>();
       const approval = createDeferred<CliBackendToolPermissionResult>();
       const assertActive = () => {
-        if (!active) throw reason;
+        if (!active) {
+          throw reason;
+        }
       };
       const context = await createContext(`revoked-${stage}`, {
         prompt: "Remember orange.",
