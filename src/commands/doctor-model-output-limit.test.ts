@@ -55,27 +55,31 @@ it.each([
   },
 );
 
-it("points a catalog-derived limit at the model row, where a raise takes effect", () => {
-  const rootDir = path.resolve("extensions/openai");
-  const loaded = loadPluginManifest(rootDir);
-  if (!loaded.ok) {
-    throw new Error(loaded.error);
-  }
-  registry.plugins = [createPluginManifestRecordFixture({ ...loaded.manifest, rootDir })];
-  const cfg = {
-    agents: { defaults: { model: { primary: "openai/gpt-4.1" } } },
-    models: {
-      providers: {
-        openai: { maxTokens: 65_536, models: [{ id: "gpt-4.1", name: "gpt-4.1" }] },
+// 32768 is gpt-4.1's catalog limit: an equal provider value must not look provider-derived.
+it.each([65_536, 32_768])(
+  "points a catalog-derived limit at the model row with provider maxTokens %i",
+  (providerMaxTokens) => {
+    const rootDir = path.resolve("extensions/openai");
+    const loaded = loadPluginManifest(rootDir);
+    if (!loaded.ok) {
+      throw new Error(loaded.error);
+    }
+    registry.plugins = [createPluginManifestRecordFixture({ ...loaded.manifest, rootDir })];
+    const cfg = {
+      agents: { defaults: { model: { primary: "openai/gpt-4.1" } } },
+      models: {
+        providers: {
+          openai: { maxTokens: providerMaxTokens, models: [{ id: "gpt-4.1", name: "gpt-4.1" }] },
+        },
       },
-    },
-  } as unknown as OpenClawConfig;
-  expect(resolveAgentModelOutputLimit({ cfg, agentId: "main" })).toMatchObject({
-    maxTokens: 32_768,
-    path: "models.providers.openai.models[0].maxTokens",
-  });
-  registry.plugins = [];
-});
+    } as unknown as OpenClawConfig;
+    expect(resolveAgentModelOutputLimit({ cfg, agentId: "main" })).toMatchObject({
+      maxTokens: 32_768,
+      path: "models.providers.openai.models[0].maxTokens",
+    });
+    registry.plugins = [];
+  },
+);
 
 it("leaves catalog-only models alone", () => {
   const cfg = withLocal({}, "anthropic/claude-opus-5-5");

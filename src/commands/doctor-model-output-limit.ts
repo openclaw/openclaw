@@ -59,24 +59,40 @@ export function resolveAgentModelOutputLimit(
       budget = { maxTokens, path: `${path}.maxTokens` };
     }
   }
-  const materialized = applyModelDefaults(cfg, {
-    loadManifestRegistry: () =>
-      loadPluginManifestRegistryForPluginRegistry({
-        config: cfg,
-        workspaceDir: params.cwd,
-        env: params.env ?? process.env,
-      }),
-  });
-  const index =
-    materialized.models?.providers?.[providerKey]?.models?.findIndex(
-      (model) => model.id === ref.model,
-    ) ?? -1;
-  const row = materialized.models?.providers?.[providerKey]?.models?.[index];
-  // The provider fallback applies only when neither the row nor the catalog set a limit.
-  // Otherwise only a row-level maxTokens (which wins over the catalog) changes it.
-  const authoredRow = cfg.models?.providers?.[providerKey]?.models?.[index];
-  const providerFallback = cfg.models?.providers?.[providerKey]?.maxTokens ?? 8192;
-  const fromProvider = authoredRow?.maxTokens === undefined && row?.maxTokens === providerFallback;
+  let manifestRegistry: ReturnType<typeof loadPluginManifestRegistryForPluginRegistry> | undefined;
+  const loadManifestRegistry = () =>
+    (manifestRegistry ??= loadPluginManifestRegistryForPluginRegistry({
+      config: cfg,
+      workspaceDir: params.cwd,
+      env: params.env ?? process.env,
+    }));
+  const materializedRow = (config: OpenClawConfig, index: number) =>
+    applyModelDefaults(config, { loadManifestRegistry }).models?.providers?.[providerKey]?.models?.[
+      index
+    ];
+  const provider = cfg.models?.providers?.[providerKey];
+  const index = provider?.models?.findIndex((model) => model.id === ref.model) ?? -1;
+  const row = materializedRow(cfg, index);
+  // A row-level maxTokens wins over the catalog and the provider fallback. Without one,
+  // probe whether a higher provider maxTokens would raise the ceiling: only then is the
+  // provider setting the one to change (the catalog limit can equal it by coincidence).
+  let fromProvider = false;
+  if (provider && provider.models?.[index]?.maxTokens === undefined && row?.maxTokens) {
+    const probe = materializedRow(
+      {
+        ...cfg,
+        models: {
+          ...cfg.models,
+          providers: {
+            ...cfg.models?.providers,
+            [providerKey]: { ...provider, maxTokens: row.maxTokens * 2 },
+          },
+        },
+      },
+      index,
+    );
+    fromProvider = (probe?.maxTokens ?? 0) > row.maxTokens;
+  }
   const ceiling =
     typeof row?.maxTokens === "number"
       ? {
