@@ -165,15 +165,15 @@ export async function releaseCodexAppServerBindingSubscription(
   if (!clientLease) {
     return;
   }
+  let subscriptionReleased = false;
   try {
-    if (
-      await releaseCodexAppServerLiveThread(
-        clientLease.client,
-        binding.threadId,
-        options.assertCurrent,
-        options.withCurrent,
-      )
-    ) {
+    subscriptionReleased = await releaseCodexAppServerLiveThread(
+      clientLease.client,
+      binding.threadId,
+      options.assertCurrent,
+      options.withCurrent,
+    );
+    if (subscriptionReleased) {
       return;
     }
     options.assertCurrent?.();
@@ -199,11 +199,13 @@ export async function releaseCodexAppServerBindingSubscription(
         `Codex retired thread subscription could not be released: ${binding.threadId}`,
       );
     }
+    subscriptionReleased = true;
   } finally {
     // A same-client caller releases its outer lease only after this cleanup returns.
     await clientLease.release(
       binding.clientId !== options.retainedClientId &&
         !isCodexAppServerLiveThreadClaimed(clientLease.client, binding.threadId),
+      { subscriptionReleased },
     );
   }
 }

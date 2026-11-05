@@ -15,6 +15,7 @@ import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js"
 import { registerSharedClientAuthRefreshTests } from "./shared-client-auth-refresh.test-support.js";
 import { waitForCodexAppServerClientExit } from "./shared-client-lifecycle.js";
 import { registerSharedClientRecoveryCleanupTests } from "./shared-client-recovery-cleanup.test-support.js";
+import { registerSharedClientThreadHandoffTests } from "./shared-client-thread-handoff.test-support.js";
 import {
   captureCodexAppServerClientLifetime,
   captureSharedCodexAppServerCatalogLifetime,
@@ -44,6 +45,7 @@ export function registerSharedClientLifetimeTests(
 ) {
   registerSharedClientAuthRefreshTests();
   registerSharedClientRecoveryCleanupTests();
+  registerSharedClientThreadHandoffTests(sendInitializeResult);
 
   it("retires a health-observed client after real work drains without blocking the next startup", async () => {
     const old = createClientHarness();

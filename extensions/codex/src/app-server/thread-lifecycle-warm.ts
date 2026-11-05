@@ -154,11 +154,12 @@ export async function releaseCodexBoundLiveThread(
     return false;
   }
   const client = previous?.client ?? options.client;
+  let subscriptionReleased = false;
   try {
     if (isCodexAppServerLiveThreadClaimed(client, options.threadId)) {
       throw new Error(`Codex thread ${options.threadId} is claimed by active work; stop it first.`);
     }
-    return await releaseCodexRetainedLiveThread({
+    subscriptionReleased = await releaseCodexRetainedLiveThread({
       ...options,
       client,
       abandonClient: previous ? undefined : options.abandonClient,
@@ -172,9 +173,14 @@ export async function releaseCodexBoundLiveThread(
           }
         : undefined,
     });
+    return subscriptionReleased;
   } finally {
-    // Rejection must free the lane so the claimed run can still be stopped.
-    await previous?.release(!isCodexAppServerLiveThreadClaimed(client, options.threadId));
+    // A confirmed socket unsubscribe must free this thread's lane without
+    // waiting for sibling conversations to release the old shared connection.
+    // Unconfirmed releases and process-owned writers retain their exit fence.
+    await previous?.release(!isCodexAppServerLiveThreadClaimed(client, options.threadId), {
+      subscriptionReleased,
+    });
   }
 }
 
