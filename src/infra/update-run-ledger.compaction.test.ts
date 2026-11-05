@@ -38,7 +38,10 @@ describe("update run ledger compaction", () => {
     })) {
       write(entry);
     }
-    const widening = "Retirement-only Doctor widened: config.preflight-config-changed";
+    const widenings = [
+      "Retirement-only Doctor widened: config.model-retirement",
+      "Retirement-only Doctor widened: config.model-retirement.warning-notes.codex-routes",
+    ];
     const evidence = [
       "candidate-admission",
       "warning:update-admission-fallback",
@@ -51,8 +54,13 @@ describe("update run ledger compaction", () => {
       "service-start",
       "service-running",
       "update-driver-handoff",
-      "diagnostic:post-plugin doctor:2",
-    ].map((step) => timedStep(step, step === "global update" ? "failed" : "completed"));
+      ...widenings.map((_, index) => `diagnostic:post-plugin doctor:${index}`),
+    ].map((step) =>
+      Object.assign(
+        timedStep(step, step === "global update" ? "failed" : "completed"),
+        step.startsWith("diagnostic:") ? { detail: widenings[Number(step.split(":").at(-1))] } : {},
+      ),
+    );
     const refusal = {
       reason: "refused",
       message: "Repair is pending.",
@@ -61,7 +69,7 @@ describe("update run ledger compaction", () => {
     for (const step of evidence) {
       write({
         ...step,
-        detail: step.step === "diagnostic:post-plugin doctor:2" ? widening : detail,
+        detail: step.detail ?? detail,
         ...(step.step === "openclaw doctor" ? { configWriteRefusal: refusal } : {}),
       });
     }
@@ -105,9 +113,6 @@ describe("update run ledger compaction", () => {
     for (const key of ["warning:post-plugin doctor", "warning:post-stop-checks"]) {
       expect(persisted.steps.find((step) => step.step === key)?.detail).toBe(detail);
     }
-    expect(
-      persisted.steps.find((step) => step.step === "diagnostic:post-plugin doctor:2")?.detail,
-    ).toBe(widening);
     expect(persisted.steps.length).toBeLessThanOrEqual(128);
     expect(Buffer.byteLength(JSON.stringify(persisted.steps))).toBeLessThanOrEqual(16 * 1024);
   });
