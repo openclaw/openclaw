@@ -83,6 +83,8 @@ describe("normalizeMessageActionInput", () => {
       [],
     ],
     [makeInput("send", { target: "channel:C1", messageThreadId: 99 }), { threadId: "99" }, []],
+    [makeInput("send", { target: "channel:C1", message_thread_id: 99 }), { threadId: "99" }, []],
+    [makeInput("send", { target: "channel:C1", thread_id: "99" }), { threadId: "99" }, []],
     [
       makeInput("send", { target: "channel:C1", threadId: "99", messageThreadId: 99 }),
       { threadId: "99" },
@@ -147,12 +149,15 @@ describe("normalizeMessageActionInput", () => {
     ).toThrow(/conflicting target and delivery alias/);
   });
 
-  it("rejects conflicting thread id aliases", () => {
+  it.each<Record<string, unknown>>([
+    { threadId: "42", messageThreadId: "99" },
+    { threadId: "42", message_thread_id: "99" },
+    { thread_id: "42", messageThreadId: "99" },
+    { threadId: null, message_thread_id: "99" },
+  ])("rejects conflicting thread id spellings %j", (threadArgs) => {
     expect(() =>
-      normalizeMessageActionInput(
-        makeInput("send", { target: "channel:C1", threadId: "42", messageThreadId: "99" }),
-      ),
-    ).toThrow(/conflicting threadId and messageThreadId/);
+      normalizeMessageActionInput(makeInput("send", { target: "channel:C1", ...threadArgs })),
+    ).toThrow(/conflicting thread id values/);
   });
 
   it("allows a trusted direct operator to use an opaque resource without a conversation", () => {
