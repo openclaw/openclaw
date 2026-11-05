@@ -5648,6 +5648,9 @@ jobs:
             ~/.cargo/registry
             ${{ runner.temp }}/openclaw-watch-rtc-libraries
           key: watch-rtc-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-${{ hashFiles('apps/shared/OpenClawWatchRTC/Cargo.lock', 'apps/shared/OpenClawWatchRTC/Cargo.toml', 'apps/shared/OpenClawWatchRTC/rust-toolchain.toml', 'apps/shared/OpenClawWatchRTC/build.sh', 'apps/shared/OpenClawWatchRTC/src/**', 'apps/ios/project.yml') }}
+          # The build phase verifies each slice fingerprint and checksum before reuse.
+          restore-keys: |
+            watch-rtc-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-
 
       - name: Restore iOS test build products
         id: ios-build-cache

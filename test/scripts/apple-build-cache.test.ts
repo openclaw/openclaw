@@ -295,6 +295,18 @@ it("reuses trusted simulator libraries and shared package downloads without publ
     (step: WorkflowStep) => step.id === "watch-rtc-cache",
   );
   expect(restore?.with).toEqual(producer.with);
+  expect(producer.with["restore-keys"]).toBe(
+    "watch-rtc-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-\n",
+  );
+  for (const [file, job] of [
+    ["macos-periphery.yml", "ios-index"],
+    ["ios-store-release.yml", "screenshots"],
+  ]) {
+    const consumer = readWorkflow(`.github/workflows/${file}`).jobs[job].steps.find(
+      (step: WorkflowStep) => step.name === "Restore Watch RTC build inputs",
+    );
+    expect(consumer.with).toEqual(producer.with);
+  }
   const packages = capture.steps.find((step: WorkflowStep) => step.id === "ios-packages-cache");
   const nativePackages = jobs["ios-build"].steps.find(
     (step: WorkflowStep) => step.id === "ios-packages-cache",
