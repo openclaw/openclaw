@@ -12,13 +12,13 @@ title: "Secrets CLI"
 
 Manage SecretRefs and keep the active runtime snapshot healthy.
 
-| Command     | Role                                                                                                                                                                                                                                                               |
-| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------                                                                       |
-| `reload`    | Gateway RPC (`secrets.reload`): re-resolves refs and atomically publishes the owner-aware runtime snapshot (no config writes); eligible owner failures may publish as cold or stale warnings                                                                       |
-| `store`     | Manages team-scoped secret and environment values in the local shared state SQLite database                                                                                                                                                                        |
-| `audit`     | Read-only scan of config/auth/generated-model stores and legacy residues for plaintext, unresolved refs, and precedence drift (exec refs skipped unless `--allow-exec`; a run that skips exec checks reports `UNMEASURED` in the header and is not a healthy gate) |
-| `configure` | Interactive planner for provider setup, target mapping, and preflight (requires a TTY)                                                                                                                                                                             |
-| `apply`     | Executes a saved plan (`--dry-run` validates only and skips exec checks by default; write mode rejects exec-containing plans unless `--allow-exec`), then scrubs targeted plaintext residues                                                                       |
+| Command     | Role                                                                                                                                                                                         |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reload`    | Gateway RPC (`secrets.reload`): re-resolves refs and atomically publishes the owner-aware runtime snapshot (no config writes); eligible owner failures may publish as cold or stale warnings |
+| `store`     | Manages team-scoped secret and environment values in the local shared state SQLite database                                                                                                  |
+| `audit`     | Read-only scan of config/auth/generated-model stores and legacy residues for plaintext, unresolved refs, and precedence drift (exec refs skipped unless `--allow-exec`)                      |
+| `configure` | Interactive planner for provider setup, target mapping, and preflight (requires a TTY)                                                                                                       |
+| `apply`     | Executes a saved plan (`--dry-run` validates only and skips exec checks by default; write mode rejects exec-containing plans unless `--allow-exec`), then scrubs targeted plaintext residues |
 
 Recommended operator loop:
 
