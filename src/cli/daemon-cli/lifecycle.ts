@@ -383,21 +383,16 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
         `Gateway HTTP readiness: /healthz=${readiness.healthz ?? "unreachable"}; ` +
           `/readyz=${readiness.readyz ?? "unreachable"}.`,
       );
-      if (health.waitOutcome === "still-starting") {
-        fail(
-          formatGatewayRestartFailure({
-            health,
-            port,
-            defaultTimeoutSeconds: Math.round(deadlineMs / 1000),
-          }).failMessage,
-          [formatCliCommand("openclaw gateway status --deep")],
-          "still-starting",
-        );
-        return;
-      }
+      const failure = formatGatewayRestartFailure({
+        health,
+        port,
+        defaultTimeoutSeconds: Math.round(deadlineMs / 1000),
+        action: "start",
+      });
       fail(
-        `Gateway start timed out after ${Math.round(deadlineMs / 1000)}s waiting for /healthz and /readyz.`,
+        failure.failMessage,
         [formatCliCommand("openclaw gateway status --deep"), formatCliCommand("openclaw doctor")],
+        health.waitOutcome === "still-starting" ? "still-starting" : undefined,
       );
     },
     expectedPort,
