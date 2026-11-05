@@ -9,6 +9,10 @@ import {
   resolveDockerReleasePolicy,
 } from "./lib/docker-release-policy.mjs";
 import { compareReleaseVersions } from "./lib/release-version.mjs";
+import {
+  verifyReleaseToolingIdentity,
+  verifyReleaseWorkflowRun,
+} from "./release-tooling-identity.mjs";
 import { verifyDockerAttestations } from "./verify-docker-attestations.mjs";
 
 const IMAGETOOLS_TIMEOUT_MS = 20 * 60_000;
@@ -88,7 +92,15 @@ export function createVercelContainerRegistryPublishPlan({
   };
 }
 
-function runImagetools(args, execFileSyncImpl, { inherit = false } = {}) {
+function runImagetools(args, execFileSyncImpl, { inherit = false, beforeMutation } = {}) {
+  if (args[0] === "create") {
+    if (typeof beforeMutation !== "function") {
+      throw new Error("VCR publication requires a synchronous beforeMutation authority check.");
+    }
+    if (beforeMutation() !== undefined) {
+      throw new Error("VCR beforeMutation authority check must complete synchronously.");
+    }
+  }
   return execFileSyncImpl("docker", ["buildx", "imagetools", ...args], {
     encoding: "utf8",
     killSignal: "SIGKILL",
@@ -345,7 +357,7 @@ export function publishVercelContainerRegistryImages(params, options = {}) {
     runImagetools(
       ["create", "--progress", "plain", "--tag", manifestTargetRef, ...platformSourceRefs],
       execFileSyncImpl,
-      { inherit: true },
+      { inherit: true, beforeMutation: options.beforeMutation },
     );
     verifyCleanIndex(manifestTargetRef, platformDigests, execFileSyncImpl);
     const manifestDescriptor = inspectManifestDescriptor(manifestTargetRef, execFileSyncImpl);
@@ -369,7 +381,7 @@ export function publishVercelContainerRegistryImages(params, options = {}) {
           `${plan.sourceImage}@${sourceDigest}`,
         ],
         execFileSyncImpl,
-        { inherit: true },
+        { inherit: true, beforeMutation: options.beforeMutation },
       );
       const descriptor = inspectManifestDescriptor(targetRef, execFileSyncImpl);
       if (!IMAGE_MANIFEST_MEDIA_TYPES.has(descriptor.mediaType)) {
@@ -458,7 +470,7 @@ export function promoteVercelContainerRegistryAliases(params, options = {}) {
     runImagetools(
       ["create", "--prefer-index=false", ...targetArgs, sourceDigestRef],
       execFileSyncImpl,
-      { inherit: true },
+      { inherit: true, beforeMutation: options.beforeMutation },
     );
     for (const targetRef of targetRefs) {
       const descriptor = inspectManifestDescriptor(targetRef, execFileSyncImpl);
@@ -477,6 +489,48 @@ export function promoteVercelContainerRegistryAliases(params, options = {}) {
     channel: policy.channel,
     targetImage,
     version: policy.version,
+  };
+}
+
+function createBeforeMutation(env) {
+  const workflowPath =
+    env.VCR_ADVISORY === "true"
+      ? ".github/workflows/openclaw-release-publish.yml"
+      : ".github/workflows/vercel-container-registry-publish.yml";
+  const binding = {
+    repository: env.GITHUB_REPOSITORY,
+    workflowSha: env.VCR_TOOLING_SHA,
+    workflowRef: env.VCR_TOOLING_REF,
+    workflowFullRef: env.VCR_TOOLING_FULL_REF,
+    runId: env.VCR_WRITER_RUN_ID,
+    runAttempt: env.VCR_WRITER_RUN_ATTEMPT,
+  };
+  if (
+    Object.values(binding).some((value) => typeof value !== "string" || !value.trim()) ||
+    !["true", "false"].includes(env.VCR_ADVISORY) ||
+    env.GITHUB_EVENT_NAME !== "workflow_dispatch" ||
+    binding.workflowSha !== env.GITHUB_WORKFLOW_SHA ||
+    binding.workflowRef !== env.GITHUB_REF_NAME ||
+    binding.workflowFullRef !== env.GITHUB_REF ||
+    binding.runId !== env.GITHUB_RUN_ID ||
+    binding.runAttempt !== env.GITHUB_RUN_ATTEMPT ||
+    env.VCR_WRITER_WORKFLOW_PATH !== workflowPath ||
+    env.GITHUB_WORKFLOW_REF !==
+      `${binding.repository}/${workflowPath}@${binding.workflowFullRef}` ||
+    (env.VCR_ADVISORY === "false" && binding.workflowFullRef !== "refs/heads/main")
+  ) {
+    throw new Error("VCR tooling and writer must match the complete executing workflow identity.");
+  }
+  // The reusable VCR job is inside the active Release Publish run. Recovery
+  // instead owns an active VCR dispatch; neither route accepts a completed run.
+  return () => {
+    verifyReleaseToolingIdentity(binding);
+    verifyReleaseWorkflowRun({
+      ...binding,
+      workflowPath,
+      workflowEvent: "workflow_dispatch",
+      runStatePolicy: "active",
+    });
   };
 }
 
@@ -506,27 +560,34 @@ function main() {
   if (!values.version || !values["target-image"]) {
     throw new Error("--version and --target-image are required.");
   }
+  const beforeMutation = createBeforeMutation(process.env);
   if (values["promote-aliases"]) {
     if (values["source-ref"]) {
       throw new Error("--promote-aliases cannot be combined with --source-ref.");
     }
-    const result = promoteVercelContainerRegistryAliases({
-      includeBrowser: values["include-browser"] ?? false,
-      targetImage: values["target-image"],
-      version: values.version,
-    });
+    const result = promoteVercelContainerRegistryAliases(
+      {
+        includeBrowser: values["include-browser"] ?? false,
+        targetImage: values["target-image"],
+        version: values.version,
+      },
+      { beforeMutation },
+    );
     console.log(`Promoted ${result.channel} aliases for ${result.targetImage}:${result.version}.`);
     return;
   }
   if (!values["source-ref"]) {
     throw new Error("--source-ref is required when publishing immutable images.");
   }
-  const plan = publishVercelContainerRegistryImages({
-    includeBrowser: values["include-browser"] ?? false,
-    sourceRefs: values["source-ref"],
-    targetImage: values["target-image"],
-    version: values.version,
-  });
+  const plan = publishVercelContainerRegistryImages(
+    {
+      includeBrowser: values["include-browser"] ?? false,
+      sourceRefs: values["source-ref"],
+      targetImage: values["target-image"],
+      version: values.version,
+    },
+    { beforeMutation },
+  );
   console.log(
     `Published ${plan.copies.length} immutable ${plan.channel} tags to ${plan.targetImage}.`,
   );
