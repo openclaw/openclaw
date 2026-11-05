@@ -18,14 +18,14 @@ export function normalizeIMessageAutomationError(message: string): string | unde
     return undefined;
   }
   return (
-    "Messages automation failed with AppleScript error " +
-    code +
-    ". " +
     (code === "-1712"
-      ? "Messages timed out; check for an unresponsive Messages.app or a hidden permission prompt. "
-      : "Messages Automation is not authorized. ") +
-    "On the Messages Mac, open System Settings > Privacy & Security > Automation and allow Messages for the process running imsg. " +
-    "For an app-managed background Gateway, check the current Gateway runtime (bun), not Terminal or the previous node/bun runtime. " +
-    "An app update can change this permission identity. After granting access, verify delivery and queued replies before retrying from the Gateway."
+      ? "Messages took too long to respond, so OpenClaw couldn't confirm your iMessage was sent. Open Messages on your Mac and approve any permission prompt. If the app is frozen, quit and reopen it. "
+      : "OpenClaw couldn't send your iMessage because it doesn't have permission to control Messages. ") +
+    "On the Mac running Messages, open System Settings > Privacy & Security > Automation and allow Messages access for the process running OpenClaw. " +
+    'If this started after an OpenClaw update, you may need to allow access again. For an app-managed Gateway, look for "bun" in Automation settings. ' +
+    "Check whether your message was delivered and review queued replies before retrying to avoid duplicates. " +
+    "Technical details: Messages automation failed with AppleScript error " +
+    code +
+    "."
   );
 }
