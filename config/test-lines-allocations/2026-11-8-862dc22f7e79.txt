@@ -1,0 +1,6 @@
+36
+# LOCAL 2026.11.8 row 113; source 862dc22f7e793af3b61bddd7b168d102ebbd5296.
+# Knowledge selected-corpus retrieval regression (+34 LF) plus the reviewed incremental authorizer-braces repair (+2 LF); retain all existing assertions.
+# Reviewed private composition: 8a38f19c4707f2624acee43289ddff5bc8dc1a23, then 636ab589c058046809dfc1ef74281ced301827f6.
+# Exact net test LF including matching helper/support files; no scalar baseline or coverage reduction.
+# Apply only with this reviewed source composition; do not duplicate existing or folded credit.

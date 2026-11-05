@@ -1,16 +1,24 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile, readFile, rm, rename, link, symlink } from "node:fs/promises";
 import path from "node:path";
+import { constants } from "node:sqlite";
 import { Check } from "typebox/value";
 import { expect, it } from "vitest";
 import { stringify } from "yaml";
 import { contract } from "./contract.js";
 import { SqliteIdentityStore } from "./identity-store.js";
 import { isFullHit } from "./retrieval-hit.js";
-import { keywordExpression } from "./retrieval.js";
+import { keywordSearch, keywordExpression } from "./retrieval.js";
 import { AGENT_HIT_LIMIT, COMPACT_SNIPPET_CHARS } from "./search-detail.js";
 import { createKnowledgeService } from "./service.js";
-import { apiFor, useTestTempDirs, defaultOrder, type TestStoreConfig } from "./test-support.js";
+import { KnowledgeStorage } from "./storage.js";
+import {
+  plainAccess,
+  apiFor,
+  useTestTempDirs,
+  defaultOrder,
+  type TestStoreConfig,
+} from "./test-support.js";
 
 const tempDirs = useTestTempDirs();
 
@@ -600,4 +608,32 @@ it("canonical keyword forms preserve authored records and snippet offsets", asyn
     "hangul_note",
   ]);
   expect(await Promise.all([...bodies.keys()].map(read))).toStrictEqual(before);
+});
+
+it("filters FTS without rereading the indexed corpus", async () => {
+  const f = await fixture();
+  await f.put("title_record", "Needle", "text", { tags: ["chosen"] });
+  await f.put("body_record", "Other", "needle", { tags: ["chosen"] });
+  await f.put("outside_record", "Needle", "needle ".repeat(100));
+  const storage = new KnowledgeStorage(f.config, f.store);
+  const data = await storage.run(plainAccess(), (vault) => vault.scan());
+  f.store.withDatabase((db) => {
+    expect(keywordSearch(db, data, { query: "needle" }, "test", "1").total).toBe(3);
+    let corpusReads = 0;
+    db.setAuthorizer((action, table) => {
+      if (action === constants.SQLITE_READ && table?.startsWith("keyword_fts_v1_")) {
+        corpusReads++;
+      }
+      return constants.SQLITE_OK;
+    });
+    try {
+      const result = keywordSearch(db, data, { query: "needle", tag: "chosen" }, "test", "1");
+      expect(result.index.state).toBe("ready");
+      expect(ids(result)).toEqual(["title_record", "body_record"]);
+      expect(result.total).toBe(2);
+      expect(corpusReads).toBe(0);
+    } finally {
+      db.setAuthorizer(null);
+    }
+  });
 });
