@@ -62,7 +62,8 @@ export async function resolveIMessageChat(params: {
   const { cliPath, dbPath, remoteHost } = params.options;
   const key = `${cliPath}\0${dbPath ?? ""}\0${remoteHost ?? ""}`;
   const cached = chatListCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) {
+  // The chat snapshot expires on elapsed time so a wall-clock step cannot pin a stale list.
+  if (cached && cached.expiresAt > performance.now()) {
     return findChat(cached.list, params.target);
   }
   chatListCache.delete(key);
@@ -84,7 +85,7 @@ export async function resolveIMessageChat(params: {
         list.push({ id, guid, identifier: stringFromUnknown(chat.identifier) });
       }
     }
-    chatListCache.set(key, { list, expiresAt: Date.now() + CHAT_LIST_CACHE_TTL_MS });
+    chatListCache.set(key, { list, expiresAt: performance.now() + CHAT_LIST_CACHE_TTL_MS });
     return findChat(list, params.target);
   } finally {
     await client.stop();

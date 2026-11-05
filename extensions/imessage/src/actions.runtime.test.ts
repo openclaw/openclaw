@@ -407,6 +407,24 @@ describe("imessage actions runtime", () => {
     expect(createClient).toHaveBeenCalledTimes(2);
   });
 
+  it("expires cached chat lists on elapsed time when the wall clock steps backwards", async () => {
+    vi.useFakeTimers();
+    try {
+      rpc({ chats: [{ id: 1, guid: "iMessage;+;clock-step" }] });
+      rpc({ chats: [{ id: 1, guid: "iMessage;+;clock-step" }] });
+      const target = { kind: "chat_id", chatId: 1 } as const;
+      await expect(resolve(target, "imsg-chat-clock")).resolves.toBe("iMessage;+;clock-step");
+
+      // A backwards wall-clock step must not keep the chat snapshot past its TTL.
+      vi.setSystemTime(Date.now() - 60 * 60 * 1000);
+      await vi.advanceTimersByTimeAsync(30_001);
+      await expect(resolve(target, "imsg-chat-clock")).resolves.toBe("iMessage;+;clock-step");
+      expect(createClient).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   const chatList = [
     { id: 7, identifier: "chat0000", guid: "iMessage;+;chat0000" },
     { id: 8, identifier: "Other@Example.com", guid: "any;-;Other@Example.com" },
