@@ -523,10 +523,7 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                     agentSessionKey: opts.agentSessionKey,
                   });
                   if (inferred) {
-                    job.delivery = {
-                      ...inferred,
-                      ...delivery,
-                    } satisfies CronDelivery;
+                    job.delivery = { ...inferred, ...delivery } satisfies CronDelivery;
                   }
                 }
               }

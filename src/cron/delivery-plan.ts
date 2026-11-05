@@ -136,10 +136,12 @@ export function resolveFailureDestination(
   let to: string | undefined;
   let accountId: string | undefined;
   let mode: "announce" | "webhook" | undefined;
+  let threadId: string | number | undefined;
 
   if (globalConfig) {
     channel = normalizeMessageChannel(globalConfig.channel);
     to = normalizeOptionalString(globalConfig.to);
+    threadId = normalizeOptionalThreadValue(globalConfig.threadId);
     accountId = normalizeOptionalString(globalConfig.accountId);
     mode = normalizeFailureMode(globalConfig.mode);
   }
@@ -161,6 +163,17 @@ export function resolveFailureDestination(
     const hasToField = Object.hasOwn(routeOverride, "to");
     const hasAccountIdField = Object.hasOwn(routeOverride, "accountId");
     const hasModeField = Object.hasOwn(routeOverride, "mode");
+    const hasThreadField = Object.hasOwn(routeOverride, "threadId");
+    const recipientChanged =
+      (hasAccountIdField && overrideAccountId !== accountId) ||
+      (hasToField && overrideTo !== to) ||
+      (overrideChannel !== undefined &&
+        overrideChannel !== resolveAnnounceChannel({ channel, to }));
+    if (hasThreadField) {
+      threadId = normalizeOptionalThreadValue(routeOverride.threadId);
+    } else if (recipientChanged) {
+      threadId = undefined;
+    }
 
     const hasExplicitTo = hasToField && overrideTo !== undefined;
     const globalChannel = resolveAnnounceChannel({ channel, to });
@@ -191,6 +204,9 @@ export function resolveFailureDestination(
       const globalMode = mode ?? "announce";
       const resolvedOverrideMode = effectiveOverrideMode ?? "announce";
       if (globalMode !== resolvedOverrideMode) {
+        if (!hasThreadField) {
+          threadId = undefined;
+        }
         // Chat targets and accounts cannot be reused as webhook routing, or vice versa.
         if (!hasChannelField) {
           channel = undefined;
@@ -210,8 +226,15 @@ export function resolveFailureDestination(
     jobAlertRoute?.mode !== undefined &&
     jobAlertRoute.channel === undefined &&
     jobAlertRoute.to === undefined &&
-    jobAlertRoute.accountId === undefined;
-  if (!channel && !to && !accountId && (!mode || jobAlertOnlySelectsMode)) {
+    jobAlertRoute.accountId === undefined &&
+    jobAlertRoute.threadId === undefined;
+  if (
+    !channel &&
+    !to &&
+    !accountId &&
+    threadId === undefined &&
+    (!mode || jobAlertOnlySelectsMode)
+  ) {
     return null;
   }
 
@@ -224,6 +247,7 @@ export function resolveFailureDestination(
   const result: CronFailureDeliveryPlan = {
     mode: resolvedMode,
     channel: resolvedMode === "announce" ? resolveAnnounceChannel({ channel, to }) : undefined,
+    ...(resolvedMode === "announce" && threadId !== undefined ? { threadId } : {}),
     to,
     accountId,
   };
@@ -263,6 +287,6 @@ function isSameDeliveryTarget(
     failureChannelNormalized === primaryChannelNormalized &&
     failurePlan.to === primaryTo &&
     failurePlan.accountId === primaryAccountId &&
-    primaryThreadId === undefined
+    normalizeOptionalStringifiedId(failurePlan.threadId) === primaryThreadId
   );
 }

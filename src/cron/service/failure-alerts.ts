@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+  normalizeOptionalThreadValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { classifyOAuthRefreshFailure } from "../../agents/auth-profiles/oauth-refresh-failure.js";
@@ -149,6 +151,7 @@ export function resolveFailureAlert(
     (jobConfig.channel !== undefined ||
       jobConfig.to !== undefined ||
       jobConfig.accountId !== undefined ||
+      jobConfig.threadId !== undefined ||
       jobConfig.mode !== undefined),
   );
   const alternateRoute = resolveFailureDestination(
@@ -210,15 +213,24 @@ export function resolveFailureAlert(
   const accountId =
     normalizeOptionalString(route?.accountId) ??
     (primaryRecipientMatches ? primaryAnnounceRoute?.accountId : undefined);
-  // A configured failure destination has no thread and stays distinct from a
-  // threaded primary peer unless a job alert names its own recipient.
-  const primaryRouteMatches =
+  // Preserve legacy thread inheritance when no explicit failure thread is set.
+  const primaryThreadFallbackMatches =
     primaryRecipientMatches &&
     accountId === primaryAnnounceRoute?.accountId &&
     (alternateRoute === null ||
       !job.delivery?.failureDestination ||
       primaryAnnounceRoute?.threadId == null ||
       jobConfig?.to !== undefined);
+  const threadId =
+    mode === "announce"
+      ? (normalizeOptionalThreadValue(route?.threadId) ??
+        (primaryThreadFallbackMatches ? primaryAnnounceRoute?.threadId : undefined))
+      : undefined;
+  const primaryRouteMatches =
+    primaryRecipientMatches &&
+    accountId === primaryAnnounceRoute?.accountId &&
+    normalizeOptionalStringifiedId(threadId) ===
+      normalizeOptionalStringifiedId(primaryAnnounceRoute?.threadId);
 
   return {
     after: clampPositiveInt(jobConfig?.after ?? globalConfig?.after, DEFAULT_FAILURE_ALERT_AFTER),
@@ -230,7 +242,7 @@ export function resolveFailureAlert(
     to,
     mode,
     accountId,
-    threadId: primaryRouteMatches ? primaryAnnounceRoute.threadId : undefined,
+    threadId,
     includeSkipped: jobConfig?.includeSkipped ?? globalConfig?.includeSkipped ?? false,
     alternateRoute: alternateRoute !== null && !primaryRouteMatches,
   };
@@ -490,7 +502,10 @@ function maybeEmitFailureAlert(
   ].some(
     (route) =>
       route &&
-      (route.channel !== undefined || route.to !== undefined || route.accountId !== undefined),
+      (route.channel !== undefined ||
+        route.to !== undefined ||
+        route.threadId !== undefined ||
+        route.accountId !== undefined),
   );
   // A recurring job's auto-disable notice goes straight to the route: a repair turn can
   // fail the same way the job did and leave the route silent.

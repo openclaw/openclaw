@@ -53,6 +53,7 @@ const CronDefaultDeliveryDestinationSchema = z.strictObject({
 });
 
 const CronFailureAlertRouteSchema = z.strictObject({
+  threadId: z.union([z.string().trim().min(1), z.number().int()]).optional(),
   mode: z.enum(["announce", "webhook"]).optional(),
   accountId: z.string().optional(),
   channel: z.string().optional(),

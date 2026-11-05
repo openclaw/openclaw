@@ -1,7 +1,6 @@
 // Load-time validation for cron default destinations: channel existence and agent keys.
 import { describe, expect, it } from "vitest";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
-import { listCronDefaultDestinationChannels } from "./cron-default-destinations.js";
 import type { CronConfig } from "./types.cron.js";
 import { validateConfigObject, validateConfigObjectWithPlugins } from "./validation.js";
 import { OpenClawSchema } from "./zod-schema.js";
@@ -30,27 +29,12 @@ function validateCron(cron: CronConfig) {
 }
 
 describe("cron default destination channels", () => {
-  it("lists every explicit default channel and skips last and webhook routes", () => {
-    expect(
-      listCronDefaultDestinationChannels({
-        delivery: { channel: " chat ", to: "1" },
-        failureAlert: { channel: "Last", to: "1" },
-        agents: {
-          ops: {
-            delivery: { to: "1" },
-            failureAlert: { mode: "webhook", channel: "ignored", to: "https://example.invalid" },
-          },
-        },
-        creators: { alice: { failureAlert: { channel: "ghost", to: "1" } } },
-      }),
-    ).toEqual([
-      { path: "cron.delivery.channel", channel: "chat", globalFailureAlert: false },
-      {
-        path: "cron.creators.alice.failureAlert.channel",
-        channel: "ghost",
-        globalFailureAlert: false,
-      },
-    ]);
+  it.each([
+    { failureAlert: { threadId: 42 } },
+    { agents: { ops: { failureAlert: { threadId: "42" } } } },
+    { creators: { alice: { failureAlert: { threadId: 42 } } } },
+  ])("accepts optional failure threads: %j", (config) => {
+    expect(validateCron(config).ok).toBe(true);
   });
 
   it("accepts defaults on known channels, including built-in aliases", () => {

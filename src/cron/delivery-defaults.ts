@@ -109,6 +109,7 @@ export function resolveCronFailureAlertDefaults(
     mode: agentRoute.mode,
     channel: agentRoute.channel,
     to: agentRoute.to,
+    threadId: agentRoute.threadId,
     accountId: agentRoute.accountId,
   };
 }

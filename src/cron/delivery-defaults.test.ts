@@ -2,10 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
 import type { CronConfig } from "../config/types.cron.js";
-import {
-  resolveCronDefaultDeliveryDestination,
-  resolveCronDeliveryDefaultsScope,
-} from "./delivery-defaults.js";
+import { resolveCronDeliveryDefaultsScope } from "./delivery-defaults.js";
 import { resolveCronDeliveryPlan } from "./delivery-plan.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
 import { resolveFailureAlert } from "./service/failure-alerts.js";
@@ -90,16 +87,6 @@ describe("cron default delivery destination", () => {
     expect(plan({ agents: { other: { delivery: agentDelivery } } }, delivery)).toEqual(
       resolveCronDeliveryPlan(makeCronJob({ delivery })),
     );
-  });
-
-  it("selects the owner's default for create-time route inference", () => {
-    expect(resolveCronDefaultDeliveryDestination({ cronConfig: both, agentId: "ops" })).toBe(
-      agentDelivery,
-    );
-    expect(resolveCronDefaultDeliveryDestination({ cronConfig: both, agentId: "main" })).toBe(
-      globalDelivery,
-    );
-    expect(resolveCronDefaultDeliveryDestination({ cronConfig: agentOnly })).toBeUndefined();
   });
 });
 

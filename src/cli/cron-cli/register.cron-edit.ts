@@ -126,6 +126,7 @@ export function registerCronEditCommand(cron: Command) {
         `Failure alert channel (${getCronChannelOptions()})`,
       )
       .option("--failure-alert-to <dest>", "Failure alert destination")
+      .option("--failure-alert-thread-id <id>", "Thread ID for failure alerts")
       .option("--failure-alert-cooldown <duration>", "Minimum time between alerts (e.g. 1h, 30m)")
       .option("--failure-alert-include-skipped", "Count consecutive skipped runs toward alerts")
       .option("--failure-alert-exclude-skipped", "Exclude skips except local-provider outages")
@@ -636,6 +637,7 @@ export function registerCronEditCommand(cron: Command) {
               "failureAlertAfter",
               "failureAlertChannel",
               "failureAlertTo",
+              "failureAlertThreadId",
               "failureAlertCooldown",
               "failureAlertMode",
               "failureAlertAccountId",
@@ -662,6 +664,9 @@ export function registerCronEditCommand(cron: Command) {
             if (typeof opts.failureAlertChannel === "string") {
               failureAlert.channel =
                 normalizeOptionalLowercaseString(opts.failureAlertChannel) ?? null;
+            }
+            if (typeof opts.failureAlertThreadId === "string") {
+              failureAlert.threadId = normalizeOptionalString(opts.failureAlertThreadId) ?? null;
             }
             if (typeof opts.failureAlertTo === "string") {
               failureAlert.to = normalizeOptionalString(opts.failureAlertTo) ?? null;
