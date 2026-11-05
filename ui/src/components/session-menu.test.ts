@@ -306,6 +306,7 @@ describe("session menu", () => {
         "Mark as unread",
         "Copy link",
         "Open in new tab",
+        "Open in new window",
         "Move to group",
         "Add to section",
         "Archive session",
@@ -338,7 +339,7 @@ describe("session menu", () => {
   );
 
   it("navigates compact groups without side flyouts", async () => {
-    const menu = await mountMenu({ compact: true, groups: ["Research"] });
+    const menu = await mountMenu({ compact: true, groups: ["Research"], splitAllowed: true });
     for (const view of ["copy", "open-in", "icon", "group"] as const) {
       const advanced = view !== "group";
       if (advanced) {
@@ -588,7 +589,6 @@ describe("session menu", () => {
     ["editor", { pullRequestUrl: null, worktreePath: "/work/trees/demo" }],
   ] as const)("opens resolved workspace destinations: %s", async (_name, work) => {
     const { menu, onAction } = await actionMenu({ work });
-    expect(menuItemLabels(menuItem(menu, "Open in"))).toContain("New window");
     if (work?.pullRequestUrl) {
       const openPr = menuItem(menu, "Open PR");
       openPr.focus();

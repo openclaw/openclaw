@@ -24,7 +24,7 @@ import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
 } from "../test-helpers/native-gateways.ts";
-import { openSubmenu } from "../test-helpers/session-menu.ts";
+import { menuItemLabels, openSubmenu } from "../test-helpers/session-menu.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
 import { createSidebarMenus } from "./sidebar-menus.tsx";
@@ -176,14 +176,13 @@ it.each(["provider replacement", "client replacement", "native disconnect and re
       await waitForSolid(() => expect(find("openclaw-session-menu")).not.toBeNull());
       const menu = find("openclaw-session-menu")!;
       const advanced = await openSubmenu(menu, "Advanced");
-      const openIn = await openSubmenu(advanced, "Open in");
-      expect(openIn.querySelector('[data-value="open-in:vscode"]')).toBeNull();
+      expect(menuItemLabels(advanced)).not.toContain("Open in");
 
       retired.resolve(response);
       await vi.dynamicImportSettled();
       await sidebar.updateComplete;
       if (transition !== "provider replacement") {
-        expect(openIn.querySelector('[data-value="open-in:vscode"]')).toBeNull();
+        expect(advanced.querySelector('[data-value="open-in:vscode"]')).toBeNull();
         if (transition === "client replacement") {
           expect(worktrees).toHaveBeenCalledTimes(1);
           gateway.publish({ phase: "connected" });
@@ -191,9 +190,10 @@ it.each(["provider replacement", "client replacement", "native disconnect and re
         }
         current.resolve(response);
       }
-      await waitForSolid(() => {
-        const editor = openIn.querySelector<HTMLButtonElement>('[data-value="open-in:vscode"]');
-        expect(editor).toMatchObject({ disabled: false });
+      await waitForSolid(() => expect(menuItemLabels(advanced)).toContain("Open in"));
+      const openIn = await openSubmenu(advanced, "Open in");
+      expect(openIn.querySelector('[data-value="open-in:vscode"]')).toMatchObject({
+        disabled: false,
       });
     } finally {
       retired.resolve({ worktrees: [] });

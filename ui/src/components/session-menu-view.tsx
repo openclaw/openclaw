@@ -282,7 +282,7 @@ export function useSessionMenuEntries(
               : undefined,
           }),
           submenu({ view: "copy", label: t("sessionsView.copyDetails"), icon: "copy" }),
-          ...(state.navigationAllowed || state.worktreePath || options.openInExtra
+          ...(state.splitAllowed || state.worktreePath || options.openInExtra
             ? [
                 submenu({
                   view: "open-in",
@@ -308,7 +308,6 @@ export function useSessionMenuEntries(
         ];
       case "open-in":
         return [
-          ...(state.navigationAllowed ? items(["open-new-window"]) : []),
           ...(state.splitAllowed ? items(["split-right", "split-below"]) : []),
           ...(options.openInExtra?.() ?? []),
           ...(state.worktreePath
@@ -404,7 +403,7 @@ export function useSessionMenuEntries(
           }),
         ]
       : []),
-    ...(!batch() && state.navigationAllowed ? items(["open-new-tab"]) : []),
+    ...(!batch() && state.navigationAllowed ? items(["open-new-tab", "open-new-window"]) : []),
     ...(!batch() && state.session.placementAction
       ? [
           item({
