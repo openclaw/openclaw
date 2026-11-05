@@ -1,3 +1,4 @@
+import type { BoardSnapshot } from "../../lib/board/types.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
 import {
   cacheChatSessionSnapshot,
@@ -5,6 +6,8 @@ import {
   type ChatMessageCache,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
+import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
+import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
 type ChatMessageCacheHost = Parameters<typeof cacheChatSessionSnapshot>[1];
 type ChatMessageCacheTarget = Parameters<typeof cacheChatSessionSnapshot>[2];
@@ -29,12 +32,17 @@ function cacheChatBoardSnapshot(
 export function cacheChatBoardSnapshotAfterHydration(
   host: ChatMessageCacheHost & { chatMessagesBySession: ChatMessageCache },
   target: ChatMessageCacheTarget,
-  snapshot: unknown,
+  snapshot: BoardSnapshot | null,
   receivedAtMs: number,
   isCurrent: () => boolean,
+  snapshotStore?: SessionSnapshotStore,
 ): void {
   const persist = () => {
     if (isCurrent()) {
+      void snapshotStore?.boardAppDisplay(
+        resolveChatSnapshotKey(host, target),
+        snapshot?.widgets ?? [],
+      );
       cacheChatBoardSnapshot(host.chatMessagesBySession, host, target, snapshot, receivedAtMs);
     }
   };

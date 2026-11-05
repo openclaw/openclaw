@@ -10,13 +10,12 @@ import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetAppViewState } from "../../lib/board/view-types.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { McpAppView } from "../mcp-app-view-lazy.ts";
+import type { BoardAppDisplayAccess } from "../mcp-app-view-types.ts";
 import { LazyViewError } from "../solid/lazy-view-error.tsx";
 
 registerEnglishCatalog(registerBoardDocumentEnglish);
 
 registerEnglishCatalog(registerBoardEnglish);
-
-type ReadyAppView = Extract<BoardWidgetAppViewState, { status: "ready" }>;
 
 function McpAppLoadError(props: { error: unknown; active: boolean; reset: () => void }) {
   let connected = true;
@@ -45,6 +44,7 @@ export function BoardMcpAppContent(props: {
   accessNotice: SolidJSX.Element;
   active: boolean;
   appView?: BoardWidgetAppViewState;
+  appDisplay?: BoardAppDisplayAccess;
   busy: boolean;
   loading: boolean;
   nearVisible: boolean;
@@ -58,22 +58,26 @@ export function BoardMcpAppContent(props: {
 }) {
   let element: HTMLElementTagNameMap["mcp-app-view"] | undefined;
   let generation = 0;
-  const [presented, setPresented] = createSignal<ReadyAppView | undefined>(undefined, {
+  const [presented, setPresented] = createSignal(false, {
     ownedWrite: true,
   });
   createEffect(
     () => {
       const view = props.appView;
-      return view?.status === "ready" &&
-        view.expiresAtMs > Date.now() &&
-        (!props.active || props.nearVisible)
-        ? view
-        : undefined;
+      return (
+        props.widget.contentKind === "mcp-app" &&
+        (!props.active || props.nearVisible) &&
+        ((view?.status === "ready" && view.expiresAtMs > Date.now()) ||
+          (Boolean((props.active || presented()) && props.appDisplay) &&
+            view?.status !== "stale" &&
+            props.widget.grantState !== "pending" &&
+            props.widget.grantState !== "rejected"))
+      );
     },
     (next) => {
       const current = ++generation;
       if (next) {
-        setPresented(next);
+        setPresented(true);
         element?.restartAfterTeardown();
         return;
       }
@@ -81,14 +85,14 @@ export function BoardMcpAppContent(props: {
       if (retirement) {
         void retirement.then(() => {
           if (current === generation) {
-            setPresented(undefined);
+            setPresented(false);
             props.retired?.();
           } else {
             element?.restartAfterTeardown();
           }
         });
       } else {
-        setPresented(undefined);
+        setPresented(false);
         props.retired?.();
       }
     },
@@ -141,7 +145,7 @@ export function BoardMcpAppContent(props: {
           </Show>
         }
       >
-        {(ready) => (
+        {() => (
           <Errored
             fallback={(error, reset) => (
               <McpAppLoadError error={error()} active={props.active} reset={reset} />
@@ -155,7 +159,9 @@ export function BoardMcpAppContent(props: {
                 }}
                 class="board-widget__mcp-app-view"
                 sessionKey={props.sessionKey}
-                viewId={ready().viewId}
+                widget={props.widget}
+                appDisplay={props.appDisplay}
+                viewId={props.appView?.status === "ready" ? props.appView.viewId : ""}
                 fillContainer={true}
                 surface="board"
                 title={props.widget.title || props.widget.name}

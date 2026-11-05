@@ -1,4 +1,6 @@
+import type { BoardWidget } from "@openclaw/gateway-protocol";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { McpAppViewPayload } from "../../components/mcp-app-view-types.ts";
 import { requestResult, transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
 import {
   MAX_CHAT_THUMBNAILS,
@@ -14,6 +16,7 @@ import {
   peekPrewarmedChatSnapshot,
   type PrewarmedSnapshot,
 } from "./chat-snapshot-prewarm.ts";
+import type { BoardAppDisplay } from "./session-board-app-snapshot.ts";
 import {
   getSessionCacheValue,
   MAX_CACHED_CHAT_SESSIONS,
@@ -27,7 +30,7 @@ import {
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 import {
-  accessSidebarSnapshot,
+  accessSnapshotProjection,
   sidebarRecordBytes,
   SIDEBAR_SNAPSHOT_PROJECTION_VERSION,
   type SidebarRecord,
@@ -269,6 +272,40 @@ export class SessionSnapshotStore implements ChatCacheObserver {
 
   constructor(private readonly memoryCache?: ChatMessageCache) {}
 
+  async boardAppDisplay(
+    sessionKey: string,
+    widgets: readonly BoardWidget[],
+    widget?: BoardWidget,
+    payload?: McpAppViewPayload,
+  ): Promise<BoardAppDisplay | null> {
+    if (!this.connected || !isPersistableChatSnapshotKey(sessionKey)) return null;
+    return this.accessProjection(`${sessionKey}\0board:`, async (isCurrent) => {
+      const { accessBoardAppSnapshot } = await import("./session-board-app-snapshot.ts");
+      return accessBoardAppSnapshot(sessionKey, widgets, isCurrent, widget, payload);
+    });
+  }
+
+  private async accessProjection<Model>(
+    key: string,
+    access: (isCurrent: () => boolean) => Promise<Model | null>,
+  ): Promise<Model | null> {
+    if (!this.connected) return null;
+    const scope = this.captureReadScope(key);
+    const isCurrent = () => this.connected && scope.isCurrent();
+    let result: Model | null = null;
+    try {
+      this.writeChain = this.writeChain
+        .then(async () => {
+          result = await access(isCurrent);
+        })
+        .catch((error) => debugSnapshotStore("projection could not be cached", error));
+      await this.writeChain;
+      return isCurrent() ? result : null;
+    } finally {
+      scope.dispose();
+    }
+  }
+
   connect(): void {
     this.connected = true;
     activeStores.add(this);
@@ -276,7 +313,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
 
   disconnect(): void {
     this.connected = false;
-    this.forgetSidebar({});
+    this.forgetProjections({});
     void this.flush().finally(() => {
       if (!this.connected) {
         activeStores.delete(this);
@@ -313,16 +350,9 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     key: string,
     validate: (value: unknown) => Model | null,
   ): Promise<Model | null> {
-    if (!this.connected) {
-      return null;
-    }
-    const scope = this.captureReadScope(key);
-    try {
-      await this.writeChain;
-      return await accessSidebarSnapshot(key, validate, () => this.connected && scope.isCurrent());
-    } finally {
-      scope.dispose();
-    }
+    return this.accessProjection(key, (isCurrent) =>
+      accessSnapshotProjection(key, validate, isCurrent),
+    );
   }
 
   async writeSidebar<Model>(
@@ -333,7 +363,6 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     if (!this.connected || !key.startsWith("scope:[") || !key.includes("\u0000sidebar:")) {
       return false;
     }
-    const scope = this.captureReadScope(key);
     try {
       const record: SidebarRecord = {
         sessionKey: key,
@@ -341,35 +370,24 @@ export class SessionSnapshotStore implements ChatCacheObserver {
         projectionVersion: SIDEBAR_SNAPSHOT_PROJECTION_VERSION,
         model: structuredClone(model),
       };
-      if (sidebarRecordBytes(record) > 512 * 1024) {
-        return false;
-      }
-      let written = false;
-      this.writeChain = this.writeChain.then(async () => {
-        written =
-          (await accessSidebarSnapshot(
-            key,
-            validate,
-            () => this.connected && scope.isCurrent(),
-            record,
-          )) !== null;
-      });
-      await this.writeChain;
-      return written;
+      if (sidebarRecordBytes(record) > 512 * 1024) return false;
+      return (
+        (await this.accessProjection(key, (isCurrent) =>
+          accessSnapshotProjection(key, validate, isCurrent, record),
+        )) !== null
+      );
     } catch (error) {
       debugSnapshotStore("sidebar projection could not be cached", error);
       return false;
-    } finally {
-      scope.dispose();
     }
   }
 
-  forgetSidebar(invalidation: SnapshotInvalidation): void {
+  forgetProjections(invalidation: SnapshotInvalidation): void {
     for (const key of this.readScopes.keys()) {
       if (
-        key.includes("\u0000sidebar:") &&
+        (key.includes("\u0000sidebar:") || key.includes("\0board:")) &&
         (sidebarSnapshotInvalidationMatches(key, invalidation) ||
-          sidebarSnapshotDeletedSessionKey(key, invalidation))
+          (key.includes("\u0000sidebar:") && sidebarSnapshotDeletedSessionKey(key, invalidation)))
       ) {
         this.forget(key);
       }
@@ -437,6 +455,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
   }
 
   forget(sessionKey: string): void {
+    this.readScopes.delete(`${sessionKey}\0board:`);
     discardPrewarmedChatSnapshot(sessionKey);
     this.readScopes.delete(sessionKey);
     this.pending.delete(sessionKey);
@@ -607,7 +626,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
 subscribeSnapshotInvalidation(async (invalidation) => {
   const { sessionKey, scopePrefix } = invalidation;
   for (const store of activeStores) {
-    store.forgetSidebar(invalidation);
+    store.forgetProjections(invalidation);
     if (scopePrefix) {
       store.forgetScope(scopePrefix);
     } else if (sessionKey) {

@@ -4,6 +4,7 @@ import type { BoardWidgetAppViewState } from "../../lib/board/provider.ts";
 import type { BoardTab, BoardWidget } from "../../lib/board/types.ts";
 import type { BoardGrantDecision, BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
+import type { BoardAppDisplayAccess } from "../mcp-app-view-types.ts";
 
 export const BOARD_SIZE_PRESETS = {
   sm: { w: 3, h: 3 },
@@ -20,6 +21,7 @@ export type BoardWidgetPageMenu = {
 };
 
 export type BoardWidgetCellCallbacks = {
+  appDisplay?: BoardAppDisplayAccess;
   presentationReady?: () => void;
   appViewGeneration: () => number;
   grant: (name: string, decision: BoardGrantDecision) => Promise<void>;

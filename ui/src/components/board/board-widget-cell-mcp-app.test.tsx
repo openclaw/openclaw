@@ -369,16 +369,23 @@ describe("board MCP App cell lifecycle", () => {
     expect(frame.title).toBe("Updated HTML widget");
   });
 
-  it("waits to materialize an inactive cell until its board becomes active", async () => {
+  it("materializes cached cells only when active and retains them while the live lease is pending", async () => {
     const visibility = stubVisibility(() => true);
-    const widgetAppView = vi.fn(async () => readyAppView("activated-view"));
-    const cell = await mount({ widgetAppView }, { active: false });
+    const lease = deferred<BoardWidgetAppViewState>();
+    const widgetAppView = vi.fn(() => lease.promise);
+    const cell = await mount({ widgetAppView, appDisplay: async () => null }, { active: false });
     expect(visibility.observed()).toBe(0);
     expect(widgetAppView).not.toHaveBeenCalled();
     expect(app(cell)).toBeNull();
     await update(cell, { active: true });
     await vi.waitFor(() => expect(widgetAppView).toHaveBeenCalledOnce());
-    expect(app(cell)).not.toBeNull();
+    await waitForApp(cell);
+    const cached = app(cell);
+    await update(cell, { active: false });
+    expect(app(cell)).toBe(cached);
+    lease.resolve(readyAppView("activated-view"));
+    await settle(cell);
+    expect(app(cell)).toBe(cached);
   });
 
   it("shows pending access notices above container-sized apps", async () => {

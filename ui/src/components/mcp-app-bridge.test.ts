@@ -4,9 +4,14 @@ import { createComponent } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  createTestGatewayClient,
+  createGatewayRequestMock,
+} from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import { boardWidget } from "./board/board-view.test-support.ts";
 import { bindMcpAppResourceHandlers, OpenClawAppBridge } from "./mcp-app-bridge.ts";
 import { McpAppConfirmation } from "./mcp-app-confirm-solid.tsx";
 import { createMcpAppConfirm } from "./mcp-app-confirm.ts";
@@ -18,6 +23,7 @@ import {
   type McpAppFileOpenEventDetail,
   type McpAppMessageEventDetail,
 } from "./mcp-app-security.ts";
+import type { McpAppViewPayload } from "./mcp-app-view-types.ts";
 import { mockMcpSandboxProxyReady, mountView } from "./mcp-app-view.test-support.ts";
 
 const transportMocks = vi.hoisted(() => ({ next: undefined as (() => unknown) | undefined }));
@@ -31,8 +37,13 @@ function bindResources(
   owner: Pick<ResourceOwner, "bridge" | "request" | "iframe"> & Partial<ResourceOwner>,
 ) {
   return bindMcpAppResourceHandlers({
-    sessionKey: "one",
-    viewId: "app",
+    binding: () => ({
+      sessionKey: "one",
+      viewId: "app",
+      client: createTestGatewayClient(createGatewayRequestMock()),
+      scope: 1,
+      connectionRevision: 1,
+    }),
     releaseResourceSubscription: async () => ({}),
     confirmOpenFile: async () => false,
     isDisposed: () => false,
@@ -108,8 +119,13 @@ it("confirms file paths in the pane before requesting or opening a file", async 
   bindResources({
     bridge,
     request,
-    sessionKey: "file-session",
-    viewId: "file-view",
+    binding: () => ({
+      sessionKey: "file-session",
+      viewId: "file-view",
+      client: createTestGatewayClient(createGatewayRequestMock()),
+      scope: 1,
+      connectionRevision: 1,
+    }),
     iframe: frame,
     openFilesSupported: true,
     confirmOpenFile: (text: string) =>
@@ -479,3 +495,133 @@ it("forwards resource metadata and keeps subscriptions with the extracted bridge
     await close();
   }
 });
+
+it.each(["same", "html", "csp", "sandbox", "input", "capabilities"] as const)(
+  "restores a display without authority and handles %s live content",
+  async (change) => {
+    const cached: McpAppViewPayload = {
+      html: "<output>Last board state</output>",
+      csp: { connectDomains: ["https://data.example"] },
+      sandboxUrl: "/mcp-app-sandbox",
+      sandboxPort: 8444,
+      toolInput: { period: "week" },
+      toolResult: { content: [{ type: "text", text: "cached" }] },
+      messageSupported: true,
+      updateModelContextSupported: true,
+      openFilesSupported: true,
+      fileResourcesSupported: true,
+    };
+    const fresh = {
+      ...cached,
+      ...(change === "html" ? { html: "<output>Updated app</output>" } : {}),
+      ...(change === "csp" ? { csp: { connectDomains: [] } } : {}),
+      ...(change === "sandbox" ? { sandboxPort: 8445 } : {}),
+      ...(change === "input" ? { toolInput: { period: "month" } } : {}),
+      ...(change === "capabilities" ? { messageSupported: false } : {}),
+      toolResult: { content: [{ type: "text" as const, text: "live" }] },
+    };
+    const pairs = [InMemoryTransport.createLinkedPair(), InMemoryTransport.createLinkedPair()];
+    const transports = pairs.map(() => createDeferred());
+    let next = 0;
+    transportMocks.next = () => {
+      transports[next]!.resolve();
+      return pairs[next++]![0];
+    };
+    const input = vi.fn();
+    const result = createDeferred();
+    const updates: unknown[] = [];
+    const app = new App({ name: "warm-proof", version: "1" }, {}, { autoResize: false });
+    app.ontoolinput = input;
+    app.ontoolresult = (value) => {
+      updates.push(value);
+      result.resolve();
+    };
+    const client = {
+      request: vi.fn(async (method: string) =>
+        method === "mcp.app.listTools" ? { tools: [] } : fresh,
+      ),
+    };
+    const gateway = {
+      snapshot: { client, phase: "connected", hello: gatewayHelloForMethods(["mcp.app.view"]) },
+      connection: { gatewayUrl: "ws://gateway.example:8443/openclaw" },
+      connectionRevision: 1,
+      subscribe: () => () => {},
+      subscribeEvents: vi.fn(() => () => {}),
+    };
+    mockMcpSandboxProxyReady();
+    const display = vi.fn(async () => cached);
+    const { view, unmount } = mountView(
+      {
+        sessionKey: "agent:main:warm",
+        widget: boardWidget({ contentKind: "mcp-app" }),
+        appDisplay: display,
+      },
+      { gateway, theme: { subscribe: () => () => {} } },
+    );
+    let replacement: App | undefined;
+    try {
+      await transports[0]!.promise;
+      await app.connect(pairs[0]![1]);
+      await result.promise;
+      const frame = view.querySelector("iframe");
+      expect(client.request).not.toHaveBeenCalled();
+      expect(gateway.subscribeEvents).not.toHaveBeenCalled();
+      expect(input).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ arguments: { period: "week" } }),
+      );
+      for (const [method, params] of [
+        ["tools/list", {}],
+        ["tools/call", { name: "read" }],
+        ["resources/read", { uri: "fixture://state" }],
+        ["resources/subscribe", { uri: "fixture://state" }],
+        ["resources/unsubscribe", { uri: "fixture://state" }],
+        ["openai/resources/write", { uri: "fixture://state", text: "retry" }],
+        ["ui/message", { role: "user", content: [{ type: "text", text: "retry me" }] }],
+        ["ui/update-model-context", { content: [] }],
+        ["ui/open-link", { url: "https://example.com" }],
+        ["ui/request-display-mode", { mode: "fullscreen" }],
+        ["openai/files/open", { path: "/workspace/state.txt" }],
+      ] as const) {
+        await expect(requestRecord(app, method, params)).rejects.toThrow("Reconnect and try again");
+      }
+      expect(client.request).not.toHaveBeenCalled();
+      view.viewId = "fresh-live-lease";
+      if (change === "same") {
+        await waitForSolid(() => expect(updates).toHaveLength(2));
+        expect(view.querySelector("iframe")).toBe(frame);
+        expect(input).toHaveBeenCalledTimes(1);
+        expect(gateway.subscribeEvents).toHaveBeenCalledOnce();
+        expect(await requestRecord(app, "tools/list", {})).toEqual({ tools: [] });
+        expect(client.request).toHaveBeenLastCalledWith(
+          "mcp.app.listTools",
+          {
+            sessionKey: "agent:main:warm",
+            viewId: "fresh-live-lease",
+          },
+          expect.anything(),
+        );
+      } else {
+        await transports[1]!.promise;
+        replacement = new App({ name: "live-proof", version: "1" }, {}, { autoResize: false });
+        replacement.ontoolinput = () => {};
+        replacement.ontoolresult = () => {};
+        await replacement.connect(pairs[1]![1]);
+        expect(view.querySelector("iframe")).not.toBe(frame);
+        expect(frame?.isConnected).toBe(false);
+      }
+      expect(client.request).toHaveBeenCalledWith(
+        "mcp.app.view",
+        {
+          sessionKey: "agent:main:warm",
+          viewId: "fresh-live-lease",
+        },
+        expect.anything(),
+      );
+    } finally {
+      await view.teardown();
+      unmount();
+      await app.close();
+      await replacement?.close();
+    }
+  },
+);

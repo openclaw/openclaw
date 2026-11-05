@@ -8,6 +8,7 @@ import { isSidebarSlotVisible } from "./sidebar-layout.ts";
 /** Loaded with the panel; the retained pane still owns its view and all mutations. */
 export function buildChatBoardPanel(
   {
+    appDisplay,
     controls,
     owner,
     board,
@@ -46,6 +47,7 @@ export function buildChatBoardPanel(
       canMutate: board.provider.canMutate,
       canGrant: board.provider.canGrant,
       callbacks: {
+        appDisplay,
         appViewGeneration: board.provider.appViewGeneration,
         applyOps: (ops) => board.provider.applyOps(ops),
         grant: (name, decision) => board.provider.grant(name, decision),

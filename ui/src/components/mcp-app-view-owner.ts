@@ -10,18 +10,21 @@ import { i18n, t as translate } from "../i18n/index.ts";
 import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
 import { parseMcpAppLink } from "../lib/mcp-app-route.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
-import { listen } from "../lib/reactive/listener.ts";
 import { observeResize } from "../lib/reactive/observers.ts";
-import { OpenClawAppBridge, bindMcpAppResourceHandlers } from "./mcp-app-bridge.ts";
+import {
+  boardAppDisplayKey,
+  boardAppDisplaySchema,
+} from "../pages/chat/session-board-app-snapshot.ts";
+import { bindMcpAppResourceHandlers } from "./mcp-app-bridge.ts";
 import { createMcpAppConfirm } from "./mcp-app-confirm.ts";
 import {
   buildMcpAppFrameHostContext,
+  createMcpAppFrameBridge,
   loadMcpAppSandbox,
   waitForMcpAppHandlerRegistration,
   waitForMcpAppInitialization,
 } from "./mcp-app-frame.ts";
 import {
-  buildMcpAppHostCapabilities,
   dispatchMcpAppMessage,
   isWidgetFrameInteractable,
   negotiateMcpAppDisplayModes,
@@ -30,6 +33,11 @@ import {
   type McpAppContextEventDetail,
   MCP_APP_VIEW_EXPIRED_EVENT,
 } from "./mcp-app-security.ts";
+import {
+  requestMcpAppBinding,
+  resolveMcpAppBinding,
+  isCurrentMcpAppBinding,
+} from "./mcp-app-view-binding.ts";
 import type {
   McpAppBinding,
   McpAppResources,
@@ -57,6 +65,7 @@ export function createMcpAppView(
   let activeResources: McpAppResources | null = null;
   let teardownPromise: Promise<void> | null = null;
   let setupAbort: AbortController | undefined;
+  let frameSetup = Promise.resolve();
   let requestAbort = new AbortController();
   const confirmation = createMcpAppConfirm();
   let started = false;
@@ -93,6 +102,7 @@ export function createMcpAppView(
       gateway.snapshot.phase === "connected" &&
         gateway.snapshot.hello !== null &&
         !hasOperatorReadAccess(gateway.snapshot.hello.auth ?? null),
+      host.widget && boardAppDisplayKey(host.widget),
     ] as const;
   }
 
@@ -103,11 +113,14 @@ export function createMcpAppView(
     }
     const nextBinding = readBindingInputs();
     const bindingChanged = !bindingInputs?.every((value, index) => value === nextBinding[index]);
+    const retain =
+      bindingInputs &&
+      [1, 3, 5, 6, 7].every((index) => bindingInputs?.[index] === nextBinding[index]);
     bindingInputs = nextBinding;
     const reconnectSetup = reconnectSetupPending && !retired;
     reconnectSetupPending = false;
     if (bindingChanged || reconnectSetup) {
-      void setup(currentBinding(nextBinding));
+      void setup(currentBinding(nextBinding), retain);
     }
     if (titleInput !== host.title) {
       titleInput = host.title;
@@ -189,7 +202,7 @@ export function createMcpAppView(
       }
     }
   }
-  async function setup(binding: McpAppBinding | null) {
+  async function setup(binding: McpAppBinding | null, retain = false) {
     if (disposed) {
       return;
     }
@@ -200,16 +213,25 @@ export function createMcpAppView(
     errorState = null;
     publishState();
     try {
+      if (!retain || activeResources?.binding) await teardownResources(activeResources);
+      abort.signal.throwIfAborted();
+      if (!binding && retain && activeResources) return;
+      const payload = binding
+        ? await requestOwner<McpAppViewPayload>(binding, "mcp.app.view", {}, abort.signal)
+        : !readBindingInputs()[6] && host.widget && (await host.appDisplay?.(host.widget));
+      if (retain && activeResources) await frameSetup.catch(() => undefined);
+      abort.signal.throwIfAborted();
+      if (payload && binding && retain && (await activeResources?.adopt?.(binding, payload)))
+        return;
       await teardownResources(activeResources);
       abort.signal.throwIfAborted();
       setInactive(null);
-      if (!host.sessionKey || !host.viewId) {
+      if (!payload || !host.sessionKey) {
+        if (host.viewId) throw new Error(translate("mcpApp.errors.gatewayUnavailable"));
         return;
       }
-      if (!binding) {
-        throw new Error(translate("mcpApp.errors.gatewayUnavailable"));
-      }
-      await setupResources(binding, abort.signal);
+      frameSetup = setupResources(binding, payload);
+      await frameSetup;
     } catch (error) {
       if (!abort.signal.aborted) {
         errorState = error;
@@ -259,7 +281,7 @@ export function createMcpAppView(
   }
 
   async function requestOwner<T = unknown>(
-    binding: McpAppBinding,
+    binding: McpAppBinding | null,
     method: string,
     params: Record<string, unknown>,
     signal?: AbortSignal,
@@ -268,30 +290,17 @@ export function createMcpAppView(
       ? AbortSignal.any([signal, requestAbort.signal])
       : requestAbort.signal;
     try {
-      requestSignal.throwIfAborted();
-      const gateway = context.gateway;
-      if (
-        gateway.snapshot.phase !== "connected" ||
-        gateway.snapshot.client !== binding.client ||
-        !hasOperatorReadAccess(gateway.snapshot.hello?.auth ?? null) ||
-        gatewayPresentationScope(gateway).key !== binding.scope
-      ) {
-        throw new Error(translate("mcpApp.errors.gatewayUnavailable"));
-      }
-      const { agentId: _untrustedAgent, ...operationParams } = params;
-      const requestParams = {
-        ...operationParams,
-        sessionKey: binding.sessionKey,
-        viewId: binding.viewId,
-        ...(binding.agentId ? { agentId: binding.agentId } : {}),
-      };
-      const result = await binding.client.request<T>(method, requestParams, {
-        signal: requestSignal,
-      });
-      requestSignal.throwIfAborted();
-      return result;
+      return await requestMcpAppBinding<T>(
+        binding,
+        context.gateway,
+        method,
+        params,
+        requestSignal,
+        translate("mcpApp.errors.gatewayUnavailable"),
+      );
     } catch (error) {
       if (
+        binding &&
         isMcpAppViewExpiredError(error) &&
         !requestSignal.aborted &&
         host.viewId === binding.viewId &&
@@ -373,49 +382,17 @@ export function createMcpAppView(
   }
 
   function currentBinding(inputs = readBindingInputs()): McpAppBinding | null {
-    const [client, sessionKey, viewId, agentId, connectionRevision, scope, denied] = inputs;
-    return client && !denied
-      ? {
-          client,
-          sessionKey,
-          viewId,
-          agentId: agentId || undefined,
-          connectionRevision,
-          scope,
-        }
-      : null;
+    return resolveMcpAppBinding(inputs, context.gateway.snapshot.phase === "connected");
   }
 
-  function isCurrentBinding(
-    binding: McpAppBinding,
-    resources: McpAppResources,
-    signal: AbortSignal,
-  ): boolean {
-    const gateway = context.gateway;
-    return (
-      !signal.aborted &&
-      !resources.disposed &&
-      activeResources === resources &&
-      host.isConnected &&
-      inactive !== "ended" &&
-      host.sessionKey === binding.sessionKey &&
-      host.viewId === binding.viewId &&
-      (host.agentId || undefined) === binding.agentId &&
-      gateway.snapshot.phase === "connected" &&
-      gateway.snapshot.client === binding.client &&
-      hasOperatorReadAccess(gateway.snapshot.hello?.auth ?? null) &&
-      gateway.connectionRevision === binding.connectionRevision &&
-      gatewayPresentationScope(gateway).key === binding.scope
-    );
-  }
-
-  async function setupResources(binding: McpAppBinding, signal: AbortSignal): Promise<void> {
-    const { sessionKey, viewId, agentId } = binding;
+  async function setupResources(
+    binding: McpAppBinding | null,
+    payload: McpAppViewPayload,
+  ): Promise<void> {
+    const { widget, appDisplay } = host;
     let resources: McpAppResources | null = null;
     try {
-      const payload = await requestOwner<McpAppViewPayload>(binding, "mcp.app.view", {}, signal);
       const mount = mountElement;
-      signal.throwIfAborted();
       setInactive(payload.messageSupported === false ? "reconstructed" : null);
       if (!mount) {
         throw new Error(translate("mcpApp.errors.mountUnavailable"));
@@ -431,6 +408,7 @@ export function createMcpAppView(
       iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms");
       mount.appendChild(iframe);
       const createdResources: McpAppResources = {
+        binding,
         bridge: null,
         requestAbort: new AbortController(),
         cleanups: new Set(),
@@ -439,13 +417,12 @@ export function createMcpAppView(
         transport: null,
         disposed: false,
       };
+      const initialization = new AbortController();
+      const signal = initialization.signal;
+      addResourceCleanup(createdResources, () => initialization.abort());
       resources = createdResources;
       activeResources = createdResources;
       addResourceCleanup(createdResources, () => confirmation.cancel());
-      addResourceCleanup(
-        createdResources,
-        listen(signal, "abort", () => void teardownResources(createdResources), { once: true }),
-      );
 
       const addCleanup = (cleanup: () => void) => addResourceCleanup(createdResources, cleanup);
       await loadMcpAppSandbox(
@@ -498,7 +475,10 @@ export function createMcpAppView(
           ...(deepLink ? { "openai/deepLink": deepLink } : {}),
         };
       };
-      const publishContext = () =>
+      const publishContext = () => {
+        const live = createdResources.binding;
+        if (!live) return;
+        const { sessionKey, viewId } = live;
         host.dispatchEvent(
           new CustomEvent<McpAppContextEventDetail>(MCP_APP_CONTEXT_EVENT, {
             bubbles: true,
@@ -506,26 +486,31 @@ export function createMcpAppView(
             detail: { sessionKey, viewId, state: modelContext },
           }),
         );
-      const bridge = new OpenClawAppBridge(
-        null,
-        { name: "OpenClaw", version: "1.0.0" },
-        buildMcpAppHostCapabilities(
-          payload.csp,
-          payload.messageSupported === true,
-          payload.updateModelContextSupported === true,
-          {
-            richModelContext: payload.richModelContextSupported === true,
-            fileResources: payload.fileResourcesSupported === true,
-            openFiles: payload.openFilesSupported === true,
-          },
-        ),
-        { hostContext: buildHostContext() },
-      );
+      };
+      const bridge = createMcpAppFrameBridge(payload, buildHostContext());
       createdResources.bridge = bridge;
       // Keep saves live through graceful teardown, then retire all frame RPCs.
-      const request = <T = unknown>(method: string, params: Record<string, unknown>) =>
-        requestOwner<T>(binding, method, params, createdResources.requestAbort.signal);
-      const isCurrent = () => isCurrentBinding(binding, createdResources, signal);
+      const liveBinding = () => {
+        const current = createdResources.binding;
+        if (!current) {
+          throw new Error(translate("mcpApp.errors.gatewayUnavailable"));
+        }
+        return current;
+      };
+      const request = async <T = unknown>(method: string, params: Record<string, unknown>) =>
+        requestOwner<T>(
+          createdResources.binding,
+          method,
+          params,
+          createdResources.requestAbort.signal,
+        );
+      const isCurrent = () =>
+        !signal.aborted &&
+        !createdResources.disposed &&
+        activeResources === createdResources &&
+        host.isConnected &&
+        inactive !== "ended" &&
+        isCurrentMcpAppBinding(createdResources.binding, host, context.gateway);
       const confirm = (text: string, kind: "message" | "file") =>
         confirmation.request({
           frame: iframe,
@@ -572,6 +557,7 @@ export function createMcpAppView(
       });
       if (payload.messageSupported === true) {
         bridge.setMessageHandler(async (params) => {
+          const { sessionKey, viewId } = liveBinding();
           const accepted = await dispatchMcpAppMessage(
             iframe,
             { sessionKey, viewId },
@@ -596,11 +582,9 @@ export function createMcpAppView(
         bridge,
         request,
         releaseResourceSubscription: (uri) =>
-          requestOwner(binding, "mcp.app.unsubscribeResource", { uri }),
-        sessionKey,
-        viewId,
+          requestOwner(createdResources.binding, "mcp.app.unsubscribeResource", { uri }),
+        binding: liveBinding,
         iframe,
-        agentId,
         fileResourcesSupported: payload.fileResourcesSupported,
         openFilesSupported: payload.openFilesSupported,
         confirmOpenFile: (path) => confirm(path, "file"),
@@ -617,7 +601,8 @@ export function createMcpAppView(
         },
         subscribeEvents: (listener) => context.gateway.subscribeEvents(listener),
       });
-      bridge.onrequestdisplaymode = ({ mode }) => {
+      bridge.onrequestdisplaymode = async ({ mode }) => {
+        liveBinding();
         if ((mode !== "inline" && mode !== "fullscreen") || !modes.available.includes(mode)) {
           return Promise.resolve({ mode: host.displayMode });
         }
@@ -629,12 +614,10 @@ export function createMcpAppView(
         bridge.setHostContext(buildHostContext());
         return Promise.resolve({ mode });
       };
-      bridge.onopenlink = ({ url }) => {
+      bridge.onopenlink = async ({ url }) => {
+        liveBinding();
         // Both external and plugin navigation require the current, focused App.
-        if (
-          !isCurrentBinding(binding, createdResources, signal) ||
-          !isWidgetFrameInteractable(createdResources.iframe)
-        ) {
+        if (!isCurrent() || !isWidgetFrameInteractable(createdResources.iframe)) {
           return Promise.resolve({ isError: true });
         }
         if (!parseMcpAppLink(url)) {
@@ -683,8 +666,9 @@ export function createMcpAppView(
       createdResources.updateHostContext = updateHostContext;
       updateHostContext();
       publishContext();
-      notifications.start();
+      if (binding) notifications.start();
       createdResources.reconnect = async () => {
+        if (!createdResources.binding) return;
         await notifications.reconnect();
         if (payload.updateModelContextSupported === true) {
           await refreshModelContext();
@@ -702,6 +686,25 @@ export function createMcpAppView(
       });
       await bridge.sendToolResult(payload.toolResult);
       signal.throwIfAborted();
+      if (widget && isCurrent()) void appDisplay?.(widget, payload);
+      if (!binding)
+        createdResources.adopt = async (live, next) => {
+          // Complete tool input is once per initialization; changed facts require a new frame.
+          const { toolResult, ...initial } = boardAppDisplaySchema.parse(payload);
+          const { toolResult: freshResult, ...fresh } = boardAppDisplaySchema.parse(next);
+          if (JSON.stringify(initial) !== JSON.stringify(fresh)) return false;
+          createdResources.binding = live;
+          modelContext = next.hostContext?.["openai/modelContext"] ?? null;
+          payload = next;
+          createdResources.adopt = undefined;
+          notifications.start();
+          updateHostContext();
+          publishContext();
+          if (JSON.stringify(toolResult) !== JSON.stringify(freshResult))
+            await bridge.sendToolResult(freshResult);
+          if (widget && isCurrent()) void appDisplay?.(widget, next);
+          return true;
+        };
     } catch (error) {
       await teardownResources(resources);
       throw error;

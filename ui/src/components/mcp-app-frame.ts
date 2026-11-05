@@ -2,7 +2,10 @@ import { type AppBridge, McpUiHostContextSchema } from "@modelcontextprotocol/ex
 import { t } from "../i18n/index.ts";
 import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { OpenClawAppBridge } from "./mcp-app-bridge.ts";
+import { buildMcpAppHostCapabilities } from "./mcp-app-security.ts";
 import { collectMcpAppStyleVariables } from "./mcp-app-theme.ts";
+import type { McpAppViewPayload } from "./mcp-app-view-types.ts";
 
 registerMcpAppEnglish();
 
@@ -115,4 +118,22 @@ export async function waitForMcpAppHandlerRegistration(): Promise<void> {
       window.setTimeout(resolve, 1_000);
     }),
   ]);
+}
+
+export function createMcpAppFrameBridge(payload: McpAppViewPayload, hostContext: HostContext) {
+  return new OpenClawAppBridge(
+    null,
+    { name: "OpenClaw", version: "1.0.0" },
+    buildMcpAppHostCapabilities(
+      payload.csp,
+      payload.messageSupported === true,
+      payload.updateModelContextSupported === true,
+      {
+        richModelContext: payload.richModelContextSupported === true,
+        fileResources: payload.fileResourcesSupported === true,
+        openFiles: payload.openFilesSupported === true,
+      },
+    ),
+    { hostContext: hostContext },
+  );
 }

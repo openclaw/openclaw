@@ -248,7 +248,7 @@ describe("persistent chat session snapshots", () => {
       } else if (operation === "clear") {
         store.clearMemory();
       } else if (operation === "sidebar") {
-        store.forgetSidebar({ sessionKey });
+        store.forgetProjections({ sessionKey });
       } else {
         store.disconnect();
       }

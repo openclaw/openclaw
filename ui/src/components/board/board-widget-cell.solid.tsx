@@ -476,6 +476,7 @@ function BoardWidgetCellContent(
           <BoardMcpAppContent
             accessNotice={<AccessNotice />}
             active={current().appView.snapshot().active}
+            appDisplay={props.callbacks?.appDisplay}
             appView={current().appView.snapshot().state}
             busy={unavailable()}
             loading={current().appView.snapshot().loading}
