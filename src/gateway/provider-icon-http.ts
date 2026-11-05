@@ -2,6 +2,7 @@ import { closeSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import pLimit from "p-limit";
+import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import { resolveConfigPath } from "../config/paths.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -155,11 +156,9 @@ export async function handleProviderIconHttpRequest(
   }
   auth.assertCurrent();
   const providerId = parsed.value;
-  const providers = opts.config.models?.providers;
-  const icon =
-    providerId && providers && Object.hasOwn(providers, providerId)
-      ? providers[providerId]?.icon
-      : undefined;
+  const icon = providerId
+    ? resolveMergedModelProviderConfig(opts.config, providerId)?.icon
+    : undefined;
   if (
     !providerId ||
     !icon ||

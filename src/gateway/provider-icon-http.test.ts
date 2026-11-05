@@ -14,11 +14,14 @@ const PNG = Buffer.from(
   "base64",
 );
 const AUTH = "Bearer test-token";
-function configuration(icon: NonNullable<ModelProviderConfig["icon"]>): OpenClawConfig {
+function configuration(
+  icon: NonNullable<ModelProviderConfig["icon"]>,
+  provider = "workstation",
+): OpenClawConfig {
   return {
     models: {
       providers: {
-        workstation: {
+        [provider]: {
           baseUrl: "http://127.0.0.1:11434/v1",
           models: [],
           name: "Workstation",
@@ -56,6 +59,7 @@ describe("provider artwork through authenticated Gateway HTTP", () => {
       run: async (server) => {
         vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(dir, "openclaw.json"));
         const url = "/dashboard" + iconUrl(cfg);
+        cfg = configuration({ source: "file", path: "workstation.png" }, " Workstation ");
         expect(url).not.toContain("workstation.png");
         const unauthorized = await sendRequest(server, { path: url });
         expect(unauthorized.res.statusCode).toBe(401);

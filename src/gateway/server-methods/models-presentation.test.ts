@@ -3,7 +3,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { listModels } from "./models-list.test-support.js";
 
 describe("models.list provider presentation", () => {
-  it("publishes current provider presentation without changing model identity or leaking sources", async () => {
+  it("publishes authored mixed-case provider presentation without changing identity or leaking sources", async () => {
     await withOpenClawTestState({ prefix: "models-presentation-", scenario: "empty" }, async () => {
       const loadGatewayModelCatalog = vi.fn(async () => [
         { id: "local-model", name: "Local model", provider: "workstation" },
@@ -19,7 +19,7 @@ describe("models.list provider presentation", () => {
           runtimeConfig: {
             models: {
               providers: {
-                workstation: {
+                " Workstation ": {
                   baseUrl: "https://models.example.com/v1",
                   auth: "none",
                   models: [],

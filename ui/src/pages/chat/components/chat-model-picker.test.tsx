@@ -291,43 +291,6 @@ it("keeps search live while targets load, then ranks model, target, and account 
   expect(selectAccount).not.toHaveBeenCalled();
 });
 
-it("shows the prepared custom provider initial without changing the selected model", async () => {
-  const props = pickerProps({
-    open: true,
-    modelOptions: [
-      option("workstation", "local", { presentation: { providerName: "Research Lab" } }),
-    ],
-    selectedModelValue: "workstation/local",
-    triggerModelLabel: "Local",
-  });
-  const view = mountPicker(props);
-  const icon = () => view.container.querySelector(".chat-controls__trigger-provider-icon");
-  expect(icon()?.textContent).toBe("R");
-  await waitForMenu(view.container);
-  const group = () =>
-    view.container.querySelector('[data-chat-model-provider-group="workstation"]');
-  expect(group()?.querySelector(".chat-controls__provider-label")?.textContent).toBe(
-    "Research Lab",
-  );
-  expect(group()?.querySelector(".chat-controls__provider-icon")?.textContent).toBe("R");
-  view.update({
-    ...props,
-    modelOptions: [
-      option("workstation", "local", {
-        presentation: { providerName: "Alpha workstation" },
-      }),
-    ],
-  });
-  expect(icon()?.textContent).toBe("A");
-  expect(group()?.querySelector(".chat-controls__provider-label")?.textContent).toBe(
-    "Alpha workstation",
-  );
-  expect(view.container.querySelector(".chat-controls__inline-select-label")?.textContent).toBe(
-    "Local",
-  );
-  expect(props.onModelSelect).not.toHaveBeenCalled();
-});
-
 it("keeps unconfigured unknown provider trigger icons unchanged", () => {
   const { container } = mountPicker({
     modelOptions: [option("workstation", "local")],

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { ProviderPresentation } from "../../packages/gateway-protocol/src/schema/model-catalog.js";
+import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildControlUiResourcePath } from "./control-ui-resource-routes.js";
@@ -13,9 +14,7 @@ export function resolveProviderPresentation(
   cfg: OpenClawConfig,
   providerId: string,
 ): ProviderPresentation {
-  const providers = cfg.models?.providers;
-  const provider =
-    providers && Object.hasOwn(providers, providerId) ? providers[providerId] : undefined;
+  const provider = resolveMergedModelProviderConfig(cfg, providerId);
   const icon = provider?.icon;
   return {
     ...(provider?.name ? { providerName: provider.name } : {}),
