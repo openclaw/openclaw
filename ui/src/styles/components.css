@@ -2928,11 +2928,6 @@ select.data-table-pagination__size {
   white-space: nowrap;
 }
 
-.provider-brand-icon--custom {
-  object-fit: contain;
-  border-radius: var(--radius-sm);
-}
-
 .provider-brand-icon {
   display: inline-flex;
   align-items: center;

@@ -149,6 +149,7 @@ it("loads artwork through the Gateway and falls through to the effective-name in
   ));
   await expect.poll(() => container.querySelector("img")).not.toBeNull();
   expect(fetch.mock.calls[0]?.[0]).toContain("/__openclaw__/provider-icon/workstation?v=opaque");
+  expect(container.querySelector("img")?.style.objectFit).toBe("contain");
   const imageUrl = container.querySelector("img")?.src;
   container.querySelector("img")?.dispatchEvent(new Event("error"));
   flush();

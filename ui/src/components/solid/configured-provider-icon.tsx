@@ -72,7 +72,8 @@ export default function ConfiguredProviderIcon(props: {
             <Show when={!failed() && artwork()} fallback={props.fallback}>
               {(url) => (
                 <img
-                  class={["provider-brand-icon", "provider-brand-icon--custom", props.class]}
+                  class={["provider-brand-icon", props.class]}
+                  style={{ "object-fit": "contain" }}
                   src={url()}
                   alt=""
                   aria-hidden="true"
