@@ -50,6 +50,23 @@ function buildPushHeaders(config: A2aPushNotificationConfig): Record<string, str
   return headers;
 }
 
+/** Raised by the final-effect check when a delivery's authority evaporated mid-flight. */
+class A2aPushDeliveryRevokedError extends Error {}
+
+/**
+ * Two registrations describe the same delivery target when every field that
+ * reaches the wire matches; anything else is a replacement, not the
+ * registration this delivery was authorized for.
+ */
+function sameDeliveryTarget(a: A2aPushNotificationConfig, b: A2aPushNotificationConfig): boolean {
+  return (
+    a.url === b.url &&
+    a.token === b.token &&
+    a.authentication?.scheme === b.authentication?.scheme &&
+    a.authentication?.credentials === b.authentication?.credentials
+  );
+}
+
 export type A2aPushSenderLogger = (message: string) => void;
 
 /**
@@ -77,9 +94,11 @@ export class A2aPushSender {
   notify(params: {
     task: A2aTask;
     /**
-     * Resolved at every delivery boundary, not when the event fires: a
-     * registration deleted or replaced while this notification sat queued
-     * behind a slow receiver must not receive (or be charged for) the update.
+     * Resolved at every delivery boundary — queue time, each retry, and the
+     * synchronous final-effect check at request initiation — not when the
+     * event fires: a registration deleted or replaced while this notification
+     * sat queued behind a slow receiver must not receive (or be charged for)
+     * the update.
      */
     resolveConfigs: () => A2aPushNotificationConfig[];
     event: A2aStreamResponse;
@@ -138,6 +157,26 @@ export class A2aPushSender {
           auditContext: "a2a.push_notification",
           // A redirect could deliver a task update to an unintended receiver.
           maxRedirects: 0,
+          // Final-effect authorization: transport preparation and DNS are
+          // awaited after the loop above re-resolved the registration, so
+          // authority is checked one last time — synchronously, at the exact
+          // moment the request is about to hit the network. A registration
+          // deleted or replaced (or a channel shutdown) during that window
+          // loses the right to receive the POST, including its URL, task
+          // content, and webhook credentials.
+          beforeRequest: () => {
+            if (this.#closed) {
+              throw new A2aPushDeliveryRevokedError(
+                "a2a push channel closed before request initiation",
+              );
+            }
+            const current = resolveConfigs().find((entry) => entry.id === configId);
+            if (!current || !sameDeliveryTarget(current, config)) {
+              throw new A2aPushDeliveryRevokedError(
+                `a2a push registration ${configId} revoked before request initiation`,
+              );
+            }
+          },
           init: { method: "POST", headers, body },
         });
         try {

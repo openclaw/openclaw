@@ -11,20 +11,38 @@ import type { A2aTaskStore } from "./task-store.js";
 
 type GuardedFetchCall = { url: string; init: { headers?: Record<string, string>; body?: string } };
 
-const { createdStores, dispatchers, fetchCalls } = vi.hoisted(() => ({
+const { createdStores, dispatchers, fetchCalls, fetchStarted, transportGate } = vi.hoisted(() => ({
   createdStores: [] as A2aTaskStore[],
   dispatchers: new WeakMap<
     A2aTaskStore,
     (message: Parameters<typeof dispatchA2aInbound>[0]) => Promise<void>
   >(),
   fetchCalls: [] as GuardedFetchCall[],
+  /** Counted the moment the mocked guard is entered, before transport preparation. */
+  fetchStarted: [] as number[],
+  /**
+   * When `promise` is set, the mocked guard parks the request in "transport
+   * preparation" until it resolves, mirroring the DNS/connect await of the
+   * real guard — the synchronous beforeRequest hook runs only after it.
+   */
+  transportGate: { promise: undefined as Promise<void> | undefined },
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
   return {
     ...actual,
-    fetchWithSsrFGuard: async (params: GuardedFetchCall & { url: string }) => {
+    fetchWithSsrFGuard: async (params: {
+      url: string;
+      init?: { headers?: Record<string, string>; body?: string };
+      beforeRequest?: () => void;
+    }) => {
+      fetchStarted.push(Date.now());
+      // The real guard awaits transport preparation (DNS, connect) and only
+      // then runs the synchronous final-effect hook; a throw there rejects
+      // without the request ever reaching the network.
+      await transportGate.promise;
+      params.beforeRequest?.();
       fetchCalls.push({ url: params.url, init: params.init ?? {} });
       return {
         response: { ok: true, status: 200 },
@@ -59,6 +77,8 @@ afterEach(async () => {
     await lifecycle;
   }
   fetchCalls.length = 0;
+  fetchStarted.length = 0;
+  transportGate.promise = undefined;
   resetPluginRuntimeStateForTest();
   vi.restoreAllMocks();
 });
@@ -206,6 +226,41 @@ describe("A2A push notification configuration", () => {
     expect(payload).toMatchObject({
       statusUpdate: { status: { state: "TASK_STATE_COMPLETED" } },
     });
+  });
+
+  it("refuses the webhook POST when its registration is revoked during transport preparation", async () => {
+    const { taskStore, post } = await startPushHarness();
+    const task = taskStore.create("ctx-revoke", "alpha");
+    taskStore.start(task.id);
+    const created = (await (
+      await post(
+        rpc("CreateTaskPushNotificationConfig", {
+          taskId: task.id,
+          url: "https://peer.example.test/webhook",
+          authentication: { scheme: "Bearer", credentials: "peer-token" },
+        }),
+      )
+    ).json()) as { result: { id: string } };
+
+    // Park the first delivery in transport preparation (DNS/connect).
+    let release!: () => void;
+    transportGate.promise = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    taskStore.complete(task.id, "final answer");
+    await waitFor(() => fetchStarted.length > 0);
+
+    // The registration is revoked while the request sits in transport
+    // preparation: the final-effect check must reject it, so the URL, task
+    // content, and webhook credentials never reach the network.
+    await post(rpc("DeleteTaskPushNotificationConfig", { taskId: task.id, id: created.result.id }));
+    release();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
+
+    expect(fetchCalls).toEqual([]);
   });
 
   it("registers a webhook supplied inline with SendMessage", async () => {
