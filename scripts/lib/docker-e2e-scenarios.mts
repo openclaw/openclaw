@@ -460,6 +460,12 @@ export const mainLanes: DockerE2eLane[] = [
     stateScenario: "empty",
     timeoutMs: 20 * 60 * 1000,
   }),
+  // Three sequential installed-parent cells share one immutable candidate.
+  npmLane("installed-terminal", {
+    stateScenario: "empty",
+    timeoutMs: 50 * 60 * 1000,
+    weight: 3,
+  }),
   upgradeSurvivorLane(
     "dreaming-cron-doctor",
     dreamingCronDoctorCommand,

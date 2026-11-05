@@ -1,14 +1,16 @@
-// External process and SQLite observation preserves native behavior.
+// External installed-process observation. Never substitute a worker response,
+// SQLite result, or product failure; the only fault is a launcher inode change.
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { fileURLToPath, URL, URLSearchParams } from "node:url";
 import { types } from "node:util";
 import workerThreads from "node:worker_threads";
-import { gzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import {
   fileIdentity,
   installedRecoveryEvidenceMode,
@@ -607,9 +609,11 @@ function install(spec) {
     spawn: childProcess.spawn,
     spawnSync: childProcess.spawnSync,
     Worker: workerThreads.Worker,
+    readFile: fsp.readFile,
     stdoutWrite: Reflect.get(process.stdout, "write"),
   };
   const maxBytes = 4 * 1024 * 1024;
+  const maxInputBytes = 1024 * 1024;
   const thread = workerThreads.threadId;
   for (const key of [
     "directory",
@@ -1111,6 +1115,7 @@ function install(spec) {
     },
   });
   workerThreads.Worker = observedWorker;
+  let selected;
   let spawnId = 0;
   const nativeOperation = (command, argv, data) => {
     const env = data?.env;
@@ -1316,8 +1321,195 @@ function install(spec) {
       child.once("close", (code, signal) =>
         report("spawn-close", { spawnId: id, child: pid, spawned, code, signal }),
       );
+      // The same installed executable also serves Doctor and post-core requests.
+      // Only its argument-free installed Node invocation owns final publication.
+      const finalizer =
+        nodeChild &&
+        argv?.length === 1 &&
+        /(?:^|\/)update-migrated-finalize\.worker\.(?:m?js)$/u.test(argv[0]);
+      if (finalizer) {
+        assert(!selected, "Multiple migrated finalizers in one predecessor");
+        assert(child.pid && child.stdin && child.stdout && child.stderr);
+        selected = { child: child.pid, input: [], inputBytes: 0, output: [], outputBytes: 0 };
+        const capture = (value, encoding) => {
+          if (value === undefined || value === null || typeof value === "function") {
+            return;
+          }
+          const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value, encoding);
+          selected.inputBytes += chunk.length;
+          assert(selected.inputBytes <= maxInputBytes, "Migrated input exceeded observer budget");
+          selected.input.push(chunk);
+        };
+        const write = child.stdin.write;
+        child.stdin.write = function (...writeArgs) {
+          const [value, encoding] = writeArgs;
+          observe("worker-input", () =>
+            capture(value, typeof encoding === "string" ? encoding : undefined),
+          );
+          return Reflect.apply(write, this, writeArgs);
+        };
+        const end = child.stdin.end;
+        child.stdin.end = function (...endArgs) {
+          const [value, encoding] = endArgs;
+          observe("worker-input", () =>
+            capture(value, typeof encoding === "string" ? encoding : undefined),
+          );
+          observe("handoff", () => {
+            selected.request = JSON.parse(Buffer.concat(selected.input).toString("utf8"));
+            const request = selected.request;
+            assert(path.isAbsolute(request.resultPath));
+            assert.equal(request.params.result.root, spec.root);
+            assert.equal(typeof request.params.opts.run.runId, "string");
+            assert(Array.isArray(request.params.schemaVersions));
+            const databases = request.params.schemaVersions.map((entry) =>
+              fileFacts(locationOf(entry.path)),
+            );
+            assert(!fs.existsSync(scopeFile), "Multiple installed handoffs");
+            scope = { time: String(process.hrtime.bigint()), child: child.pid, databases };
+            writeInstalledRecoveryEvidence(scopeFile, scope);
+            report("handoff", { ...scope, request });
+          });
+          return Reflect.apply(end, this, endArgs);
+        };
+        child.stdout.on("data", (chunk) => {
+          observe("worker-output", () => {
+            selected.outputBytes += chunk.length;
+            assert(
+              selected.outputBytes <= maxInputBytes,
+              "Migrated stdout exceeded observer budget",
+            );
+            selected.output.push(Buffer.from(chunk));
+          });
+        });
+        child.stdout.once("end", () => {
+          selected.stdoutEnded = true;
+        });
+        child.stderr.once("end", () => {
+          selected.stderrEnded = true;
+        });
+        child.once("exit", (code, signal) => {
+          selected.exit = { code, signal };
+        });
+        child.once("close", (code, signal) => {
+          observe("worker-closed", () => {
+            selected.closed = true;
+            report("worker-closed", {
+              child: child.pid,
+              code,
+              signal,
+              exit: selected.exit,
+              stdoutEnded: selected.stdoutEnded,
+              stderrEnded: selected.stderrEnded,
+              stdout: Buffer.concat(selected.output).toString("utf8"),
+            });
+          });
+        });
+      }
     });
     return child;
+  };
+  const readOnly = (databasePath, read) => {
+    // This external evidence query is deliberately separate from product opens.
+    report("observer-read", { location: databasePath });
+    const database = new NativeDatabase(databasePath, { readOnly: true });
+    try {
+      return read(database);
+    } finally {
+      database.close();
+    }
+  };
+  fsp.readFile = async function (...args) {
+    const result = await Reflect.apply(original.readFile, this, args);
+    observe("candidate-response", () => {
+      if (!selected?.request || String(args[0]) !== selected.request.resultPath) {
+        return;
+      }
+      assert(!selected.observed, "Migrated response was read twice");
+      selected.observed = true;
+      assert(selected.closed && selected.stdoutEnded && selected.stderrEnded);
+      assert.deepEqual(selected.exit, { code: 0, signal: null });
+      assert(Buffer.byteLength(result) <= maxInputBytes);
+      const response = JSON.parse(result.toString());
+      const params = selected.request.params;
+      const runId = params.opts.run.runId;
+      assert.equal(params.rollbackBlockedReason, "state-migrated-no-rollback");
+      const before = params.schemaVersions.find((entry) => entry.path === spec.agentDatabase);
+      assert.equal(before?.contentVersion ?? before?.userVersion, 25);
+      assert.equal(params.result.root, spec.root);
+      assert.equal(response.result.root, spec.root);
+      assert.equal(response.result.runId, runId);
+      assert.equal(response.terminalRunId, runId);
+      assert.equal(response.result.status, "ok");
+      assert.equal(response.exitCode, 0);
+      const candidate = readOnly(spec.stateDatabase, (db) => ({
+        ...db.prepare("SELECT * FROM update_runs WHERE run_id = ?").get(runId),
+      }));
+      assert.equal(candidate.status, "succeeded");
+      assert.equal(candidate.phase, "finished");
+      const agent = readOnly(spec.agentDatabase, (db) => ({
+        userVersion: db.prepare("PRAGMA user_version").get().user_version,
+        metadataVersion: db
+          .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+          .get().schema_version,
+        retained: db
+          .prepare(
+            "SELECT value_json FROM cache_entries WHERE scope = 'installed-terminal' AND key = 'retained'",
+          )
+          .get().value_json,
+      }));
+      assert.equal(agent.userVersion, spec.agentVersion);
+      assert.equal(agent.metadataVersion, spec.agentVersion);
+      assert.equal(agent.retained, '"preserve-me"');
+      const row = readOnly(spec.journal, (db) => ({
+        ...db.prepare("SELECT * FROM package_activation WHERE slot = 1").get(),
+      }));
+      const descriptor = JSON.parse(row.descriptor_json);
+      const publications = JSON.parse(row.publications_json);
+      assert.equal(row.phase, "publication-complete");
+      assert.equal(descriptor.authority.installKey, spec.root);
+      assert.equal(descriptor.binDir, path.dirname(spec.bin));
+      report("candidate-success", {
+        child: selected.child,
+        response,
+        candidate,
+        agent,
+        activation: row,
+      });
+      if (spec.fault) {
+        // A recorder failure in any isolate invalidates the proof. Do not turn
+        // that failure into a new launcher mutation or hide an existing intent.
+        if (failure || fs.existsSync(sharedFailure)) {
+          return;
+        }
+        const stat = fs.lstatSync(spec.bin, { bigint: true });
+        const identity = `${stat.dev}:${stat.ino}`;
+        assert.equal(publications.find((entry) => entry.name === "openclaw")?.identity, identity);
+        assert(stat.isSymbolicLink(), "This npm Linux cell requires its real launcher symlink");
+        const link = fs.readlinkSync(spec.bin);
+        // Escrow stays on the installation filesystem; the evidence bind mount
+        // may be a different device and must never turn this into an EXDEV fault.
+        const escrow = spec.escrow;
+        assert(!fs.existsSync(escrow));
+        const intent = { row, identity, link, escrow, bin: spec.bin };
+        writeInstalledRecoveryEvidence(path.join(spec.directory, "launcher-intent.json"), intent);
+        report("launcher-intent", intent);
+        if (failure || fs.existsSync(sharedFailure)) {
+          return;
+        }
+        fs.renameSync(spec.bin, escrow);
+        fs.symlinkSync(link, spec.bin);
+        const replacement = fs.lstatSync(spec.bin, { bigint: true });
+        const replacementIdentity = `${replacement.dev}:${replacement.ino}`;
+        assert.notEqual(identity, replacementIdentity);
+        const replaced = { ...intent, replacementIdentity };
+        writeInstalledRecoveryEvidence(
+          path.join(spec.directory, "launcher-replaced.json"),
+          replaced,
+        );
+        report("launcher-replaced", replaced);
+      }
+    });
+    return result;
   };
   process.stdout.write = function (...args) {
     const [value, encoding] = args;
@@ -1341,7 +1533,7 @@ function install(spec) {
   });
   observe("heartbeat-package", qualifyHeartbeatPackage);
   process.once("exit", (code) => {
-    report("exit", { code });
+    report("exit", { code, selectedWorker: selected?.child ?? null });
     persistFailure();
     try {
       fs.closeSync(fd);
@@ -1349,6 +1541,53 @@ function install(spec) {
       fail(error, "close");
     }
   });
+}
+
+// Event parsing can fail after a real rename. This separate custody receipt is
+// authoritative only for restoring this observer's exact escrow and replacement.
+export function restoreInstalledTerminalLauncher(spec) {
+  const read = (name) => {
+    const file = path.join(spec.directory, name);
+    const stat = fs.lstatSync(file, { throwIfNoEntry: false });
+    if (!stat) {
+      return undefined;
+    }
+    assert(stat.isFile() && stat.size <= 1024 * 1024, "Unsafe launcher custody receipt");
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  };
+  const intent = read("launcher-intent.json");
+  const escrow = fs.lstatSync(spec.escrow, { throwIfNoEntry: false });
+  if (!intent) {
+    assert(!escrow, "Unattributed launcher escrow retained");
+    return { status: "not-armed" };
+  }
+  assert.equal(intent.bin, spec.bin);
+  assert.equal(intent.escrow, spec.escrow);
+  const current = fs.lstatSync(spec.bin, { throwIfNoEntry: false });
+  if (!escrow) {
+    assert(current?.isSymbolicLink());
+    assert.equal(fileIdentity(spec.bin), intent.identity);
+    assert.equal(fs.readlinkSync(spec.bin), intent.link);
+    return { status: "unchanged", row: intent.row };
+  }
+  assert(escrow.isSymbolicLink());
+  assert.equal(fileIdentity(spec.escrow), intent.identity);
+  assert.equal(fs.readlinkSync(spec.escrow), intent.link);
+  if (current) {
+    const replaced = read("launcher-replaced.json");
+    assert(replaced, "Unacknowledged replacement retained");
+    assert.deepEqual(
+      { ...replaced, replacementIdentity: undefined },
+      { ...intent, replacementIdentity: undefined },
+    );
+    assert(current.isSymbolicLink());
+    assert.equal(fileIdentity(spec.bin), replaced.replacementIdentity);
+    assert.equal(fs.readlinkSync(spec.bin), intent.link);
+    fs.unlinkSync(spec.bin);
+  }
+  fs.renameSync(spec.escrow, spec.bin);
+  assert.equal(fileIdentity(spec.bin), intent.identity);
+  return { status: "restored", row: intent.row };
 }
 
 // A single source-qualified builtin leaf may lack the ambient preload. Reject
@@ -1541,6 +1780,129 @@ export function installedTerminalDescendants(rows, root) {
     }
   }
   return found;
+}
+
+// The inner terminal owner suppresses candidate success on settlement failure;
+// the outer JSON reporter still publishes one detached error after that refusal.
+// Validate the complete stream and its emitting owner, not an empty-stdout proxy.
+export function assertInstalledTerminalOutput(rows, spec, result) {
+  const only = (event) => {
+    const matches = rows.filter((row) => row.event === event);
+    assert.equal(matches.length, 1, `Expected one ${event}`);
+    return matches[0];
+  };
+  const closed = only("worker-closed");
+  const candidateResult = JSON.parse(closed.stdout);
+  assert.equal(candidateResult.status, "ok");
+  const handoff = only("handoff");
+  const success = only("candidate-success");
+  const all = installedTerminalDescendants(rows, result.pid);
+  const candidate = installedTerminalDescendants(rows, handoff.child);
+  const outputs = rows.filter(
+    (row) => row.event === "stdout" && all.has(row.pid) && !candidate.has(row.pid),
+  );
+  const bytes = (events) => Buffer.concat(events.map((row) => Buffer.from(row.bytes, "base64")));
+  if (!spec.fault) {
+    assert.equal(result.code, 0);
+    // The terminal owner forwards the candidate bytes only after settlement.
+    // A separate successful row cannot qualify stale or prematurely emitted stdout.
+    assert.equal(result.stdout, closed.stdout, "Healthy stdout changed candidate bytes");
+    assert.equal(candidateResult.root, spec.root);
+    assert.equal(candidateResult.runId, success.response.terminalRunId);
+    assert.equal(closed.pid, handoff.pid);
+    assert.equal(success.pid, handoff.pid);
+    assert.equal(closed.child, handoff.child);
+    assert.equal(success.child, handoff.child);
+    assert(BigInt(closed.time) < BigInt(success.time));
+    assert.deepEqual(
+      bytes(outputs.filter((row) => row.pid === handoff.pid)),
+      Buffer.from(result.stdout),
+      "Healthy parent stdout capture mismatch",
+    );
+    for (const row of outputs) {
+      if (Buffer.from(row.bytes, "base64").length) {
+        if (row.pid === handoff.pid) {
+          assert.equal(row.thread, 0);
+          assert(BigInt(row.time) > BigInt(success.time), "Healthy output preceded settlement");
+        } else {
+          // Earlier inspection children use stdout for captured private replies.
+          // Complete CLI/parent equality above detects any bytes that escaped;
+          // after handoff, predecessor writers must also remain quiescent.
+          assert(
+            BigInt(row.time) < BigInt(handoff.time),
+            "Foreign predecessor wrote during healthy terminal handoff",
+          );
+        }
+      }
+    }
+    return;
+  }
+  const fault = only("launcher-replaced");
+  assert.equal(fault.pid, handoff.pid);
+  assert.equal(fault.thread, 0);
+  assert(BigInt(success.time) < BigInt(fault.time));
+  assert.equal(result.code, 1);
+  const refusal = result.stderr
+    .split(/\r?\n/u)
+    .find((line) =>
+      /^Update backup cleanup failed: Selected package launcher identity changed\.\. Inspect .+ before manual cleanup\.$/u.test(
+        line,
+      ),
+    );
+  assert(refusal, "Missing exact package backup cleanup refusal");
+  const leaked = bytes(outputs).includes(Buffer.from(closed.stdout));
+  if (spec.historical) {
+    assert(leaked, "Historical driver did not expose the original early-publication failure");
+    assert(result.stdout.includes(closed.stdout), "Historical success did not reach CLI stdout");
+    return;
+  }
+  assert(!leaked, "Parent republished candidate success after settlement failed");
+  const parentOutput = outputs.filter((row) => row.pid === handoff.pid);
+  assert.deepEqual(
+    bytes(parentOutput),
+    Buffer.from(result.stdout),
+    "Parent stdout capture mismatch",
+  );
+  for (const row of outputs) {
+    if (BigInt(row.time) > BigInt(success.time) && Buffer.from(row.bytes, "base64").length) {
+      assert.equal(row.pid, handoff.pid, "Foreign predecessor published terminal output");
+      assert.equal(row.thread, 0);
+      assert(BigInt(row.time) > BigInt(fault.time), "Parent output preceded the settlement fault");
+    }
+  }
+  // Empty callback writes drain a Worker's stream without publishing bytes.
+  // Keep them in the capture equality; only actual bytes have publication timing.
+  assert(
+    parentOutput.every(
+      (row) =>
+        Buffer.from(row.bytes, "base64").length === 0 || BigInt(row.time) > BigInt(fault.time),
+    ),
+    "Parent publication preceded the settlement fault",
+  );
+  // JSON.parse rejects concatenated results and progress text. A detached report
+  // must preserve captured identities without reopening or projecting the ledger.
+  const output = JSON.parse(result.stdout);
+  assert.equal(output.status, "error");
+  assert.equal(output.reason, "update-recovery-pending");
+  assert.equal(output.mode, "npm");
+  assert.equal(output.root, spec.root);
+  assert.equal(output.runId, success.response.terminalRunId);
+  for (const key of ["mode", "root", "runId", "before", "after"]) {
+    assert.deepEqual(output[key], candidateResult[key], `Changed captured result ${key}`);
+  }
+  assert.equal(output.run, undefined, "Detached failure must not project retained history");
+  assert.deepEqual(output.recovery, {
+    serviceRestartSafe: false,
+    reason: "runtime-verification-failed",
+  });
+  const failures = output.steps.filter((step) => step.exitCode !== 0);
+  assert.equal(failures.length, 1);
+  const failure = failures[0];
+  assert.equal(failure.name, "package-backup-retention");
+  assert.equal(failure.command, "openclaw update");
+  assert.equal(failure.cwd, spec.root);
+  assert.equal(failure.exitCode, 1);
+  assert.equal(failure.stderrTail, refusal, "Missing exact parent settlement diagnostic");
 }
 
 function readObservation(directory, spec = {}) {
@@ -2283,6 +2645,176 @@ function readIsolateCensus(directory, files) {
     );
   }
   return bytes;
+}
+
+// The reader adds decisions to copies of canonical events. Reference the original
+// event bytes, retaining decisions separately instead of repeating helper bodies.
+export function summarizeInstalledTerminalLaunches(rows) {
+  const reference = (row) => {
+    const record = { ...row };
+    delete record.coverage;
+    delete record.lifetimeBound;
+    assert(Number.isSafeInteger(row.pid) && row.pid > 0);
+    assert(Number.isSafeInteger(row.thread) && row.thread >= 0);
+    assert(Number.isSafeInteger(row.sequence) && row.sequence >= 0);
+    return {
+      source: `${row.pid}-${row.thread}.jsonl`,
+      sequence: row.sequence,
+      event: row.event,
+      sha256: digest(JSON.stringify(record)),
+    };
+  };
+  const handoffs = rows.filter((row) => row.event === "handoff");
+  assert.equal(handoffs.length, 1);
+  const startups = rows.filter((row) => row.event === "startup");
+  return {
+    workersWithoutPreload: rows
+      .filter(
+        (row) =>
+          row.event === "thread" &&
+          !startups.some((start) => start.pid === row.pid && start.thread === row.childThread),
+      )
+      .map((row) => {
+        const exits = rows.filter(
+          (event) =>
+            event.event === "thread-exit" &&
+            event.pid === row.pid &&
+            event.childThread === row.childThread,
+        );
+        assert.equal(exits.length, 1);
+        return {
+          pid: row.pid,
+          creatorThread: row.thread,
+          thread: row.childThread,
+          evidence: reference(row),
+          coverage: row.coverage ?? { role: "package-hasher", reason: "state-incapable" },
+          nativeExit: reference(exits[0]),
+          exitCode: exits[0].code,
+          joinedBeforeHandoff: BigInt(exits[0].time) < BigInt(handoffs[0].time),
+        };
+      }),
+    processesWithoutPreload: rows
+      .filter((row) => row.event === "spawn" && row.coverage)
+      .map((row) => ({
+        pid: row.child,
+        creatorPid: row.pid,
+        creatorThread: row.thread,
+        spawnId: row.spawnId,
+        evidence: reference(row),
+        coverage: row.coverage,
+        nativeSettlement: rows
+          .filter(
+            (event) =>
+              ["spawn-exit", "spawn-sync-return", "spawn-close"].includes(event.event) &&
+              event.pid === row.pid &&
+              event.thread === row.thread &&
+              event.spawnId === row.spawnId,
+          )
+          .map(reference),
+      })),
+    workerLifetimeBounds: rows
+      .filter((row) => row.event === "thread" && row.lifetimeBound)
+      .map((row) => ({
+        pid: row.pid,
+        creatorThread: row.thread,
+        thread: row.childThread,
+        evidence: reference(row),
+        bound: row.lifetimeBound,
+      })),
+  };
+}
+
+// This is an export check, not a replay of the runtime oracle. Resolve every
+// compact launch reference against the finalized, hash-bound raw artifacts.
+export function buildInstalledTerminalSummary(summary, manifestBytes, readArtifact) {
+  assert(manifestBytes.length <= 128 * 1024, "Evidence manifest exceeds 128 KiB");
+  const manifest = JSON.parse(Buffer.from(manifestBytes).toString());
+  if (summary.status === "passed") {
+    assert.equal(manifest.status, "complete");
+    assert.deepEqual(manifest.omissions, []);
+  }
+  const names = new Set(manifest.files.map((file) => file.name));
+  assert.equal(names.size, manifest.files.length, "Duplicate evidence artifact");
+  const read = (name, maximum) => {
+    const file = manifest.files.find((entry) => entry.name === name);
+    assert(file, `Missing summary evidence: ${name}`);
+    assert(Number.isSafeInteger(file.bytes) && file.bytes >= 0 && file.bytes <= 7 * 1024 * 1024);
+    const bytes = readArtifact(name);
+    assert.equal(bytes.length, file.bytes);
+    assert.equal(digest(bytes), file.sha256, `Changed summary evidence: ${name}`);
+    const decoded = gunzipSync(bytes, { maxOutputLength: maximum });
+    assert.equal(decoded.at(-1), 10, `Truncated summary evidence: ${name}`);
+    return decoded
+      .toString()
+      .trimEnd()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+  };
+  for (const cell of summary.cells) {
+    assert(["healthy", "late-failure", "historical-control"].includes(cell.name));
+    const references = [
+      ...(cell.workersWithoutPreload ?? []).flatMap((row) => [row.evidence, row.nativeExit]),
+      ...(cell.processesWithoutPreload ?? []).flatMap((row) =>
+        [row.evidence].concat(row.nativeSettlement),
+      ),
+      ...(cell.workerLifetimeBounds ?? []).map((row) => row.evidence),
+    ];
+    if (references.length === 0) {
+      continue;
+    }
+    const events = new Map();
+    const add = (row, kind) => {
+      const source = `${row.pid}-${row.thread}.jsonl`;
+      const key = `${source}:${row.sequence}`;
+      const encoded = JSON.stringify(row);
+      const previous = events.get(key);
+      if (previous) {
+        assert(!previous.kinds.has(kind), `Duplicate summary event: ${key}`);
+        assert.equal(previous.encoded, encoded, `Conflicting summary event: ${key}`);
+        previous.kinds.add(kind);
+      } else {
+        events.set(key, { row, encoded, kinds: new Set([kind]) });
+      }
+    };
+    for (const row of read(`${cell.name}-observer.jsonl.gz`, 32 * 1024 * 1024)) {
+      add(row, "raw");
+    }
+    const lifecycleName = `${cell.name}-lifetimes.jsonl.gz`;
+    if (names.has(lifecycleName)) {
+      const lifecycle = read(lifecycleName, 4 * 1024 * 1024);
+      const footer = lifecycle.pop();
+      assert.equal(footer.status, "complete");
+      assert.equal(footer.omittedFiles, 0);
+      for (const source of lifecycle) {
+        assert.equal(source.recordsComplete, true);
+        for (const row of source.events) {
+          assert.equal(source.name, `${row.pid}-${row.thread}.jsonl`);
+          add(row, "lifecycle");
+        }
+      }
+    }
+    for (const reference of references) {
+      assert(reference && /^\d+-\d+\.jsonl$/u.test(reference.source));
+      assert(Number.isSafeInteger(reference.sequence) && reference.sequence >= 0);
+      const found = events.get(`${reference.source}:${reference.sequence}`);
+      assert(found, "Missing summary event");
+      assert.equal(found.row.event, reference.event, "Changed summary event kind");
+      assert.equal(digest(found.encoded), reference.sha256, "Changed summary event digest");
+    }
+  }
+  const result = {
+    ...summary,
+    evidence: {
+      manifest: "manifest.json",
+      bytes: manifestBytes.length,
+      sha256: digest(manifestBytes),
+    },
+  };
+  assert(
+    Buffer.byteLength(`${JSON.stringify(result, null, 2)}\n`) <= 512 * 1024,
+    "Terminal summary exceeds 512 KiB",
+  );
+  return result;
 }
 
 // Export complete bounded evidence, not one artifact per Node isolate. The raw
