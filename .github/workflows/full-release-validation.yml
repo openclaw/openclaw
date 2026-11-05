@@ -2656,7 +2656,7 @@ jobs:
           role: decision
           api-key: ${{ secrets.BOAT_API_KEY }}
           boat-org: ${{ vars.BOAT_ORG }}
-          runner-group: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP }}
+          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
           app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
       - name: Provision drain runner
         id: drain
@@ -2666,7 +2666,7 @@ jobs:
           role: drain
           api-key: ${{ secrets.BOAT_API_KEY }}
           boat-org: ${{ vars.BOAT_ORG }}
-          runner-group: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP }}
+          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
           app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
 
   release_decision:
@@ -2684,7 +2684,7 @@ jobs:
     if: always() && (vars.OPENCLAW_CI_RUNNER_BACKEND != 'boat' || needs.boat_release_runners.result == 'success')
     runs-on: >-
       ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' &&
-      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP),
+      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.BOAT_RELEASE_RUNNER_GROUP),
       toJSON(needs.boat_release_runners.outputs.decision_label))) || (vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',       toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' &&       'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'       && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404')) }}
     timeout-minutes: 720
     env:
@@ -2770,7 +2770,7 @@ jobs:
     if: always() && (vars.OPENCLAW_CI_RUNNER_BACKEND != 'boat' || needs.boat_release_runners.result == 'success')
     runs-on: >-
       ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' &&
-      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP),
+      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.BOAT_RELEASE_RUNNER_GROUP),
       toJSON(needs.boat_release_runners.outputs.drain_label))) || (vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',       toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' &&       'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'       && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404')) }}
     timeout-minutes: 720
     env:
@@ -3188,7 +3188,7 @@ jobs:
           role: decision
           api-key: ${{ secrets.BOAT_API_KEY }}
           boat-org: ${{ vars.BOAT_ORG }}
-          runner-group: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP }}
+          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
           app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           vm: ${{ needs.boat_release_runners.outputs.decision_vm }}
           runner: ${{ needs.boat_release_runners.outputs.decision_runner }}
@@ -3201,7 +3201,7 @@ jobs:
           role: drain
           api-key: ${{ secrets.BOAT_API_KEY }}
           boat-org: ${{ vars.BOAT_ORG }}
-          runner-group: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP }}
+          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
           app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           vm: ${{ needs.boat_release_runners.outputs.drain_vm }}
           runner: ${{ needs.boat_release_runners.outputs.drain_runner }}

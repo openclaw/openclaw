@@ -113,6 +113,23 @@ it("routes long watchers to their own Boat runner and always cleans up after the
       const waiter = selected.jobs[name];
       expect(waiter.needs).toContain(provision);
       expect(waiter["timeout-minutes"]).toBe(720);
+      expect(
+        workflow.evaluateWorkflow(waiter["runs-on"], {
+          runnerBackend: "boat",
+          releaseRunnerGroup: "hosted-controls",
+          boatReleaseRunnerGroup: "boat-watchers",
+          additionalNeeds: {
+            [provision]: {
+              result: "success",
+              outputs: {
+                decision_label: "decision",
+                drain_label: "drain",
+                nightly_label: "nightly",
+              },
+            },
+          },
+        }),
+      ).toMatchObject({ group: "boat-watchers" });
       expect(workflow.evaluateWorkflow(`\${{ ${waiter.if} }}`, failedProvision)).toBe(false);
       expect(
         workflow.evaluateWorkflow(`\${{ ${waiter.if} }}`, {

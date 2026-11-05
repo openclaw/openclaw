@@ -53,7 +53,7 @@ jobs:
           role: nightly
           api-key: ${{ secrets.BOAT_API_KEY }}
           boat-org: ${{ vars.BOAT_ORG }}
-          runner-group: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP }}
+          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
           app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
 
   validate:
@@ -63,7 +63,7 @@ jobs:
     # release_decision waiter, so this job uses that job's runner and budget.
     runs-on: >-
       ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' &&
-      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP),
+      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.BOAT_RELEASE_RUNNER_GROUP),
       toJSON(needs.boat_nightly_runner.outputs.nightly_label))) || (vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404')) }}
     timeout-minutes: 720
     permissions:
@@ -148,7 +148,7 @@ jobs:
           role: nightly
           api-key: ${{ secrets.BOAT_API_KEY }}
           boat-org: ${{ vars.BOAT_ORG }}
-          runner-group: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP }}
+          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
           app-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           vm: ${{ needs.boat_nightly_runner.outputs.nightly_vm }}
           runner: ${{ needs.boat_nightly_runner.outputs.nightly_runner }}
