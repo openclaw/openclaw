@@ -636,6 +636,66 @@ describe("TwilioProvider", () => {
     });
   });
 
+  it("keeps direct Say playback separate from conversation silence recovery", async () => {
+    const provider = new TwilioProvider({ accountSid: "AC123", authToken: "secret" });
+    guardedJsonApiRequestMock.mockResolvedValue({ sid: "CA-direct", status: "queued" });
+    await provider.initiateCall({
+      callId: "direct",
+      from: "+15550000000",
+      to: "+15550000001",
+      webhookUrl: "https://example.test/voice",
+    });
+    await provider.playTts({
+      callId: "direct",
+      providerCallId: "CA-direct",
+      text: "A&B",
+      voice: "alice",
+    });
+    const request = guardedJsonApiRequestMock.mock.calls.at(-1)?.[0];
+    expect(request.body.get("Twiml")).toBe(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Joanna" language="en-US">A&amp;B</Say>
+  <Gather input="speech" speechTimeout="auto" action="https://example.test/voice?callId=direct" method="POST">
+    <Say>.</Say>
+  </Gather>
+</Response>`);
+  });
+
+  it("renews explicit listening with its language and turn token", async () => {
+    const provider = new TwilioProvider({ accountSid: "AC123", authToken: "secret" });
+    guardedJsonApiRequestMock.mockResolvedValue({ sid: "CA-listen", status: "queued" });
+    await provider.initiateCall({
+      callId: "listen",
+      from: "+15550000000",
+      to: "+15550000001",
+      webhookUrl: "https://example.test/voice",
+    });
+    await provider.startListening({
+      callId: "listen",
+      providerCallId: "CA-listen",
+      language: "es-ES",
+      turnToken: "turn-1",
+    });
+    const request = guardedJsonApiRequestMock.mock.calls.at(-1)?.[0];
+    const twiml = request.body.get("Twiml");
+    expect(twiml).toContain('timeout="120"');
+    expect(twiml).toContain('language="es-ES"');
+    expect(twiml).toContain("turnToken=turn-1");
+    const redirect = twiml.match(/<Redirect method="POST">([^<]+)<\/Redirect>/)?.[1];
+    expect(redirect).toBeDefined();
+    const url = new URL(String(redirect).replaceAll("&amp;", "&"));
+    const result = provider.parseWebhookEvent({
+      ...createContext("CallSid=CA-listen&CallStatus=in-progress&Direction=outbound-api"),
+      url: url.toString(),
+      query: Object.fromEntries(url.searchParams),
+    });
+    expect(result.events).toEqual([]);
+    expect(result.providerResponseBody).toContain('timeout="120"');
+    expect(result.providerResponseBody).toContain('language="es-ES"');
+    expect(result.providerResponseBody).toContain("turnToken=turn-1");
+    expect(result.providerResponseBody).not.toContain("<Pause");
+  });
+
   it("uses a stable fallback dedupeKey for identical request payloads", () => {
     const provider = createProvider();
     const rawBody = "CallSid=CA789&Direction=inbound&SpeechResult=hello";
