@@ -239,7 +239,7 @@ function renderWidenedCapabilities(details: CapabilityConsentErrorDetails) {
     <section class="plugins-consent__section oc-section">
       <h3>{t("pluginConsent.widenedTitle")}</h3>
       <p class="plugins-consent__description">
-        {t("pluginConsent.widenedDescription")}
+        {t("pluginConsent.widenedDescription")}{" "}
         {details.acceptedAt
           ? t("pluginConsent.previouslyAccepted", { date: details.acceptedAt })
           : undefined}
@@ -292,14 +292,21 @@ function renderPluginGrants(grants: PluginOperatorGrants, origin?: string): JSX.
       description={t("pluginConsent.grantsDescription")}
       carapace
     >
-      {renderPluginMetaRow(
-        t("pluginConsent.promptInjection"),
-        grantValue(
-          grants.hooks.allowPromptInjection,
-          "pluginConsent.allowed",
-          "pluginConsent.blocked",
-        ),
-      )}
+      <SettingsRow
+        title={t("pluginConsent.promptInjection")}
+        description={t("pluginConsent.promptInjectionDescription")}
+        control={
+          <span>
+            {grantValue(
+              grants.hooks.allowPromptInjection,
+              "pluginConsent.allowed",
+              "pluginConsent.blocked",
+            )}
+          </span>
+        }
+        stackedOnNarrow
+        carapace
+      />
       {renderPluginMetaRow(
         t("pluginConsent.conversationAccess"),
         <>
@@ -449,7 +456,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
   const confirm = (
     <button
       type="button"
-      class="btn primary oc-action oc-action-primary"
+      class="btn primary"
       disabled={confirmUnavailable() && !props.mutationBlockedReason}
       aria-disabled={!props.canMutate ? "true" : undefined}
       onClick={() => {

@@ -3,7 +3,11 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
+import {
+  takeControlUiElementScreenshot,
+  takeControlUiViewportScreenshot,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import {
   objectSchema,
@@ -64,6 +68,7 @@ function laboratoryConfig(endpoint: string, retryBudget = 2) {
 }
 
 async function installConfig(page: Page, config: Record<string, unknown>, hash: string) {
+  await page.clock.install();
   return installMockGateway(page, {
     methodResponses: {
       "config.get": configResponse(config, hash),
@@ -89,7 +94,13 @@ function mutationParams(request: MockGatewayRequest): MutationParams {
 const button = (page: Page, name: string) => page.getByRole("button", { name, exact: true });
 const expectSaveStatus = (page: Page, status: string) =>
   expect
-    .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
+    .poll(async () => {
+      // Let each real config.get settle before advancing the next polling window.
+      if (status === "Apply changes") {
+        await page.clock.runFor(1_000);
+      }
+      return page.locator("openclaw-settings-save-indicator").textContent();
+    })
     .toContain(status);
 const requestCount = async (gateway: Awaited<ReturnType<typeof installConfig>>, method: string) =>
   (await gateway.getRequests(method)).length;
@@ -202,18 +213,13 @@ suite.define(() => {
         expect.soft(box && box.x >= 0 && box.x + box.width <= viewport.width).toBe(true);
       }
       await page.setViewportSize({ width: 1440, height: 1000 });
-      // Let the resize settle so the comparison below only sees save feedback.
-      let fieldBefore = await endpoint.boundingBox();
+      // Observe the responsive handoff before settling its layout transitions.
+      const shell = page.locator(".shell");
       await expect
-        .poll(
-          async () => {
-            const previous = fieldBefore;
-            fieldBefore = await endpoint.boundingBox();
-            return previous?.x === fieldBefore?.x && previous?.y === fieldBefore?.y;
-          },
-          { interval: 500 },
-        )
-        .toBe(true);
+        .poll(() => shell.evaluate((element) => element.classList.contains("shell--mobile-nav")))
+        .toBe(false);
+      await shell.evaluate(finishElementAnimations);
+      const fieldBefore = await endpoint.boundingBox();
       await gateway.resolveDeferred("config.set");
       await expectSaveStatus(page, "Saved");
       expect(await endpoint.boundingBox()).toEqual(fieldBefore);
@@ -242,11 +248,17 @@ suite.define(() => {
         code: "UNAVAILABLE",
         message: "Synthetic config file is read-only",
       });
-      await expectSaveStatus(page, "Save failed");
+      await expectSaveStatus(page, "Couldn’t save settings. Try again.");
       expect(await endpoint.inputValue()).toBe("kept-after-failure");
       expect(await indicator.locator(".settings-save-indicator__reason").textContent()).toBe(
         "Synthetic config file is read-only",
       );
+      if (proof.enabled) {
+        await writeFile(
+          path.join(proof.directory(), "05-save-failed.png"),
+          await takeControlUiElementScreenshot(page, indicator, [indicator]),
+        );
+      }
 
       // Discard asks first; cancelling keeps the edit.
       await button(page, "Discard changes").click();
@@ -256,7 +268,9 @@ suite.define(() => {
       await button(page, "Discard changes").click();
       await confirm.getByRole("button", { name: "Discard changes", exact: true }).click();
       await expect.poll(() => endpoint.inputValue()).toBe("before-failure");
-      await expect.poll(() => indicator.textContent()).not.toContain("Save failed");
+      await expect
+        .poll(() => indicator.textContent())
+        .not.toContain("Couldn’t save settings. Try again.");
     });
   });
 
@@ -453,7 +467,9 @@ suite.define(() => {
         message: "QA configuration save failed",
       });
       const saveIndicator = page.locator("openclaw-settings-save-indicator");
-      await expect.poll(() => saveIndicator.textContent()).toContain("Save failed");
+      await expect
+        .poll(() => saveIndicator.textContent())
+        .toContain("Couldn’t save settings. Try again.");
       await button(page, "Raw").click();
       await page.locator(".config-raw-field textarea").fill(JSON.stringify(initialConfig, null, 2));
       await button(page, "Form").click();
@@ -517,7 +533,7 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("config.get")).length)
         .toBe(configGetsBeforePatch);
-      await expect.poll(() => codeModeRow.textContent()).toContain("Default: Disabled");
+      await expect.poll(() => codeModeSwitch.isChecked()).toBe(true);
       await expect.poll(() => labsLink.getAttribute("aria-current")).toBe("page");
       await capture(page, "00-labs-canonical-refresh.png", codeModeSwitch);
 

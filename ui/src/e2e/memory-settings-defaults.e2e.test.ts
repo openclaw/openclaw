@@ -135,14 +135,15 @@ suite.define(() => {
       const response = await page.goto(`${suite.server.baseUrl}settings/memory/settings`);
       expect(response?.status()).toBe(200);
 
-      const engineRow = settingsRow(page, "Memory engine");
-      const frequencyRow = settingsRow(page, "Dreaming frequency");
-      await expect.poll(() => engineRow.textContent()).toContain("Default: OpenClaw Memory");
-      await expect.poll(() => frequencyRow.textContent()).toContain("Default: 0 3 * * *");
-      await expect.poll(() => frequencyRow.getByRole("textbox").inputValue()).toBe("0 6 * * *");
+      const engine = page.getByRole("combobox", { name: "Memory engine", exact: true });
+      const frequencyRow = settingsRow(page, "Schedule (cron)");
+      const frequency = frequencyRow.getByRole("textbox");
+      await expect.poll(() => engine.inputValue()).toBe("memory-core");
+      await expect.poll(() => frequency.getAttribute("placeholder")).toBe("0 3 * * *");
+      await expect.poll(() => frequency.inputValue()).toBe("0 6 * * *");
 
-      await frequencyRow.getByRole("textbox").fill("");
-      await frequencyRow.getByRole("textbox").blur();
+      await frequency.fill("");
+      await frequency.blur();
 
       const saved = requestRaw(await gateway.waitForRequest("config.set"));
       expect(saved).toMatchObject({
@@ -157,11 +158,9 @@ suite.define(() => {
         .toContain("Apply changes");
 
       await page.reload();
-      await expect.poll(() => engineRow.textContent()).toContain("Default: OpenClaw Memory");
+      await expect.poll(() => engine.inputValue()).toBe("memory-core");
       await expect.poll(() => frequencyRow.textContent()).not.toContain("Using default:");
-      await expect.poll(() => frequencyRow.getByRole("textbox").inputValue()).toBe("");
-      await expect
-        .poll(() => frequencyRow.getByRole("textbox").getAttribute("placeholder"))
-        .toBe("0 3 * * *");
+      await expect.poll(() => frequency.inputValue()).toBe("");
+      await expect.poll(() => frequency.getAttribute("placeholder")).toBe("0 3 * * *");
     }));
 });

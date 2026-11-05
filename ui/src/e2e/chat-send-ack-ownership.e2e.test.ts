@@ -89,7 +89,9 @@ suite.define(() => {
       });
       if (status === "timeout") {
         await page
-          .getByTitle("The run ended before the message was accepted.", { exact: true })
+          .getByTitle("Your message wasn’t accepted before the reply ended. Try again.", {
+            exact: true,
+          })
           .waitFor();
       } else {
         await gateway.waitForRequest("chat.history", { after: historyRequests });
@@ -103,7 +105,7 @@ suite.define(() => {
         await composer.fill("");
         await stop.click();
         const aborted = await gateway.waitForRequest("chat.abort");
-        expect(aborted.params).toEqual({ sessionKey, runId });
+        expect(aborted.params).toEqual({ sessionKey, runId, userInitiated: true });
       } else {
         expect(await successorTool.isVisible()).toBe(true);
         expect(await successorTool.locator(".chat-tool-row__cmd").textContent()).toContain(

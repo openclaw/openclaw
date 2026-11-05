@@ -12,7 +12,6 @@ import {
 } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ConfigError } from "../../components/config-error.tsx";
-import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
@@ -36,6 +35,7 @@ import { buildAgentContext } from "../../lib/agents/display.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { ReasonedDisabledControl } from "../plugins/reasoned-disabled-control.tsx";
 import { AgentsPageMenu } from "./agents-page-menu.tsx";
 import type { AgentsPageView } from "./agents-page-state.ts";
@@ -48,6 +48,8 @@ registerRouteSubtitlesEnglish();
 registerEnglishCatalog(registerSettingsEnglish);
 registerEnglishCatalog(registerPluginManagementEnglish);
 
+// Matches the phone rules in agents.css, where New agent and Refresh move into the menu.
+const PHONE_WIDTH_QUERY = "(max-width: 640px)";
 const AGENTS_DOCS_URL = "https://docs.openclaw.ai/concepts/multi-agent";
 const AgentMemoryPanel = lazy(() => import("./memory/memory-panel.tsx"), {
   export: "AgentMemoryPanel",
@@ -123,6 +125,10 @@ export function Agents(props: AgentsProps) {
       defaultId(),
       props.agentIdentityById[props.selectedAgentId!] ?? null,
     );
+  const phone = createMediaQuery(
+    PHONE_WIDTH_QUERY,
+    globalThis.matchMedia?.(PHONE_WIDTH_QUERY).matches ?? false,
+  );
   const pageMenu = () => (
     <AgentsPageMenu
       agentId={selectedAgent()?.id ?? null}
@@ -141,6 +147,13 @@ export function Agents(props: AgentsProps) {
           ? "agents.unpinFromSwitcher"
           : "agents.pinToSwitcher",
       )}
+      showPhoneActions={phone()}
+      createLabel={t("custodian.newAgent")}
+      createDisabled={rosterPending() || !props.access.canCreateAgent}
+      createDisabledReason={
+        !props.access.canCreateAgent ? t("custodian.adminAccessRequired") : undefined
+      }
+      onCreate={props.onCreateAgent}
       refreshLabel={t(rosterPending() ? "common.loading" : "common.refresh")}
       refreshDisabled={rosterPending()}
       onSetDefault={setDefault}
@@ -150,85 +163,29 @@ export function Agents(props: AgentsProps) {
   );
   const pageActions = () => (
     <div class="agents-toolbar-actions">
-      <ReasonedDisabledControl
-        reason={!props.access.canCreateAgent ? t("custodian.accessRequired") : undefined}
-      >
-        <button
-          class="btn btn--sm btn--ghost agents-create-btn"
-          disabled={rosterPending() || !props.access.canCreateAgent}
-          title={!props.access.canCreateAgent ? t("custodian.accessRequired") : undefined}
-          onClick={() => props.onCreateAgent()}
-        >
-          {t("custodian.newAgent")}
-        </button>
-      </ReasonedDisabledControl>
-      <Show when={selectedAgent()}>
-        {(agent) => (
-          <>
-            <Show when={agent().id} keyed>
-              {(id) => {
-                let label!: HTMLSpanElement;
-                let announcement!: HTMLSpanElement;
-                return (
-                  <>
-                    <button
-                      type="button"
-                      class="btn btn--sm btn--ghost agents-toolbar-secondary"
-                      onClick={(event) =>
-                        void handleCopyButton(event, id, t("agents.copyId"), {
-                          label,
-                          announcement,
-                        })
-                      }
-                    >
-                      <span ref={(element) => (label = element)} data-copy-label>
-                        {t("agents.copyId")}
-                      </span>
-                    </button>
-                    <span
-                      ref={(element) => (announcement = element)}
-                      class="sr-only"
-                      role="status"
-                    />
-                  </>
-                );
-              }}
-            </Show>
-            <button
-              type="button"
-              class="btn btn--sm btn--ghost agents-toolbar-secondary"
-              disabled={
-                !props.access.canUpdateConfig || settingDefault() || agent().id === defaultId()
-              }
-              onClick={() => setDefault(agent().id)}
-            >
-              {settingDefault()
-                ? t("common.saving")
-                : agent().id === defaultId()
-                  ? t("agents.default")
-                  : t("agents.setDefault")}
-            </button>
-            <button
-              type="button"
-              class="btn btn--sm btn--ghost agents-toolbar-secondary"
-              onClick={() => props.onTogglePinnedAgent(agent().id)}
-            >
-              {t(
-                props.pinnedAgentIds.includes(agent().id)
-                  ? "agents.unpinFromSwitcher"
-                  : "agents.pinToSwitcher",
-              )}
-            </button>
-          </>
-        )}
-      </Show>
       <RefreshButton
         class="agents-refresh-btn"
         label={t("common.refresh")}
         busy={rosterPending()}
         onClick={() => props.onRefresh()}
       />
-      <FloatingHeaderActions fallback={pageMenu()}>{pageMenu()}</FloatingHeaderActions>
+      <Show when={!phone()}>
+        <ReasonedDisabledControl
+          reason={!props.access.canCreateAgent ? t("custodian.adminAccessRequired") : undefined}
+        >
+          <button
+            class="btn btn--sm agents-create-btn"
+            disabled={rosterPending() || !props.access.canCreateAgent}
+            title={!props.access.canCreateAgent ? t("custodian.adminAccessRequired") : undefined}
+            onClick={() => props.onCreateAgent()}
+          >
+            {t("custodian.newAgent")}
+          </button>
+        </ReasonedDisabledControl>
+      </Show>
+      <Show when={selectedAgent() || phone()}>
+        <FloatingHeaderActions fallback={pageMenu()}>{pageMenu()}</FloatingHeaderActions>
+      </Show>
     </div>
   );
   // Defaults apply to every agent, so this row stays out of the per-agent tab bar.

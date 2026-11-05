@@ -1,11 +1,51 @@
 /* Profile settings page: authenticated user profile and identity controls.
    Structural surfaces come from settings.css. */
 
+.profile-discord-reservation {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  /* Reserve the unavailable copy and the action's final row before the status reply. */
+  .profile-discord-description {
+    display: grid;
+
+    > span {
+      grid-area: 1 / 1;
+    }
+  }
+
+  .profile-discord-reservation {
+    display: block;
+    visibility: hidden;
+  }
+
+  :is(.shell--settings, .shell--embed-settings)
+    .settings-row:has(> .settings-row__text .profile-discord-description) {
+    flex-wrap: wrap;
+
+    > .settings-row__control {
+      width: 100%;
+      max-width: 100%;
+      justify-content: flex-start;
+    }
+  }
+}
+
 .identity-emails {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+}
+
+/* Refresh stays beside the subtitle, which wraps first on narrow columns. */
+.content-header--settings:has(> .page-header-actions .profile-refresh) {
+  flex-wrap: nowrap;
+}
+
+.page-header-actions:has(.profile-refresh) {
+  flex-shrink: 0;
 }
 
 /* An account's identity under its title: an address, an id or a handle. */
@@ -78,17 +118,13 @@
 
 .profile-hero__badge {
   flex: 0 0 auto;
-}
-
-.profile-hero__badge,
-.model-accounts__provider {
   font-size: var(--control-ui-text-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--accent);
   background: var(--accent-subtle);
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border: 1px solid var(--border);
   border-radius: var(--radius-full);
   padding: 2px 8px;
 }
@@ -115,19 +151,7 @@
   overflow-wrap: anywhere;
 }
 
-.model-accounts__id {
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-sm);
-  color: var(--text-strong);
-}
-
-.model-accounts__provider {
-  margin-left: var(--space-2);
-  vertical-align: middle;
-}
-
-.model-accounts-flow,
-.model-accounts-choice {
+.model-accounts-flow {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -146,6 +170,29 @@
 .model-accounts-form .settings-input {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+.model-accounts-form .btn {
+  flex: none;
+}
+
+/* A typed credential id reads from its start. */
+.settings-row__control .model-accounts-form input.settings-input:not(.picker-select__search) {
+  text-align: start;
+}
+
+/* A provider and its account stay on one line on phones; the picker truncates long labels. */
+@media (max-width: 640px) {
+  :is(.shell--settings, .shell--embed-settings)
+    .settings-row:has(> .settings-row__control .profile-auth-account-picker) {
+    flex-wrap: nowrap;
+
+    > .settings-row__control {
+      width: auto;
+      flex: 0 1 64%;
+      flex-wrap: nowrap;
+    }
+  }
 }
 
 .model-accounts-error .settings-row__desc {

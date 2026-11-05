@@ -1,0 +1,2 @@
+# Preserve run-loading, search-state, and browser-label assertions during copy integration.
+15

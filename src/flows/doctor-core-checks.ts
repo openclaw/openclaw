@@ -33,7 +33,6 @@ import type { DoctorHealthCheckContext } from "./doctor-health-contribution-type
 import { legacyOwnedRepair } from "./doctor-health-contribution.js";
 import { modelReferenceCheck } from "./doctor-model-reference-check.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
-import { skillWorkshopToolPolicyCheck } from "./doctor-skill-workshop-check.js";
 import { runtimeToolSchemaCheck } from "./doctor-tool-schema-check.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
 import { securityAuditFindingToHealthFinding } from "./health-check-adapter.js";
@@ -146,7 +145,7 @@ const legacyStateCheck: CoreHealthCheck = {
   async detect(ctx) {
     const { detectLegacyStateMigrations } = await import("../infra/state-migrations.doctor.js");
     const { prepareLegacySessionSurfaces } = await import("../plugins/legacy-session-surfaces.js");
-    const legacySessionSurfaces = prepareLegacySessionSurfaces({ config: ctx.cfg });
+    const legacySessionSurfaces = await prepareLegacySessionSurfaces({ config: ctx.cfg });
     const detected = await detectLegacyStateMigrations({
       cfg: ctx.cfg,
       doctorOnlyStateMigrations: true,
@@ -716,7 +715,6 @@ export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
     },
     runtimeToolSchemaCheck,
     workspaceSuggestionsCheck,
-    skillWorkshopToolPolicyCheck,
     commandOwnerCheck,
     skillsReadinessCheck,
     finalConfigValidationCheck,

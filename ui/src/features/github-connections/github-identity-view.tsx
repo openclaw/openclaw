@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, isPending, latest, Loading, Match, Show, Switch } from "solid-js";
 import type { GitHubIdentityFacts } from "../../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import { ErrorDetails } from "../../components/config-error.tsx";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
@@ -169,14 +170,16 @@ function GitHubAuthorization(props: IdentityProps) {
           ? t("agentTools.githubDenied")
           : state.phase === "incorrect_device_code"
             ? t("agentTools.githubIncorrectCode")
-            : state.phase === "failed"
-              ? (state.message ?? t("agentTools.githubAuthorizationFailed"))
-              : t("agentTools.githubAuthorizationFailed"),
+            : "",
     );
+  };
+  const failureDetail = () => {
+    const state = authorization();
+    return state.phase === "failed" ? state.message : undefined;
   };
   const patButton = () => (
     <Show when={view().scope !== "personal"}>
-      <button class="btn" onClick={() => props.identity.showPatFallback()}>
+      <button class="btn btn--sm" onClick={() => props.identity.showPatFallback()}>
         {t("agentTools.githubUsePat")}
       </button>
     </Show>
@@ -192,13 +195,21 @@ function GitHubAuthorization(props: IdentityProps) {
       <Match when={!view().statusReadable}>
         <SettingsRow
           title={<SettingsStatus kind="danger" label={t("agentTools.githubAccessRequired")} />}
-          description={t("agentTools.githubReadRequired")}
+          description={t(
+            view().scope === "personal"
+              ? "agentTools.githubReadRequired"
+              : "agentTools.githubAdminRequired",
+          )}
         />
       </Match>
       <Match when={!view().authorizable}>
         <SettingsRow
           title={<SettingsStatus kind="warn" label={t("agentTools.githubAccessRequired")} />}
-          description={t("agentTools.githubAdminRequired")}
+          description={t(
+            view().scope === "personal"
+              ? "agentTools.githubPersonalSignInRequired"
+              : "agentTools.githubAdminRequired",
+          )}
         />
       </Match>
       <Match when={starting()}>
@@ -238,10 +249,21 @@ function GitHubAuthorization(props: IdentityProps) {
               t("agentTools.githubAuthorization")
             )
           }
-          description={failed() ? failureDescription() : t("agentTools.githubConnectHint")}
+          description={
+            failed() ? (
+              <>
+                <Show when={failureDescription()}>
+                  {(description) => <div>{description()}</div>}
+                </Show>
+                <ErrorDetails error={failureDetail()} />
+              </>
+            ) : (
+              t("agentTools.githubConnectHint")
+            )
+          }
           control={
             <>
-              <button class="btn" onClick={() => void props.identity.startAuthorization()}>
+              <button class="btn btn--sm" onClick={() => void props.identity.startAuthorization()}>
                 {t("githubConnections.continue")}
               </button>
               <Show when={failed()}>{patButton()}</Show>
@@ -293,7 +315,7 @@ function GitHubAuthorizationCode(
               )}
             />
             <a
-              class="btn"
+              class="btn btn--sm"
               href={props.authorization.verificationUri}
               target={EXTERNAL_LINK_TARGET}
               rel={buildExternalLinkRel()}
@@ -365,7 +387,7 @@ function GitHubAuthorizationCode(
           >
             <button
               type="button"
-              class="btn"
+              class="btn btn--sm"
               onClick={() => void props.identity.cancelAuthorization()}
             >
               {props.authorization.phase === "cancel_error"

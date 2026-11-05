@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { DatabaseSearchCapabilityUnavailableError } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl, WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { recordMemoryEntryOrigins } from "../memory-entry-origins.js";
@@ -123,50 +124,52 @@ describe("memory index", () => {
   const writeMemory = (name: string, content: string) =>
     fs.writeFile(path.join(fixture.paths.memory, name), content);
 
-  it.each(["search-bootstrap", "search"])(
-    "keeps nested sync failure details redacted in the %s warning",
-    async (reason) => {
-      const manager =
-        reason === "search" ? await syncedKeyword() : await getPersistentManager(keywordConfig());
-      const failure = new Error("memory index maintenance failed", {
-        cause: Object.assign(new Error("database is not open; password=memory-warning-secret"), {
-          code: "ERR_INVALID_STATE",
-        }),
-      });
-      const rejectSync = (target: Manager) =>
-        vi
-          .spyOn(target as unknown as MaintenanceFields, "syncMemoryFiles")
-          .mockRejectedValue(failure);
-      const sync =
-        reason === "search"
-          ? interceptMaintenance((target) => {
-              rejectSync(target);
-            })
-          : rejectSync(manager);
-      try {
-        markDirty(manager);
-        memoryWarnings.mockClear();
+  it("propagates CLI capability failures before retrying bootstrap", async () => {
+    const manager = await getFreshManager(createCfg({}), "cli");
+    const failure = new DatabaseSearchCapabilityUnavailableError("vector", "pgvector is missing");
+    using sync = vi
+      .spyOn(manager as unknown as MaintenanceFields, "syncMemoryFiles")
+      .mockRejectedValueOnce(failure);
+    await expect(manager.search("alpha")).rejects.toBe(failure);
+    expect(sync).toHaveBeenCalledOnce();
+  });
 
-        const results = await manager.search("zebra", { minScore: 0 });
+  it.each(["bootstrap", "recovery"])("keeps nested %s failure details redacted", async (mode) => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    const manager = await getPersistentManager(keywordConfig());
+    const failure = new Error("memory index maintenance failed", {
+      cause: Object.assign(new Error("database is not open; password=memory-warning-secret"), {
+        code: "ERR_INVALID_STATE",
+      }),
+    });
+    const sync = vi
+      .spyOn(MemoryIndexManager.prototype as unknown as MaintenanceFields, "syncMemoryFiles")
+      .mockRejectedValue(failure);
+    try {
+      memoryWarnings.mockClear();
+      if (mode === "recovery") {
+        await vi.advanceTimersByTimeAsync(300_000);
         await awaitIdle(manager);
-
-        if (reason === "search") {
-          expectFixtureHit(results);
-        } else {
-          expect(results).toEqual([]);
-        }
-        const warning = memoryWarnings.mock.calls
-          .map((call) => String(call[0]))
-          .find((message) => message.startsWith(`memory sync failed (${reason}):`));
-        expect(warning).toContain("memory index maintenance failed");
-        expect(warning).toContain("database is not open");
-        expect(warning).toContain("ERR_INVALID_STATE");
-        expect(warning).not.toContain("memory-warning-secret");
-      } finally {
-        sync.mockRestore();
+      } else {
+        await expect(manager.search("zebra", { minScore: 0 })).resolves.toEqual([]);
       }
-    },
-  );
+      const warning = memoryWarnings.mock.calls
+        .map((call) => String(call[0]))
+        .find((message) =>
+          message.startsWith(
+            mode === "recovery"
+              ? "memory session update failed:"
+              : "memory sync failed (search-bootstrap):",
+          ),
+        );
+      expect(warning).toContain("memory index maintenance failed");
+      expect(warning).toContain("database is not open");
+      expect(warning).toContain("ERR_INVALID_STATE");
+      expect(warning).not.toContain("memory-warning-secret");
+    } finally {
+      sync.mockRestore();
+    }
+  });
 
   it("reuses published facts across searches and observes the next publication", async () => {
     const manager = await getPersistentManager(keywordConfig());
@@ -464,45 +467,54 @@ describe("memory index", () => {
     expect(trustedResults[0]?.source).toBe("sessions");
   });
 
-  it("searches the published index without flushing dirty sessions", async () => {
-    const manager = await syncedKeyword({ sources: ["memory", "sessions"], sessionMemory: true });
-    const content = "Quiet-period transcript canary is ORCHID-83.";
-    await seedMemoryIndexSessionTranscript({
-      sessionId: "search-sync",
-      messages: [{ role: "assistant", timestamp: Date.now(), content }],
-    });
-    const servingFields = manager as unknown as {
-      dirty: boolean;
-      sessionsDirty: boolean;
-      sessionsDirtyFiles: Set<string>;
-      listSessionCorpusEntries: () => Promise<Array<{ sessionFile: string }>>;
-    };
-    const entries = await servingFields.listSessionCorpusEntries();
-    expect(entries).toHaveLength(1);
-    servingFields.dirty = false;
-    servingFields.sessionsDirty = true;
-    servingFields.sessionsDirtyFiles = new Set(entries.map((entry) => entry.sessionFile));
-    {
-      using getSpy = vi.spyOn(MemoryIndexManager, "get");
-      const publishedResults = await manager.search("zebra", { maxResults: 5, minScore: 0 });
-      expect(publishedResults.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
-      await expect(manager.search("ORCHID-83", { minScore: 0 })).resolves.toEqual([]);
-      expect(getSpy.mock.calls.some(([params]) => params.purpose === "maintenance")).toBe(false);
-      expect(servingFields.sessionsDirty).toBe(true);
-      expect(servingFields.sessionsDirtyFiles).toEqual(
-        new Set(entries.map((entry) => entry.sessionFile)),
-      );
-    }
+  it.each([false, true])(
+    "searches the published index without dirty reconciliation (fullRetry=%s)",
+    async (fullRetry) => {
+      const manager = await syncedKeyword({ sources: ["memory", "sessions"], sessionMemory: true });
+      const content = "Quiet-period transcript canary is ORCHID-83.";
+      await seedMemoryIndexSessionTranscript({
+        sessionId: "search-sync",
+        messages: [{ role: "assistant", timestamp: Date.now(), content }],
+      });
+      const servingFields = manager as unknown as {
+        dirty: boolean;
+        memoryFullRetryDirty: boolean;
+        sessionsDirty: boolean;
+        sessionsDirtyFiles: Set<string>;
+        listSessionCorpusEntries: () => Promise<Array<{ sessionFile: string }>>;
+      };
+      const entries = await servingFields.listSessionCorpusEntries();
+      expect(entries).toHaveLength(1);
+      servingFields.dirty = true;
+      servingFields.memoryFullRetryDirty = fullRetry;
+      servingFields.sessionsDirty = true;
+      servingFields.sessionsDirtyFiles = new Set(entries.map((entry) => entry.sessionFile));
+      {
+        using getSpy = vi.spyOn(MemoryIndexManager, "get");
+        const publishedResults = await manager.search("zebra", { maxResults: 5, minScore: 0 });
+        expect(publishedResults.some((entry) => entry.path === "memory/2026-01-12.md")).toBe(true);
+        await expect(manager.search("ORCHID-83", { minScore: 0 })).resolves.toEqual([]);
+        expect(getSpy.mock.calls.some(([params]) => params.purpose === "maintenance")).toBe(false);
+        expect(servingFields.sessionsDirty).toBe(true);
+        expect(servingFields.sessionsDirtyFiles).toEqual(
+          new Set(entries.map((entry) => entry.sessionFile)),
+        );
+      }
 
-    await manager.sync({ reason: "test", force: true });
-    expect(await manager.search("ORCHID-83", { minScore: 0 })).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ source: "sessions", snippet: expect.stringContaining(content) }),
-      ]),
-    );
-  });
+      await manager.sync({ reason: "test", force: true });
+      expect(await manager.search("ORCHID-83", { minScore: 0 })).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            source: "sessions",
+            snippet: expect.stringContaining(content),
+          }),
+        ]),
+      );
+    },
+  );
 
   it("keeps search usable while maintenance syncs a full memory retry", async () => {
+    vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
     const manager = await syncedKeyword({ sources: ["memory", "sessions"], sessionMemory: true });
     const searchCurrent = () =>
       manager.search("current dirty search sync", { maxResults: 5, minScore: 0 });
@@ -513,6 +525,7 @@ describe("memory index", () => {
 
     try {
       const firstSearch = manager.search("zebra", { maxResults: 5, minScore: 0 });
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
       await maintenance.ready;
       expect(manager.status()).toMatchObject({ dirty: true });
       expect(maintenance.state.fields!.runInPlaceReindex).toHaveBeenCalledTimes(1);
@@ -575,13 +588,14 @@ describe("memory index", () => {
     });
 
     try {
+      const recovery = searchSync(manager);
       const search = manager.search("zebra", { maxResults: 5, minScore: 0 });
       await shadowReady.promise;
       await forgetMemoryEntries({ cfg, agentId: "main", sessionIds: [sessionId] });
       releasePublish.resolve();
 
       expectFixtureHit(await search);
-      await awaitIdle(manager);
+      await recovery;
       expect(manager.status()).toMatchObject({ dirty: false, lastSyncError: undefined });
       expect(syncCalls).toBe(2);
       expect(await fs.readFile(memoryPath, "utf8")).not.toContain("Private violet");
@@ -598,66 +612,27 @@ describe("memory index", () => {
     }
   });
 
-  it("publishes transient CLI search maintenance before close, off the serving write path", async () => {
+  it("publishes CLI additions, edits, and deletions before returning the read", async () => {
     const cfg = keywordConfig();
-    const initialManager = await getFreshManager(cfg, "cli");
-    await initialManager.sync({ reason: "test", force: true });
-    await initialManager.close?.();
-    await writeMemory("cli-refresh.md", "Content published after transient CLI maintenance.");
-
-    const manager = await getFreshManager(cfg, "cli", true);
-    const servingFields = manager as unknown as MaintenanceFields;
-    const servingSync = vi.spyOn(servingFields, "syncMemoryFiles");
-    let closePromise: Promise<void> | undefined;
-    const maintenance = pauseMaintenance();
-    const idleEntered = createDeferred<void>();
-    const awaitManagerIdle = serving(manager).awaitManagerIdle.bind(manager);
-    const idleSettled = vi.fn();
-    using idle = vi.spyOn(serving(manager), "awaitManagerIdle");
-    idle.mockImplementation(() => {
-      const pending = awaitManagerIdle();
-      void pending.then(idleSettled, idleSettled);
-      idleEntered.resolve();
-      return pending;
-    });
-
-    try {
-      const search = manager.search("zebra", {
-        maxResults: 5,
-        minScore: 0,
-        sessionKey: "agent:main:cli:memory-search",
-      });
-      await maintenance.ready;
-      expectFixtureHit(await search);
-      expect(servingSync).not.toHaveBeenCalled();
-      closePromise = manager.close();
-      // Teardown must not release the connection the paused maintenance writes through.
-      await idleEntered.promise;
-      expect(idleSettled).not.toHaveBeenCalled();
-      expect(maintenance.state.closed).toBe(false);
-      maintenance.release();
-      await closePromise;
-      expect(maintenance.state.closed).toBe(true);
-    } finally {
-      maintenance.release();
-      await closePromise;
-      maintenance.spy.mockRestore();
-      await manager.close?.();
-    }
-
-    // A standalone CLI process exits after close; the refresh it started is published.
-    const next = await getFreshManager(cfg, "cli");
-    try {
-      expect(
-        await next.search("transient", {
-          maxResults: 5,
-          minScore: 0,
-          sessionKey: "agent:main:cli:memory-search",
-        }),
-      ).toEqual(matchingHit({ path: "memory/cli-refresh.md" }));
-      expect(next.status().lastSyncError).toBeUndefined();
-    } finally {
-      await next.close?.();
+    const initial = await getFreshManager(cfg, "cli");
+    await initial.sync({ reason: "test", force: true });
+    await initial.close();
+    for (const content of ["Cobalt heron discovered.", "Violet badger replaced it.", null]) {
+      if (content === null) {
+        await fs.unlink(path.join(fixture.paths.memory, "cli-refresh.md"));
+      } else {
+        await writeMemory("cli-refresh.md", content);
+      }
+      const manager = await getFreshManager(cfg, "cli");
+      try {
+        const results = await manager.search(content ?? "Violet badger", { minScore: 0 });
+        expect(results.some((entry) => entry.path === "memory/cli-refresh.md")).toBe(
+          content !== null,
+        );
+        expect(manager.status().lastSyncError).toBeUndefined();
+      } finally {
+        await manager.close();
+      }
     }
   });
 

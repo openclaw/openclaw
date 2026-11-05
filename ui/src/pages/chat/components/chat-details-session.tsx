@@ -14,6 +14,7 @@ import { createScrollPosition } from "../../../lib/reactive/scroll-state.ts";
 import { scopedSessionArtifactKey } from "../../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { ProcessesPanelData } from "../processes-panel-data.ts";
+import { getSessionCacheValue, setSessionCacheValue } from "../session-cache.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { ChatDetailsBackground } from "./chat-details-background.tsx";
 import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
@@ -47,6 +48,13 @@ const ChatDetailsPeople = lazy(() => import("./chat-details-people-list.tsx"), {
 const ChatOutputsDesktop = lazy(() => import("./chat-outputs.tsx"), {
   export: "ChatOutputsDesktop",
 });
+
+// Disclosure choices outlive keyed remounts (pane eviction, Gateway restarts) for this page
+// load only: a new session or a reload starts from the defaults, and nothing is persisted.
+const sectionChoicesBySession = new Map<
+  string,
+  Partial<Record<ChatDetailsDesktopSectionId, boolean>>
+>();
 
 type Props = {
   props?: ChatDetailsProps;
@@ -150,11 +158,11 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
     });
     return (
       <Show when={identity()} keyed>
-        {(_identity) => {
+        {(sessionIdentity) => {
           const [pullRequestsOpen, setPullRequestsOpen] = createSignal(true);
           const [sectionChoices, setSectionChoices] = createStore<
             Partial<Record<ChatDetailsDesktopSectionId, boolean>>
-          >({});
+          >({ ...getSessionCacheValue(sectionChoicesBySession, sessionIdentity) });
           const desktopPresentation = () =>
             props.desktop ? props.props?.desktopPresentation : undefined;
           const sectionExpanded = (section: ChatDetailsDesktopSectionId) =>
@@ -170,6 +178,10 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
             }
             setSectionChoices((choices) => {
               choices[section] = expanded;
+            });
+            setSessionCacheValue(sectionChoicesBySession, sessionIdentity, {
+              ...getSessionCacheValue(sectionChoicesBySession, sessionIdentity),
+              [section]: expanded,
             });
             props.props?.desktopDisclosures?.onExpandedChange(section, expanded);
           };
@@ -214,8 +226,8 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
           );
           const people = () => session()?.expandedParticipants ?? session()?.participants ?? [];
           const count = () => session()?.participantCount ?? people().length;
-          const partialPeople = () =>
-            session()?.participantCount === undefined || count() > people().length;
+          // The Gateway omits the count when the owner-excluded participant list is empty.
+          const partialPeople = () => count() > people().length;
           const desktopPeople = createMemo(() => {
             const union = new Map<string, SessionParticipant>();
             const actors = [owner(), session()?.createdActor];
@@ -563,6 +575,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                     showProcesses={false}
                   />
                   <ChatDetailsProcesses
+                    details={props.props!}
                     processes={processes}
                     presented={active()}
                     expanded={sectionExpanded("processes")}

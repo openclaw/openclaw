@@ -136,7 +136,7 @@ jobs:
           set -euo pipefail
           bundle _4.0.23_ install --jobs 4 --retry 3
           bundle _4.0.23_ check
-          test "$(bundle _4.0.23_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.241.1"
+          test "$(bundle _4.0.23_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.241.2"
 
       - name: Create apps-signing read token
         id: apps-signing-token

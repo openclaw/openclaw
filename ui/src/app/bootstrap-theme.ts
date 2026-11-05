@@ -3,6 +3,7 @@ import {
   resolveThemeBranding,
 } from "../../../packages/gateway-protocol/src/theme.ts";
 import { createChangeListeners } from "../../../src/shared/listeners.js";
+import { formatUiError } from "../lib/format-error.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { ApplicationGateway, ApplicationTheme, ApplicationThemePalette } from "./context.ts";
 import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
@@ -184,7 +185,7 @@ export function createApplicationTheme(
       if (!disposed) {
         catalogLoadError = {
           themes: [],
-          error: error instanceof Error ? error.message : String(error),
+          error: formatUiError(error),
         };
         publish();
       }
@@ -220,20 +221,14 @@ export function createApplicationTheme(
     const changed = livePreferencesKey(next) !== livePreferencesKey(settings);
     const appearanceChanged = appearanceKey(next) !== appearanceKey(settings);
     settings = next;
-    if (!changed) {
-      // Readiness can change without changing the stored preference values.
-      if (options?.notify) {
-        publish();
-      }
-      return;
+    if (changed) {
+      void loadCatalog();
     }
-    void loadCatalog();
     if (appearanceChanged) {
       publish();
       syncSystemThemeListener();
-    } else {
-      // Board/navigation preferences still notify consumers without reapplying
-      // the document palette or retiring an in-flight palette load.
+    } else if (changed || options?.notify) {
+      // Navigation and profile readiness do not reapply or retire the palette.
       listeners.publish();
     }
   };
@@ -289,7 +284,7 @@ export function createApplicationTheme(
     get appliedPalette() {
       return appliedPalette;
     },
-    recordServerSelection: publish,
+    recordServerSelection: listeners.publish,
     setMode(mode: ThemeMode) {
       patchSettings({ themeMode: mode });
     },

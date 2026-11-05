@@ -256,7 +256,7 @@ export function PluginSkillPreview(props: {
                   >
                     {t("common.close")}
                   </button>
-                  <button type="button" class="btn oc-action oc-action-primary" onClick={reset}>
+                  <button type="button" class="btn primary" onClick={reset}>
                     {t("pluginsPage.tryAgain")}
                   </button>
                 </openclaw-modal-actions>

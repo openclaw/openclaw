@@ -173,6 +173,7 @@ export function memoizedSidebarSections(
       const zone = groups?.length ? host.reconciledSidebarZone(rows) : undefined;
       return host.sessionProjection.project({
         rows,
+        selectedSessionKey: isSessionRouteId(host.activeRouteId) ? host.getRouteSessionKey() : null,
         referencedRows: groups?.flatMap((group) => host.personalGroupSessionRows(group, zone)),
         sections,
         pinnedKeys,
