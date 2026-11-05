@@ -34,6 +34,8 @@ private final class DashboardWindow: ExperienceWindow {
     /// User intent belongs to the native window, not the privileged document it hosts.
     var userIntentGeneration: UInt64 = 0
     var lifetimeRevision: UInt64 = 0
+    /// Set while a launch preload has never been shown; window counts skip it.
+    var isUnshownPreload = false
     var pendingGatewaySwitch: DashboardGatewaySwitchIntent?
     var documentLoad: DashboardDocumentLoad?
 
@@ -412,6 +414,16 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.isWindowOpen || self.isHiddenForExperience
     }
 
+    var isUnshownPreload: Bool {
+        (self.window as? DashboardWindow)?.isUnshownPreload == true
+    }
+
+    /// A window that was never shown keeps the experience-hidden lifetime until `show()`.
+    func retainHidden() {
+        (self.window as? DashboardWindow)?.isHiddenForExperience = true
+        (self.window as? DashboardWindow)?.isUnshownPreload = true
+    }
+
     func hideForExperience() {
         guard let window else { return }
         // Keep the document and drafts, but retire actions admitted by the
@@ -433,6 +445,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
     func show() {
         (self.window as? DashboardWindow)?.isHiddenForExperience = false
+        (self.window as? DashboardWindow)?.isUnshownPreload = false
         self.window?.isExcludedFromWindowsMenu = false
         self.deviceSettingsMessageHandler.startObserving()
         if let window {
