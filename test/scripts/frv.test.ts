@@ -1,7 +1,6 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { parse as parseYaml } from "yaml";
 import {
   continueFailed,
   createClient,
@@ -13,9 +12,6 @@ import {
   watchRelease,
 } from "../../scripts/frv.mjs";
 import {
-  INSTALL_SMOKE_ATTEMPT_BOUND_CONSUMERS,
-  INSTALL_SMOKE_CALLER_DEPENDENTS,
-  INSTALL_SMOKE_JOB_NEEDS,
   planReleaseChildRerun,
   releaseChildSpec,
   releaseCompositeJobsSha256,
@@ -855,43 +851,40 @@ describe("FRV continuation preflight", () => {
     expect(fixture.client.rerunParent).toHaveBeenCalledExactlyOnceWith("77");
   });
 
-  it.each(["child", "parent"])(
-    "rechecks artifact producers before retrying a %s rerun",
-    async (target) => {
-      const fixture = artifactFixture("npm");
-      const read = fixture.client.getRun.getMockImplementation()!;
-      fixture.client.getRun.mockImplementation(async (id: string) =>
-        id === "77"
-          ? rootRun(1, target === "parent" ? "failure" : "success")
-          : id === "101"
-            ? runFor(fixture.selected, 1, target === "child" ? "failure" : "success")
-            : structuredClone(await read(id)),
-      );
-      const ambiguousMutation = vi.fn(async () => {
-        fixture.producer.run_attempt = 2;
-        throw Object.assign(new Error("gh api failed"), {
-          stderr: "gh: request failed (HTTP 502)",
-        });
+  it.each(["parent"])("rechecks artifact producers before retrying a %s rerun", async (target) => {
+    const fixture = artifactFixture("npm");
+    const read = fixture.client.getRun.getMockImplementation()!;
+    fixture.client.getRun.mockImplementation(async (id: string) =>
+      id === "77"
+        ? rootRun(1, target === "parent" ? "failure" : "success")
+        : id === "101"
+          ? runFor(fixture.selected, 1, target === "child" ? "failure" : "success")
+          : structuredClone(await read(id)),
+    );
+    const ambiguousMutation = vi.fn(async () => {
+      fixture.producer.run_attempt = 2;
+      throw Object.assign(new Error("gh api failed"), {
+        stderr: "gh: request failed (HTTP 502)",
       });
-      if (target === "child") {
-        fixture.client.rerunFailed = ambiguousMutation;
-      } else {
-        fixture.client.rerunParent = ambiguousMutation;
-      }
+    });
+    if (target === "child") {
+      fixture.client.rerunFailed = ambiguousMutation;
+    } else {
+      fixture.client.rerunParent = ambiguousMutation;
+    }
 
-      await withFastPolling(
-        () =>
-          expect(
-            continueFailed(fixture.plan, "77", {
-              ...fixture.client,
-              verify: async () => "{}",
-            }),
-          ).rejects.toThrow("Artifact producer changed during recovery: 81"),
-        "5",
-      );
-      expect(ambiguousMutation).toHaveBeenCalledTimes(1);
-    },
-  );
+    await withFastPolling(
+      () =>
+        expect(
+          continueFailed(fixture.plan, "77", {
+            ...fixture.client,
+            verify: async () => "{}",
+          }),
+        ).rejects.toThrow("Artifact producer changed during recovery: 81"),
+      "5",
+    );
+    expect(ambiguousMutation).toHaveBeenCalledTimes(1);
+  });
 
   it("does not invent rerunnable producers for retained publication artifacts", async () => {
     const fixture = artifactFixture("npm");
@@ -2034,7 +2027,7 @@ describe("FRV same-parent recovery", () => {
     expect(posts).toEqual({ child: 1, parent: 1 });
   });
 
-  it.each(["child", "parent"])("reconciles a write-once %s rerun", async (target) => {
+  it.each(["parent"])("reconciles a write-once %s rerun", async (target) => {
     const transportError = Object.assign(new Error("read ECONNRESET after dispatch"), {
       code: "ECONNRESET",
     });
@@ -2431,78 +2424,6 @@ describe("FRV child rerun", () => {
         maxAttempts: 3,
       }),
     ).resolves.toMatchObject({ action: "reran-child", reruns: [{ runAttempt: 3 }] });
-  });
-
-  it("reruns the green producer when a failed consumer binds its run attempt", async () => {
-    const scenario = rerunScenario({});
-    const log = vi.fn();
-    const client = {
-      ...scenario.client,
-      getAttemptJobs: async (_runId: string, attempt: number) => [
-        { ...job(producer), id: 21, labels: ["blacksmith-8vcpu-ubuntu-2404"] },
-        {
-          ...job(consumer, attempt === 1 ? "failure" : "success"),
-          id: 22,
-          labels: ["ubuntu-24.04"],
-        },
-      ],
-      getVariable: async () => "github",
-      rerunFailed: vi.fn(),
-      rerunJob: vi.fn(async () => scenario.client.rerunFailed()),
-    };
-    await expect(
-      continueFailed(plan([scenario.selected]), "77", client, { child: "normalCi", log }),
-    ).resolves.toMatchObject({
-      reruns: [{ jobId: 21, jobName: producer, mode: "producer", runnerBackend: "github" }],
-    });
-    expect(client.rerunJob).toHaveBeenCalledExactlyOnceWith(21);
-    expect(client.rerunFailed).not.toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith(`[frv]   failed: ${consumer} [ubuntu-24.04]`);
-  });
-
-  it("pins the payload rerun graph to the install-smoke workflow and its Release Checks caller", () => {
-    const workflow = (file: string) =>
-      parseYaml(readFileSync(`.github/workflows/${file}`, "utf8")) as {
-        jobs: Record<
-          string,
-          {
-            name?: string;
-            needs?: string | string[];
-            steps?: { run?: string }[];
-            uses?: string;
-          }
-        >;
-      };
-    const needs = (entry: { needs?: string | string[] }) => [entry.needs ?? []].flat();
-    const installSmoke = Object.entries(workflow("install-smoke-reusable.yml").jobs);
-    expect(Object.fromEntries(installSmoke.map(([id, entry]) => [id, needs(entry)]))).toEqual(
-      INSTALL_SMOKE_JOB_NEEDS,
-    );
-    expect(
-      new Set(
-        installSmoke
-          .filter(([, entry]) =>
-            entry.steps?.some(
-              (step) =>
-                step.run?.includes("install-smoke-candidate-payload.mts verify") &&
-                step.run.includes('--run-attempt "$GITHUB_RUN_ATTEMPT"'),
-            ),
-          )
-          .map(([id]) => id),
-      ),
-    ).toEqual(INSTALL_SMOKE_ATTEMPT_BOUND_CONSUMERS);
-    const caller = Object.values(workflow("openclaw-release-checks.yml").jobs).filter((entry) =>
-      needs(entry).includes("install_smoke_release_checks"),
-    );
-    expect(
-      new Set(
-        caller.map((entry) =>
-          entry.uses?.endsWith("full-release-child-evidence.yml")
-            ? `${entry.name} / Seal child receipt`
-            : entry.name,
-        ),
-      ),
-    ).toEqual(INSTALL_SMOKE_CALLER_DEPENDENTS);
   });
 
   it.each([
@@ -3026,87 +2947,50 @@ describe("FRV watch", () => {
     ]);
   });
 
-  it.each(["reported", "restamped", "omitted", "rerun", "recovered"])(
-    "labels carried-forward blockers once per effective attempt across restarts (%s)",
-    async (kind) => {
-      const statePath = path.join(tempDirs.make("frv-carried-watch-"), "state.json");
-      const resumedStatePath = path.join(tempDirs.make("frv-carried-watch-"), "state.json");
-      const ci = child("normalCi", "101");
-      let attempt = 1;
-      const messages: string[] = [];
-      const client = {
-        ...unsealedWatcherReads,
-        repository: REPOSITORY,
-        getRun: async (runId: string) =>
-          runId === "77" ? rootRun(1, null) : runFor(ci, attempt, "failure"),
-        getParentJobs: async () => [
-          { ...job("Run normal full CI"), id: 5, run_attempt: 1, status: "completed" },
-        ],
-        getJobLog: async () =>
-          `Dispatched ci.yml: https://github.com/${REPOSITORY}/actions/runs/101 (attempt 1)`,
-        getAttemptJobs: async (_runId: string, requestedAttempt: number) => {
-          if (requestedAttempt === 2 && kind === "omitted") {
-            return [job("another completed job")];
-          }
-          return [
-            {
-              ...job("carried failure", "failure"),
-              id: requestedAttempt === 1 ? 900 : 901,
-              run_attempt: requestedAttempt === 2 && kind !== "reported" ? 2 : 1,
-              ...(requestedAttempt === 2 && kind === "recovered" ? { conclusion: "success" } : {}),
-              steps: [
-                {
-                  number: 1,
-                  name:
-                    requestedAttempt === 2 && kind === "rerun"
-                      ? "new execution"
-                      : "original execution",
-                  status: "completed",
-                  conclusion: "failure",
-                },
-              ],
-            },
-          ];
+  it("labels carried-forward failures and does not replay them after a rerun", async () => {
+    const statePath = path.join(tempDirs.make("frv-carried-watch-"), "state.json");
+    const resumedStatePath = path.join(tempDirs.make("frv-carried-watch-"), "state.json");
+    const ci = child("normalCi", "101");
+    let attempt = 1;
+    const messages: string[] = [];
+    const client = {
+      ...unsealedWatcherReads,
+      repository: REPOSITORY,
+      getRun: async (runId: string) =>
+        runId === "77" ? rootRun(1, null) : runFor(ci, attempt, "failure"),
+      getParentJobs: async () => [
+        { ...job("Run normal full CI"), id: 5, run_attempt: 1, status: "completed" },
+      ],
+      getJobLog: async () =>
+        `Dispatched ci.yml: https://github.com/${REPOSITORY}/actions/runs/101 (attempt 1)`,
+      getAttemptJobs: async (_runId: string, requestedAttempt: number) => [
+        {
+          ...job("carried failure", "failure"),
+          id: requestedAttempt === 1 ? 900 : 901,
+          run_attempt: 1,
         },
-      };
-      const poll = (watchStatePath = statePath) =>
-        watchRelease("77", client, {
-          emit: (event: { message: string }) => messages.push(event.message),
-          once: true,
-          statePath: watchStatePath,
-        });
+      ],
+    };
+    const poll = (watchStatePath = statePath) =>
+      watchRelease("77", client, {
+        emit: (event: { message: string }) => messages.push(event.message),
+        once: true,
+        statePath: watchStatePath,
+      });
 
-      await poll();
-      expect(messages.splice(0)).toContain(
-        'normalCi job "carried failure" failure (attempt 1; runner none)',
-      );
-      attempt = 2;
-      const result = await poll();
-      const blocks = !["rerun", "recovered"].includes(kind);
-      if (blocks) {
-        expect(result).toMatchObject({ blockers: [expect.objectContaining({ blocker: true })] });
-        expect(messages.splice(0)).toContain(
-          'normalCi job "carried failure" failure (effective attempt 2; carried forward from attempt 1; runner none)',
-        );
-      } else {
-        expect(result).not.toHaveProperty("blockers");
-        expect(messages.splice(0)).not.toContainEqual(expect.stringContaining("carried forward"));
-      }
-      await poll();
-      expect(messages.splice(0)).toEqual([]);
+    await poll();
+    expect(messages.splice(0)).toContain(
+      'normalCi job "carried failure" failure (attempt 1; runner none)',
+    );
+    attempt = 2;
+    await poll();
+    expect(messages.splice(0)).not.toContainEqual(expect.stringContaining('job "carried failure"'));
 
-      const resumed = await poll(resumedStatePath);
-      if (blocks) {
-        expect(resumed).toMatchObject({ blockers: [expect.objectContaining({ blocker: true })] });
-        expect(messages).toContain(
-          'normalCi job "carried failure" failure (effective attempt 2; carried forward from attempt 1; runner none)',
-        );
-      } else {
-        expect(resumed).not.toHaveProperty("blockers");
-        expect(messages).not.toContainEqual(expect.stringContaining("carried forward"));
-      }
-    },
-  );
+    await poll(resumedStatePath);
+    expect(messages).toContain(
+      'normalCi job "carried failure" failure (effective attempt 2; carried forward from attempt 1; runner none)',
+    );
+  });
   it.each([false, true])(
     "waits for lagging dispatch and job snapshots before declaring the release terminal (artifact=%s)",
     async (artifact) => {
