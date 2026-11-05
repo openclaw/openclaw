@@ -1,0 +1,2 @@
+# Updates refuse PostgreSQL capture without exclusive state ownership before replacing the install: Git and package, ownership held and free.
+78
