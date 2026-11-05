@@ -1,4 +1,5 @@
 import { filterStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { CallBriefSchema, type CallBrief } from "./call-brief-schema.js";
 import type { CallRecord } from "./types.js";
 
@@ -110,7 +111,7 @@ export function buildCallBriefInstructions(call: CallRecord): string {
       : undefined);
   const ownerInstructions = filterStringEntries(call.metadata?.ownerInstructions)
     .slice(-8)
-    .map((value) => value.slice(0, 500));
+    .map((value) => truncateUtf16Safe(value, 500));
   const voicemailManagedByHost = call.metadata?.voicemailManagedByHost === true;
   if (!brief && !task && ownerInstructions.length === 0 && !voicemailManagedByHost) {
     return "";
@@ -162,5 +163,5 @@ export function buildCallBriefInstructions(call: CallRecord): string {
   if (ownerInstructions.length) {
     lines.push("Current owner instructions (most recent last):", ...ownerInstructions);
   }
-  return lines.join("\n").slice(0, 14000);
+  return truncateUtf16Safe(lines.join("\n"), 14000);
 }
