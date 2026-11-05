@@ -1,0 +1,2 @@
+# Prove canonical APFS skips mount while aliased paths still read it.
+40
