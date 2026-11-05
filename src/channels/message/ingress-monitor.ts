@@ -71,8 +71,9 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
       : { ...CHANNEL_INGRESS_RETENTION_DEFAULTS, ...options.retention };
   const { pruneIntervalMs, ...pruneOptions } = retention;
   const shutdown = new AbortController();
-  const drainAbortSignal = options.abortSignal
-    ? AbortSignal.any([shutdown.signal, options.abortSignal])
+  // Native AbortSignal consumers require the original handle, not its plugin view.
+  const drainAbortSignal = params.abortSignal
+    ? AbortSignal.any([shutdown.signal, params.abortSignal])
     : shutdown.signal;
   const activeDeliveries = new Set<Promise<unknown>>();
   const activeInspections = new Set<Promise<unknown>>();
@@ -562,7 +563,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     if (
       (stopped && options.admissionMode !== "durable-after-stop") ||
       (options.admissionMode === "while-running" && !running) ||
-      (options.abortSignal?.aborted && options.admissionMode !== "durable-after-stop")
+      (params.abortSignal?.aborted && options.admissionMode !== "durable-after-stop")
     ) {
       throw createStoppedError();
     }
