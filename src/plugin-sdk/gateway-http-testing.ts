@@ -88,9 +88,8 @@ function createCapturedResponse(req: IncomingMessage): {
   };
 }
 
-// The captured emitter is the response the Gateway handler writes. One assertion
-// keeps that test double out of the public signature without an unknown chain.
 function toServerResponse(response: EventEmitter): ServerResponse {
+  // SAFETY: This emitter is the response the Gateway handler writes through setHeader and end.
   return response as ServerResponse;
 }
 
