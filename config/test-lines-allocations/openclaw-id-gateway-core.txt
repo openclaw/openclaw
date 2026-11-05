@@ -1,4 +1,5 @@
 # OpenClaw ID Gateway core: new membership authority, publication, People events,
 # Gateway-start device-token binding enforcement and Labs-off tests for new surface
 # (src/gateway/openclaw-id). No existing tests replaced.
-3596
+# Bounded state: invite sweep, mailbox revocation replay, full-caps claw record size and row-split tests.
+3886

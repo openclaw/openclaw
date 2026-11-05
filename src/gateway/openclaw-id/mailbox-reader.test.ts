@@ -158,9 +158,14 @@ describe("mailbox revocation replay", () => {
     const laptop = await generateEd25519Signer();
     const peer = formatIrohEndpointKey(randomBytes(32));
     const body = {
-      ...{ device_pub: formatEd25519PublicKey(laptop.publicKey), peer_keys: [peer] },
-      ...{ label: "laptop", scope: "owner" as const, caps: [...OWNER_CAPABILITIES] },
-      ...{ issued_at: now, expires_at: null, root_epoch: ROOT_EPOCH },
+      device_pub: formatEd25519PublicKey(laptop.publicKey),
+      peer_keys: [peer],
+      label: "laptop",
+      scope: "owner" as const,
+      caps: [...OWNER_CAPABILITIES],
+      issued_at: now,
+      expires_at: null,
+      root_epoch: ROOT_EPOCH,
     };
     const cert = await signStatement("OwnerDeviceCert", body, claw.device);
     const approve = async () =>
@@ -171,9 +176,13 @@ describe("mailbox revocation replay", () => {
     const revocation = await signStatement(
       "Revocation",
       {
-        ...{ claw_id: claw.clawId, seq: (await claw.authority.load())!.authority!.seq },
-        ...{ target_fp: await fingerprint(body.device_pub), target_kind: "owner_device" as const },
-        ...{ reason: "lost", root_epoch: ROOT_EPOCH, issued_at: now },
+        claw_id: claw.clawId,
+        seq: (await claw.authority.load())!.authority!.seq,
+        target_fp: await fingerprint(body.device_pub),
+        target_kind: "owner_device" as const,
+        reason: "lost",
+        root_epoch: ROOT_EPOCH,
+        issued_at: now,
       },
       claw.device,
     );

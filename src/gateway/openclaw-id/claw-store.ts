@@ -35,7 +35,10 @@ export type StoredClaw = {
    * authority) and how the invite ended, keyed by invite id.
    */
   invite_reports?: Record<string, InviteReport>;
-  /** Device tokens issued over the tunnel and the device key W each belongs to. */
+  /**
+   * Device tokens issued over the tunnel and the device key W each belongs to. Stored in their
+   * own row (see writeStoredClaw), so neither row outgrows the plugin-state value limit.
+   */
   token_bindings?: DeviceTokenBinding[];
   /** Discovery publication state (a mirror; never authority). */
   discovery: {
@@ -86,21 +89,55 @@ export function storedOwnerProfile(
 }
 
 const RECORD_KEY = "current";
+const TOKEN_BINDINGS_KEY = "token-bindings";
 
-function openStore() {
-  return createCorePluginStateKeyedStore<StoredClaw>({
+/** The device-token bindings row, kept beside the claw record. */
+export type StoredTokenBindings = { v: 1; bindings: DeviceTokenBinding[] };
+
+function openStore<T>() {
+  return createCorePluginStateKeyedStore<T>({
     ownerId: "core:openclaw-id",
     namespace: "claw",
     retention: "retained",
   });
 }
 
-/** Reads the claw record, or undefined before the first link attempt. */
-export async function readStoredClaw(): Promise<StoredClaw | undefined> {
-  return await openStore().lookup(RECORD_KEY);
+/**
+ * Splits the claw record into its two stored rows: the record without its token bindings,
+ * and the bindings. At every protocol cap each row stays within the plugin-state value limit,
+ * which the record as one value would not.
+ */
+export function clawStoreRows(record: StoredClaw): {
+  claw: StoredClaw;
+  tokenBindings: StoredTokenBindings;
+} {
+  const { token_bindings: bindings, ...claw } = record;
+  return { claw, tokenBindings: { v: 1, bindings: bindings ?? [] } };
 }
 
-/** Replaces the claw record. */
+/**
+ * Reads the claw record, or undefined before the first link attempt. The bindings row wins
+ * over bindings still inside a record written before they had their own row; the next write
+ * moves them out.
+ */
+export async function readStoredClaw(): Promise<StoredClaw | undefined> {
+  const [record, bindings] = await Promise.all([
+    openStore<StoredClaw>().lookup(RECORD_KEY),
+    openStore<StoredTokenBindings>().lookup(TOKEN_BINDINGS_KEY),
+  ]);
+  if (!record || !bindings) {
+    return record;
+  }
+  return { ...record, token_bindings: bindings.bindings };
+}
+
+/**
+ * Replaces the claw record. The bindings row is written before the record row. Apart from
+ * moving bindings out of an older record, a write changes only one of the two, so an
+ * interrupted write leaves the rows as they were or with only its own change.
+ */
 export async function writeStoredClaw(record: StoredClaw): Promise<void> {
-  await openStore().register(RECORD_KEY, record);
+  const rows = clawStoreRows(record);
+  await openStore<StoredTokenBindings>().register(TOKEN_BINDINGS_KEY, rows.tokenBindings);
+  await openStore<StoredClaw>().register(RECORD_KEY, rows.claw);
 }
