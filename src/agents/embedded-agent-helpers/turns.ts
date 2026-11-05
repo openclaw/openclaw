@@ -242,16 +242,12 @@ function validateTurnsWithConsecutiveMerge<TRole extends "assistant" | "user">(p
       if (msgRole === lastRole && lastRole === role) {
         const lastMsg = result[result.length - 1];
         const currentMsg = msg as Extract<AgentMessage, { role: TRole }>;
-        if (
-          lastMsg &&
-          typeof lastMsg === "object" &&
-          (!params.canMerge ||
-            (params.canMerge(lastMsg as Extract<AgentMessage, { role: TRole }>) &&
-              params.canMerge(currentMsg)))
-        ) {
+        if (lastMsg && typeof lastMsg === "object") {
           const lastTyped = lastMsg as Extract<AgentMessage, { role: TRole }>;
-          result[result.length - 1] = merge(lastTyped, currentMsg);
-          continue;
+          if (!params.canMerge || (params.canMerge(lastTyped) && params.canMerge(currentMsg))) {
+            result[result.length - 1] = merge(lastTyped, currentMsg);
+            continue;
+          }
         }
       }
       lastRole = msgRole;
