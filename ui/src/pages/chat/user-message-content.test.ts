@@ -89,3 +89,17 @@ it.each(["paste", "file", undefined] as const)(
     }
   },
 );
+
+it("keeps submitted App context with the user message without changing authored text", () => {
+  const appContext = [
+    {
+      title: "Helmet shell",
+      uri: "shell://specimens/helmet",
+      icon: "https://example.test/shell.png",
+    },
+  ];
+  const input = { text: "Describe this shell.", createdAt: 1, appContext };
+  const message = buildLocalUserMessage(input);
+  expect(message?.content).toEqual([{ type: "text", text: "Describe this shell." }]);
+  expect(message?.["__openclaw"].appContext).toEqual(appContext);
+});
