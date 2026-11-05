@@ -3,12 +3,15 @@ import { parseBoardWebsite } from "../../../../../src/boards/board-website.ts";
 import { BoardWidgetError } from "../../../components/board/board-widget-error.tsx";
 import { resolveGatewayHttpOrigin } from "../../../components/sandbox-host.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerBoardDocumentEnglish } from "../../../i18n/locales/en-board-document.ts";
 import { registerBoardWebsiteEnglish } from "../../../i18n/locales/en-board-website.ts";
 import { useOptionalApplication } from "../../reactive/context.ts";
-import { t } from "../../reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../solid-bridge.ts";
 import type { BoardWidget } from "../types.ts";
 import "./website.css";
+
+registerEnglishCatalog(registerBoardDocumentEnglish);
 
 registerBoardWebsiteEnglish();
 type WebsiteWidgetProps = { widget?: BoardWidget; active: boolean };

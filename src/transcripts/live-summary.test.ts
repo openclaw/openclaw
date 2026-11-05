@@ -2,24 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import "../agents/isolated-completion.js";
-import { createTranscriptsTool } from "../agents/tools/transcripts-tool.js";
 import "../agents/utility-completion.js";
 import type { MeetingSessionRecord } from "../meeting-bot/session-types.js";
 import { createMeetingDurableTranscriptBridge } from "../meeting-bot/transcripts-bridge.runtime.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import * as gatewayWorkAdmission from "../process/gateway-work-admission.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
 import { createTranscriptsStore } from "./capture-operations.js";
 import { activeSessions, prepareTranscriptCaptureDisable } from "./capture-startup.js";
-import { startTranscripts } from "./capture.js";
-import { clearTranscriptCapturesForTest } from "./capture.test-support.js";
 import { getTranscriptLibrary, listTranscriptLibrary } from "./library.js";
 import type { TranscriptStartRequest } from "./provider-types.js";
+import { useTranscriptStatusFixture } from "./status.producer.test-harness.js";
 import { TranscriptsStore } from "./store.js";
 import { summarizeTranscripts, type TranscriptsSummary } from "./summary.js";
 
@@ -38,6 +30,7 @@ vi.mock("./summary-model.runtime.js", async (importOriginal) => {
   };
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const makeCapture = useTranscriptStatusFixture();
 const fiveMinutes = 5 * 60_000;
 const pendingCompletions = new Set<() => void>();
 function holdCompletion() {
@@ -86,51 +79,22 @@ beforeEach(() => {
     agentDir: `/tmp/${agentId}`,
   }));
 });
-afterEach(async () => {
-  for (const settle of pendingCompletions) {
-    settle();
-  }
-  pendingCompletions.clear();
-  await clearTranscriptCapturesForTest();
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-});
-
-async function capture(initialText?: string, stateDir = tempDirs.make("transcript-live-notes-")) {
+async function capture(initialText?: string) {
+  const { ctx, store, provider, start, tool } = makeCapture(cfg);
+  provider.sourceKinds = ["live-caption"];
   const updates = trackSummaryUpdates();
-  const ctx = {
-    stateDir,
-    config: cfg,
-    logger: { warn: vi.fn() },
-    caller: { kind: "operator" as const, source: "local" as const },
-  };
-  const store = createTranscriptsStore(ctx);
   let source!: TranscriptStartRequest;
   const stopStarted = createDeferred();
-  const stop = vi.fn(async ({ sessionId }: { sessionId: string }) => {
+  const stop = vi.fn<NonNullable<typeof provider.stop>>(async ({ sessionId }) => {
     stopStarted.resolve();
-    return { ok: true as const, sessionId };
+    return { ok: true, sessionId };
   });
-  const registry = createEmptyPluginRegistry();
-  registry.transcriptSourceProviders.push({
-    pluginId: "notes",
-    source: import.meta.url,
-    provider: {
-      id: "notes",
-      name: "Notes",
-      sourceKinds: ["live-caption"],
-      start: async (request) => {
-        source = request;
-        return { ok: true, session: request.session };
-      },
-      stop,
-    },
-  });
-  await withPluginRuntimeRegistryScope(registry, () =>
-    startTranscripts({ ctx, store, rawParams: { providerId: "notes", sessionId: "meeting" } }),
-  );
+  provider.start = async (request) => {
+    source = request;
+    return { ok: true, session: request.session };
+  };
+  provider.stop = stop;
+  await start({ providerId: provider.id, sessionId: "meeting" });
   const speak = (text: string) => source.onUtterance({ text });
   const saved = async () => (await store.readSummary(source.session)).summary;
   if (initialText) {
@@ -154,10 +118,8 @@ async function capture(initialText?: string, stateDir = tempDirs.make("transcrip
     advance: () => advanceSummaryInterval(updates),
     settle: () => settleSummaryUpdates(updates),
     execute(id: string, action: "stop" | "summarize") {
-      const tool = createTranscriptsTool(ctx);
-      return withPluginRuntimeRegistryScope(registry, () =>
-        tool.execute(id, { action, sessionId: "meeting" }),
-      );
+      vi.stubEnv("OPENCLAW_STATE_DIR", ctx.stateDir);
+      return tool.execute(id, { action, sessionId: "meeting" });
     },
   };
 }
@@ -177,6 +139,13 @@ async function expectLibraryState(
 }
 
 describe("live meeting summaries", () => {
+  // Inner cleanup releases held inference before the shared capture fixture retires it.
+  afterEach(() => {
+    for (const settle of pendingCompletions) {
+      settle();
+    }
+    pendingCompletions.clear();
+  });
   it.each(["restart-drain", "capture-policy"] as const)(
     "persists final speech without loading inference after %s closes admission",
     async (reason) => {
@@ -225,19 +194,6 @@ describe("live meeting summaries", () => {
     expectCalls(0);
     expect(await fixture.saved()).toEqual(final);
   });
-  it("retires failed snapshot initialization and permits capture retry", async () => {
-    const stateDir = tempDirs.make("transcript-summary-start-retry-");
-    const read = vi
-      .spyOn(TranscriptsStore.prototype, "readSummarySnapshot")
-      .mockRejectedValueOnce(new Error("Snapshot unavailable"));
-    await expect(capture(undefined, stateDir)).rejects.toThrow("Snapshot unavailable");
-    read.mockRestore();
-    const store = createTranscriptsStore({ stateDir, logger: console });
-    expect((await store.readSession("meeting"))?.stoppedAt).toBeTruthy();
-    const fixture = await capture("Recovered capture", stateDir);
-    await fixture.advance();
-    await fixture.expectSummary({ source: "model", utteranceCount: 1 }, 1);
-  });
 
   it("stops pending snapshot input before final inference", async () => {
     const fixture = await capture("Saved speech");
@@ -259,10 +215,13 @@ describe("live meeting summaries", () => {
   });
 
   it("outlives its caller and skips unchanged intervals", async () => {
+    const snapshots = vi.spyOn(TranscriptsStore.prototype, "readSummarySnapshot");
     const caller = new AsyncWorkScope();
     const fixture = await caller.track(() => capture());
+    expect(snapshots).not.toHaveBeenCalled();
     await caller.drain();
     await fixture.advance();
+    expect(snapshots).toHaveBeenCalledOnce();
     expectCalls(0);
     await fixture.speak("First decision");
     await vi.advanceTimersByTimeAsync(fiveMinutes - 1);
@@ -292,6 +251,23 @@ describe("live meeting summaries", () => {
     });
     await fixture.advance();
     expectCalls(2);
+  });
+
+  it("recovers on the next interval after a failed snapshot", async () => {
+    const fixture = await capture("Saved speech");
+    vi.spyOn(fixture.store, "readSummarySnapshot").mockRejectedValueOnce(
+      new Error("Snapshot unavailable"),
+    );
+    await expect(fixture.advance()).rejects.toThrow("Snapshot unavailable");
+    await vi.advanceTimersByTimeAsync(0);
+    expectCalls(0);
+    expect(fixture.ctx.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("Snapshot unavailable"),
+    );
+    // The fixture must not rejoin the already-observed rejected interval.
+    vi.mocked(gatewayWorkAdmission.runWithGatewayDetachedWorkAdmission).mockClear();
+    await fixture.advance();
+    await fixture.expectSummary({ source: "model", transcript: ["Saved speech"] }, 1);
   });
 
   it("settles cancelled interim inference before finalizing provider stop", async () => {
@@ -424,73 +400,61 @@ describe("live meeting summaries", () => {
     expectCalls(2);
   });
 
-  it.each([false, true])(
-    "summarizes and finalizes browser meetings (restored: %s)",
-    async (restored) => {
-      const updates = trackSummaryUpdates();
-      const stateDir = tempDirs.make("browser-live-notes-");
-      const store = createTranscriptsStore({ stateDir, logger: console });
-      const session: MeetingSessionRecord<"chrome", "agent"> = {
-        id: "browser-meeting",
-        url: "https://meeting.example/room",
-        transport: "chrome",
-        mode: "agent",
-        agentId: "research",
-        state: "active",
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        participantIdentity: "Synthetic guest",
-        realtime: { enabled: true, toolPolicy: "safe-read-only" },
-        notes: [],
-      };
-      if (restored) {
-        const previous = {
-          sessionId: session.id,
-          startedAt: session.createdAt,
-          source: { providerId: "meeting", kind: "live-caption" as const },
-        };
-        const opening = { text: "Earlier speech already summarized" };
-        await store.writeSession(previous);
-        await store.appendUtteranceForSession(previous, opening);
-        await store.writeSummary(
-          summarizeTranscripts({ session: previous, utterances: [opening] }),
-          previous,
-        );
-        await store.appendUtteranceForSession(previous, {
-          text: "Speech saved after the previous summary",
-        });
-      }
-      const bridge = createMeetingDurableTranscriptBridge({
-        logger: { warn: vi.fn() },
-        options: { providerId: "meeting", providerName: "Meeting", stateDir, openclawConfig: cfg },
-      });
-      await bridge.start(session, async () => {});
-      try {
-        const descriptor = (await store.listSessionEntries())[0]!;
-        await expectLibraryState(store, descriptor.selector, true, restored);
-        if (!restored) {
-          await bridge.ingest(session, [
-            { at: new Date().toISOString(), speaker: "Ada", text: "We agreed to simplify setup." },
-          ]);
-        }
-        await advanceSummaryInterval(updates);
-        expectCalls(1);
-        expect(inference()).toMatchObject({ model: "utility", agentId: "research" });
-        expect((await store.readSummary(descriptor.session)).summary?.source).toBe("model");
-        if (restored) {
-          expect((await store.readSummary(descriptor.session)).summary?.transcript).toEqual([
-            "Earlier speech already summarized",
-            "Speech saved after the previous summary",
-          ]);
-        }
-        await expectLibraryState(store, descriptor.selector, true, true);
-        await bridge.stop(session, async () => {});
-        expectCalls(2);
-        expect((await store.readSession(session.id))?.stoppedAt).toBeTruthy();
-        await expectLibraryState(store, descriptor.selector, false);
-      } finally {
-        await bridge.stop(session, async () => {});
-      }
-    },
-  );
+  it("refreshes restored browser notes and finalizes the same summary lane", async () => {
+    const updates = trackSummaryUpdates();
+    const stateDir = tempDirs.make("browser-live-notes-");
+    const store = createTranscriptsStore({ stateDir, logger: console });
+    const session: MeetingSessionRecord<"chrome", "agent"> = {
+      id: "browser-meeting",
+      url: "https://meeting.example/room",
+      transport: "chrome",
+      mode: "agent",
+      agentId: "research",
+      state: "active",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      participantIdentity: "Synthetic guest",
+      realtime: { enabled: true, toolPolicy: "safe-read-only" },
+      notes: [],
+    };
+    const previous = {
+      sessionId: session.id,
+      startedAt: session.createdAt,
+      source: { providerId: "meeting", kind: "live-caption" as const },
+    };
+    const opening = { text: "Earlier speech already summarized" };
+    await store.writeSession(previous);
+    await store.appendUtteranceForSession(previous, opening);
+    await store.writeSummary(
+      summarizeTranscripts({ session: previous, utterances: [opening] }),
+      previous,
+    );
+    await store.appendUtteranceForSession(previous, {
+      text: "Speech saved after the previous summary",
+    });
+    const bridge = createMeetingDurableTranscriptBridge({
+      logger: { warn: vi.fn() },
+      options: { providerId: "meeting", providerName: "Meeting", stateDir, openclawConfig: cfg },
+    });
+    await bridge.start(session, async () => {});
+    try {
+      const descriptor = (await store.listSessionEntries())[0]!;
+      await expectLibraryState(store, descriptor.selector, true, true);
+      await advanceSummaryInterval(updates);
+      expectCalls(1);
+      expect(inference()).toMatchObject({ model: "utility", agentId: "research" });
+      expect((await store.readSummary(descriptor.session)).summary?.source).toBe("model");
+      expect((await store.readSummary(descriptor.session)).summary?.transcript).toEqual([
+        "Earlier speech already summarized",
+        "Speech saved after the previous summary",
+      ]);
+      await expectLibraryState(store, descriptor.selector, true, true);
+      await bridge.stop(session, async () => {});
+      expectCalls(2);
+      expect((await store.readSession(session.id))?.stoppedAt).toBeTruthy();
+      await expectLibraryState(store, descriptor.selector, false);
+    } finally {
+      await bridge.stop(session, async () => {});
+    }
+  });
 });

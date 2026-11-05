@@ -5,3 +5,9 @@ type AuthenticatedGitHubIdentitySyncResult = CachedGitHubIdentity & {
   enterprise?: { accountId: number; login: string; avatarUrl?: string };
 };
 export type AuthenticatedGitHubIdentitySync = () => Promise<AuthenticatedGitHubIdentitySyncResult>;
+
+export type GitHubIdentityPreparationTiming =
+  | "profileAccessIdentityMs"
+  | "profileGitHubMetadataMs"
+  | "profileBindingReadMs"
+  | "profileWriteMs";

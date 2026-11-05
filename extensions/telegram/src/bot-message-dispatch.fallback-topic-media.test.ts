@@ -43,13 +43,13 @@ function expectPresentation(
   contains = labels.map((x) => `- ${x}`),
 ) {
   expect(text).toContain("<table><caption>Status</caption>");
+  expect(text).toContain("<td>running</td>");
   for (const value of contains) {
     expect(text).toContain(value);
   }
   for (const label of labels) {
     expect(text.match(new RegExp(label, "g"))).toHaveLength(1);
   }
-  expect(text).not.toBe("Gateway status as plain text");
 }
 function createMessageToolOnlyGroupContext(): TelegramMessageContext {
   const chat = { id: -1001234, type: "supergroup" };
@@ -67,15 +67,6 @@ function createMessageToolOnlyGroupContext(): TelegramMessageContext {
   });
 }
 describeTelegramDispatch("dispatchTelegramMessage presentation and fallback policy", () => {
-  it("respects richMessages=true on the finalized status preview", async () => {
-    const finalUpdate = await dispatchPresentationFinal({
-      text: "Gateway status as plain text",
-      presentationTextMode: "fallback",
-      presentation: { blocks: [statusTable(0)] },
-    });
-    expect(finalUpdate).toContain("<table><caption>Status</caption>");
-    expect(finalUpdate).toContain("<td>running</td>");
-  });
   it("keeps dropped labels: unset mixed", async () => {
     const finalUpdate = await dispatchPresentationFinal({
       text: "Status summary\n\n- Legacy\n- Presentation",

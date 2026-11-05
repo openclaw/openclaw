@@ -31,6 +31,12 @@ again. Version-1 cache entries, retained group history, and session transcripts
 remain supported. Transcript deduplication uses recorded message identities;
 markerless assistant replies may appear in both reply context and the transcript.
 
+When Telegram context is restored from the session transcript, confirmed final
+replies sent with the `message` tool are included alongside the user requests they
+answered. An interrupted tool result does not hide a reply whose final delivery
+was already recorded. Progress updates and ordinary delivery bookkeeping are
+excluded from this restored context.
+
 <Note>
   **Upgrade note: Telegram's default preview changed in 2026.8.1.** With `channels.telegram.streaming` unset, Telegram keeps one editable status draft during the turn (the agent's current status plus its tool lines) and sends the final answer as a normal message. It previously streamed the answer text itself into the preview. No config becomes invalid and no `doctor --fix` is needed; to keep the previous behavior, set:
 
@@ -81,6 +87,8 @@ Ordinary text batches are bounded to 12 messages and 50,000 characters. Their co
     Tool-progress lines are the short status updates shown while tools run (command execution, file reads, planning updates, patch summaries, Codex preamble/commentary in app-server mode). `partial` and `block` previews show them by default; the `progress` draft shows them only with `streaming.progress.toolProgress: true`. Compaction status follows the same settings and appears as soon as compaction starts, including before the first model output.
 
     In default `progress` mode, `/verbose on` sends separate tool summaries and `/verbose full` also sends completed tool output. An explicit `toolProgress: false` wins over `/verbose`; `streaming.mode: "off"` also suppresses these diagnostics.
+
+    Native questions keep their buttons and remain visible when a progress update is retired at the same time. Progress cleanup and question delivery share the draft's ordering, so cleanup cannot discard a pending question or delete an accepted one.
 
     Keep answer-preview edits but hide tool-progress lines:
 
@@ -285,6 +293,8 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
     Telegram-only poll flags: `--poll-duration-seconds` (5-604800; up to seven days), `--poll-anonymous`, `--poll-public`, `--thread-id` (or a `:topic:` target). `--poll-option` repeats 2-12 times (Telegram's option cap).
 
     Telegram send also supports `--presentation` with `buttons` blocks for inline keyboards (when `channels.telegram.capabilities.inlineButtons` allows it), `--pin` or `--delivery '{"pin":true}'` to request pinned delivery when the bot can pin in that chat, and `--force-document` to send outbound images, GIFs, and videos as documents instead of compressed/animated/video uploads.
+
+    Message-tool sends accept `effectId` (alias `effect`) for Telegram message effects: a numeric Bot API `message_effect_id`. The effect applies once per send, on its first message (for location sends, on the location itself). Effects are forwarded only for known private chats. Other targets and non-numeric effect names retain ordinary delivery without an effect. Sends without `effectId` are unchanged.
 
     Action gating: `channels.telegram.actions.sendMessage=false` disables all outbound messages including polls; `channels.telegram.actions.poll=false` disables poll creation while leaving regular sends enabled.
 

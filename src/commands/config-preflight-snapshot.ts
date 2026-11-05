@@ -33,6 +33,11 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import {
   withArtifactPreservingStateReads,
+  withLiveStateReads,
+} from "../state/artifact-preserving-state-reads.js";
+import {
+  recoverOpenClawStateRollbackJournalForStartup,
+  withCurrentOpenClawStateReadScope,
   withOpenClawStateDatabaseReadSnapshot,
 } from "../state/openclaw-state-db-readonly.js";
 import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
@@ -41,7 +46,6 @@ import {
   rethrowStartupConfigFailure,
   throwStartupMigrationGuardRejected,
 } from "./doctor-startup-migration-refusal.js";
-import { addDoctorLegacyIssues } from "./doctor/shared/legacy-config-issues.js";
 
 export type ConfigPreflightSnapshotRead = {
   databaseEngineSelection?: DatabaseEngineSelection;
@@ -51,6 +55,9 @@ export type ConfigPreflightSnapshotRead = {
 
 // Match the five-minute startup migration lease budget, including slow cold starts.
 const STARTUP_STATE_ADMISSION_TIMEOUT_MS = 5 * 60_000;
+let doctorIssuesModule:
+  | Promise<typeof import("./doctor/shared/legacy-config-issues.js")>
+  | undefined;
 
 /** Own executable inspection caches until a final snapshot transfers to its caller. */
 export function createConfigPreflightSnapshotReader() {
@@ -142,7 +149,9 @@ async function readConfigPreflightSnapshot(
           return {
             snapshot:
               params.purpose === "doctor" || !result.snapshot.valid
-                ? addDoctorLegacyIssues(result.snapshot, pluginMetadataSnapshot)
+                ? await (
+                    await (doctorIssuesModule ??= import("./doctor/shared/legacy-config-issues.js"))
+                  ).addDoctorLegacyIssues(result.snapshot, pluginMetadataSnapshot)
                 : result.snapshot,
             ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
           };
@@ -157,7 +166,9 @@ async function readConfigPreflightSnapshot(
         return {
           snapshot:
             params.purpose === "doctor" || !snapshot.valid
-              ? addDoctorLegacyIssues(snapshot)
+              ? await (
+                  await (doctorIssuesModule ??= import("./doctor/shared/legacy-config-issues.js"))
+                ).addDoctorLegacyIssues(snapshot)
               : snapshot,
         };
       },
@@ -215,134 +226,158 @@ export async function readAdmittedConfigSnapshot(params: {
   ) => Promise<ConfigPreflightSnapshotRead>;
   validateConfig?: (snapshot: ConfigFileSnapshot) => void | Promise<void>;
   beforeStatePreparation?: (snapshot: ConfigFileSnapshot) => Promise<boolean>;
+  /** Startup alone migrates credentials after read admission releases its snapshot. */
+  prepareClientCredentials?: (snapshot: ConfigFileSnapshot) => Promise<void>;
 }): Promise<ConfigPreflightSnapshotRead & { recovery?: PreparedConfigRecovery }> {
-  return await withArtifactPreservingStateReads(async () => {
-    await measureDoctorConfigPreflightStep("admission.live-owner", () =>
-      refuseStartupMigrationsForLiveGatewayOwner(params.env),
-    );
-    try {
-      let restoreSelectedSourceEnv: (() => void) | undefined;
-      const selected = await measureDoctorConfigPreflightStep("admission.core-config", () =>
-        readConfigSnapshotForEngineSelection(params.env, {
-          onSourceEnvApplied: (restore) => {
-            restoreSelectedSourceEnv = restore;
-          },
-        }),
+  const readIdentity = () =>
+    measureDoctorConfigPreflightStep("admission.device-identity", async () => {
+      const { loadDeviceIdentityIfPresentAsync } =
+        await import("../infra/device-identity-async.js");
+      await loadDeviceIdentityIfPresentAsync({ env: params.env });
+    });
+  const admitted = await withLiveStateReads(() =>
+    withArtifactPreservingStateReads(async () => {
+      await measureDoctorConfigPreflightStep("admission.live-owner", () =>
+        refuseStartupMigrationsForLiveGatewayOwner(params.env),
       );
-      // Retain definitive source failures before storage admission. Provisional
-      // plugin migration issues still need the full snapshot's validation below.
-      if (
-        isConfigReadFailure(selected) ||
-        selected.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
-      ) {
-        return { snapshot: selected };
-      }
-      // Read-only preparation shares one state generation. Release its snapshot before
-      // the caller's live guard or any recovery application / writer lease acquisition.
-      const selection =
-        getDatabaseEngineSelection() ??
-        (await resolveDatabaseEngineSelection(selected.config, params.env));
-      installDatabaseEngineSelection(selection);
-      const admitted = await measureDoctorConfigPreflightStep("admission.state-snapshot", () =>
-        withOpenClawStateDatabaseReadSnapshot(
-          async () => {
-            const recoveryOptions = {
-              configPath: selected.path,
-              observe: false,
-              env: params.env,
-            };
-            const coreRecovery = await measureDoctorConfigPreflightStep(
-              "admission.core-recovery",
-              () =>
-                createConfigIO({
-                  ...recoveryOptions,
-                  pluginValidation: "core-only",
-                }).prepareConfigRecovery(selected),
-            );
-            if (coreRecovery) {
-              // Discard only the final JSON source; accepted redirect and dotenv layers remain.
-              restoreSelectedSourceEnv?.();
-            }
-            const candidate = coreRecovery?.snapshot ?? selected;
-            // Both readers use the admitted snapshot. Pin schema selection before the
-            // full config read applies env defaults, and join both before releasing it.
-            let metadataMetrics: Readonly<Record<string, number>> = {};
-            const [readiness, configRead] = await Promise.allSettled([
-              (async () => {
-                await assertStartupStateReady({
-                  cfg: candidate.sourceConfig ?? candidate.config,
-                  env: cloneEnvWithPlatformSemantics(params.env),
-                });
-                if (candidate.valid) {
-                  await params.validateConfig?.(candidate);
+      try {
+        let restoreSelectedSourceEnv: (() => void) | undefined;
+        const selected = await measureDoctorConfigPreflightStep("admission.core-config", () =>
+          readConfigSnapshotForEngineSelection(params.env, {
+            onSourceEnvApplied: (restore) => {
+              restoreSelectedSourceEnv = restore;
+            },
+          }),
+        );
+        // Retain definitive source failures before storage admission. Provisional
+        // plugin migration issues still need the full snapshot's validation below.
+        if (
+          isConfigReadFailure(selected) ||
+          selected.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
+        ) {
+          return { snapshot: selected };
+        }
+        // Startup normally reads committed live state. A hot journal keeps one private
+        // source until validated startup can safely recover the canonical database.
+        const selection =
+          getDatabaseEngineSelection() ??
+          (await resolveDatabaseEngineSelection(selected.config, params.env));
+        installDatabaseEngineSelection(selection);
+        const admittedRead = await measureDoctorConfigPreflightStep(
+          "admission.state-snapshot",
+          () =>
+            withOpenClawStateDatabaseReadSnapshot(
+              async () => {
+                const recoveryOptions = {
+                  configPath: selected.path,
+                  observe: false,
+                  env: params.env,
+                };
+                const coreRecovery = await measureDoctorConfigPreflightStep(
+                  "admission.core-recovery",
+                  () =>
+                    createConfigIO({
+                      ...recoveryOptions,
+                      pluginValidation: "core-only",
+                    }).prepareConfigRecovery(selected),
+                );
+                if (coreRecovery) {
+                  // Discard only the final JSON source; accepted redirect and dotenv layers remain.
+                  restoreSelectedSourceEnv?.();
                 }
-              })(),
-              measureDoctorConfigPreflightStep(
-                "admission.plugin-config",
-                async () => {
-                  const read = await params.readSnapshot(
-                    coreRecovery ? { isolateEnv: true } : undefined,
-                  );
-                  metadataMetrics = read.pluginMetadataSnapshot?.metrics ?? {};
-                  return read;
-                },
-                undefined,
-                () => metadataMetrics,
-              ),
-            ]);
-            if (readiness.status === "rejected") {
-              throw readiness.reason;
-            }
-            if (configRead.status === "rejected") {
-              throw configRead.reason;
-            }
-            let read = configRead.value;
-            if (isConfigReadFailure(read.snapshot)) {
-              throw createConfigReadError(read.snapshot);
-            }
-            const recovery = await measureDoctorConfigPreflightStep(
-              "admission.config-recovery",
-              () => createConfigIO(recoveryOptions).prepareConfigRecovery(read.snapshot),
-            );
-            if (recovery) {
-              read = {
-                snapshot: recovery.snapshot,
-                pluginMetadataSnapshot: recovery.pluginMetadataSnapshot,
-              };
-            }
-            if (read.snapshot.valid) {
-              await params.validateConfig?.(read.snapshot);
-              await measureDoctorConfigPreflightStep("admission.device-identity", async () => {
-                const { loadDeviceIdentityIfPresentAsync } =
-                  await import("../infra/device-identity-async.js");
-                await loadDeviceIdentityIfPresentAsync({ env: params.env });
-              });
-            }
-            return { ...read, ...(recovery ? { recovery } : {}) };
-          },
-          {
-            env: params.env,
-            admissionTimeoutMs: STARTUP_STATE_ADMISSION_TIMEOUT_MS,
-            reuseCleanClose: true,
-          },
-        ),
-      );
-      if (
-        params.beforeStatePreparation &&
-        !(await measureDoctorConfigPreflightStep("admission.config-guard", () =>
-          params.beforeStatePreparation?.(admitted.snapshot),
-        ))
-      ) {
-        throwStartupMigrationGuardRejected();
+                const candidate = coreRecovery?.snapshot ?? selected;
+                // Both readers use the admitted database. Pin schema selection before the
+                // full config read applies env defaults, and join both before releasing it.
+                let metadataMetrics: Readonly<Record<string, number>> = {};
+                const [readiness, configRead] = await Promise.allSettled([
+                  (async () => {
+                    await assertStartupStateReady({
+                      cfg: candidate.sourceConfig ?? candidate.config,
+                      env: cloneEnvWithPlatformSemantics(params.env),
+                    });
+                    if (candidate.valid) {
+                      await params.validateConfig?.(candidate);
+                    }
+                  })(),
+                  measureDoctorConfigPreflightStep(
+                    "admission.plugin-config",
+                    async () => {
+                      const read = await params.readSnapshot(
+                        coreRecovery ? { isolateEnv: true } : undefined,
+                      );
+                      metadataMetrics = read.pluginMetadataSnapshot?.metrics ?? {};
+                      return read;
+                    },
+                    undefined,
+                    () => metadataMetrics,
+                  ),
+                ]);
+                if (readiness.status === "rejected") {
+                  throw readiness.reason;
+                }
+                if (configRead.status === "rejected") {
+                  throw configRead.reason;
+                }
+                let read = configRead.value;
+                if (isConfigReadFailure(read.snapshot)) {
+                  throw createConfigReadError(read.snapshot);
+                }
+                const recovery = await measureDoctorConfigPreflightStep(
+                  "admission.config-recovery",
+                  () => createConfigIO(recoveryOptions).prepareConfigRecovery(read.snapshot),
+                );
+                if (recovery) {
+                  read = {
+                    snapshot: recovery.snapshot,
+                    pluginMetadataSnapshot: recovery.pluginMetadataSnapshot,
+                  };
+                }
+                if (read.snapshot.valid) {
+                  await params.validateConfig?.(read.snapshot);
+                  if (!params.prepareClientCredentials) {
+                    await readIdentity();
+                  }
+                }
+                if (
+                  params.beforeStatePreparation &&
+                  !(await measureDoctorConfigPreflightStep("admission.config-guard", () =>
+                    withCurrentOpenClawStateReadScope({ env: params.env }, () =>
+                      params.beforeStatePreparation?.(read.snapshot),
+                    ),
+                  ))
+                ) {
+                  throwStartupMigrationGuardRejected();
+                }
+                if (read.snapshot.valid) {
+                  recoverOpenClawStateRollbackJournalForStartup({ env: params.env });
+                }
+                return { ...read, ...(recovery ? { recovery } : {}) };
+              },
+              {
+                env: params.env,
+                admissionTimeoutMs: STARTUP_STATE_ADMISSION_TIMEOUT_MS,
+                allowStartupRollbackRecovery: true,
+              },
+            ),
+        );
+        return {
+          ...admittedRead,
+          databaseEngineSelection: selection,
+        };
+      } catch (error) {
+        return rethrowStartupConfigFailure(error);
       }
-      return {
-        ...admitted,
-        databaseEngineSelection: selection,
-      };
+    }),
+  );
+  if (admitted.snapshot.valid && params.prepareClientCredentials) {
+    try {
+      await params.prepareClientCredentials(admitted.snapshot);
+      await withLiveStateReads(() => withArtifactPreservingStateReads(readIdentity));
     } catch (error) {
       return rethrowStartupConfigFailure(error);
     }
-  });
+  }
+  return admitted;
 }
 
 /** Admission runs before lease acquisition: even acquiring a lease commits SQLite writes. */

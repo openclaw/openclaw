@@ -1,6 +1,12 @@
 import childProcess, { ChildProcess } from "node:child_process";
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
+import { attachChildProcessBridge } from "./child-process-bridge.js";
+
+vi.mock("./child-process-bridge.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./child-process-bridge.js")>()),
+  attachChildProcessBridge: vi.fn(),
+}));
 
 const signalProcessTreeMock = vi.hoisted(() => vi.fn());
 vi.mock("./kill-tree.js", async (importOriginal) => ({
@@ -19,33 +25,24 @@ function start(
     pid?: number;
     detached?: boolean;
     onError?: (error: unknown) => void | Promise<void>;
-    spawnError?: Error;
   } = {},
 ) {
   const child = Object.assign(new ChildProcess(), { pid: options.pid });
   const kill = vi.spyOn(child, "kill").mockReturnValue(true);
-  vi.spyOn(childProcess, "spawn").mockImplementation(() => {
-    if (options.spawnError) {
-      throw options.spawnError;
-    }
-    return child;
-  });
+  vi.spyOn(childProcess, "spawn").mockReturnValue(child);
   const detach = vi.fn();
   let onSignal: ((signal: NodeJS.Signals) => void) | undefined;
   const onError = vi.fn(options.onError ?? (() => {}));
+  vi.mocked(attachChildProcessBridge).mockImplementation((_child, signalHandler) => {
+    onSignal = signalHandler;
+    return { detach };
+  });
   const completion = runRespawnChildWithSignalBridge({
     command: "/usr/bin/node",
     args: ["/repo/openclaw/dist/entry.js"],
     env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
     onError,
     detachForProcessTree: options.detached,
-    runtime: {
-      spawn: childProcess.spawn,
-      attachChildProcessBridge: (_child, signalHandler) => {
-        onSignal = signalHandler;
-        return { detach };
-      },
-    },
   });
   runs.push({ child, completion });
   const settled = vi.fn();
@@ -65,6 +62,7 @@ beforeEach(() => {
     Object.defineProperty(stream, "isTTY", { configurable: true, value: false });
   }
   signalProcessTreeMock.mockReset();
+  vi.mocked(attachChildProcessBridge).mockReset();
   killProcess = vi.spyOn(process, "kill").mockReturnValue(true);
 });
 afterEach(async () => {
@@ -185,10 +183,4 @@ it.each(["reject", "throw"] as const)("joins close and diagnostics: %s", async (
   } finally {
     reporting.resolve();
   }
-});
-it("preserves synchronous spawn errors without diagnostics", () => {
-  const error = new Error("invalid spawn options");
-  const onError = vi.fn();
-  expect(() => start({ spawnError: error, onError })).toThrow(error);
-  expect(onError).not.toHaveBeenCalled();
 });

@@ -32,14 +32,13 @@ export type SignalInboundEntry = {
   media?: ChannelInboundMediaInput[];
   commandAuthorized: boolean;
   canDetectMention?: boolean;
-  requireMention?: boolean;
   wasMentioned?: boolean;
   replyToBody?: string;
   replyToSender?: string;
   replyToIsQuote?: boolean;
   turnAdoptionLifecycle?: SignalIngressLifecycle;
   channelIngress?: readonly ResolvedChannelMessageIngress[];
-  resolveChannelIngress?: (
+  resolveChannelIngress: (
     contextBinding: ChannelIngressContextBinding,
   ) => Promise<ResolvedChannelMessageIngress>;
 };

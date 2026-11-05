@@ -39,17 +39,16 @@ struct DeviceAuthPayloadTests {
         #expect(
             payload
                 ==
-                "v3|dev-1|openclaw-macos|ui|operator|operator.admin,operator.read|1800000000000|tok-123|nonce-abc|ios|iphone")
+                "v3|dev-1|openclaw-macos|ui|operator|operator.admin,operator.read|" +
+                "1800000000000|tok-123|nonce-abc|ios|iphone")
     }
 
     @Test
     func `signed device dictionary preserves 64-bit timestamp`() throws {
-        let tempDir = FileManager.default.temporaryDirectory
+        let tempDir = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TMPDIR"] ?? NSTemporaryDirectory())
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let databaseURL = tempDir.appendingPathComponent("openclaw.sqlite", isDirectory: false)
         defer { try? FileManager.default.removeItem(at: tempDir) }
         let identity = try DeviceIdentitySQLiteStore.loadOrCreate(
-            databaseURL: databaseURL,
             destinationStateDirURL: tempDir,
             profile: .primary)
         let signedAtMs: Int64 = 1_800_000_000_000
@@ -89,6 +88,6 @@ struct DeviceAuthPayloadTests {
     func `normalizes metadata with ASCII-only lowercase`() {
         #expect(GatewayDeviceAuthPayload.normalizeMetadataField("  İOS  ") == "İos")
         #expect(GatewayDeviceAuthPayload.normalizeMetadataField("  MAC  ") == "mac")
-        #expect(GatewayDeviceAuthPayload.normalizeMetadataField(nil) == "")
+        #expect(GatewayDeviceAuthPayload.normalizeMetadataField(nil).isEmpty)
     }
 }

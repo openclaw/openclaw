@@ -226,17 +226,33 @@ choose **DeepSeek** in **Settings → Search** or `openclaw configure --section 
 ```
 
 The key is optional when `DEEPSEEK_API_KEY` is set in the Gateway environment
-or `models.providers.deepseek.apiKey` is configured. Credential precedence is
-plugin search key, environment key, then model-provider key. The plugin search
-key and model-provider fallback support SecretRefs through the standard secret
-preparation flow. Search does not reuse API keys stored only in model auth profiles.
+or `models.providers.deepseek.apiKey` is configured for DeepSeek's own API. Credential precedence is
+plugin search key, environment key, then model-provider key. Search treats
+`DEEPSEEK_API_KEY` as a DeepSeek key. It reuses the model-provider key only while
+`models.providers.deepseek.baseUrl` and every model `baseUrl` under it are unset
+or use `https://api.deepseek.com` (any path); a key configured for another base
+URL is not sent to DeepSeek and does not make DeepSeek eligible for
+auto-detection. Only routes in `models.providers` are checked, not routes that
+come only from an agent's `models.json`. The plugin search key and model-provider
+fallback support SecretRefs through the standard secret preparation flow. Search
+does not reuse API keys stored only in model auth profiles.
+
+With DeepSeek selected as the search provider, changing its search key or SecretRef
+hot-applies through the Gateway's secrets runtime without replacing the plugin or
+waiting for unrelated agent turns. Plugin enablement and explicit plugin reloads
+still use normal lifecycle settlement.
 
 With no explicit search provider, credential auto-detection considers DeepSeek
 after Parallel (order 80), before configured endpoint providers. Select
 `provider: "deepseek"` to prevent automatic fallback to another search service.
 
 Search always calls `https://api.deepseek.com/v1/tools/search`; a configured chat
-base URL does not redirect search or its credential to a proxy.
+base URL does not redirect search to a proxy. When chat uses a proxy, store the
+proxy key in a DeepSeek auth profile or in `models.providers.deepseek.apiKey`
+with `auth: "api-key"` (otherwise DeepSeek auth profiles and `DEEPSEEK_API_KEY`
+take precedence over the config key), and give search a DeepSeek key through the
+plugin search key or `DEEPSEEK_API_KEY`. A proxy that forwards a DeepSeek key
+also needs that key set for search.
 
 ### Queries and results
 

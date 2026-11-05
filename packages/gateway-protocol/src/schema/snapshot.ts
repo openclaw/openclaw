@@ -73,6 +73,8 @@ const HealthSnapshotSchema = closedObject({
   // Every field is optional because hello snapshots use an empty object until
   // the asynchronous health producer has populated the cache.
   ok: Type.Optional(Type.Literal(true)),
+  // Live health RPC readiness, independent of optional channel health.
+  coreReady: Type.Optional(Type.Boolean()),
   ts: Type.Optional(Type.Integer({ minimum: 0 })),
   durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
   eventLoop: Type.Optional(GatewayEventLoopHealthSchema),
@@ -242,6 +244,10 @@ export const SnapshotSchema = closedObject({
   /** Credential-free browser sign-in endpoint advertised to authenticated operators. */
   controlUiIdentityUrl: Type.Optional(NonEmptyString),
   authMode: Type.Optional(stringLiteralUnion(["none", "token", "password", "trusted-proxy"])),
+  /** Address the running Gateway listens on, including startup flags that config can't show. */
+  bindHost: Type.Optional(NonEmptyString),
+  /** Tailscale exposure of the running Gateway, which keeps a loopback bind. */
+  tailscaleMode: Type.Optional(stringLiteralUnion(["off", "serve", "funnel"])),
   updateAvailable: Type.Optional(UpdateAvailableSchema),
   updateSchedule: Type.Optional(UpdateScheduleStateSchema),
 });

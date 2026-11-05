@@ -65,7 +65,7 @@ it("preserves input conflicts without waiting for reader retirement that needs t
   const historyRetiring = createDeferred();
   const writerSettled = createDeferred();
   const releaseHistory = createDeferred();
-  const retirement = vi.spyOn(historyLane.pool, "rotate").mockImplementation(() => {
+  using _ = vi.spyOn(historyLane.pool, "rotate").mockImplementation(() => {
     historyRetiring.resolve();
     return Promise.race([writerSettled.promise, releaseHistory.promise]);
   });
@@ -90,7 +90,6 @@ it("preserves input conflicts without waiting for reader retirement that needs t
   } finally {
     releaseHistory.resolve();
     await Promise.allSettled([reading, following]);
-    retirement.mockRestore();
   }
 });
 
@@ -141,49 +140,55 @@ it.each(["rejected", "unknown"] as const)("makes a %s queued delivery terminal",
   expect(await send("terminal", "platform-late")).toEqual(terminal);
 });
 
-it("preserves routed session bindings and terminal delivery evidence during maintenance", async () => {
-  const { scope, conversationRef, begin, get, send } = await conversationStore();
-  await begin("preserved", { sourceSessionKey: sessionKey });
-  await send("preserved", "platform-preserved");
-
-  await applySessionEntryLifecycleMutation({
-    ...scope,
-    maintenanceOverride: { mode: "enforce", pruneAfterMs: 1 },
-  });
-
-  expect(await readConversation(scope, conversationRef)).toMatchObject({
-    conversationRef,
-    channel: "reef",
-    sessionId: "reef-session",
-  });
-  expect(loadSessionEntry({ ...scope, sessionKey })?.archivedAt).toBeUndefined();
-  expect(await get("preserved")).toMatchObject({
-    channel: "reef",
-    conversationRef,
-    platformMessageId: "platform-preserved",
-    status: "sent",
-  });
-});
+it.each(["maintenance", "guarded deletion"] as const)(
+  "retains source-bound delivery evidence during %s",
+  async (cleanup) => {
+    const { scope, conversationRef, begin, get, send } = await conversationStore();
+    await begin("preserved", { sourceSessionKey: sessionKey });
+    await send("preserved", "platform-preserved");
+    if (cleanup === "maintenance") {
+      await applySessionEntryLifecycleMutation({
+        ...scope,
+        maintenanceOverride: { mode: "enforce", pruneAfterMs: 1 },
+      });
+      expect(loadSessionEntry({ ...scope, sessionKey })?.archivedAt).toBeUndefined();
+    } else {
+      await deleteSessionEntryLifecycle({
+        ...scope,
+        archiveTranscript: false,
+        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      });
+      expect(loadSessionEntry({ ...scope, sessionKey })).toBeUndefined();
+    }
+    const conversation = await readConversation(scope, conversationRef);
+    expect(conversation).toMatchObject({ conversationRef, channel: "reef" });
+    expect(conversation?.sessionId).toBe(cleanup === "maintenance" ? "reef-session" : undefined);
+    expect(await get("preserved")).toMatchObject({
+      channel: "reef",
+      conversationRef,
+      platformMessageId: "platform-preserved",
+      sourceSessionKey: sessionKey,
+      status: "sent",
+    });
+  },
+);
 
 it("removes only source-bound delivery evidence and its progress cache when fully deleted", async () => {
   const { scope, conversationRef, begin, get, send } = await conversationStore();
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteReadScope(scope)));
+  const { db } = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteReadScope(scope)));
   const progressJson = JSON.stringify({ lines: ["Working"] });
+  const insertCache = db.prepare(
+    "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, 1)",
+  );
   for (const [operationId, sourceSessionKey] of [
     ["deleted", sessionKey],
     ["other", "agent:main:other"],
   ] as const) {
     await begin(operationId, { sourceSessionKey });
     await send(operationId, "platform-deleted");
-    database.db
-      .prepare(
-        "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES ('conversation-progress', ?, ?, 1)",
-      )
-      .run(operationId, progressJson);
+    insertCache.run("conversation-progress", operationId, progressJson);
   }
-  database.db
-    .prepare("INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)")
-    .run("unrelated", "deleted", "keep", 1);
+  insertCache.run("unrelated", "deleted", "keep");
 
   await deleteSessionEntryLifecycle({
     ...scope,
@@ -194,41 +199,16 @@ it("removes only source-bound delivery evidence and its progress cache when full
 
   expect(await get("deleted")).toBeUndefined();
   expect(
-    database.db
+    db
       .prepare("SELECT key, value_json FROM cache_entries WHERE scope = 'conversation-progress'")
       .all(),
   ).toEqual([{ key: "other", value_json: progressJson }]);
   expect(
-    database.db
+    db
       .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
       .get("unrelated", "deleted"),
   ).toEqual({ value_json: "keep" });
   expect(await readConversation(scope, conversationRef)).toMatchObject({ conversationRef });
-});
-
-it("retains source-bound delivery evidence for guarded lifecycle cleanup", async () => {
-  const { scope, conversationRef, begin, get, send } = await conversationStore();
-  await begin("migrated", { sourceSessionKey: sessionKey });
-  await send("migrated", "platform-migrated");
-
-  await deleteSessionEntryLifecycle({
-    ...scope,
-    archiveTranscript: false,
-    target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-  });
-
-  expect(await readConversation(scope, conversationRef)).toMatchObject({
-    conversationRef,
-    channel: "reef",
-  });
-  expect((await readConversation(scope, conversationRef))?.sessionId).toBeUndefined();
-  expect(loadSessionEntry({ ...scope, sessionKey })).toBeUndefined();
-  expect(await get("migrated")).toMatchObject({
-    conversationRef,
-    platformMessageId: "platform-migrated",
-    sourceSessionKey: sessionKey,
-    status: "sent",
-  });
 });
 
 it("rejects a reservation whose caller loses authority while queued", async () => {

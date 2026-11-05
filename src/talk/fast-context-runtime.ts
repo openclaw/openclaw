@@ -4,11 +4,11 @@
  * back to the normal consult flow.
  */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { withTimeout } from "../infra/fs-safe.js";
 import type { MemoryCallerContext, MemorySearchHit } from "../plugins/memory-provider-types.js";
-import { withTimeout } from "../utils/with-timeout.js";
 import type { RealtimeVoiceAgentConsultResult } from "./agent-consult-runtime.js";
 import { parseRealtimeVoiceAgentConsultArgs } from "./agent-consult-tool.js";
 
@@ -56,26 +56,24 @@ export type RealtimeVoiceFastContextConsultResult =
 
 const MAX_SNIPPET_CHARS = 700;
 
-function normalizeSnippet(text: string): string {
-  const normalized = text.replace(/\s+/g, " ").trim();
-  if (normalized.length <= MAX_SNIPPET_CHARS) {
-    return normalized;
-  }
-  // Keep individual memory snippets bounded so several hits still fit in a
-  // short realtime response prompt.
-  return `${truncateUtf16Safe(normalized, MAX_SNIPPET_CHARS - 1).trimEnd()}...`;
-}
-
 function buildContextText(params: {
   query: string;
   hits: FastContextHit[];
   labels: RealtimeVoiceFastContextLabels;
 }): string {
   const hits = params.hits
-    .map(
-      (hit, index) =>
-        `${index + 1}. [${hit.source}] ${hit.location}\n${normalizeSnippet(hit.snippet)}`,
-    )
+    .map((hit, index) => {
+      const snippet = truncateWithMarker(
+        hit.snippet.replace(/\s+/g, " ").trim(),
+        MAX_SNIPPET_CHARS,
+        {
+          marker: "...",
+          reserve: 1,
+          trimEnd: true,
+        },
+      );
+      return `${index + 1}. [${hit.source}] ${hit.location}\n${snippet}`;
+    })
     .join("\n\n");
   return [
     `Fast ${params.labels.contextName} found for the live ${params.labels.audienceLabel}.`,

@@ -254,8 +254,8 @@ resource-specific policy remain required where the direct listener requires them
 The surface refuses
 general APIs, webhooks, `/v1`, standalone MCP, worker and node transfers, and
 undeclared plugin routes. Service workers and local browser bootstrap recovery
-are blocked. The sandbox surface serves only its dedicated shell and declared
-public renderer resources, never Gateway data.
+are blocked. The sandbox surface serves only its dedicated shell, never Gateway
+data.
 
 The HTTP transport is not arbitrary forwarding or a private network proxy. MCP
 integrations use the separate grant-bound RPC operation, not an HTTP route
@@ -269,3 +269,41 @@ ingress redemption additionally checks the selected principal and session.
 
 The relay owns browser-session routing and hosting; this transport alone is not
 a complete remote UI deployment.
+
+## Unattended operator continuations
+
+A service with a persistent consent owner can register the optional
+`factory.registerPrincipalRecovery(resume)` hook before binding principals.
+The callback receives the original `audienceId` and must reconstruct that exact
+grant from its canonical store, returning a stable issuance-specific `recoveryId`, its principal, scope ceiling,
+service-owned signal, and live `assertCurrent` check. Return `undefined` only
+when the grant definitively ended; throw while the store is unavailable.
+Do not retain a request or relay-connection signal in this callback. A replaced
+grant must have a different recovery ID even if its audience ID is reused.
+
+Core saves a bounded principal-source reference, not a credential. On each
+continuation it revalidates the ingress consent independently of Gateway access
+policy, identity, role, model restrictions, and original scope ceiling. Losing
+or revoking one grant cannot be repaired by borrowing another grant for the
+same profile. At restoration and before protected operations, person sources
+must satisfy the same current policy as live person ingress: trusted-proxy
+authentication, `gateway.roles`, and the Cloudflare Access email and JWT headers.
+Core also checks current resolved `gateway.auth.trustedProxy.allowUsers` against
+canonical profile emails. Removing a person from a nonempty
+list blocks their retained work; an absent or empty list remains unrestricted.
+MCP relay registers this hook against its persisted connected-app
+grants. Ephemeral consent handles remain nonrecoverable. If the consent owner or
+store is temporarily unavailable before execution admission, cron retains the
+same job and applies its configured transient retry policy. Revoked consent,
+access, or role authority remains a terminal refusal.
+
+Without supported recovery custody, interactive principal requests still work,
+but a newly created operator continuation reports a warning that protected
+operator actions require an interactive turn. Existing source-less jobs are not
+promoted to operator authority.
+
+Restart continuation admission can transfer a session's recorded authenticated
+source even when Gateway roles are configured. It retains that source's original
+scope/model ceilings and live consent checks. Fresh role-based principal and
+heartbeat admission are unchanged; a legacy session with no recorded source
+does not gain durable operator custody merely from its owner profile.

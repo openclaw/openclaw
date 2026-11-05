@@ -160,12 +160,9 @@ export async function updateAgentConfigEntry(
 export async function deleteAgentConfigEntry(params: {
   agentId: string;
   validate?: (agent: AgentConfig) => void;
-  validateConfig?: (config: OpenClawConfig) => void | Promise<void>;
   assertCurrent?: () => void;
   assertCurrentAsync?: () => Promise<void>;
   allowMissing?: boolean;
-  allowConfigSizeDrop?: boolean;
-  fallbackWorkspace?: string;
   writeOptions?: ConfigWriteOptions;
 }): Promise<{
   nextConfig: OpenClawConfig;
@@ -177,10 +174,9 @@ export async function deleteAgentConfigEntry(params: {
       allowedAgentRosterRemovals: [params.agentId],
       assertConfigPathForWrite: params.assertCurrent,
       beforeCommit: params.assertCurrentAsync,
-      ...(params.allowConfigSizeDrop ? { allowConfigSizeDrop: true } : {}),
+      allowConfigSizeDrop: true,
     }),
-    mutate: async (draft) => {
-      await params.validateConfig?.(draft);
+    mutate: (draft) => {
       params.assertCurrent?.();
       const configured = isConfiguredAgent(draft, params.agentId);
       if (!configured && !params.allowMissing) {
@@ -190,9 +186,7 @@ export async function deleteAgentConfigEntry(params: {
       if (agent) {
         params.validate?.(agent);
       }
-      const workspaceDir = agent
-        ? resolveAgentWorkspaceDir(draft, params.agentId)
-        : (params.fallbackWorkspace ?? "");
+      const workspaceDir = agent ? resolveAgentWorkspaceDir(draft, params.agentId) : "";
       const agentDir = resolveAgentDir(draft, params.agentId);
       const sessionsDir = resolveSessionTranscriptsDirForAgent(params.agentId);
       const result = pruneAgentConfig(draft, params.agentId);

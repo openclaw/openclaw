@@ -1,32 +1,28 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import {
-  createTestRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
-import { dispatchInboundMessage, resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import {
   getSessionBindingService,
   testing as sessionBindingTesting,
 } from "openclaw/plugin-sdk/session-binding-runtime";
-import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import { createTelegramBotCore } from "./bot-core.js";
-import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
-import { telegramPlugin } from "./channel.js";
-import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
 import {
-  clearTelegramRuntimeForTest,
-  resetTelegramAccountThrottlersForTest,
+  apiCalls,
+  chat,
+  from,
+  createBot as createNativeBot,
+  harness,
+  publishTelegramTestConfig,
+} from "./bot.create-telegram-bot.native-pipeline.test-support.js";
+import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
+import { TelegramPollingSession } from "./polling-session.js";
+import {
   resetTelegramMessageCacheForTest,
   resetTelegramSentMessageCacheForTest,
 } from "./runtime.test-support.js";
-import { resetTelegramClientOptionsCacheForTests } from "./send.js";
-import { useTelegramHttpFixture } from "./send.telegram-http.test-support.js";
 import {
   TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
   TELEGRAM_THREAD_BINDINGS_NAMESPACE,
@@ -35,71 +31,29 @@ import {
 import { getTelegramThreadBindingManager } from "./thread-bindings.js";
 
 const accountId = "work";
-const chat = { id: 42001, type: "private", first_name: "Alice" } as const;
-const from = { id: chat.id, is_bot: false, first_name: "Alice" } as const;
 const conversation = { channel: "telegram", accountId, conversationId: String(chat.id) };
 const token = "123456:synthetic_disabled_binding_test";
 const service = getSessionBindingService();
 
-const { readRuntimeConfig } = vi.hoisted(() => ({
-  readRuntimeConfig:
-    vi.fn<typeof import("openclaw/plugin-sdk/runtime-config-snapshot").readRuntimeConfig>(),
-}));
-vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
-  readRuntimeConfig: (...args: Parameters<typeof readRuntimeConfig>) => readRuntimeConfig(...args),
-}));
-vi.mock("./bot-native-command-menu.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./bot-native-command-menu.js")>()),
-  syncTelegramMenuCommands: vi.fn(async () => {}),
-}));
-
-const http = useTelegramHttpFixture();
-let state: OpenClawTestState;
-const bots: Awaited<ReturnType<typeof createTelegramBotCore>>[] = [];
-const errors = vi.fn();
-const replyResolver = vi.fn(async () => ({ text: "ordinary reply" }));
-let nextMessageId = 1000;
-
-beforeEach(async () => {
-  state = await createOpenClawTestState({ label: "telegram-disabled-bindings" });
+beforeEach(() => {
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
-  setTelegramPluginStateRuntimeForTests();
-  setActivePluginRegistry(
-    createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
-  );
-  http.responseFor = (method, fields) =>
-    method === "getMe"
-      ? telegramBotInfoForTest
-      : method === "sendMessage"
-        ? { message_id: ++nextMessageId, date: 1736380800, chat, text: fields.text }
-        : true;
-  errors.mockClear();
-  replyResolver.mockClear();
+  harness.replySpy.mockResolvedValue({ text: "ordinary reply" });
 });
 
 afterEach(async () => {
   try {
-    for (const bot of bots.splice(0).toReversed()) {
-      await bot.stop();
-    }
     // Also release an owner leaked by a failing constructor in the pre-fix run.
     await getTelegramThreadBindingManager(accountId)?.stop();
   } finally {
-    resetTelegramClientOptionsCacheForTests();
-    resetTelegramAccountThrottlersForTest();
+    resetInboundDedupe();
     resetTelegramMessageCacheForTest();
     resetTelegramSentMessageCacheForTest();
-    clearTelegramRuntimeForTest();
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
-    resetPluginRuntimeStateForTest();
-    resetInboundDedupe();
-    resetPluginStateStoreForTests();
-    await state.cleanup();
   }
 });
 
-async function createBot(scope: "channel" | "account" | "enabled", botToken = token) {
+async function prepareConfig(scope: "channel" | "account" | "enabled", idleHours = 24) {
+  const state = harness.state;
   const cfg: OpenClawConfig = {
     agents: {
       ownership: "explicit",
@@ -114,31 +68,33 @@ async function createBot(scope: "channel" | "account" | "enabled", botToken = to
     channels: {
       telegram: {
         botToken: token,
-        apiRoot: http.cfg.channels.telegram.apiRoot,
         dmPolicy: "open",
         allowFrom: ["*"],
         streaming: { mode: "off" },
-        threadBindings: { enabled: scope !== "channel" },
+        threadBindings: { enabled: scope !== "channel", idleHours },
         accounts: {
           [accountId]: scope === "account" ? { threadBindings: { enabled: false } } : {},
         },
       },
     },
   };
+  publishTelegramTestConfig(cfg);
   await state.writeConfig(cfg);
-  readRuntimeConfig.mockReturnValue(cfg);
-  const bot = await createTelegramBotCore({
+  return cfg;
+}
+
+async function createBot(scope: "channel" | "account" | "enabled", botToken = token) {
+  const cfg = await prepareConfig(scope);
+  if (botToken) {
+    return createNativeBot(false, true, cfg, false, accountId);
+  }
+  return createTelegramBotCore({
     token: botToken,
     accountId,
     config: cfg,
     botInfo: telegramBotInfoForTest,
-    runtime: { log: () => {}, error: errors, exit: () => {} },
     telegramTransport: { fetch, sourceFetch: fetch, close: async () => {} },
-    // Keep startup, inbound assembly, core gather, and delivery real; isolate model execution.
-    dispatchReplyFromConfig: (params) => dispatchInboundMessage({ ...params, replyResolver }),
   });
-  bots.push(bot);
-  return bot;
 }
 
 function storedBindings() {
@@ -177,13 +133,10 @@ it("answers an ordinary inbound message with account bindings disabled without p
     update_id: 1001,
     message: { message_id: 101, date: 1736380800, chat, from, text: "hello" },
   });
-  expect(replyResolver, errors.mock.calls.flat().join("\n")).toHaveBeenCalledOnce();
-  const sent = http.requests.filter(({ method }) => method === "sendMessage");
-  expect(sent).toEqual([
-    { method: "sendMessage", fields: expect.objectContaining({ text: "ordinary reply" }) },
-  ]);
-  expect(String(sent[0]?.fields.chat_id)).toBe(String(chat.id));
-  expect(errors).not.toHaveBeenCalled();
+  const sent = apiCalls.mock.calls.filter(([method]) => method === "sendMessage");
+  expect(sent).toEqual([["sendMessage", expect.objectContaining({ text: "ordinary reply" })]]);
+  const payload = sent[0]?.[1];
+  expect(isRecord(payload) ? String(payload.chat_id) : undefined).toBe(String(chat.id));
   await expectAvailableEmptyOwner();
   const targetSessionKey = "agent:main:subagent:synthetic-child";
   await expect(
@@ -228,6 +181,66 @@ it("does not retain an owner when the real bot constructor fails with enabled bi
   await expect(createBot("enabled", "")).rejects.toThrow("Empty token!");
   await expectUnavailableOwner();
   expect(storedBindings()).toEqual([]);
-  expect(replyResolver).not.toHaveBeenCalled();
-  expect(http.requests).toEqual([]);
+  expect(harness.replySpy).not.toHaveBeenCalled();
+  expect(apiCalls).not.toHaveBeenCalled();
 });
+
+it.each(["getMe", "deleteWebhook"])(
+  "retires polling bindings when startup is canceled at %s",
+  async (method) => {
+    const cfg = await prepareConfig("enabled", 1);
+    const abort = new AbortController();
+    const requested = createDeferred<void>();
+    const transportFetch: typeof fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith(`/${method}`)) {
+        const signal = init?.signal;
+        if (!signal) {
+          throw new Error("Expected account-owned Telegram transport cancellation");
+        }
+        return new Promise<Response>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(new DOMException("canceled", "AbortError")),
+            { once: true },
+          );
+          requested.resolve();
+        });
+      }
+      return Response.json({ ok: true, result: true });
+    };
+    const session = new TelegramPollingSession({
+      token,
+      config: cfg,
+      accountId,
+      runtime: undefined,
+      proxyFetch: undefined,
+      abortSignal: abort.signal,
+      telegramTransport: {
+        fetch: transportFetch,
+        sourceFetch: transportFetch,
+        close: async () => {},
+      },
+      getCommittedUpdateId: () => null,
+      persistUpdateId: async () => {},
+      log: () => {},
+      ingress: {
+        createWorker: () => {
+          throw new Error("Startup must not admit ingress");
+        },
+      },
+    });
+    const run = session.runUntilAbort();
+    try {
+      await requested.promise;
+      expect(getTelegramThreadBindingManager(accountId)?.getIdleTimeoutMs()).toBe(3_600_000);
+    } finally {
+      abort.abort();
+      await run;
+    }
+    expect(getTelegramThreadBindingManager(accountId)).toBeNull();
+    await expectUnavailableOwner();
+    await createBot("enabled");
+    expect(getTelegramThreadBindingManager(accountId)?.getIdleTimeoutMs()).toBe(86_400_000);
+  },
+);

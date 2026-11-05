@@ -154,7 +154,7 @@ it("passes the exact persisted owner identity to the lease callback", async () =
   });
 });
 
-it("holds an exact Claw package owner until async release completes", async () => {
+it("holds an exact Template package owner until async release completes", async () => {
   await withOpenClawTestState({ label: "claw-package-lease-owner" }, async (state) => {
     const artifact = { kind: "plugin", source: "clawhub", ref: "sample/plugin" } as const;
     const options = { env: state.env, required: true };
@@ -163,7 +163,7 @@ it("holds an exact Claw package owner until async release completes", async () =
       throw new Error("Expected the package lease to be acquired");
     }
     try {
-      lease.heartbeat();
+      lease.assertCurrent();
       const database = openOpenClawStateDatabase({ env: state.env });
       expect(leaseStore.readOpenClawStateLeaseExpiry(database.db, lease.identity)).toBeGreaterThan(
         Date.now(),

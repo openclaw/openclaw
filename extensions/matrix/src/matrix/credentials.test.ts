@@ -8,6 +8,7 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { hasAnyMatrixAuthAsync } from "../../auth-presence.js";
+import { matrixSetupPlugin } from "../channel.setup.js";
 import { getMatrixRuntime } from "../runtime.js";
 import { installMatrixTestRuntime } from "../test-runtime.js";
 import { resolveConfiguredMatrixBotUserIds } from "./accounts.js";
@@ -18,7 +19,6 @@ import {
   loadMatrixCredentials,
   saveBackfilledMatrixDeviceId,
   saveMatrixCredentials,
-  touchMatrixCredentials,
 } from "./credentials.js";
 
 const auth = {
@@ -35,7 +35,6 @@ const save = (value: Parameters<typeof saveMatrixCredentials>[0] = auth) =>
 const backfill = (value: Parameters<typeof saveBackfilledMatrixDeviceId>[0]) =>
   saveBackfilledMatrixDeviceId(value, {}, "default");
 const clear = () => clearMatrixCredentials({}, "default");
-const touch = () => touchMatrixCredentials({}, "default");
 
 let stateDir = "";
 
@@ -47,6 +46,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   vi.useRealTimers();
   await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
@@ -131,21 +131,6 @@ it.each([
   },
 );
 
-it("touch updates lastUsedAt while preserving createdAt", async () => {
-  vi.useFakeTimers();
-  vi.setSystemTime(new Date("2026-03-01T10:00:00.000Z"));
-  await save();
-  const initial = load();
-  expect(initial).toMatchObject({ createdAt: expect.any(String) });
-
-  vi.setSystemTime(new Date("2026-03-01T10:05:00.000Z"));
-  await touch();
-  expect(load()).toMatchObject({
-    createdAt: initial?.createdAt,
-    lastUsedAt: "2026-03-01T10:05:00.000Z",
-  });
-});
-
 it("omits an explicitly undefined device id from persisted credentials", async () => {
   const withoutDevice = { ...auth, deviceId: undefined };
   await save(withoutDevice);
@@ -195,7 +180,6 @@ it.each(["before", "during comparison"])(
     }
 
     await expect(backfill({ ...auth, deviceId: "STALE" })).resolves.toBe("skipped");
-    await touch();
 
     expect(load()).toBeNull();
     expect(raw()).toMatchObject({ kind: "revoked" });
@@ -212,11 +196,17 @@ it("does not read or remove legacy credential files at runtime", async () => {
   expect(fs.existsSync(legacyPath)).toBe(true);
 });
 
-it("clears only the requested canonical account", async () => {
+it("clears only the account removed through channels remove", async () => {
+  // The CLI resolves the setup plugin, whose removal hook reads process.env.
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   await save();
   await saveMatrixCredentials(auth, {}, "ops");
 
-  await clearMatrixCredentials({}, "ops");
+  await matrixSetupPlugin.lifecycle?.onAccountRemoved?.({
+    prevCfg: {},
+    accountId: "ops",
+    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+  });
 
   expect(loadMatrixCredentials({}, "ops")).toBeNull();
   expect(raw("ops")).toMatchObject({ kind: "revoked", accountId: "ops" });

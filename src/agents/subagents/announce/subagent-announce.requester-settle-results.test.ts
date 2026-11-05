@@ -1,9 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
+import { completionReader, visibleCompletion } from "./subagent-announce-fixtures.test-support.js";
 import {
   registryRuntimeMock,
-  findTranscriptEventMock,
+  findTranscriptEventMock as findEvent,
   sessionStore,
   wakeParams,
 } from "./subagent-announce.requester-settle-fixture.test-support.js";
@@ -15,7 +15,7 @@ import {
   requesterSettleKey,
 } from "./subagent-announce.requester-settle-wake.test-support.js";
 
-const { maybeWakeRequesterAfterAllChildrenSettled } =
+const { maybeWakeRequesterAfterAllChildrenSettled: wakeRequester } =
   await import("./subagent-announce.requester-settle-wake.js");
 
 describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
@@ -29,28 +29,24 @@ describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
     });
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
       quietChild,
-      makeSettledChild({
-        runId: "run-b",
-        completion: { required: true, resultText: "network findings" },
-      }),
-      makeSettledChild({
-        runId: "run-a",
-        completion: { required: true, resultText: "social findings" },
-      }),
+      ...[
+        ["run-b", "network findings"],
+        ["run-a", "social findings"],
+      ].map(([runId, resultText]) =>
+        makeSettledChild({ runId, completion: { required: true, resultText } }),
+      ),
     ]);
 
-    const woke = await maybeWakeRequesterAfterAllChildrenSettled(
-      wakeParams({ settledEntry: quietChild }),
-    );
-
-    expect(woke).toBe(true);
+    expect(await wakeRequester(wakeParams({ settledEntry: quietChild }))).toBe(true);
     expect(deliverSpy).toHaveBeenCalledTimes(1);
     const call = deliveredCallArg();
-    expect(call.targetRequesterSessionKey).toBe(REQUESTER);
-    expect(call.requesterIsSubagent).toBe(false);
-    expect(call.expectsCompletionMessage).toBe(false);
+    expect(call).toMatchObject({
+      targetRequesterSessionKey: REQUESTER,
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      directIdempotencyKey: requesterSettleKey("run-a,run-b,run-quiet"),
+    });
     expect(call.requireVisibleReply).toBeUndefined();
-    expect(call.directIdempotencyKey).toBe(requesterSettleKey("run-a,run-b,run-quiet"));
     expect(quietChild.requesterTurnRunId).toBe("quiet-cancellation-owner");
     const message = String(call.triggerMessage);
     expect(message).toContain("settled");
@@ -69,11 +65,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
           outcome: { status },
           completion:
             index === 3
-              ? {
-                  required: true,
-                  terminalReply: { disposition: "visible", text: "blocked fetch" },
-                  resultText: "blocked fetch",
-                }
+              ? visibleCompletion("blocked fetch")
               : {
                   required: true,
                   terminalReply: { disposition: "empty" },
@@ -82,28 +74,14 @@ describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
                 },
         }),
     );
-    const visibleChild = expectDefined(children[3], "visible child");
+    const visible = expectDefined(children[3], "visible child");
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
-    sessionStore[visibleChild.childSessionKey] = { sessionId: "child-3-session" };
-    findTranscriptEventMock.mockImplementation(async ({ sessionId }, match) => {
-      const event = {
-        type: "message",
-        message: {
-          role: "assistant",
-          display: true,
-          stopReason: "stop",
-          content: [{ type: "text", text: "blocked fetch" }],
-          __openclaw: { runId: visibleChild.runId },
-        },
-      };
-      return sessionId === "child-3-session" && matchesTranscriptEvent(event, match)
-        ? { event }
-        : undefined;
-    });
+    sessionStore[visible.childSessionKey] = { sessionId: "child-3-session" };
+    findEvent.mockImplementation(
+      completionReader((id) => (id === "child-3-session" ? visible : undefined), "stop"),
+    );
 
-    expect(
-      await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: children[5] })),
-    ).toBe(true);
+    expect(await wakeRequester(wakeParams({ settledEntry: children[5] }))).toBe(true);
 
     expect(deliverSpy).toHaveBeenCalledOnce();
     const message = String(deliveredCallArg().triggerMessage);

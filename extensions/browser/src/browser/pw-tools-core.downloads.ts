@@ -4,6 +4,7 @@ import {
   isPrivateNetworkAllowedByPolicy,
   normalizeHostname,
 } from "openclaw/plugin-sdk/security-runtime";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { Frame, Page } from "playwright-core";
 import { DEFAULT_BROWSER_DOWNLOAD_TIMEOUT_MS } from "./constants.js";
@@ -26,10 +27,8 @@ import {
   restoreRoleRefsForTarget,
   withPageNavigationRequestGuard,
 } from "./pw-session.js";
-import {
-  clickViaPlaywright,
-  setFileChooserFilesViaPlaywright,
-} from "./pw-tools-core.interactions.js";
+import { clickViaPlaywright } from "./pw-tools-core.interactions.actions.js";
+import { setFileChooserFilesViaPlaywright } from "./pw-tools-core.interactions.content.js";
 import {
   awaitActionWithAbort,
   assertInteractionCurrent,
@@ -123,7 +122,7 @@ async function runFileUpload(opts: UploadOptions): Promise<void> {
   let deadline = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const startDeadline = () => {
-    deadline = Date.now() + timeout;
+    deadline = performance.now() + timeout;
     timer = setTimeout(
       () =>
         controller.abort(new Error(`Timeout ${timeout}ms exceeded while completing file upload`)),
@@ -173,7 +172,7 @@ async function runFileUpload(opts: UploadOptions): Promise<void> {
           await clickViaPlaywright({
             ...opts,
             ref: opts.ref!,
-            timeoutMs: Math.max(1, deadline - Date.now()),
+            timeoutMs: Math.max(1, deadline - performance.now()),
             resolvedPage: page,
             signal,
           });
@@ -199,7 +198,7 @@ async function runFileUpload(opts: UploadOptions): Promise<void> {
           page,
           fileChooser,
           paths,
-          timeoutMs: Math.max(1, deadline - Date.now()),
+          timeoutMs: Math.max(1, deadline - performance.now()),
           signal,
         });
         signal.throwIfAborted();
@@ -378,7 +377,7 @@ export async function downloadViaPlaywright(
   const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
 
   const ref = requireRef(opts.ref);
-  const outPath = opts.path?.trim() ?? "";
+  const outPath = readNonBlankString(opts.path);
   if (!outPath) {
     throw new Error("path is required");
   }

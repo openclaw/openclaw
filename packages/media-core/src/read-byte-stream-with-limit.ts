@@ -10,22 +10,6 @@ export type ReadByteStreamWithLimitOptions = {
   onOverflow?: (params: ByteStreamLimitOverflow) => Error;
 };
 
-function normalizeByteChunk(chunk: unknown): Buffer {
-  if (Buffer.isBuffer(chunk)) {
-    return chunk;
-  }
-  if (typeof chunk === "string") {
-    return Buffer.from(chunk);
-  }
-  if (chunk instanceof ArrayBuffer) {
-    return Buffer.from(chunk);
-  }
-  if (ArrayBuffer.isView(chunk)) {
-    return Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
-  }
-  throw new TypeError(`Unsupported byte stream chunk: ${typeof chunk}`);
-}
-
 function destroyReadableOnOverflow(stream: unknown, err: Error): void {
   const readable = stream as {
     destroy?: () => unknown;
@@ -67,7 +51,18 @@ export async function readByteStreamWithLimit(
   let total = 0;
 
   for await (const chunk of stream) {
-    const buffer = normalizeByteChunk(chunk);
+    let buffer: Buffer;
+    if (Buffer.isBuffer(chunk)) {
+      buffer = chunk;
+    } else if (typeof chunk === "string") {
+      buffer = Buffer.from(chunk);
+    } else if (chunk instanceof ArrayBuffer) {
+      buffer = Buffer.from(chunk);
+    } else if (ArrayBuffer.isView(chunk)) {
+      buffer = Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+    } else {
+      throw new TypeError(`Unsupported byte stream chunk: ${typeof chunk}`);
+    }
     if (buffer.byteLength === 0) {
       continue;
     }

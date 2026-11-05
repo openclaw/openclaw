@@ -60,14 +60,50 @@ export class GitHubPublicationWorkspaceChangedError extends GitHubPublicationKno
   }
 }
 
+/** The session worktree has a branch checked out other than the branch this session publishes. */
+export class GitHubPublicationSessionBranchMismatchError extends GitHubPublicationKnownFailure {
+  constructor(branches: { session: string; checkedOut: string }) {
+    const { session, checkedOut } = branches;
+    super(
+      `The session worktree has branch ${checkedOut} checked out, but this session publishes branch ${session}.`,
+      {
+        code: "workspace_changed",
+        nextAction: `In the session worktree, rename the branch back with \`git branch -m ${checkedOut} ${session}\`, or switch to it with \`git switch ${session}\` if it still exists, then request publication again. Publication only pushes the session branch.`,
+      },
+    );
+  }
+}
+
 export class GitHubPublicationBranchChangedError extends GitHubPublicationKnownFailure {
-  constructor() {
+  constructor(options: { originalPullRequest?: boolean } = {}) {
     super("GitHub publication cannot safely extend the published branch.", {
       code: "push_rejected",
-      nextAction:
-        "Preserve your local work and inspect the published head. To refresh the existing PR, apply the intended changes on top of that head without rewriting its history; otherwise publish from a new session branch and open a replacement PR. Repository-only checkpoints cannot adopt external branch changes; use a new session branch for those. Do not merge old history merely to make a rebased branch pushable. The broker never rewrites published history.",
+      nextAction: options.originalPullRequest
+        ? "The PR head changed after this workspace last integrated it. Your local work is saved: call prepare_pr with this PR's URL to merge its newer head into that work, resolve any returned conflicts, then publish again. Do not create a replacement PR or redirect publication to another branch."
+        : "Preserve your local work and inspect the published head. If this conversation published the PR from its managed workspace, call prepare_pr with its URL to merge the newer head into the saved work, then publish again; otherwise publish from a new session branch and open a replacement PR. Repository-only checkpoints cannot adopt external branch changes; use a new session branch for those. Do not merge old history merely to make a rebased branch pushable. The broker never rewrites published history.",
     });
   }
+}
+
+/**
+ * Classify a push whose head did not land. Git exiting on its own with a failure while the
+ * remote still holds its pre-push head is a definitive rejection. Anything else (exit 0, a
+ * killed or signalled push, or a moved remote) stays unconfirmed for recovery to settle.
+ */
+export function gitHubPublicationPushFailure(
+  pushed: { code: number | null; signal: unknown; killed: boolean },
+  remoteUnchanged: boolean,
+  { login, pushRepository }: { login: string; pushRepository: string },
+): Error {
+  if (!remoteUnchanged || pushed.code === 0 || pushed.signal !== null || pushed.killed) {
+    return new Error(
+      pushed.code === 0 ? "GitHub push verification failed." : "GitHub push was rejected.",
+    );
+  }
+  return new GitHubPublicationKnownFailure(`GitHub rejected the push to ${pushRepository}.`, {
+    code: "push_rejected",
+    nextAction: `Nothing was pushed as @${login}. Give @${login} write access (or point the worktree's origin at a fork it owns) and check the repository's branch rules, then request publication again.`,
+  });
 }
 
 export class GitHubPublicationSessionChangedError extends GitHubPublicationKnownFailure {
@@ -105,14 +141,20 @@ export class GitHubPublicationWorkflowChangesError extends GitHubPublicationKnow
     super("Publishing GitHub workflow changes requires full operator write permission.", {
       code: "github_rejected",
       nextAction:
-        "Your saved changes are intact. Ask a maintainer with full write access to publish the GitHub workflow changes, or restore the workflow definitions and request publication again.",
+        "OpenClaw requires the requester's full operator write authority for these workflow changes; this is not a GitHub token scope failure. Your saved changes are intact. Ask a maintainer with full write access to publish, or remove only unintended workflow edits after reviewing the accepted diff.",
     });
   }
 }
 
+/**
+ * Resolve the persisted failure code and guidance. A known failure's message is code-authored,
+ * so it leads the guidance as the specific reason; other errors may carry raw command output
+ * and only select generic guidance.
+ */
 export function resolveGitHubPublicationFailure(error: unknown): PublicationFailure {
   if (error instanceof GitHubPublicationKnownFailure) {
-    return error.failure;
+    const reason = /[.!?]$/u.test(error.message) ? error.message : `${error.message}.`;
+    return { code: error.failure.code, nextAction: `${reason} ${error.failure.nextAction}` };
   }
   const message = error instanceof Error ? error.message : "";
   if (message.includes("publication workspace base")) {

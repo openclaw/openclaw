@@ -29,23 +29,6 @@ export type PlaybackMediaProbeResult = MediaProbeResult & {
   videoStreamIndex?: number;
 };
 
-type MediaProbeOptions = {
-  timeoutMs?: number;
-};
-
-type MediaFileProbeInput = {
-  filePath: string;
-  kind: MediaProbeKind;
-};
-
-type MediaProbeBatchOptions = {
-  budgetMs: number;
-  concurrency: number;
-  maxProbes: number;
-};
-
-type FfprobeSource = { stdinFileDescriptor: number } | { input: Buffer };
-
 function parseDurationMs(value: unknown): number | undefined {
   if (typeof value !== "number" && typeof value !== "string") {
     return undefined;
@@ -144,9 +127,11 @@ function isMissingFdProtocolError(error: unknown): boolean {
 }
 
 async function probeMediaSource(
-  source: FfprobeSource,
+  source: { stdinFileDescriptor: number } | { input: Buffer },
   kind: MediaProbeKind,
-  options: MediaProbeOptions = {},
+  options: {
+    timeoutMs?: number;
+  } = {},
 ): Promise<PlaybackMediaProbeResult | null> {
   const isFileDescriptor = "stdinFileDescriptor" in source;
   const runProbe = async (protocol: "fd" | "pipe") =>
@@ -202,30 +187,17 @@ export function toMediaProbeResult(result: PlaybackMediaProbeResult | null): Med
   };
 }
 
-/** Probes a local audio or video file; every failure degrades to absent fields. */
-async function probeMediaFile(
-  filePath: string,
-  kind: MediaProbeKind,
-  options: MediaProbeOptions,
-): Promise<MediaProbeResult> {
-  try {
-    const handle = await fs.open(filePath, "r");
-    try {
-      return toMediaProbeResult(
-        await probeMediaSource({ stdinFileDescriptor: handle.fd }, kind, options),
-      );
-    } finally {
-      await handle.close().catch(() => {});
-    }
-  } catch {
-    return {};
-  }
-}
-
 /** Probes a bounded batch under one elapsed-time budget, unaffected by wall-clock steps. */
 export async function probeMediaFilesWithinBudget(
-  inputs: readonly MediaFileProbeInput[],
-  options: MediaProbeBatchOptions,
+  inputs: readonly {
+    filePath: string;
+    kind: MediaProbeKind;
+  }[],
+  options: {
+    budgetMs: number;
+    concurrency: number;
+    maxProbes: number;
+  },
 ): Promise<MediaProbeResult[]> {
   const results: MediaProbeResult[] = inputs.map(() => ({}));
   const deadlineMs = performance.now() + options.budgetMs;
@@ -238,7 +210,20 @@ export async function probeMediaFilesWithinBudget(
     const batchEnd = Math.min(offset + options.concurrency, probeCount);
     const batch = inputs.slice(offset, batchEnd);
     const batchResults = await Promise.all(
-      batch.map((input) => probeMediaFile(input.filePath, input.kind, { timeoutMs })),
+      batch.map(async ({ filePath, kind }) => {
+        try {
+          const handle = await fs.open(filePath, "r");
+          try {
+            return toMediaProbeResult(
+              await probeMediaSource({ stdinFileDescriptor: handle.fd }, kind, { timeoutMs }),
+            );
+          } finally {
+            await handle.close().catch(() => {});
+          }
+        } catch {
+          return {};
+        }
+      }),
     );
     for (const [batchIndex, metadata] of batchResults.entries()) {
       results[offset + batchIndex] = metadata;

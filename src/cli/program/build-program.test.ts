@@ -1,51 +1,24 @@
-// Build program tests cover root CLI program construction and command wiring.
 import process from "node:process";
 import { CommanderError } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildProgram } from "./build-program.js";
 import type { ProgramContext } from "./context.js";
 
-const registerCoreCliCommandsMock = vi.hoisted(() => vi.fn());
-const registerSubCliCommandsMock = vi.hoisted(() => vi.fn());
 const createProgramContextMock = vi.hoisted(() => vi.fn());
-const configureProgramHelpMock = vi.hoisted(() => vi.fn());
-const registerPreActionHooksMock = vi.hoisted(() => vi.fn());
-const setProgramContextMock = vi.hoisted(() => vi.fn());
-
-vi.mock("./command-registry-core.js", () => ({
-  registerCoreCliCommands: registerCoreCliCommandsMock,
-}));
-
-vi.mock("./register.subclis.js", () => ({
-  registerSubCliCommands: registerSubCliCommandsMock,
-}));
-
-vi.mock("./context.js", () => ({
-  createProgramContext: createProgramContextMock,
-}));
-
-vi.mock("./help.js", () => ({
-  configureProgramHelp: configureProgramHelpMock,
-}));
-
-vi.mock("./preaction.js", () => ({
-  registerPreActionHooks: registerPreActionHooksMock,
-}));
-
-vi.mock("./program-context.js", () => ({
-  setProgramContext: setProgramContextMock,
-}));
+// mock-isolation: root argument handling must not load or execute real command handlers.
+vi.mock("./command-registry-core.js", () => ({ registerCoreCliCommands: vi.fn() }));
+// mock-isolation: root argument handling must not load optional subcommand runtimes.
+vi.mock("./register.subclis.js", () => ({ registerSubCliCommands: vi.fn() }));
+// mock-isolation: use fixed version and channel context, not installed runtime metadata.
+vi.mock("./context.js", () => ({ createProgramContext: createProgramContextMock }));
+// mock-isolation: exercise Commander error routing without global help customization.
+vi.mock("./help.js", () => ({ configureProgramHelp: vi.fn() }));
+// mock-isolation: argument-error tests must not admit real command side effects.
+vi.mock("./preaction.js", () => ({ registerPreActionHooks: vi.fn() }));
+// mock-isolation: keep the program context local to this synthetic CLI fixture.
+vi.mock("./program-context.js", () => ({ setProgramContext: vi.fn() }));
 
 describe("buildProgram", () => {
-  function mockProcessOutput() {
-    vi.spyOn(process.stdout, "write").mockImplementation(
-      (() => true) as unknown as typeof process.stdout.write,
-    );
-    vi.spyOn(process.stderr, "write").mockImplementation(
-      (() => true) as unknown as typeof process.stderr.write,
-    );
-  }
-
   async function expectCommanderExit(promise: Promise<unknown>, exitCode: number) {
     const error = await promise.catch((err: unknown) => err);
 
@@ -56,7 +29,8 @@ describe("buildProgram", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockProcessOutput();
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     createProgramContextMock.mockReturnValue({
       programVersion: "9.9.9-test",
       messageChannelOptions: "quietchat",
@@ -69,27 +43,15 @@ describe("buildProgram", () => {
     vi.restoreAllMocks();
   });
 
-  it("sets exitCode to 1 on argument errors (fixes #60905)", async () => {
+  it.each([
+    { args: ["test", "unexpected-arg"], exitCode: 1, code: "commander.excessArguments" },
+    { args: ["--help"], exitCode: 0, code: "commander.helpDisplayed" },
+  ])("preserves $code exit status (regression #60905)", async ({ args, exitCode, code }) => {
     const program = buildProgram();
     program.command("test").description("Test command");
-
-    const error = await expectCommanderExit(
-      program.parseAsync(["test", "unexpected-arg"], { from: "user" }),
-      1,
-    );
-
-    expect(error.code).toBe("commander.excessArguments");
-    expect(process.exitCode).toBe(1);
-  });
-
-  it("preserves exitCode 0 for help display", async () => {
-    const program = buildProgram();
-    program.command("test").description("Test command");
-
-    const error = await expectCommanderExit(program.parseAsync(["--help"], { from: "user" }), 0);
-
-    expect(error.code).toBe("commander.helpDisplayed");
-    expect(process.exitCode).toBe(0);
+    const error = await expectCommanderExit(program.parseAsync(args, { from: "user" }), exitCode);
+    expect(error.code).toBe(code);
+    expect(process.exitCode).toBe(exitCode);
   });
 
   it("preserves caller-configured Commander error output", async () => {

@@ -16,14 +16,6 @@ function isSuppressedByEnv(value: string | undefined): boolean {
   );
 }
 
-function isCopySensitiveToken(word: string): boolean {
-  if (word.includes("/") || word.includes("\\")) {
-    return true;
-  }
-  // Preserve common file-like tokens (for example administrators_authorized_keys).
-  return word.includes("_") && FILE_LIKE_RE.test(word);
-}
-
 function wrapLine(line: string, maxWidth: number): string[] {
   if (line.trim().length === 0) {
     return [line];
@@ -58,9 +50,12 @@ function wrapLine(line: string, maxWidth: number): string[] {
       available = nextWidth;
     }
 
+    // Preserve common file-like tokens (for example administrators_authorized_keys).
     if (
       (isPrintableAscii ? word.length : visibleWidth(word)) > available &&
-      !isCopySensitiveToken(word)
+      !word.includes("/") &&
+      !word.includes("\\") &&
+      !(word.includes("_") && FILE_LIKE_RE.test(word))
     ) {
       // Measure whole graphemes in visible columns so CJK/emoji do not overflow.
       // Keep this word's initial budget for all fragments, even when the next prefix differs.

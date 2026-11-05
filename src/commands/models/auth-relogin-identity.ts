@@ -37,13 +37,7 @@ export function resolveReloginProfileIdentity(params: {
   existingProfiles?: Readonly<Record<string, AuthProfileCredential>>;
   matchesPersonalAccount?: AccountMatcher;
   allowMissingReusedProfile?: boolean;
-}): {
-  profiles: ProviderAuthResult["profiles"];
-  validateCurrentCredential?: (
-    profileId: string,
-    credential: AuthProfileCredential | undefined,
-  ) => void;
-} {
+}) {
   const requestedProfileId = params.requestedProfileId?.trim();
   if (requestedProfileId) {
     if (params.profiles.length !== 1) {
@@ -83,7 +77,7 @@ export function resolveReloginProfileIdentity(params: {
   const reusedProfileId = expectDefined(matchingProfileIds[0], "matched auth profile id");
   return {
     profiles: [{ ...returnedProfile, profileId: reusedProfileId }],
-    validateCurrentCredential: (profileId, current) => {
+    validateCurrentCredential: (profileId: string, current: AuthProfileCredential | undefined) => {
       let currentMatches = false;
       if (current) {
         try {

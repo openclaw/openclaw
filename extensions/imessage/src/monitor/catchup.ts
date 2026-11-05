@@ -194,7 +194,6 @@ export type CatchupDispatchFn = (row: IMessageCatchupRow) => Promise<{ ok: boole
 type PerformCatchupParams = {
   accountId: string;
   config: ResolvedCatchupConfig;
-  now?: number;
   fetch: CatchupFetchFn;
   dispatch: CatchupDispatchFn;
   observeSkippedFromMe?: (row: IMessageCatchupRow) => Promise<void> | void;
@@ -243,14 +242,13 @@ export async function advanceIMessageCatchupCursor(
 }
 
 export async function performIMessageCatchup(params: PerformCatchupParams) {
-  const now = params.now ?? Date.now();
+  const now = Date.now();
   const cfg = params.config;
   const cursor = await loadIMessageCatchupCursor(params.accountId);
   const lookbackMs =
     cursor === null ? cfg.firstRunLookbackMinutes * 60_000 : cfg.maxAgeMinutes * 60_000;
   const ageBoundMs = now - cfg.maxAgeMinutes * 60_000;
   const windowStartMs = Math.max(cursor?.lastSeenMs ?? now - lookbackMs, ageBoundMs);
-  const windowEndMs = now;
   const sinceRowid = cursor?.lastSeenRowid ?? 0;
 
   const summary = {
@@ -259,21 +257,11 @@ export async function performIMessageCatchup(params: PerformCatchupParams) {
     fetchedCount: 0,
     replayed: 0,
     skippedFromMe: 0,
-    skippedPreCursor: 0,
     // GUIDs already at the retry ceiling before this pass.
     skippedGivenUp: 0,
     failed: 0,
     // GUIDs that reached the retry ceiling during this pass.
     givenUp: 0,
-    cursorBefore: cursor
-      ? { lastSeenMs: cursor.lastSeenMs, lastSeenRowid: cursor.lastSeenRowid }
-      : null,
-    cursorAfter: {
-      lastSeenMs: cursor?.lastSeenMs ?? windowStartMs,
-      lastSeenRowid: cursor?.lastSeenRowid ?? 0,
-    },
-    windowStartMs,
-    windowEndMs,
   };
 
   let fetchResult: Awaited<ReturnType<CatchupFetchFn>>;
@@ -310,7 +298,6 @@ export async function performIMessageCatchup(params: PerformCatchupParams) {
 
   for (const row of rows) {
     if (row.rowid <= sinceRowid) {
-      summary.skippedPreCursor += 1;
       continue;
     }
     // A held failure clamps the final cursor below this watermark.
@@ -319,7 +306,6 @@ export async function performIMessageCatchup(params: PerformCatchupParams) {
     if (row.date < ageBoundMs) {
       // Row predates the recency ceiling. Skip but advance the cursor so we
       // don't re-fetch it next pass.
-      summary.skippedPreCursor += 1;
       continue;
     }
     if (row.isFromMe) {
@@ -392,7 +378,6 @@ export async function performIMessageCatchup(params: PerformCatchupParams) {
   }
 
   const capped = capFailureRetriesMap(failureRetries);
-  summary.cursorAfter = { lastSeenMs, lastSeenRowid };
   const next = buildIMessageCatchupCursor(
     { lastSeenMs, lastSeenRowid, failureRetries: capped },
     Date.now(),

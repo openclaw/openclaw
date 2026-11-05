@@ -1,20 +1,21 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import type { SessionCostWorkerLane } from "../config/sessions/session-transcript-read-pools.js";
 import {
   acquireHistoryDatabaseResource,
   armDatabaseWorkerIdleRetirement,
   costReadLane,
   costRefreshLane,
-  historyClearTimeout,
+  clearDatabaseWorkerIdleRetirement,
   pruneHistoryDatabases,
   refreshDatabaseWorkerPressureSubscription,
   releaseRetiredDatabaseCustody,
   rotateDatabaseWorkers,
   type HistoryDatabaseResource,
-  type SessionCostWorkerLane,
   type SessionDatabaseCleanup,
 } from "../config/sessions/session-transcript-worker-resources.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createPendingPromiseTracker } from "../shared/pending-promises.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
@@ -54,6 +55,7 @@ export async function withSessionCostUsageWorkerDatabases<T>(
     throw error;
   }
   const pending = new Set<Promise<UsageCostWorkerResult>>();
+  const track = createPendingPromiseTracker(pending);
   const cleanups = new Set<SessionDatabaseCleanup>();
   // Failed native stops remain retryable after the task's original failure is observed.
   const lanes = new Map<SessionCostWorkerLane, { native: boolean; retry: boolean }>();
@@ -136,7 +138,7 @@ export async function withSessionCostUsageWorkerDatabases<T>(
     for (const resource of resources) {
       resource.aborters.add(abort);
     }
-    historyClearTimeout(lane.idleTimer);
+    clearDatabaseWorkerIdleRetirement(lane);
     lane.pending++;
     refreshDatabaseWorkerPressureSubscription();
     const hostEffects = new Set<Promise<WorkerTaskResponse>>();
@@ -206,6 +208,8 @@ export async function withSessionCostUsageWorkerDatabases<T>(
                   : undefined,
               },
             ),
+          [],
+          signal,
         );
         if (!reply.ok) {
           throw new UsageCostWorkerReplyError(reply.error);
@@ -238,12 +242,7 @@ export async function withSessionCostUsageWorkerDatabases<T>(
         armDatabaseWorkerIdleRetirement(lane);
       }
     })();
-    pending.add(task);
-    void task.then(
-      () => pending.delete(task),
-      () => pending.delete(task),
-    );
-    return task;
+    return track(task);
   };
   let result: { ok: true; value: T } | { ok: false; error: unknown };
   try {

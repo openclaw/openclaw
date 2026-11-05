@@ -1,5 +1,4 @@
-import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import {
   copyFileSync,
@@ -15,9 +14,14 @@ import { parse } from "yaml";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
+import {
+  SOURCE_SHA,
+  VERSION,
+  registryFixture as makeRegistryFixture,
+  sha256,
+  writeTarball,
+} from "./prepublish-plugin-registry.fixture.js";
 
-const SOURCE_SHA = "a".repeat(40);
-const VERSION = "2026.8.1-beta.1";
 const BASELINE_VERSION = "2026.7.1";
 const SCRIPT = "scripts/e2e/lib/prepublish-plugin-registry.sh";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -35,10 +39,6 @@ function runShell(
   });
 }
 
-function sha256(path: string): string {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
-}
-
 function createTarball(
   root: string,
   outputDir: string,
@@ -46,52 +46,19 @@ function createTarball(
   filename: string,
   version = VERSION,
   extra: Record<string, unknown> = {},
-): string {
-  const packageRoot = join(root, "staging", filename, "package");
-  mkdirSync(packageRoot, { recursive: true });
-  writeFileSync(
-    join(packageRoot, "package.json"),
-    `${JSON.stringify({ ...extra, name, version })}\n`,
-  );
-  const tarball = join(outputDir, filename);
-  execFileSync("tar", ["-czf", tarball, "-C", join(packageRoot, ".."), "package"]);
-  return tarball;
+) {
+  return writeTarball(root, join(outputDir, filename), name, version, extra);
 }
 
 function registryFixture(root: string, names: string[], version = VERSION) {
-  const artifactDir = join(root, "artifact");
-  mkdirSync(artifactDir);
-  const packages = names
-    .toSorted((a, b) => a.localeCompare(b))
-    .map((name) => {
-      const tarball = `${name.replace(/^@/u, "").replace("/", "-")}.tgz`;
-      const file = createTarball(root, artifactDir, name, tarball, version, {
-        provenance: "candidate",
-        ...(name === "openclaw" ? { dependencies: { "@openclaw/ai": version } } : {}),
-      });
-      return { name, version, tarball, sha256: sha256(file) };
-    });
-  const manifestPath = join(artifactDir, "prepublish-plugin-registry.json");
-  writeFileSync(
-    manifestPath,
-    JSON.stringify({
-      schema: "openclaw.prepublish-plugin-registry/v1",
-      schemaVersion: 1,
-      sourceSha: SOURCE_SHA,
-      candidateVersion: version,
-      packages,
-    }),
-  );
-  return {
-    artifactDir,
-    manifestPath,
-    env: {
-      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: artifactDir,
-      OPENCLAW_DOCKER_E2E_SELECTED_SHA: SOURCE_SHA,
-      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: version,
-      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: sha256(manifestPath),
+  return makeRegistryFixture(
+    root,
+    names.toSorted((a, b) => a.localeCompare(b)),
+    version,
+    {
+      candidateMetadata: true,
     },
-  };
+  );
 }
 
 async function withPublishedRegistry(
@@ -337,6 +304,78 @@ node -e 'const assert=require("node:assert/strict"); for(const name of ["opencla
           }
         },
         baselineVersion,
+      );
+    },
+  );
+
+  it.for(["run_negative_control", "run_positive_hops"])(
+    "isolates published setup before candidate update through %s",
+    async (caller, { signal }) => {
+      const version = "2026.8.1";
+      const root = tempDirs.make("openclaw-first-hop-same-version-");
+      const fixture = registryFixture(root, ["openclaw", "@openclaw/ai"], version);
+      const published = createTarball(root, root, "openclaw", "published.tgz", version, {
+        dependencies: { "@openclaw/ai": version },
+      });
+      const source = readFileSync(
+        "scripts/e2e/lib/upgrade-survivor/update-first-hop-compat.sh",
+        "utf8",
+      );
+      const start = source.indexOf(`${caller}() {`);
+      const end = source.indexOf("\n}\n", start);
+      if (start < 0 || end < start) {
+        throw new Error(`Missing first-hop owner ${caller}`);
+      }
+      await withPublishedRegistry(
+        root,
+        signal,
+        async (upstream) => {
+          const result = runShell(
+            `
+set -euo pipefail
+source "$HELPER"
+${source.slice(start, end + 3)}
+registry_before="$NPM_CONFIG_REGISTRY"
+baseline_installed=0
+setup_lane() {
+  npm install --prefix "$BASELINE_INSTALL" "$PUBLISHED_TARBALL" --ignore-scripts --no-fund --no-audit --package-lock=false
+  node -e 'const assert=require("node:assert/strict"); assert.equal(require(process.env.BASELINE_INSTALL+"/node_modules/@openclaw/ai/package.json").provenance,"published");'
+  printf '123\\n' >"$ARTIFACT_DIR/$1-before.pid"
+  baseline_installed=1
+}
+run_update() {
+  test "$baseline_installed" = 1 || exit 1
+  test "$NPM_CONFIG_REGISTRY" = "$registry_before" || exit 1
+  test "$npm_config_registry" = "$registry_before" || exit 1
+  test "$BUN_CONFIG_REGISTRY" = "$registry_before" || exit 1
+  npm install --prefix "$CANDIDATE_INSTALL" "$ROOT_TARBALL" --ignore-scripts --no-fund --no-audit --package-lock=false || exit 1
+  node -e 'const assert=require("node:assert/strict"); for(const name of ["openclaw","@openclaw/ai"]) assert.equal(require(process.env.CANDIDATE_INSTALL+"/node_modules/"+name+"/package.json").provenance,"candidate");' || exit 1
+  exit 0
+}
+"$CALLER"
+`,
+            {
+              ...fixture.env,
+              OPENCLAW_NPM_REGISTRY_UPSTREAM: upstream,
+              HELPER: resolve(SCRIPT),
+              CALLER: caller,
+              ARTIFACT_DIR: root,
+              ADMISSION_PROTOCOL: "0",
+              NEGATIVE_PACKAGE: "unused-before-update-boundary",
+              CANDIDATE_PACKAGE: "unused-before-update-boundary",
+              PUBLISHED_TARBALL: published,
+              BASELINE_INSTALL: join(root, "baseline"),
+              CANDIDATE_INSTALL: join(root, "candidate"),
+              ROOT_TARBALL: join(fixture.artifactDir, "openclaw.tgz"),
+              npm_config_cache: join(root, "cache"),
+              NPM_CONFIG_USERCONFIG: "/dev/null",
+              npm_config_userconfig: "/dev/null",
+            },
+            { timeout: 30_000, mounted: true },
+          );
+          expect(result.status, result.stdout + result.stderr).toBe(0);
+        },
+        version,
       );
     },
   );

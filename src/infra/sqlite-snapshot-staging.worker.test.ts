@@ -1,31 +1,21 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { expect, it, vi } from "vitest";
+import { useSqliteTempDirs } from "./sqlite-shard-lifecycle.test-support.js";
+import type { createSqliteSnapshotStagingRuntime } from "./sqlite-snapshot-staging-runtime.js";
 import type { SqliteSnapshotStagingReply } from "./sqlite-snapshot-staging.types.js";
+
+type Runtime = ReturnType<typeof createSqliteSnapshotStagingRuntime>;
+type RunTask = (input: unknown) => Promise<SqliteSnapshotStagingReply>;
+type Resource = { closeResource: (directory?: string) => Promise<void> };
 
 const fixture = vi.hoisted(() => {
   const ports: { value?: import("node:worker_threads").MessageChannel } = {};
   return {
     ports,
-    register:
-      vi.fn<
-        (
-          run: (input: unknown) => Promise<SqliteSnapshotStagingReply>,
-          options: { closeResource: (directory?: string) => Promise<void> },
-        ) => void
-      >(),
-    allocate:
-      vi.fn<
-        ReturnType<
-          typeof import("./sqlite-snapshot-staging-runtime.js").createSqliteSnapshotStagingRuntime
-        >["allocate"]
-      >(),
-    closeRuntime: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    register: vi.fn<(run: RunTask, options: Resource) => void>(),
+    allocate: vi.fn<Runtime["allocate"]>(),
     removed: vi.fn<(directory: string) => Promise<void>>().mockResolvedValue(undefined),
-    createSession: vi.fn(() => {
-      throw new Error("The controlled allocation fixture must not create a native child");
-    }),
   };
 });
 
@@ -37,34 +27,31 @@ vi.mock("node:worker_threads", async (importOriginal) => {
   return { ...actual, workerData: { [SQLITE_NATIVE_RESOURCE_PORT]: ports.port1 } };
 });
 vi.mock("./worker-task-server.js", () => ({ serveOwnedWorkerTasks: fixture.register }));
+// mock-isolation: Controlled allocations exercise removal acknowledgement without starting native sessions.
 vi.mock("./sqlite-snapshot-staging-runtime.js", () => ({
   createSqliteSnapshotStagingRuntime: () => ({
     allocate: fixture.allocate,
-    close: fixture.closeRuntime,
+    close: async () => {},
   }),
 }));
+// mock-isolation: Removal receipts are injected and unexpected native child creation must fail this fixture.
 vi.mock("./sqlite-readonly-native-resource.client.js", () => ({
   createSqliteReadOnlyNativeResourceClient: () => ({
-    createSession: fixture.createSession,
+    createSession: () => {
+      throw new Error("Controlled allocation must not create a native child");
+    },
     removed: fixture.removed,
   }),
 }));
 
-const directories = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(async () => {
-    try {
-      const registration = fixture.register.mock.calls[0];
-      if (registration) {
-        await registration[1].closeResource();
-      }
-      cleanup();
-    } finally {
-      fixture.ports.value?.port1.close();
-      fixture.ports.value?.port2.close();
-      vi.restoreAllMocks();
-    }
-  });
-});
+const directories = useSqliteTempDirs(
+  () => fixture.register.mock.calls[0]?.[1].closeResource(),
+  () => {
+    fixture.ports.value?.port1.close();
+    fixture.ports.value?.port2.close();
+    vi.restoreAllMocks();
+  },
+);
 
 it("retries only the removal acknowledgement and preserves a replacement directory", async () => {
   const root = directories.make("staging-removal-ack-");
@@ -78,13 +65,8 @@ it("retries only the removal acknowledgement and preserves a replacement directo
   fixture.removed.mockRejectedValueOnce(failure);
   const remove = vi.spyOn(fs, "rm");
 
-  // Exercise the actual registered worker handlers; only allocation and ACK are controlled.
   await import("./sqlite-snapshot-staging.worker.js");
-  const registration = fixture.register.mock.calls[0];
-  if (!registration) {
-    throw new Error("Staging worker did not register its task and resource handlers");
-  }
-  const [runTask, resource] = registration;
+  const [runTask, resource] = fixture.register.mock.calls[0]!;
   expect(
     await runTask({
       type: "allocate",
@@ -97,15 +79,13 @@ it("retries only the removal acknowledgement and preserves a replacement directo
 
   await expect(resource.closeResource(directory)).rejects.toBe(failure);
   await expect(fs.stat(directory)).rejects.toHaveProperty("code", "ENOENT");
-  expect(retire).toHaveBeenCalledOnce();
-  expect(remove).toHaveBeenCalledOnce();
+  expect([retire.mock.calls.length, remove.mock.calls.length]).toEqual([1, 1]);
 
   await fs.mkdir(directory);
   await fs.writeFile(sentinel, "replacement must survive");
   await resource.closeResource(directory);
 
   expect(await fs.readFile(sentinel, "utf8")).toBe("replacement must survive");
-  expect(retire).toHaveBeenCalledOnce();
-  expect(remove).toHaveBeenCalledOnce();
+  expect([retire.mock.calls.length, remove.mock.calls.length]).toEqual([1, 1]);
   expect(fixture.removed.mock.calls).toEqual([[directory], [directory]]);
 });

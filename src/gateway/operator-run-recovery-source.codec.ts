@@ -3,13 +3,13 @@ import { GatewayOperatorRoleDefinitionSchema } from "../config/zod-schema.gatewa
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { userChannelAuthorizationReferenceSchema } from "../state/user-channel-authorization-reference.js";
 
-export const MAX_RECOVERY_SOURCE_BYTES = 65_536;
+const MAX_RECOVERY_SOURCE_BYTES = 65_536;
 const boundedString = z.string().min(1).max(4096);
 const refs = z.strictObject({
   exact: z.array(boundedString).max(4096),
   wildcards: z.array(boundedString).max(256),
 });
-const operatorRunRecoverySnapshotSchema = z.strictObject({
+const handshakeRecoverySnapshotSchema = z.strictObject({
   profileId: boundedString,
   scopes: z.array(boundedString).max(64),
   assignedRole: boundedString.nullable(),
@@ -47,6 +47,23 @@ const operatorRunRecoverySnapshotSchema = z.strictObject({
   localOperator: z.boolean(),
   sourceIngress: z.enum(["control-ui", "internal"]),
 });
+const principalRecoverySnapshotSchema = handshakeRecoverySnapshotSchema.extend({
+  sourceIngress: z.literal("principal"),
+  ingress: z.strictObject({
+    pluginId: boundedString,
+    audienceId: boundedString,
+    recoveryId: boundedString,
+  }),
+  authPolicy: z.undefined().optional(),
+  sharedGeneration: z.undefined().optional(),
+  device: z.undefined().optional(),
+  controlUiAdmin: z.literal(false),
+  localOperator: z.literal(false),
+});
+const operatorRunRecoverySnapshotSchema = z.discriminatedUnion("sourceIngress", [
+  handshakeRecoverySnapshotSchema,
+  principalRecoverySnapshotSchema,
+]);
 const sourceSchema = z.strictObject({
   version: z.literal(1),
   agentId: boundedString,
@@ -60,8 +77,8 @@ const sourceSchema = z.strictObject({
 const channelSnapshotSchema = z.strictObject({
   reference: userChannelAuthorizationReferenceSchema,
   profileId: boundedString,
-  scopes: operatorRunRecoverySnapshotSchema.shape.scopes,
-  modelPolicy: operatorRunRecoverySnapshotSchema.shape.modelPolicy,
+  scopes: handshakeRecoverySnapshotSchema.shape.scopes,
+  modelPolicy: handshakeRecoverySnapshotSchema.shape.modelPolicy,
 });
 const queuedSourceSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("gateway"), snapshot: operatorRunRecoverySnapshotSchema }),

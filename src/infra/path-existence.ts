@@ -1,7 +1,53 @@
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
+import path from "node:path";
 import { hasNodeErrorCode, isNotFoundPathError } from "@openclaw/fs-safe/path";
 import { ignoreMissingPath, isMissingPathError } from "./errno.js";
+
+/** Resolve existing links, or use the absolute lexical path when probing fails. */
+export async function realpathOrResolve(candidate: string): Promise<string> {
+  try {
+    return await fsPromises.realpath(candidate);
+  } catch {
+    return path.resolve(candidate);
+  }
+}
+
+/** Resolve an absolute path through a readable ancestor; this is not a containment check. */
+export function realpathExistingAncestorSync(candidate: string): string | undefined {
+  const suffix: string[] = [];
+  let current = candidate;
+  while (true) {
+    try {
+      return path.join(fs.realpathSync.native(current), ...suffix.toReversed());
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) {
+        return undefined;
+      }
+      suffix.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+/** Async counterpart for runtime identity capture, including unreadable intermediate paths. */
+export async function realpathExistingAncestor(candidate: string): Promise<string | undefined> {
+  const suffix: string[] = [];
+  let current = candidate;
+  while (true) {
+    try {
+      return path.join(await fsPromises.realpath(current), ...suffix.toReversed());
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) {
+        return undefined;
+      }
+      suffix.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
 
 /** Only definite absence, including a non-directory ancestor, permits an absent verdict. */
 export function pathMayExistSync(filePath: string): boolean {

@@ -11,7 +11,6 @@ import type { IdentityAvatarInput } from "./identity-avatar.ts";
 
 const directories = new WeakMap<ApplicationGateway, ProfileDirectory>();
 
-/** The authorized people directory is shared by avatars, person cards, and assignment menus. */
 export function profileDirectory(gateway: ApplicationGateway): ProfileDirectory {
   let directory = directories.get(gateway);
   if (!directory) {
@@ -21,11 +20,9 @@ export function profileDirectory(gateway: ApplicationGateway): ProfileDirectory 
   return directory;
 }
 
-/** Uploads and email-backed Gravatar both resolve through the versioned profile route. */
+/** The Gateway route alone decides upload, provider, host-photo and initials fallback. */
 export function profileAvatarUrl(profile: UserProfile | undefined): string | undefined {
-  return profile?.hasAvatar || profile?.emails.length
-    ? buildControlUiUserAvatarPath(profile.id, profile.updatedAt)
-    : undefined;
+  return profile ? buildControlUiUserAvatarPath(profile.id, profile.updatedAt) : undefined;
 }
 
 class ProfileDirectory {
@@ -156,6 +153,7 @@ class ProfileDirectory {
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     this.selfAvatar = this.gateway.snapshot.selfUser?.avatarUrl;
+    // Avatars, person cards, and assignment menus share this authorized directory's Gateway lifetime.
     this.stop ??= this.gateway.subscribe(() => {
       const avatar = this.gateway.snapshot.selfUser?.avatarUrl;
       const avatarChanged = avatar !== this.selfAvatar;

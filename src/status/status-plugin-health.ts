@@ -29,7 +29,7 @@ type ContextEngineQuarantineRecord = {
   failedAt: Date | number;
 };
 
-export type RuntimeToolQuarantineRecord = {
+type RuntimeToolQuarantineRecord = {
   toolName: string;
   owner?: string;
   reason: string;
@@ -87,15 +87,17 @@ export function dedupeChannelPluginFailures(
   );
 }
 
-function mergePluginRecords(
-  installed: readonly PluginHealthRecord[],
-  runtime: readonly PluginHealthRecord[],
-): PluginHealthRecord[] {
+export function mergeStatusPluginHealthSnapshots(
+  installed: StatusPluginHealthSnapshot,
+  runtime: StatusPluginHealthSnapshot,
+): StatusPluginHealthSnapshot {
+  const installedPlugins = installed.plugins;
+  const runtimePlugins = runtime.plugins;
   const merged = new Map<string, PluginHealthRecord>();
-  for (const plugin of installed) {
+  for (const plugin of installedPlugins) {
     merged.set(plugin.id, plugin);
   }
-  for (const plugin of runtime) {
+  for (const plugin of runtimePlugins) {
     const existing = merged.get(plugin.id);
     // Field-wise merge: runtime facts win, but a runtime record missing a
     // field never erases what the installed scan knew.
@@ -108,15 +110,8 @@ function mergePluginRecords(
       failurePhase: plugin.failurePhase ?? existing?.failurePhase,
     });
   }
-  return [...merged.values()];
-}
-
-export function mergeStatusPluginHealthSnapshots(
-  installed: StatusPluginHealthSnapshot,
-  runtime: StatusPluginHealthSnapshot,
-): StatusPluginHealthSnapshot {
   return {
-    plugins: mergePluginRecords(installed.plugins, runtime.plugins),
+    plugins: [...merged.values()],
     diagnostics: dedupePluginDiagnostics([...installed.diagnostics, ...runtime.diagnostics]),
     contextEngineQuarantines: [
       ...installed.contextEngineQuarantines,
@@ -222,7 +217,8 @@ export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot)
     snapshot.shouldRunPluginIds && runtimeLoaded
       ? snapshot.shouldRunPluginIds
           .filter((id) => !runtimeLoaded.has(id) && !explainedPluginIds.has(id))
-          .toSorted(byLocale)
+          // oxlint-disable-next-line unicorn/no-array-sort -- filter created this private array.
+          .sort(byLocale)
       : [];
   const shouldRunNotLoadedSet = new Set(shouldRunNotLoaded);
   const installedNotActive = runtimeLoaded
@@ -232,17 +228,21 @@ export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot)
         // Drift ids are reported on their own line below; keep them out of the
         // neutral "Installed (not active)" inventory so each id appears once.
         .filter((id) => !shouldRunNotLoadedSet.has(id))
-        .toSorted(byLocale)
+        // oxlint-disable-next-line unicorn/no-array-sort -- filter created this private array.
+        .sort(byLocale)
     : [];
   const disabledPlugins = snapshot.plugins
     .filter((plugin) => plugin.status === "disabled")
-    .toSorted((left, right) => byLocale(left.id, right.id));
+    // oxlint-disable-next-line unicorn/no-array-sort -- filter created this private array.
+    .sort((left, right) => byLocale(left.id, right.id));
   const errors = snapshot.plugins
     .filter((plugin) => plugin.status === "error")
-    .toSorted((left, right) => byLocale(left.id, right.id));
+    // oxlint-disable-next-line unicorn/no-array-sort -- filter created this private array.
+    .sort((left, right) => byLocale(left.id, right.id));
   const dependencyIssues = snapshot.plugins
     .filter(hasDependencyIssue)
-    .toSorted((left, right) => byLocale(left.id, right.id));
+    // oxlint-disable-next-line unicorn/no-array-sort -- filter created this private array.
+    .sort((left, right) => byLocale(left.id, right.id));
   const diagnostics = getReportableDiagnostics(snapshot);
   const diagnosticCounts = countProblemDiagnostics(diagnostics);
   const contextEngineQuarantines = snapshot.contextEngineQuarantines.toSorted((left, right) =>
@@ -292,7 +292,8 @@ export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot)
         disabledByReason.set(reason, [plugin.id]);
       }
     }
-    const reasonEntries = [...disabledByReason.entries()].toSorted((left, right) =>
+    // oxlint-disable-next-line unicorn/no-array-sort -- The Map spread is a private array.
+    const reasonEntries = [...disabledByReason.entries()].sort((left, right) =>
       byLocale(left[0], right[0]),
     );
     lines.push(

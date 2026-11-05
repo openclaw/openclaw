@@ -8,7 +8,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { loadAgentTrajectoryOperations } from "../../state/openclaw-agent-execution-operations.js";
+import { createAgentWorkerTestLoaders } from "../../state/openclaw-agent-execution-operations.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   beginTrajectoryRuntimeRetention,
@@ -181,7 +181,6 @@ it.each([
         ('history', 0, 'run', '{"type":"expired"}', 1)`);
       const prepared = readSessionEntrySelectionSnapshot(f.database, f.scope.sessionKey, false);
       const writeBase = prepared[0]!.entry;
-      const operations = await loadAgentTrajectoryOperations();
       const lease = new Int32Array(new SharedArrayBuffer(4));
       Atomics.store(lease, 0, 1);
       const sweepId = beginTrajectoryRuntimeRetention(f.database.db, lease);
@@ -207,6 +206,8 @@ it.each([
         writeTransaction: (operationLabel, _owner, write) =>
           runOpenClawAgentWriteTransaction(write, options, { operationLabel }),
       };
+      const operations =
+        await createAgentWorkerTestLoaders(context)["trajectory.retention.delete"]();
       const counter = trackSqliteStatementExecutions(f.database.db, ["trajectory"], (sql) =>
         /^select\b/i.test(sql) && sql.includes('"trajectory_runtime_events"') ? "trajectory" : null,
       );

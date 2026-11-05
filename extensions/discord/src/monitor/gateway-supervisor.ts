@@ -14,14 +14,11 @@ export type DiscordGatewayEvent = {
 };
 
 export class DiscordGatewayLifecycleError extends Error {
-  readonly eventType: DiscordGatewayEventType;
-
   constructor(event: Pick<DiscordGatewayEvent, "type" | "message" | "err">) {
     super(`discord gateway ${event.type}: ${event.message}`, {
       cause: event.err instanceof Error ? event.err : undefined,
     });
     this.name = "DiscordGatewayLifecycleError";
-    this.eventType = event.type;
   }
 }
 

@@ -19,6 +19,7 @@ import {
 } from "../infra/sqlite-schema-sql.js";
 import { publishVerifiedSqliteFile } from "../infra/sqlite-snapshot.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { defaultRuntime } from "../runtime.js";
 import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import {
   assertAgentSchemaVersion,
@@ -725,6 +726,10 @@ export async function restoreGitBackupDirectory(params: {
     }
     throw error;
   } finally {
-    await fs.rm(stagingDirectory, { recursive: true, force: true }).catch(() => undefined);
+    await fs.rm(stagingDirectory, { recursive: true, force: true }).catch(() => {
+      defaultRuntime.error(
+        `Warning: Git backup temporary files may remain under ${stagingDirectory}; cleanup failed: inspect and remove the directory when safe.`,
+      );
+    });
   }
 }

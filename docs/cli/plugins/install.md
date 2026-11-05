@@ -34,7 +34,7 @@ the Gateway host. Marketplace requests also require a local connection because
 marketplace names can resolve to host-local registrations. The CLI resolves local
 paths before sending the request. The Control UI continues to offer official and ClawHub sources only.
 
-Plugin dependencies installed by `claws add` retain the Claw batch lease;
+Plugin dependencies installed by `templates add` retain the Template batch lease;
 live activation of that batch is separate from this single-plugin command.
 
 ```bash
@@ -217,7 +217,7 @@ If a plugin you published on ClawHub is hidden or blocked by a registry scan, us
 
 ### ClawHub security audit
 
-Community ClawHub installs check the selected release's trust record before downloading. OpenClaw prints the outcome, exact audit overview, and details link. A Review outcome is informational and installation continues. If ClawHub disables download or returns a blocking moderation outcome, OpenClaw refuses the release. Direct official ClawHub plugin installs and bundled OpenClaw plugin sources bypass this release-trust check. When a Claw installs a plugin, the Claw flow checks release trust for official packages too and requires separate acknowledgement for Review outcomes.
+Community ClawHub installs check the selected release's trust record before downloading. OpenClaw prints the outcome, exact audit overview, and details link. A Review outcome is informational and installation continues. If ClawHub disables download or returns a blocking moderation outcome, OpenClaw refuses the release. Direct official ClawHub plugin installs and bundled OpenClaw plugin sources bypass this release-trust check. When a Template installs a plugin, the Template flow checks release trust for official packages too and requires separate acknowledgement for Review outcomes.
 
 ### Hook packs and npm specs
 
@@ -282,6 +282,11 @@ openclaw plugins install <plugin-name> --marketplace <owner/repo>
 openclaw plugins install <plugin-name> --marketplace https://github.com/<owner>/<repo>
 openclaw plugins install <plugin-name> --marketplace ./my-marketplace
 ```
+
+Marketplace plugin names are case-sensitive after trimming surrounding whitespace.
+If multiple entries share the requested name, installation and updates stop with
+an ambiguity error. Remove or rename the duplicate entries in the marketplace;
+listing and operations on uniquely named plugins remain available.
 
 <Tabs>
   <Tab title="Marketplace sources">

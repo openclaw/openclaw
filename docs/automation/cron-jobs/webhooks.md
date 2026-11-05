@@ -152,7 +152,7 @@ limits, routing policy, and error responses.
       --data '{"text":"The sample import completed","mode":"now","agentId":"main"}'
     ```
 
-    HTTP `200` includes `eventOutcome: "queued"` when the queue accepts the wake or `eventOutcome: "coalesced"` when the same wake is already the queue's most recent pending event. With `mode: "now"`, the response confirms admission to ordinary session execution, not completed execution or delivery. The event waits behind existing work in that session and does not depend on heartbeat cadence or active hours. Use `mode: "next-heartbeat"` to retain the event for the next heartbeat.
+    HTTP `200` includes `eventOutcome: "queued"` when the queue accepts the wake or `eventOutcome: "coalesced"` when the same wake is already the queue's most recent pending event. With `mode: "now"`, the response confirms admission to ordinary session execution, not completed execution or delivery. The event waits behind existing work in that session and does not depend on heartbeat cadence or active hours. The legacy `mode: "next-heartbeat"` value assigns the event to an eligible scheduled automation for that session. If no eligible job exists, the request reports an actionable error; use explicit automation scheduling for delayed work.
 
     A full session queue returns HTTP `503` with an actionable error instead of evicting an accepted event. Let the session process its pending events before retrying. This applies to mapped wake actions too; duplicate wakes can still coalesce when the queue is full.
 

@@ -1,28 +1,7 @@
-import type { ApplicationContext } from "../../app/context.ts";
-import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
-import { getChatPendingInputs } from "./chat-pending-inputs.ts";
-import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { admitChatSubmission } from "./history-merge.ts";
 import { resolveChatSnapshotKey } from "./session-message-cache.ts";
 import { subscribeSnapshotInvalidation } from "./session-snapshot-invalidation-events.ts";
-
-export function subscribeChatPaneStartup(
-  context: Pick<ApplicationContext, "placementStartup">,
-  getState: () => ChatPageHost | undefined,
-): () => void {
-  // Admit each accepted initial turn before waking followers parked behind recovery.
-  return context.placementStartup.subscribe(() => {
-    const state = getState();
-    if (state) {
-      admitChatSubmission(state, getChatPendingInputs(state)?.page.items);
-      if (!parseCatalogSessionKey(state.sessionKey)) {
-        void resumeStoredChatOutboxes(state);
-      }
-    }
-  });
-}
 
 export function subscribeChatPaneSnapshotInvalidation(
   getState: () => ChatPageHost | undefined,

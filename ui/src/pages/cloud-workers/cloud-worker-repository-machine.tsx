@@ -93,7 +93,7 @@ function RepositoryMachine(props: RepositoryMachineProps) {
           <button
             type="button"
             class="btn btn--sm"
-            disabled={editor.state().busy}
+            disabled={editor.busy()}
             onClick={() => setEditing(false)}
           >
             {t("common.cancel")}

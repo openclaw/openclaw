@@ -21,59 +21,10 @@ import {
   PLUGIN_INSTALL_ERROR_CODE,
   type InstallPluginResult,
   type PackageInstallCommonParams,
-  type PluginInstallErrorCode,
   type PluginNpmIntegrityDriftParams,
 } from "./install-types.js";
 
 const MANAGED_NPM_PACK_ARCHIVE_DIR = "_openclaw-pack-archives";
-
-function resolveTrustedNpmPackPackageName(packageName: string | undefined):
-  | {
-      ok: true;
-      packageName: string;
-    }
-  | {
-      ok: false;
-      error: string;
-      code: PluginInstallErrorCode;
-    } {
-  if (!packageName) {
-    return {
-      ok: false,
-      error: "npm pack metadata missing package name",
-      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_NPM_SPEC,
-    };
-  }
-  const parsedSpec = parseRegistryNpmSpec(packageName);
-  if (!parsedSpec || parsedSpec.selectorKind !== "none") {
-    return {
-      ok: false,
-      error: `unsupported npm pack package name: ${packageName}`,
-      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_NPM_SPEC,
-    };
-  }
-  return { ok: true, packageName: parsedSpec.name };
-}
-
-async function stageNpmPackArchiveInManagedRoot(params: {
-  archivePath: string;
-  npmRoot: string;
-  packageName: string;
-  version?: string;
-  integrity?: string;
-  shasum?: string;
-  tarballName: string;
-}): Promise<string> {
-  const archiveStoreDir = path.join(params.npmRoot, MANAGED_NPM_PACK_ARCHIVE_DIR);
-  const identity = params.integrity ?? params.shasum ?? params.tarballName;
-  const identitySlug = sha256HexPrefixCore(identity, 16);
-  const packageSlug = safePluginInstallFileName(params.packageName) || "plugin";
-  const versionSlug = safePluginInstallFileName(params.version ?? "pack") || "pack";
-  const archiveFileName = `${packageSlug}-${versionSlug}-${identitySlug}.tgz`;
-  await fs.mkdir(archiveStoreDir, { recursive: true });
-  await fs.copyFile(params.archivePath, path.join(archiveStoreDir, archiveFileName));
-  return `file:./${path.posix.join(MANAGED_NPM_PACK_ARCHIVE_DIR, archiveFileName)}`;
-}
 
 export async function installPluginFromNpmPackArchive(
   params: Omit<
@@ -113,11 +64,23 @@ export async function installPluginFromNpmPackArchive(
   if (driftResult.error) {
     return { ok: false, error: driftResult.error };
   }
-  const packageNameResult = resolveTrustedNpmPackPackageName(metadataResult.metadata.name);
-  if (!packageNameResult.ok) {
-    return packageNameResult;
+  const metadataName = metadataResult.metadata.name;
+  if (!metadataName) {
+    return {
+      ok: false,
+      error: "npm pack metadata missing package name",
+      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_NPM_SPEC,
+    };
   }
-  const packageName = packageNameResult.packageName;
+  const parsedSpec = parseRegistryNpmSpec(metadataName);
+  if (!parsedSpec || parsedSpec.selectorKind !== "none") {
+    return {
+      ok: false,
+      error: `unsupported npm pack package name: ${metadataName}`,
+      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_NPM_SPEC,
+    };
+  }
+  const packageName = parsedSpec.name;
   const npmBaseDir = params.npmDir ? resolveUserPath(params.npmDir) : resolveDefaultPluginNpmDir();
   const { policyMode } = await resolveManagedNpmInstallPlan({
     runtime,
@@ -135,15 +98,20 @@ export async function installPluginFromNpmPackArchive(
       packageName,
       prepareDependencySpec: async ({ npmRoot }) => {
         try {
-          return await stageNpmPackArchiveInManagedRoot({
-            archivePath: metadataResult.archivePath,
-            npmRoot,
-            packageName,
-            version: metadataResult.metadata.version,
-            integrity: metadataResult.metadata.integrity,
-            shasum: metadataResult.metadata.shasum,
-            tarballName: metadataResult.tarballName,
-          });
+          const archivePath = metadataResult.archivePath;
+          const archiveStoreDir = path.join(npmRoot, MANAGED_NPM_PACK_ARCHIVE_DIR);
+          const identity =
+            metadataResult.metadata.integrity ??
+            metadataResult.metadata.shasum ??
+            metadataResult.tarballName;
+          const identitySlug = sha256HexPrefixCore(identity, 16);
+          const packageSlug = safePluginInstallFileName(packageName) || "plugin";
+          const versionSlug =
+            safePluginInstallFileName(metadataResult.metadata.version ?? "pack") || "pack";
+          const archiveFileName = `${packageSlug}-${versionSlug}-${identitySlug}.tgz`;
+          await fs.mkdir(archiveStoreDir, { recursive: true });
+          await fs.copyFile(archivePath, path.join(archiveStoreDir, archiveFileName));
+          return `file:./${path.posix.join(MANAGED_NPM_PACK_ARCHIVE_DIR, archiveFileName)}`;
         } catch (error) {
           throw new Error(
             `Failed to stage npm pack archive in managed npm root: ${String(error)}`,
@@ -172,7 +140,6 @@ export async function installPluginFromNpmPackArchive(
       onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
       beforePersistentApply: params.beforePersistentApply,
       npmResolution,
-      ...(driftResult.integrityDrift ? { integrityDrift: driftResult.integrityDrift } : {}),
     }),
   );
   emitSuccessfulPluginInstallSecurityEvent(result, {

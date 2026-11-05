@@ -247,6 +247,7 @@ export async function initiateCall(
 
 export type SpeakOptions = {
   listenAfterPlayback?: boolean;
+  turnToken?: string;
   isCurrent?: () => boolean;
 };
 
@@ -308,6 +309,7 @@ export async function speak(
       text,
       voice,
       ...(options?.listenAfterPlayback ? { listenAfterPlayback: true } : {}),
+      ...(options?.turnToken ? { turnToken: options.turnToken } : {}),
     });
 
     if (!(await updateCall(ctx, call, (next) => addTranscriptEntry(next, "bot", text)))) {
@@ -406,7 +408,9 @@ export async function speakInitialMessage(
 
   try {
     console.log(`[voice-call] Speaking initial message for call ${call.callId} (mode: ${mode})`);
-    const result = await speak(ctx, call.callId, initialMessage);
+    const result = await speak(ctx, call.callId, initialMessage, {
+      listenAfterPlayback: mode === "conversation" && ctx.provider?.name === "twilio",
+    });
     if (!result.success) {
       console.warn(`[voice-call] Failed to speak initial message: ${result.error}`);
       return;
@@ -474,10 +478,13 @@ export async function speakInitialMessage(
       if (ctx.isStopping()) {
         throw new Error("Voice Call manager is stopping");
       }
-      await ctx.provider.startListening({
-        callId: call.callId,
-        providerCallId: call.providerCallId ?? providerCallId,
-      });
+      // Twilio's Say already owns the following Gather; replacing it cuts playback short.
+      if (ctx.provider.name !== "twilio") {
+        await ctx.provider.startListening({
+          callId: call.callId,
+          providerCallId: call.providerCallId ?? providerCallId,
+        });
+      }
     }
   } finally {
     ctx.initialMessageInFlight.delete(call.callId);
@@ -504,7 +511,14 @@ export async function continueCall(
   const turnToken = provider.name === "twilio" ? crypto.randomUUID() : undefined;
 
   try {
-    const speakResult = await speak(ctx, callId, prompt);
+    const listenAfterPlayback =
+      provider.name === "twilio" && !hasConversationStreamConnect(provider, ctx.config);
+    const speakResult = await speak(
+      ctx,
+      callId,
+      prompt,
+      listenAfterPlayback ? { listenAfterPlayback: true, turnToken } : undefined,
+    );
     if (!speakResult.success) {
       return speakResult;
     }
@@ -520,11 +534,13 @@ export async function continueCall(
       throw new Error("Voice Call manager is stopping");
     }
     const listenStartedAt = Date.now();
-    await provider.startListening({
-      callId,
-      providerCallId: call.providerCallId ?? providerCallId,
-      turnToken,
-    });
+    if (!listenAfterPlayback) {
+      await provider.startListening({
+        callId,
+        providerCallId: call.providerCallId ?? providerCallId,
+        turnToken,
+      });
+    }
     if (ctx.isStopping()) {
       throw new Error("Voice Call manager is stopping");
     }

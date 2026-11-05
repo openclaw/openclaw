@@ -1,9 +1,11 @@
 import { Type, type TSchema, type TString, type TInteger } from "typebox";
 import { checkProtocolJson, type ValidationError } from "../validation-errors.js";
 import { closedObject } from "./closed-object.js";
+import { WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH } from "./worker-protocol-constants.js";
+
+export { WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH } from "./worker-protocol-constants.js";
 
 export const WORKER_PUBLIC_INGRESS_PATH = "/__openclaw__/worker";
-export const WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH = 256;
 export const WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH = 128;
 export const WORKER_PROTOCOL_MAX_PAYLOAD_BYTES = 64 * 1024;
 export const WORKER_PROTOCOL_MAX_CONCURRENT_TOOLS = 4;

@@ -1,6 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
+import { isRedactedSecretValue } from "../config/redact-sentinel.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveHostAccountName } from "../infra/host-account-name.js";
 import {
   GatewayControlUiIngressError,
   type GatewayControlUiIngressFactoryV2,
@@ -9,18 +14,57 @@ import {
   type GatewayIngressPrincipalBindingV1,
   type GatewayControlUiIngressRequestV1,
   type GatewayControlUiIngressV2,
+  type GatewayIngressPrincipal,
 } from "../plugins/gateway-ingress.types.js";
+import { assertionSucceeds } from "../shared/assertion.js";
+import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
+import {
+  captureResidentUserProfileAccess,
+  prepareUserProfileIdentity,
+  projectUserProfileDisplay,
+} from "../state/user-profile-list.js";
+import { ensureCanonicalGatewayOwnerProfile } from "../state/user-profile-writes.js";
+import type { ResolvedGatewayAuth } from "./auth-resolve.js";
+import { gatewayPersonPrincipalAuthError } from "./auth.js";
 import { validateRemoteControlUiFrameAncestors } from "./control-ui-csp.js";
 import { filterRemoteControlUiPluginReadCookies } from "./control-ui-plugin-auth-cookie.js";
+import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
+import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { isOperatorScope } from "./operator-scopes.js";
 import { resolveRemoteControlUiHttpRoute } from "./remote-control-ui-http-routing.js";
 import type { GatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import { createRemoteControlUiTransport } from "./remote-control-ui-transport.js";
-import { prepareRemoteIngressPrincipal } from "./remote-ingress-principal.js";
+import {
+  captureIngressPrincipalRecovery,
+  registerIngressPrincipalRecovery,
+} from "./remote-ingress-principal-recovery.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
-import type { RemoteControlUiIngressContext } from "./server/client-identity-types.js";
+import type {
+  RemoteControlUiIngressContext,
+  RemoteIngressPrincipalSnapshot,
+} from "./server/client-identity-types.js";
+
+function remoteControlUiGatewayAuthError(
+  auth: ResolvedGatewayAuth,
+  cfg: OpenClawConfig,
+  principal: GatewayIngressPrincipal,
+): string | undefined {
+  if (principal.kind === "person") {
+    return gatewayPersonPrincipalAuthError(auth, cfg);
+  }
+  if (cfg.gateway?.roles) {
+    return "Owner ingress does not support gateway.roles. Use a person-bound grant approved in the Gateway Control UI.";
+  }
+  if (auth.mode !== "token" && auth.mode !== "password") {
+    return "Owner ingress requires gateway.auth.mode token or password without gateway.roles. Trusted-proxy Gateways require a person-bound grant.";
+  }
+  if (isRedactedSecretValue(auth[auth.mode])) {
+    return "Remote Control UI ingress cannot use a redacted Gateway credential. Replace the configured token or password with its real value locally before opening ingress.";
+  }
+  return undefined;
+}
 
 const MAX_HTTP_PER_HANDLE = 16;
 const requestHeaders = new Set([
@@ -168,6 +212,15 @@ export function createGatewayControlUiIngressFactory(params: {
   ): Promise<GatewayIngressPrincipalBindingV1> {
     const operatorScopeCeiling = validatePrincipalOptions(options);
     const principal = Object.freeze({ ...options.principal });
+    const recoveryContext = host.resolveGatewayContext?.();
+    const recoverySource = recoveryContext
+      ? await captureIngressPrincipalRecovery(
+          recoveryContext,
+          { pluginId, audienceId: options.audienceId },
+          principal.kind === "owner" ? GATEWAY_OWNER_PROFILE_ID : principal.profileId,
+          operatorScopeCeiling,
+        )
+      : undefined;
     const grantSignal = AbortSignal.any([params.signal, host.signal, options.signal]);
     const grantAssertion = options.assertCurrent;
     const assertGrant = () => {
@@ -176,14 +229,154 @@ export function createGatewayControlUiIngressFactory(params: {
       grantAssertion();
     };
     assertGrant();
-    const authority = await prepareRemoteIngressPrincipal({
-      principal,
-      operatorScopeCeiling,
-      getRuntimeConfig: () => host.getRuntimeConfig(),
-      getResolvedAuth: () => host.getResolvedAuth(),
-      signal: grantSignal,
-      assertCurrent: assertGrant,
-    });
+    const authority = await (async () => {
+      const invalidated = new AbortController();
+      const bindingId = randomUUID();
+      const ceiling = [...operatorScopeCeiling];
+      const assertPrincipalGrant = () => {
+        invalidated.signal.throwIfAborted();
+        grantSignal.throwIfAborted();
+        assertGrant();
+        const error = remoteControlUiGatewayAuthError(
+          host.getResolvedAuth(),
+          host.getRuntimeConfig(),
+          principal,
+        );
+        if (error) {
+          throw new GatewayControlUiIngressError("unsupported-auth", error);
+        }
+      };
+      assertPrincipalGrant();
+      if (principal.kind === "person" && principal.profileId === GATEWAY_OWNER_PROFILE_ID) {
+        throw new GatewayControlUiIngressError(
+          "forbidden",
+          "Person ingress requires an existing non-owner verified profile.",
+        );
+      }
+      const profileId =
+        principal.kind === "person" ? principal.profileId : GATEWAY_OWNER_PROFILE_ID;
+      if (principal.kind === "owner") {
+        const displayName = await resolveHostAccountName();
+        assertPrincipalGrant();
+        await ensureCanonicalGatewayOwnerProfile(displayName, {
+          assertCurrent: assertPrincipalGrant,
+        });
+      }
+      const prepared = await prepareUserProfileIdentity(profileId).catch(() => {
+        throw new GatewayControlUiIngressError(
+          "forbidden",
+          "Remote ingress requires an available existing verified profile.",
+        );
+      });
+      const invalidate = (error: unknown): never => {
+        const denial =
+          error instanceof GatewayControlUiIngressError
+            ? error
+            : new GatewayControlUiIngressError(
+                "forbidden",
+                "Remote ingress principal authority changed; reopen the binding under current authority.",
+              );
+        invalidated.abort(denial);
+        prepared.release();
+        throw denial;
+      };
+      try {
+        assertPrincipalGrant();
+        const resident = captureResidentUserProfileAccess(profileId);
+        const initialIdentity = prepared.readCurrentFacts();
+        const initial = initialIdentity.profile;
+        const emailBindingIds = prepared.emailBindingIds;
+        const readRole = (current: typeof initial) =>
+          resolveOperatorRolePolicyForAssignment(
+            profileId,
+            current.assignedRole,
+            host.getRuntimeConfig(),
+            current.githubLogin ?? null,
+          );
+        const role = principal.kind === "person" ? structuredClone(readRole(initial)) : undefined;
+        const access =
+          principal.kind === "person"
+            ? resolveGatewayOperatorAccessAuthority(profileId, host.getRuntimeConfig(), {
+                requireLivePolicySet: true,
+              })
+            : undefined;
+        const signal = AbortSignal.any([
+          grantSignal,
+          invalidated.signal,
+          ...(access ? [access.signal] : []),
+        ]);
+        const assertCurrent = () => {
+          try {
+            assertPrincipalGrant();
+            const currentIdentity = prepared.readCurrentFacts(emailBindingIds);
+            const current = currentIdentity.profile;
+            const row = resident.assertCurrent();
+            if (
+              !isDeepStrictEqual(currentIdentity.aliases, initialIdentity.aliases) ||
+              initial.emails.some((email) => !current.emails.includes(email)) ||
+              initial.githubAccountIds?.some((id) => !current.githubAccountIds?.includes(id)) ||
+              (principal.kind === "person" &&
+                gatewayPersonPrincipalAuthError(
+                  host.getResolvedAuth(),
+                  host.getRuntimeConfig(),
+                  current.emails,
+                ) !== undefined) ||
+              !isDeepStrictEqual(role, principal.kind === "person" ? readRole(current) : undefined)
+            ) {
+              throw new Error("Principal identity or role changed");
+            }
+            access?.assertCurrent();
+            return { ...currentIdentity, row };
+          } catch (error) {
+            return invalidate(error);
+          }
+        };
+        signal.addEventListener("abort", prepared.release, { once: true });
+        assertCurrent();
+        return {
+          signal,
+          assertCurrent,
+          resolve(): RemoteIngressPrincipalSnapshot {
+            const { profile, aliases, row } = assertCurrent();
+            const display = projectUserProfileDisplay(row);
+            return {
+              bindingId,
+              ...(recoverySource ? { recoverySource } : {}),
+              authenticatedUserProfile: {
+                profileId,
+                displayName: display.displayName,
+                avatarRevision: display.avatarRevision,
+                hasAvatar: display.hasAvatar,
+                updatedAt: row.updated_at,
+              },
+              preparedSessionProfile: {
+                profileId,
+                role: profile.assignedRole,
+                githubLogin: profile.githubLogin ?? null,
+                aliases,
+              },
+              operatorRoleActor:
+                principal.kind === "owner" ? { kind: "system" } : { kind: "operator", profileId },
+              operatorRolePolicy: role,
+              operatorAccessAuthority: access,
+              scopes: role ? intersectOperatorScopes(ceiling, role.scopes) : [...ceiling],
+              assertCurrent,
+              signal,
+            };
+          },
+          close() {
+            invalidated.abort(
+              new GatewayControlUiIngressError(
+                "closed",
+                "Remote ingress principal binding is closed.",
+              ),
+            );
+          },
+        };
+      } catch (error) {
+        return invalidate(error);
+      }
+    })();
     const principalSignal = authority.signal;
     const resolvePrincipal = () => authority.resolve();
     const assertPrincipalCurrent = authority.assertCurrent;
@@ -214,14 +407,7 @@ export function createGatewayControlUiIngressFactory(params: {
           throw new GatewayControlUiIngressError("closed", "Gateway request owner was replaced.");
         }
       };
-      const hasCurrentClientAuthority = () => {
-        try {
-          assertRequestCurrent();
-          return true;
-        } catch {
-          return false;
-        }
-      };
+      const hasCurrentClientAuthority = () => assertionSucceeds(assertRequestCurrent);
       assertRequestCurrent();
       const internal: NonNullable<GatewayClient["internal"]> = {
         authenticatedOperator: true,
@@ -489,6 +675,17 @@ export function createGatewayControlUiIngressFactory(params: {
   return {
     capabilityVersion: 2,
     bindPrincipal,
+    registerPrincipalRecovery: async (resume) => {
+      const context = host.resolveGatewayContext?.();
+      if (!context) {
+        throw new Error("The ingress Gateway is unavailable.");
+      }
+      registerIngressPrincipalRecovery(context, pluginId, {
+        resume,
+        signal: params.signal,
+        assertCurrent: params.assertCurrent,
+      });
+    },
     async open(options) {
       const binding = await bindPrincipal(options);
       try {

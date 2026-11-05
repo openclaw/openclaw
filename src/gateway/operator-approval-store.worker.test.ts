@@ -10,11 +10,14 @@ import {
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import * as readOwner from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as store from "./operator-approval-store.js";
@@ -24,6 +27,7 @@ import {
   getOperatorApprovalResolutionKey,
   OPERATOR_APPROVAL_TERMINAL_RETENTION_MS,
 } from "./operator-approval-store.rows.js";
+import { createExecApprovalPresentation } from "./operator-approval-store.test-support.js";
 import * as nativeTransitions from "./operator-approval-store.transitions.worker.js";
 import type { OperatorApprovalRow } from "./operator-approval-store.types.js";
 
@@ -51,16 +55,7 @@ function approval(id: string): Parameters<typeof store.insertOperatorApproval>[0
     source: { agentId: "main", sessionKey: "agent:main:synthetic" },
     reviewerDeviceIds: ["reviewer"],
     audienceSessionKeys: ["agent:main:synthetic"],
-    presentation: {
-      kind: "exec",
-      commandText: "printf 'héllo  world'",
-      commandPreview: "printf 'héllo  world'",
-      warningText: null,
-      host: "gateway",
-      nodeId: null,
-      agentId: "main",
-      allowedDecisions: ["allow-once", "deny"],
-    },
+    presentation: createExecApprovalPresentation("printf 'héllo  world'", ["allow-once", "deny"]),
   };
 }
 
@@ -235,7 +230,6 @@ it("fences exec while an Allow Always MCP grant commits and publishes the new po
 it("publishes exact native postimages only after the outer commit and retention tombstones", () => {
   const databaseOptions = options();
   const facts = new Map<string, OperatorApprovalRow>();
-  const snapshots: string[][] = [];
   const releaseFacts = operatorApprovalPublication.subscribeFacts((change) => {
     if (change.kind !== "committed") {
       return;
@@ -248,9 +242,6 @@ it("publishes exact native postimages only after the outer commit and retention 
         facts.delete(key);
       }
     }
-  });
-  const releaseObserver = operatorApprovalPublication.subscribe(() => {
-    snapshots.push([...facts.values()].map((row) => `${row.approval_id}:${row.status}`));
   });
   try {
     runOpenClawStateWriteTransaction(() => {
@@ -271,9 +262,9 @@ it("publishes exact native postimages only after the outer commit and retention 
       native.insertOperatorApprovalInDatabase({ approval: approval("second"), databaseOptions });
       expect(facts.size).toBe(0);
     }, databaseOptions);
-    expect(snapshots).toEqual([
-      ["first:pending", "second:pending"],
-      ["first:pending", "second:pending"],
+    expect([...facts.values()].map((row) => `${row.approval_id}:${row.status}`)).toEqual([
+      "first:pending",
+      "second:pending",
     ]);
     native.getOperatorApprovalDetailedInDatabase({ id: "first", nowMs: 10_000, databaseOptions });
     expect(facts.get("first")?.status).toBe("expired");
@@ -301,7 +292,6 @@ it("publishes exact native postimages only after the outer commit and retention 
     expect(facts.size).toBe(0);
   } finally {
     releaseFacts();
-    releaseObserver();
   }
 });
 
@@ -569,4 +559,83 @@ it("queues a brief approval burst through shared input admission", async () => {
       value: { outcome: "found", record: { status: "pending", decision: null } },
     });
   }
+});
+
+it("commits verdicts during a terminal history read and rejects revoked read authority", async ({
+  signal,
+}) => {
+  const databaseOptions = options();
+  for (const id of ["earlier", "later"]) {
+    await store.insertOperatorApproval({ approval: approval(id), databaseOptions });
+  }
+  const ready = createDeferredCore();
+  const release = createDeferredCore();
+  const unblock = () => release.resolve();
+  signal.addEventListener("abort", unblock, { once: true });
+  const executeRead = readOwner.executeExistingOpenClawStateRead;
+  const observed = vi
+    .spyOn(readOwner, "executeExistingOpenClawStateRead")
+    .mockImplementationOnce(async (...args) => {
+      const result = await executeRead(...args);
+      expect(result).toMatchObject({ history: { records: [{ id: "earlier", status: "denied" }] } });
+      ready.resolve();
+      await release.promise;
+      return result;
+    });
+  const resolve = (id: string) =>
+    store.resolveOperatorApproval({
+      id,
+      decision: "deny",
+      resolver: { kind: "device", id: "reviewer" },
+      nowMs: 2000,
+      databaseOptions,
+    });
+  const earlier = resolve("earlier");
+  let current = true;
+  const history = store.listTerminalOperatorApprovals({
+    nowMs: 3000,
+    databaseOptions,
+    assertCurrent() {
+      if (!current) {
+        throw new Error("synthetic history authority revoked");
+      }
+    },
+  });
+  const result = history.then(
+    (value) => ({ value }),
+    (error: unknown) => {
+      ready.reject(error);
+      return { error };
+    },
+  );
+  try {
+    await ready.promise;
+    expect(await earlier).toMatchObject({ outcome: "resolved" });
+    expect(await resolve("later")).toMatchObject({ outcome: "resolved" });
+    current = false;
+    release.resolve();
+    expect(await result).toMatchObject({ error: new Error("synthetic history authority revoked") });
+    observed.mockRestore();
+    const fresh = await store.listTerminalOperatorApprovals({ nowMs: 3000, databaseOptions });
+    expect(fresh.records.map((record) => record.id)).toEqual(["later", "earlier"]);
+  } finally {
+    release.resolve();
+    signal.removeEventListener("abort", unblock);
+    await Promise.allSettled([earlier, result]);
+  }
+});
+
+it("leaves the writer free while the host decides approval admission", async () => {
+  const databaseOptions = options();
+  openOpenClawStateDatabase(databaseOptions);
+  using contention = probe.writerLock(resolveOpenClawStateSqlitePath(databaseOptions.env));
+  probe.admission(workerAdmission, (request, grant, admit) => {
+    contention.observe(request.stage);
+    admit(request, grant);
+  });
+  await store.insertOperatorApproval({ approval: approval("contention"), databaseOptions });
+  expect(contention.observed).toEqual(["transaction:free", "commit:held"]);
+  expect(await store.listPendingOperatorApprovals({ nowMs: 2000, databaseOptions })).toEqual([
+    expect.objectContaining({ id: "contention" }),
+  ]);
 });

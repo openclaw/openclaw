@@ -51,94 +51,84 @@ export function seleneMoon(phaseIndex: number): JSX.Element {
   const phase = ((Math.round(phaseIndex) % 8) + 8) % 8;
   if (phase === 0) {
     return (
-      <>
-        <g class="lob-selene-moon">
-          <circle cx="60" cy="64" r="12" fill="#26304a" />
-          <circle cx="60" cy="64" r="11" fill="none" stroke="#f4f7fc" stroke-width="1" />
-        </g>
-      </>
+      <g class="lob-selene-moon">
+        <circle cx="60" cy="64" r="12" fill="#26304a" />
+        <circle cx="60" cy="64" r="11" fill="none" stroke="#f4f7fc" stroke-width="1" />
+      </g>
     );
   }
   if (phase === 4) {
     return (
-      <>
-        <g class="lob-selene-moon">
-          <circle cx="60" cy="64" r="12" fill="#26304a" />
-          <circle cx="60" cy="64" r="11" fill="#f4f7fc" />
-        </g>
-      </>
+      <g class="lob-selene-moon">
+        <circle cx="60" cy="64" r="12" fill="#26304a" />
+        <circle cx="60" cy="64" r="11" fill="#f4f7fc" />
+      </g>
     );
   }
   const darkOffset = phase < 4 ? [-5, -9, -14][phase - 1] : [14, 9, 5][phase - 5];
   return (
-    <>
-      <g class="lob-selene-moon">
-        <circle cx="60" cy="64" r="12" fill="#26304a" />
-        <circle cx="60" cy="64" r="11" fill="#f4f7fc" />
-        <circle cx={60 + (darkOffset ?? 0)} cy="64" r="11" fill="#26304a" />
-      </g>
-    </>
+    <g class="lob-selene-moon">
+      <circle cx="60" cy="64" r="12" fill="#26304a" />
+      <circle cx="60" cy="64" r="11" fill="#f4f7fc" />
+      <circle cx={60 + (darkOffset ?? 0)} cy="64" r="11" fill="#26304a" />
+    </g>
   );
 }
 
+// Main cells keep the palette variable so offline and mood-style tinting still read.
+const PIXEL_PARTS = staticSprite(`
+<g class="lob-pixel-antennae" fill="#d84c3e">
+  <rect x="30" y="0" width="6" height="6"></rect>
+  <rect x="36" y="6" width="6" height="6"></rect>
+  <rect x="42" y="12" width="6" height="6"></rect>
+  <rect x="84" y="0" width="6" height="6"></rect>
+  <rect x="78" y="6" width="6" height="6"></rect>
+  <rect x="72" y="12" width="6" height="6"></rect>
+</g>
+<g class="lob-pixel-claws">
+  <path d="M18 42 H6 V48 H0 V60 H6 V66 H18 V60 H24 V48 H18 Z M6 48 H12 V60 H6 Z" fill="#d84c3e"></path>
+  <rect x="6" y="60" width="12" height="6" fill="#a83428"></rect>
+  <path d="M102 42 H114 V48 H120 V60 H114 V66 H102 V60 H96 V48 H102 Z M108 48 H114 V60 H108 Z" fill="#d84c3e"></path>
+  <rect x="102" y="60" width="12" height="6" fill="#a83428"></rect>
+</g>
+<g class="lob-pixel-body" fill="var(--lob-shell, #d84c3e)">
+  <rect x="42" y="12" width="36" height="6"></rect>
+  <rect x="36" y="18" width="48" height="6"></rect>
+  <rect x="30" y="24" width="60" height="6"></rect>
+  <rect x="24" y="30" width="72" height="48"></rect>
+  <rect x="30" y="78" width="60" height="12"></rect>
+  <rect x="36" y="90" width="48" height="6"></rect>
+  <rect x="36" y="96" width="12" height="9"></rect>
+  <rect x="72" y="96" width="12" height="9"></rect>
+</g>
+<g fill="#ef8f6a">
+  <rect x="36" y="24" width="24" height="6"></rect>
+  <rect x="30" y="30" width="18" height="12"></rect>
+  <rect x="24" y="42" width="12" height="12"></rect>
+</g>
+<g fill="#a83428">
+  <rect x="30" y="78" width="60" height="12"></rect>
+  <rect x="36" y="90" width="48" height="6"></rect>
+  <rect x="36" y="96" width="12" height="9"></rect>
+  <rect x="72" y="96" width="12" height="9"></rect>
+</g>
+`);
+
 export function PIXEL_LOBSTER(props: LobsterEyeProps): JSX.Element {
   return (
-    <>
-      <g class="lob-pixel-frame" shape-rendering="crispEdges">
-        <g class="lob-pixel-antennae" fill="#d84c3e">
-          <rect x="30" y="0" width="6" height="6" />
-          <rect x="36" y="6" width="6" height="6" />
-          <rect x="42" y="12" width="6" height="6" />
-          <rect x="84" y="0" width="6" height="6" />
-          <rect x="78" y="6" width="6" height="6" />
-          <rect x="72" y="12" width="6" height="6" />
-        </g>
-        <g class="lob-pixel-claws">
-          <path
-            d="M18 42 H6 V48 H0 V60 H6 V66 H18 V60 H24 V48 H18 Z M6 48 H12 V60 H6 Z"
-            fill="#d84c3e"
-          />
-          <rect x="6" y="60" width="12" height="6" fill="#a83428" />
-          <path
-            d="M102 42 H114 V48 H120 V60 H114 V66 H102 V60 H96 V48 H102 Z M108 48 H114 V60 H108 Z"
-            fill="#d84c3e"
-          />
-          <rect x="102" y="60" width="12" height="6" fill="#a83428" />
-        </g>
-        {/* Main cells keep the palette variable so offline and mood-style tinting still read. */}
-        <g class="lob-pixel-body" fill="var(--lob-shell, #d84c3e)">
-          <rect x="42" y="12" width="36" height="6" />
-          <rect x="36" y="18" width="48" height="6" />
-          <rect x="30" y="24" width="60" height="6" />
-          <rect x="24" y="30" width="72" height="48" />
-          <rect x="30" y="78" width="60" height="12" />
-          <rect x="36" y="90" width="48" height="6" />
-          <rect x="36" y="96" width="12" height="9" />
-          <rect x="72" y="96" width="12" height="9" />
-        </g>
-        <g fill="#ef8f6a">
-          <rect x="36" y="24" width="24" height="6" />
-          <rect x="30" y="30" width="18" height="12" />
-          <rect x="24" y="42" width="12" height="12" />
-        </g>
-        <g fill="#a83428">
-          <rect x="30" y="78" width="60" height="12" />
-          <rect x="36" y="90" width="48" height="6" />
-          <rect x="36" y="96" width="12" height="9" />
-          <rect x="72" y="96" width="12" height="9" />
-        </g>
-        <g class="lob-eye-open" style={props.openEyeStyle}>
-          <rect x="42" y="30" width="6" height="6" fill="#0a1014" />
-          <rect x="72" y="30" width="6" height="6" fill="#0a1014" />
-          <rect x="42" y="30" width="2.5" height="2.5" fill="#fff" />
-          <rect x="72" y="30" width="2.5" height="2.5" fill="#fff" />
-        </g>
-        <g class="lob-eye-closed" style={props.closedEyeStyle} fill="#0a1014">
-          <rect x="42" y="33" width="6" height="3" />
-          <rect x="72" y="33" width="6" height="3" />
-        </g>
+    <g class="lob-pixel-frame" shape-rendering="crispEdges">
+      {PIXEL_PARTS()}
+      <g class="lob-eye-open" style={props.openEyeStyle}>
+        <rect x="42" y="30" width="6" height="6" fill="#0a1014" />
+        <rect x="72" y="30" width="6" height="6" fill="#0a1014" />
+        <rect x="42" y="30" width="2.5" height="2.5" fill="#fff" />
+        <rect x="72" y="30" width="2.5" height="2.5" fill="#fff" />
       </g>
-    </>
+      <g class="lob-eye-closed" style={props.closedEyeStyle} fill="#0a1014">
+        <rect x="42" y="33" width="6" height="3" />
+        <rect x="72" y="33" width="6" height="3" />
+      </g>
+    </g>
   );
 }
 
@@ -166,13 +156,11 @@ export const RETRO_ANTENNAE = staticSprite(`
 
 function browedFace(mouth: string): JSX.Element {
   return (
-    <>
-      <g stroke="#0a1014" stroke-linecap="round" fill="none">
-        <path d="M37 24 L51 28" stroke-width="3.5" />
-        <path d="M69 28 L83 24" stroke-width="3.5" />
-        <path d={mouth} stroke-width="3" />
-      </g>
-    </>
+    <g stroke="#0a1014" stroke-linecap="round" fill="none">
+      <path d="M37 24 L51 28" stroke-width="3.5" />
+      <path d="M69 28 L83 24" stroke-width="3.5" />
+      <path d={mouth} stroke-width="3" />
+    </g>
   );
 }
 
@@ -307,45 +295,29 @@ export const PASSER_SPRITES: Record<"crab" | "snail" | "duck" | "jellyfish", () 
   jellyfish: JELLYFISH_SPRITE,
 };
 
+const OPEN_BOTTLE = staticSprite(`
+<rect x="36" y="20" width="11" height="7" rx="1.5" fill="#f2e5c9" transform="rotate(-24 41 23)"></rect>
+<rect x="43" y="30" width="4.5" height="8" rx="1.6" fill="#8a5a2b" transform="rotate(38 45 34)"></rect>
+`);
+
 // While hovering, a closed bottle keeps its secret; opening swaps the title
 // to the fortune — the pet-name tooltip channel, so no i18n surface.
 export function BottleSvg(props: { opened: boolean }) {
   return (
-    <>
-      <svg class="lobster-bottle__svg" viewBox="0 0 48 44" aria-hidden="true">
-        <g transform="rotate(-16 24 30)">
-          <rect x="5" y="18" width="30" height="16" rx="7" fill="#7fc8b8" opacity="0.72" />
-          <rect x="33" y="22" width="9" height="8" rx="2.5" fill="#7fc8b8" opacity="0.72" />
-          {props.opened ? (
-            <>
-              <rect
-                x="36"
-                y="20"
-                width="11"
-                height="7"
-                rx="1.5"
-                fill="#f2e5c9"
-                transform="rotate(-24 41 23)"
-              />
-              <rect
-                x="43"
-                y="30"
-                width="4.5"
-                height="8"
-                rx="1.6"
-                fill="#8a5a2b"
-                transform="rotate(38 45 34)"
-              />
-            </>
-          ) : (
-            <rect x="41" y="21.5" width="5" height="9" rx="1.8" fill="#8a5a2b" />
-          )}
-          <rect x="11" y="22" width="12" height="8" rx="1.5" fill="#f2e5c9" />
-          <path d="M13 24.5 L21 24.5 M13 27 L19 27" stroke="#b6a071" stroke-width="1" />
-          <ellipse cx="13" cy="20.5" rx="5" ry="2" fill="#ffffff" opacity="0.35" />
-        </g>
-      </svg>
-    </>
+    <svg class="lobster-bottle__svg" viewBox="0 0 48 44" aria-hidden="true">
+      <g transform="rotate(-16 24 30)">
+        <rect x="5" y="18" width="30" height="16" rx="7" fill="#7fc8b8" opacity="0.72" />
+        <rect x="33" y="22" width="9" height="8" rx="2.5" fill="#7fc8b8" opacity="0.72" />
+        {props.opened ? (
+          OPEN_BOTTLE()
+        ) : (
+          <rect x="41" y="21.5" width="5" height="9" rx="1.8" fill="#8a5a2b" />
+        )}
+        <rect x="11" y="22" width="12" height="8" rx="1.5" fill="#f2e5c9" />
+        <path d="M13 24.5 L21 24.5 M13 27 L19 27" stroke="#b6a071" stroke-width="1" />
+        <ellipse cx="13" cy="20.5" rx="5" ry="2" fill="#ffffff" opacity="0.35" />
+      </g>
+    </svg>
   );
 }
 

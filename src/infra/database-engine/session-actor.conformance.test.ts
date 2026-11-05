@@ -4,6 +4,7 @@ import { appendSessionManagerActor } from "../../agents/sessions/session-manager
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
+  readTranscriptMutationAtSync,
   replaceSessionEntry,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
@@ -11,6 +12,7 @@ import { readTranscriptEventRows } from "../../config/sessions/session-accessor.
 import type { SessionActorAuthority } from "../../config/sessions/session-actor-contract.js";
 import { createSessionActorFactory } from "../../config/sessions/session-actor-durable.js";
 import { collectSessionAdmissionReferences } from "../../config/sessions/session-history-eviction-candidates.js";
+import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
 import { createReadonlySessionHistoryReader } from "../../gateway/session-history-readonly-reader.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -24,6 +26,16 @@ import {
 } from "./mixed-agent.conformance.test-support.js";
 
 const authority: SessionActorAuthority = { assertCurrent() {}, authorize() {} };
+const revokeAtCommit = (message: string): SessionActorAuthority => ({
+  assertCurrent() {},
+  authorize(stage) {
+    if (stage === "commit") {
+      throw new Error(message);
+    }
+  },
+});
+const openMainDatabase = () =>
+  withEngineStoreAdmission(() => openOpenClawAgentDatabase({ agentId: "main" }));
 
 describe
   .skipIf(!mixedAgentConnection)
@@ -33,9 +45,7 @@ describe
     const pair = useMixedAgentPair(stateEngine, agentEngine);
 
     it("protects admitted session keys and their previous generations during reclamation", async () => {
-      const database = withEngineStoreAdmission(() =>
-        openOpenClawAgentDatabase({ agentId: "main" }),
-      );
+      const database = openMainDatabase();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:admitted-é",
@@ -59,21 +69,19 @@ describe
     });
 
     it("reads cold compacted history and retains exact run visibility across a reset", async () => {
-      const database = withEngineStoreAdmission(() =>
-        openOpenClawAgentDatabase({ agentId: "main" }),
-      );
+      const database = openMainDatabase();
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:cold-history",
         sessionId: "cold-history",
         storePath: database.path,
       };
-      const messages: Array<[string, Record<string, unknown>]> = [
+      const input: Array<[string, string, string, Record<string, unknown>]> = [
         [
           "hidden-input",
+          "user",
+          "Internal checkpoint",
           {
-            role: "user",
-            content: "Internal checkpoint",
             idempotencyKey: "worker-run:user",
             provenance: {
               kind: "inter_session",
@@ -82,38 +90,29 @@ describe
             },
           },
         ],
-        [
-          "hidden-answer",
-          { role: "assistant", content: "Internal answer", __openclaw: { runId: "worker-run" } },
-        ],
-        [
-          "other-steer",
-          { role: "user", content: "Another run", __openclaw: { steerTargetRunId: "other-run" } },
-        ],
-        [
-          "still-hidden",
-          { role: "assistant", content: "Still internal", __openclaw: { runId: "worker-run" } },
-        ],
+        ["hidden-answer", "assistant", "Internal answer", { __openclaw: { runId: "worker-run" } }],
+        ["other-steer", "user", "Another run", { __openclaw: { steerTargetRunId: "other-run" } }],
+        ["still-hidden", "assistant", "Still internal", { __openclaw: { runId: "worker-run" } }],
         [
           "human-steer",
-          {
-            role: "user",
-            content: "Show progress",
-            __openclaw: { steerTargetRunId: "worker-run" },
-          },
+          "user",
+          "Show progress",
+          { __openclaw: { steerTargetRunId: "worker-run" } },
         ],
         [
           "visible-answer",
-          { role: "assistant", content: "Visible progress", __openclaw: { runId: "worker-run" } },
+          "assistant",
+          "Visible progress",
+          { __openclaw: { runId: "worker-run" } },
         ],
       ];
       await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       await appendTranscriptEvent(scope, { type: "session", version: 3, id: scope.sessionId });
-      for (const [index, [eventId, message]] of messages.entries()) {
+      for (const [index, [eventId, role, content, extra]] of input.entries()) {
         await appendTranscriptMessage(scope, {
           eventId,
-          parentId: messages[index - 1]?.[0] ?? null,
-          message,
+          parentId: input[index - 1]?.[0] ?? null,
+          message: { role, content, ...extra },
         });
       }
       for (const type of ["compaction", "reset"] as const) {
@@ -141,7 +140,7 @@ describe
           });
           const page = reader.readHistoryEventPage({ maxMessages: 20, offset: 0 });
           expect(page.events.map(({ event }) => event)).toEqual(
-            [...messages.map(([id]) => id), type].map((id) => expect.objectContaining({ id })),
+            [...input.map(([id]) => id), type].map((id) => expect.objectContaining({ id })),
           );
           const visibility = reader.subagentCoordination;
           expect(visibility.isSubagentRunMessage("worker-run", 2)).toBe(true);
@@ -180,51 +179,51 @@ describe
           { assertCurrent() {}, assertReadable() {} },
         );
         const scope = { ...options, storePath: database.path, sessionKey, sessionId };
+        const append = (input: Parameters<typeof appendSessionManagerActor>[0]["append"]) =>
+          appendSessionManagerActor({
+            actor,
+            toolResult: false,
+            message: input.kind === "message" ? { role: "user" } : null,
+            assertCurrent() {},
+            append: input,
+          });
         return {
           actor,
+          scope,
+          readMutationAt: () => withEngineStoreAdmission(() => readTranscriptMutationAtSync(scope)),
           append: (content: string, initialize = false) =>
-            appendSessionManagerActor({
-              actor,
-              toolResult: false,
-              assertCurrent() {},
-              append: {
-                kind: "message",
-                input: {
-                  scope,
-                  cwd: "/synthetic",
-                  messageJson: JSON.stringify({ role: "user", content, timestamp: 2 }),
-                },
-                ...(initialize
-                  ? { initialization: { scope, entry: { sessionId, updatedAt: 2 } } }
-                  : {}),
+            append({
+              kind: "message",
+              input: {
+                scope,
+                cwd: "/synthetic",
+                messageJson: JSON.stringify({ role: "user", content, timestamp: 2 }),
               },
+              ...(initialize
+                ? { initialization: { scope, entry: { sessionId, updatedAt: 2 } } }
+                : {}),
             }),
           appendInitialMetadata: (modelId: string) =>
-            appendSessionManagerActor({
-              actor,
-              toolResult: false,
-              assertCurrent() {},
-              append: {
-                kind: "metadata",
-                input: {
-                  scope,
-                  initialModel: {
-                    type: "model_change",
-                    id: modelId,
-                    parentId: null,
-                    timestamp: "1970-01-01T00:00:00.003Z",
-                    provider: "synthetic",
-                    modelId: "synthetic-model",
-                  },
-                  event: JSON.stringify({
-                    type: "thinking_level_change",
-                    id: "initial-thinking",
-                    parentId: modelId,
-                    timestamp: "1970-01-01T00:00:00.003Z",
-                    thinkingLevel: "high",
-                  }),
-                  options: { appendIntent: "active-branch" },
+            append({
+              kind: "metadata",
+              input: {
+                scope,
+                initialModel: {
+                  type: "model_change",
+                  id: modelId,
+                  parentId: null,
+                  timestamp: "1970-01-01T00:00:00.003Z",
+                  provider: "synthetic",
+                  modelId: "synthetic-model",
                 },
+                event: JSON.stringify({
+                  type: "thinking_level_change",
+                  id: "initial-thinking",
+                  parentId: modelId,
+                  timestamp: "1970-01-01T00:00:00.003Z",
+                  thinkingLevel: "high",
+                }),
+                options: { appendIntent: "active-branch" },
               },
             }),
         };
@@ -257,14 +256,7 @@ describe
               phaseId: "turn",
               reducers: [{ kind: "activity", updatedAt: 999 }],
             },
-            {
-              assertCurrent() {},
-              authorize(stage) {
-                if (stage === "commit") {
-                  throw new Error("synthetic live authority revocation");
-                }
-              },
-            },
+            revokeAtCommit("synthetic live authority revocation"),
           ),
         ).toMatchObject({
           kind: "rolled-back",
@@ -315,16 +307,93 @@ describe
         ]);
         const beforePartialPair = first.actor.snapshot(authority);
         assert(beforePartialPair);
+        expect(beforePartialPair.transcript.version).toMatchObject({
+          generation: afterRefusal.transcript.version.generation,
+          rawSeq: (afterRefusal.transcript.version.rawSeq ?? -1) + 2,
+        });
+        expect(beforePartialPair.transcript.version.updatedAt).toBeGreaterThan(
+          afterRefusal.transcript.version.updatedAt!,
+        );
+        expect(first.readMutationAt()).toBe(beforePartialPair.transcript.version.updatedAt);
         await expect(first.appendInitialMetadata("refused-model")).rejects.toThrow(
           "Initial thinking metadata was not persisted: transcript-event-not-appended",
         );
         expect(readRows()).toEqual(rowsBeforePartialPair);
         const afterPartialPair = await first.actor.read(authority);
         expect(afterPartialPair.entry).toEqual(beforePartialPair.entry);
+        expect(afterPartialPair.transcript.version).toEqual(beforePartialPair.transcript.version);
+        expect(first.readMutationAt()).toBe(beforePartialPair.transcript.version.updatedAt);
         expect(afterPartialPair.transcript.watermark).toEqual(
           beforePartialPair.transcript.watermark,
         );
         expect(afterPartialPair.pendingInputs).toEqual(beforePartialPair.pendingInputs);
+
+        const anchor = (
+          await readSessionTranscriptAnchorsAsync(first.scope, { entryIds: [firstMessageId] })
+        ).anchors[0];
+        assert(anchor);
+        const appendProjection = (text: string, liveAuthority = authority) =>
+          first.actor.appendTranscriptEvent(
+            {
+              commandId: "prompt-carrier",
+              phaseId: "turn",
+              append: {
+                kind: "metadata",
+                modelPromptProjection: { anchor, text },
+                input: {
+                  scope: first.scope,
+                  event: JSON.stringify({
+                    type: "custom_message",
+                    id: "runtime-context",
+                    parentId: "initial-thinking",
+                    timestamp: "1970-01-01T00:00:00.004Z",
+                    customType: "openclaw.runtime-context",
+                    content: "Synthetic runtime context",
+                    display: false,
+                    details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
+                  }),
+                  options: { appendIntent: "active-branch" },
+                },
+              },
+            },
+            liveAuthority,
+          );
+        expect(
+          await appendProjection(
+            "Refused prompt",
+            revokeAtCommit("synthetic fused authority revocation"),
+          ),
+        ).toMatchObject({
+          kind: "rolled-back",
+          error: { message: "synthetic fused authority revocation" },
+        });
+        expect(readRows()).toEqual(rowsBeforePartialPair);
+        const beforeFusion = await first.actor.read(authority);
+        expect(beforeFusion.transcript.version).toEqual(afterPartialPair.transcript.version);
+        const fused = await appendProjection("Captured input");
+        assert(fused.kind === "committed");
+        expect(fused.failure).toBeUndefined();
+        const transcript = fused.receipt.transcript;
+        expect(transcript.before).toEqual(beforeFusion.transcript.version);
+        expect(transcript.after.rawSeq).toBe((transcript.before.rawSeq ?? -1) + 1);
+        expect(transcript.after.generation).not.toBe(transcript.before.generation);
+        expect(transcript.append?.modelPromptProjection?.result.message).toMatchObject({
+          role: "user",
+          content: "first input",
+          __openclaw: { modelPromptProjection: { version: 1, text: "Captured input" } },
+        });
+        expect(transcript.appendedEvents?.map(({ event }) => event)).toMatchObject([
+          { id: "runtime-context", parentId: "initial-thinking" },
+        ]);
+        const finalAuthority = transcript.authorityReceipts?.[0]?.facts.get(sessionKey);
+        expect(finalAuthority).toMatchObject({
+          kind: "postimage",
+          value: { ...transcript.after, leafEventId: "runtime-context" },
+        });
+        expect(first.actor.snapshot(authority)?.transcript.version).toEqual(transcript.after);
+        const unchanged = await appendProjection("Captured input");
+        assert(unchanged.kind === "committed");
+        expect(unchanged.receipt.transcript.after).toEqual(transcript.after);
       } finally {
         await first.actor.release();
       }
@@ -337,12 +406,22 @@ describe
         expect((await reopened.append("continued input")).failure).toBeUndefined();
         expect(readRows().map((row) => JSON.parse(row.eventJson))).toMatchObject([
           { type: "session", id: sessionId },
-          { type: "message", message: { role: "user", content: "first input" } },
-          { type: "model_change", id: "initial-model" },
-          { type: "thinking_level_change", id: "initial-thinking", parentId: "initial-model" },
           {
             type: "message",
-            parentId: "initial-thinking",
+            message: {
+              role: "user",
+              content: "first input",
+              __openclaw: {
+                modelPromptProjection: { version: 1, text: "Captured input" },
+              },
+            },
+          },
+          { type: "model_change", id: "initial-model" },
+          { type: "thinking_level_change", id: "initial-thinking", parentId: "initial-model" },
+          { type: "custom_message", id: "runtime-context", parentId: "initial-thinking" },
+          {
+            type: "message",
+            parentId: "runtime-context",
             message: { role: "user", content: "continued input" },
           },
         ]);

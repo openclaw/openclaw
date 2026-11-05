@@ -2,6 +2,7 @@
 import type { UsersMentionableResult } from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import {
   composerFixture,
   mention,
@@ -33,7 +34,7 @@ it.each([
     "chat",
     "Review @Alex",
     [recipient],
-    history === "loading" ? "Loading chat" : undefined,
+    history === "loading" ? "Loading conversation…" : undefined,
   );
 
   view.edit(draft);
@@ -125,7 +126,9 @@ describe.each(["chat", "new-session"] as const)("%s human mentions", (kind) => {
     });
     it("retries a failed query without sending and handles selection before its result", async () => {
       const view = composerFixture(kind);
-      view.request.mockRejectedValueOnce(new Error("Directory unavailable"));
+      view.request.mockRejectedValueOnce(
+        new GatewayRequestError({ code: "UNAVAILABLE", message: "Directory unavailable" }),
+      );
       await view.search("@Al");
       expect(view.key("Enter").defaultPrevented).toBe(true);
       expect(view.send).not.toHaveBeenCalled();

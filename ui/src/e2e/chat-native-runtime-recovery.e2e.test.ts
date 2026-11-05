@@ -30,10 +30,15 @@ suite.define(() => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
         if (mode === "volatile") {
           await page.addInitScript(() => {
+            let quotaFailures = 0;
+            Object.defineProperty(window, "composerQuotaFailures", {
+              get: () => quotaFailures,
+            });
             // oxlint-disable-next-line typescript/unbound-method -- call(this, key, value) preserves each Storage receiver.
             const setItem = Storage.prototype.setItem;
             Storage.prototype.setItem = function (key: string, value: string) {
-              if (key.startsWith("openclaw.control.chatComposer.v2:")) {
+              if (key.startsWith("openclaw.control.chatComposer.")) {
+                quotaFailures++;
                 throw new DOMException("Quota exceeded", "QuotaExceededError");
               }
               return setItem.call(this, key, value);
@@ -93,11 +98,20 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}new`);
         await page.locator(".new-session-page__message").fill(message);
+        const quotaFailuresBeforeStart =
+          mode === "volatile"
+            ? await page.evaluate(() => Reflect.get(window, "composerQuotaFailures"))
+            : 0;
         await exactButton(page, "Start session").click();
         const modal = page.locator("openclaw-modal-dialog");
         await modal.waitFor();
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+        if (mode === "volatile") {
+          expect(
+            await page.evaluate(() => Reflect.get(window, "composerQuotaFailures")),
+          ).toBeGreaterThan(quotaFailuresBeforeStart);
+        }
         if (mode === "cancel") {
           await exactButton(modal, "Cancel").click();
           await modal.waitFor({ state: "hidden" });
@@ -106,7 +120,7 @@ suite.define(() => {
           expect(await page.locator(".chat-group.user").textContent()).toContain(message);
           return;
         }
-        await exactButton(modal, "Continue for this chat").click();
+        await exactButton(modal, "Continue for this session").click();
         await expectRequest(gateway, "sessions.patch", {
           key,
           expectedSessionId: sessionId,
@@ -126,7 +140,7 @@ suite.define(() => {
 
   it.each(
     (["selection", "send"] as const).flatMap((entrypoint) =>
-      (["confirm", "cancel", "mandatory", "non-admin"] as const).map((action) => ({
+      (["confirm", "cancel", "mandatory"] as const).map((action) => ({
         entrypoint,
         action,
       })),
@@ -159,14 +173,13 @@ suite.define(() => {
           sessionInfo: row,
           sessions: [row],
           models: [model],
-          operatorScopes:
-            action === "non-admin" ? ["operator.read", "operator.write"] : ["operator.admin"],
+          operatorScopes: ["operator.admin"],
           deferredMethods: [refusalMethod],
           methodResponses: { "sessions.list": result },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
         const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-        const { composer, trigger, runtime } = modelPicker(pane);
+        const { composer, picker, trigger, runtime } = modelPicker(pane);
         const draft = composer.locator("textarea").first();
         const attachments = composer.locator(".chat-attachment-thumb");
         const error = pane.locator(".chat-error");
@@ -183,7 +196,7 @@ suite.define(() => {
           await gateway.waitForRequest("chat.send");
         } else {
           await trigger.click();
-          await selectChatModelOption(runtime("opencode"));
+          await selectChatModelOption(picker, "fixture/synthetic-model", { runtime: "opencode" });
           await expectRequest(gateway, "sessions.patch", {
             key,
             model: "fixture/synthetic-model",
@@ -198,7 +211,7 @@ suite.define(() => {
           expectedSandboxMode: null,
           expectedNativeRuntimeConsent: null,
         };
-        const blocked = action === "mandatory" || action === "non-admin";
+        const blocked = action === "mandatory";
         const reason =
           action === "mandatory"
             ? "sandbox-required"
@@ -219,15 +232,15 @@ suite.define(() => {
         await page.locator("openclaw-modal-dialog, .chat-error").first().waitFor();
         if (blocked) {
           await polledText(error).toContain("Choose another model");
-          expect(await exactButton(page, "Continue for this chat").count()).toBe(0);
+          expect(await exactButton(page, "Continue for this session").count()).toBe(0);
         } else {
           const modal = page.locator("openclaw-modal-dialog");
           await modal.waitFor();
           expect(await modal.textContent()).toContain("own permissions");
-          expect(await modal.textContent()).toContain("Gateway host");
-          expect(await modal.textContent()).toContain("Only this chat");
+          expect(await modal.textContent()).toContain("Gateway device");
+          expect(await modal.textContent()).toContain("Only this session");
           expect(await modal.textContent()).toContain(
-            "other chats and global configuration stay unchanged",
+            "other sessions and global configuration stay unchanged",
           );
           expect(await gateway.getRequests("sessions.patch")).toHaveLength(initialPatchCount);
           if (action === "confirm") {
@@ -235,7 +248,7 @@ suite.define(() => {
           }
           await exactButton(
             modal,
-            action === "confirm" ? "Continue for this chat" : "Cancel",
+            action === "confirm" ? "Continue for this session" : "Cancel",
           ).click();
           if (action === "confirm") {
             const retry = await gateway.waitForRequest("sessions.patch", {

@@ -1,4 +1,6 @@
+import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
+import { GatewayRetainedWorkTimeoutError } from "../../shared/async-work-scope.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import {
   prepareClientVoiceSessionClose,
@@ -170,9 +172,15 @@ export function prepareTalkConnectionClose(
     async drain() {
       try {
         beginClose();
-        await pending;
-      } finally {
+        // Cleanup is itself retained. Join the bounded owner first so a provider
+        // ignoring abort cannot hide its unsettled custody behind this promise.
         await persistence.drain();
+        await pending;
+      } catch (error) {
+        if (error instanceof GatewayRetainedWorkTimeoutError) {
+          log.warn(error.message);
+        }
+        throw error;
       }
     },
   };
@@ -191,12 +199,7 @@ async function closeTalkConnections(connIds: Iterable<string>): Promise<void> {
     }
   }
   const results = await Promise.allSettled(pending);
-  const failures = results.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-  if (failures.length > 0) {
-    throw new AggregateError(failures, "Talk provider cleanup did not complete");
-  }
+  throwSettledAggregate(results, "Talk provider cleanup did not complete");
 }
 
 export function rememberUnifiedTalkSession(

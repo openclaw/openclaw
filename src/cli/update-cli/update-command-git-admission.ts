@@ -1,11 +1,6 @@
 import { inspectSourceUpdateArtifacts } from "../../../scripts/lib/source-update-artifact-preflight.mts";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { UpdateRunnerOptions } from "../../infra/update-runner-types.js";
-import { assertReadableGitMetadata } from "./schema-preflight.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
-import type { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
-
-type BeforeGitMutation = NonNullable<UpdateRunnerOptions["beforeGitMutation"]>;
 
 export async function admitSourceUpdateArtifacts(
   root: string,
@@ -26,17 +21,4 @@ export async function admitSourceUpdateArtifacts(
       cause,
     });
   }
-}
-
-export async function recordInspectedGitTarget(
-  target: Parameters<BeforeGitMutation>[0],
-  recordPhase: ReturnType<typeof createUpdateCommandExecutionGuards>["recordPhase"],
-  assertCurrent: () => void | Promise<void>,
-): Promise<void> {
-  await assertCurrent();
-  await recordPhase("staging", {
-    target: { kind: "git", sha: target.sha, version: target.version },
-  });
-  await assertCurrent();
-  assertReadableGitMetadata(target.metadataUnreadable);
 }

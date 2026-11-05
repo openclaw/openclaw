@@ -28,58 +28,50 @@ it.skipIf(process.platform === "win32").each(["consume", "cancel"] as const)(
       }, 10);
     `;
     const supervisor = createProcessSupervisor();
-    const scope = `relay-${path.basename(cwd)}`;
-    const closeScope = supervisor.acquireScopeCleanup(scope, { processTree: "required-all" });
-    const observed = { stdout: "", stderr: "" };
+    const closeScope = supervisor.acquireScopeCleanup(cwd, { processTree: "required-all" });
+    const observed = { stdout: "", stderr: "", launchGrants: 0, ready: false };
     const nativeAdmission = createDeferredCore();
-    let launchGrants = 0;
-    let ready = false;
     const starting = supervisor.spawn({
       mode: "child",
-      scopeKey: scope,
+      scopeKey: cwd,
       argv: [process.execPath, "-e", script],
       cwd,
       stdinMode: "pipe-closed",
       timeoutMs: 10_000,
       secretInput: { fd: 3, createData: () => secret },
       initiateSpawn(launch, settlement) {
-        launchGrants++;
+        observed.launchGrants++;
         if (!settlement) {
           throw new Error("Relay launch did not retain native admission");
         }
         void settlement.then(() => nativeAdmission.resolve(), nativeAdmission.reject);
         return launch();
       },
-      onStdout: (chunk) => {
-        observed.stdout += chunk;
-      },
-      onStderr: (chunk) => {
-        observed.stderr += chunk;
-      },
+      onStdout: (chunk) => (observed.stdout += chunk),
+      onStderr: (chunk) => (observed.stderr += chunk),
     });
-    void starting.then(() => {
-      ready = true;
-    }, nativeAdmission.reject);
+    void starting.then(() => (observed.ready = true), nativeAdmission.reject);
     try {
       await nativeAdmission.promise;
-      expect(launchGrants).toBe(1);
+      expect(observed.launchGrants).toBe(1);
       await expect
         .poll(() => observed, { timeout: 5_000 })
         .toEqual({
           stdout: body,
           stderr: "stderr tail\n",
+          launchGrants: 1,
+          ready: false,
         });
-      expect(ready).toBe(false);
       if (operation === "consume") {
         writeFileSync(release, "consume");
       } else {
-        supervisor.cancelScope(scope);
+        supervisor.cancelScope(cwd);
       }
-      const run = await starting;
-      const result = await run.wait();
-      expect(result.reason).toBe(operation === "consume" ? "exit" : "manual-cancel");
-      expect(result.stdout).toBe(body + (operation === "consume" ? expectedHash : ""));
-      expect(result.stderr).toBe("stderr tail\n");
+      expect(await (await starting).wait()).toMatchObject({
+        reason: operation === "consume" ? "exit" : "manual-cancel",
+        stdout: body + (operation === "consume" ? expectedHash : ""),
+        stderr: "stderr tail\n",
+      });
       expect(secret.every((byte) => byte === 0)).toBe(true);
       if (operation === "consume") {
         await closeScope();
@@ -88,7 +80,7 @@ it.skipIf(process.platform === "win32").each(["consume", "cancel"] as const)(
       }
     } finally {
       writeFileSync(release, "consume");
-      supervisor.cancelScope(scope);
+      supervisor.cancelScope(cwd);
       await starting.then(
         (run) => run.wait(),
         () => undefined,

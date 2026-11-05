@@ -24,6 +24,7 @@ import type {
   TrustedAgentToolCaller,
 } from "../../gateway/server-methods/types.js";
 import {
+  captureOperatorToolGatewayContinuationContext,
   dispatchGatewayMethodInProcess,
   getInProcessGatewayRequestContext,
   runWithOperatorToolGatewayCleanupContext,
@@ -31,13 +32,17 @@ import {
 } from "../../gateway/server-plugin-in-process-dispatch.js";
 import type { TrustedSessionCreation } from "../../gateway/session-creation-provenance.js";
 import { bindSessionSendDeliveryContext } from "../../gateway/session-send-delivery.js";
-import { isGatewayWorkerApprovalMethod } from "../../infra/approval-gateway-runtime-methods.js";
+import {
+  isGatewayWorkerApprovalMethod,
+  isHostPluginApprovalMethod,
+} from "../../infra/approval-gateway-runtime-methods.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { readQuestionDispatchCapability } from "../harness/host-private-capabilities.js";
 import type { ReplyExpectation } from "../reply-completion.js";
+import { requesterCreatorProfileId } from "../requester-origin.js";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
@@ -53,6 +58,10 @@ type InProcessGatewayCallOptions = {
   sessionMutationCommitGuard?: () => void;
   signal?: AbortSignal;
   timeoutMs?: number | null;
+  /** False when a committed result belongs to its target rather than the requesting turn. */
+  revalidateOnCompletion?: boolean;
+  /** Spawn creation only: the requesting tool's fence, checked by the Gateway at commit. */
+  requesterCommitGuard?: () => void;
 };
 
 export type InProcessGatewayCaller = <T = Record<string, unknown>>(
@@ -71,6 +80,7 @@ type AgentToolGatewayRequest = Pick<
   | "onAccepted"
   | "onSignalAbort"
   | "params"
+  | "sharedStateMode"
   | "signal"
   | "scopes"
   | "timeoutMs"
@@ -128,8 +138,24 @@ export function runWithGatewayToolCleanupContext<T>(
 }
 
 /** Transfers accepted reply work to a bounded source-authority hold, not the tool lifetime. */
-export function runWithGatewayToolContinuationContext<T>(run: () => Promise<T>): Promise<T> {
+export async function runWithGatewayToolContinuationContext<T>(
+  run: () => Promise<T>,
+  options?: { retainRequester?: true },
+): Promise<T> {
   const resolveGatewayContext = callerGatewayContextResolver();
+  if (options?.retainRequester) {
+    const preparation = captureOperatorToolGatewayContinuationContext(undefined, {
+      retainRequester: true,
+    });
+    if (preparation) {
+      const captured = await preparation;
+      try {
+        return await captured.runWithRequester(run);
+      } finally {
+        captured.release();
+      }
+    }
+  }
   return runWithOperatorToolGatewayContinuationContext(() =>
     withoutGatewayToolCallerIdentity(() =>
       resolveGatewayContext
@@ -339,7 +365,7 @@ async function callAgentToolGatewayRequestBound<T>(
     ...(request.replyExpectation ? { replyExpectation: request.replyExpectation } : {}),
     forceSyntheticClient: true,
     operatorRoleActor: { kind: "system" as const },
-    ...(method === "plugin.approval.request" && runtimeIdentity?.approvalOwnerPluginId
+    ...(isHostPluginApprovalMethod(method) && runtimeIdentity?.approvalOwnerPluginId
       ? { allowHostPluginApprovalRequest: true }
       : {}),
     ...(request.agentRunTracking ? { agentRunTracking: request.agentRunTracking } : {}),
@@ -447,7 +473,12 @@ async function callInProcessGatewayToolBound<T>(
           executionIdentityToken: caller.executionIdentityToken,
           requesterOrigin: resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true })
             .requesterOrigin,
-          assertCurrent: assertCallerCurrent,
+          assertCurrent: options.requesterCommitGuard
+            ? () => {
+                assertCallerCurrent();
+                options.requesterCommitGuard?.();
+              }
+            : assertCallerCurrent,
         }
       : undefined;
   return await callAgentToolGatewayRequestBound<T>(
@@ -463,7 +494,7 @@ async function callInProcessGatewayToolBound<T>(
     undefined,
     assertCallerCurrent,
     false,
-    true,
+    options.revalidateOnCompletion ?? true,
     {
       sessionCreation: options.sessionCreation,
       onExecution: options.onExecution,
@@ -523,7 +554,11 @@ export async function callInProcessGatewayToolWithCreation<T = Record<string, un
   creation: TrustedSessionCreation,
   options: Omit<InProcessGatewayCallOptions, "onExecution"> = {},
 ): Promise<T> {
-  const requesterProfileId = resolveGatewayToolOperatorSelection().operatorAuthority?.profileId;
+  // Selected operators retain responsibility; linked nonadmins contribute identity, not authority.
+  const requesterProfileId =
+    resolveGatewayToolOperatorSelection().operatorAuthority?.profileId ??
+    creation.requesterProfileId ??
+    requesterCreatorProfileId(getGatewayToolCallerIdentity()?.requesterOrigin);
   const trustedCreation =
     creation.via === "spawn" && requesterProfileId ? { ...creation, requesterProfileId } : creation;
   return await callInProcessGatewayToolBound(method, params, {

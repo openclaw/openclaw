@@ -1,19 +1,15 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SessionControllerInput } from "../../../sessions/session-controller.contracts.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
+import type { captureSubagentCommands } from "./subagent-control-commands.js";
+import type { SubagentKillSession } from "./subagent-control-session.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export type KillScope = {
   cancellationControl: SubagentCancellationControl;
   refresh: () => Promise<number>;
   sealRootSelection: () => void;
   stateContext: OpenClawStateWorkerContext;
-};
-
-export type KillPublicationPreparation<T> = {
-  prepare: (
-    publish: (prepareRows?: (publishResult: () => void) => Promise<void>) => Promise<void>,
-  ) => Promise<void>;
-  publishSnapshot?: (result: T) => void;
 };
 
 /** Exact source/target references retained across a kill's admission cleanup. */
@@ -82,4 +78,21 @@ export type SubagentRunKillResult = {
   targetState?: SubagentKillTargetState;
   error?: string;
   completedCleanupError?: string;
+};
+
+export type SubagentRunKillParams = {
+  entry: SubagentRunRecord;
+  session: SubagentKillSession;
+  stateContext: OpenClawStateWorkerContext;
+  cancellationControl: SubagentCancellationControl;
+  /** A requester-wide Stop or reset, or a cascade below a cancelled root: nothing is owed. */
+  suppressTaskDelivery?: boolean;
+  onCancelled?: (entry: SubagentRunRecord) => void;
+  exactRunSelection?: boolean;
+  commands?: ReturnType<typeof captureSubagentCommands>;
+  beforeSessionKill?: () => boolean | Promise<boolean>;
+  requiredSessionId?: string;
+  isCurrent: (entry: SubagentRunRecord, requirePreparedSession?: boolean) => boolean;
+  withdrawQueuedReservation: () => void;
+  refreshDescendants: () => Promise<number>;
 };

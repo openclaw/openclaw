@@ -11,7 +11,11 @@ export type { SecretInput } from "../config/types.secrets.js";
 export type { SecretInputMode } from "../plugins/provider-auth-types.js";
 export type { ProviderAuthResult } from "../plugins/types.js";
 export type { ProviderAuthContext } from "../plugins/types.js";
-export type { AuthProfileStore, OAuthCredential } from "../agents/auth-profiles/types.js";
+export type {
+  AuthProfileCredential,
+  AuthProfileStore,
+  OAuthCredential,
+} from "../agents/auth-profiles/types.js";
 
 export { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 export { normalizeGithubCopilotDomain, resolveAuthProfileOrder };
@@ -30,6 +34,7 @@ export {
   ensureAuthProfileStoreAsync,
   ensureAuthProfileStoreForLocalUpdate,
   ensureAuthProfileStoreForLocalUpdateAsync,
+  loadAuthProfileStoreForRuntimeAsync,
 } from "../agents/auth-profiles/store-runtime.js";
 export {
   listProfilesForProvider,

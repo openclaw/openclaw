@@ -58,7 +58,7 @@ it("saves a newer edit after route teardown while an older save is in flight", a
   firstPage.read().overview.onIdentityFieldChange("name", "Second name");
   firstPage.dispose();
   const secondPage = createAgentsPage(context);
-  expect(secondPage.read().overview.identityDraft.name).toBe("Second name");
+  expect(secondPage.read().readData().identityDraft.name).toBe("Second name");
   expect(request).toHaveBeenCalledTimes(1);
 
   firstUpdate.resolve({});
@@ -81,7 +81,7 @@ it("does not replay a retained draft into a different Gateway", () => {
   const secondClient = { request: secondRequest } as unknown as GatewayBrowserClient;
   Object.assign(context, { gateway: gateway(snapshot(secondClient)) });
   const secondPage = createAgentsPage(context);
-  expect(secondPage.read().overview.identityDraft.name).toBeNull();
+  expect(secondPage.read().readData().identityDraft.name).toBeNull();
   expect(secondRequest).not.toHaveBeenCalledWith("agents.update", expect.anything());
 });
 
@@ -95,6 +95,6 @@ it("does not restore an unmounted draft after the operator profile changes", () 
 
   context.gateway.snapshot.selfUser = { id: "second-operator" };
   const secondPage = createAgentsPage(context);
-  expect(secondPage.read().overview.identityDraft.name).toBeNull();
+  expect(secondPage.read().readData().identityDraft.name).toBeNull();
   expect(request).not.toHaveBeenCalledWith("agents.update", expect.anything());
 });

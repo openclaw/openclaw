@@ -45,21 +45,14 @@ function executableIdentity(execPath: string): string | undefined {
   }
 }
 
-function accessExecutable(execPath: string): void {
-  accessSync(execPath, constants.X_OK);
-}
-
-export function readChildRuntimeViability(params?: {
-  execPath?: string;
-  access?: (execPath: string) => void;
-}): ChildRuntimeViability {
+export function readChildRuntimeViability(params?: { execPath?: string }): ChildRuntimeViability {
   const execPath = params?.execPath ?? process.execPath;
   if (runtime.execPath === execPath && runtime.failure) {
     return { execPath, available: false };
   }
   let available = true;
   try {
-    (params?.access ?? accessExecutable)(execPath);
+    accessSync(execPath, constants.X_OK);
   } catch (error) {
     available = !(hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR"));
     if (!available) {

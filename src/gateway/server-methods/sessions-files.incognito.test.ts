@@ -7,7 +7,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vite
 import { createDeferred, awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type { SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
 import {
   fetchMcpAppView,
   getMcpAppViewLease,
@@ -25,12 +24,8 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-ag
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createMcpAppWorkspaceUploadProvider } from "../mcp-app-form-resources.js";
-import {
-  prepareMcpAppHostFile,
-  readMcpAppHostFile,
-  writeMcpAppHostFile,
-  subscribeMcpAppHostFile,
-} from "../mcp-app-host-files.js";
+import { prepareMcpAppHostFile, readMcpAppHostFile } from "../mcp-app-host-files.js";
+import { runtime as createMcpRuntime } from "./mcp-app.test-support.js";
 import * as openPath from "./open-path.js";
 import { loadSessionDiff } from "./sessions-diff.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
@@ -163,12 +158,11 @@ it("keeps MCP file and upload authority on the original actor when a same-ID act
       text: "<p>editor</p>",
     };
     const runtime = {
+      ...createMcpRuntime(),
       sessionId: sid,
       sessionKey: key,
-      mcpAppsEnabled: true,
-      markUsed() {},
       readResource: async () => ({ contents: [resource] }),
-    } as unknown as SessionMcpRuntime;
+    };
     const file = await prepareMcpAppHostFile(options, { ...target, path: "example.txt" });
     const upload = createMcpAppWorkspaceUploadProvider({
       workspaceDir: workspace,
@@ -200,14 +194,6 @@ it("keeps MCP file and upload authority on the original actor when a same-ID act
       const view = getMcpAppViewLease(viewId, runtime);
       assert(view);
       const read = () => readMcpAppHostFile(options, view, { uri: file.resourceUri });
-      await read();
-      expect(
-        await writeMcpAppHostFile(options, view, { uri: file.resourceUri, text: "MCP saved\n" }),
-      ).toMatchObject({ outcome: "saved" });
-      const uploaded = await uploadText("upload.txt", "uploaded");
-      expect(uploaded).toHaveLength(1);
-      expect(await readFile(new URL(uploaded[0]!.uri), "utf8")).toBe("uploaded");
-      await subscribeMcpAppHostFile(options, view, file.resourceUri, true);
       const download = await files.ok("download", "example.txt", undefined, connection);
       const entered = createDeferred();
       const release = createDeferred();

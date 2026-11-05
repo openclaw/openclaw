@@ -28,9 +28,7 @@ export const ConfigSchema = Type.Object(
 );
 
 type RuntimeSnapshot = ReturnType<OpenClawPluginApi["runtime"]["config"]["current"]>;
-export type ModelProviderConfig = NonNullable<
-  NonNullable<RuntimeSnapshot["models"]>["providers"]
->[string];
+type ModelProviderConfig = NonNullable<NonNullable<RuntimeSnapshot["models"]>["providers"]>[string];
 export type RuntimeConfig = {
   apiKey?: string;
   baseUrl?: string;

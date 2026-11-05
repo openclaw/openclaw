@@ -336,7 +336,7 @@ export function isSessionMutationActive(
 export function hasOnlySessionMutationKindActive(
   scope: string,
   identities: Iterable<string | undefined>,
-  kind: "compaction",
+  kind: "compaction" | "read-marker" | "background-result",
 ): boolean {
   const mutations = matchingEntries(targetFrom({ scope, identities })).flatMap(
     (entry) => entry.lifecycle?.mutations.filter((mutation) => mutation.phase === "active") ?? [],

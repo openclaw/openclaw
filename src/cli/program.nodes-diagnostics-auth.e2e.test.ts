@@ -79,6 +79,22 @@ describe("cli program (nodes diagnostics auth)", () => {
       },
     },
     {
+      label: "role policies reject the stored device identity",
+      argv: [],
+      displayName: "Password Auth Node",
+      local: false,
+      storedError: requestError(
+        "operator role policies require a verified user identity",
+        "INVALID_REQUEST",
+        "AUTH_VERIFIED_USER_REQUIRED",
+      ),
+      backendError: gatewayError(
+        "local backend shared auth unavailable for trusted-proxy",
+        "GatewayLocalBackendSharedAuthUnavailableError",
+      ),
+      response: nodeResponse("password-auth-node", "Password Auth Node"),
+    },
+    {
       label: "remote explicit credentials",
       argv: ["--url", "wss://gateway.example.test", "--token", "explicit-token"],
       displayName: "Remote Read Only Node",

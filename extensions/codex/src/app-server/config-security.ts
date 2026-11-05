@@ -201,8 +201,6 @@ export function resolveDefaultCodexAppServerPolicy(params: {
   execModeRequiringUserReviewer?: OpenClawExecMode;
   env?: NodeJS.ProcessEnv;
   requirementsToml?: string | null;
-  requirementsPath?: string;
-  readRequirementsFile?: (path: string) => string | undefined;
   platform?: NodeJS.Platform;
   hostName?: string;
 }): CodexAppServerDefaultPolicy {

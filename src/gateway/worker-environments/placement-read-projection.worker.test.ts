@@ -39,7 +39,7 @@ import {
   writePlacementEnvironmentFixture,
 } from "./placement-test-fixtures.js";
 import { stagePlacementTurnClaimWorkerPublication } from "./placement-turn-authority.js";
-import { matchesWorkspaceResultClaim } from "./placement-workspace-result.js";
+import { matchesWorkspaceResultClaim } from "./placement-workspace-result-owner.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 import { prepareSessionWorkerPlacementMutationCheckAsync } from "./session-placement-lifecycle.js";
 import { createWorkerEnvironmentStore } from "./store.js";
@@ -262,18 +262,51 @@ it("publishes retention without host SQL and fences drained dispatch", async () 
   }
 });
 
-it.each(["local", "worker-turn", "remote-exec"] as const)(
+it("keeps local owner claims current in worker-backed reader snapshots", async () => {
+  const store = createWorkerSessionPlacementStore({ database });
+  const session = sessionIdentity("local-reader-placement");
+  const claim = await store.claimTurn({
+    ...session,
+    owner: { kind: "local" },
+    claimId: "local-reader-claim",
+    runId: "local-reader-run",
+  });
+  const readPlacements = async () => [
+    (await store.readProjection([session.sessionId, "absent"], { current: true })).placements.get(
+      session.sessionId,
+    ),
+    (await store.listAsync()).find((placement) => placement.sessionId === session.sessionId),
+    (await store.getWithMoveAsync(session.sessionId)).placement,
+  ];
+  const sessionRead = await store.prepareRuntimeRefresh(session.sessionId);
+  try {
+    sessionRead.placement!.agentId = "caller-agent";
+    sessionRead.placement!.turnClaim!.claimId = "caller-claim";
+    for (const placement of await readPlacements()) {
+      expect(placement).toMatchObject({
+        ...session,
+        turnClaim: { claimId: "local-reader-claim" },
+      });
+    }
+    await store.releaseTurn(claim);
+    expect(() => sessionRead.assertCurrent()).toThrow("placement authority changed");
+    for (const placement of await readPlacements()) {
+      expect(placement).toMatchObject({ ...session, turnClaim: null });
+    }
+  } finally {
+    sessionRead.release();
+  }
+});
+
+it.each(["worker-turn", "remote-exec"] as const)(
   "fences observations during %s publication settlement",
   async (kind) => {
     const store = createWorkerSessionPlacementStore({ database });
     const session = sessionIdentity("settling-placement");
-    if (kind !== "local") {
-      await activePlacement(session.sessionId, kind);
-    }
-    const current = await store.getAsync(session.sessionId);
+    const { placement: current } = await activePlacement(session.sessionId, kind);
     await store.claimTurn({
       ...session,
-      owner: current?.state === "active" ? placementTurnOwner(current) : { kind: "local" },
+      owner: placementTurnOwner(current),
       claimId: "settling-claim",
       runId: "settling-run",
     });
@@ -288,6 +321,11 @@ it.each(["local", "worker-turn", "remote-exec"] as const)(
         placement.state,
       );
       try {
+        sessionRead.placement!.agentId = "caller-agent";
+        sessionRead.placement!.turnClaim!.claimId = "caller-claim";
+        expect(
+          (await store.readProjection([session.sessionId])).placements.get(session.sessionId),
+        ).toMatchObject({ agentId: session.agentId, turnClaim: { claimId: "settling-claim" } });
         expect(() => sessionRead.assertCurrent()).toThrow("placement authority changed");
         publication[settlement]();
         if (settlement === "rollback") {
@@ -310,10 +348,15 @@ it.each(["local", "worker-turn", "remote-exec"] as const)(
   },
 );
 
-it("derives inference without rewriting its bound snapshot", async () => {
+it("derives inference from an environment with a recorded resource receipt", async () => {
   const sessionId = "snapshot-worker";
   const environmentId = "environment-" + sessionId;
   const profileSnapshot = { settings: { device: "paired-node", inference: "worker" } };
+  const resourceReceipt = {
+    version: 1 as const,
+    leaseId: `lease:${environmentId}`,
+    identity: { resourceId: "resource-1" },
+  };
   writePlacementEnvironmentFixture(database, {
     environmentId,
     state: "attached",
@@ -323,6 +366,7 @@ it("derives inference without rewriting its bound snapshot", async () => {
     profileId: "named-device",
     nodeDeviceId: "paired-node",
     profileSnapshot,
+    resourceReceipt,
   });
   const { store, placement } = await activePlacement(sessionId);
   const snapshot = await store.readProjection([sessionId]);
@@ -359,6 +403,7 @@ it("discovers disk probes off thread before sampling", async () => {
   let discoverySql: string[] | undefined;
   const requestedEnvironments: string[] = [];
   const warn = vi.fn();
+  using _ = vi.spyOn(Date, "now").mockReturnValue(2000);
   const monitor = createWorkerPlacementDiskSpaceMonitor({
     placements: store,
     runnerAvailability: { read: () => undefined, version: () => 0 },
@@ -378,7 +423,6 @@ it("discovers disk probes off thread before sampling", async () => {
       },
     },
     warn,
-    now: () => 2000,
   });
   await monitor.sweep();
 
@@ -524,7 +568,7 @@ it.each([false, true])(
       "journal-stale",
       "result-reclaimed",
     ].map((sessionId) => {
-      const pending: WorkerWorkspacePendingResult = {
+      const pending: Omit<WorkerWorkspacePendingResult, "repositoryDiskAuthority"> = {
         sessionId,
         environmentId: `env-${sessionId}`,
         ownerEpoch: sessionId === "journal-stale" ? 8 : 7,
@@ -618,11 +662,13 @@ it.each([false, true])(
       state: "local",
       environmentId: null,
       moveSourceEnvironmentId: "source-move-z-local",
+      workspaceRecoveryPending: true,
     });
     expect(candidates.find((candidate) => candidate.sessionId === "journal-draining")).toEqual({
       sessionId: "journal-draining",
       state: "draining",
       environmentId: "env-journal-draining",
+      workspaceRecoveryPending: true,
     });
     counters.expectIdle();
     db.prepare("UPDATE worker_session_placements SET updated_at_ms = ? WHERE session_id = ?").run(

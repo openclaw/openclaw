@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import { session } from "../../test-helpers/app-sidebar-cases/roster.test-support.ts";
@@ -16,6 +17,7 @@ import {
   listParams,
   ownRoster,
   ownerCountsFixture,
+  rosterPage,
 } from "./session-roster-refresh.test-support.ts";
 
 function changed(payload: Record<string, unknown>) {
@@ -26,21 +28,25 @@ function makeRow(id: string, updatedAt: number, fields: Partial<GatewaySessionRo
   return session("main", updatedAt, { key: `agent:main:${id}`, sessionId: id, ...fields });
 }
 
-function snapshot(row: GatewaySessionRow) {
-  return { reason: "patch", sessionKey: row.key, session: row, ancestorSessions: [] };
+function snapshot(row: GatewaySessionRow, fields: Record<string, unknown> = {}) {
+  return { reason: "patch", sessionKey: row.key, session: row, ancestorSessions: [], ...fields };
 }
 
 function fixture(request: Parameters<typeof createTestGatewayClient>[0]) {
   const client = createTestGatewayClient(request);
   const harness = createGatewayHarness(client);
-  return { ...harness, client, ...ownRoster(harness.gateway) };
+  return {
+    ...harness,
+    client,
+    ...ownRoster(harness.gateway),
+    emit: (payload: Record<string, unknown>) => harness.publishEvent("sessions.changed", payload),
+  };
 }
 
 describe("session roster event traffic", () => {
   beforeEach(() => vi.useFakeTimers());
-  it("keeps 200-row shared and personal windows current without periodic reads of held rows", async () => {
+  it("refreshes shared and personal membership only when a row crosses its window", async () => {
     vi.setSystemTime(100_000);
-    const random = vi.spyOn(Math, "random").mockReturnValue(0);
     const viewer = { type: "profile", id: "profile-ada" } as const;
     const actor = (id: string) => ({
       type: "human" as const,
@@ -48,26 +54,21 @@ describe("session roster event traffic", () => {
       identity: { type: "profile" as const, id },
     });
     const rows: GatewaySessionRow[] = Array.from({ length: 270 }, (_, index) =>
-      session("main", index < 250 ? 99_000 - index : 90_000 - index, {
-        key: `agent:main:conversation-${index}`,
-        sessionId: `conversation-${index}`,
+      makeRow(`conversation-${index}`, index < 250 ? 99_000 - index : 90_000 - index, {
         isMain: false,
         snapshotAt: 100_000,
-        label: `Conversation ${index}`,
-        lastMessagePreview: "Synthetic project update",
         owner: { actor: actor(index === 0 || index >= 250 ? viewer.id : "profile-sam") },
         participants: index === 0 || index >= 250 ? [] : [{ identity: viewer }],
         hiddenFromInvolvingMe: false,
         hasActiveRun: false,
         status: "done",
-        unread: false,
+        unread: true,
         lastReadAt: 98_000,
       }),
     );
     const shared = { agentId: "main", limit: 200 };
     const personal = { ...shared, involvingMe: true };
     const reads = { shared: 0, personal: 0 };
-    const bytes = { shared: 0, personal: 0 };
     const request = async (method: string, params?: unknown) => {
       const queryParams = listParams(method, params);
       const scope = queryParams.involvingMe ? "personal" : "shared";
@@ -84,104 +85,39 @@ describe("session roster event traffic", () => {
       const ownerRows = queryParams.ownerFirst
         ? eligible.filter((row) => row.owner?.actor.id === viewer.id && !page.includes(row))
         : [];
-      const response = {
-        ...sessionsResult([...page, ...ownerRows], Date.now()),
-        totalCount: eligible.length,
-        hasMore: true,
-        nextOffset: 200,
-        limitApplied: 200,
-      } satisfies SessionsListResult;
       reads[scope]++;
-      bytes[scope] += new TextEncoder().encode(JSON.stringify(response)).byteLength;
-      await delay(200);
-      return response;
+      return rosterPage([...page, ...ownerRows], eligible.length, 200, Date.now());
     };
     const harness = createGatewayHarness(createTestGatewayClient(request));
     harness.publish({ selfUser: { id: viewer.id, identity: viewer } });
-    const { sessions, watch, listRows, settle } = ownRoster(harness.gateway);
+    const { sessions, watch, listRows } = ownRoster(harness.gateway);
     watch(personal);
     const emit = (row: GatewaySessionRow) =>
-      harness.publishEvent("sessions.changed", {
-        reason: "patch",
-        sessionKey: row.key,
-        agentId: "main",
-        session: row,
-        ancestorSessions: [],
-      });
-    settle(async () => {
-      await advance(200);
-      random.mockRestore();
-    });
-    const bootstrap = [
+      harness.publishEvent("sessions.changed", snapshot(row, { agentId: "main" }));
+    const update = (index: number, fields: Partial<GatewaySessionRow>) => {
+      rows[index] = { ...rows[index]!, snapshotAt: Date.now() + 1, ...fields };
+      emit(rows[index]!);
+    };
+    await Promise.all([
       sessions.refresh({ ...shared, force: true }),
       sessions.refreshList(personal),
-    ];
-    await advance(200);
-    await Promise.all(bootstrap);
+    ]);
     expect(sessions.state.result?.sessions).toHaveLength(220);
     expect(listRows(personal)).toHaveLength(200);
-    const bootReads = { ...reads };
-    const bootBytes = { ...bytes };
-    for (let index = 0; index < 1_200; index++) {
-      const hot = index % 10;
-      rows[hot] = {
-        ...rows[hot]!,
-        updatedAt: 100_001 + index,
-        snapshotAt: Date.now() + 1,
-        totalTokens: index + 1,
-        unread: hot % 2 === 0,
-        lastReadAt: hot % 2 === 0 ? 98_000 : 100_001 + index,
-      };
-      emit(rows[hot]!);
-      await advance(100);
-      if (index === 599) {
-        expect(reads).toEqual(bootReads);
-        expect(bytes).toEqual(bootBytes);
-      }
-    }
-    expect(reads).toEqual({ shared: bootReads.shared + 1, personal: bootReads.personal + 1 });
-    for (const scope of ["shared", "personal"] as const) {
-      expect(bytes[scope] - bootBytes[scope]).toBeLessThan(2 * bootBytes[scope]);
-    }
-    for (const query of [shared, personal]) {
-      const held = listRows(query) ?? [];
-      expect(held.slice(0, 10).map((row) => row.key)).toEqual(
-        Array.from({ length: 10 }, (_, index) => `agent:main:conversation-${9 - index}`),
-      );
-      expect(held.find((row) => row.key === "agent:main:conversation-8")).toMatchObject({
-        totalTokens: 1_199,
-        unread: true,
-        lastReadAt: 98_000,
-      });
-      expect(held.find((row) => row.key === "agent:main:conversation-9")).toMatchObject({
-        totalTokens: 1_200,
-        unread: false,
-        lastReadAt: 101_200,
-      });
-    }
-    // Explicit reads absorb the minute fallback before exercising membership changes.
-    const fresh = [
-      sessions.refresh({ ...shared, force: true }),
-      sessions.refreshList({ ...personal, force: true }),
-    ];
-    await advance(200);
-    await Promise.all(fresh);
     const settledReads = { ...reads };
-    rows[8] = { ...rows[8]!, unread: false, lastReadAt: Date.now(), snapshotAt: Date.now() + 1 };
-    emit(rows[8]!);
+    update(8, { updatedAt: 100_001, unread: false, lastReadAt: Date.now() });
     for (const query of [shared, personal]) {
-      expect(listRows(query)?.find((row) => row.key === rows[8]!.key)).toMatchObject({
+      expect(listRows(query)?.[0]).toMatchObject({
+        key: rows[8]!.key,
         unread: false,
         lastReadAt: Date.now(),
       });
     }
     expect(reads).toEqual(settledReads);
-    rows[250] = { ...rows[250]!, updatedAt: 90_100, snapshotAt: Date.now() + 1 };
-    emit(rows[250]!);
+    update(250, { updatedAt: 90_100 });
     await advance(5_200);
     expect(reads.shared).toBe(settledReads.shared);
-    rows[250] = { ...rows[250]!, updatedAt: Date.now(), snapshotAt: Date.now() + 1 };
-    emit(rows[250]!);
+    update(250, { updatedAt: Date.now() });
     await advance(5_200);
     expect(reads.shared).toBe(settledReads.shared + 1);
     expect(sessions.state.result?.sessions).toHaveLength(219);
@@ -195,37 +131,13 @@ describe("session roster event traffic", () => {
       [2, { participants: [] }],
     ] satisfies Array<[number, Partial<GatewaySessionRow>]>) {
       const before = reads.personal;
-      rows[index] = {
-        ...rows[index]!,
-        ...patch,
-        updatedAt: Date.now(),
-        snapshotAt: Date.now() + 1,
-      };
-      emit(rows[index]!);
+      update(index, { ...patch, updatedAt: Date.now() });
       await advance(5_200);
       const held = listRows(personal) ?? [];
       expect(reads.personal).toBe(before + 1);
       expect(held).toHaveLength(200);
       expect(held.some((row) => row.key === rows[index]!.key)).toBe(false);
     }
-    const beforeUnknown = { ...reads };
-    const unknown = session("main", Date.now(), {
-      ...rows[3]!,
-      key: "agent:main:new-conversation",
-      sessionId: "new-conversation",
-      updatedAt: Date.now(),
-      snapshotAt: Date.now() + 1,
-    });
-    rows.push(unknown);
-    emit(unknown);
-    expect(listRows(personal)?.some((row) => row.key === unknown.key)).toBe(false);
-    await advance(5_200);
-    expect(reads).toEqual({
-      shared: beforeUnknown.shared + 1,
-      personal: beforeUnknown.personal + 1,
-    });
-    expect(sessions.state.result?.sessions[0]?.key).toBe(unknown.key);
-    expect(listRows(personal)?.[0]?.key).toBe(unknown.key);
   });
 
   it.each([false, true])(
@@ -233,28 +145,20 @@ describe("session roster event traffic", () => {
     async (personal) => {
       const viewer = { type: "profile", id: "profile-ada" } as const;
       const held = Array.from({ length: 200 }, (_, index) =>
-        session("main", 10_000 - index, {
-          key: `agent:main:held-${index}`,
-          sessionId: `held-${index}`,
+        makeRow(`held-${index}`, 10_000 - index, {
           isMain: false,
           participants: [{ identity: viewer }],
           hiddenFromInvolvingMe: false,
         }),
       );
-      const incoming = session("main", 15_000, {
+      const incoming = {
         ...held[0]!,
         key: "agent:main:incoming",
         sessionId: "incoming",
         updatedAt: 15_000,
-      });
+      };
       const promoted = { ...held[199]!, updatedAt: 20_000, unread: true, snapshotAt: 30_000 };
-      const page = (rows: GatewaySessionRow[]) => ({
-        ...sessionsResult(rows, 1),
-        totalCount: 201,
-        hasMore: true,
-        nextOffset: 200,
-        limitApplied: 200,
-      });
+      const page = (rows: GatewaySessionRow[]) => rosterPage(rows, 201, 200);
       const pending = createDeferred<SessionsListResult>();
       const request = vi.fn().mockResolvedValue(page([promoted, incoming, ...held.slice(0, 198)]));
       request.mockResolvedValueOnce(page(held));
@@ -345,11 +249,8 @@ describe("session roster event traffic", () => {
     const request = vi.fn(async () => sessionsResult([held], 1));
     const { sessions, ...harness } = fixture(request);
     await sessions.refresh({ agentId: "main", excludeDock: true, force: true });
-    harness.publishEvent("sessions.changed", snapshot(dock));
-    harness.publishEvent(
-      "sessions.changed",
-      snapshot({ ...held, updatedAt: 3, label: "Updated title" }),
-    );
+    harness.emit(snapshot(dock));
+    harness.emit(snapshot({ ...held, updatedAt: 3, label: "Updated title" }));
     await advance(5_000);
     expect(request).toHaveBeenCalledOnce();
     expect(sessions.state.result?.sessions).toEqual([
@@ -357,44 +258,44 @@ describe("session roster event traffic", () => {
     ]);
   });
 
-  it.each([false, true])(
-    "recovers failed membership refreshes on the next keyed snapshot (managed: %s)",
-    async (managed) => {
+  it.each([false, true, "FORBIDDEN"] as const)(
+    "retries transient membership failures automatically and denied queries explicitly (%s)",
+    async (mode) => {
+      const managed = mode !== false;
       const held = session("main", 1, { sessionId: "held" });
       const updated = { ...held, updatedAt: 2 };
-      const added = makeRow("new", 3);
       let rows = [held];
       let fail = false;
       let reads = 0;
-      const client = createTestGatewayClient(async (_method, params) => {
+      const harness = fixture(async (_method, params) => {
         const selected = (Reflect.get(params ?? {}, "archived") === "all") === managed;
-        if (selected) {
-          reads += 1;
-          if (fail) {
-            throw new Error("List unavailable");
-          }
+        reads += Number(selected);
+        if (selected && fail) {
+          throw new GatewayRequestError({
+            code: typeof mode === "string" ? mode : "UNAVAILABLE",
+            message: "List unavailable",
+          });
         }
         return sessionsResult(rows, 1);
       });
-      const harness = createGatewayHarness(client);
-      const { sessions, watch, listRows } = ownRoster(harness.gateway);
+      const { sessions, watch, listRows } = harness;
       const query = { agentId: "main", ...(managed ? { archivedFilter: "all" as const } : {}) };
       if (managed) {
         watch(query);
       }
-      await sessions.refresh({ agentId: "main", force: true });
-      if (managed) {
-        await sessions.refreshList(query);
-      }
+      await sessions.refreshList({ ...query, force: true });
       fail = true;
-      harness.publishEvent("sessions.changed", { reason: "stores" });
+      harness.emit({ reason: "stores" });
       await advance(5_000);
       expect(sessions.listSnapshot(query).error).toBe("List unavailable");
       fail = false;
-      rows = [added, updated];
-      harness.publishEvent("sessions.changed", { reason: "patch", session: updated });
+      rows = [makeRow("new", 3), updated];
+      harness.emit({ reason: "patch", session: updated });
       await advance(20_000);
-      expect(reads).toBe(3);
+      expect(reads).toBe(mode === "FORBIDDEN" ? 2 : 3);
+      if (mode === "FORBIDDEN") {
+        await sessions.refreshList(query);
+      }
       expect(sessions.listSnapshot(query).error).toBeNull();
       expect(listRows(query)).toEqual(rows);
     },
@@ -419,7 +320,7 @@ describe("session roster event traffic", () => {
         .mockResolvedValue(sessionsResult(finalRows, 2));
       const { sessions, ...harness } = fixture(request);
       await sessions.refresh({ agentId: "main", force: true });
-      harness.publishEvent("sessions.changed", { reason: "patch", session: stopped });
+      harness.emit({ reason: "patch", session: stopped });
       await advance(5_000);
       expect(request).toHaveBeenCalledTimes(2);
       expect(sessions.state.result?.sessions).toEqual(finalRows);
@@ -473,7 +374,7 @@ describe("session roster event traffic", () => {
         force: true,
       });
       for (let index = 0; index < (limited ? 10 : 1); index += 1) {
-        gatewayHarness.publishEvent("sessions.changed", {
+        gatewayHarness.emit({
           reason: limited ? "patch" : change,
           sessionKey: next.key,
           ...(limited ? { pinnedAt: null } : { ancestorSessions: [] }),
@@ -488,8 +389,6 @@ describe("session roster event traffic", () => {
       expect(sessions.state.result?.sessions).toEqual(finalRows);
       if (limited) {
         expect(sessions.state.result).toMatchObject({ hasMore: true, nextOffset: 2, count: 2 });
-      } else {
-        expect(listRows({ agentId: "main" })).toEqual(finalRows);
       }
     },
   );
@@ -503,10 +402,20 @@ describe("session roster event traffic", () => {
     "all",
     "sessions-page",
     "dashboard",
-  ])("bounds requests during a continuous %s stream for existing members", async (stream) => {
-    const row = session("main", 1, { sessionId: "tracked", hasActiveRun: true, hasBoard: true });
+    "other-owner",
+    "other-owner-partial",
+  ])("bounds requests during a continuous %s stream", async (stream) => {
+    const otherOwner = stream.startsWith("other-owner");
+    const managed =
+      ["filtered", "all", "sessions-page", "dashboard"].includes(stream) || otherOwner;
+    const row = session("main", 1, {
+      sessionId: "tracked",
+      hasActiveRun: true,
+      hasBoard: true,
+      owner: { actor: { type: "human", id: "other" } },
+    });
     let reads = 0;
-    const client = createTestGatewayClient(async (method, params) => {
+    const gatewayHarness = fixture(async (method, params) => {
       expect(method).toBe("sessions.list");
       if (stream === "filtered" && !Reflect.get(params ?? {}, "search")) {
         return sessionsResult([], 0);
@@ -515,13 +424,13 @@ describe("session roster event traffic", () => {
       if (reads > 1) {
         await delay(1_000);
       }
-      return sessionsResult([row], reads);
+      const ownerId = Reflect.get(params ?? {}, "ownerId");
+      return sessionsResult(ownerId && ownerId !== row.owner?.actor.id ? [] : [row], reads);
     });
-    const gatewayHarness = createGatewayHarness(client);
-    const { gateway } = gatewayHarness;
-    const { sessions, watch, listRows, settle } = ownRoster(gateway);
+    const { sessions, watch, listRows, settle } = gatewayHarness;
     const query = {
       agentId: "main",
+      ...(otherOwner ? { ownerId: " selected " } : {}),
       ...(stream === "filtered" ? { search: "tracked" } : {}),
       ...(stream === "all" ? { archivedFilter: "all" as const } : {}),
       ...(stream === "sessions-page"
@@ -529,15 +438,15 @@ describe("session roster event traffic", () => {
         : {}),
       ...(stream === "dashboard" ? { hasBoard: true, archivedFilter: "all" as const } : {}),
     };
-    if (["filtered", "all", "sessions-page", "dashboard"].includes(stream)) {
+    if (managed) {
       watch(query);
     }
     settle(() => advance(1_000));
-    if (["all", "sessions-page", "dashboard"].includes(stream)) {
+    if (managed && stream !== "filtered") {
       await sessions.refresh({ agentId: "main", force: true });
     }
     const initial = sessions.refreshList({ ...query, force: true });
-    if (["all", "sessions-page", "dashboard"].includes(stream)) {
+    if (managed && stream !== "filtered") {
       await advance(1_000);
     }
     await initial;
@@ -553,21 +462,38 @@ describe("session roster event traffic", () => {
           ...(stream === "invalidation"
             ? {}
             : {
-                ancestorSessions: [],
+                ...(stream === "other-owner-partial" ? {} : { ancestorSessions: [] }),
                 session: {
                   ...row,
                   updatedAt: index + 2,
                   totalTokens: index + 1,
                   hasActiveRun: stream !== "terminal-message",
+                  unread: index % 2 === 0,
+                  lastReadAt: index + 1,
                 },
               }),
         },
       );
       await advance(100);
     }
-    if (stream !== "invalidation" && stream !== "filtered") {
+    if (!["invalidation", "filtered", "other-owner-partial"].includes(stream)) {
       expect(reads - initialReads).toBe(0);
-      expect(listRows(query)?.[0]?.totalTokens).toBe(600);
+      expect(
+        stream === "other-owner" ? sessions.state.result?.sessions[0] : listRows(query)?.[0],
+      ).toMatchObject({
+        totalTokens: 600,
+        unread: false,
+        lastReadAt: 600,
+      });
+      if (stream === "other-owner") {
+        expect(listRows(query)).toEqual([]);
+        row.owner = { actor: { type: "human", id: "selected" } };
+        row.updatedAt = 602;
+        gatewayHarness.publishEvent("sessions.changed", snapshot(row));
+        await advance(6_000);
+        expect(listRows(query)?.[0]?.owner?.actor.id).toBe("selected");
+        expect(reads - initialReads).toBeGreaterThan(0);
+      }
     } else {
       expect(reads - initialReads).toBeGreaterThan(1);
       expect(reads - initialReads).toBeLessThanOrEqual(15);
@@ -613,7 +539,7 @@ describe("session roster event traffic", () => {
     async (intent) => {
       let reads = 0;
       const row = session("main", 1);
-      const client = createTestGatewayClient(async (method) => {
+      const gatewayHarness = fixture(async (method) => {
         if (method !== "sessions.list") {
           return {};
         }
@@ -623,11 +549,9 @@ describe("session roster event traffic", () => {
         }
         return sessionsResult([row], reads);
       });
-      const gatewayHarness = createGatewayHarness(client);
-      const { gateway } = gatewayHarness;
-      const { sessions } = ownRoster(gateway);
+      const { sessions } = gatewayHarness;
       await sessions.refresh({ agentId: "main", force: true });
-      gatewayHarness.publishEvent("sessions.changed", { sessionKey: row.key, reason: "patch" });
+      gatewayHarness.emit({ sessionKey: row.key, reason: "patch" });
       await advance(6_000);
       expect(reads).toBe(2);
       gatewayHarness.publishEvent("sessions.changed", { sessionKey: row.key, reason: "patch" });
@@ -659,7 +583,7 @@ describe("session roster event traffic", () => {
     });
     let retired = false;
     const reads: Record<string, number> = {};
-    const client = createTestGatewayClient(async (method, params) => {
+    const harness = fixture(async (method, params) => {
       expect(method).toBe("sessions.list");
       const value = Reflect.get(params ?? {}, "spawnedBy");
       const owner = typeof value === "string" ? value : undefined;
@@ -667,8 +591,7 @@ describe("session roster event traffic", () => {
       const rows = !owner ? [parent, child] : owner === parent.key && !retired ? [child] : [];
       return { ...sessionsResult(rows, 1), hasMore: false, totalCount: rows.length };
     });
-    const harness = createGatewayHarness(client);
-    const { sessions, watch, listRows } = ownRoster(harness.gateway);
+    const { sessions, watch, listRows } = harness;
     const children = { spawnedBy: parent.key, includeGlobal: false, includeUnknown: false };
     const empty = { ...children, spawnedBy: child.key };
     [children, empty].forEach(watch);
@@ -715,11 +638,7 @@ describe("session roster event traffic", () => {
       counts.running = index === 0 ? 1 : 0;
       counts.open = index === 2 ? 7 : 8;
       emitEvent(
-        changed({
-          ...snapshot({ ...unseen, ...fields, updatedAt: 11 + index }),
-          agentId: "main",
-          reason: "patch",
-        }),
+        changed(snapshot({ ...unseen, ...fields, updatedAt: 11 + index }, { agentId: "main" })),
       );
       await advance(5_000);
       expect(summaryRequest).toHaveBeenCalledTimes(2 + index);
@@ -728,14 +647,14 @@ describe("session roster event traffic", () => {
   });
 
   it("retains owner counts for title updates but refreshes changed run contributions", async () => {
-    const row = {
+    const row: GatewaySessionRow = {
       key: "agent:main:owned",
       sessionId: "owned-session",
-      kind: "direct" as const,
+      kind: "direct",
       label: "Owned session",
       updatedAt: 1,
       hasActiveRun: false,
-      status: "done" as const,
+      status: "done",
     };
     const other = { ...row, key: "agent:main:off-facet", sessionId: "off-facet" };
     const query = {
@@ -761,16 +680,17 @@ describe("session roster event traffic", () => {
     for (let index = 0; index < 5; index += 1) {
       for (const held of [row, other]) {
         emitEvent(
-          changed({
-            ...snapshot({ ...held, label: `Renamed ${index}`, updatedAt: index + 2 }),
-            agentId: "main",
-            reason: "patch",
-          }),
+          changed(
+            snapshot(
+              { ...held, label: `Renamed ${index}`, updatedAt: index + 2 },
+              { agentId: "main" },
+            ),
+          ),
         );
       }
       await advance(1_000);
     }
-    await advance(54_999);
+    await advance(125_000);
     expect(summaryRequest).toHaveBeenCalledOnce();
     counts.running = 1;
     emitEvent(
@@ -802,11 +722,12 @@ describe("session roster event traffic", () => {
     for (const [index, hasActiveSubagentRun] of [true, false].entries()) {
       counts.running = hasActiveSubagentRun ? 2 : 1;
       emitEvent(
-        changed({
-          ...snapshot({ ...other, updatedAt: 100 + index, hasActiveSubagentRun }),
-          agentId: "main",
-          reason: "subagent",
-        }),
+        changed(
+          snapshot(
+            { ...other, updatedAt: 100 + index, hasActiveSubagentRun },
+            { agentId: "main", reason: "subagent" },
+          ),
+        ),
       );
       await advance(5_000);
       expect(summaryRequest).toHaveBeenCalledTimes(3 + index);

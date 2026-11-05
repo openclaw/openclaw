@@ -1,4 +1,5 @@
 import { isMainThread } from "node:worker_threads";
+import JSON5 from "json5";
 import { loadDotEnvAsync } from "../infra/dotenv.js";
 import { ignoreMissingPath } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -70,7 +71,7 @@ function* loadConfigWithEffects(
       sync: () => maybeLoadDotEnvForConfig(deps.env),
       async: async () => {
         if (deps.env === process.env) {
-          await loadDotEnvAsync({ env: deps.env, quiet: true });
+          await loadDotEnvAsync({ env: deps.env });
         }
       },
     });
@@ -105,7 +106,7 @@ function* loadConfigWithEffects(
           context.finalizeLoadedRuntimeConfigAsync(materialized, metadata, options.assertCurrent),
       });
     }
-    const parsed = deps.json5.parse(raw);
+    const parsed = JSON5.parse(raw);
     const readResolution = resolveConfigForRead(
       resolveConfigIncludesForRead(parsed, configPath, deps),
       deps.env,

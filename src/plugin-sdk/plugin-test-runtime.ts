@@ -1,6 +1,7 @@
 // Focused public test helpers for plugin runtime, registry, and setup fixtures.
 
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import type { AgentHarness } from "../agents/harness/types.js";
 import type {
   IsolatedCompletionBoundaryFixture,
   IsolatedCompletionBoundaryFixtureParams,
@@ -144,6 +145,68 @@ export async function createAgentHarnessHostCapabilitiesForTest(params: {
   };
 }
 
+/**
+ * Loads plugins for `config` through the real loader and runs callbacks inside one plugin's
+ * instance scope, the way the host runs that plugin's tools, hooks, commands and services.
+ * Call `dispose` before loading again.
+ */
+export async function loadPluginInstanceForTest(params: {
+  config: OpenClawConfig;
+  pluginId: string;
+  workspaceDir?: string;
+}) {
+  const [{ loadOpenClawPlugins }, { getPluginInstance }, { disposePluginRegistryInstances }] =
+    await Promise.all([
+      import("../plugins/loader.js"),
+      import("../plugins/plugin-instance-scope.js"),
+      import("../plugins/runtime.js"),
+    ]);
+  const registry = loadOpenClawPlugins({
+    config: params.config,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    cache: false,
+    activate: false,
+  });
+  const record = registry.plugins.find((plugin) => plugin.id === params.pluginId);
+  const instance = record ? getPluginInstance(record) : undefined;
+  if (!record || !instance) {
+    throw new Error(
+      `Plugin ${params.pluginId} did not load (${record?.status ?? "missing"}${record?.error ? `: ${record.error}` : ""}).`,
+    );
+  }
+  return {
+    registry,
+    run: <T>(run: () => T): T => instance.runInRegistry(registry, run),
+    dispose: async () => {
+      await disposePluginRegistryInstances(registry);
+    },
+  };
+}
+
+/**
+ * Loads one plugin through the real loader and makes its registry the active one, so its
+ * registered tools, prompt guidance and hooks serve the test. The returned restore reinstates
+ * the previous registry and disposes the plugin; pass it to `onTestFinished`.
+ */
+export async function activatePluginForTest(params: {
+  config: OpenClawConfig;
+  pluginId: string;
+}): Promise<() => Promise<void>> {
+  const { getActivePluginRegistry, resetPluginRuntimeStateForTest, setActivePluginRegistry } =
+    await import("../plugins/runtime.js");
+  const plugin = await loadPluginInstanceForTest(params);
+  const previous = getActivePluginRegistry();
+  setActivePluginRegistry(plugin.registry);
+  return async () => {
+    if (previous) {
+      setActivePluginRegistry(previous);
+    } else {
+      resetPluginRuntimeStateForTest();
+    }
+    await plugin.dispose();
+  };
+}
+
 /** Admits a native harness fixture through the production session mailbox. */
 export async function withAdmittedSessionTurnForTest<T>(
   params: {
@@ -183,12 +246,22 @@ export async function runInHarnessToolAuthorityForTest<
   run: (
     attempt: Omit<Attempt, "replyOperation"> & { toolAuthorityFingerprint?: string },
   ) => Promise<T>,
+  options?: { registeredHarness: AgentHarness },
 ): Promise<T> {
   if (attempt.toolAuthorityFingerprint) {
     throw new Error("The tool-authority boundary derives its own fingerprint");
   }
   const { withPreparedEmbeddedRunToolAuthority } =
     await import("../agents/harness/tool-authority.runtime.js");
+  const queueInputAdapter = options
+    ? await import("../agents/harness/registry.js").then((registry) => {
+        const harness = options.registeredHarness;
+        if (registry.resolveAgentHarnessOwnerPluginId(harness) !== pluginId) {
+          throw new Error("Fixture harness does not belong to the admitted plugin");
+        }
+        return registry.resolveAgentHarnessQueueInputAdapter(harness);
+      })
+    : undefined;
   const { resolveAgentIdFromSessionKey } = await import("../routing/session-key.js");
   const { harnessHostAdmissionsForTest } =
     await import("../agents/harness/host-capability.test-support.js");
@@ -205,6 +278,7 @@ export async function runInHarnessToolAuthorityForTest<
         replyOperation,
         trigger: attempt.trigger,
         sessionPersistence: attempt.sessionPersistence,
+        queueInputAdapter,
       },
       { ...pluginAttempt, agentId },
       undefined,
@@ -233,8 +307,7 @@ export {
   type PluginRecord,
 } from "../plugins/registry.js";
 export {
-  providerContractLoadError,
-  pluginRegistrationContractRegistry,
+  getPluginRegistrationContracts,
   resolveProviderContractProvidersForPluginIds,
   resolveWebFetchProviderContractEntriesForPluginId,
   resolveWebSearchProviderContractEntriesForPluginId,
@@ -249,7 +322,6 @@ export { registerDiagnosticTracePropagationBridge } from "../infra/diagnostic-tr
 export { runWithDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 export { prepareSystemRunMutableFileApproval } from "../infra/system-run-approval-binding.js";
 export { logMessageDispatchStarted, logMessageProcessed } from "../logging/diagnostic.js";
-export { resolveBundledExplicitProviderContractsFromPublicArtifacts } from "../plugins/provider-contract-public-artifacts.js";
 export {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -286,7 +358,6 @@ export { onTrustedInternalDiagnosticEvent } from "../infra/diagnostic-events.js"
 export {
   buildProviderPluginMethodChoice,
   resolveProviderModelPickerEntries,
-  setProviderWizardProvidersResolverForTest,
 } from "../plugins/provider-wizard.js";
 export { resolveProviderPluginChoice } from "../plugins/provider-auth-choice.runtime.js";
 export {
@@ -327,6 +398,7 @@ export {
   type WizardPrompter,
 } from "../test-utils/plugin-setup-wizard.js";
 export { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+export { registerSkillsChangeListener } from "../skills/runtime/refresh-state.js";
 type AdmittedHostCapabilityTestFixtureFactory =
   typeof import("../agents/harness/host-capability.test-support.js").createAdmittedHostCapabilityTestFixture;
 
@@ -363,3 +435,4 @@ export {
 } from "./test-helpers/plugin-runtime-mock.js";
 
 export { createHookRunner } from "../plugins/hooks.js";
+export { explainToolAvailability } from "../agents/tool-availability-explanation.js";

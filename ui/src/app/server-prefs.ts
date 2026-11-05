@@ -52,15 +52,15 @@ type ServerUiPrefsPushHooks = {
 };
 export type { ServerUiPrefProvenance } from "./server-prefs-state.ts";
 
-const preferenceWriteListeners = new Set<() => void>();
+let preferenceWritesChanged: (() => void) | undefined;
 export function subscribeServerUiPrefWrites(listener: () => void): () => void {
-  preferenceWriteListeners.add(listener);
-  return () => preferenceWriteListeners.delete(listener);
+  preferenceWritesChanged = listener;
+  return () => {
+    preferenceWritesChanged = undefined;
+  };
 }
 function publishPreferenceWrites(): void {
-  for (const listener of preferenceWriteListeners) {
-    listener();
-  }
+  preferenceWritesChanged?.();
 }
 class ServerUiPrefsOutbox {
   applyingServerPrefs = false;
@@ -345,7 +345,6 @@ function startPendingDrain(writer: ServerUiPrefsWriter): void {
     return;
   }
   if (
-    writer.state.connected &&
     writer.canPatch === false &&
     !(sync.pushProfileId && sync.pushCanWrite && Object.keys(sync.pendingPrefs).some(isProfilePref))
   ) {
