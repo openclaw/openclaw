@@ -365,6 +365,23 @@ describe("optional media tool factory planning", () => {
     });
   });
 
+  it("plans generation tools for a usable key on the provider entry", () => {
+    const imageGenerate = (apiKey?: string, authStore = createAuthStore()) => {
+      const imageOwner = { baseUrl: "https://image.example/v1", models: [], apiKey };
+      const config: OpenClawConfig = { models: { providers: { "image-owner": imageOwner } } };
+      installSnapshot(config, createStandardMediaPlugins());
+      return resolveOptionalMediaToolFactoryPlan({ config, authStore }).imageGenerate;
+    };
+    const coolingDown: AuthProfileStore = {
+      ...createAuthStore(),
+      usageStats: { "inline-api-key:image-owner": { cooldownUntil: Date.now() + 60_000 } },
+    };
+
+    expect(imageGenerate()).toBe(false);
+    expect(imageGenerate("inline-image-key")).toBe(true);
+    expect(imageGenerate("inline-image-key", coolingDown)).toBe(false);
+  });
+
   it("defers PDF resolution and passes the active model at execution", async () => {
     const config: OpenClawConfig = {};
     const workspaceDir = process.cwd();
