@@ -122,8 +122,11 @@ suite.define(() => {
           Math.abs((await bottomGap(".new-session-page__composer")) - chatGap),
           state.name,
         ).toBeLessThanOrEqual(1);
-        const local = page.locator("#new-session-where-trigger");
-        expect((await local.boundingBox())!.width).toBeLessThanOrEqual(100);
+        // #192044 renamed Local to This computer; keep the picker within half a row.
+        const device = page.locator("#new-session-where-trigger");
+        expect((await device.boundingBox())!.width).toBeLessThanOrEqual(
+          (await triggers.boundingBox())!.width / 2,
+        );
         expect(
           await page.locator(".new-session-page__select--agent .agent-select__label").isVisible(),
         ).toBe(true);

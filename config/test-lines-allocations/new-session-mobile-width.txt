@@ -1,0 +1,2 @@
+# Preserve responsive picker width coverage after #192044 renamed Local to This computer.
+7

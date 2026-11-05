@@ -124,8 +124,12 @@ suite.define(() => {
         );
       expect(new Set(layout.map((box) => box.row)).size).toBeLessThanOrEqual(mobile ? 2 : 1);
       if (mobile) {
-        const local = page.locator("#new-session-where-trigger");
-        expect((await local.boundingBox())!.width).toBeLessThanOrEqual(100);
+        // #192044 renamed Local to This computer; keep the picker within half a row.
+        const device = page.locator("#new-session-where-trigger");
+        const row = page.locator(".new-session-page__triggers");
+        expect((await device.boundingBox())!.width).toBeLessThanOrEqual(
+          (await row.boundingBox())!.width / 2,
+        );
       }
       for (const [index, box] of layout.entries()) {
         expect(box.left).toBeGreaterThanOrEqual(0);
