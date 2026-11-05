@@ -7,7 +7,6 @@ import {
   readChromeVersionWithCredentialFallback,
   type ChromeVersion,
 } from "./chrome.diagnostics.js";
-import type { RunningChrome } from "./chrome.js";
 
 export async function fetchChromeVersion(
   cdpUrl: string,
@@ -23,14 +22,14 @@ export async function fetchChromeVersion(
   }
 }
 
-export async function launchChromeWithNativeIdentity(params: {
+export async function launchChromeWithNativeIdentity<Chrome>(params: {
   cdpUrl: string;
   headless: boolean;
   extraArgs: string[];
   signal?: AbortSignal;
-  launch: (userAgent?: string) => Promise<RunningChrome>;
-  stop: (running: RunningChrome) => Promise<void>;
-}): Promise<RunningChrome> {
+  launch: (userAgent?: string) => Promise<Chrome>;
+  stop: (running: Chrome) => Promise<void>;
+}): Promise<Chrome> {
   const running = await params.launch();
   if (
     !params.headless ||
