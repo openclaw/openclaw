@@ -492,6 +492,17 @@ when initialization must finish before the child runs.
       without waiting for `onAgentRunTerminalOutcome`. Overflow retained for a summary
       remains pending; sources evicted from the summary cap report `queue-cap-old`.
 
+      Durable ingress wrappers must also forward and await
+      `turnAdoptionLifecycle.onDropped(reason)` for terminal queue-policy losses.
+      The ingress owner records `queue-cap-old` or `queue-cap-new` as the failed
+      row's reason, without replay. Keep `onAbandoned` for retryable relinquishment;
+      `queue-cap` when all entries are protected still uses that path. Wrappers
+      must settle their handoff and source cleanup when either callback completes.
+      Spreading the lifecycle while overriding only `onAbandoned` does not intercept
+      drops: also wrap `onDropped`, or use the reply lifecycle's `onSettled` for
+      shared terminal cleanup. Omitting `onDropped` retains legacy abandonment and
+      replay. Policy drops do not send retry-failure notices.
+
       A `queuedDeliveryCorrelations` entry stays bound to its source through collect
       batching. Its optional `shouldSuppressReply(payload)` applies before an
       origin-routed send, which bypasses the immediate reply dispatcher. All source

@@ -15,6 +15,8 @@ import type {
   PluginCohortRecovery,
   PluginCohortRecoveryPair,
 } from "../infra/update-plugin-cohort-schema.js";
+import { PLUGIN_COHORT_KEPT_WARNING_STEP } from "../infra/update-run-codec.js";
+import { recordUpdateRunDiagnostic } from "../infra/update-run-ledger.js";
 import type { UpdateRecoveryRecord } from "../infra/update-run-recovery-schema.js";
 import {
   beginPluginCohortRecovery,
@@ -42,6 +44,7 @@ import {
   restoreRetainedManagedNpmInstallMarkers,
 } from "./managed-npm-retention.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import type { PluginSourceSnapshotIndexChange } from "./plugin-source-snapshot.types.js";
 import {
   assertPluginCohortArtifactDirectory,
   readPluginCohortArtifactIdentity as artifactIdentity,
@@ -353,13 +356,29 @@ export function recordPluginCohortRetentionMarker(
   });
 }
 
-/** Restore only matching cohort deltas. A later writer keeps its values and blocks old-core readiness. */
+/** Install records are keyed by installation owner; snapshots by plugin ID. */
+function snapshotBelongsToInstallation(
+  restoration: PluginSourceSnapshotIndexChange,
+  installKey: string,
+): boolean {
+  const owners = [restoration.before?.installOwner, restoration.after?.installOwner].filter(
+    (owner) => owner !== undefined,
+  );
+  return owners.length > 0 ? owners.includes(installKey) : restoration.pluginId === installKey;
+}
+
+/**
+ * Restore only matching cohort deltas. A plugin migration obligation or install
+ * record that a later writer changed keeps that value; rollback restores the rest,
+ * completes, and records what it kept as a warning on the update run.
+ */
 export async function settleUpdatePluginCohort(
   params: CohortOptions & {
     runId: string;
     action: "commit" | "rollback";
     /** Repair proved the candidate serves; commit over a recorded rollback that restored nothing. */
     supersedeUnsettledRollback?: true;
+    onLaterDecisionsKept?: (warning: string) => void;
   },
 ): Promise<{ configPaths: string[] }> {
   params.fence.assertCurrent();
@@ -421,9 +440,10 @@ export async function settleUpdatePluginCohort(
       pair = writePluginCohortRecovery(pair, { ...pair.cohort, disposition: action }, fence, {
         env: params.env,
       });
+      const kept: string[] = [];
       if (action === "rollback") {
         const recordChanges = foldPluginCohortRecordPublications(pair.cohort.publications);
-        const sourceSnapshotRestorations = foldPluginSourceSnapshotChanges(
+        let sourceSnapshotRestorations = foldPluginSourceSnapshotChanges(
           pair.cohort.publications.flatMap((publication) =>
             publication.kind === "records" ? (publication.sourceSnapshots ?? []) : [],
           ),
@@ -431,10 +451,11 @@ export async function settleUpdatePluginCohort(
         if (migrations.length > 0) {
           const { restorePluginCohortMigrationPublications } =
             await import("../infra/deferred-plugin-migrations.js");
-          await restorePluginCohortMigrationPublications(migrations, {
+          const obligations = await restorePluginCohortMigrationPublications(migrations, {
             env: params.env,
             assertCurrent: fence.assertCurrent,
           });
+          kept.push(...obligations.map((id) => `plugin ${id} data/settings upgrade obligation`));
         }
         const publications = pair.cohort.publications.toReversed();
         for (let index = pair.cohort.settledPublications; index < publications.length; index++) {
@@ -471,9 +492,12 @@ export async function settleUpdatePluginCohort(
             const current = currentRecords[change.pluginId];
             const alreadyRestored = isDeepStrictEqual(current, change.before);
             if (!alreadyRestored && !isDeepStrictEqual(current, change.after)) {
-              throw new Error(
-                `Plugin ${change.pluginId} changed after the update; cohort recovery preserved it.`,
+              // A later install owns this installation now; keep its plugins' snapshots too.
+              kept.push(`plugin ${change.pluginId} install record`);
+              sourceSnapshotRestorations = sourceSnapshotRestorations.filter(
+                (restoration) => !snapshotBelongsToInstallation(restoration, change.pluginId),
               );
+              continue;
             }
             const before = change.before;
             if (before?.source === "npm" && before.installPath) {
@@ -632,6 +656,22 @@ export async function settleUpdatePluginCohort(
         await collectInstalledPluginSourceSnapshots(resolveStateDir(params.env));
       } catch (error) {
         process.emitWarning(`Plugin source snapshot collection deferred: ${String(error)}`);
+      }
+      if (kept.length > 0) {
+        const warning = `Update rollback kept newer changes made after the update instead of restoring them: ${kept.join("; ")}. Run openclaw doctor to review them.`;
+        try {
+          recordUpdateRunDiagnostic(
+            params.runId,
+            warning,
+            { env: params.env },
+            PLUGIN_COHORT_KEPT_WARNING_STEP,
+          );
+        } catch (error) {
+          process.emitWarning(
+            `Update history did not record kept plugin changes: ${String(error)}`,
+          );
+        }
+        params.onLaterDecisionsKept?.(warning);
       }
       return { configPaths };
     },
