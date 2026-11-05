@@ -20,6 +20,7 @@ type GatewayMaintenanceParams = Parameters<StartGatewayMaintenanceTimers>[0];
 /** Start early Gateway side runtimes before the main server is fully ready. */
 export async function startGatewayEarlyRuntime(params: {
   scheduler: GatewayScheduler;
+  getCronStorePath: () => string;
   minimalTestGateway: boolean;
   isClosing: () => boolean;
   updateCanary?: boolean;
@@ -96,7 +97,7 @@ export async function startGatewayEarlyRuntime(params: {
     setSkillsRemoteRegistry(params.nodeRegistry);
     void primeRemoteSkillsCache();
     if (!params.isClosing()) {
-      startCronMaintenance(params.scheduler);
+      startCronMaintenance(params.scheduler, params.getCronStorePath);
     }
   }
 
