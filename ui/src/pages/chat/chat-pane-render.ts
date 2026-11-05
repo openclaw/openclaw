@@ -402,7 +402,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         : undefined,
       canAbort: sessionParticipationBlocked
         ? false
-        : (cachedSession?.runActive ?? hasAbortableSessionRun(state)),
+        : Boolean(state.chatRunId) || (cachedSession?.runActive ?? hasAbortableSessionRun(state)),
       runActive,
       runStatus: state.chatRunStatus,
       startupStatus: activeChatRunStartupStatus(state.chatRunStartup),
