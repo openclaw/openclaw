@@ -1,6 +1,5 @@
 import type { CyberAccessProgram } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { AdmittedRunOperatorAuthority } from "./admitted-run-operator-authority.types.js";
-import type { AgentHarness } from "./harness/types.js";
 
 type AccessRolePolicy = Pick<
   NonNullable<AdmittedRunOperatorAuthority["rolePolicy"]>,
@@ -34,7 +33,8 @@ export function requiresOperatorModelExecutionPolicy(
 
 /** Built-in execution is checked by its host identity; plugin selections need exact enforcement. */
 export function resolveAgentHarnessOperatorPolicyError(
-  harness: Pick<AgentHarness, "id" | "nativeModelPolicySupport"> | undefined,
+  // Runtime types consume this policy leaf; accept only their capability contract.
+  harness: { id: string; nativeModelPolicySupport?: "exact" } | undefined,
   authority: OperatorModelExecutionPolicy | undefined,
 ): string | undefined {
   return harness &&

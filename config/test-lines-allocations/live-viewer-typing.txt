@@ -1,2 +1,2 @@
-72
-# Live connection typing delivery after beacon eviction and peer disconnect.
+235
+# Live connection typing delivery after beacon eviction, peer disconnect, and real WebSocket recipient revocation.

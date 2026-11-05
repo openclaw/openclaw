@@ -118,7 +118,7 @@ it("retains exact native runtimes and rechecks operator policy at commit", async
   ).toBe(true);
 
   harness.nativeModelPolicySupport = undefined;
-  let policy: AdmittedRunOperatorAuthority["modelPolicy"];
+  let policy: AdmittedRunOperatorAuthority["modelPolicy"] = undefined;
   const authority = createAdmittedRunOperatorAuthority({
     profileId: "runtime-policy-fixture",
     scopes: ["operator.admin"],
