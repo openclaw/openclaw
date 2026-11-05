@@ -1,7 +1,6 @@
 {
   "version": 2,
   "locale": "ko",
-  "glossaryHash": "31510f6398458d1da1b082b45b39b144b16b17a091cc64c02124e9563fd035be",
   "translations": {
     "native.android.000452ffd65ee11a": "도구 1개 건너뜀",
     "native.android.004fd715ebe3d013": "최근 대화",
