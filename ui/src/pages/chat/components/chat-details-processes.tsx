@@ -1,4 +1,14 @@
-import { Errored, For, Loading, Show, createMemo, createSignal, isPending, latest } from "solid-js";
+import {
+  Errored,
+  For,
+  Loading,
+  Show,
+  createMemo,
+  createSignal,
+  isPending,
+  latest,
+  onSettled,
+} from "solid-js";
 import type { SessionProcessSummary } from "../../../../../packages/gateway-protocol/src/schema/session-processes.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
@@ -7,9 +17,10 @@ import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-sessio
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createKeyedListMotion } from "../../../lib/reactive/keyed-list-motion.ts";
 import type { ProcessesPanelData } from "../processes-panel-data.ts";
-import "./chat-details-processes.css";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
+import "./chat-details-processes.css";
 import { createDetailsProcessesPresentation } from "./chat-details-processes-presentation.ts";
+import type { ChatDetailsProps } from "./chat-details-types.ts";
 import { createProcessesPresentation } from "./chat-processes-presentation.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -22,6 +33,7 @@ type Props = {
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
   onOpen?: (instanceId?: string) => void;
+  details: ChatDetailsProps;
 };
 
 function ProcessRow(props: {
@@ -98,14 +110,42 @@ function ProcessRow(props: {
 export function ChatDetailsProcesses(props: Props) {
   const presentation = createProcessesPresentation(() => props.processes(), true);
   const snapshot = () => props.processes()?.snapshot;
-  const rows = createDetailsProcessesPresentation(() => snapshot()?.rows ?? []);
-  const visibleRows = createMemo(() => rows().slice(0, 3));
-  const hidden = () => rows().length - visibleRows().length;
+  const live = createDetailsProcessesPresentation(() => snapshot()?.rows ?? []);
+  const cached = () => props.details.cachedDetails?.processes;
+  const visibleRows = createMemo<SessionProcessSummary[]>(() =>
+    snapshot()?.hasResult || snapshot()?.errorKind === "access"
+      ? live().slice(0, 3)
+      : (cached()?.rows ?? []).map((row) => ({
+          ...row,
+          status: "running",
+          tail: "",
+          truncated: false,
+          canStop: false,
+        })),
+  );
+  const hidden = () =>
+    (snapshot()?.hasResult ? live().length : (cached()?.total ?? 0)) - visibleRows().length;
+  const receipt = createMemo(() =>
+    (snapshot()?.hasResult || snapshot()?.errorKind === "access") && props.details.onDetailsSnapshot
+      ? {
+          write: props.details.onDetailsSnapshot,
+          processes: {
+            total: live().length,
+            rows: visibleRows().map(({ processId, instanceId, name, startedAt }) => ({
+              processId,
+              instanceId,
+              name,
+              startedAt,
+            })),
+          },
+        }
+      : undefined,
+  );
   const [revealing, setRevealing] = createSignal(false);
   const motion = createKeyedListMotion({
     ids: () => visibleRows().map((row) => row.instanceId),
     scope: presentation.scope,
-    ready: () => Boolean(snapshot()?.hasResult),
+    ready: () => Boolean(snapshot()?.hasResult || cached()),
     active: () =>
       props.presented && props.expanded && !revealing() && snapshot()?.errorKind !== "access",
   });
@@ -114,7 +154,7 @@ export function ChatDetailsProcesses(props: Props) {
       props.onOpen?.(instanceId);
     }
   };
-  const hasRunning = () => rows().length > 0;
+  const hasRunning = () => visibleRows().length > 0;
   const ProcessError = (errorProps: { loading: boolean; retry: () => void }) => (
     <Show when={snapshot()?.errorKind !== "read" && snapshot()?.error}>
       {(error) => (
@@ -193,6 +233,12 @@ export function ChatDetailsProcesses(props: Props) {
   // The disclosure's layout owner must survive pending and errored body reads.
   return (
     <Show when={props.onOpen}>
+      <Show when={receipt()} keyed>
+        {(value) => {
+          onSettled(() => value.write({ processes: value.processes }));
+          return null;
+        }}
+      </Show>
       <Show when={motion.present()} fallback={<ReadContent />}>
         <div ref={motion.shell} class="chat-details-processes__envelope">
           <div ref={motion.content} class="chat-details-processes__motion-content">

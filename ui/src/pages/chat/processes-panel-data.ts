@@ -312,7 +312,7 @@ class ProcessObservation {
           this.truncated = false;
         }
         this.readError = formatUiError(error);
-        this.readDenied = accessDenied;
+        this.readDenied ||= accessDenied;
       })
       .finally(() => {
         if (this.pending === pending) {
@@ -443,8 +443,8 @@ class ProcessObservation {
     this.loading = false;
     this.hasResult = false;
     this.truncated = false;
-    this.readError = null;
-    this.readDenied = false;
+    // A pending reconnect must not restore cached output after access was denied.
+    this.readError = this.readDenied ? this.readError : null;
     this.actionError = null;
     this.actionInstanceId = null;
   }

@@ -96,6 +96,20 @@ export const detailsSnapshotSchema = json.optional(
       }),
     ),
     outputs: json.optional(nonnegative),
+    processes: json.optional(
+      json.object({
+        total: nonnegative,
+        rows: json.array(
+          json.object({
+            processId: sessionKeySchema,
+            instanceId: sessionKeySchema,
+            name: json.text,
+            startedAt: json.number,
+          }),
+          3,
+        ),
+      }),
+    ),
   }),
 );
 
