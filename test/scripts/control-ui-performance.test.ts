@@ -1129,7 +1129,7 @@ if (process.argv.includes("--report-only")) process.kill(process.pid, "SIGTERM")
     expect(output).toContain("candidate attribution failed:");
     expect(output).not.toContain("Control UI baseline failure attribution:");
     expect(fs.readFileSync(marker, "utf8").trim().split("\n")).toHaveLength(2);
-    expect(output).toContain(`${path.basename(process.execPath)} failed (1)`);
+    expect(output).toContain(`${path.basename(repo.nodeExecutable)} failed (1)`);
     expect(output).toContain("[control-ui-performance-base] FAILED (exit 1)");
   });
 
