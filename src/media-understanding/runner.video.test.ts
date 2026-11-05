@@ -4,11 +4,11 @@ import type { OpenClawConfig } from "../config/types.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import { mediaModels } from "./media-config.test-support.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 import { runMediaFixture } from "./runner-case.test-support.js";
 import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
 import { runCapability } from "./runner.js";
 import { withVideoFixture } from "./runner.test-utils.js";
-import type { MediaUnderstandingProvider } from "./types.js";
 
 const nativeModel = { provider: "lmstudio", model: "video-model" };
 const handoff = "handed-to-native-vision";
