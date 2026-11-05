@@ -353,6 +353,13 @@ preparation still run in full. Other pending work or incomplete discovery select
 the full Doctor flow; older candidates and standalone `openclaw update repair`
 continue using the full pass.
 
+When that second pass widens, its diagnostics name the first config eligibility
+check or retained contribution that required the full flow. These names contain
+no config values. Gateway verification timing ends at readiness; separate timing
+steps cover post-ready maintenance, plugin commit, and recovery-artifact cleanup.
+The candidate supplies Doctor diagnostics, while the installed updater must
+contain the timing changes.
+
 Stopped update and Doctor database snapshots tolerate concurrent read-only SQLite
 probes. The transient `-shm` WAL index is rebuilt privately, never copied or used
 to detect durable changes. Empty WAL files created by readers count as absent.
