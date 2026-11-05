@@ -8,7 +8,10 @@ const { fixture, host } = createPluginModuleGenerationTestHarness();
 describe("plugin module URL identity", () => {
   it.each(
     ["mjs", "ts"].flatMap((extension) =>
-      ["relative", "absolute", "absolute-encoded", "file"].map((form) => ({ extension, form })),
+      // Windows import() requires file URLs; a raw drive path is a c: URL.
+      ["relative", "absolute", "absolute-encoded", "file"]
+        .filter((form) => form !== "absolute" || process.platform !== "win32")
+        .map((form) => ({ extension, form })),
     ),
   )("preserves computed import URL identity ($extension, $form)", async ({ extension, form }) => {
     const root = fixture({
