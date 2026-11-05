@@ -1,0 +1,2 @@
+# Real-Gateway contract test: saving or adding an API key checks it against the provider and reports a rejected (401/403), inconclusive (5xx) or verified key in the form, within 2 s, keeping a rejected key editable.
+181
