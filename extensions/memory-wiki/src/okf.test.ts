@@ -650,11 +650,25 @@ private body
     const bundlePath = path.join(rootDir, "notes-okf");
     await fs.mkdir(bundlePath, { recursive: true });
     const conceptPath = path.join(bundlePath, "customers.md");
-    await fs.writeFile(
-      conceptPath,
-      "---\ntype: Concept\ntitle: Customers\n---\nOriginal body.\n",
-      "utf8",
-    );
+    const producer = (version: string) =>
+      [
+        "---",
+        "type: Concept",
+        "title: Customers",
+        "example: |",
+        "  ```",
+        "---",
+        "## Notes",
+        `${version} body.`,
+        "## Content",
+        "~~~html",
+        "<!-- openclaw:human:start -->",
+        "Producer marker example",
+        "<!-- openclaw:human:end -->",
+        "~~~",
+        "",
+      ].join("\n");
+    await fs.writeFile(conceptPath, producer("Original"), "utf8");
     const { config } = await createVault({ rootDir: path.join(rootDir, "vault") });
     const first = await importMemoryWikiOkfBundle({ config, bundlePath });
     const pagePath = path.join(config.vault.path, getOnlyPagePath(first.pagePaths));
@@ -667,11 +681,7 @@ private body
       original.replace(emptyNotes, () => humanNotes),
       "utf8",
     );
-    await fs.writeFile(
-      conceptPath,
-      "---\ntype: Concept\ntitle: Customers\n---\nUpdated body.\n",
-      "utf8",
-    );
+    await fs.writeFile(conceptPath, producer("Updated"), "utf8");
 
     await importMemoryWikiOkfBundle({ config, bundlePath });
 
@@ -679,5 +689,6 @@ private body
     expect(refreshed).toContain("Updated body.");
     expect(refreshed).not.toContain("Original body.");
     expect(refreshed).toContain(humanNotes);
+    expect(refreshed).toContain("Producer marker example");
   });
 });
