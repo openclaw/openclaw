@@ -2,16 +2,24 @@
 // node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-pr-currency-measure.ts
 //   --output .local/currency.json [--allocations] [--base-owner-suffix base]
 // --base-owner-suffix compares control-ui-session-pr-{read,source,subscriptions}.<suffix>.ts.
+// Subscription snapshots must expose the current four-argument replace API.
 // --base-projection-suffix compares session-row-projection.<suffix>.ts (redirect its
 // materialize import to the matching baseline snapshot). --captures isolates row capture.
-// --unrelated-churn updates an unrelated archived session between batches of 64 validations;
+// --unrelated-churn updates an unrelated archived session between batches of 64 validations/polls;
 // baseline read imports must point at control-ui-session-task-prs.<suffix>.ts as well.
 // --subscribe measures real subscribe handlers plus settled passive watcher work.
 // Its baseline also needs server-methods/control-ui.<suffix>.ts.
 // --subscriptions measures passive watcher polls with a runtime publication per poll;
-// iterations must be divisible by 64 and count watcher validations, not polls.
+// iterations must be divisible by --clients and count watcher validations, not polls.
+// --task-receipts seeds one acknowledged synthetic PR per root/descendant and verifies delivery.
+// --count-membership instruments owner reads; run separately from CPU/allocation measurements.
+// --notifications --clients 65 measures participant-fact notifications (one event per turn);
+// --idle supplies the matching event-loop-only control. Iterations count events/idle turns.
+// Subscription arms install and stop their subscriptions outside each sample, so global
+// publications never exercise the other arm's watchers. Report checks separately from events.
 // Both arms share one prepared fixture; five pairs alternate AB/BA without rebuilding state.
 // Fixture setup is excluded: 10k persisted rows, 40 configured agents, 64 retained readers.
+// Each reader has four shared descendants created by a different profile.
 // Each arm acquires one physical source, then checks it at every reader's final assertion.
 // Preserve every arm, report host load, and interpret allocation-mode timing separately.
 import assert from "node:assert/strict";
@@ -24,15 +32,20 @@ import path from "node:path";
 import { PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
-import type { ControlUiSessionPrRead } from "../../src/gateway/control-ui-session-pr-read.js";
+import type {
+  ControlUiSessionPrRead,
+  ControlUiSessionPrTarget,
+} from "../../src/gateway/control-ui-session-pr-read.js";
 import type { GatewayClient } from "../../src/gateway/server-methods/client-types.js";
 import { createControlUiRequestOptions } from "../../src/gateway/server-methods/control-ui-request.test-support.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
 } from "../../src/gateway/server-methods/types.js";
+import type { RepositoryGitHubPublicationRow } from "../../src/state/github-publication-read.types.js";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
@@ -42,7 +55,12 @@ const { values } = parseArgs({
     warmup: { type: "string", default: "1000" },
     allocations: { type: "boolean", default: false },
     subscriptions: { type: "boolean", default: false },
+    "task-receipts": { type: "boolean", default: false },
+    "count-membership": { type: "boolean", default: false },
     subscribe: { type: "boolean", default: false },
+    notifications: { type: "boolean", default: false },
+    idle: { type: "boolean", default: false },
+    clients: { type: "string", default: "64" },
     "unrelated-churn": { type: "boolean", default: false },
     "base-owner-suffix": { type: "string" },
     "base-projection-suffix": { type: "string" },
@@ -51,17 +69,21 @@ const { values } = parseArgs({
     output: { type: "string" },
   },
 });
-const integer = (name: "iterations" | "warmup" | "pairs") =>
+const integer = (name: "iterations" | "warmup" | "pairs" | "clients") =>
   parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min: 1, fallback: 1 });
 const iterations = integer("iterations");
 const warmup = integer("warmup");
 const pairs = integer("pairs");
-const watchSubscriptions = values.subscriptions || values.subscribe;
-assert(!(values.subscriptions && values.subscribe), "Choose --subscribe or --subscriptions");
+const watchSubscriptions = values.subscriptions || values.subscribe || values.notifications;
+assert(
+  [values.subscriptions, values.subscribe, values.notifications].filter(Boolean).length <= 1,
+  "Choose --subscribe, --subscriptions, or --notifications",
+);
+assert(!values.idle || values.notifications, "--idle requires --notifications");
 assert(!(values.captures && watchSubscriptions), "Choose --captures or subscription work");
 assert(
-  !values["unrelated-churn"] || (!watchSubscriptions && !values.captures),
-  "--unrelated-churn uses reader mode",
+  !values["unrelated-churn"] || ((!watchSubscriptions || values.subscriptions) && !values.captures),
+  "--unrelated-churn uses reader or subscription mode",
 );
 assert(!(values["base-owner-suffix"] && values["base-projection-suffix"]));
 assert(global.gc, "Run Node with --expose-gc");
@@ -131,11 +153,12 @@ for (const directory of ["home", "tmp"]) {
   mkdirSync(path.join(stateDir, directory));
 }
 const sessionCount = 10_000;
-const readerCount = 64;
-if (watchSubscriptions) {
-  assert.equal(iterations % readerCount, 0, "--iterations must be divisible by 64");
+const readerCount = integer("clients");
+if (watchSubscriptions && !values.notifications) {
+  assert.equal(iterations % readerCount, 0, "--iterations must be divisible by --clients");
 }
 const childrenPerRoot = 4;
+assert(readerCount * (childrenPerRoot + 1) < sessionCount, "Too many clients for the fixture");
 const agentIds = ["main", ...Array.from({ length: 39 }, (_, i) => `worker-${i}`)];
 const cfg: OpenClawConfig = {
   agents: {
@@ -212,6 +235,7 @@ const owners = await Promise.all(
   }),
 );
 const profile = ensureProfileForEmail("currency-reader@example.test");
+const childCreator = ensureProfileForEmail("currency-child-creator@example.test");
 setRuntimeConfigSnapshot(cfg);
 const keyFor = (index: number) => `agent:main:currency-${index}`;
 const projections: import("../../src/gateway/session-row-projection.js").SessionRowProjection[] =
@@ -224,8 +248,7 @@ const observer = new PerformanceObserver((list) => {
     gc.push({ start: entry.startTime, ms: entry.duration });
   }
 });
-const schedulers: InstanceType<typeof GatewayScheduler>[] = [];
-const stopSubscriptions: (() => Promise<void>)[] = [];
+let stopNotificationArm: (() => Promise<void>) | undefined;
 try {
   runOpenClawAgentWriteTransaction(
     (database) => {
@@ -235,7 +258,11 @@ try {
           sessionId: `currency-session-${index}`,
           updatedAt: 1_700_000_000_000 + index,
           spawnedCwd: "/synthetic/currency-workspace",
-          createdActor: { type: "human", source: "profile", id: profile.id },
+          createdActor: {
+            type: "human",
+            source: "profile",
+            id: child ? childCreator.id : profile.id,
+          },
           ...(child ? { parentSessionKey: keyFor((index - readerCount) % readerCount) } : {}),
           ...(index >= readerCount * (childrenPerRoot + 1)
             ? { archivedAt: 1_700_000_000_001 }
@@ -246,12 +273,79 @@ try {
     },
     { agentId: "main" },
   );
+  if (values["task-receipts"]) {
+    const { insertRepositoryGitHubPublicationFixture } =
+      await import("../../src/gateway/github-publication-store.test-support.js");
+    const { repositoryGitHubPublicationDigest } =
+      await import("../../src/gateway/github-repository-publication.kernel.js");
+    for (let index = 0; index < readerCount * (childrenPerRoot + 1); index++) {
+      const requestId = `currency-pr-${index}`;
+      const row: RepositoryGitHubPublicationRow = {
+        request_id: requestId,
+        idempotency_key: requestId,
+        request_digest: "",
+        session_id: `currency-session-${index}`,
+        session_key: keyFor(index),
+        agent_id: "main",
+        session_lifecycle_revision: null,
+        requester_authority_json: null,
+        workspace_id: `currency-workspace-${index}`,
+        owner_profile_id: null,
+        connection_generation: null,
+        identity_source: "system-configured",
+        identity_profile_id: profile.id,
+        identity_account_id: 42,
+        identity_login: "fixture-bot",
+        title: `Synthetic task ${index}`,
+        body: null,
+        draft: null,
+        status: "published",
+        gateway_instance_id: null,
+        execution_id: null,
+        push_repository: "synthetic/currency",
+        repository: "synthetic/currency",
+        branch: `task-${index}`,
+        base_branch: "main",
+        source_head_commit: "b".repeat(40),
+        source_index_tree: "c".repeat(40),
+        workspace_tree: "c".repeat(40),
+        previous_head_commit: null,
+        pushed_head_commit: null,
+        head_commit: null,
+        pull_request_url: `https://github.com/synthetic/currency/pull/${index + 1}`,
+        claim_id: null,
+        run_id: null,
+        environment_id: null,
+        owner_epoch: null,
+        placement_generation: null,
+        checkpoint_ref: null,
+        checkpoint_digest: null,
+        error_code: null,
+        next_action: null,
+        last_effect: null,
+        effect_state: null,
+        created_at_ms: 1000,
+        updated_at_ms: 1000,
+        reported_at_ms: null,
+      };
+      row.request_digest = repositoryGitHubPublicationDigest(row);
+      insertRepositoryGitHubPublicationFixture(row, () => {});
+    }
+  }
   const arms = [];
   for (const owner of owners) {
     const projection = await owner.createSessionRowProjection({ cfg, modelCatalog: [] });
     projections.push(projection);
     await projection.prepareSelection();
     await projection.ensureMaterialized();
+    let membershipReads = 0;
+    if (values["count-membership"]) {
+      const readMembership = projection.readMembership.bind(projection);
+      projection.readMembership = (query) => {
+        membershipReads++;
+        return readMembership(query);
+      };
+    }
     const access = new AbortController();
     const reads: ControlUiSessionPrRead[] = [];
     const clients: GatewayClient[] = [];
@@ -301,10 +395,27 @@ try {
       assert(target?.assertCurrent);
       assert.equal(target.taskReceipts?.sessions.length, childrenPerRoot + 1);
     }
+    if (values["task-receipts"] && !watchSubscriptions) {
+      const { readTaskPullRequestReceipts } =
+        await import("../../src/gateway/control-ui-session-task-prs.js");
+      for (const target of targets) {
+        assert(target?.taskReceipts && target.assertCurrent);
+        const receipts = await readTaskPullRequestReceipts(
+          target.taskReceipts,
+          target.assertCurrent,
+        );
+        assert.equal(receipts.taskPullRequestCount, childrenPerRoot + 1);
+      }
+    }
     const source = targets[0]!.readSource;
     assert(targets.every((target) => target?.readSource.path === source.path));
+    let watcherChecks = 0;
+    const updateDurations: number[] = [];
+    let prepare = async () => {};
+    let cleanup = async () => {};
     let run = (count: number) =>
       owner.withControlUiSessionPrSource(source, async (assertSourceCurrent) => {
+        let batchStarted = performance.now();
         for (let index = 0; index < count; index++) {
           if (values["unrelated-churn"] && index % readerCount === 0) {
             await upsertSessionEntryCore(
@@ -322,6 +433,10 @@ try {
           );
           assertSourceCurrent();
           target!.assertCurrent!();
+          if ((index + 1) % readerCount === 0) {
+            updateDurations.push(performance.now() - batchStarted);
+            batchStarted = performance.now();
+          }
         }
       });
     if (values.captures) {
@@ -338,108 +453,200 @@ try {
         }
       };
     }
-    if (owner.subscriptions) {
-      const scheduler = new GatewayScheduler();
-      schedulers.push(scheduler);
-      let publications = 0;
-      const subscriptions = owner.subscriptions.createControlUiSessionPullRequestSubscriptions({
-        scheduler,
-        getSessionRowProjection: () => projection,
-        broadcastToConnIds: () => {
-          publications++;
-        },
-        isConnectionActive: () => true,
-        prepareRead: async (connId) => {
-          const read = reads[Number(connId)];
-          assert(read, "Every request must have a real reader");
-          return read;
-        },
-      });
-      stopSubscriptions.push(subscriptions.stop);
-      const replacements: Promise<void>[] = [];
-      const requestSubscriptions = {
-        ...subscriptions,
-        replace: (...args: Parameters<typeof subscriptions.replace>) => {
-          const pending = subscriptions.replace(...args);
-          replacements.push(pending);
-          return pending;
-        },
-      };
-      const settleReplacements = async () => {
-        await Promise.all(replacements.splice(0));
-      };
-      const requestOptions = createControlUiRequestOptions(() => cfg);
-      const requests = owner.handler
-        ? clients.map((client, index) => {
-            const params = { sessionKeys: [], passiveSessionKeys: [keyFor(index)] };
-            // This owner benchmark supplies only the context consumed by the subscribe RPC.
-            const context = {
-              controlUiSessionPullRequests: requestSubscriptions,
-              logGateway: {
-                warn: (message: string) => {
-                  throw new Error(message);
-                },
-              },
-            } satisfies Pick<GatewayRequestContext, "controlUiSessionPullRequests"> & {
-              logGateway: Pick<GatewayRequestContext["logGateway"], "warn">;
-            };
-            const respond = (ok: boolean, payload: unknown) => {
-              assert(ok);
-              assert.deepEqual(payload, { subscribed: true });
-            };
-            return Object.assign(requestOptions(params, respond, { context }), {
-              client,
-              req: {
-                type: "req" as const,
-                id: String(index),
-                method: "controlUi.sessionPullRequests.subscribe",
-                params,
-              },
-            }) satisfies GatewayRequestHandlerOptions;
-          })
-        : [];
-      if (owner.handler) {
-        for (const request of requests) {
-          await owner.handler(request);
+    if (values.notifications && owner.subscriptions) {
+      const subscriptionOwner = owner.subscriptions;
+      const wrapped = new WeakMap<ControlUiSessionPrTarget, ControlUiSessionPrTarget>();
+      const countedReads = reads.map((read): ControlUiSessionPrRead => async () => {
+        const target = await read();
+        if (!target) {
+          return undefined;
         }
-        await settleReplacements();
-        assert.equal(publications, readerCount, "Each real subscription must publish its snapshot");
-      } else {
+        let counted = wrapped.get(target);
+        if (!counted) {
+          counted = {
+            ...target,
+            assertCurrent: () => {
+              watcherChecks++;
+              target.assertCurrent!();
+            },
+          };
+          wrapped.set(target, counted);
+        }
+        return counted;
+      });
+      prepare = async () => {
+        assert(!stopNotificationArm, "Only one notification arm may subscribe");
+        const scheduler = new GatewayScheduler();
+        let publications = 0;
+        const subscriptions = subscriptionOwner.createControlUiSessionPullRequestSubscriptions({
+          scheduler,
+          getSessionRowProjection: () => projection,
+          broadcastToConnIds: () => publications++,
+          isConnectionActive: () => true,
+          prepareRead: async (connId) => countedReads[Number(connId)],
+        });
+        stopNotificationArm = async () => {
+          await subscriptions.stop();
+          await scheduler.stop();
+        };
         for (let index = 0; index < readerCount; index++) {
-          if (owner.name === "base" && values["base-owner-suffix"]) {
-            // Historical owner snapshots retain the removed admission callback position.
-            const replace = subscriptions.replace as (
-              connId: string,
-              keys: readonly string[],
-              refresh: ReadonlySet<string>,
-              admitted: undefined,
-              passive: ReadonlySet<string>,
-            ) => Promise<void>;
-            await replace(String(index), [], new Set(), undefined, new Set([keyFor(index)]));
-          } else {
+          await subscriptions.replace(String(index), [], new Set(), new Set([keyFor(index)]));
+        }
+        assert.equal(publications, readerCount, "Each real subscription must publish its snapshot");
+        watcherChecks = 0;
+      };
+      cleanup = async () => {
+        await stopNotificationArm?.();
+        stopNotificationArm = undefined;
+      };
+      run = async (count) => {
+        for (let index = 0; index < count; index++) {
+          if (!values.idle) {
+            sessionChanges.emit({
+              agentId: "main",
+              storePath: source.path,
+              sessionKey: keyFor(index % readerCount),
+              scope: "session-entry",
+              facts: { kind: "participants", projectionChanged: false },
+            });
+          }
+          // Drain the owner's existing deferred pass, without adding a poll.
+          await nextTurn();
+        }
+      };
+    } else if (owner.subscriptions) {
+      const subscriptionOwner = owner.subscriptions;
+      prepare = async () => {
+        assert(!stopNotificationArm, "Only one subscription arm may subscribe");
+        const scheduler = new GatewayScheduler();
+        let publications = 0;
+        const subscriptions = subscriptionOwner.createControlUiSessionPullRequestSubscriptions({
+          scheduler,
+          getSessionRowProjection: () => projection,
+          broadcastToConnIds: (_event, payload) => {
+            publications++;
+            if (values["task-receipts"]) {
+              assert(isRecord(payload) && isRecord(payload.sessions));
+              for (const snapshot of Object.values(payload.sessions)) {
+                assert(isRecord(snapshot));
+                assert.equal(snapshot.taskPullRequestCount, childrenPerRoot + 1);
+              }
+            }
+          },
+          isConnectionActive: () => true,
+          prepareRead: async (connId) => {
+            const read = reads[Number(connId)];
+            assert(read, "Every request must have a real reader");
+            return read;
+          },
+        });
+        stopNotificationArm = async () => {
+          await subscriptions.stop();
+          await scheduler.stop();
+        };
+        const replacements: Promise<void>[] = [];
+        const requestSubscriptions = {
+          ...subscriptions,
+          replace: (...args: Parameters<typeof subscriptions.replace>) => {
+            const pending = subscriptions.replace(...args);
+            replacements.push(pending);
+            return pending;
+          },
+        };
+        const settleReplacements = async () => {
+          await Promise.all(replacements.splice(0));
+        };
+        const requestOptions = createControlUiRequestOptions(() => cfg);
+        const requests = owner.handler
+          ? clients.map((client, index) => {
+              const params = { sessionKeys: [], passiveSessionKeys: [keyFor(index)] };
+              // This owner benchmark supplies only the context consumed by the subscribe RPC.
+              const context = {
+                controlUiSessionPullRequests: requestSubscriptions,
+                logGateway: {
+                  warn: (message: string) => {
+                    throw new Error(message);
+                  },
+                },
+              } satisfies Pick<GatewayRequestContext, "controlUiSessionPullRequests"> & {
+                logGateway: Pick<GatewayRequestContext["logGateway"], "warn">;
+              };
+              const respond = (ok: boolean, payload: unknown) => {
+                assert(ok);
+                assert.deepEqual(payload, { subscribed: true });
+              };
+              return Object.assign(requestOptions(params, respond, { context }), {
+                client,
+                req: {
+                  type: "req" as const,
+                  id: String(index),
+                  method: "controlUi.sessionPullRequests.subscribe",
+                  params,
+                },
+              }) satisfies GatewayRequestHandlerOptions;
+            })
+          : [];
+        if (owner.handler) {
+          for (const request of requests) {
+            await owner.handler(request);
+          }
+          await settleReplacements();
+        } else {
+          for (let index = 0; index < readerCount; index++) {
             await subscriptions.replace(String(index), [], new Set(), new Set([keyFor(index)]));
           }
         }
-      }
-      run = async (count) => {
-        for (let index = 0; index < Math.ceil(count / readerCount); index++) {
-          if (owner.handler) {
-            await Promise.all(requests.map((request) => Promise.resolve(owner.handler!(request))));
-            // Include exactly the work scheduled by the request, without an extra poll.
-            await settleReplacements();
-          } else {
-            sessionChanges.emit({
-              agentId: "main",
-              sessionKey: keyFor(index % readerCount),
-              scope: "runtime",
-            });
-            await subscriptions.pollNow();
+        assert.equal(publications, readerCount, "Each real subscription must publish its snapshot");
+        run = async (count) => {
+          for (let index = 0; index < Math.ceil(count / readerCount); index++) {
+            const started = performance.now();
+            if (owner.handler) {
+              await Promise.all(
+                requests.map((request) => Promise.resolve(owner.handler!(request))),
+              );
+              // Include exactly the work scheduled by the request, without an extra poll.
+              await settleReplacements();
+            } else {
+              if (values["unrelated-churn"]) {
+                await upsertSessionEntryCore(
+                  { agentId: "main", sessionKey: keyFor(sessionCount - 1) },
+                  { label: `Churn ${index}` },
+                );
+                await projection.ensureMaterialized();
+                // Consume the publication's deferred audience pass before the explicit poll.
+                await nextTurn();
+              }
+              sessionChanges.emit({
+                agentId: "main",
+                sessionKey: keyFor(index % readerCount),
+                scope: "runtime",
+              });
+              await subscriptions.pollNow();
+              if (values["unrelated-churn"]) {
+                await nextTurn();
+              }
+            }
+            updateDurations.push(performance.now() - started);
           }
-        }
+        };
+      };
+      cleanup = async () => {
+        await stopNotificationArm?.();
+        stopNotificationArm = undefined;
       };
     }
+    await prepare();
     await run(warmup);
-    arms.push({ owner, run });
+    await cleanup();
+    arms.push({
+      owner,
+      run: (count: number) => run(count),
+      prepare,
+      cleanup,
+      updateDurations,
+      watcherChecks: () => watcherChecks,
+      membershipReads: () => membershipReads,
+    });
   }
   if (values.allocations) {
     inspector.connect();
@@ -449,6 +656,7 @@ try {
   for (let pair = 0; pair < pairs; pair++) {
     const order = pair % 2 === 0 ? arms : arms.toReversed();
     for (const arm of order) {
+      await arm.prepare();
       global.gc();
       await nextTurn();
       gc.length = 0;
@@ -464,6 +672,8 @@ try {
       const before = process.memoryUsage();
       const hostLoadBefore = os.loadavg();
       const cpuBefore = process.threadCpuUsage();
+      const membershipBefore = arm.membershipReads();
+      arm.updateDurations.length = 0;
       const started = performance.now();
       await arm.run(iterations);
       const ended = performance.now();
@@ -488,12 +698,34 @@ try {
         allocation:
           bytes === undefined
             ? null
-            : { sampledBytes: bytes, bytesPerReadAndAssertion: bytes / iterations },
+            : {
+                sampledBytes: bytes,
+                ...(values.notifications
+                  ? { bytesPerTurn: bytes / iterations }
+                  : { bytesPerReadAndAssertion: bytes / iterations }),
+              },
         cpu: {
           mainThreadMs: (cpu.user + cpu.system) / 1000,
-          microsecondsPerReadAndAssertion: (cpu.user + cpu.system) / iterations,
+          ...(values.notifications
+            ? { microsecondsPerTurn: (cpu.user + cpu.system) / iterations }
+            : { microsecondsPerReadAndAssertion: (cpu.user + cpu.system) / iterations }),
         },
+        ...(values.notifications
+          ? {
+              work: {
+                turns: iterations,
+                notifications: values.idle ? 0 : iterations,
+                watcherChecks: arm.watcherChecks(),
+                notificationsPerSecond: values.idle ? 0 : (iterations * 1000) / (ended - started),
+                watcherChecksPerSecond: (arm.watcherChecks() * 1000) / (ended - started),
+              },
+            }
+          : {}),
         elapsedMs: ended - started,
+        ...(values["count-membership"]
+          ? { membershipReads: arm.membershipReads() - membershipBefore }
+          : {}),
+        updateDurationsMs: arm.updateDurations.slice(),
         gc: {
           count: measuredGc.length,
           totalMs: measuredGc.reduce((total, entry) => total + entry.ms, 0),
@@ -502,6 +734,7 @@ try {
         memory: { before, after },
         hostLoad: { before: hostLoadBefore, after: hostLoadAfter },
       });
+      await arm.cleanup();
     }
   }
   for (const source of sources) {
@@ -544,9 +777,11 @@ try {
   const result = {
     scope: values.captures
       ? "real resident row captures on Team-shaped state; no transport or whole-Gateway claim"
-      : values.subscribe
-        ? "real subscribe handler and settled owner work; no transport or whole-Gateway claim"
-        : "real in-process PR reader, physical source and final currency assertions; no transport or whole-Gateway claim",
+      : values.notifications
+        ? "real subscription-owner participant notifications or idle control; no transport or production-frequency claim"
+        : values.subscribe
+          ? "real subscribe handler and settled owner work; no transport or whole-Gateway claim"
+          : "real in-process PR reader, physical source and final currency assertions; no transport or whole-Gateway claim",
     node: process.version,
     owners: sources.map(
       ({
@@ -586,7 +821,10 @@ try {
       warmup,
       pairs,
       subscriptions: values.subscriptions,
+      taskReceipts: values["task-receipts"] ? readerCount * (childrenPerRoot + 1) : 0,
       subscribe: values.subscribe,
+      notifications: values.notifications,
+      idle: values.idle,
       unrelatedChurn: values["unrelated-churn"],
       captures: values.captures,
     },
@@ -599,12 +837,7 @@ try {
   }
   process.stdout.write(output);
 } finally {
-  for (const stop of stopSubscriptions) {
-    await stop();
-  }
-  for (const scheduler of schedulers) {
-    await scheduler.stop();
-  }
+  await stopNotificationArm?.();
   observer.disconnect();
   if (inspectorConnected) {
     inspector.disconnect();

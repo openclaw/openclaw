@@ -1,6 +1,7 @@
+import * as normalization from "@openclaw/normalization-core";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { assert, expect, it } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import type { Tool } from "../types.js";
 import type { ToolSchemaModelCompat } from "./agent-tools-parameter-schema.js";
 import { convertResponsesToolPayload } from "./openai-responses-tools.js";
@@ -45,6 +46,25 @@ function normalizePrepared(tools: Tool[], modelCompat: ToolSchemaModelCompat) {
   const parameters = expectDefined(projection.tools[0], "projected tool").parameters;
   return withPrepared(schemas, () => normalize(parameters, true, modelCompat));
 }
+
+it("does not traverse admitted request schemas again on normalization cache hits", () => {
+  const tools = [choose(actionSchema())];
+  payloadSchema(tools);
+  const { projection, schemas } = prepareOpenAITools(tools);
+  const parameters = expectDefined(projection.tools[0], "projected tool").parameters;
+  const entries = vi.spyOn(Object, "entries");
+  let traversals: number;
+  try {
+    withPrepared(schemas, () => normalize(parameters, false));
+    traversals = entries.mock.calls.filter(([value]) => value === parameters).length;
+  } finally {
+    entries.mockRestore();
+  }
+  expect(traversals).toBe(0);
+  // Admission expires with the conversion: direct mutable callers still detect cycles.
+  parameters.properties = { self: parameters };
+  expect(() => normalize(parameters, false)).toThrow("circular reference");
+});
 
 it("prepares published compatibility and union dialects once without sharing their policy", () => {
   const source = {
@@ -102,6 +122,7 @@ it("publishes detached immutable schemas while source edits require a new public
 });
 
 it("reuses published provider variants without changing current strict or compatibility options", () => {
+  using stringify = vi.spyOn(normalization, "stableStringify");
   const source = actionSchema();
   Reflect.deleteProperty(source, "additionalProperties");
   const projection = publishRuntimeToolInputSchema(source);
@@ -119,6 +140,7 @@ it("reuses published provider variants without changing current strict or compat
   expect(stripped).not.toHaveProperty("properties.action.enum");
   expect(normalizePrepared(tools, stripEnumCompat)).toBe(stripped);
   expect(payloadSchema(tools, true)).toHaveProperty("properties.action.enum", ["read"]);
+  expect(stringify).not.toHaveBeenCalled();
 });
 
 it("keeps current provider options isolated", () => {

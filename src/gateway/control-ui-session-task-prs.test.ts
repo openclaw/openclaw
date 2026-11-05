@@ -9,18 +9,27 @@ import {
   listAgentDatabaseAdmissionRefusals,
   recordAgentDatabaseAdmissions,
 } from "../state/agent-database-admission.js";
-import { publicationRowDefaults } from "../state/github-publication-fixtures.test-support.js";
+import {
+  holdStateRead,
+  publicationRowDefaults,
+  waitForPublicationGate,
+} from "../state/github-publication-fixtures.test-support.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
+import * as profileReads from "../state/user-profile-list.js";
+import { mergeProfiles } from "../state/user-profile-writes.worker.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import type { ControlUiSessionPullRequestSnapshot } from "./control-ui-contract.js";
 import { createFixture, sessionKey } from "./control-ui-session-pr-access.test-support.js";
+import { staleReceiptsOnlyCell } from "./control-ui-session-pr-prepared-read.js";
 import {
   createControlUiSessionPrRead,
   prepareControlUiSessionPrServiceTarget,
+  receiptsOnlyTargetIdentity,
+  type ControlUiSessionPrTarget,
 } from "./control-ui-session-pr-read.js";
 import { githubJson, pullListItem, requestUrl } from "./control-ui-session-prs.test-support.js";
 import { prepareTaskPublicationSessions } from "./control-ui-session-task-prs.js";
@@ -217,6 +226,47 @@ it("reuses unchanged watcher currency and retires it on owner publications", asy
   }
 });
 
+it("prepares task audience policy once without reacquiring descendant membership", async () => {
+  for (let index = 0; index < 4; index++) {
+    await fixture.seed(`agent:main:foreign-${index}`, fixture.other.id, {
+      parentSessionKey: sessionKey,
+    });
+  }
+  const projection = getSessionRowProjection(fixture.context)!;
+  const read = createControlUiSessionPrRead({
+    client: fixture.client,
+    sessionKey,
+    getRuntimeConfig: fixture.context.getRuntimeConfig,
+    getSessionRowProjection: () => projection,
+    isCurrentClient: () => true,
+  })!;
+  const target = (await read())!;
+  expect(target.taskReceipts?.sessions).toHaveLength(5);
+  await fixture.seed("agent:main:unrelated", fixture.profile.id);
+  await projection.ensureMaterialized();
+  const aliases = vi.spyOn(profileReads, "readResidentUserProfileAliases");
+  const membership = vi.spyOn(projection, "readMembership");
+  target.assertCurrent!();
+  expect(aliases).toHaveBeenCalledTimes(1);
+  // Root admission still reads membership; already-selected descendants use owner facts.
+  expect(membership).toHaveBeenCalledTimes(1);
+
+  await fixture.seed("agent:main:foreign-0", fixture.other.id, {
+    parentSessionKey: sessionKey,
+    visibility: "draft",
+  });
+  await projection.ensureMaterialized();
+  expect(() => target.assertCurrent!()).toThrow("Task pull-request audience changed");
+  const narrowed = (await read())!;
+  expect(narrowed.taskReceipts?.sessions).toHaveLength(4);
+
+  // A later validation must prepare fresh aliases, even when the viewer ID is unchanged.
+  mergeProfiles(fixture.other.id, fixture.profile.id);
+  prepareGatewayRecipientProfile(fixture.client);
+  expect(() => narrowed.assertCurrent!()).toThrow("Task pull-request audience changed");
+  expect((await read())?.taskReceipts?.sessions).toHaveLength(5);
+});
+
 it("shares lineage work across audiences without sharing visibility or stale descendants", async () => {
   const child = "agent:main:a-child";
   const hidden = "agent:main:b-hidden";
@@ -247,7 +297,7 @@ it("shares lineage work across audiences without sharing visibility or stale des
       lifecycleRevision: null,
     }));
   const allowsAll = () => true;
-  const allowsShared = (key: string | undefined) => key !== hidden;
+  const allowsShared = ({ key }: records.EntryRow) => key !== hidden;
   const selected = prepareTaskPublicationSessions(projection, root, () => allowsAll).sessions;
   expect(selected).toEqual(expected([child, hidden, leaf, sessionKey]));
   selected.reverse();
@@ -303,7 +353,9 @@ it("shares lineage work across audiences without sharing visibility or stale des
     prepareTaskPublicationSessions(
       projection,
       root,
-      () => (_key, entry) => entry.visibility !== "draft",
+      () =>
+        ({ entry }) =>
+          entry.visibility !== "draft",
     ).sessions,
   ).toEqual(expected([child, hidden, leaf, sessionKey]));
   expect(reads).toHaveBeenCalledTimes(afterCreation);
@@ -556,6 +608,33 @@ it.each([false, true])(
   },
 );
 
+it("withholds task receipts when a descendant becomes private during their read", async ({
+  signal,
+}) => {
+  const child = "agent:main:pending-private-child";
+  await fixture.seed(child, fixture.other.id, { parentSessionKey: sessionKey });
+  receipt(child, 1);
+  stubOffline();
+  const held = holdStateRead("githubPublications.taskReceipts");
+  const pending = passive();
+  try {
+    await waitForPublicationGate(signal, pending, held.ready);
+    await fixture.seed(child, fixture.other.id, {
+      parentSessionKey: sessionKey,
+      visibility: "draft",
+    });
+    held.release();
+    await pending;
+    await fixture.subscriptions.pollNow();
+    await vi.waitFor(() => expect(taskNumbers()).toEqual([]));
+    expect(snapshots().flatMap((snapshot) => snapshot.taskPullRequests ?? [])).toEqual([]);
+  } finally {
+    held.release();
+    await pending.catch(() => {});
+    held.restore();
+  }
+});
+
 it("keeps personal receipts viewer-scoped and withdraws inaccessible descendants", async () => {
   const child = "agent:main:private-child";
   await fixture.seed(child, fixture.other.id, {
@@ -630,6 +709,78 @@ it("keeps personal receipts viewer-scoped and withdraws inaccessible descendants
   receipt(sessionKey, 3);
   await fixture.subscriptions.pollNow();
   expect(snapshots()).toHaveLength(delivered);
+});
+
+it("gives passive rows the PR state an active viewer already verified, without GitHub reads", async () => {
+  receipt(sessionKey, 1);
+  const phone = fixture.addReader("phone");
+  const fetcher = stubOffline("No GitHub allowed for passive rows");
+  await passive(phone.client);
+  const phoneLatest = () => snapshots(phone.socket).at(-1)?.taskPullRequests?.[0]?.pullRequest;
+  expect(phoneLatest()).toBeUndefined();
+  fetcher.mockImplementation(async (input) =>
+    githubJson(
+      pullListItem({
+        number: Number(new URL(requestUrl(input)).pathname.split("/").at(-1)),
+        state: "closed",
+        merged_at: "2026-11-01T00:00:00Z",
+        html_url: "https://github.com/example/repository/pull/1",
+        base: { repo: { name: "repository", owner: { login: "example" } } },
+      }),
+    ),
+  );
+  await fixture.subscribe();
+  await fixture.subscriptions.pollNow();
+  expect(latest()?.taskPullRequests?.[0]?.pullRequest?.state).toBe("merged");
+  const verifiedReads = fetcher.mock.calls.length;
+  // The retained passive audience learns the verified state without its own lookup.
+  await vi.waitFor(() => expect(phoneLatest()?.state).toBe("merged"));
+  // Passive pushes carry the state chip only, not diff stats or CI rollups.
+  expect(Object.keys(phoneLatest() ?? {}).toSorted()).toEqual([
+    "branch",
+    "number",
+    "owner",
+    "repo",
+    "state",
+    "title",
+    "url",
+  ]);
+  // A reconnecting sidebar receives it too.
+  const reconnected = fixture.addReader("phone-reconnected");
+  await passive(reconnected.client);
+  expect(snapshots(reconnected.socket).at(-1)?.taskPullRequests?.[0]?.pullRequest?.state).toBe(
+    "merged",
+  );
+  await fixture.subscriptions.pollNow();
+  expect(fetcher).toHaveBeenCalledTimes(verifiedReads);
+});
+
+it("reloads a stale passive cell once per verified state, even when its cache misses", () => {
+  const target = { identity: "session" } as ControlUiSessionPrTarget;
+  const pullRequest = (prState: "open" | "merged") => {
+    const url = "https://github.com/example/repository/pull/1";
+    const facts = { url, owner: "example", repo: "repository", number: 1, branch: "fix" };
+    return {
+      ...facts,
+      sourceSessionKey: sessionKey,
+      sourceAgentId: "main",
+      pullRequest: { ...facts, title: "Fix", state: prState },
+    };
+  };
+  const cell = (taskPullRequests: ControlUiSessionPullRequestSnapshot["taskPullRequests"]) => ({
+    connIds: new Set(["phone"]),
+    target,
+    cacheLifetime: new AbortController(),
+    snapshot: { pullRequests: [], rateLimited: false, status: "ready" as const, taskPullRequests },
+  });
+  const passiveKey = receiptsOnlyTargetIdentity(target.identity);
+  const passiveCell = cell([{ ...pullRequest("open"), pullRequest: undefined }]);
+  passiveCell.target = { ...target, identity: passiveKey, taskReceiptsOnly: true };
+  const keyStates = new Map([[passiveKey, passiveCell]]);
+  const active = cell([pullRequest("merged")]);
+  expect(staleReceiptsOnlyCell(keyStates, active, active.snapshot)).toBe(passiveKey);
+  // The reload missed the cache: the next poll of the same verified state must not reload again.
+  expect(staleReceiptsOnlyCell(keyStates, active, active.snapshot)).toBeUndefined();
 });
 
 it("keeps a known cold URL when GitHub metadata fails, and ignores a replaced session lifecycle", async () => {

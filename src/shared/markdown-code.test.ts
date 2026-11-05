@@ -1,20 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { formatFencedCodeBlock, formatInlineCodeSpan } from "./markdown-code.js";
 
-describe("formatInlineCodeSpan", () => {
-  it("grows the delimiter past embedded backtick runs", () => {
-    expect(formatInlineCodeSpan("a `b` c")).toBe("``a `b` c``");
-    expect(formatInlineCodeSpan("x ``y`` z")).toBe("```x ``y`` z```");
-  });
-
-  it("pads when content starts or ends with a backtick", () => {
-    expect(formatInlineCodeSpan("`edge")).toBe("`` `edge ``");
-    expect(formatInlineCodeSpan("edge`")).toBe("`` edge` ``");
-  });
+it.each([
+  ["a `b` c", "``a `b` c``"],
+  ["x ``y`` z", "```x ``y`` z```"],
+  ["`edge", "`` `edge ``"],
+  ["edge`", "`` edge` ``"],
+  [" 1 ", "`  1  `"],
+  [" `code` ", "``  `code`  ``"],
+  ["   ", "`   `"],
+  [" \t ", "`  \t  `"],
+  [" \u00a0 ", "`  \u00a0  `"],
+] as const)("formats inline code span %j", (input, expected) => {
+  expect(formatInlineCodeSpan(input)).toBe(expected);
 });
 
-describe("formatFencedCodeBlock", () => {
-  it("keeps a three-backtick fence for short inner runs", () => {
-    expect(formatFencedCodeBlock("a ``b`` c")).toBe("```\na ``b`` c\n```");
-  });
+it("formatFencedCodeBlock keeps a fence longer than inner runs", () => {
+  expect(formatFencedCodeBlock("a ``b`` c")).toBe("```\na ``b`` c\n```");
 });

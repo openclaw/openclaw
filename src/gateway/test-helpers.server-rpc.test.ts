@@ -38,7 +38,7 @@ import {
 import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission-state.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
-import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
+import { getGatewayLifecycleRuntime } from "./server-lifecycle-runtime-context.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { releaseSessionTestDirectories } from "./session-test-directories.test-support.js";
 import { createGatewayConfigOverrides } from "./test-helpers.config-runtime.js";
@@ -108,7 +108,7 @@ describe("Gateway RPC fixture session writes", () => {
     const { dir, storePath, seed } = storeFixture("projection-release");
     await seed();
     expect((await rpcReq(ws, "chat.history", { sessionKey: "main" })).ok).toBe(true);
-    const runtime = getGatewayRecoveryRuntime();
+    const runtime = getGatewayLifecycleRuntime();
     const projection = getSessionRowProjection(runtime && getGatewayContextResolver(runtime)?.());
     assert(projection, "Suite Gateway projection is missing");
     await projection.ensureMaterialized();

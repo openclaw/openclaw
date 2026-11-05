@@ -385,8 +385,8 @@ async function exerciseDiagnostics({ page }: { page: Page }) {
   await contains(widget, "Unavailable");
   expect(await widget.textContent()).not.toContain("0.50 cores");
   expect(await widget.textContent()).not.toContain("654 MB");
-  await contains(snapshots, "Offline");
-  await contains(snapshots, "Connect to the Gateway to refresh diagnostics.");
+  await contains(snapshots, "Disconnected");
+  await contains(snapshots, "Reconnect to refresh diagnostics.");
   expect(await refresh.isDisabled()).toBe(true);
   await contains(snapshots, "diagnostics-e2e");
   await page.setViewportSize({ height: 844, width: 390 });

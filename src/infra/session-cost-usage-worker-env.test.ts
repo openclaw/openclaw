@@ -209,9 +209,17 @@ it("keeps SQLite selectors distinct", async ({ usage: { state, scope } }) => {
   open(scope, databasePath);
   const sessionFiles = ["first", "second"].map((id) => `sqlite:main:${id}:${storePath}`);
   const prepared = prepare({ ...scope, storePath, sessionFiles });
-  await expect(run(prepared, { kind: "inventory", sessionFiles })).resolves.toMatchObject({
-    kind: "inventory",
-    files: sessionFiles.map((sourcePath) => ({ kind: "sqlite", sourcePath })),
+  await expect(
+    run(prepared, {
+      kind: "sessions",
+      sessions: sessionFiles.map((sessionFile) => ({ sessionFile })),
+      pricingFingerprint: "synthetic",
+      dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+    }),
+  ).resolves.toMatchObject({
+    kind: "sessions",
+    summaries: [null, null],
+    staleSessionFiles: sessionFiles,
   });
 });
 
@@ -327,9 +335,9 @@ test.each(["none", "cleanup", "after-open", "during-open"] as const)(
   async (failure) => {
     onTestFinished(clearRuntimeConfigSnapshot);
     const failCleanup = failure === "cleanup";
-    const failDuringOpen = failure === "during-open";
-    const failAfterOpen = failure === "after-open" || failDuringOpen;
-    const captureStage = failDuringOpen
+    const duringOpen = failure === "during-open";
+    const failAfterOpen = failure === "after-open" || duringOpen;
+    const captureStage = duringOpen
       ? "agent-registration-start"
       : failAfterOpen
         ? "agent-registration-committed"
@@ -352,8 +360,8 @@ test.each(["none", "cleanup", "after-open", "during-open"] as const)(
         const releaseReader = createDeferred();
         const readerHeld = createDeferred();
         const cleanupFailure = new Error("Cache creator admission cleanup failed");
-        const refreshRefusal = new Error("Cache creator schema refresh refused after native open");
-        let refusedOpenRequests = 0;
+        const refreshRefusal = new Error("Cache creator admission refused after native open");
+        let refusedRequests = 0;
         let reading: Promise<SessionExactEntriesWorkerResult> | undefined;
         const runReader = historyLane.pool.run.bind(historyLane.pool);
         const reader = vi
@@ -365,8 +373,8 @@ test.each(["none", "cleanup", "after-open", "during-open"] as const)(
           });
         const admission = probe.admission(operationAdmission, (request, grant, authorize) => {
           authorize(request, () => {
-            if (failAfterOpen && reading && request.stage === "open") {
-              refusedOpenRequests += 1;
+            if (failAfterOpen && reading && request.stage === (duringOpen ? "open" : "prepare")) {
+              refusedRequests += 1;
               throw refreshRefusal;
             }
             if (!reading && preparing(request, captureStage)) {
@@ -397,7 +405,7 @@ test.each(["none", "cleanup", "after-open", "during-open"] as const)(
               failAfterOpen ? refreshRefusal.message : changedTarget,
             );
           }
-          expect(refusedOpenRequests).toBe(failAfterOpen ? 1 : 0);
+          expect(refusedRequests).toBe(failAfterOpen ? 1 : 0);
           assert(reading, "Cache creator did not reach the reader capture boundary");
           await awaitGateBeforeSettlement(
             readerHeld.promise,
@@ -419,7 +427,7 @@ test.each(["none", "cleanup", "after-open", "during-open"] as const)(
           admission.mockRestore();
         }
       };
-      if (failDuringOpen) {
+      if (duringOpen) {
         await runWithAgentCreationClaim({ agentId: "main", env: state.env }, exercise);
       } else {
         await exercise();

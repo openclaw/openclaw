@@ -9,6 +9,7 @@ require "digest/md5"
 require "time"
 require "rubygems/version"
 require_relative "screenshot_diagnostics"
+require_relative "watch_runtime_admission"
 require_relative "testflight"
 
 default_platform(:ios)
@@ -284,44 +285,97 @@ def require_exclusive_screenshot_simulator!(udid, diagnostics)
   UI.user_error!("Task-owned screenshot simulator #{udid} is #{state}, not Booted; CoreSimulator ended its session.") unless state == "Booted"
 end
 
-def repair_watch_screenshot_runtime!(runtime)
-  version = runtime ? runtime.split(".watchOS-").last.tr("-", ".") : sh("xcrun", "--sdk", "watchsimulator", "--show-sdk-version").strip
-  runtime ||= "com.apple.CoreSimulator.SimRuntime.watchOS-#{version.tr(".", "-")}"
-  2.times do |attempt|
+def delete_watch_screenshot_runtime!(runtime, retained_assets: [])
+  deletion_pending = false
+  retried = false
+  deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 120
+  loop do
     images = JSON.parse(sh("xcrun", "simctl", "runtime", "list", "-j", log: false)).values
       .select { |image| image["runtimeIdentifier"] == runtime }
-    report_watch_runtime_images(runtime, images)
-    UI.user_error!("Cannot repair #{runtime}: expected at most one registered disk image, found #{images.length}.") if images.length > 1
-    break if images.empty?
+    retained_assets |= images.filter_map { |image| image["path"] }
+    # Deleting registrations and temporarily empty inventories can retain the
+    # MobileAsset. Neither permits a replacement download or import yet.
+    return if images.empty? && retained_assets.none? { |asset| File.exist?(asset) }
+    deletable = images.reject { |image| image["state"] == "Deleting" }
+    UI.user_error!("Cannot repair #{runtime}: expected at most one registered disk image, found #{deletable.length}.") if deletable.length > 1
+    if deletion_pending || deletable.empty?
+      if Process.clock_gettime(Process::CLOCK_MONOTONIC) >= deadline
+        report_watch_runtime_images(runtime, images)
+        UI.user_error!("#{runtime} did not finish deletion before runtime repair; wait for CoreSimulator to reclaim its MobileAsset.")
+      end
+      sleep(2)
+      next
+    end
 
+    report_watch_runtime_images(runtime, images)
     deletion_error = nil
-    sh("xcrun", "simctl", "runtime", "delete", images.first.fetch("identifier"),
+    sh("xcrun", "simctl", "runtime", "delete", deletable.first.fetch("identifier"),
       error_callback: ->(output) { deletion_error = output })
-    break if deletion_error.nil?
-    unless attempt.zero? &&
+    if deletion_error.nil?
+      deletion_pending = true
+      next
+    end
+    unless !retried &&
       deletion_error.include?("domain=com.apple.CoreSimulator.simdiskimaged.SimDiskImageError, code=30)") &&
       deletion_error.include?("Removed the runtime, but did not reclaim its MobileAsset")
       UI.user_error!("Watch runtime deletion failed: #{deletion_error.strip}")
     end
 
     # Apple removed the registration, so re-scan and resolve its new image ID.
+    retried = true
     UI.important("Watch runtime asset reclamation was incomplete; re-registering before one more targeted deletion.")
     sh("xcrun", "simctl", "runtime", "scan-and-mount")
   end
+end
 
-  sh("xcodebuild", "-downloadPlatform", "watchOS", "-buildVersion", version)
+def fallback_watch_runtime_image(images, runtime)
+  images.find do |image|
+    image["runtimeIdentifier"] == runtime && image["kind"] == "Patchable Cryptex Disk Image" &&
+      image["mountPath"].to_s.start_with?("/Library/Developer/CoreSimulator/Volumes/")
+  end
+end
+
+def repair_watch_screenshot_runtime!(runtime, staged_image: nil)
+  version = runtime ? runtime.split(".watchOS-").last.tr("-", ".") : sh("xcrun", "--sdk", "watchsimulator", "--show-sdk-version").strip
+  runtime ||= "com.apple.CoreSimulator.SimRuntime.watchOS-#{version.tr(".", "-")}"
+  unless staged_image
+    # An unavailable runtime can still have its downloaded DMG. Preserve it before
+    # deletion; downloading it again can register aliases sharing the same asset.
+    images = JSON.parse(sh("xcrun", "simctl", "runtime", "list", "-j", log: false)).values
+      .select { |image| image["runtimeIdentifier"] == runtime }
+    staged_image = fallback_watch_runtime_image(images.reject { |image| image["state"] == "Deleting" }, runtime)
+    staged_image = nil if staged_image && Dir[File.join(staged_image.fetch("path"), "Restore", "*.dmg")].empty?
+  end
+  unless staged_image
+    delete_watch_screenshot_runtime!(runtime, retained_assets: images.filter_map { |image| image["path"] })
+    sh("xcodebuild", "-downloadPlatform", "watchOS", "-buildVersion", version)
+    images = WatchRuntimeAdmission.wait!(runtime)
+    staged_image = fallback_watch_runtime_image(images, runtime)
+  end
+  if staged_image
+    asset = staged_image.fetch("path")
+    packages = Dir[File.join(asset, "Restore", "*.dmg")]
+    UI.user_error!("Cannot stabilize #{runtime}: expected one runtime DMG, found #{packages.length}.") unless packages.one?
+    Dir.mktmpdir("openclaw-watch-runtime-") do |directory|
+      package = File.join(directory, File.basename(packages.first))
+      sh("/bin/cp", "-c", packages.first, package)
+      delete_watch_screenshot_runtime!(runtime, retained_assets: [asset])
+      sh("xcrun", "simctl", "runtime", "add", package)
+    end
+  end
   images = JSON.parse(sh("xcrun", "simctl", "runtime", "list", "-j", log: false)).values
     .select { |image| image["runtimeIdentifier"] == runtime }
   report_watch_runtime_images(runtime, images)
   restored = images.any? do |image|
-    image["state"] == "Ready" && image["runtimeBundlePath"] && File.directory?(image["runtimeBundlePath"])
+    image["state"] == "Ready" && image["runtimeBundlePath"] && File.directory?(image["runtimeBundlePath"]) &&
+      (!staged_image || image["signatureState"] == "Verified")
   end
-  UI.user_error!("watchOS #{version} download did not restore a mounted runtime for #{runtime}.") unless restored
+  UI.user_error!("watchOS #{version} repair did not restore a mounted runtime for #{runtime}.") unless restored
 end
 
 def report_watch_runtime_images(runtime, images)
   facts = images.map do |image|
-    image.slice("state", "version", "build").merge("mountedPathExists" => !!(image["runtimeBundlePath"] && File.directory?(image["runtimeBundlePath"])))
+    image.slice("state", "version", "build", "kind", "signatureState").merge("mountedPathExists" => !!(image["runtimeBundlePath"] && File.directory?(image["runtimeBundlePath"])))
   end
   UI.important("Watch runtime images for #{runtime}: #{JSON.generate(facts)}")
 end
@@ -333,28 +387,45 @@ end
 def create_watch_screenshot_simulator(name)
   # Runtime availability can change during the phone/tablet captures. One repair
   # covers resolution and creation together; boot and capture are never retried.
-  2.times do |attempt|
+  repaired = false
+  2.times do
     template = resolve_simulator_device(name)
     if template
       begin
+        if ENV["CI"] == "true"
+          images = WatchRuntimeAdmission.wait!(template.fetch("runtime"))
+          image = fallback_watch_runtime_image(images, template.fetch("runtime"))
+          # A fallback-mounted cryptex is re-imported every ten minutes, ending
+          # active Watch sessions. Retire its asset and stage the signed DMG once.
+          if image
+            UI.user_error!("Watch runtime still needs stabilization after one repair.") if repaired
+            repaired = true
+            repair_watch_screenshot_runtime!(template.fetch("runtime"), staged_image: image)
+          end
+        end
         return [template, create_screenshot_simulator(template)]
       rescue StandardError => error
-        raise unless ENV["CI"] == "true" && error.message.include?("runtime path not found")
+        raise unless ENV["CI"] == "true" && (error.is_a?(WatchRuntimeAdmission::Unavailable) || error.message.include?("runtime path not found"))
         reason = error.message
       end
     else
       reason = "No available watchOS runtime. Install one for the selected Xcode with: xcodebuild -downloadPlatform watchOS"
     end
     UI.user_error!(reason) unless ENV["CI"] == "true"
-    UI.user_error!("Watch simulator creation failed after one runtime repair: #{reason}") unless attempt.zero?
+    UI.user_error!("Watch simulator creation failed after one runtime repair: #{reason}") if repaired
 
     UI.important("Watch runtime unavailable; repairing once before simulator creation.")
+    repaired = true
     repair_watch_screenshot_runtime!(template && template.fetch("runtime"))
   end
 end
 
 def with_screenshot_simulator(template = nil, watch_name: nil, diagnostics: nil)
   require_idle_screenshot_simulators!
+  # A deleted simulator can leave the host busy with first-launch work.
+  screenshot_phase(diagnostics, "headroom", device: watch_name || template.fetch("name")) do
+    sh("node", File.join(repo_root, "scripts", "lib", "ios-simulator-headroom.ts"))
+  end
   udid = screenshot_phase(diagnostics, "create", device: watch_name || template.fetch("name")) do
     if watch_name
       template, identifier = create_watch_screenshot_simulator(watch_name)
@@ -368,8 +439,20 @@ def with_screenshot_simulator(template = nil, watch_name: nil, diagnostics: nil)
 
   begin
     screenshot_phase(diagnostics, "boot", device: name, udid: udid) do
-      sh("xcrun", "simctl", "bootstatus", udid, "-b")
-      require_exclusive_screenshot_simulator!(udid, diagnostics)
+      started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+      inventory_started = nil
+      begin
+        sh("xcrun", "simctl", "bootstatus", udid, "-b")
+        inventory_started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        require_exclusive_screenshot_simulator!(udid, diagnostics)
+      ensure
+        finished = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+        if diagnostics
+          event = diagnostics.events.last
+          event["bootstatusSeconds"] = ((inventory_started || finished) - started).round(2)
+          event["inventorySeconds"] = (finished - inventory_started).round(2) if inventory_started
+        end
+      end
     end
     if ENV["OPENCLAW_SNAPSHOT_STARTUP_PROBE"] == "1"
       screenshot_phase(diagnostics, "simulator-idle", device: name, udid: udid) { sleep(120) }
@@ -618,6 +701,8 @@ def build_watch_screenshot_app
       "generic/platform=watchOS Simulator",
       "-derivedDataPath",
       derived_data_path,
+      "-clonedSourcePackagesDirPath",
+      File.join(ios_root, "build", "SourcePackages"),
       "build",
     ])
   )
@@ -1870,7 +1955,7 @@ ensure
 end
 
 def capture_release_ios_screenshots!(
-  project:,
+  xctestrun_path:,
   device:,
   output_directory:,
   result_bundle_path:,
@@ -1878,7 +1963,6 @@ def capture_release_ios_screenshots!(
   log_directory:,
   capture_attempts:,
   capture_attempts_path:,
-  derived_data_path:,
   device_udid:,
   snapshot_cache_directory:,
   diagnostics: nil
@@ -1901,8 +1985,7 @@ def capture_release_ios_screenshots!(
     screenshot_phase(diagnostics, "capture", device: device, udid: device_udid, log_path: log_path) do
       run_screenshot_xcodebuild!(
         [
-          "-project", project, "-scheme", "OpenClawUITests", "-configuration", "Debug",
-          "-derivedDataPath", derived_data_path,
+          "-xctestrun", xctestrun_path,
           "-destination", "platform=iOS Simulator,id=#{device_udid}",
           "-resultBundlePath", result_bundle_path,
           *RELEASE_IOS_SCREENSHOT_TESTS.map { |screenshot| "-only-testing:OpenClawUITests/OpenClawSnapshotUITests/#{screenshot.fetch(:test)}" },
@@ -1944,6 +2027,17 @@ def capture_release_ios_screenshots!(
     attempt: attempt,
     capture_outcome: "succeeded"
   )
+ensure
+  if diagnostics
+    begin
+      app_path = File.join(File.dirname(xctestrun_path), "Debug-iphonesimulator", "OpenClaw.app")
+      app_identifier = bundle_identifier_for_product(app_path)
+      retained = diagnostics.retain_mermaid_trace(device_udid, app_identifier, File.join(log_directory, "#{device}-mermaid.log"))
+      UI.message("Mermaid screenshot trace for #{device}: #{retained ? "saved" : "unavailable"}.")
+    rescue StandardError
+      UI.important("Could not locate the optional Mermaid screenshot trace.")
+    end
+  end
 end
 
 def build_app_store_release(context)
@@ -2428,6 +2522,7 @@ platform :ios do
       attempts: capture_attempts,
       output_path: capture_attempts_path
     )
+    # Downloads live outside DerivedData so every compilation starts clean.
     FileUtils.rm_rf(derived_data_path)
     devices = snapshot_devices
     project = File.join(ios_root, "OpenClaw.xcodeproj")
@@ -2444,13 +2539,20 @@ platform :ios do
           "-project", project, "-scheme", "OpenClawUITests", "-configuration", "Debug",
           "-showBuildTimingSummary",
           "-derivedDataPath", derived_data_path,
+          "-clonedSourcePackagesDirPath", File.join(ios_root, "build", "SourcePackages"),
           "-destination", "generic/platform=iOS Simulator",
           "ARCHS=#{RbConfig::CONFIG.fetch("host_cpu")}", "ONLY_ACTIVE_ARCH=YES",
+          "COMPILER_INDEX_STORE_ENABLE=NO",
           "-allowProvisioningUpdates", "build-for-testing"
         ],
         log_path: File.join(log_directory, "build.log")
       )
     end
+    # Reuse this clean build's test specification without reopening the project
+    # and resolving its package graph for each capture device.
+    xctestrun_paths = Dir.glob(File.join(derived_data_path, "Build", "Products", "*.xctestrun"))
+    UI.user_error!("Expected one fresh screenshot .xctestrun after build-for-testing; found #{xctestrun_paths.length}.") unless xctestrun_paths.length == 1
+    xctestrun_path = xctestrun_paths.first
     if ENV["OPENCLAW_SNAPSHOT_STARTUP_PROBE"] == "1"
       screenshot_phase(diagnostics, "host-idle") { sleep(60) }
     end
@@ -2470,7 +2572,7 @@ platform :ios do
           sh("xcrun", "simctl", "status_bar", device_udid, "override", *Shellwords.split(SNAPSHOT_STATUS_BAR_ARGUMENTS))
         end
         capture_release_ios_screenshots!(
-          project: project,
+          xctestrun_path: xctestrun_path,
           device: device.fetch("name"),
           output_directory: output_directory,
           result_bundle_path: result_bundle_path,
@@ -2478,7 +2580,6 @@ platform :ios do
           log_directory: log_directory,
           capture_attempts: capture_attempts,
           capture_attempts_path: capture_attempts_path,
-          derived_data_path: derived_data_path,
           device_udid: device_udid,
           snapshot_cache_directory: snapshot_cache_directory,
           diagnostics: diagnostics

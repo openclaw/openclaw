@@ -22,6 +22,7 @@ export type CronFormState = {
   name: string;
   description: string;
   agentId: string;
+  ownerProfileId: string;
   sessionKey: string;
   clearAgent: boolean;
   enabled: boolean;
@@ -89,6 +90,7 @@ export type CronFieldKey =
   | "scheduleAt"
   | "everyAmount"
   | "cronExpr"
+  | "cronTz"
   | "staggerAmount"
   | "activeHoursStart"
   | "activeHoursEnd"

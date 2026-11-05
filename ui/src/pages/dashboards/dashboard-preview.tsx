@@ -1,9 +1,9 @@
 import { createErrorBoundary } from "@solidjs/signals";
 import { createSignal, lazy, Loading, onSettled, Show } from "solid-js";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { NearViewportObserver } from "../../components/near-viewport-observer.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { observeIntersection } from "../../lib/reactive/observers.ts";
 
 const BoardDocument = lazy(() => import("../../components/board/board-document.tsx"), {
   export: "OpenClawBoardDocument",
@@ -16,21 +16,11 @@ export function DashboardPreview(props: {
 }) {
   let host!: HTMLElement;
   const [nearVisible, setNearVisible] = createSignal(false);
-  onSettled(() => {
-    let active = true;
-    const visibility = new NearViewportObserver(200, () => {
-      if (active) {
-        setNearVisible(visibility.nearVisible);
-      }
-    });
-    // Bounds before the first paint would activate every gallery preview at once.
-    const frame = window.requestAnimationFrame(() => visibility.observe(host));
-    return () => {
-      active = false;
-      window.cancelAnimationFrame(frame);
-      visibility.disconnect();
-    };
-  });
+  onSettled(() =>
+    observeIntersection([host], (entries) => setNearVisible(entries.at(-1)!.isIntersecting), {
+      rootMargin: "200px 0px",
+    }),
+  );
   return (
     <openclaw-dashboard-preview
       ref={(element) => {

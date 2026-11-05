@@ -32,6 +32,20 @@ describe("worker tunnel manager hash memo", () => {
         captureEnvelopes.push(JSON.parse(result.stdout));
       }
     });
+    const run = fake.runner.run.bind(fake.runner);
+    fake.runner.run = (argv, options) =>
+      run(
+        argv,
+        isMemoCapture(argv)
+          ? {
+              ...options,
+              baseEnv: {
+                ...options.baseEnv,
+                NODE_OPTIONS: `--import=data:text/javascript,Date.now=()=>${Date.now() + 60_000};`,
+              },
+            }
+          : options,
+      );
     const { handle } = await startConnectedTunnel(fake, "worker:memo-persist", 3);
 
     try {

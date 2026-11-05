@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import * as gatewayWork from "../../../process/gateway-work-admission.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -46,10 +47,33 @@ export function createTalkHandlerCaller(talkHandlers: GatewayRequestHandlers) {
       respond(false, undefined, admission.error);
       return;
     }
-    const ownsTimers = method === "talk.catalog" && !vi.isFakeTimers();
-    if (ownsTimers) {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    }
+    let catalogReleased: Promise<"settled" | "reset"> | undefined;
+    const beginRootWork = gatewayWork.tryBeginGatewayIndependentRootWorkAdmission;
+    const rootWorkSpy =
+      method === "talk.catalog"
+        ? vi
+            .spyOn(gatewayWork, "tryBeginGatewayIndependentRootWorkAdmission")
+            .mockImplementation((origin, options) => {
+              const lease = beginRootWork(origin, options);
+              if (!lease || origin !== "talk-catalog-refresh") {
+                return lease;
+              }
+              return {
+                ...lease,
+                run: (run) =>
+                  lease.run(() => {
+                    const observeRelease = expectDefined(
+                      gatewayWork.captureGatewayRootWorkReleaseObserver(),
+                      "catalog refresh root release observer",
+                    );
+                    catalogReleased = new Promise((resolve) => {
+                      observeRelease(resolve);
+                    });
+                    return run();
+                  }),
+              };
+            })
+        : undefined;
     try {
       const handler = expectDefined(
         talkHandlers[method],
@@ -84,13 +108,16 @@ export function createTalkHandlerCaller(talkHandlers: GatewayRequestHandlers) {
         if (!warming || attempt === 1) {
           break;
         }
-        await vi.advanceTimersByTimeAsync(0);
+        // A clock turn cannot join credential reads or provider discovery owned by this root.
+        await catalogReleased;
       }
     } finally {
-      if (ownsTimers) {
-        vi.useRealTimers();
+      try {
+        await catalogReleased;
+      } finally {
+        rootWorkSpy?.mockRestore();
+        admission?.authorization?.release?.();
       }
-      admission?.authorization?.release?.();
     }
   };
 }

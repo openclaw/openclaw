@@ -1,13 +1,16 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
-import { Worker } from "node:worker_threads";
+import type { Worker } from "node:worker_threads";
 import {
+  createCpuTrackedWorker,
   createPluginRuntimeProcessEntrypoint,
   resolveRuntimeWorkerUrl,
 } from "openclaw/plugin-sdk/process-runtime";
 import type { VaultAccess } from "./access.js";
 import { pluginFilesLocation } from "./plugin-files.js";
 import type { StoreConfig } from "./real-vault.js";
+import { KnowledgeRestartError } from "./restart-error.js";
 import type { StorageOperations } from "./storage-host.js";
 import { AUTHORITY_REVOKED, type HostMessage, type WorkerMessage } from "./storage-protocol.js";
 
@@ -16,6 +19,9 @@ type Input<Op extends keyof StorageOperations> = Parameters<StorageOperations[Op
 const storageEntrypoint = createPluginRuntimeProcessEntrypoint("knowledgeStorage", import.meta.url);
 type Call = {
   access: VaultAccess;
+  /** Runs in the calling operation's async context. Worker replies arrive in the
+   * context of whichever call started the worker, which may be long retired. */
+  inCallerContext: <R>(run: () => R) => R;
   resolve(value: unknown): void;
   reject(error: unknown): void;
   revoked?: unknown;
@@ -23,10 +29,10 @@ type Call = {
 
 // SDK modules reachable from storage and registry code in the workers.
 const SDK_MODULES = [
-  "openclaw/plugin-sdk/database-engine-worker-runtime",
   "openclaw/plugin-sdk/feature-contract",
   "openclaw/plugin-sdk/routing",
   "openclaw/plugin-sdk/sqlite-worker-runtime",
+  "openclaw/plugin-sdk/text-utility-runtime",
 ];
 // Resolve through whatever resolver the host installed for this plugin module.
 export function sdkUrls(): Record<string, string> {
@@ -66,8 +72,13 @@ export class StorageClient {
     const worker = this.start(),
       id = ++this.nextId;
     return new Promise<Output<Op>>((resolve, reject) => {
-      // SAFETY: each call resolves with the output type of the operation it sent.
-      this.calls.set(id, { access, resolve: resolve as (value: unknown) => void, reject });
+      this.calls.set(id, {
+        access,
+        inCallerContext: AsyncLocalStorage.snapshot(),
+        // SAFETY: each call resolves with the output type of the operation it sent.
+        resolve: resolve as (value: unknown) => void,
+        reject,
+      });
       // Keep the process alive only while work is outstanding.
       worker.ref();
       worker.postMessage(
@@ -84,18 +95,24 @@ export class StorageClient {
       );
     });
   }
-  /** Stop the worker. Outstanding calls fail; the next call starts a new worker. */
-  close() {
+  /** Stop the worker and resolve once it has exited. Outstanding calls fail;
+   * the next call starts a new worker. */
+  async close() {
     const worker = this.worker;
     this.worker = undefined;
-    this.fail(new Error("Knowledge storage stopped; retry the original request."));
-    void worker?.terminate();
+    this.fail(
+      new KnowledgeRestartError(
+        "storage-stopped",
+        "Knowledge storage stopped; retry the original request.",
+      ),
+    );
+    await worker?.terminate();
   }
   private start(): Worker {
     if (this.worker) {
       return this.worker;
     }
-    const worker = new Worker(resolveRuntimeWorkerUrl(storageEntrypoint), {
+    const worker = createCpuTrackedWorker(resolveRuntimeWorkerUrl(storageEntrypoint), {
       workerData: {
         sdk: sdkUrls(),
         files: pluginFilesLocation(),
@@ -126,7 +143,9 @@ export class StorageClient {
       // Answer through shared memory: the worker is blocked waiting for it.
       let current = false;
       try {
-        call?.access.assertCurrent();
+        if (call) {
+          call.inCallerContext(() => call.access.assertCurrent());
+        }
         current = Boolean(call);
       } catch (error) {
         if (call) {

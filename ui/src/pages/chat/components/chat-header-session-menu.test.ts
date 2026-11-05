@@ -9,11 +9,11 @@ import { profileDirectory } from "../../../lib/profile-directory.ts";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { createSessionOwnerMenuHarness } from "../../../test-helpers/session-owner-menu.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { createGatewayBrowserClientFixture } from "../chat-application-context.test-support.ts";
+import type { HeaderMenuAction } from "../chat-pane-session-menu-contract.ts";
 import { createPaneHeaderWorkspaceFixture, createTestChatPane } from "../chat-pane.test-support.ts";
 import { createSessionCapabilityFixture } from "../chat-session-capability.test-support.ts";
 import type { ChatPageHost } from "../chat-state-host.ts";
-import type { HeaderMenuAction, HeaderMenuProps } from "./chat-header-session-menu.tsx";
+import type { HeaderMenuProps } from "./chat-header-session-menu.tsx";
 import {
   chatPaneHeaderSessionRow as row,
   renderPaneHeaderInto,
@@ -189,7 +189,7 @@ async function select(menu: HeaderMenuElement, value: string) {
 it("focuses the current first row when reopening removes the parked first row", async () => {
   const menu = await mountMenu({}, false);
   await openMenu(menu);
-  const previousFirst = item(menu, "Command palette");
+  const previousFirst = item(menu, "search");
   const trigger = menu.readTrigger()!;
   const hidden = whenHidden(menu);
   press(panel(menu), "Escape");
@@ -275,7 +275,7 @@ it.each(["MacIntel", "Win32"])(
     vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
     const menu = await mountMenu({ archiveShortcut: true });
     expect(shortcut(item(menu, "Archive session"), true)).toBe(
-      platform === "MacIntel" ? "A/⌘⇧A" : "A/Ctrl+Shift+A",
+      platform === "MacIntel" ? "A/⌘⇧A" : "A/Ctrl⇧A",
     );
     menu.archiveShortcut = false;
     await menu.updateComplete;
@@ -302,10 +302,7 @@ it("preserves row-discovered groups when the gateway catalog lags", async () => 
       },
     },
   });
-  const { pane, state } = createTestChatPane({
-    client: createGatewayBrowserClientFixture(),
-    sessions,
-  });
+  const { pane, state } = createTestChatPane({ sessions });
   state.settings = {} as ChatPageHost["settings"];
   const container = document.body.appendChild(document.createElement("div"));
   containers.push(container);

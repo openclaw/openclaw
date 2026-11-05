@@ -1,3 +1,9 @@
+import { formatErrorMessage, readErrorName } from "@openclaw/normalization-core/error-coercion";
+import {
+  attachInternalToolExecutionPreparer,
+  copyInternalToolResultState,
+  getInternalToolExecutionPreparer,
+} from "../../packages/agent-core/src/internal-hooks.js";
 /**
  * Owns hook execution, client-tool delegation, result coercion, and safe
  * logging for failed tool calls.
@@ -31,20 +37,16 @@ import {
   getCodeModeExecBeforeHookMetadata,
   normalizeCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
-import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
+import type { ClientToolDefinition } from "./command/shared-types.js";
 import { readNodePermissionError } from "./node-permission-error.js";
 import { projectAgentToolDefinition } from "./prepared-tool-surface.js";
 import type { AgentTool as AnyAgentTool, AgentToolResult } from "./runtime/index.js";
-import {
-  attachInternalToolExecutionPreparer,
-  copyInternalToolResultState,
-  getInternalToolExecutionPreparer,
-} from "./runtime/internal-hooks.js";
 import type { ToolDefinition } from "./sessions/index.js";
+import { ToolInputError } from "./tool-input-error.js";
 import { readToolOperatorHint } from "./tool-operator-hint.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { copyAgentToolReplaySafety } from "./tool-replay-safety.js";
-import { jsonResult, payloadTextResult, ToolInputError } from "./tools/common.js";
+import { jsonResult, payloadTextResult } from "./tools/tool-results.js";
 
 function captureSourceInvocationGuard(tool: AnyAgentTool, signal?: AbortSignal): () => void {
   const assertCurrent = captureAgentToolSourceExecutionGuard(signal);
@@ -115,7 +117,11 @@ async function executeAdaptedToolOperation(params: {
     const operatorHint = described.operatorHint ? ` ${described.operatorHint}` : "";
     // Operator-only: the hint names containment configuration and stays out of the
     // model-visible result below.
-    logError(`[tools] ${params.normalizedToolName} failed:${operatorHint}`);
+    const name = readErrorName(err);
+    const diagnostic = formatErrorMessage(err, { includeCode: true });
+    logError(
+      `[tools] ${params.normalizedToolName} failed: ${name ? `${name}: ` : ""}${diagnostic}${operatorHint}`,
+    );
     const result = buildToolExecutionErrorResult({
       toolName: params.normalizedToolName,
       message: described.message,
@@ -202,6 +208,7 @@ export function toToolDefinitions(
     const definition = {
       ...projectAgentToolDefinition(tool),
       prepareArguments: tool.prepareArguments,
+      interruptible: tool.interruptible,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const [toolCallId, params, callSignal, onUpdate] = args;
         const signal = resolveAbortSignal(callSignal);

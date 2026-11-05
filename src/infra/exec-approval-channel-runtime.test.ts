@@ -286,15 +286,7 @@ describe("createExecApprovalChannelRuntime", () => {
       finalizeResolved,
     });
 
-    const requestPromise = runtime.handleRequested({
-      id: "plugin:abc",
-      request: {
-        title: "Plugin approval",
-        description: "Let plugin proceed",
-      },
-      createdAtMs: 1000,
-      expiresAtMs: 2000,
-    });
+    const requestPromise = runtime.handleRequested(createPluginReplayRequest("plugin:abc"));
     await runtime.handleResolved({
       id: "plugin:abc",
       decision: "allow-once",

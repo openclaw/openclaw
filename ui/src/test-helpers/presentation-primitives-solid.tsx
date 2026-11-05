@@ -196,13 +196,7 @@ function Controls() {
           disabled
           onChange={() => recordAction("unexpected")}
         />
-        <ChoiceRow
-          title="Button choices"
-          value={segment()}
-          mode="buttons"
-          variant="accent"
-          onChange={setSegment}
-        />
+        <ChoiceRow title="Button choices" value={segment()} mode="buttons" onChange={setSegment} />
         <settings.SettingsRow
           title="Secret"
           control={

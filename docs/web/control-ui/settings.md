@@ -18,9 +18,28 @@ In **Search settings**, Escape clears the search before leaving Settings. While 
 
 Use **Search settings** to find pages and configuration fields. Search for **Typography**, **font**, or **Chat prose** to jump to the Interface and Chat prose font controls in Appearance. Authored schema tags remain searchable with `tag:<name>` but are not displayed as field badges. Tags are not inferred from setting names, sensitivity, or complexity. For a field authored with a `storage` tag, combine it with text such as `Log tag:storage File`. Multiple tags require a field to match every tag.
 
-Model menus with more than eight choices include search. Filter by model name or provider/model reference, then choose a result to apply it. Typing or dismissing the menu leaves the current selection unchanged. Short menus stay compact, and custom model entry remains available where the setting supports it.
+Configuration field text and `tag:` comparisons ignore case and match canonically equivalent composed and decomposed Unicode text. Search normalizes only comparison copies; field values, labels, and stored tags keep their original text.
 
-When the Gateway rejects an invalid setting, **Settings not applied** keeps your draft and offers **Show reason**, **Retry**, and **Discard draft and reload**. Discard removes all unsaved configuration edits and reloads the saved settings. Edits entered while Discard waits for an earlier save remain pending; newer Form edits resume autosaving, and newer Raw edits remain available to save. Clearing a text field is an edit, not a discard: settings that accept an empty string keep that explicit value.
+People search in **Session access**, the **New Session → Where** picker, and provider
+search also match equivalent composed and decomposed Unicode text without changing
+the original labels or identifiers. Filtering does not change sharing permissions.
+The **Add account** search and command palette session-settings workspace
+search use the same comparison-only matching. Filtering does not start sign-in or
+change the selected provider, device, or project.
+
+In **Models**, choose **Add account** to save a provider sign-in or API key for an agent.
+**Accounts** lists saved access; keys supplied by config or the environment stay
+managed at their source. **Sign out** removes a saved sign-in. Removing a provider
+also removes its saved accounts and may stop active replies; the confirmation
+explains whether shared accounts and other agents are affected.
+
+Model menus with more than eight choices include search. Filter by model name or provider/model reference, then choose a result to apply it. Typing or dismissing the menu leaves the current selection unchanged. Short menus stay compact. Where custom entry is supported, choose **Custom model…** to enter a provider/model reference.
+
+Custom model text stays in the field while background data refreshes, without
+saving before the field's normal commit event. A newly committed model value
+still replaces the displayed value.
+
+When the Gateway rejects an invalid setting, **Couldn’t apply settings. Review your changes.** keeps your draft, shows the rejection reason, and offers **Retry** and **Discard changes**. Discard removes all unsaved configuration edits and reloads the saved settings. Edits entered while Discard waits for an earlier save remain pending; newer Form edits resume autosaving, and newer Raw edits remain available to save. Clearing a text field is an edit, not a discard: settings that accept an empty string keep that explicit value.
 
 Typing in Form fields copies the edited path instead of cloning and formatting the full configuration on every keystroke. Full JSON formatting happens when saving or opening **Advanced → Raw**. The Raw editor still shows the current draft, including newer edits made while an earlier save is in flight.
 
@@ -28,17 +47,25 @@ Global model defaults apply to every agent. Switching the Settings agent while s
 
 In **Models**, thinking choices follow the primary model's reported reasoning levels, including provider-specific levels. Fast-mode choices follow its reported speed capabilities, with **Ultrafast** shown separately from **On**. A saved preference that is no longer supported stays visible but cannot be selected anew. A saved account-pinned model does not borrow speed capabilities from another account's catalog; unverified speed preferences remain visible but unavailable for new selections. Switching models does not rewrite a saved preference; choose another supported value or **Default** to return to model policy. **Auto** is a timed fast-mode preference, not inheritance.
 
-Configuration edits, including reverting a value while a save is pending, survive refreshes and reconnects. If a save's outcome is unknown, the UI keeps your draft and pauses unrelated settings writes until a refresh confirms the saved revision or you explicitly retry the save or discard the draft. Even when a reverted draft looks unchanged, the save indicator keeps **Retry** available and prevents managed UI reloads from losing the unresolved draft. **Retry** repeats the failed Save or Apply operation. Seeing the old saved value after reconnect does not confirm that an earlier write has stopped; the UI keeps the uncertainty visible so a later commit cannot erase your revert. Changes from another writer retain the original draft and report a conflict instead of silently replacing your edits. Raw-editor drafts remain manual-save-only.
+Configuration edits, including reverting a value while a save is pending, survive configuration refreshes and reconnects. If a save's outcome is unknown, the UI keeps your draft and pauses unrelated settings writes until a refresh confirms the saved revision or you explicitly retry the save or discard the draft. Even when a reverted draft looks unchanged, the save indicator keeps **Retry** available and prevents managed UI reloads from losing the unresolved draft. **Retry** repeats the failed Save or Apply operation. Seeing the old saved value after reconnect does not confirm that an earlier write has stopped; the UI keeps the uncertainty visible so a later commit cannot erase your revert. Changes from another writer retain the original draft and report a conflict instead of silently replacing your edits. Raw-editor drafts remain manual-save-only. Unsaved configuration edits live only in the open page: while an edit is unsaved or a save is still in flight, the browser asks for confirmation before an ordinary reload or tab close. Cancel keeps the draft; confirming discards it without saving.
 
 An unsettled Save or Apply stays bound to its original Gateway. Switching Gateways does not transfer that pending change: reconnect to the original Gateway to retry it, or discard the retained draft before editing the new Gateway.
 
-In **Models**, **Connect provider** offers the credential-only sign-in methods declared by installed provider plugins. Connecting saves the credential without selecting its starter model. If model restrictions hide the provider, choose **Show all provider models** or **Keep current restrictions**; saving a credential alone does not widen access. Choose **Models → Connect provider → On this Gateway** to find existing connections or open [setup and explicit model activation](/start/onboarding). Saving credentials does not activate a model; testing and using a model remains a separate choice for the selected agent. If saving has already started, cancellation keeps the dialog open until the saved result arrives. Leaving the page closes pending sign-in input and lets an active save finish, so a later sign-in can start without losing saved credentials.
+In Memory's **Settings** tab, unfinished number text such as `1e` restores the last accepted value when you leave the field, without removing its override. Deliberately clearing the field still removes the override, and valid edits save normally.
+
+In **Models**, **Add account** offers the credential-only sign-in methods declared by installed provider plugins. Connecting saves the credential without selecting its starter model. If model restrictions hide every model of the provider, saving its API key or sign-in adds `<provider>/*` to them so its models appear in the model picker; restrictions that already name some of its models stay unchanged. Choose **Models → Add account → On this Gateway** to find existing connections or open [setup and explicit model activation](/start/onboarding). Saving credentials does not activate a model; testing and using a model remains a separate choice for the selected agent. If saving has already started, cancellation keeps the dialog open until the saved result arrives. Leaving the page closes pending sign-in input and lets an active save finish, so a later sign-in can start without losing saved accounts.
 
 Model pickers show the authentication methods available to the selected agent. In **Models** settings, this muted information appears on the right of each open option row; the closed control shows only the model name and icon. A single subscription or an explicitly selected account includes its email when available; multiple accounts and mixed API/subscription credentials are shown without guessing which account will run. **Utility Model → Auto** also shows the recommended small model derived from the global primary model, including an explicit account selection inherited from that model. Providers without a recommended small model say so. Agent-specific overrides still take precedence when the agent runs.
 
+Inbox account alerts distinguish **Sign in** from **Update API key**. Accounts without a known recovery method show **Review account**. These actions open **Models** so you can repair the saved account.
+
 Open panels share provider sign-in status. Configuration edits keep that status until the Gateway publishes updated authentication information; credential changes, reconnects, and expiry deadlines still refresh it.
 
-During first-run **Model Setup**, reloading the browser resumes an unfinished provider wizard on the same running Gateway without repeating your answers. Continue from its current question, or choose **Cancel** to release provider choices once the Gateway confirms cancellation. Unsubmitted input is not saved. If the Gateway restarted or no longer has the wizard, **Check again** refreshes the current setup without starting another provider attempt; the recovery guard remains until a model can be verified or the pending attempt expires.
+During first-run **Models**, reloading the browser resumes an unfinished provider wizard on the same running Gateway without repeating your answers. Continue from its current question, or choose **Cancel** to release provider choices once the Gateway confirms cancellation. Unsubmitted input is not saved. If the Gateway restarted or no longer has the wizard, **Check again** refreshes the current setup without starting another provider attempt; the recovery guard remains until a model can be verified or the pending attempt expires.
+
+If a provider rejects a text reply, the wizard returns keyboard focus to that field so you can correct it without clicking back. Your draft is kept, and sensitive replies remain masked.
+
+Channel setup also restores focus to a rejected text field while preserving its draft and masking, unless you have moved focus to another control while the reply was pending.
 
 ## Environment identity
 
@@ -82,6 +109,10 @@ After the Gateway applies the change, reload the browser page or reconnect to pi
 
 ## Personal identity
 
+**Settings → Profile → Your access** shows your current permissions. To request broader access, use **Admin access**; an admin must approve this device separately.
+
+**Personal instructions** keeps your preferences in your personal `USER.md`, separate from the shared workspace file. A missing profile asks you to sign in. If you’re already signed in but lack permission to view your own sessions, ask an admin for access instead. Your unsaved draft stays private when your profile or access changes.
+
 Authenticated people have a durable Gateway profile with a display name, avatar, linked emails, and optional verified GitHub identity. Open **Settings → Profile → Identity** to update the editable fields. The profile follows the authenticated person across browsers; clearing browser site data does not delete it.
 
 Profile photos load through authenticated Gateway routes in the online roster, person cards, and chat. Paired browsers use their approved read scopes. When the Mac app connects through an SSH tunnel to a trusted-proxy Gateway, image requests can use the connection's saved password if its paired credential is rejected. Credentials stay in request headers; profiles without an available image show initials.
@@ -90,11 +121,13 @@ On a single-user Gateway, unidentified operators share one durable owner profile
 
 On macOS, the owner's avatar defaults to the Gateway host account's user picture when no OpenClaw avatar is saved. This uses the Mac running the Gateway, including when you connect from another device. A saved avatar always takes priority. OpenClaw reads the picture locally and serves a resized copy through the authenticated avatar route; other people's profiles never inherit it. Restart the Gateway to pick up a changed macOS picture. If the picture cannot be read, initials remain visible.
 
-**Settings → Profile → Connected accounts** shows the selected **Gateway**, saved **Person**, and **Scope: Personal**. Choose **Add account**, then a provider and sign-in method from the Gateway's catalog. Browser/device sign-in, protected credential inputs, progress, and cancellation use one guided flow. These are the same personal accounts managed by `openclaw models accounts login`, not the machine-local system/agent credentials managed by `models auth`. Account controls follow the Gateway-assigned profile, including the shared owner profile on a single-user Gateway. If the connection has no profile, the section explains the missing identity and offers **Connection settings** without showing provider credential inputs. Shared Gateway tokens and device pairing alone do not distinguish people on a multi-user Gateway. See [Per-person model accounts](/concepts/multi-user#per-person-model-accounts).
+**Settings → Profile → Saved accounts** shows the selected **Gateway**, saved **Person**, and **Scope: Personal**. Choose **Add account**, then a provider and sign-in method from the Gateway’s catalog. Browser/device sign-in, protected sign-in inputs, progress, and cancellation use one guided flow. These are the same personal accounts managed by `openclaw models accounts login`, not the machine-local system/agent credentials managed by `models auth`. Account controls follow the Gateway-assigned profile, including the shared owner profile on a single-user Gateway. Sign-in needs a verified Gateway identity and `operator.write` access, not admin access. The section distinguishes a missing identity, insufficient permission, a profile that hasn’t loaded, and a disconnected Gateway. It offers **Connection settings** when there’s no account profile, without showing provider sign-in inputs. Shared Gateway tokens and device pairing alone do not distinguish people on a multi-user Gateway. See [Per-person model accounts](/concepts/multi-user#per-person-model-accounts).
+
+Choose **Use for new sessions** to set a **New session default**. Existing sessions keep their account choice. **Use shared default** clears only this personal default; saved accounts and existing sessions stay unchanged. Shared fallback rules still apply, so an account preference isn’t a billing guarantee.
 
 GitHub-backed sign-in through Cloudflare Access or Tailscale Serve fills the read-only **GitHub account** row with the verified public avatar and account link without replacing a custom OpenClaw avatar. **Git co-author credit** is a separate profile-wide toggle, on by default for verified accounts, that controls future commits from shared sessions. It stays editable for personal profiles without a single display account, including merged accounts on multiple enterprise hosts. See [User model](/concepts/user-model#gateway-profile-and-github-credit) for verification, retry, account-change, noreply privacy, and eligibility rules.
 
-**Settings → Profile → GitHub connections** separately shows **My GitHub** and **System GitHub**. Identified people, including read-scoped operators, can connect and disconnect only their own account; administrators can also change the shared System account. Connecting defaults to **For me** for identified users and never changes their sign-in identity, co-author preference, or shared execution defaults. Personal credentials support explicit Gateway-brokered **Publish PR** actions, not ordinary agent shell commands. See [GitHub connections](/concepts/user-model#github-connections).
+**Settings → Profile → GitHub accounts** separately shows **My GitHub** and **System GitHub**. Identified people, including read-scoped operators, can connect and disconnect only their own account; administrators can also change the shared System account. Connecting defaults to **For me** for identified users and never changes their sign-in identity, co-author preference, or shared execution defaults. Personal credentials support explicit Gateway-brokered **Publish PR** actions, not ordinary agent shell commands. See [GitHub connections](/concepts/user-model#github-connections).
 
 Administrators also see the default agent's effective GitHub account and verification status here. **View agent account** opens **Agent settings → Tools → GitHub account**, where any agent's account source, credential type, OAuth expiry, and refresh state are available. Authenticated [GitHub Actions widgets](/tools/show-widget#read-github-actions-runs) use this effective agent account. **Verified** confirms the account with GitHub; repository permissions are checked on each data request.
 
@@ -108,9 +141,12 @@ In **Agent settings → Files**, an unread file stays unavailable for editing an
 
 Elsewhere, agents without a custom image or emoji use a generated face that fills the circular avatar. Its color, eyes, mouth, and solid or pastel background come from the agent ID, so the same agent keeps the same face across reloads and clients. Renaming the agent's display name does not change its face. Generated faces are decorative and do not indicate activity or model choice.
 
-## Gateway host status
+<a id="gateway-host-status" />
 
-The connection settings use one **Gateway secret** field for the configured
+## Gateway connection
+
+The **Connection** page shows the Gateway connection and this tab’s saved sign-in.
+It uses one **Gateway secret** field for the configured
 token or password. The Gateway accepts either wire field; its auth mode selects
 the configured secret. After a successful token-mode connection, the UI remembers
 the secret in session storage for the current browser tab and Gateway only.
@@ -131,7 +167,7 @@ Gateway in this browser without reconnecting. Session edits and connection edits
 have independent Save/Apply and Discard actions. Switching Gateways restores
 that Gateway's saved session selection.
 
-Open **Settings → Gateway** to see the **Gateway Host** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and space for each mounted local disk. Linux EFI boot partitions mounted at `/boot/efi` or `/efi` are omitted. The card shares a ten-second `system.info` refresh with the activity graphs while visible; mounted-disk discovery and state-directory disk space reuse thirty-second snapshots. Machine name, CPU count, and CPU model are sampled once when the Gateway process starts; restart the Gateway to reflect CPU topology changes. Process counters, load averages, and event-loop health stay live on every request. Linux disk sampling reads filesystem statistics directly and does not require the `df` utility. The RPC requires the `operator.read` scope. If mounted-disk discovery is unavailable, the card retains the state-directory disk reading when available. Connections without the required scope omit the card. Shimmer placeholders appear while the first stats are being fetched and remain still with reduced motion enabled; refreshes keep the previous readings and uptime visible. Disk paths appear in their labels without duplicate tooltips.
+Open **Settings → Gateway** to see the **This computer** card with the Gateway machine, LAN address, operating system, runtime, uptime, CPU load, memory, and space for each mounted local disk. Linux EFI boot partitions mounted at `/boot/efi` or `/efi` are omitted. The card shares a ten-second `system.info` refresh with the activity graphs while visible; mounted-disk discovery and state-directory disk space reuse thirty-second snapshots. Machine name, CPU count, and CPU model are sampled once when the Gateway process starts; restart the Gateway to reflect CPU topology changes. Process counters, load averages, and event-loop health stay live on every request. Linux disk sampling reads filesystem statistics directly and does not require the `df` utility. The RPC requires the `operator.read` scope. If mounted-disk discovery is unavailable, the card retains the state-directory disk reading when available. Disk paths, including the state directory, are returned only to `operator.admin` connections; read-only connections receive the state volume's total and free space without a path, so the card shows no per-disk meters. Connections without the required scope omit the card. Shimmer placeholders appear while the first stats are being fetched and remain still with reduced motion enabled; refreshes keep the previous readings and uptime visible. Disk paths appear in their labels without duplicate tooltips.
 
 The **Connection** card also shows average ping and p50, p95, and p99 round-trip
 times in milliseconds. It samples every ten seconds while the page is visible
@@ -145,7 +181,7 @@ CPU, process memory, and event-loop delay graphs as the debug overlay, with up t
 100 snapshots sampled every ten seconds while visible. CPU includes event-loop
 utilization, memory shows process RSS and used heap, and delay shows the Gateway's
 event-loop p99 and maximum delay. These are Gateway process measurements, separate
-from connection ping and the machine-wide **Gateway Host** readings below.
+from connection ping and the machine-wide **This computer** readings below.
 Gateway, Appearance, Devices, Systems, and System busyness share status reads for the same connection,
 so opening the tray alongside Settings does not multiply `system.info` traffic.
 Hidden tabs pause these reads and resume when visible. Cached samples retain their
@@ -160,12 +196,12 @@ including Gateway request handling. It is not ICMP ping or model response time.
 
 The Control UI localizes itself on first load based on your browser locale. To override it later, open **Settings → Appearance → Language**.
 
-- Supported locales: `en`, `ar`, `de`, `es`, `fa`, `fr`, `hi`, `id`, `it`, `ja-JP`, `ko`, `nl`, `pl`, `pt-BR`, `ru`, `sv`, `th`, `tr`, `uk`, `vi`, `zh-CN`, `zh-TW`
+- Supported locales: `en`, `ar`, `ca`, `de`, `es`, `fa`, `fr`, `hi`, `id`, `it`, `ja-JP`, `ko`, `nl`, `pl`, `pt-BR`, `ru`, `sv`, `th`, `tr`, `uk`, `vi`, `zh-CN`, `zh-TW`
 - Non-English translations are lazy-loaded in the browser.
 - The selected locale is saved in browser storage and reused on future visits.
-- Missing translation keys fall back to English.
+- Missing translation keys fall back to English. Catalan (`ca`) uses English until its first post-merge locale refresh completes.
 
-Docs translations are generated for the same non-English locale set, including Swedish (`sv`) once its first translation refresh completes. The custom docs website supports these locales, including Thai (`th`) and Persian (`fa`).
+Docs translations are generated for the same non-English locale set except Catalan, including Swedish (`sv`) once its first translation refresh completes. The custom docs website supports these locales, including Thai (`th`) and Persian (`fa`).
 
 ## Appearance themes
 
@@ -183,7 +219,7 @@ Plugin themes can also bring their own SVG hats and composer visitors through [d
 
 Every built-in theme includes matching light and dark background artwork across the app canvas. The small, bundled lossless WebP images follow the selected mode, including System. Plugin themes can [declare their own light and dark backgrounds](/plugins/manifest/surfaces#themes), which are dimmed like a custom image; personal and imported palettes, and plugin themes without one for the current mode, use neutral artwork. Existing users keep this theme artwork until they change their background preference.
 
-In **Appearance → Background**, choose **None**, **Theme artwork**, or **Custom image**. **New session page** and **Conversations** are independent: hiding a background does not delete your image. Choosing a custom image for the first time starts with conversation backgrounds off. Later edits preserve your placement choices. Changing themes, fonts, accent, or color mode does not replace an explicit image or re-enable **None**. Without a personal profile, None, theme artwork, placement, presentation, and visibility are saved only in this browser for the selected Gateway. You can opt out without signing in; private uploads still require a profile.
+In **Appearance → Background**, choose **None**, **Theme artwork**, or **Custom image**. **New session page** and **Sessions** are independent: hiding a background does not delete your image. Choosing a custom image for the first time starts with **Sessions** turned off. Later edits preserve your placement choices. Changing themes, fonts, accent, or color mode does not replace an explicit image or re-enable **None**. Without a personal profile, None, theme artwork, placement, presentation, and visibility are saved only in this browser for the selected Gateway. You can opt out without signing in; private uploads still require a profile.
 
 Custom images belong to your authenticated profile, not the shared conversation. Upload a static JPEG, PNG, or WebP up to 8 MiB and 25 megapixels. The Gateway resizes it to at most 2560 pixels on the longest side, strips metadata, and saves a normalized JPEG of at most 2 MiB. The original file is not retained. You can keep one image; **Replace image** replaces it and **Remove image** deletes it. Choosing None or theme artwork retains the image for later use. Uploading requires profile write access; the Control UI explains when a personal profile or permission is unavailable.
 
@@ -233,7 +269,8 @@ are unchanged.
 ## Session sources
 
 Open the sidebar's **Filter & sort** menu and choose **Session sources…** to
-control automatic discovery of **Claude Code**, **Codex**, **OpenCode**, and **Pi** conversations.
+control automatic discovery of **Claude Code**, **Codex**, **OpenCode**, and **Pi** sessions
+on this Gateway and paired devices.
 The same controls live in **Settings → Appearance → Session sources**; searching
 Settings for the coding app's name and **sessions** opens them directly.
 
@@ -358,8 +395,9 @@ in the default hybrid reload mode. See
 [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect)
 for application failures, cleanup warnings, and source-edit reloads.
 Plugins that declare OAuth-backed MCP servers list them under **Accounts** on
-the plugin's page; an administrator selects **Connect** to sign in once after
-the plugin is added. `openclaw mcp login <name>` signs in only to servers
+the plugin's page; an administrator selects **Sign in** to sign in once after
+the plugin is added. Until then, the plugin page and the chat install card show
+**Sign in** where the Install button was. `openclaw mcp login <name>` signs in only to servers
 defined under `mcp.servers`, not to servers a plugin declares.
 
 The page intentionally focuses on inventory, discovery, install, enablement,
@@ -434,6 +472,21 @@ Form edits save automatically. If the connection changes while edits are pending
 autosave pauses until you choose **Save** to keep them or **Reload Config** to
 discard them and load the current configuration. A successful reload resumes
 autosave for new edits; an offline reload keeps the pending draft.
+
+**Channels** are the exception: channel settings save only when you select
+**Save**. They hold connection settings such as bot tokens, and writing a
+half-typed value can restart the channel against it, so they don't autosave.
+While a channel has edits, its dialog footer shows **Unsaved changes** with
+**Discard** and **Save**. Closing the dialog with Escape, a click outside it,
+or the close button asks whether to save, discard, or keep editing; **Run
+setup** asks the same before setup starts. Leaving the page keeps the edits
+without saving them: a notice names every channel with edits, and each of those
+channels shows **Unsaved changes** in the list until you save or discard.
+If a field you edited was changed elsewhere in the meantime, Save writes
+nothing and names the field: **Reload** takes the newer value, **Overwrite**
+keeps yours. If the connection drops during Save, the dialog checks the saved
+configuration once reconnected and shows whether the change was saved.
+
 Devices node-binding controls also pause while configuration reloads, so a pending
 read cannot overwrite a new selection.
 
@@ -441,6 +494,11 @@ When Advanced settings reconnects, a form with an already loaded schema stays
 visible at your reading position while the schema refreshes. Form and Setup
 controls cannot be edited until that refresh finishes. The first load still
 shows **Loading schema…** until a schema is available.
+
+In an agent's **Tools** tab, expand a tool group to browse its tools and policy
+details. Browser Find searches group summaries and tools in expanded groups.
+Selecting a tool in **Tool preview** opens its group and focuses its details.
+Collapsing a group closes its tool details.
 
 In an agent's **Files** editor, **Add file** opens a missing optional workspace
 document. Saving creates it only if it is still missing. If another editor or
@@ -507,10 +565,10 @@ Incomplete array-row edits stay with their item when you remove earlier rows or 
 
 When you remove a list item or map entry with the keyboard, focus moves to the next remaining row, to the previous row after removing the last one, or to the collection's add button once it is empty. A rejected removal keeps focus on its remove button.
 
-On desktop web, the active agent’s avatar appears at the top of the icon rail. Clicking it opens the agent menu; in team mode the identity opens the workspace menu. Command-palette search (⌘K) sits below the Pages, Sessions, and Online buttons. Each view has one header row. In Sessions, its title is the owner-filter chip (**My sessions**, **Involving me**, **All owners**, or a person’s name), followed by the remaining filters and a collapse button. The rail owns **New conversation**, which opens the team new-session menu in team mode; **Home** at the bottom of the icon rail toggles the Home panel and reflects the active agent’s Home activity and attention state. When something needs action — failed or overdue cron jobs, expiring or expired model auth — the rail’s **Inbox** button shows an attention badge. Open Inbox to inspect the items and navigate to their owning pages. The rail identity shows the agent's avatar (identity image or emoji), with its name in the accessible label and no hover tooltip; active-run status appears on the owning session row. Its menu starts with **Create new agent**, followed by **Show all** when multiple agents are configured, then compact agent rows. **Show all** opens Sessions across agents; choosing a named row opens that agent's main conversation. Hover or keyboard-focus an agent row to reveal its settings gear, which opens that agent's settings without selecting the row. The selector has no pin controls, search field, or separate active-agent actions. Creation requires administrator access and starts with a dialog to name the agent and choose or generate its avatar. Submitting immediately opens the named agent’s chat and selects its row at the top. OpenClaw verifies inference before saving the agent and its named greeting or enabling replies; a failed check explains the problem without creating an agent. The agent asks you to choose one of four roles, then asks for more detail about what you want to achieve. The conversation remains available when you leave and return. Choosing an agent scopes Chat plus Usage, Automations, Workboard, and Sessions to that agent. Each scoped page exposes an **Agent** control with **All agents** as an escape; this widens the shared page scope without changing the concrete chat agent, while direct session links still open their target. The Agents settings page keeps its own [URL selection](/web/urls#route-table) and does not follow the shared page scope. The profile icon at the bottom of the navigation rail remains available offline, with connection state in its accessible label and tooltip. It opens the app/account menu, whose profile identity header is followed by **Settings**, **Updates**, **Usage**, mobile pairing, **Get the apps**, **Help** (**Get support** for official OpenClaw support, Discord for social chat, Docs for self-service help, and the changelog), an offline retry action when needed, the version/build chip, and the color-mode toggle. The build chip opens the About page. When the gateway runs from a source checkout on a branch other than `main`, the footer also shows that branch name in red so a non-release gateway is obvious at a glance (release installs never show it). Shift-Command-Comma on Apple platforms or Ctrl-Shift-Comma elsewhere opens **Settings** without overriding the browser's plain Command-Comma shortcut. Collapsing the sidebar (⌘B) hides the navigation list while keeping the icon rail and its personal shortcuts available. Clicking the active rail view toggles its list; selecting another view opens that list. Opening Home or a pinned session, page, plugin, or person collapses the list on desktop while keeping the rail available. The rail keeps its own width instead of reducing the saved list width. The sidebar is the only navigation chrome on desktop, with no top bar. Narrow viewports swap the sidebar for a slide-over drawer behind a compact header row holding the drawer toggle, brand, and command-palette search; on phones, Chat absorbs that navigation row into its title bar, with the menu and search controls beside the session title.
+On desktop web, the active agent’s avatar appears at the top of the icon rail. Clicking it opens the agent menu; in team mode the identity opens the workspace menu. Command-palette search (⌘K) sits below the Pages, Sessions, and Online buttons. Each view has one header row. In Sessions, its title is the owner-filter chip (**My sessions**, **Involving me**, **All owners**, or a person’s name), followed by the remaining filters and a collapse button. The rail owns **New session**, which opens the team new-session menu in team mode; **Home** at the bottom of the icon rail toggles the Home panel and reflects the active agent’s Home activity and attention state. When something needs action — failed or overdue cron jobs, expiring or expired model auth — the rail’s **Inbox** button shows an attention badge. Open Inbox to inspect the items and navigate to their owning pages. The rail identity shows the agent's avatar (identity image or emoji), with its name in the accessible label and no hover tooltip; active-run status appears on the owning session row. Its menu starts with **Create new agent**, followed by **Show all** when multiple agents are configured, then compact agent rows. **Show all** opens Sessions across agents; choosing a named row opens that agent's main conversation. Hover or keyboard-focus an agent row to reveal its settings gear, which opens that agent's settings without selecting the row. The selector has no pin controls, search field, or separate active-agent actions. Creation requires administrator access and starts with a dialog to name the agent and choose or generate its avatar. Submitting immediately opens the named agent’s chat and selects its row at the top. OpenClaw verifies inference before saving the agent and its named greeting or enabling replies; a failed check explains the problem without creating an agent. The agent asks you to choose one of four roles, then asks for more detail about what you want to achieve. The conversation remains available when you leave and return. Choosing an agent scopes Chat plus Usage, Automations, Workboard, and Sessions to that agent. Each scoped page exposes an **Agent** control with **All agents** as an escape; this widens the shared page scope without changing the concrete chat agent, while direct session links still open their target. The Agents settings page keeps its own [URL selection](/web/urls#route-table) and does not follow the shared page scope. The profile icon at the bottom of the navigation rail remains available offline, with connection state in its accessible label and tooltip. It opens the app/account menu, whose profile identity header is followed by **Settings**, **Updates**, **Usage**, mobile pairing, **Get the apps**, **Help** (**Get support** for official OpenClaw support, Discord for social chat, Docs for self-service help, and the changelog), an offline retry action when needed, the version/build chip, and the color-mode toggle. The build chip opens the About page. When the gateway runs from a source checkout on a branch other than `main`, the footer also shows that branch name in red so a non-release gateway is obvious at a glance (release installs never show it). Shift-Command-Comma on Apple platforms or Ctrl-Shift-Comma elsewhere opens **Settings** without overriding the browser's plain Command-Comma shortcut. Collapsing the sidebar (⌘B) hides the navigation list while keeping the icon rail and its personal shortcuts available. Clicking the active rail view toggles its list; selecting another view opens that list. Opening Home or a pinned session, page, plugin, or person collapses the list on desktop while keeping the rail available. The rail keeps its own width instead of reducing the saved list width. The sidebar is the only navigation chrome on desktop, with no top bar. Narrow viewports swap the sidebar for a slide-over drawer behind a compact header row holding the drawer toggle, brand, and command-palette search; on phones, Chat absorbs that navigation row into its title bar, with the menu and search controls beside the session title.
 
 The macOS Web experience and Tauri desktop app on macOS, Linux, and Windows share the desktop web rail and panel layout, with panel and content headers centered in the 52px titlebar row.
-On desktop web and in these apps, Sessions, Pages, and Online have a trailing **Collapse sidebar** button; the Sessions title is followed by its filter control. **New conversation** stays in the rail and opens the team new-session menu in team mode. Collapsing leaves only **Expand sidebar** beside the persistent rail.
+On desktop web and in these apps, Sessions, Pages, and Online have a trailing **Collapse sidebar** button; the Sessions title is followed by its filter control. **New session** stays in the rail and opens the team new-session menu in team mode. Collapsing leaves only **Expand sidebar** beside the persistent rail.
 Search stays in the rail, and native back/forward buttons precede the content title in both expanded and collapsed layouts.
 On macOS, the panel title clears the traffic lights and the rail retains a draggable top inset; Linux/Windows align the rail with the top row and reserve the top-right caption buttons.
 Navigation uses regular browser history; the macOS app also supports trackpad swipe gestures.
@@ -520,7 +578,10 @@ The bottom-left account footer, including the Settings sidebar, shows **Suspendi
 Sidebar visibility belongs to the current tab and is not remembered across tabs, windows, or reloads; the sidebar's width is still remembered. On desktop, new tabs, direct links, bookmarks, and reloads start with the sidebar expanded. Middle-click or Cmd/Ctrl-click a session to open it in a new tab without changing the original tab. Press ⌘B on Mac or Ctrl+B on Windows/Linux to collapse or expand the sidebar in the current tab.
 
 Pending approvals also contribute to the rail’s **Inbox** attention badge.
-Open Inbox to inspect them and navigate to the Approvals page.
+Open Inbox to inspect them and navigate to the Approvals page. Command approvals
+show **Runs on** with **This computer** for the Gateway’s computer or the paired
+device’s name. Approval history keeps the recorded decision and resolution reason,
+including decisions made elsewhere.
 
 When an approval appears inline in a different session, **Approval requested by session**
 uses the requesting session's loaded title, not the open conversation's title. If that
@@ -584,17 +645,17 @@ including limited access to contacts or photos. Precise location is read-only
 on iOS; **Open Settings** opens the system setting. Talk shows the device's
 Voice Wake, Talk mode, Talk button, background Talk, and speakerphone controls.
 
-## Claws (Labs)
+## Templates (Labs)
 
-Enable **Settings → Labs → Claws** to browse official Claw packages from
+Enable **Settings → Labs → Templates** to browse official Template packages from
 ClawHub on the **Agents** page. Search the catalog, review the files and
-capabilities a Claw will install, then select **Add** to create its agent.
+capabilities a Template will install, then select **Add** to create its agent.
 Add creates an ordinary agent and opens its chat. It does not create a separate
-installed Claw to update or remove. Delete the agent through normal agent
+installed Template to update or remove. Delete the agent through normal agent
 controls; shared plugins and MCP servers remain installed. See
-[Claws](/cli/claws) for the package contract and local-source CLI commands.
+[Templates](/cli/templates) for the package contract and local-source CLI commands.
 
-Turning the Labs switch off hides Claw discovery and Add. Existing agents keep
+Turning the Labs switch off hides Template discovery and Add. Existing agents keep
 running.
 
 ## Speech bubbles
@@ -609,29 +670,33 @@ Control UI pages without restarting the Gateway.
 
 ## Custom plugin UI
 
-Find **Labs** in the **System** section of the Settings sidebar, after **Infrastructure**.
+Enabled plugins can add native pages, widgets, actions, and view replacements
+by default. Custom plugin UI is no longer a Labs setting. Installed plugin
+details and existing enable reviews disclose native UI from the inspected
+manifest; catalog install surfaces explain that plugin code may also include
+native UI when the catalog does not provide that information.
 
-**Settings → Labs → Custom plugin UI** enables native pages, widgets, actions,
-and view replacements from user-installed plugins. It defaults to off and
-writes `gateway.controlUi.experimental.customPlugins`. Changes apply without
-restarting the Gateway, and connected pages refresh their plugin views
-automatically. After disabling it, reload browser tabs to clear plugin
-JavaScript that already ran.
-
-Only enable it for plugin authors you trust: native UI runs in the Control UI
-origin with the signed-in operator's Gateway authority. Native UI from enabled
-bundled plugins, including Workboard, remains available with the lab off.
-Backend plugin APIs, ordinary plugin loading, sandboxed dashboard widgets, and
-MCP Apps are unaffected. All plugin APIs are experimental; see
+Only install plugins from authors you trust: native UI runs in the Control UI
+origin with each signed-in viewer's Gateway authority. It is not sandboxed.
+All plugin APIs remain experimental; see
 [Feature plugins](/plugins/feature-plugins) for authoring and the trust model.
+
+The existing `gateway.controlUi.experimental.customPlugins: false` remains an
+advanced opt-out for user-installed native UI. Existing explicit `false` values
+stay off on upgrade; omission and `true` allow native UI. Changes hot-apply and
+refresh connected pages without a Gateway restart. After disabling, reload
+browser tabs to clear JavaScript that already ran. Enabled bundled plugin views,
+backend operations, sandboxed dashboard widgets, and MCP Apps are unaffected.
 
 Authenticated native UI requires HTTPS or a browser-trusted loopback URL.
 On non-local plain HTTP, plugin pages explain how to open a supported URL;
 dashboard pairing and backend plugin operations remain available.
 
-## Import assistant memory
+<a id="import-assistant-memory" />
 
-Open **Settings** → **Import Memory** to bring local Codex, Claude Code, or Hermes memory
+## Import agent memory
+
+Open **Settings** → **Import memory** to bring local Codex, Claude Code, or Hermes memory
 into an OpenClaw agent. The Gateway discovers supported local memory on its own
 host, so a remote Control UI imports from the Gateway computer rather than the
 browser computer.
@@ -696,6 +761,7 @@ Open **Activity** from the sidebar’s **Pages** view, or visit `/activity` unde
 - The pulse card above the list describes the selected time window: hourly bars for **Last 24 hours**, daily bars for **Last 7 days** and **Last 30 days**, and monthly bars for the last 12 months under **All time**, using local time. Its counts of active sessions, sessions started in the window (omitted for All time), associated people, and sessions running now follow the current filters and include matches beyond the 100-row window; All time counts every match even though its bars cover 12 months. Each session contributes to the bar of its latest activity.
 - Each session can show a rolling recap in one to three sentences: what was done and where the work stands. Recaps use the agent's [utility model](/gateway/config-agents/models#agents-defaults-model) and are shared across clients and Gateway restarts. Initial loading uses shimmer placeholders; an existing recap shimmers while refreshing. A failed refresh keeps the last recap and identifies the refresh failure. **Retry recap** requests another attempt after the Gateway's cooldown. Read-only viewers can read cached recaps but cannot request generation. On a page with mixed permissions, view-only sessions do not block recap generation for writable sessions.
 - Sessions with a GitHub checkout show associated branch PRs and their added/removed line counts. Hover or keyboard-focus a PR to preview its details, or select it to open GitHub. Before an open PR exists, the branch shows its diff against the default branch, including uncommitted work. These are checkout/PR statistics, not cumulative session edit counts; unavailable counts stay hidden, and retained stale data carries a warning.
+- Branch PR cache and quota-backoff windows use elapsed time, so wall-clock corrections do not shorten or extend them.
 - Sessions can show up to four transcript images in one compact horizontal row. On narrow screens, scroll the previews sideways to see the remaining images. Select an image to expand it in the image viewer. Previews load as rows approach the viewport, reading bounded recent transcript pages; **Older images** continues when more history remains. Existing thumbnails remain visible during refreshes and failed retries. Changing the session or connection clears the previous gallery.
 - **Live activity** shows running and queued sessions above the ephemeral browser-local tool stream. The session snapshot comes from the Gateway; the tool stream uses the same `session.tool` and tool events that power Chat tool cards.
 - **Run inspector** is deep-link only and reads the Gateway's durable, immutable `audit.run.inspect` safe-only projection. The RPC contains required `decisionDisplays` and never a raw `decisions` field. Use **Inspect run** on an active session or the run ID link in Live activity, or open `/activity?view=run&run=<percent-encoded-run-id>` directly. Reloading or revisiting the link queries the Gateway again; it never reconstructs identity from Live activity.
@@ -717,6 +783,8 @@ To find an older archived conversation, choose **Sessions**, **All time**, and *
 **Active sessions** loads when you open Live activity and refreshes after reconnecting, so sessions already running or queued appear before new tool events arrive. It shows up to 100 sessions you are allowed to see, including work on other agents and agent-owned global sessions. A limit notice appears when more sessions match. Select a linked row to open that session. Reserved `unknown` sessions show status without a conversation link; raw `global` sessions do the same outside global session scope, where the Home URL addresses a different session. Changes update this snapshot while the view is open; disconnected or failed reads show a visible status instead of claiming that sessions are idle. **Clear** only clears the received-event list. It does not clear or stop active sessions.
 
 Live activity keeps up to 100 bounded summaries with truncated output previews. Preview text is not secret-masked and can contain credentials. Tool argument values are not stored in Activity state; the UI shows that arguments are hidden and records only the argument field count.
+
+Live activity search is case-insensitive and matches equivalent composed and decomposed Unicode text, such as either spelling of an accented character. Only the local comparison is normalized; displayed output and identifiers remain unchanged.
 
 Live activity collects events only while this view is open and the browser tab is visible. It watches the bounded, authorized **Active sessions** roster and releases those subscriptions when you hide the tab or leave the view. Activity from before you opened the view is not shown. Use the search, tool, and status filters to narrow received entries. Leaving the Activity page, reloading, changing Gateway or authentication context, and **Clear** reset the list. Ordinary reconnects preserve received entries and expansion state, then resume subscriptions from the refreshed roster. This browser-local feed is not a durable record of work performed while the view was closed, hidden, or disconnected.
 

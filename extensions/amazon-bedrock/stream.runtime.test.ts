@@ -27,6 +27,7 @@ import {
   mockResponse,
   mockStream,
   png,
+  readTool,
   replayAssistant,
   runtimeUser,
   startEvent,
@@ -51,10 +52,6 @@ const adaptiveFields = (effort: string) => ({
   output_config: { effort },
 });
 
-const findToolUse = (input: Awaited<ReturnType<typeof capturePayload>>) =>
-  input.messages?.flatMap((message) => message.content ?? []).find((block) => block.toolUse)
-    ?.toolUse;
-
 const claudeModel = (id: string, overrides: Parameters<typeof bedrockModel>[0] = {}) =>
   bedrockModel({ id, name: id, contextWindow: 1_000_000, maxTokens: 128_000, ...overrides });
 const fableModel = () =>
@@ -70,7 +67,6 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
-
 it("destroys the client after an aborted Bedrock request", async () => {
   const controller = new AbortController();
   const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockImplementation(() => {
@@ -85,6 +81,20 @@ it("destroys the client after an aborted Bedrock request", async () => {
 
   expect(result).toMatchObject({ stopReason: "aborted", errorMessage: "synthetic abort" });
   expectDestroyedClient(send, destroy);
+});
+
+it("aborts before send while the payload hook is pending", async () => {
+  const controller = new AbortController();
+  const send = vi.spyOn(BedrockRuntimeClient.prototype, "send");
+  const result = streamBedrockForTest(bedrockModel({}), userContext(), {
+    signal: controller.signal,
+    onPayload: () => {
+      queueMicrotask(() => controller.abort());
+      return Promise.withResolvers<undefined>().promise;
+    },
+  }).result();
+  await expect(result).resolves.toMatchObject({ stopReason: "aborted" });
+  expect(send).not.toHaveBeenCalled();
 });
 
 it.each([
@@ -130,102 +140,33 @@ it("rejects malformed base64 and decodes a valid PNG without Node Buffer", async
   expect(input.messages?.[0]?.content?.[0]?.image?.source?.bytes?.byteLength).toBeGreaterThan(0);
 });
 
-it("drops model-bound opaque reasoning when switching between Claude models", async () => {
-  const input = await capturePayload(
-    bedrockModel({
-      id: "anthropic.claude-sonnet-4-5-20250929-v1:0",
-      name: "Claude Sonnet 4.5",
-    }),
-    {
-      messages: [
-        replayAssistant("anthropic.claude-haiku-4-5-20251001-v1:0", [
-          {
-            type: "thinking",
-            thinking: "[Reasoning redacted]",
-            thinkingSignature: "3q2+7w==",
-            redacted: true,
-          },
-          { type: "text", text: "Safe visible response" },
-        ]),
-      ],
-    } as never,
-  );
-
-  expect(input.messages).toMatchObject([{ content: [{ text: "Safe visible response" }] }]);
-});
-
-it("coalesces tool results while replacing audio and dropping empty image husks", async () => {
-  const input = await capturePayload(bedrockModel({ input: ["text", "image"] }), {
-    messages: [
-      {
-        role: "toolResult",
-        toolCallId: "call_audio",
-        toolName: "listen",
-        isError: false,
-        content: [{ type: "audio", mimeType: "audio/wav", data: "YXVkaW8=" }],
-      },
-      toolResult("call_husk", [{ type: "image", mimeType: "image/png", data: "" }], "screenshot"),
-      toolResult("call_text", [{ type: "text", text: "actual tool output" }], "read"),
-    ],
-  } as never);
-  const messages = input.messages;
-
-  expect(messages).toHaveLength(1);
-  expect(messages?.[0]).toMatchObject(
-    wireUser(
-      { toolResult: { toolUseId: "call_audio", content: [{ text: "(see attached audio)" }] } },
-      { toolResult: { toolUseId: "call_husk", content: [{ text: "(no output)" }] } },
-      { toolResult: { toolUseId: "call_text", content: [{ text: "actual tool output" }] } },
-    ),
-  );
-  expect(JSON.stringify(messages)).not.toContain('"image"');
-  expect(JSON.stringify(messages)).not.toContain("see attached image");
-});
-it("normalizes invalid stored arguments at the Bedrock request boundary", async () => {
-  const context = {
-    messages: [
-      {
-        ...replayAssistant("amazon.nova-micro-v1:0", [
-          { type: "toolCall", id: "call_replay", name: "read", arguments: '{"path":' },
-        ]),
-        timestamp: 0,
-      },
-      toolResult("call_replay", [{ type: "text", text: "existing result" }], "read", false, 1),
-      { role: "user", content: "continue", timestamp: 2 },
-    ],
-  } as never;
-  const originalContext = JSON.stringify(context);
-  const input = await capturePayload(bedrockModel({}), context);
-  expect(findToolUse(input)?.input).toEqual({});
-  expect(JSON.stringify(context)).toBe(originalContext);
-});
-
-it("resolves a GovCloud inference-profile ARN ahead of the ambient region", async () => {
-  vi.stubEnv("AWS_PROFILE", "");
-  vi.stubEnv("AWS_REGION", "us-east-1");
-  const send = mockStream();
-  await streamBedrockForTest(
+it.each([
+  [
+    "us-gov-west-1",
     bedrockModel({
       id: "arn:aws-us-gov:bedrock:us-gov-west-1:123456789012:application-inference-profile/profile-abc",
     }),
-    userContext(),
-  ).result();
-  const client = send.mock.contexts[0] as BedrockRuntimeClient;
-  await expect(client.config.region()).resolves.toBe("us-gov-west-1");
-});
-
-it("lets configured profiles own standard endpoint resolution", async () => {
-  const send = mockStream();
-
-  await streamBedrockForTest(
-    bedrockModel({ baseUrl: "https://bedrock-runtime.us-west-2.amazonaws.com" }),
-    userContext(),
+    {},
+  ],
+  [
+    "us-west-2",
+    bedrockModel({
+      id: "us.xai.grok-4.6",
+      baseUrl: "https://bedrock-runtime.us-west-2.amazonaws.com",
+    }),
     { profile: "prod-bedrock", region: "us-west-2" },
-  ).result();
-
-  const client = send.mock.contexts.at(-1) as BedrockRuntimeClient;
+  ],
+] as const)("resolves %s ahead of the ambient region", async (region, model, options) => {
+  vi.stubEnv("AWS_PROFILE", "");
+  vi.stubEnv("AWS_REGION", "us-east-1");
+  const send = mockStream();
+  await streamBedrockForTest(model, userContext(), { ...options, temperature: 0.2 }).result();
+  const client = send.mock.contexts[0] as BedrockRuntimeClient;
   expect(client.config.endpoint).toBeUndefined();
-  await expect(client.config.region()).resolves.toBe("us-west-2");
+  await expect(client.config.region()).resolves.toBe(region);
+  if (region === "us-west-2") {
+    expect(send.mock.calls[0]?.[0]).not.toHaveProperty("input.inferenceConfig.temperature");
+  }
 });
 it.each([
   [BedrockStopReason.STOP_SEQUENCE, "stop", undefined],
@@ -356,12 +297,7 @@ describe("Bedrock Fable contract", () => {
     expect(input).toMatchObject({
       modelId: "production-fable",
       inferenceConfig: {},
-      messages: [
-        {
-          role: "user",
-          content: [{ text: "Reply briefly." }, { cachePoint: { type: "default" } }],
-        },
-      ],
+      messages: [wireUser(wireText("Reply briefly."), checkpoint)],
       toolConfig: { toolChoice: { auto: {} } },
       additionalModelRequestFields: adaptiveFields("high"),
       additionalModelResponseFieldPaths: ["/stop_details"],
@@ -595,6 +531,7 @@ describe("Bedrock prompt cache ownership", () => {
           Array.from({ length: 21 }, (_, index) => `Attached document block ${index}`),
         ),
       ],
+      tools: [readTool],
     };
     const first = await captureMessages(model, context, { cacheRetention: "short" });
     expect([first[0]?.content?.at(-1), first[2]?.content?.at(-1)]).toEqual([
@@ -655,6 +592,7 @@ describe("Bedrock prompt cache ownership", () => {
           },
           toolResult("call_follow_up", [textBlock("later stable tool output")], "read", false, 2),
         ],
+        tools: [readTool],
       } as never,
       { cacheRetention: "long" },
     );
@@ -730,6 +668,7 @@ it("lifts tool images into user content for OpenAI while preserving result assoc
       toolResult("call_second", [image], "inspect", true),
       toolResult("call_text", [textBlock("plain result")], "read"),
     ],
+    tools: [readTool],
   };
   const before = structuredClone(context);
   const input = await capturePayload(

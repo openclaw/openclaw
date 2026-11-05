@@ -1,57 +1,36 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile, readFile, rm, rename, link, symlink } from "node:fs/promises";
 import path from "node:path";
+import { constants } from "node:sqlite";
 import { Check } from "typebox/value";
 import { expect, it } from "vitest";
 import { stringify } from "yaml";
 import { contract } from "./contract.js";
 import { SqliteIdentityStore } from "./identity-store.js";
 import { isFullHit } from "./retrieval-hit.js";
-import { keywordExpression } from "./retrieval.js";
+import { keywordExpression, keywordSearch } from "./retrieval.js";
 import { AGENT_HIT_LIMIT, COMPACT_SNIPPET_CHARS } from "./search-detail.js";
 import { createKnowledgeService } from "./service.js";
-import { apiFor, useTestTempDirs, defaultOrder, type TestStoreConfig } from "./test-support.js";
+import { KnowledgeStorage } from "./storage.js";
+import {
+  apiFor,
+  useTestTempDirs,
+  defaultOrder,
+  plainAccess,
+  createVault,
+  toolContext,
+  operatorContext,
+} from "./test-support.js";
 
 const tempDirs = useTestTempDirs();
 
 async function fixture() {
   const base = tempDirs.make("knowledge-retrieval-");
-
-  const root = path.join(base, "vault"),
-    sessionId = randomUUID();
-  const manifest = {
-    format: "knowledge-vault-v2",
-    vaultId: randomUUID(),
-    generation: 0,
-    publicationId: randomUUID(),
-  };
-  await mkdir(root);
-  await mkdir(path.join(root, "private"));
-  await writeFile(path.join(root, "vault.json"), JSON.stringify(manifest));
-  const config: TestStoreConfig = {
-    root,
-    statePath: path.join(base, "state.sqlite"),
-    vaultId: manifest.vaultId,
-    publicationId: manifest.publicationId,
-    writesEnabled: false,
-    operatorRead: true,
-  };
+  const sessionId = randomUUID();
+  const { root, manifest, config } = await createVault(base, { writesEnabled: false });
   const api = apiFor(base, config);
-  const owner: any = {
-    source: "tool",
-    api,
-    tool: {
-      agentId: "main",
-      memoryAudience: { kind: "owner-private", agentId: "main" },
-      assertInvocationCurrent() {},
-      assertMemoryAudienceCurrent() {},
-    },
-  };
-  const operator: any = {
-    source: "session-action",
-    api,
-    action: { client: { connId: "test", scopes: ["operator.read"] } },
-  };
+  const owner = toolContext(api);
+  const operator = operatorContext(api, ["operator.read"]);
   const service = createKnowledgeService(api),
     store = new SqliteIdentityStore(config.statePath);
   async function put(id: any, title: any, body: any, metadata = {}, partition = "private") {
@@ -83,7 +62,6 @@ async function fixture() {
     total: async (input: any) => (await service.grep(input, owner)).total,
     outcome: async (input: any) => (await service.lookup(input, owner)).outcome,
     root,
-    base,
     config,
     manifest,
     sessionId,
@@ -403,10 +381,10 @@ it("FTS operators are literal words, malformed/oversized input is rejected, Unic
   }
 });
 
-it("ranking emphasizes titles, deterministic pagination and scoped index reuse", async () => {
+it("ranking preserves pagination and scope without rereading the filtered corpus", async () => {
   const f = await fixture();
-  await f.put("title_record", "Needle", "text");
-  await f.put("body_record", "Other", "needle");
+  await f.put("title_record", "Needle", "text", { tags: ["chosen"] });
+  await f.put("body_record", "Other", "needle", { tags: ["chosen"] });
   for (let n = 0; n <= AGENT_HIT_LIMIT; n++) {
     await f.put(`haystack_${n}`, "Other", "haystack");
   }
@@ -423,6 +401,28 @@ it("ranking emphasizes titles, deterministic pagination and scoped index reuse",
   const agentPage = await f.service.grep({ query: "haystack" }, f.owner);
   expect(agentPage.hits.length).toBe(AGENT_HIT_LIMIT);
   expect(agentPage.nextOffset).toBe(AGENT_HIT_LIMIT);
+  await f.put("outside_record", "Needle", "needle ".repeat(100));
+  const storage = new KnowledgeStorage(f.config, f.store);
+  const data = await storage.run(plainAccess(), (vault) => vault.scan());
+  f.store.withDatabase((db) => {
+    expect(keywordSearch(db, data, { query: "needle" }, "test", "1").total).toBe(3);
+    let corpusReads = 0;
+    db.setAuthorizer((action, table) => {
+      if (action === constants.SQLITE_READ && table?.startsWith("keyword_fts_v1_")) {
+        corpusReads++;
+      }
+      return constants.SQLITE_OK;
+    });
+    try {
+      const result = keywordSearch(db, data, { query: "needle", tag: "chosen" }, "test", "1");
+      expect(result.index.state).toBe("ready");
+      expect(ids(result)).toEqual(["title_record", "body_record"]);
+      expect(result.total).toBe(2);
+      expect(corpusReads).toBe(0);
+    } finally {
+      db.setAuthorizer(null);
+    }
+  });
 });
 
 it("published pages are immediately searchable without approval; restored generations cannot serve a newer index", async () => {

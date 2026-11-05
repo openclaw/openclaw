@@ -88,10 +88,10 @@ function fixture(
       templateModelRegistry: stores.modelRegistry,
       modelCatalog,
       configuredRuntimeModels: rows,
-      inlineProviderModels: [],
     },
     {
       initialAuth: { authStore, authModes: {}, providerAuthLabels: new Map() },
+      readUsage: (store) => store,
       isCurrent: () => true,
       withRefreshStatus: (catalog) => catalog,
       readFullModelCatalog: () => undefined,

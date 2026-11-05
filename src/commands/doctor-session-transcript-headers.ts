@@ -131,14 +131,15 @@ export async function noteSessionTranscriptHeaderHealth(params: {
   let repaired = 0;
   const preserved = new Set<string>();
 
-  scanDoctorSessionTranscripts(
+  await scanDoctorSessionTranscripts(
     {
       cfg: params.cfg,
       env,
       title: NOTE_TITLE,
       failureLabel: "Failed to inspect transcript headers",
+      selectSessionIds: (reader, reportError) => reader.headerlessSessionIds(reportError),
     },
-    ({ reader, target, databaseOptions, reportError, sessionId }) => {
+    async ({ reader, target, databaseOptions, reportError, sessionId }) => {
       const sqlitePath = target.sqlitePath;
       const parser = createCanonicalHeaderlessEventParser(sessionId);
       const snapshot = reader.headerlessSnapshot(
@@ -168,6 +169,11 @@ export async function noteSessionTranscriptHeaderHealth(params: {
       const logicalAgentId = parseAgentSessionKey(snapshot.sessionKey)?.agentId ?? target.agentId;
       const workspaceCwd = resolveAgentWorkspaceDir(params.cfg, logicalAgentId, env);
       try {
+        if (!preserved.has(sqlitePath)) {
+          const backup = await backupDoctorSqliteRepair(sqlitePath, "transcript-headers");
+          preserved.add(sqlitePath);
+          note(`- Saved pre-repair SQLite backup: ${backup}`, NOTE_TITLE);
+        }
         runOpenClawAgentWriteTransaction(
           (database) => {
             const currentRows = readTranscriptStorageRows(database, sessionId);
@@ -187,11 +193,6 @@ export async function noteSessionTranscriptHeaderHealth(params: {
               sessionId,
               timestamp: headerTimestamp,
             });
-            if (!preserved.has(sqlitePath)) {
-              const backup = backupDoctorSqliteRepair(sqlitePath, "transcript-headers");
-              preserved.add(sqlitePath);
-              note(`- Saved pre-repair SQLite backup: ${backup}`, NOTE_TITLE);
-            }
             replaceSqliteTranscriptEventsInTransaction(
               database,
               {

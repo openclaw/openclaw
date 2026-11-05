@@ -20,7 +20,7 @@ import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { resolveRealtimeVoiceAgentConsultToolsAllow } from "../../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../talk/describe-view-tool.js";
-import type { RealtimeVoiceProviderResolveConfigContext } from "../../../talk/provider-types.js";
+import type { RealtimeVoiceProviderResolveConfigContext } from "../../../talk/provider-contexts.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { resolveChatSendCallerContext } from "../../server-methods/gateway-client-identity.js";
 import { fixedStoreOwnershipConfig } from "../../server-methods/sessions-fixed-store.test-support.js";
@@ -157,7 +157,7 @@ const mocks = vi.hoisted(() => ({
   gatewayControlClose: vi.fn(async () => undefined),
   gatewayControl: { bindBridge: vi.fn(), bindControl: vi.fn() },
   createTalkClientGatewayControlOwner: vi.fn(),
-  agentRuntime: {},
+  agentRuntime: { session: { prepareSessionEntryPatch: vi.fn() } },
 }));
 
 vi.mock("../../../config/config.js", async (importOriginal) => ({

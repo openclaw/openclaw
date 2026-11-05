@@ -2,12 +2,14 @@ import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   getTerminalTableWidth,
   renderTerminalSafeTable,
 } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 import {
   getWideAreaZonePath,
@@ -16,6 +18,7 @@ import {
   resolveWideAreaDiscoveryDomain,
 } from "../infra/widearea-dns.js";
 import { defaultRuntime } from "../runtime.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 import { formatDocsHelp } from "./help-format.js";
 
 type RunOpts = { allowFailure?: boolean; inherit?: boolean; timeoutMs?: number };
@@ -129,11 +132,15 @@ export function registerDnsCli(program: Command) {
       if (explicitDomain) {
         // Throw on invalid CLI/config input before resolveWideAreaDiscoveryDomain
         // silently swallows the validation error and falls back to env.
-        normalizeWideAreaDomain(explicitDomain);
+        try {
+          normalizeWideAreaDomain(explicitDomain);
+        } catch (err) {
+          throwExpectedCliError(formatErrorMessage(err));
+        }
       }
       const wideAreaDomain = resolveWideAreaDiscoveryDomain({ configDomain: explicitDomain });
       if (!wideAreaDomain) {
-        throw new Error(
+        throwExpectedCliError(
           "No wide-area domain configured. Set discovery.wideArea.domain or pass --domain.",
         );
       }
@@ -171,10 +178,14 @@ export function registerDnsCli(program: Command) {
       defaultRuntime.log("");
       defaultRuntime.log(theme.heading("Tailscale admin (DNS → Nameservers):"));
       defaultRuntime.log(
-        theme.muted(`- Add nameserver: ${tailnetIPv4 ?? "<this machine's tailnet IPv4>"}`),
+        theme.muted(
+          terminalText`- Add nameserver: ${tailnetIPv4 ?? "<this machine's tailnet IPv4>"}`,
+        ),
       );
       defaultRuntime.log(
-        theme.muted(`- Restrict to domain (Split DNS): ${wideAreaDomain.replace(/\.$/, "")}`),
+        theme.muted(
+          terminalText`- Restrict to domain (Split DNS): ${wideAreaDomain.replace(/\.$/, "")}`,
+        ),
       );
 
       if (!opts.apply) {
@@ -184,10 +195,12 @@ export function registerDnsCli(program: Command) {
       }
 
       if (process.platform !== "darwin") {
-        throw new Error("dns setup is currently supported on macOS only");
+        throwExpectedCliError("dns setup is currently supported on macOS only");
       }
       if (!tailnetIPv4 && !tailnetIPv6) {
-        throw new Error("no tailnet IP detected; check that Tailscale is running on this machine");
+        throwExpectedCliError(
+          "no tailnet IP detected; check that Tailscale is running on this machine",
+        );
       }
 
       // A hung brew shim can block setup indefinitely; bound only this fast probe.

@@ -2,7 +2,7 @@
 import { expect, it } from "vitest";
 import type { SessionsPatchResult } from "../../../../src/gateway/session-utils.types.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionsResult } from "./session-capability.test-support.ts";
 import {
@@ -45,6 +45,68 @@ function modelFixture(patch: () => unknown) {
     }),
   };
 }
+
+it("keeps a confirmed Access setting when a pre-patch list with a newer sampling time finishes", async () => {
+  const initial = modelRow({
+    updatedAt: 10,
+    snapshotAt: 10,
+    hasActiveRun: true,
+    activeRunIds: ["active-run"],
+  });
+  const delayedList = createDeferred<SessionsListResult>();
+  const listIssued = createDeferred();
+  let holdList = false;
+  let listed = initial;
+  const { sessions } = modelHarness({
+    "sessions.list": () => {
+      if (holdList) {
+        listIssued.resolve();
+        return delayedList.promise;
+      }
+      return sessionsResult([listed], listed.snapshotAt ?? 0);
+    },
+    "sessions.patch": () =>
+      patchReceipt(
+        key,
+        { sessionId: initial.sessionId, updatedAt: 30, cyberAccessProgram: "daybreak_blue" },
+        "",
+      ),
+  });
+  let read: ReturnType<typeof sessions.refresh> | undefined;
+  try {
+    await sessions.refresh({ agentId: "main", force: true });
+    holdList = true;
+    read = sessions.refresh({ agentId: "main", force: true });
+    await listIssued.promise;
+    await sessions.patch(
+      key,
+      { cyberAccessProgram: "daybreak_blue" },
+      { agentId: "main", expectedSessionId: initial.sessionId, deferListRefresh: true },
+    );
+    expect(sessions.state.result?.sessions[0]?.cyberAccessProgram).toBe("daybreak_blue");
+    delayedList.resolve(sessionsResult([{ ...initial, snapshotAt: 20 }], 20));
+    await read;
+    expect(sessions.state.result?.sessions[0]?.cyberAccessProgram).toBe("daybreak_blue");
+    holdList = false;
+    listed = {
+      ...initial,
+      snapshotAt: 40,
+      cyberAccessProgram: "standard",
+      hasActiveRun: false,
+      activeRunIds: [],
+    };
+    await sessions.refresh({ agentId: "main", force: true });
+    expect(sessions.state.result?.sessions[0]).toMatchObject({
+      cyberAccessProgram: "standard",
+      hasActiveRun: false,
+      activeRunIds: [],
+    });
+  } finally {
+    delayedList.resolve(sessionsResult([initial], 10));
+    await read;
+    sessions.dispose();
+  }
+});
 
 it.each(
   ["primary", "supplemental", "descriptor"].flatMap((source) =>

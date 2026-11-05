@@ -4,8 +4,8 @@ import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import { invalidateModelCatalogCache } from "../../lib/model-catalog-cache.ts";
-import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
-import { loadModelProvidersData, type ModelProvidersData } from "./load.ts";
+import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
+import { catalogDiscoveryError, loadModelProvidersData, type ModelProvidersData } from "./load.ts";
 
 export type ModelProviderRefreshReason = "publication" | "replacement" | "forced";
 
@@ -24,6 +24,8 @@ async function loadConnectedProviderData(
   return {
     ...target.data,
     providerOutcomes: refreshed.providerOutcomes,
+    pendingProviders: refreshed.pendingProviders,
+    catalogRequestFailed: refreshed.catalogRequestFailed,
     catalogError: refreshed.catalogError,
     error: authStatus ? refreshed.error : t("modelProviders.login.statusRefreshFailed"),
     authStatus:
@@ -104,10 +106,7 @@ export class ModelProviderCoreLoader {
         signal: request.signal,
       });
       if (ownsResult()) {
-        this.catalogError = modelCatalogRefreshError(
-          result,
-          t("modelProviders.defaults.discoverFailed"),
-        );
+        this.catalogError = catalogDiscoveryError(result);
         this.options.onCatalogComplete(result);
       }
     } catch (failure) {

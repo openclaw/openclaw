@@ -57,8 +57,8 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}settings/plugins/knowledge?view=settings`);
       const editor = page.locator(".plugin-editor");
-      const read = editor.getByRole("checkbox", { name: "Operator Read", exact: true });
-      const writes = editor.getByRole("checkbox", { name: "Writes Enabled", exact: true });
+      const read = editor.getByRole("checkbox", { name: "Operator read", exact: true });
+      const writes = editor.getByRole("checkbox", { name: "Writes enabled", exact: true });
       await read.waitFor();
       await writes.waitFor();
       if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {

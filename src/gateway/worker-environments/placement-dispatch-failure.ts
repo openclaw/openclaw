@@ -29,10 +29,6 @@ export type WorkerActiveDispatchPlacement = Extract<
   { state: "active" }
 >;
 type WorkerFailedDispatchPlacement = Extract<WorkerDispatchPlacement, { state: "failed" }>;
-export type WorkerProvisioningDispatchPlacement = Extract<
-  WorkerDispatchPlacement,
-  { state: "provisioning" }
->;
 type WorkerDrainingDispatchPlacement = Extract<WorkerDispatchPlacement, { state: "draining" }>;
 export type WorkerDispatchPlacementStore = Pick<
   ReturnType<typeof createWorkerSessionPlacementStore>,
@@ -92,6 +88,7 @@ export type WorkerDispatchEnvironmentService = Pick<
   | "prepareProjectIntent"
   | "assertPreparedIntentCurrent"
   | "getPreparedCandidates"
+  | "refreshPreparedEnvironment"
   | "schedulePreparedRefill"
   | "createWithRequest"
   | "destroy"
@@ -100,6 +97,7 @@ export type WorkerDispatchEnvironmentService = Pick<
   | "fenceWorkerTurnForRecovery"
   | "reconcileEnvironment"
   | "reconcileOnce"
+  | "ensureRetainedRunning"
   | "startTunnel"
   | "stopTunnel"
   | "supportsProviderExecutionMode"

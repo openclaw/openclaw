@@ -36,7 +36,6 @@ import { SidebarDropdown, renderSidebarMenuAction } from "./app-sidebar-dropdown
 import { renderSidebarIdentityMenu as SidebarIdentityMenu } from "./app-sidebar-identity-menu.tsx";
 import { renderSidebarPeopleFilterMenuForMenus } from "./app-sidebar-people-filter-menu.tsx";
 import { renderSidebarPluginNavigationMenuForMenus } from "./app-sidebar-plugin-navigation-menu.tsx";
-import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
 import { findActiveSidebarLineageRow } from "./app-sidebar-session-lookup.ts";
 import {
   renderSidebarCatalogViewMenuForMenus,
@@ -47,7 +46,12 @@ import { canRetryGatewayStatus } from "./gateway-status.ts";
 import "../styles/sidebar-menus.css";
 import { sessionMenuReasons } from "./session-menu-access.ts";
 import { SessionMenu, type SessionMenuAction } from "./session-menu-solid.tsx";
-import { runSessionAction, runBatchSessionAction } from "./session-organizer-menu.runtime.ts";
+import {
+  createNestedSession,
+  isCreatingNestedSession,
+  runSessionAction,
+  runBatchSessionAction,
+} from "./session-organizer-menu.runtime.ts";
 import { moveSessionFromMenu, sessionPlacementAction } from "./session-placement-action.ts";
 import { isUpdateAttentionForced } from "./sidebar-attention-dismissals.ts";
 import { isReleaseUpdateAvailable } from "./sidebar-attention-update.ts";
@@ -239,8 +243,27 @@ function renderSidebarMenus(
         })
       }
     </Show>,
-    <Show when={projected.agentCreateDialogOpen}>
-      {renderSidebarAgentCreateDialogForMenus(projected, view)}
+    <Show when={projected.agentCreateDialogOpen && view.sessionDataContext} keyed>
+      {(context) => (
+        <Loading>
+          <AgentCreateDialog
+            context={context}
+            onCancel={() => projected.closeAgentCreateDialog()}
+            onCreate={(identity) => {
+              projected.closeAgentCreateDialog();
+              void import("../app/create-agent.ts")
+                .then(({ createApplicationAgent }) => createApplicationAgent(context, identity))
+                .catch((error: unknown) =>
+                  showToast({
+                    severity: "error",
+                    message: t("agentChip.creationFailed", { error: formatUiError(error) }),
+                    durationMs: 12_000,
+                  }),
+                );
+            }}
+          />
+        </Loading>
+      )}
     </Show>,
     <Show when={projected.identityMenuPosition} keyed>
       {(menu) => {
@@ -416,7 +439,6 @@ function renderSidebarMenus(
             involvingMeContext={view.sessionInvolvingMeFilterActive}
             selectionCount={rows().length}
             compact={isMobileNavLayout()}
-            lastActive={batchRows() ? "" : formatSidebarTimestamp(session().updatedAt)}
             anchor={menu}
             trigger={projected.triggers.get("session") ?? null}
             disabled={false}
@@ -424,12 +446,29 @@ function renderSidebarMenus(
             navigationAllowed={Boolean(context())}
             copyMarkdownAllowed={canCopySessionMarkdown(context()?.gateway.snapshot)}
             splitAllowed={canSplitSessionView()}
+            nestedSession={{
+              creating: isCreatingNestedSession(
+                view.sessionOrganizer,
+                context()?.gateway.snapshot.client,
+                session().key,
+              ),
+              // Forks and empty children share parent-scoped sessions.create admission.
+              disabledReason: actionDisabledReasons().fork,
+              onCreate: () => {
+                void createNestedSession(view.sessionOrganizer, session()).finally(() => {
+                  if (projected.sessionMenu === menu) {
+                    menus.closeSessionMenu();
+                  }
+                });
+              },
+            }}
             forkDisabled={view.sessionData.sessionsLoading || session().modelSelectionLocked}
             forkFromLastCompleted={session().gatewayHasActiveRun ?? session().hasActiveRun}
             snoozeAllowed={true}
             archiveAllowed={archiveAllowed()}
             deleteAllowed={deleteAllowed()}
             cloudWorkerStopAllowed={cloudWorkerStopAllowed()}
+            cloudWorkerStopLabel={t(cloudWorkerStopAction()?.copyKey ?? "sessionsView.stopWorker")}
             groups={view.knownSessionGroups()}
             currentOwner={session().owner?.actor ?? null}
             work={batchRows() ? null : projected.sessionMenuWork}
@@ -508,7 +547,8 @@ function renderSidebarMenus(
                     }).catch((error: unknown) => {
                       if (!actionSignal.aborted) {
                         showToast({
-                          message: error instanceof Error ? error.message : String(error),
+                          severity: "error",
+                          message: formatUiError(error),
                         });
                       }
                     });
@@ -535,33 +575,4 @@ function renderSidebarMenus(
       {(menu) => renderSidebarCatalogViewMenuForMenus(projected, view, menu)}
     </Show>,
   ];
-}
-
-function renderSidebarAgentCreateDialogForMenus(
-  menus: SidebarMenus,
-  host: SidebarMenusOwner,
-): JSX.Element | null {
-  const context = host.sessionDataContext;
-  if (!context) {
-    return null;
-  }
-  return (
-    <Loading>
-      <AgentCreateDialog
-        context={context}
-        onCancel={() => menus.closeAgentCreateDialog()}
-        onCreate={(identity) => {
-          menus.closeAgentCreateDialog();
-          void import("../app/create-agent.ts")
-            .then(({ createApplicationAgent }) => createApplicationAgent(context, identity))
-            .catch((error: unknown) =>
-              showToast({
-                message: t("agentChip.creationFailed", { error: formatUiError(error) }),
-                durationMs: 12_000,
-              }),
-            );
-        }}
-      />
-    </Loading>
-  );
 }

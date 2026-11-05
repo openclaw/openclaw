@@ -24,6 +24,7 @@ import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileRole,
 } from "../state/user-profile-writes.js";
+import { createVisitorAccessPluginConfig } from "../test-utils/visitor-access-config.test-support.js";
 import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
 import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
 import { readRepositoryGitHubPublicationFixture as readRepositoryGitHubPublication } from "./github-publication-store.test-support.js";
@@ -31,7 +32,7 @@ import { readGitHubPublicationRequest } from "./github-publication-store.worker.
 import {
   createRealPublicationWorkspace,
   createTestGitHubPublicationCoordinator,
-  githubPublicationTestMocks,
+  overrideCommands,
   persistPublicationTestSession,
   root,
 } from "./github-publication.test-support.js";
@@ -45,8 +46,6 @@ import {
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
-
-const mocks = githubPublicationTestMocks();
 
 type Backend = "local" | "repository";
 type Coordinator = ReturnType<typeof createTestGitHubPublicationCoordinator>;
@@ -196,7 +195,6 @@ async function createRequesterPolicySources(
     loadSessionEntryReadOnly({ agentId: "main", sessionKey: session.sessionKey }),
   ).toMatchObject({
     createdActor: { type: "human", source: "profile", id: guestProfile },
-    sandbox: "required",
   });
   const capture = (profileId: string, scopes: readonly string[]) =>
     createGitHubPublicationRequesterFixture({
@@ -210,15 +208,13 @@ async function createRequesterPolicySources(
   const database = openOpenClawStateDatabase();
   const publishedTitles: string[] = [];
   const externalWrites: string[] = [];
-  const transport = mocks.runCommand.getMockImplementation()!;
-  mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+  overrideCommands((argv, input) => {
     if (argv.includes("push") || argv.includes("POST") || argv.includes("graphql")) {
       externalWrites.push(argv.join(" "));
     }
     if (argv.includes("POST") && argv.some((arg) => arg.endsWith("/pulls"))) {
-      publishedTitles.push(JSON.parse(options!.input!).title);
+      publishedTitles.push(JSON.parse(input!).title);
     }
-    return await transport(argv, options);
   });
   return {
     config,
@@ -253,6 +249,8 @@ export async function createRequesterPublicationFixture(
   repositoryOptions: {
     requestedRef?: Parameters<typeof createRepositoryPublicationFixture>[1];
     baseFiles?: Record<string, string>;
+    sourceHistory?: Parameters<typeof createRepositoryPublicationFixture>[5];
+    initialCheckpoint?: boolean;
   } = {},
 ) {
   const repository =
@@ -262,6 +260,8 @@ export async function createRequesterPublicationFixture(
           repositoryOptions.requestedRef,
           session,
           repositoryOptions.baseFiles,
+          repositoryOptions.initialCheckpoint,
+          repositoryOptions.sourceHistory,
         )
       : undefined;
   await persistPublicationTestSession(session.sessionKey);
@@ -392,20 +392,11 @@ export async function prepareVisitorPublicationFixture(f: {
   ]);
   const config: OpenClawConfig = {
     ...requireVisitorPublicationPolicy(f),
-    plugins: {
-      allow: ["visitor-access"],
-      slots: { memory: "none" },
-      entries: {
-        "visitor-access": {
-          enabled: true,
-          config: {
-            accountId: "publication-test",
-            appId: "publication-test",
-            apiToken: "synthetic-publication-policy-token",
-          },
-        },
-      },
-    },
+    plugins: createVisitorAccessPluginConfig(
+      "publication-test",
+      "publication-test",
+      "synthetic-publication-policy-token",
+    ),
   };
   setRuntimeConfigSnapshot(config);
   const env = {
@@ -486,6 +477,7 @@ export async function prepareVisitorPublicationFixture(f: {
         subagent: {
           complete: unexpected,
           forkSession: unexpected,
+          runForkedTurn: unexpected,
           run: unexpected,
           waitForRun: unexpected,
           getSessionMessages: unexpected,

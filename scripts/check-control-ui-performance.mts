@@ -29,11 +29,12 @@ const DEFAULT_STARTUP_BUDGET_BASELINE_PATH = path.resolve(
 // Each landed change can consume this much ratchet tolerance, so small increases
 // may accumulate. The fixed startup JS ceiling bounds that cumulative creep.
 const CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES = 512;
-const CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES = 64;
+// Patrick approved 192 B of generated-name/compression variance for #192338 (2026-11-03).
+const CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES = 192;
 const CONTROL_UI_STARTUP_CSS_GZIP_TARGET_BYTES = 45 * KIB;
 // Immediate Home and diagnostic frames approved in #147574, including shared header styles.
 const CONTROL_UI_CSS_GZIP_GROWTH_BYTES = 1.5 * KIB;
-const MERMAID_RENDERER_GZIP_BYTES = 960 * KIB;
+const MERMAID_RENDERER_GZIP_BYTES = 256 * KIB;
 const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 
 // Small, explicit headroom over the optimized baseline. Budget changes should
@@ -48,28 +49,29 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Streaming token-to-DOM: 1,274,050 B measured + the existing 811 B headroom.
-  // Peter accepted chat growth for less streaming CPU and HTML parsing.
-  chatBootJsGzipBytes: 1_274_861,
-  newBootJsGzipBytes: 797_395,
+  // Sharing Markdown's parked-block helper removes 441–449 KB gzip from non-Chat routes.
+  // Chat pays 429 B in changed compression; measured 1,294,543 B + 192 B headroom.
+  chatBootJsGzipBytes: 1_294_735,
+  // New Session retains its measured 801,486 B + 192 B headroom.
+  newBootJsGzipBytes: 801_678,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
-  // The separate 512 B growth and 64 B build-variance allowances are unchanged.
+  // The separate growth allowance stays 512 B; build variance is bounded above.
   startupJsGzipBytes: 325_131,
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
-  // Fewer boot requests save 15,022 B across Chat JS/CSS. The consolidated
-  // Chat chunk measures 463,077 B; the cap retains 25,328 B headroom.
-  largestJsGzipBytes: 488_405,
+  // Early connection evaluation cuts startup to 89,868 B and Chat to 19 requests.
+  // The shared application chunk measures 545,946 B; retain 25,328 B headroom.
+  largestJsGzipBytes: 571_274,
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
-  // CLS reservation costs 266 B gzip over main while all measured reloads stay <=0.02.
-  // The campaign permits this measured win; retain only 64 B of build variance.
-  totalCssGzipBytes: 307_769,
-  totalCssRawBytes: 1_597_441,
+  // Separately indexed field selectors cut Usage style CPU by 20–24%.
+  // Measured total CSS is 323,426 B gzip / 1,670,773 B raw; retain 64 B headroom.
+  totalCssGzipBytes: 323_490,
+  totalCssRawBytes: 1_670_837,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

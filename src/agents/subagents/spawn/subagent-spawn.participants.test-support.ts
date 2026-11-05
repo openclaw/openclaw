@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import {
   configureExecutionIdentityAdmissionSink,
@@ -30,6 +30,7 @@ import { requesterCreatorProfileId, type RequesterOrigin } from "../../requester
 import { createSessionsSendTool } from "../../tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
+import { activateSubagentRegistry } from "../registry/subagent-registry.js";
 import { closeSwarmScheduler, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { sessionReader } from "./subagent-spawn.fixtures.test-support.js";
 import {
@@ -115,6 +116,8 @@ export function registerParticipantSpawnCases(
         bound.cfg.tools = { ...bound.cfg.tools, sessions: { visibility: "all" } };
       }
       const { context, runtime } = await createBoundGateway(bound);
+      vi.mocked(runtime.lifecycle.waitForAgent).mockRestore();
+      await activateSubagentRegistry(bound.resolveGatewayContext);
       let currentConfig = bound.cfg;
       const groupId = "participant-queued";
       if (queued) {
@@ -136,7 +139,8 @@ export function registerParticipantSpawnCases(
             preparedRunAdmission: params.preparedRunAdmission,
           });
           if (visible) {
-            expect(params.userTurnTranscriptRecorder?.getPendingInputMessage?.()).toMatchObject({
+            expect(params.userTurnTranscriptRecorder?.hasPersisted()).toBe(true);
+            expect(params.userTurnTranscriptRecorder?.getPersistedMessage?.()).toMatchObject({
               __openclaw: { senderId: "agent:main" },
               provenance: {
                 kind: "inter_session",

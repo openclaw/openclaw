@@ -8,7 +8,7 @@ import type {
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
-import { failedTextResult, textResult } from "./tools/common.js";
+import { textResult } from "./tools/tool-results.js";
 
 export function attachExecApprovalReview(
   result: AgentToolResult<ExecToolDetails>,
@@ -27,7 +27,8 @@ export function buildExecForegroundResult(params: {
   warningText?: string;
   aggregateOutputDropped?: boolean;
 }): AgentToolResult<ExecToolDetails> {
-  const warningText = params.warningText?.trim() ? `${params.warningText}\n\n` : "";
+  const warning = params.warningText?.trim();
+  const warningText = warning ? `${params.warningText}\n\n` : "";
   const retentionCapNote = params.aggregateOutputDropped ? EXEC_RETENTION_CAP_NOTE : "";
   const outcome = params.outcome;
   const details: ExecToolDetails = {
@@ -41,6 +42,7 @@ export function buildExecForegroundResult(params: {
     ...(outcome.status === "failed" ? { timedOut: outcome.timedOut } : {}),
     noOutputTimedOut: outcome.noOutputTimedOut,
     cwd: params.cwd,
+    ...(warning ? { warningText: warning } : {}),
   };
   if (params.outcome.status === "failed") {
     const linuxOomGuidance =
@@ -53,7 +55,8 @@ export function buildExecForegroundResult(params: {
           "Check cgroup memory events or kernel logs. If they show memory pressure, narrow the command or adjust memory, concurrency, or resource limits."
         : "";
     const outputText = `${retentionCapNote}${warningText}${params.outcome.reason}${linuxOomGuidance}`;
-    return failedTextResult(outputText, { ...details, status: "failed" });
+    const message = `${retentionCapNote}${warningText}${params.outcome.message}${linuxOomGuidance}`;
+    return textResult(outputText, { ...details, status: "failed", message });
   }
   const outputText = `${retentionCapNote}${warningText}${renderExecOutputText(params.outcome.aggregated)}`;
   return textResult(outputText, details);

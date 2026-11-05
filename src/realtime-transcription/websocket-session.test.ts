@@ -20,9 +20,7 @@ type SessionOptions = Partial<Omit<WebSocketOptions<ProviderEvent>, "providerId"
 
 afterEach(async () => {
   vi.unstubAllEnvs();
-  for (const session of sessions) {
-    session.close();
-  }
+  sessions.forEach((session) => session.close());
   sessions.clear();
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -66,9 +64,7 @@ async function setup(
   });
   await once(wss, "listening");
   cleanup = async () => {
-    for (const ws of wss.clients) {
-      ws.terminate();
-    }
+    wss.clients.forEach((ws) => ws.terminate());
     await new Promise<void>((resolve) => {
       wss.close(() => resolve());
     });
@@ -196,6 +192,37 @@ it("owns queued bytes without replaying successfully flushed frames", async () =
   expectError(onError, "second frame failed");
   await session.connect();
   expect(sentFrames).toEqual(["first", "second"]);
+});
+
+it("discards queued audio when the provider terminates before readiness", async () => {
+  const liveReceived = createDeferred();
+  const { session, frames } = await setup(
+    {
+      readyOnOpen: false,
+      onMessage: (event, transport) => {
+        if (event.type === "terminal") {
+          transport.closeNow();
+        } else {
+          handleProviderEvent(event, transport);
+        }
+      },
+    },
+    (socket, number) => {
+      socket.send(JSON.stringify({ type: number === 1 ? "terminal" : "session.created" }));
+      socket.on("message", (data) => {
+        if (Buffer.isBuffer(data) && data.toString() === "live") {
+          liveReceived.resolve();
+        }
+      });
+    },
+  );
+  session.sendAudio(Buffer.from("previous session"));
+  await session.connect();
+  session.close();
+  await session.connect();
+  session.sendAudio(Buffer.from("live"));
+  await liveReceived.promise;
+  expect(frames).toEqual([Buffer.from("live")]);
 });
 
 it("keeps replacement sockets owned when retired socket callbacks arrive late", async () => {
@@ -365,6 +392,7 @@ it.each([
   ["pre-ready close", closedMessage],
   ["connection resolution", "connection unavailable"],
   ["socket construction", "not a valid websocket URL"],
+  ["environment proxy", "Invalid proxy URL. Use an HTTP or HTTPS proxy URL."],
 ] as const)("reports %s failures through connect and the observer", async (phase, message) => {
   const options: SessionOptions = {
     readyOnOpen: false,
@@ -377,6 +405,9 @@ it.each([
     };
   } else if (phase === "socket construction") {
     options.url = message;
+  } else if (phase === "environment proxy") {
+    vi.stubEnv("HTTP_PROXY", "http://[");
+    vi.stubEnv("no_proxy", "");
   }
   const { session, onError } = await setup(options, (socket) => {
     if (phase === "pre-ready close") {

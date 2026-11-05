@@ -1,4 +1,3 @@
-/* @vitest-environment jsdom */
 import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -9,7 +8,6 @@ import { requestResult, transactionComplete } from "../../lib/chat/control-ui-da
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   openSessionSnapshotDatabase,
-  CHAT_SNAPSHOT_DB_NAME as DB_NAME,
   CHAT_SNAPSHOT_STORE_NAME as CHAT,
   CHAT_SNAPSHOT_METADATA_STORE_NAME as METADATA,
   SIDEBAR_SNAPSHOT_STORE_NAME as SIDEBAR,
@@ -19,7 +17,10 @@ import {
   deleteStoredChatSnapshot,
 } from "./session-snapshot-invalidation.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
+/* @vitest-environment jsdom */
+import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 
+const DB_NAME = "openclaw-chat-snapshots";
 const scope = {
   gatewayScope: "wss://sidebar.example",
   recoveryScope: "account-a",
@@ -59,7 +60,7 @@ async function seededStore() {
   return store;
 }
 
-async function putSidebar(value: unknown, savedAt: number, projectionVersion = 1) {
+async function putSidebar(value: unknown, savedAt: number, projectionVersion = 4) {
   const database = await openSessionSnapshotDatabase();
   assert(database, "expected snapshot database");
   const transaction = database.transaction(SIDEBAR, "readwrite");
@@ -122,35 +123,67 @@ it("restores the settled row order before a connection and isolates gateway, acc
   }
 });
 
-it("retires a legacy hierarchy without evicting valid sidebars or transcripts", async () => {
-  vi.spyOn(Date, "now").mockReturnValue(1000);
-  const store = createStore();
-  const profiles = Array.from({ length: 8 }, (_, index) => profile(`retained-${index}`));
-  for (const current of profiles) {
-    await store.writeSidebar(key(current), sidebarSnapshot, parseSidebarSnapshot);
-  }
-  const transcript = {
-    messages: ["Retained conversation"],
-    pagination: { hasMore: false as const },
-    sessionId: "cedar",
-  };
-  store.write(sessionKey, transcript);
-  await store.flush();
-  const [parent, child] = snapshotSessions(
-    ["parent", "child"].map((name) =>
-      projectSidebarSession({ key: `agent:main:${name}`, label: name }),
-    ),
-  );
-  const legacy = { ...sidebarSnapshot, sessions: [{ ...parent!, children: [child!] }] };
-  expect(parseSidebarSnapshot(legacy)).toBeNull();
-  await putSidebar(legacy, 2000);
-
-  expect(await store.readSidebar(key(scope), parseSidebarSnapshot)).toBeNull();
-  for (const current of profiles) {
-    expect(await store.readSidebar(key(current), parseSidebarSnapshot)).toEqual(sidebarSnapshot);
-  }
-  expect(await store.read(sessionKey)).toMatchObject(transcript);
+it("decodes only the requested profile while bounding all retained envelopes", async () => {
+  const store = await seededStore();
+  const selected = vi.fn(validate);
+  expect(await store.readSidebar(key(scope), selected)).toEqual(model);
+  expect(selected).toHaveBeenCalledExactlyOnceWith(model);
+  expect(await read(store, otherProfile)).toEqual(model);
 });
+
+it("writes each changed presentation once across independent tab stores", async () => {
+  let now = 1000;
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  const first = createStore();
+  const peer = createStore();
+  const put = vi.spyOn(IDBObjectStore.prototype, "put");
+  await Promise.all([write(first), write(peer)]);
+  const changed = { rows: ["Retained conversation"] };
+  await Promise.all([write(peer, changed), write(first, changed)]);
+  expect(
+    put.mock.calls.filter((_, index) => {
+      const instance = put.mock.instances[index];
+      return instance instanceof IDBObjectStore && instance.name === SIDEBAR;
+    }),
+  ).toHaveLength(2);
+  expect(await read(peer)).toEqual(changed);
+  now += 31 * 24 * 60 * 60 * 1000;
+  expect(await write(first, changed)).toBe(true);
+  expect(await read(peer)).toEqual(changed);
+});
+
+it.each([1, 2, 3])(
+  "retires an incompatible sidebar version %i without evicting valid caches",
+  async (projectionVersion) => {
+    vi.spyOn(Date, "now").mockReturnValue(1000);
+    const store = createStore();
+    const profiles = Array.from({ length: 8 }, (_, index) => profile(`retained-${index}`));
+    for (const current of profiles) {
+      await store.writeSidebar(key(current), sidebarSnapshot, parseSidebarSnapshot);
+    }
+    const transcript = {
+      messages: ["Retained conversation"],
+      pagination: { hasMore: false as const },
+      sessionId: "cedar",
+    };
+    writeSnapshotFixture(store, sessionKey, transcript);
+    await store.flush();
+    const [parent, child] = snapshotSessions(
+      ["parent", "child"].map((name) =>
+        projectSidebarSession({ key: `agent:main:${name}`, label: name }),
+      ),
+    );
+    const legacy = { ...sidebarSnapshot, pinnedSessions: [{ ...parent!, children: [child!] }] };
+    expect(parseSidebarSnapshot(legacy)).toBeNull();
+    await putSidebar(legacy, 2000, projectionVersion);
+
+    expect(await store.readSidebar(key(scope), parseSidebarSnapshot)).toBeNull();
+    for (const current of profiles) {
+      expect(await store.readSidebar(key(current), parseSidebarSnapshot)).toEqual(sidebarSnapshot);
+    }
+    expect(await store.read(sessionKey)).toMatchObject(transcript);
+  },
+);
 
 it("prunes oldest records by count, UTF-8 bytes, and age", async () => {
   let now = 1;
@@ -181,8 +214,8 @@ it("removes only the evicted transcript", async () => {
     sessionId: "cedar",
   };
   const retained = `${sessionKey}-retained`;
-  transcripts.write(sessionKey, snapshot);
-  transcripts.write(retained, snapshot);
+  writeSnapshotFixture(transcripts, sessionKey, snapshot);
+  writeSnapshotFixture(transcripts, retained, snapshot);
   await transcripts.flush();
   await deleteStoredChatSnapshot(sessionKey, "cache-eviction");
   expect(await transcripts.read(sessionKey)).toBeNull();
@@ -248,4 +281,41 @@ it("treats unavailable persistence as a cache miss and stops work after disconne
   const unavailable = createStore();
   await expect(write(unavailable)).resolves.toBe(false);
   expect(await read(unavailable)).toBeNull();
+});
+
+it("keeps the sidebar and unrelated chats when a deleted session is pruned from every display copy", async () => {
+  const store = createStore();
+  const [removed, retained] = snapshotSessions(
+    ["cedar", "retained"].map((name) =>
+      projectSidebarSession({ key: `agent:main:${name}`, label: name }),
+    ),
+  );
+  assert(removed && retained);
+  const saved = {
+    ...sidebarSnapshot,
+    pinnedSessions: [
+      removed,
+      { ...retained, childLoadParentKeys: [removed.key], children: [removed] },
+    ],
+    pages: [removed, retained],
+    entries: [`session:${removed.key}`, `session:${retained.key}`, "route:usage"],
+  };
+  await store.writeSidebar(key(scope), saved, parseSidebarSnapshot);
+  await store.writeSidebar(key(otherAccount), saved, parseSidebarSnapshot);
+  const transcript = {
+    messages: ["retained"],
+    pagination: { hasMore: false as const },
+    sessionId: "retained",
+  };
+  writeSnapshotFixture(store, `${accountPrefix}${retained.key}`, transcript);
+  await store.flush();
+  await deleteStoredChatSnapshot(sessionKey);
+  const restored = await store.readSidebar(key(scope), parseSidebarSnapshot);
+  assert(restored, "deleting one session must retain the sidebar");
+  expect(restored.pages.map((row) => row.key)).toEqual([retained.key]);
+  expect(restored.pinnedSessions.map((row) => row.key)).toEqual([retained.key]);
+  expect(restored.pinnedSessions[0]?.children).toEqual([]);
+  expect(restored.entries).toEqual([`session:${retained.key}`, "route:usage"]);
+  expect(await store.readSidebar(key(otherAccount), parseSidebarSnapshot)).toEqual(saved);
+  expect(await store.read(`${accountPrefix}${retained.key}`)).toEqual(transcript);
 });

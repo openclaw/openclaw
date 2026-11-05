@@ -69,7 +69,7 @@ const documentInput = () => ({
 });
 
 describe("memory model input formatting", () => {
-  it.each<[string, string, boolean, string?]>([
+  it.each<[string, string, boolean, string?, { query: string; document: string }?]>([
     [
       "local",
       "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf",
@@ -84,16 +84,17 @@ describe("memory model input formatting", () => {
     ["openai-compatible", "other/embeddinggemmax", false],
     ["gemini", "gemini-embedding-2", false],
     ["local", "embeddinggemma", true, "custom: "],
+    ["ollama", "embeddinggemma", false, undefined, { query: "", document: "" }],
   ])(
     "formats query and document inputs for %s/%s",
-    async (id, model, prefixed, queryInstruction) => {
+    async (id, model, prefixed, queryInstruction, inputFormat) => {
       const embed = vi.fn<EmbeddingProvider["embed"]>(async () => [1, 0]);
       const embedBatch = vi.fn<EmbeddingProvider["embedBatch"]>(async (inputs) =>
         inputs.map(() => [0, 1]),
       );
       const manager = createEmbeddingBatchRetryHarness(embedBatch);
       Object.assign(manager.provider, { id, model, embed });
-      Object.assign(manager, { settings: { queryInstruction } });
+      Object.assign(manager, { settings: { queryInstruction, inputFormat } });
       const document = documentInput();
 
       await expect(manager.embedQueryWithRetry("find this")).resolves.toEqual([1, 0]);
@@ -110,7 +111,10 @@ describe("memory model input formatting", () => {
             : "find this",
       );
       expect(embed.mock.calls[0]?.[1]?.queryInstructionApplied).toBe(
-        queryInstruction ? true : undefined,
+        queryInstruction || inputFormat ? true : undefined,
+      );
+      expect(embedBatch.mock.calls[0]?.[1]?.documentFormatApplied).toBe(
+        inputFormat ? true : undefined,
       );
       expect(embedBatch.mock.calls[0]?.[0]).toEqual(
         prefixed
@@ -271,6 +275,36 @@ describe("memory embedding query retry cancellation", () => {
 describe.each(["text", "structured"])("memory embedding batch retry boundary (%s)", (kind) => {
   const batchInputs = (texts: string[]) =>
     kind === "text" ? texts : texts.map((text) => ({ text }));
+  it("recovers a watchdog timeout through smaller requests in input order", async () => {
+    vi.useFakeTimers();
+    const aborted: number[] = [];
+    const embedBatch = vi.fn<EmbeddingProvider["embedBatch"]>(async (inputs, options) => {
+      if (inputs.length > 1) {
+        return await new Promise<number[][]>((_, reject) => {
+          options?.signal?.addEventListener("abort", () => {
+            aborted.push(inputs.length);
+            reject(new Error("embedding request aborted"));
+          });
+        });
+      }
+      return inputs.map((input) => [Number(typeof input === "string" ? input : input.text)]);
+    });
+    const manager = createEmbeddingBatchRetryHarness(embedBatch);
+    const pending = manager.embedBatchWithRetry(batchInputs(["0", "1", "2"]));
+    const result = expect(pending).resolves.toEqual([[0], [1], [2]]);
+    void result.catch(() => {});
+    try {
+      await vi.runAllTimersAsync();
+      await result;
+      expect(aborted).toEqual([3, 2]);
+      expect(embedBatch.mock.calls.map(([inputs]) => inputs.length)).toEqual([3, 2, 1, 1, 1]);
+      expect(manager.waitForEmbeddingRetry).not.toHaveBeenCalled();
+      expect(manager.markLocalEmbeddingProviderDegraded).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("splits a provider row-cap error without retrying oversized requests", async () => {
     const items = Array.from({ length: 33 }, (_, index) => `item-${index}`);
     const embedBatch = vi.fn<EmbeddingProvider["embedBatch"]>(async (inputs) => {

@@ -1,9 +1,11 @@
-import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
+import {
+  GatewayPayloadLimitError,
+  GatewayProtocolRequestTimeoutError,
+} from "@openclaw/gateway-client/browser";
 import {
   isGatewayRestartUnavailableError,
   isGatewaySuspendUnavailableError,
 } from "../../../../packages/gateway-protocol/src/restart-unavailable.ts";
-import { GatewayPayloadLimitError } from "../../api/gateway-browser-socket.ts";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
@@ -23,7 +25,7 @@ import { isActiveLeafChangedError } from "./chat-send-ack.ts";
 import { restoreRejectedChatDelivery } from "./chat-send-composer.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { deliveryStateWriter, updateQueuedSendItem } from "./chat-send-queue-state.ts";
-import { surfaceChatDeliveryFailure, OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
+import { surfaceChatDeliveryFailure, chatOfflineQueueStorageError } from "./chat-send-support.ts";
 import { formatConnectError } from "./connect-error.ts";
 import {
   captureOutboxPayloadOwner,
@@ -74,8 +76,8 @@ export function settleQueuedChatSendFailure(
     reportFailure();
     return "failed";
   }
-  if (err instanceof GatewayProtocolRequestTimeoutError && err.requestSent) {
-    // Admission deduplicates recorded input. Reconnect can resend this exact key.
+  if (err instanceof GatewayProtocolRequestTimeoutError) {
+    // Keep the same key after refused or uncertain sends; admission deduplicates input.
     finishScopedChatSending(host, scope);
     // A live receipt or another pane can retire this row before the ACK deadline.
     // Missing custody is not a failed storage write, and must not resurrect it.
@@ -84,7 +86,7 @@ export function settleQueuedChatSendFailure(
     }
     const retained = setState("waiting-reconnect");
     if (!retained) {
-      reportFailure(OFFLINE_QUEUE_STORAGE_ERROR);
+      reportFailure(chatOfflineQueueStorageError());
     }
     if (retained) {
       scheduleRetry(CHAT_OUTBOX_RETRY_DEFAULT_MS);
@@ -103,6 +105,13 @@ export function settleQueuedChatSendFailure(
       err.message === "gateway not connected";
     const retryDelayMs = retryableGatewayDelayMs(err);
     const safelyRejected = failedBeforeTransport || retryDelayMs !== null;
+    // A live receipt or another pane can retire this row while the request was
+    // in flight. Missing custody is not a failed delivery: never resurrect the
+    // row into the composer or report a storage failure for it.
+    if (!readQueuedMessageById(host, id)) {
+      finishScopedChatSending(host, scope);
+      return "pending";
+    }
     const rollbackAttempt = safelyRejected
       ? {
           sendAttempts: queued.sendAttempts,
@@ -140,11 +149,11 @@ export function settleQueuedChatSendFailure(
       if (!restore) {
         updateQueuedMessage(host, id, (item) => ({
           ...item,
-          sendError: OFFLINE_QUEUE_STORAGE_ERROR,
+          sendError: chatOfflineQueueStorageError(),
           sendState: "failed",
         }));
       }
-      reportFailure(OFFLINE_QUEUE_STORAGE_ERROR);
+      reportFailure(chatOfflineQueueStorageError());
       return restore ? "failed" : "pending";
     }
     if (!awaitingGateway && visibleSessionMatches(host, sessionKey, prepared.agentId)) {

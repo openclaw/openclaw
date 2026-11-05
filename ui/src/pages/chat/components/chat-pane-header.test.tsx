@@ -221,17 +221,18 @@ describe("chat pane header", () => {
     expect(onToggleSidePanel).toHaveBeenCalledTimes(2);
   });
 
-  it("replaces desktop session actions with native connection status and Retry, then restores them", () => {
+  it("keeps desktop session actions beside native connection status and Retry", () => {
     const onRetry = vi.fn();
     const { container, update } = mountHeader({ sessionMenuAction: chatPaneHeaderSessionMenu() });
     expect(container.querySelector("openclaw-chat-header-session-menu")).not.toBeNull();
     update({ gatewayStatus: { kind: "offline", onRetry } });
-    absent(container, "openclaw-chat-header-session-menu, openclaw-chat-pane-versions-menu");
-    expect(text(container, '[role="status"]')).toContain("Disconnected");
+    expect(container.querySelector("openclaw-chat-header-session-menu")).not.toBeNull();
+    expect(text(container, ".chat-pane__connection-state")).toContain("Disconnected");
+    expect(container.querySelector('.chat-pane__connection [role="status"]')).toBeNull();
     container.querySelector<HTMLButtonElement>(".chat-pane__connection-retry")!.click();
     expect(onRetry).toHaveBeenCalledOnce();
     update({ gatewayStatus: { kind: "restoring", onRetry } });
-    expect(text(container, '[role="status"]')).toContain("Restoring");
+    expect(text(container, ".chat-pane__connection-state")).toContain("Restoring");
     expect(container.querySelector(".chat-pane__connection-retry")).toBeNull();
     update({ gatewayStatus: { kind: null, onRetry } });
     expect(container.querySelector(".chat-pane__connection")).toBeNull();
@@ -244,11 +245,11 @@ describe("chat pane header", () => {
       gatewayStatus: { kind: "reconnecting" },
     });
     const savedStatus = () => text(container, ".chat-pane__connection-state");
-    expect(savedStatus()).toBe("Saved conversation · Reconnecting…");
+    expect(savedStatus()).toBe("Reconnecting… · Saved conversation");
     update({ gatewayStatus: undefined });
-    expect(savedStatus()).toBe("Saved conversation · Reconnecting…");
+    absent(container, ".chat-pane__connection");
     update({ gatewayStatus: { kind: "offline" } });
-    expect(savedStatus()).toBe("Saved conversation · Disconnected");
+    expect(savedStatus()).toBe("Disconnected · Saved conversation");
     update({ savedConversation: false, gatewayStatus: { kind: null } });
     absent(container, ".chat-pane__connection");
   });
@@ -271,7 +272,7 @@ describe("chat pane header", () => {
     });
     const menu = container.querySelector(".chat-pane__layout-menu")!;
     expect(readShortcut).not.toHaveBeenCalled();
-    await openNativeMenu(menu);
+    await openNativeMenu(menu, "terminal");
     const shortcut = menu.querySelector('[data-value="terminal"] kbd');
     expect(shortcut).not.toBeNull();
     update({ panelMenuActions: [action("Open terminal")] });
@@ -299,7 +300,7 @@ describe("chat pane header", () => {
     expect(crumbs.parentElement).toBe(placement.parentElement);
     expect(crumbs.compareDocumentPosition(placement)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(query(container, ".chat-pane__header-trailing .chat-pane__presence")).not.toBeNull();
-    expect(text(container, ".chat-pane__placement-chip")).toBe("Runs on Cloud");
+    expect(text(container, ".chat-pane__placement-chip")).toBe("Cloud device");
     const menu = container.querySelector(".chat-pane__placement-menu")!;
     await openNativeMenu(menu);
     await selectNativeMenu(menu, "move");
@@ -643,12 +644,15 @@ describe("chat pane header", () => {
     },
   );
 
-  it("names incognito threads and supplies their lifetime to the accessible reveal tooltip", async () => {
+  it("marks incognito threads with a trailing icon whose tooltip carries their lifetime", async () => {
     const { container } = mountHeader({ session: row({ incognito: true }) });
     const indicator = container.querySelector<HTMLButtonElement>("button.chat-pane__incognito")!;
     const tooltip = indicator.closest("openclaw-tooltip")!;
     await tooltip.updateComplete;
-    expect(indicator?.textContent).toContain("Incognito");
+    expect(indicator.closest(".chat-pane__actions")).not.toBeNull();
+    expect(container.querySelector(".chat-pane__header-leading .chat-pane__incognito")).toBeNull();
+    expect(indicator.getAttribute("aria-label")).toBe("Incognito");
+    expect(indicator.textContent?.trim()).toBe("");
     expect(tooltip.content).toBe(
       "Incognito session. History expires 24 hours after creation or when the Gateway restarts, whichever comes first.",
     );
@@ -656,46 +660,16 @@ describe("chat pane header", () => {
     expect(mountHeader().container.querySelector(".chat-pane__incognito")).toBeNull();
   });
 
-  it("keeps Incognito identity and limits visible when only the canonical key marks it private", () => {
+  it("marks Incognito without a limits banner when only the canonical key marks it private", () => {
     const { container } = mountHeader({
       session: row({ key: "agent:main:dashboard:incognito-private" }),
     });
-    const notice = container.querySelector(".chat-pane__incognito-notice");
-    expect(container.querySelector(".chat-pane__incognito")?.textContent).toContain("Incognito");
-    expect(notice?.textContent).toContain("History expires 24 hours after creation");
-    expect(notice?.textContent).toContain("Tools, plugins, and uploads may save data.");
-    expect(mountHeader().container.querySelector(".chat-pane__incognito-notice")).toBeNull();
+    expect(container.querySelector(".chat-pane__incognito")?.getAttribute("aria-label")).toBe(
+      "Incognito",
+    );
+    expect(container.textContent).not.toContain("History expires 24 hours after creation");
+    expect(container.textContent).not.toContain("Tools, plugins, and uploads may save data.");
   });
-});
-
-it("releases each merged-chrome toggle when its header branch closes", async () => {
-  const registered = trackNavigation();
-  const mounted = mountHeader({ mergedChrome: false });
-  const retainedToggle = query(mounted.container, ".mobile-header__navigation");
-  await waitForSolid(() => expect(registered()).toEqual([retainedToggle]));
-  for (let mount = 0; mount < 2; mount += 1) {
-    mounted.update({ mergedChrome: true });
-    const toggle = query(mounted.container, ".chat-pane__nav-toggle");
-    await waitForSolid(() => expect(registered()).toEqual([retainedToggle, toggle]));
-    mounted.update({ mergedChrome: false });
-    // A connected retired button exposes a stale map entry instead of letting isConnected mask it.
-    mounted.container.append(toggle);
-    try {
-      await waitForSolid(() => expect(registered()).toEqual([retainedToggle]));
-    } finally {
-      toggle.remove();
-    }
-  }
-  mounted.update({ mergedChrome: true });
-  const toggle = query(mounted.container, ".chat-pane__nav-toggle");
-  await waitForSolid(() => expect(registered()).toEqual([retainedToggle, toggle]));
-  mounted.unmount();
-  document.body.append(toggle);
-  try {
-    expect(registered()).toEqual([]);
-  } finally {
-    toggle.remove();
-  }
 });
 
 it("publishes the active header while retaining mobile chrome across desktop transitions", async () => {

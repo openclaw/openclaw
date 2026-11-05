@@ -40,6 +40,18 @@ export const KERNEL_TEST_ENV = {
   VITEST: "1",
 };
 
+export function kernelGatewayTestStateOptions(label: string) {
+  return {
+    label,
+    env: {
+      ...KERNEL_TEST_ENV,
+      VITEST: process.env.VITEST,
+      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    },
+  };
+}
+
 export function createGatewayBackgroundTestEnv(token: string) {
   return {
     OPENCLAW_GATEWAY_TOKEN: token,

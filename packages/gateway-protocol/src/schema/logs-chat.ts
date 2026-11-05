@@ -87,6 +87,13 @@ export const ChatPendingInputsPageSchema = closedObject({
       acceptedAt: Type.Number(),
       state: Type.String({ enum: ["queued", "cancelled", "interrupted"] }),
       queued: Type.Optional(Type.Literal(true)),
+      cancelledByUser: Type.Optional(Type.Literal(true)),
+      steerNow: Type.Optional(
+        closedObject({
+          status: Type.Enum(["available", "blocked"]),
+          tools: Type.Array(NonEmptyString),
+        }),
+      ),
     }),
     { maxItems: 20 },
   ),
@@ -262,6 +269,22 @@ export const ChatPendingInputsDismissResultSchema = closedObject({
 });
 
 export type ChatPredictParams = Static<typeof ChatPredictParamsSchema>;
+
+/** Interrupt only the tools delaying one already accepted steering input. */
+export const ChatSteerNowParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  sessionId: NonEmptyString,
+  runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),
+});
+
+export const ChatSteerNowResultSchema = closedObject({
+  status: Type.Enum(["interrupted", "idle", "blocked", "settled", "unavailable"]),
+  tools: Type.Array(NonEmptyString),
+});
+
+export type ChatSteerNowParams = Static<typeof ChatSteerNowParamsSchema>;
+export type ChatSteerNowResult = Static<typeof ChatSteerNowResultSchema>;
 export type ChatPendingInputsDismissParams = Static<typeof ChatPendingInputsDismissParamsSchema>;
 export type ChatPendingInputsDismissResult = Static<typeof ChatPendingInputsDismissResultSchema>;
 export type ChatPredictResult = Static<typeof ChatPredictResultSchema>;
@@ -421,9 +444,13 @@ export const ChatSendParamsSchema = closedObject({
 export const ChatAbortParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
+  // Optional physical-session fence; an exact runId is required when supplied.
+  sessionId: Type.Optional(NonEmptyString),
   runId: Type.Optional(NonEmptyString),
   preserveSideRuns: Type.Optional(Type.Boolean()),
   discardPendingInput: Type.Optional(Type.Boolean()),
+  /** Explicit Stop action; presentation only, never cancellation authority. */
+  userInitiated: Type.Optional(Type.Boolean()),
 });
 
 /** Inserts an operator-visible synthetic message into an existing chat transcript. */

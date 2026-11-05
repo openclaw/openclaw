@@ -20,6 +20,10 @@ available. If it is missing from your agent tools, set a provider API key or
 configure `agents.defaults.mediaModels.video`.
 </Note>
 
+A key in `models.providers.<provider>.apiKey` also makes the tool available,
+including an env-backed SecretRef. Inline keys in an auth or billing cooldown
+remain unavailable.
+
 `video_generate` has three runtime modes, resolved from the reference inputs
 in the call:
 
@@ -73,6 +77,9 @@ chat return the current task status instead of starting another
 generation. Use `action: "status"` to check without triggering a new
 generation. Direct chats keep separate tasks even when they share the main
 session transcript; completion returns to the requesting peer.
+
+Status initially names the selected provider. Once generation succeeds, it names
+the provider that produced the video, including after fallback to another provider.
 
 Outside of session-backed agent runs (for example, direct tool invocations),
 the tool falls back to inline generation and returns the final media path

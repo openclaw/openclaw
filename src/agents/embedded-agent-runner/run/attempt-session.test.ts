@@ -29,6 +29,7 @@ import {
   agentSessionSetPromptPreparation,
 } from "../../sessions/agent-session-prompting.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { SettingsManager } from "../../sessions/settings-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import * as toolSearch from "../../tool-search.js";
 import { createWorkspaceCompactionConfig } from "../compaction-workspace-config.test-support.js";
@@ -38,6 +39,7 @@ import {
   prepareSessionSystemPrompt,
 } from "../session-prompt-state.js";
 import { withPromptFixture } from "./attempt-system-prompt.sandbox-info.test-support.js";
+import { isChatGPTV2CompactionEligible } from "./chatgpt-v2-compaction.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -62,12 +64,16 @@ vi.mock("../../../plugins/hook-runner-global.js", () => ({
 vi.mock("../../agent-project-settings.js", () => ({
   createPreparedEmbeddedAgentSettingsManager: hoisted.createPreparedEmbeddedAgentSettingsManager,
 }));
-// mock-isolation: Keep configuration policy outside the session assembly fixture.
-vi.mock("../../agent-settings.js", () => ({
-  applyAgentAutoCompactionGuard: hoisted.applyAgentAutoCompactionGuard,
-  isSilentOverflowProneModel: hoisted.isSilentOverflowProneModel,
-  resolveEffectiveCompactionMode: hoisted.resolveEffectiveCompactionMode,
-}));
+vi.mock("../../agent-settings.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agent-settings.js")>();
+  hoisted.applyAgentAutoCompactionGuard.mockImplementation(actual.applyAgentAutoCompactionGuard);
+  return {
+    ...actual,
+    applyAgentAutoCompactionGuard: hoisted.applyAgentAutoCompactionGuard,
+    isSilentOverflowProneModel: hoisted.isSilentOverflowProneModel,
+    resolveEffectiveCompactionMode: hoisted.resolveEffectiveCompactionMode,
+  };
+});
 vi.mock("../../agent-tool-definition-adapter.js", () => ({
   toToolDefinitions: hoisted.toToolDefinitions,
 }));
@@ -81,7 +87,6 @@ vi.mock("../../sessions/tools/tool-definition-wrapper.js", () => ({
 vi.mock("../extensions.js", () => ({
   buildEmbeddedExtensionFactories: hoisted.buildEmbeddedExtensionFactories,
 }));
-vi.mock("../logger.js", () => ({ log: { info: vi.fn() } }));
 vi.mock("../../sessions/resource-loader.js", () => ({
   DefaultResourceLoader: hoisted.DefaultResourceLoader,
 }));
@@ -96,6 +101,14 @@ vi.mock("./message-tool-terminal.js", async (importOriginal) => ({
 import { prepareEmbeddedAttemptAgentSession } from "./attempt-session-prepare.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionPreparationEvents = [
+  "resource-reload",
+  "stage:session-resource-loader",
+  "create-session",
+  "publish-session",
+  "publish-system-prompt",
+  "install-terminal-hook",
+];
 
 const attempt = {
   authStorage: { id: "auth" },
@@ -115,7 +128,7 @@ const attempt = {
 
 function createInput(options?: { terminalHookError?: Error }) {
   const events: string[] = [];
-  const settingsManager = { id: "settings", getCompactionEnabled: () => true };
+  const settingsManager = SettingsManager.inMemory();
   const resourceLoader = {
     reload: vi.fn(async () => {
       events.push("resource-reload");
@@ -491,63 +504,52 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     },
   );
 
-  it.each([true])(
-    "refreshes permission guidance with in-history updates %s",
-    async (inHistorySystemUpdates) => {
-      const { fixture, pinnedPrompt, steer, prepareSystemPromptUpdate, prepareNextRequest } =
-        createSystemUpdateInput();
-      const prepared = await prepareEmbeddedAttemptAgentSession({
-        ...fixture.input,
-        prepareSystemPromptUpdate: inHistorySystemUpdates ? prepareSystemPromptUpdate : undefined,
-      });
-      let currentPrompt = pinnedPrompt;
-      prepared.setPermissionPromptPreparation(async () => () => currentPrompt);
-      const signal = new AbortController().signal;
-      await prepareNextRequest(signal);
-      expect(steer).not.toHaveBeenCalled();
-      if (inHistorySystemUpdates) {
-        expect(prepareSystemPromptUpdate).toHaveBeenLastCalledWith(pinnedPrompt, false);
-      }
+  it("refreshes permission guidance with in-history updates", async () => {
+    const { fixture, pinnedPrompt, steer, prepareSystemPromptUpdate, prepareNextRequest } =
+      createSystemUpdateInput();
+    const prepared = await prepareEmbeddedAttemptAgentSession({
+      ...fixture.input,
+      prepareSystemPromptUpdate,
+    });
+    let currentPrompt = pinnedPrompt;
+    prepared.setPermissionPromptPreparation(async () => () => currentPrompt);
+    const signal = new AbortController().signal;
+    await prepareNextRequest(signal);
+    expect(steer).not.toHaveBeenCalled();
+    expect(prepareSystemPromptUpdate).toHaveBeenLastCalledWith(pinnedPrompt, false);
 
-      currentPrompt =
-        "## Tools\nread\n\n<!-- openclaw:attempt:PERMISSION -->\n## Permission change\nThe operator changed workspace permissions to read-only.\n<!-- /openclaw:attempt:PERMISSION -->";
-      prepared.setPermissionPromptPreparation(async () =>
-        Object.assign(() => currentPrompt, { freshlyRendered: true }),
-      );
-      await prepareNextRequest(signal);
-      expect(fixture.activeSession.agent.state.systemPrompt).toBe(
-        inHistorySystemUpdates ? pinnedPrompt : currentPrompt,
-      );
-      if (inHistorySystemUpdates) {
-        expect(prepareSystemPromptUpdate).toHaveBeenLastCalledWith(currentPrompt, true);
-        expect(steer).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            role: "custom",
-            customType: "openclaw.system-update",
-            content: expect.stringContaining("## Tools\nread"),
-            details: { kind: "prompt-update", turnScoped: false },
-          }),
-        );
-        expect(steer.mock.calls[0]?.[0].content).toContain(
-          "## Permission change\nThe operator changed workspace permissions to read-only.",
-        );
-        await prepareNextRequest(signal);
-        expect(steer).toHaveBeenCalledTimes(1);
+    currentPrompt =
+      "## Tools\nread\n\n<!-- openclaw:attempt:PERMISSION -->\n## Permission change\nThe operator changed workspace permissions to read-only.\n<!-- /openclaw:attempt:PERMISSION -->";
+    prepared.setPermissionPromptPreparation(async () =>
+      Object.assign(() => currentPrompt, { freshlyRendered: true }),
+    );
+    await prepareNextRequest(signal);
+    expect(fixture.activeSession.agent.state.systemPrompt).toBe(pinnedPrompt);
+    expect(prepareSystemPromptUpdate).toHaveBeenLastCalledWith(currentPrompt, true);
+    expect(steer).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        role: "custom",
+        customType: "openclaw.system-update",
+        content: expect.stringContaining("## Tools\nread"),
+        details: { kind: "prompt-update", turnScoped: false },
+      }),
+    );
+    expect(steer.mock.calls[0]?.[0].content).toContain(
+      "## Permission change\nThe operator changed workspace permissions to read-only.",
+    );
+    await prepareNextRequest(signal);
+    expect(steer).toHaveBeenCalledTimes(1);
 
-        fixture.activeSession.agent.state.messages.push(
-          makeAgentAssistantMessage({
-            content: [{ type: "text", text: "Done." }],
-          }),
-        );
-        currentPrompt = "## Tools\nnone";
-        await fixture.activeSession.agent.prepareNextTurn?.(signal);
-        expect(fixture.activeSession.agent.state.systemPrompt).toBe(pinnedPrompt);
-        expect(steer).toHaveBeenCalledTimes(1);
-      } else {
-        expect(steer).not.toHaveBeenCalled();
-      }
-    },
-  );
+    fixture.activeSession.agent.state.messages.push(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "Done." }],
+      }),
+    );
+    currentPrompt = "## Tools\nnone";
+    await fixture.activeSession.agent.prepareNextTurn?.(signal);
+    expect(fixture.activeSession.agent.state.systemPrompt).toBe(pinnedPrompt);
+    expect(steer).toHaveBeenCalledTimes(1);
+  });
 
   it("keeps an initial update pending until replay admission succeeds", async () => {
     const { fixture, pinnedPrompt, steer, state, prepareSystemPromptUpdate } =
@@ -668,24 +670,29 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     expect(fixture.activeSession.agent.state.systemPrompt).toBe(snapshot?.context?.systemPrompt);
   });
 
-  it("prepares resources and publishes the activated session runtime", async () => {
+  it.each([false, true])("prepares resources with compaction forbidden=%s", async (forbidden) => {
     const fixture = createInput();
+    fixture.input.attempt = { ...fixture.input.attempt, compactionForbidden: forbidden };
+    hoisted.resolveEffectiveCompactionMode.mockReturnValue("default");
     fixture.input.initialSystemPrompt = "  system prompt\n";
-    fixture.input.onSystemPromptChanged = vi.fn(() => {
-      fixture.events.push("publish-system-prompt");
-    });
+    fixture.input.onSystemPromptChanged = vi.fn(() => fixture.events.push("publish-system-prompt"));
 
     const result = await prepareEmbeddedAttemptAgentSession(fixture.input);
 
-    expect(fixture.events).toEqual([
-      "resource-reload",
-      "stage:session-resource-loader",
-      "create-session",
-      "publish-session",
-      "publish-system-prompt",
-      "install-terminal-hook",
-      "stage:agent-session",
-    ]);
+    expect(fixture.settingsManager.getCompactionEnabled()).toBe(!forbidden);
+    expect(
+      isChatGPTV2CompactionEligible({
+        model: {
+          api: "openai-chatgpt-responses",
+          provider: "openai",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+        },
+        extraParams: {},
+        compactionEnabled: result.compactionEnabled,
+        compactionReplayEnabled: true,
+      }),
+    ).toBe(!forbidden);
+    expect(fixture.events).toEqual([...sessionPreparationEvents, "stage:agent-session"]);
     expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledOnce();
     const sessionCall = hoisted.createAgentSession.mock.calls[0];
     expect(sessionCall?.[0]).toMatchObject({ resourceLoader: fixture.resourceLoader });
@@ -697,15 +704,13 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     expect(fixture.activeSession.agent.state.systemPrompt).toBe("system prompt");
     expect(fixture.input.onSystemPromptChanged).toHaveBeenCalledWith("  system prompt\n");
     expect(sessionCall?.[0]).toMatchObject({ tools: fixture.sessionToolAllowlist });
-    expect(result).toEqual(
-      expect.objectContaining({
-        activeSession: fixture.activeSession,
-        allCustomTools: fixture.allCustomTools,
-        hookRunner: fixture.hookRunner,
-        settingsManager: fixture.settingsManager,
-        ...fixture.clientToolRuntime,
-      }),
-    );
+    expect(result).toMatchObject({
+      activeSession: fixture.activeSession,
+      allCustomTools: fixture.allCustomTools,
+      hookRunner: fixture.hookRunner,
+      settingsManager: fixture.settingsManager,
+      ...fixture.clientToolRuntime,
+    });
     expect(result.hasDeliveredSourceReply()).toBe(false);
     fixture.onDeliveredSourceReply();
     expect(result.hasDeliveredSourceReply()).toBe(true);
@@ -885,13 +890,6 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
       "terminal hook failed",
     );
 
-    expect(fixture.events).toEqual([
-      "resource-reload",
-      "stage:session-resource-loader",
-      "create-session",
-      "publish-session",
-      "publish-system-prompt",
-      "install-terminal-hook",
-    ]);
+    expect(fixture.events).toEqual(sessionPreparationEvents);
   });
 });

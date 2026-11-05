@@ -89,6 +89,27 @@ describe("source update build output transaction", () => {
     fs.mkdirSync(path.join(workdir, ".git"));
   });
 
+  it("keeps standalone checkout ownership separate from an enclosing checkout", async () => {
+    fs.mkdirSync(path.join(scratch, ".git"));
+    const enclosingLock = path.join(scratch, ".artifacts/dist-artifacts.lock");
+    fs.mkdirSync(enclosingLock, { recursive: true });
+    const retainedOwner = JSON.stringify({ pid: 0 });
+    fs.writeFileSync(path.join(enclosingLock, "owner.json"), retainedOwner);
+    const checkoutLock = path.join(workdir, ".artifacts/dist-artifacts.lock");
+
+    await expect(
+      runTransaction({
+        build: async () => {
+          expect(fs.existsSync(path.join(checkoutLock, "owner.json"))).toBe(true);
+          return { exitCode: 0 };
+        },
+        lifecycle: async () => 0,
+      }),
+    ).resolves.toBe(0);
+    expect(fs.existsSync(path.join(checkoutLock, "owner.json"))).toBe(false);
+    expect(fs.readFileSync(path.join(enclosingLock, "owner.json"), "utf8")).toBe(retainedOwner);
+  });
+
   it.each(["shared consumer", "migration refusal", "admission unavailable"])(
     "preserves the incumbent on %s",
     async (failure) => {

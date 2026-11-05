@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
@@ -8,6 +9,7 @@ import {
   runOpenClawAgentWriteTransaction as writeTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   loadTranscriptEventsSync as loadEvents,
@@ -16,12 +18,15 @@ import {
   validatePreparedAssistantAppendSync as validatePrepared,
   type TranscriptEvent,
 } from "./session-accessor.js";
+import { resolveSqliteTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { resolveTranscriptMessageAppendParent as resolveParent } from "./session-accessor.sqlite-transcript-parent.js";
+import { readTranscriptAppendStateInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
   appendTranscriptEventSnapshotSync as appendEvent,
   appendTranscriptMessageSnapshotSync as appendMessage,
-} from "./session-accessor.sqlite-transcript-write.js";
+} from "./session-accessor.sqlite-transcript-write.kernel.js";
 import { replaceTranscriptEventsSync as replaceEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { applySessionTurn } from "./session-turn.worker.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-ancestry-");
 afterEach(() => vi.restoreAllMocks());
@@ -43,9 +48,20 @@ async function createTranscript(events: TranscriptEvent[] = chain("root")) {
       appendMessage(scope, assistant(id, parentId), undefined, undefined, undefined, owner),
     transaction: <T>(operation: (current: OpenClawAgentDatabase) => T) =>
       writeTransaction(operation, { agentId: scope.agentId, path: database.path }),
-    parent: (parentId: string | null) =>
+    parent: (parentId: string | null | undefined, prepared = false) =>
       runSqliteImmediateTransactionSync(database.db, () =>
-        resolveParent(database, scope.sessionId, { appendIntent: "active-branch", parentId }),
+        resolveParent(
+          database,
+          scope.sessionId,
+          { appendIntent: "active-branch", parentId },
+          prepared
+            ? readTranscriptAppendStateInTransaction(
+                database,
+                resolveSqliteTranscriptScope(scope),
+                true,
+              ).parent
+            : undefined,
+        ),
       ),
   };
 }
@@ -174,17 +190,124 @@ const parentless = {
   id: "parentless",
   message: { role: "user", content: "late" },
 };
+it.each(["root", null])(
+  "appends a turn at explicit parent %s without scanning unrelated navigation",
+  async (parentId) => {
+    const { database, scope, parent, transaction } = await createTranscript([
+      ...linear,
+      invalidLeaf,
+    ]);
+    const context: AgentWorkerOperationContext = {
+      options: { agentId: scope.agentId, path: database.path },
+      open: () => database,
+      admit() {},
+      writeTransaction: (_label, _owner, run) => transaction(run),
+    };
+    const turn = (content = "answer") =>
+      applySessionTurn(
+        {
+          agentId: scope.agentId,
+          sessionKey: scope.sessionKey,
+          options: {
+            expectedSessionId: scope.sessionId,
+            sessionFile: scope.sessionKey,
+            messages: [
+              {
+                eventId: "answer",
+                parentId,
+                message: { role: "assistant", content, idempotencyKey: "answer-key" },
+              },
+            ],
+          },
+        },
+        context,
+        (_database, candidate) => candidate.result,
+      );
+    const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    const navigationReads = () =>
+      reads.queries.filter((query) =>
+        /from "transcript_events" where "session_id" = \? order by "seq" asc/i.test(query),
+      );
+    try {
+      expect(parent("root")).toBe("tail");
+      expect(navigationReads()).toHaveLength(1);
+      reads.queries.length = 0;
+      expect(turn().appendedMessages).toMatchObject([
+        { appended: true, messageId: "answer", effectiveParentId: parentId },
+      ]);
+      expect(navigationReads()).toHaveLength(0);
+      expect(turn().appendedMessages).toMatchObject([
+        { appended: false, messageId: "answer", effectiveParentId: parentId },
+      ]);
+      expect(() => turn("conflicting answer")).toThrow("conflicts with the admitted message");
+    } finally {
+      reads.restore();
+    }
+    expect(loadEvents(scope).at(-1)).toMatchObject({
+      type: "message",
+      id: "answer",
+      parentId,
+      message: { content: "answer" },
+    });
+  },
+);
+
 it.each([
+  ["linear ancestor", linear, "root", "tail"],
   ["dangling ancestor", [message("tail", "missing")], "missing", "tail"],
   ["unrelated cycle", cycle, "outside", "outside"],
   ["cycle without root", cycle, null, null],
   ["invalid leaf navigation fallback", [...linear, invalidLeaf], "root", "tail"],
   ["parentless navigation fallback", [...linear, parentless], "root", "root"],
-] satisfies [string, TranscriptEvent[], string | null, string | null][])(
+  [
+    "valid leaf navigation",
+    [...linear, { type: "leaf", id: "selected", parentId: "tail", targetId: "root" }],
+    "root",
+    "root",
+  ],
+  ["header without identity", [], null, null],
+  ["dirty projection", linear, "root", "tail", "dirty"],
+  ["unclassified projection", linear, "root", "tail", "unclassified"],
+  ["identity-less explicit parent", linear, "root", "root", "without-identities"],
+  ["identity-less dirty fallback", linear, undefined, "tail", "without-identities-dirty"],
+] satisfies [
+  string,
+  TranscriptEvent[],
+  string | null | undefined,
+  string | null,
+  ("dirty" | "unclassified" | "without-identities" | "without-identities-dirty")?,
+][])(
   "preserves %s",
-  async (_name, events, parentId, expected) => {
-    const { parent } = await createTranscript(events);
+  async (
+    _name,
+    events,
+    parentId,
+    expected,
+    projection?: "dirty" | "unclassified" | "without-identities" | "without-identities-dirty",
+  ) => {
+    const { database, scope, parent, transaction } = await createTranscript(events);
+    transaction(() => {
+      if (projection?.startsWith("without-identities")) {
+        database.db
+          .prepare("DELETE FROM transcript_event_identities WHERE session_id = ?")
+          .run(scope.sessionId);
+      }
+      if (projection === "dirty" || projection === "without-identities-dirty") {
+        database.db
+          .prepare(
+            "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",
+          )
+          .run(scope.sessionId);
+      } else if (projection === "unclassified") {
+        database.db
+          .prepare(
+            "UPDATE session_transcript_active_events SET context_eligible = NULL WHERE session_id = ?",
+          )
+          .run(scope.sessionId);
+      }
+    });
     expect(parent(parentId)).toBe(expected);
+    expect(parent(parentId, true)).toBe(expected);
   },
 );
 

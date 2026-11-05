@@ -104,7 +104,7 @@ describe("relay logical Runtime subscriptions", () => {
       (frame) => frame.method === "Runtime.executionContextCreated",
     );
     for (const id of reads) {
-      expect(frames.findIndex((frame) => frame.id === id)).toBeLessThan(contextIndex);
+      expect(frames.slice(0, contextIndex)).toContainEqual(expect.objectContaining({ id }));
     }
     await late.request("Runtime.enable", lateRoot);
     expect(contextFrames(late.socket, lateRoot)).toHaveLength(1);

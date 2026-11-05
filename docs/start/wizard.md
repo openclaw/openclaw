@@ -14,7 +14,7 @@ openclaw onboard
 CLI onboarding is the recommended terminal setup path on macOS, Linux, and
 Windows (native or WSL2). On a fresh install, **Quick start** detects available AI
 access, waits for you to choose a connection, verifies your choice with a real
-completion, and opens the web dashboard with a foreground Gateway. **Custom setup** preserves the full
+completion, asks whether to keep OpenClaw running in the background, and opens the web dashboard. **Custom setup** preserves the full
 guided flow. `openclaw setup` runs the same flow ([Setup](/cli/setup) covers
 the `--baseline` config-only variant). Windows desktop users can also start
 from [Windows Hub](/platforms/windows).
@@ -115,8 +115,8 @@ Quick start follows this path:
 
 1. Choose **Quick start** after the one-line security pointer.
 2. Detect configured models, API-key environment variables, supported local AI
-   CLIs, and already installed tool-capable models from reachable Ollama or LM
-   Studio servers on the Gateway host. This read-only pass never downloads a
+   CLIs, and tool-capable models already loaded in reachable Ollama or LM Studio
+   servers on the Gateway host. This read-only pass never downloads a
    model. Pi and OpenCode installs may also be reported for context when they
    cannot serve as the reusable inference route. Gemini CLI and Antigravity are
    not offered as detected setup routes.
@@ -133,14 +133,19 @@ Quick start follows this path:
    saving the provider or replacing the active model.
    Choose **Skip for now** to prepare the local baseline and exit without starting
    the Gateway or AI chat. Choosing a provider through its manual setup keeps the
-   Quick start defaults: agent name `main`, full access, telemetry consent unset,
-   and a foreground Gateway after verification.
-5. Save the verified route, prepare the agent workspace, and persist Gateway
+   Quick start defaults: agent name `main`, full access, and telemetry consent
+   unset.
+5. Answer **Keep OpenClaw running in the background?** (default yes). Yes
+   installs the background service, so the Gateway keeps running after the
+   terminal closes. No starts the Gateway in the foreground instead:
+   **Ctrl+C** stops it, config persists, and `openclaw gateway install` enables
+   background operation later. A temporary run such as `npx`, or a host where
+   OpenClaw can't manage the service, skips the question. If the service fails
+   to start, setup reports why and continues in setup chat.
+6. Save the verified route, prepare the agent workspace, and persist Gateway
    settings.
-6. Start the Gateway in the foreground and open the browser dashboard. Press
-   **Ctrl+C** to stop it; config persists. Use `openclaw gateway install` later
-   for background operation, `openclaw` for the TUI, or `openclaw dashboard` to
-   reopen the web UI.
+7. Open the browser dashboard. Use `openclaw` for the TUI or
+   `openclaw dashboard` to reopen the web UI.
 
 The Quick start choice is not offered for configured installs, remote Gateway
 chat setup, non-interactive runs, or runs with `--skip-ui` or `--tui`.

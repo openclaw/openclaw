@@ -11,6 +11,10 @@ inputs:
     description: Prepare Linux kernel memory containment for lint, compiler and tooling tests.
     required: false
     default: "false"
+  native-secret-service:
+    description: Install Linux binaries for the selected task-private native OAuth fixture.
+    required: false
+    default: "false"
   install-bun:
     description: Whether to install Bun alongside Node.
     required: false
@@ -50,7 +54,7 @@ inputs:
   build-all-cache-scope:
     description: >
       Namespace for restoring build-all's content-addressed step cache.
-      Leave empty to disable; use only for declaration builds with public inputs.
+      Leave empty to disable; each build step validates its own complete input identity.
     required: false
     default: ""
 outputs:
@@ -158,6 +162,21 @@ runs:
             test "$(cat "/sys/fs/cgroup$group/memory.oom.group")" = 1
           '
 
+    - name: Prepare native Secret Service fixture binaries
+      if: runner.os == 'Linux' && inputs.native-secret-service == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        if command -v dbus-daemon >/dev/null && command -v gnome-keyring-daemon >/dev/null && command -v gdbus >/dev/null; then
+          exit 0
+        fi
+        sudo -n apt-get update
+        sudo -n apt-get install -y --no-install-recommends dbus gnome-keyring libglib2.0-bin
+        # Fixtures start their own bus and keyring; setup never opens a user credential store.
+        command -v dbus-daemon
+        command -v gnome-keyring-daemon
+        command -v gdbus
+
     - name: Normalize container toolcache
       shell: bash
       run: |
@@ -256,12 +275,17 @@ runs:
     # Embedded step env is evaluated before its condition; keep the scan guarded
     # and share its result across cache restore and configuration.
     # CI exports actions into .ci-harness; its copied manifests are not cache inputs.
+    # Audited membership lists only select tests; keep their edits from evicting
+    # unrelated transforms. The E2E factory fingerprints its own project keys;
+    # all other direct config files remain inputs at every depth.
     - name: Resolve Vitest transform cache generation
       id: vitest-cache-generation
       if: inputs.cache-mode != 'off' && (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       shell: bash
       run: |
-        echo "value=${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', 'vitest.config.*', 'test/vitest/**', 'src/state/*.sql', '!**/node_modules/**', '!.ci-harness/**') }}" >> "$GITHUB_OUTPUT"
+        set -euo pipefail
+        generation="$(node "$GITHUB_ACTION_PATH/transform-fingerprint.mjs")"
+        echo "value=$generation" >> "$GITHUB_OUTPUT"
 
     - name: Restore exact dependency cache
       id: dependency-cache
@@ -308,11 +332,11 @@ runs:
       if: inputs.cache-mode != 'off' && (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
-        path: /var/tmp/openclaw-vitest-fs-cache
-        # v4 seeds config-owned leaves shared by single and mixed-config jobs.
-        key: ${{ github.repository }}-vitest-fs-v4-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.vitest-cache-generation.outputs.value }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .cache/openclaw-vitest-fs-cache
+        # v5 uses workspace-relative archive members across runner layouts.
+        key: ${{ github.repository }}-vitest-fs-v5-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.vitest-cache-generation.outputs.value }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          ${{ github.repository }}-vitest-fs-v4-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.vitest-cache-generation.outputs.value }}-
+          ${{ github.repository }}-vitest-fs-v5-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.vitest-cache-generation.outputs.value }}-
 
     - name: Configure Vitest transform cache
       if: inputs.cache-mode != 'off' && (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
@@ -326,7 +350,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        cache_root=/var/tmp/openclaw-vitest-fs-cache
+        cache_root="$GITHUB_WORKSPACE/.cache/openclaw-vitest-fs-cache"
         generation_file="$cache_root/.openclaw-transform-generation"
         mkdir -p "$cache_root"
         cache_generation=""
@@ -359,19 +383,19 @@ runs:
       if: inputs.cache-mode != 'off' && (inputs.node-compile-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
-        path: /var/tmp/openclaw-node-compile-cache
+        path: .cache/openclaw-node-compile-cache
         # The warmer compiles build tools and test orchestration into one seed.
-        # Retain its existing namespace so readers can reuse published archives.
-        key: ${{ github.repository }}-node-compile-v3-test-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ github.run_id }}-${{ github.run_attempt }}
+        # v4 uses workspace-relative archive members across runner layouts.
+        key: ${{ github.repository }}-node-compile-v4-test-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          ${{ github.repository }}-node-compile-v3-test-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
+          ${{ github.repository }}-node-compile-v4-test-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
 
     - name: Configure Node compile cache
       if: inputs.cache-mode != 'off' && (inputs.node-compile-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       shell: bash
       run: |
         set -euo pipefail
-        cache_root=/var/tmp/openclaw-node-compile-cache
+        cache_root="$GITHUB_WORKSPACE/.cache/openclaw-node-compile-cache"
         mkdir -p "$cache_root"
         echo "NODE_COMPILE_CACHE=$cache_root" >> "$GITHUB_ENV"
         echo "NODE_COMPILE_CACHE_PORTABLE=1" >> "$GITHUB_ENV"
@@ -398,7 +422,7 @@ runs:
           export PATH="$bun_bin:$PATH"
           echo "$bun_bin" >> "$GITHUB_PATH"
         else
-          npm install -g bun@1.4.3
+          npm install -g bun@1.4.4
         fi
 
     - name: Runtime versions

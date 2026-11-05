@@ -1,14 +1,14 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  copyInternalToolResultState,
+  getInternalToolExecutionPreparer,
+} from "../../../../packages/agent-core/src/internal-hooks.js";
 import { runWithOwnedSessionTranscriptWrite } from "../../../config/sessions/transcript-write-context.js";
 import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { notifyToolActivity } from "../../../shared/tool-activity-heartbeat.js";
 import { raceWithAbortSignal } from "../../agent-tools.abort.js";
 import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
-import {
-  copyInternalToolResultState,
-  getInternalToolExecutionPreparer,
-} from "../../runtime/internal-hooks.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { retainToolSearchImplementation } from "../../tool-search-scheduling.js";

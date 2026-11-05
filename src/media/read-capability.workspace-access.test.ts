@@ -7,7 +7,9 @@ import {
   registerAgentWorkspaceAccess,
   type AgentWorkspaceAccess,
 } from "../agents/workspace-access.js";
+import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { createReplyMediaPathNormalizer } from "../auto-reply/reply/reply-media-paths.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { buildOutboundMediaLoadOptions } from "./load-options.js";
 import { resolveAgentScopedOutboundMediaAccess as resolveMediaAccess } from "./read-capability.js";
@@ -86,6 +88,67 @@ afterEach(() => {
 });
 
 describe("registered workspace outbound media", () => {
+  it.each([
+    { name: "global read deny", global: true, policy: { deny: ["read"] }, allowed: false },
+    { name: "global wildcard deny", global: true, policy: { deny: ["*"] }, allowed: false },
+    { name: "agent read deny", global: false, policy: { deny: ["read"] }, allowed: false },
+    { name: "agent wildcard deny", global: false, policy: { deny: ["*"] }, allowed: false },
+    {
+      name: "global restrictive allow",
+      global: true,
+      policy: { allow: ["message"] },
+      allowed: false,
+    },
+    {
+      name: "agent restrictive allow",
+      global: false,
+      policy: { allow: ["message"] },
+      allowed: false,
+    },
+    {
+      name: "allowed workspace-only read",
+      global: true,
+      policy: { allow: ["read"], fs: { workspaceOnly: true } },
+      allowed: true,
+    },
+    {
+      name: "messaging profile",
+      global: true,
+      policy: { profile: "messaging" as const },
+      allowed: true,
+    },
+  ])("applies $name before staging reply workspace bytes", async ({ global, policy, allowed }) => {
+    const cfg: OpenClawConfig = {
+      tools: global ? policy : undefined,
+      agents: {
+        entries: { writer: { workspace: f.workspace, tools: global ? undefined : policy } },
+      },
+    };
+    const generated = await saveMediaBuffer(
+      Buffer.from("generated output"),
+      "text/plain",
+      "outbound",
+    );
+    const normalize = createReplyMediaPathNormalizer({
+      cfg,
+      agentId: "writer",
+      workspaceDir: f.workspace,
+    });
+    const parsed = parseReplyDirectives("MEDIA: output/report.txt");
+    const result = await normalize(parsed);
+    const staged = await fs.readdir(path.dirname(generated.path));
+    if (allowed) {
+      expect(await fs.readFile(result.mediaUrl!, "utf8")).toBe("stale Gateway copy");
+      expect(staged).toHaveLength(2);
+    } else {
+      expect(result.mediaUrl).toBeUndefined();
+      expect(result.mediaUrls).toBeUndefined();
+      expect(staged).toEqual([path.basename(generated.path)]);
+    }
+    const managed = await normalize(parseReplyDirectives("MEDIA: " + generated.path));
+    expect(await fs.readFile(managed.mediaUrl!, "utf8")).toBe("generated output");
+  });
+
   it("stages remote bytes from snapshotted roots without exposing documents or stale mirrors", async () => {
     const alias = path.join(f.root, "remote-output");
     const roots = [f.output, alias];

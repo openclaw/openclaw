@@ -35,7 +35,7 @@ import {
 import { registerAgentHarness } from "./harness/registry.js";
 import type { AgentHarness } from "./harness/types.js";
 import { configFor, modelDefinition } from "./model-auth.fixtures.test-support.js";
-import type { ModelCatalogEntry } from "./model-catalog.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import * as preparedCatalog from "./prepared-model-catalog.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";

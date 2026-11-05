@@ -68,11 +68,14 @@ it.each(["success", "failure"])("archives via the keyboard with %s feedback", as
   if (outcome === "failure") {
     patch.mockRejectedValue(new Error("Archive rejected"));
   }
-  const action = vi.spyOn(pane, "handleHeaderSessionAction");
   const scope = { agentId: "main", expectedSessionId: row.sessionId };
   expect(press(pane).defaultPrevented).toBe(true);
-  expect(action).toHaveBeenCalledExactlyOnceWith({ kind: "toggle-archived" }, row);
-  await action.mock.results[0]?.value;
+  await vi.waitFor(() => expect(patch).toHaveBeenCalledOnce());
+  await vi.waitFor(() =>
+    expect(
+      outcome === "failure" ? state.chatError : vi.mocked(showToast).mock.calls.length,
+    ).toBeTruthy(),
+  );
   expect(state.chatMessage).toBe("Keep the unsent foreground draft");
   expect(pane.onPaneSessionChange).not.toHaveBeenCalled();
   if (outcome === "failure") {

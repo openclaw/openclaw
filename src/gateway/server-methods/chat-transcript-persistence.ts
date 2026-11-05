@@ -18,6 +18,7 @@ import {
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import { rewritePreparedAssistantTranscriptMessageForRun } from "../../config/sessions/session-message-rewrite.js";
 import { withPreparedTranscriptCorrection } from "../../config/sessions/session-transcript-correction.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
 import { withoutSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import type { SessionLifecycleRevisionExpectation } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
@@ -164,16 +165,25 @@ export function buildAssistantDisplayRewrite(params: {
   const joinedCaption = authoredText
     ? sanitizeAssistantDisplayText(splitMediaFromOutput(authoredText).text)
     : undefined;
+  // A row mirroring one native CLI message owns only that message; earlier
+  // narration in the delivered caption is already shown by its own native rows.
+  const nativeMirror = Boolean(
+    readNonBlankString(transcriptEventRecord(params.message["__openclaw"])?.externalId),
+  );
   // Delivery can join multiple authored blocks into one caption. Consume that
   // caption while retaining the original blocks around their selected media.
   const matchingCaptions =
     params.mediaBySource?.size && joinedCaption
-      ? prepared.content.filter(
-          (block) =>
-            block.type === "text" &&
-            typeof block.text === "string" &&
-            sanitizeAssistantDisplayText(block.text) === joinedCaption,
-        )
+      ? prepared.content.filter((block) => {
+          const caption =
+            block.type === "text" && typeof block.text === "string"
+              ? sanitizeAssistantDisplayText(block.text)
+              : undefined;
+          return (
+            caption === joinedCaption ||
+            (nativeMirror && caption?.endsWith(`\n${joinedCaption}`) === true)
+          );
+        })
       : [];
   const retainOriginalText = params.retainOriginalText || matchingCaptions.length > 0;
   // Final delivery replaces its own media while retaining prepared progress segments.
@@ -336,11 +346,7 @@ function mediaReferenceSet(mediaUrls: readonly string[]) {
 
 function findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
   events: readonly TranscriptEvent[],
-  params: {
-    assistantMessageIndex: number;
-    mediaUrls: readonly string[];
-    rejectedMediaCount: number;
-  },
+  params: Parameters<typeof rewriteAssistantTranscriptMessageByTurnIndexAndMedia>[0],
 ): { messageId: string; message: Record<string, unknown> } | null {
   const expectedMedia = mediaReferenceSet(params.mediaUrls);
   if (
@@ -460,7 +466,9 @@ export async function persistAbortedPartial(params: {
         activeWriterRunId: snapshot.runId,
       },
     };
-    const manager = await withoutSessionTranscriptReadFence(() => SessionManager.openAsync(target));
+    const manager = await withoutSessionTranscriptReadFence(() =>
+      withSessionTranscriptHydrationCaller("correction", () => SessionManager.openAsync(target)),
+    );
     const messages = manager.buildSessionContext().messages;
     const start = messages.findLastIndex((message) => message.role === "user");
     for (const result of repairToolUseResultPairing(messages.slice(Math.max(0, start)), {

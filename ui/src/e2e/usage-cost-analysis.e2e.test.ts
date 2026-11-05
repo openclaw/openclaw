@@ -283,6 +283,7 @@ suite.define(() => {
         if (scenario === "recent-tab") {
           for (const name of ["Visible C", "Visible A", "Visible B"]) {
             await list.getByRole("button", { name, exact: true }).click();
+            await expectText(page.locator(".session-detail-title")).toBe(name);
           }
           await card.getByRole("button", { name: "Recently viewed", exact: true }).click();
           list = card.locator(".session-bars--recent");
@@ -291,7 +292,7 @@ suite.define(() => {
             "Visible A",
             "Visible C",
           ]);
-          await card.getByRole("button", { name: "Clear Selection", exact: true }).click();
+          await card.getByRole("button", { name: "Clear selection", exact: true }).click();
         }
         const names = await list.locator(".session-bar-title").allTextContents();
         await list.getByRole("button", { name: names[0], exact: true }).click();
@@ -517,11 +518,11 @@ suite.define(() => {
           values: await trimmedTexts(windowCards.locator(".cost-window__value")),
         }))
         .toEqual({
-          labels: ["Selected Range", "Today", "Last 7 days", "Last 30 days"],
+          labels: ["Selected range", "Today", "Last 7 days", "Last 30 days"],
           values: ["$32.00", "$11.00", "$20.00", "$27.00"],
         });
       await expectTexts(page.locator(".daily-chart-scale span"), ["$20", "$10", "$0"]);
-      await expectText(page.locator(".usage-insight-card", { hasText: "Top Providers" })).toContain(
+      await expectText(page.locator(".usage-insight-card", { hasText: "Top providers" })).toContain(
         "OpenAI",
       );
     });

@@ -555,7 +555,7 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
   });
 });
 
-it("reports the last-run prompt budget through /usage", async () => {
+it("reports the last-reply prompt budget through /usage", async () => {
   const request = vi.fn(async () => ({
     session: row("agent:main:main", {
       totalTokens: 160_000,
@@ -564,5 +564,5 @@ it("reports the last-run prompt budget through /usage", async () => {
     }),
   }));
   const result = await runCommand(request, "usage");
-  expect(result.content).toContain("Prompt budget (last run): **89%** of 180k");
+  expect(result.content).toContain("Prompt budget (last reply): **89%** of 180k");
 });

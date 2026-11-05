@@ -336,6 +336,8 @@ suite.define(() => {
             expect(await footer.locator("kbd").count()).toBe(1);
             expect(await footer.locator("kbd").textContent()).toMatch(/^(Enter|⏎)$/);
           }
+          // Leave the attachment hover target before testing the palette's Escape shortcut.
+          await page.mouse.move(0, 0);
           await input.press("Escape");
           await input.waitFor({ state: "hidden" });
           await page.keyboard.press("ControlOrMeta+K");

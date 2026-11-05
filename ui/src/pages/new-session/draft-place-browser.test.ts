@@ -83,8 +83,6 @@ function createBrowser(
       data,
       isConnected: true,
       isAdmin: false,
-      canStartAsDraft: false,
-      visibility: "normal",
       cloudProfileId: "",
       pendingPlacement: { sessionKey: "", gatewayUrl: "", recoveryScope: "" },
       agentsHydrated: false,
@@ -95,7 +93,6 @@ function createBrowser(
       changed: vi.fn(),
       updateComplete: () => Promise.resolve(),
       onInvalidate,
-      onVisibilityRetired: vi.fn(),
       onCloudProfileCleared: vi.fn(),
       onCloudState: vi.fn(),
       onPendingPlacementReset: vi.fn(),
@@ -140,6 +137,48 @@ function createBrowser(
 }
 
 describe("DraftPlaceBrowser", () => {
+  it("deduplicates Gateway locations, caps newest-first, and ignores historical node folders", () => {
+    const { browser } = createBrowser(async () => ({ projects: [] }));
+    expect(
+      browser.resolveProjectRecents({
+        sessions: [
+          { execCwd: "/workspace" },
+          { execCwd: "/node/repo", execNode: "macbook" },
+          { spawnedCwd: "/device/alpha", deviceFolder: { deviceId: "d", path: "/device/alpha" } },
+          { spawnedCwd: "/gateway/repo" },
+          { execCwd: "/preferred/selected", worktree: { repoRoot: "/ignored/worktree" } },
+          { worktree: { repoRoot: "/worktree/one" } },
+          { execCwd: "  /cwd/two  " },
+          { worktree: { repoRoot: "/capped/out" } },
+        ],
+        workspace: "/workspace",
+        workspaceRoots: [],
+        isAdmin: true,
+      }),
+    ).toEqual([
+      { kind: "folder", folder: "/gateway/repo", displayName: "repo" },
+      { kind: "folder", folder: "/preferred/selected", displayName: "selected" },
+      { kind: "folder", folder: "/worktree/one", displayName: "one" },
+      { kind: "folder", folder: "/cwd/two", displayName: "two" },
+    ]);
+  });
+
+  it("filters Gateway recents through the viewer's folder boundary", () => {
+    const { browser } = createBrowser(async () => ({ projects: [] }));
+    expect(
+      browser.resolveProjectRecents({
+        sessions: [
+          { spawnedCwd: "/workspace/packages/app" },
+          { execCwd: "/workspace-other/private" },
+          { execCwd: "/node/repo", execNode: "macbook" },
+        ],
+        workspace: "/workspace",
+        workspaceRoots: ["/workspace"],
+        isAdmin: false,
+      }),
+    ).toEqual([{ kind: "folder", folder: "/workspace/packages/app", displayName: "app" }]);
+  });
+
   it.each(["current", "closed", "disconnected", "focus moved", "returned"] as const)(
     "focuses only the current project view after rendering (%s)",
     async (change) => {
@@ -435,7 +474,7 @@ describe("DraftPlaceBrowser", () => {
 
     expect(
       browser.resolveProjectRecents({
-        sessions: [{ execCwd: "/workspace/recent" }],
+        sessions: [{ spawnedCwd: "/workspace/recent" }],
         workspace: "/workspace",
         workspaceRoots: ["/workspace"],
         isAdmin: false,
@@ -449,7 +488,11 @@ describe("DraftGatewayState", () => {
     const request = vi.fn(async () => ({ status: "ok", entries: {} }));
     const fixture = createBrowser(request);
     fixture.context.gateway.snapshot.selfUser = { id: "profile-one" };
-    fixture.hello.features.methods.push("users.prefs.get", "users.prefs.set");
+    fixture.hello.features.methods = [
+      ...fixture.hello.features.methods,
+      "users.prefs.get",
+      "users.prefs.set",
+    ];
     fixture.gateway.synchronize(fixture.context.gateway);
     expect(fixture.gateway.preferenceLoading).toBe(true);
     fixture.gateway.disconnect();
@@ -505,7 +548,7 @@ describe("DraftGatewayState", () => {
       () => ({ environments: [], profiles: [] }),
     );
     const fixture = createBrowser(request, undefined, false);
-    fixture.hello.features.methods.push("system.info");
+    fixture.hello.features.methods = [...fixture.hello.features.methods, "system.info"];
     fixture.hello.auth.scopes.push("operator.write");
     fixture.browser.browser.setDraft("/draft-folder");
     fixture.update();
@@ -552,7 +595,7 @@ describe("DraftGatewayState", () => {
     const fixture = createBrowser((method) =>
       method === "projects.list" ? Promise.resolve({ projects: [] }) : oldName.promise,
     );
-    fixture.hello.features.methods.push("system.info");
+    fixture.hello.features.methods = [...fixture.hello.features.methods, "system.info"];
     fixture.update();
     fixture.context.gateway.snapshot.client = createTestGatewayClient((method) =>
       method === "projects.list" ? Promise.resolve({ projects: [] }) : newName.promise,
@@ -591,7 +634,7 @@ describe("DraftGatewayState", () => {
         return result;
       });
       const fixture = createBrowser(request);
-      fixture.hello.features.methods.push("system.info");
+      fixture.hello.features.methods = [...fixture.hello.features.methods, "system.info"];
       await readSystemInfo(fixture.context.gateway);
       fixture.update();
       await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Current Gateway"));

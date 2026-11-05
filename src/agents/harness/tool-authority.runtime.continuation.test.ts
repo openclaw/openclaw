@@ -1,8 +1,12 @@
+import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
+import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
+import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import { prepareSteeringDelivery } from "../../auto-reply/reply/steering-delivery-preparation.js";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controller.contracts.js";
 import {
   beginReplyMessageInjectionTarget,
@@ -13,6 +17,7 @@ import { captureReplyMessageJoinObservation } from "../../sessions/session-contr
 import { prepareReplyMessageContinuation } from "../../sessions/session-controller.message-join.js";
 import { testing as replyTesting } from "../../sessions/session-controller.test-support.js";
 import { testing } from "../embedded-agent-runner/runs.test-support.js";
+import { agentProcessTestEntrypoints } from "../process-runtime.test-support.js";
 import { bindWorkerToolPreparation } from "./host-private-capabilities.js";
 import { bindPreparedToolAuthority } from "./tool-authority-preparation.js";
 import { withPreparedEmbeddedRunToolAuthority } from "./tool-authority.runtime.js";
@@ -24,6 +29,8 @@ import {
   sessionKey,
 } from "./tool-authority.runtime.test-support.js";
 
+const fixture = createFixtureLifetime();
+const retentionUrl = resolveRuntimeWorkerUrl(agentProcessTestEntrypoints.toolAuthorityRetention);
 const own: ReplyToolAuthorityOverlay = {
   senderIsOwner: true,
   disableTools: false,
@@ -38,11 +45,29 @@ function currentTarget() {
   }
   return target;
 }
-afterEach(() => {
+afterEach(async () => {
+  await fixture.cleanup();
   testing.resetActiveEmbeddedRuns();
   replyTesting.resetSessionControllerForTest();
   clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
+});
+
+it("retained authority assertions release settled V8 attempt continuations", async ({ signal }) => {
+  const root = fixture.createTempDir("openclaw-authority-retention-");
+  const result = await fixture.track(
+    runNodeScript(
+      (workerArgv) => ["--expose-gc", ...workerArgv(retentionUrl)],
+      { ...process.env, HOME: root, OPENCLAW_STATE_DIR: root, NODE_OPTIONS: "" },
+      undefined,
+      { cwd: fileURLToPath(new URL("../../../", import.meta.url)), signal },
+    ),
+  );
+  expect(result.error, result.stderr).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toContain(
+    '"attemptsReleased":true,"internalInputsReleased":true,"closed":true',
+  );
 });
 
 it.each(["matching attempt", "different tools", "different model", "revoked source"] as const)(

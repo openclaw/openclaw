@@ -16,25 +16,33 @@ import {
   holdWorkerTurn,
 } from "./github-publication-requester.test-support.js";
 import * as repositoryPublicationExecutor from "./github-repository-publication-executor.js";
-import { observeRepositoryCommands } from "./github-repository-publication.test-support.js";
+import {
+  observeRepositoryCommands,
+  type RepositoryPublicationSourceHistory,
+} from "./github-repository-publication.test-support.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 
 const mocks = githubPublicationTestMocks();
 const checkpoint = vi.hoisted(() => vi.fn());
+// mock-isolation: Synthetic checkpoints isolate publication from real repository and session state.
 vi.mock("./worker-environments/session-repository-checkpoints.js", () => ({
-  withSessionRepositoryCheckpoint: (...args: unknown[]) => checkpoint(...args),
+  withSessionRepositoryPublicationCheckpoint: (...args: unknown[]) => checkpoint(...args),
 }));
 
 const workflow = ".github/workflows/example.yaml";
 const definition = "name: synthetic\non: workflow_dispatch\njobs: {}\n";
 const published = { status: "published" };
 const identityChanged = { status: "failed", code: "identity_changed" };
-const createFixture = async (baseFiles: Record<string, string> = {}, requestedRef?: string) => {
+const createFixture = async (
+  baseFiles: Record<string, string> = {},
+  requestedRef?: string,
+  sourceHistory?: RepositoryPublicationSourceHistory,
+) => {
   const f = await createRequesterPublicationFixture(
     checkpoint,
     "repository",
     { sessionId: SESSION_ID, sessionKey: SESSION_KEY },
-    { baseFiles, requestedRef },
+    { baseFiles, requestedRef, sourceHistory },
   );
   if (!f.repository) {
     throw new Error("Expected a repository publication fixture.");
@@ -176,6 +184,152 @@ describe("repository checkpoint workflow authority", () => {
       }
     },
   );
+
+  it.each([
+    "linear",
+    "previous-head",
+    "source-merge",
+    "crisscross",
+    "paged-crisscross",
+    "paged-empty",
+    "paged-duplicate",
+    "commit-budget",
+    "boundary-budget",
+    "boundary-revoked",
+  ] as const)("inherits target workflows only with verified ancestry (%s)", async (history) => {
+    let ancestor = "";
+    let left = "";
+    let right = "";
+    let firstSource = "";
+    const ambiguous = history === "crisscross" || history === "paged-crisscross";
+    const incomplete = history === "paged-empty" || history === "paged-duplicate";
+    const limited = history === "commit-budget" || history === "boundary-budget";
+    const revoked = history === "boundary-revoked";
+    const f = await createFixture({ [workflow]: definition }, "topic", (base, tree, git) => {
+      ancestor = base;
+      const commit = (parents: string[], message: string) =>
+        git(["commit-tree", tree, ...parents.flatMap((parent) => ["-p", parent])], message);
+      if (history === "linear" || history === "previous-head") {
+        return commit([base], "source-only feature\n");
+      }
+      if (revoked) {
+        return commit([base, git(["rev-parse", base + "^"])], "redundant source merge\n");
+      }
+      if (history === "boundary-budget") {
+        const parents = [base];
+        for (let index = 0; index < 33; index++) {
+          ancestor = commit([ancestor], "common ancestor " + index + "\n");
+          parents.push(ancestor);
+        }
+        return commit(parents, "wide source merge\n");
+      }
+      if (incomplete || history === "commit-budget") {
+        let head = base;
+        for (let index = 0; index < (incomplete ? 101 : 1001); index++) {
+          head = commit([head], "source-only feature " + index + "\n");
+          if (index === 0) {
+            firstSource = head;
+          }
+        }
+        return head;
+      }
+      left = commit([base], "left branch\n");
+      right = commit([base], "right branch\n");
+      let head = left;
+      if (history === "paged-crisscross") {
+        for (let index = 0; index < 100; index++) {
+          head = commit([head], "source-only feature " + index + "\n");
+        }
+      }
+      return commit([head, right], "source merge\n");
+    });
+    const { git, runtime, baseCommit, capture } = f.repository;
+    if (history === "previous-head") {
+      expect(await f.publish("first-source")).toMatchObject(published);
+    }
+    const comparisonHead = runtime.head ?? baseCommit;
+    const updated = definition + "# upstream-only change\n";
+    const target = await capture(null, "upstream", { [workflow]: updated }, false);
+    if (ambiguous) {
+      runtime.baseHead = git(
+        ["commit-tree", target.workspaceTree, "-p", left, "-p", right],
+        "target merge\n",
+      );
+      runtime.baseHeadTree = target.workspaceTree;
+    } else {
+      f.targetTree(target.workspaceTree, ancestor, "upstream workflow update\n");
+    }
+    runtime.mergeBase = ambiguous ? left : ancestor;
+    runtime.mergeBaseTree = git(["rev-parse", runtime.mergeBase + "^{tree}"]);
+    const sourcePages: number[] = [];
+    const sourceHeads: string[] = [];
+    let boundaryReads = 0;
+    const transport = mocks.runCommand.getMockImplementation()!;
+    mocks.runCommand.mockImplementation(async (args, options) => {
+      const endpoint = args.find((arg: string) => arg.startsWith("repos/")) ?? "";
+      if (endpoint.includes("/compare/")) {
+        const [source, head] = endpoint.split("/compare/")[1]!.split("?")[0]!.split("...");
+        if (endpoint.includes("per_page=100")) {
+          const page = Number(new URLSearchParams(endpoint.split("?")[1]).get("page"));
+          sourcePages.push(page);
+          sourceHeads.push(head!);
+          if (page === 2 && incomplete) {
+            return json({
+              total_commits: 101,
+              commits:
+                history === "paged-empty"
+                  ? []
+                  : [{ sha: firstSource, parents: [{ sha: ancestor }] }],
+            });
+          }
+          return transport(args, options);
+        }
+        if (source !== baseCommit && source !== comparisonHead) {
+          boundaryReads++;
+          if (revoked) {
+            await f.revoke();
+          }
+        }
+        return json({
+          sha:
+            (source === baseCommit || source === comparisonHead) && head === runtime.baseHead
+              ? runtime.mergeBase
+              : git(["merge-base", source!, head!]),
+        });
+      }
+      return transport(args, options);
+    });
+    await capture("feature checkpoint\n", "refreshed", { [workflow]: updated });
+    const writesBefore = writes().length;
+    const result = await f.publish("refreshed");
+    const expected = revoked
+      ? identityChanged
+      : incomplete
+        ? { status: "failed", code: "unavailable" }
+        : ambiguous || limited
+          ? rejected
+          : published;
+    expect(result, JSON.stringify(result)).toMatchObject(expected);
+    const paged = history.startsWith("paged-");
+    expect(sourcePages).toEqual(history === "previous-head" ? [1, 1] : paged ? [1, 2] : [1]);
+    expect(sourceHeads).toEqual(
+      history === "previous-head"
+        ? [comparisonHead, baseCommit]
+        : sourcePages.map(() => comparisonHead),
+    );
+    if (ambiguous || incomplete || limited || revoked) {
+      expect(writes()).toHaveLength(writesBefore);
+    } else {
+      expect(git(["show", runtime.head + ":" + workflow])).toBe(updated.trim());
+      expect(git(["show", runtime.head + ":counter.txt"])).toBe("feature checkpoint");
+    }
+    if (history === "boundary-budget") {
+      expect(boundaryReads).toBe(0);
+    }
+    if (revoked) {
+      expect(boundaryReads).toBe(1);
+    }
+  });
 
   it.each(["foreign", "stale", "diverged", "caller-revoked", "publisher-revoked"] as const)(
     "does not exempt an inherited checkpoint with %s target or authority facts",

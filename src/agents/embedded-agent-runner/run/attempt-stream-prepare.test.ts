@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Agent } from "../../../../packages/agent-core/src/agent.js";
 import { createMessageInjectionAuthority } from "../../../auto-reply/reply/message-injection-authority.js";
 import type { Context } from "../../../llm/types.js";
 import { createReplyOperation } from "../../../sessions/session-controller.js";
@@ -24,6 +25,7 @@ import {
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { getActiveNativeAttempt, getEmbeddedRunAttachment } from "../run-state.js";
 import { registerReplyPromotionTests } from "./attempt-stream-prepare.reply-promotion.test-support.js";
+import { registerPreparationSteeringTests } from "./attempt-stream-prepare.steering.test-support.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 
 type QuestionDispatcher = Extract<
@@ -122,6 +124,8 @@ describe("prepareEmbeddedAttemptStream", () => {
     mocks.subscribe.mockReturnValue(createCatalogSubscription());
     mocks.runBeforeFinalizeHook.mockResolvedValue({ action: "continue" });
   });
+
+  registerPreparationSteeringTests();
 
   it("projects only subscriber facts while preserving real stream reads and effects", async () => {
     const { session, listeners } = await trackPreparedStreamSubscriptions((subscribe) => {
@@ -633,7 +637,7 @@ describe("prepareEmbeddedAttemptStream", () => {
           beforeAgentFinalizeRevisionAttempts: 0,
         },
         activeSession: {
-          agent: { hasQueuedMessages: () => false },
+          agent: new Agent({ streamFn: streamMocks.streamSimple }),
           isStreaming: false,
           messages,
           pendingMessageCount: 0,
@@ -685,7 +689,7 @@ describe("prepareEmbeddedAttemptStream", () => {
   it("keeps already-started steering authoritative over finalization", async () => {
     let resolveSteer: (() => void) | undefined;
     const activeSession = {
-      agent: { hasQueuedMessages: () => false },
+      agent: new Agent({ streamFn: streamMocks.streamSimple }),
       isStreaming: false,
       messages: [],
       pendingMessageCount: 0,

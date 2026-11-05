@@ -213,7 +213,7 @@ describe("chat metadata store", () => {
     request.mockResolvedValue(metadata("recovered"));
     mount(retained);
     publish(metadata("previous"));
-    expect(() => publish({ revision: "failed" })).toThrow("Chat commands are unavailable");
+    expect(() => publish({ revision: "failed" })).toThrow("Couldn’t load session commands");
     expect(peek(retained)).toBeUndefined();
     invalidateChatMetadataStore(client, undefined, undefined, "refresh", {
       commandsChanged: false,
@@ -445,30 +445,35 @@ describe("automatic metadata admission", () => {
 
   it("cancels startup polling after a retired refresh loses its last subscriber", async () => {
     vi.useFakeTimers();
+    const sent: Array<{ id: string }> = [];
     const protocol = new GatewayPendingRequests({
       createRequestId: () => "catalog",
       nowMs: Date.now,
     });
+    releases.push(() => protocol.flush(new Error("fixture closed")));
     wireRequest = createGatewayRequestMock((method, params, options) =>
-      protocol.request({ send: () => {} }, method, params, options),
+      protocol.request({ send: (frame) => sent.push(JSON.parse(frame)) }, method, params, options),
     );
     client = createTestGatewayClient(wireRequest);
     const release = mount(retained);
     const automatic = refresh({ kind: "startup" });
     const catalog = automatic.catalog.catch((error: unknown) => error);
-    protocol.handleResponse({
-      type: "res",
-      id: "catalog",
-      ok: false,
-      error: startupError,
-    });
-    await vi.advanceTimersByTimeAsync(0);
+    for (const [index, delay] of [500, 0].entries()) {
+      protocol.handleResponse({
+        type: "res",
+        id: sent[index]!.id,
+        ok: false,
+        error: startupError,
+      });
+      await vi.advanceTimersByTimeAsync(delay);
+    }
+    expect(sent).toHaveLength(2);
     retireChatMetadataRefresh(client, retained);
     release();
     await automatic.completed;
     expect(await catalog).toHaveProperty("name", "AbortError");
     await vi.advanceTimersByTimeAsync(180_000);
-    expect(wireRequest).toHaveBeenCalledOnce();
+    expect(wireRequest).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);
   });
 

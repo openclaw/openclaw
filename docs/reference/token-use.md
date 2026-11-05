@@ -84,6 +84,11 @@ window: `16000` chars below
 The runtime context-share guard also caps a single tool result at 30% of the
 context window.
 
+These text budgets use conservative weighted-character estimates, not just
+UTF-16 length. Tangut, Khitan Small Script, and Nushu receive the same weight as
+other supplementary CJK scripts: 16 budget characters (about four estimated
+tokens) per code point. This does not change provider-reported token usage.
+
 Large provider windows are not enabled automatically when they materially
 change cost or latency. For example, direct OpenAI GPT-5.5 and GPT-5.6 models
 publish a `1050000` token total window, but OpenClaw defaults their active
@@ -178,8 +183,14 @@ OpenClaw keeps provider usage accounting separate from the current context
 snapshot. Provider `usage.total` can include cached input, output, and
 multiple tool-loop model calls, so it is useful for cost and telemetry but
 can overstate the live context window. Context displays and diagnostics use
-the latest prompt snapshot (`promptTokens`, or the last model call when no
-prompt snapshot is available) for `context.used`.
+the latest request's context occupancy, including its completion and retained
+reasoning. During built-in tool loops, the provider boundary records that
+measurement plus newly appended items before sending the next request.
+`sessions.list` consumes this recorded `totalTokens` value; it does not combine
+older session counters with a separately read transcript. Older prompt-only
+snapshots become unknown on upgrade and refresh when the runtime records a new
+request. Transcript estimates remain available when no fresh runtime snapshot
+exists.
 
 Native Codex turn usage sums the reported counts from each unique completed
 model response, including responses before a retry or cancellation. Missing

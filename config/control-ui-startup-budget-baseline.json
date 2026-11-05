@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 271650,
-  "reason": "Same-host route grouping measures 271528 to 271650 B gzip (+122 B), with five startup JS requests and one CSS request unchanged. In 20 base/A-A/head triplets, 100 ms Cron readiness improves 912.5 to 816.2 ms (paired A/A -10.745%); total CPU is flat. Retain the measured head value under the approved small-byte measured-win policy.",
-  "updatedAt": "2026-10-26"
+  "startupJsGzipBytes": 92861,
+  "reason": "Mobile Profile status reservation removes repeated 0.0545–0.1138 CLS in ten interleaved 1x triplets. Exact-base startup is 92477 B; measured head is 92861 B. All 45 startup/Chat/New assets are identical after normalizing hashed import names, with unchanged raw bytes and requests. Accept the 384 B gzip hash variance and 86 B gzip / 398 B raw lazy CSS reservation for the measured layout-stability win; keep growth allowances unchanged.",
+  "updatedAt": "2026-11-05"
 }

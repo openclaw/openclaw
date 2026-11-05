@@ -26,8 +26,8 @@ function expectContract(tool: AnyAgentTool, details: unknown): void {
   expect(Value.Check(tool.outputSchema!, details)).toBe(true);
 }
 
-async function expectResult(
-  tool: AnyAgentTool,
+async function expectResult<TDetails>(
+  tool: AnyAgentTool<TDetails>,
   args: Record<string, unknown>,
   details: Record<string, unknown>,
   exact = false,
@@ -115,7 +115,7 @@ it("validates read text, image, truncation, and optional-not-found results", asy
   const missing = { path: "memory/2026-07-17.md", optional: true };
   await expectResult(tool, missing, { ...missing, kind: "not_found", status: "not_found" }, true);
   expect(compactToolOutputHint(tool.outputSchema)).toBe(
-    '{ content: string; kind: "text" } | { content: string; kind: "image"; mimeType: string } | { content: string; continuation: { kind: "line"; offset: number; limit?: number } | { cursor: number; kind: "cursor"; offset: number; limit?: number }; kind: "truncated"; truncation: { firstLineExceedsLimit: boolean; lastLinePartial: boolean; maxBytes: number; maxLines: number; outputBytes: number; outputLines: number; totalBytes: number; totalLines: number; truncated: true; truncatedBy: "lines" | "bytes" } } | { kind: "not_found"; optional: true; path: string; status: "not_found" }',
+    '{ content: string; kind: "text" } | { content: string; kind: "image"; mimeType: string } | { content: string; continuation: { kind: "line"; offset: number; limit?: number } | { cursor: number; kind: "cursor"; offset: number; limit?: number }; kind: "truncated"; truncation: { firstLineExceedsLimit: boolean; lastLinePartial: boolean; maxBytes: number; maxLines: number; outputBytes: number; outputLines: number; truncated: true; truncatedBy: "lines" | "bytes"; totalBytes?: number; totalLines?: number } } | { kind: "not_found"; optional: true; path: string; status: "not_found" }',
   );
 });
 
@@ -166,6 +166,28 @@ it.each([
     });
   },
 );
+
+it("retains adaptive cursor continuation when source totals are unknown", async () => {
+  await write("large.txt", "x".repeat(2 * 1024 * 1024));
+  const tool = read({ maxBytes: 16 * 1024 });
+  const result = await expectResult(
+    tool,
+    { path: "large.txt" },
+    {
+      kind: "truncated",
+      continuation: { kind: "cursor", offset: 1 },
+    },
+  );
+  const details = result.details;
+  if (details.kind !== "truncated" || details.continuation.kind !== "cursor") {
+    throw new Error("Expected a partial line with a cursor");
+  }
+  await expectResult(
+    tool,
+    { path: "large.txt", offset: details.continuation.offset, cursor: details.continuation.cursor },
+    { kind: "truncated", continuation: { cursor: expect.any(Number) } },
+  );
+});
 
 it.each([
   ["one leading blank", "\n", 52 * 1024, undefined, undefined],

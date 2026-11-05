@@ -41,13 +41,14 @@ import {
   listWholeConfigFiles,
 } from "./ci-node-test-inventory.mts";
 import {
-  createUiRealGatewayTestShards,
+  UI_REAL_GATEWAY_TEST_CONFIG,
   hasSharedUiE2eInput,
   createSelectedNodeTestShardBundles,
   packNodeTestGroups,
   normalizeSingletonNodeTestJob,
   nodeTestConfigRequiresCanonicalMetadata,
   resolveCanonicalNodeTestConfig,
+  resolveCompleteCanonicalNodeTestConfig,
   isCanonicalNodeTestConfig,
   isRuntimeTestFileIncluded,
   SOURCE_CHANNEL_TEST_POLICY,
@@ -98,6 +99,7 @@ type ChangedTargetValidation = {
   baseRef?: string;
   onFallback?: PlanDiagnostic;
   selectionMode?: "full" | "aggressive";
+  adaptiveMarkdown?: boolean;
   onSelection?: (selection: { rule: string; input: string; targets: string[] }) => void;
 };
 const CHANGED_FILE_SECONDS_HINTS = new Map<string, number>([
@@ -115,12 +117,8 @@ const CHANGED_FILE_SECONDS_HINTS = new Map<string, number>([
   ["test/e2e/qa-lab/runtime/node-worker-launch-wire.e2e.test.ts", 104],
   ["test/e2e/qa-lab/plugins/workspace-node-files.e2e.test.ts", 91],
   ["test/e2e/gateway-transcripts-discord-capture.e2e.test.ts", 61],
-  ["test/gateway-session-resume-restart.e2e.test.ts", 196],
-  ["test/gateway-background-process-restart.e2e.test.ts", 120],
-  ["test/gateway-subagent-restart.e2e.test.ts", 118],
   // Same runs: serial case sums are relative file costs, not wrapper walls.
   ["src/infra/update-managed-service-handoff-lifecycle.test.ts", 92],
-  ["src/agents/agent-command.harness-compaction-custody.test.ts", 52],
   ["src/cli/update-cli/update-command-migrated.test.ts", 67],
   ["src/flows/doctor-health.managed-settlement.test.ts", 296],
   ["src/cli/update-cli.already-current.test.ts", 130],
@@ -183,14 +181,7 @@ export function hasUiE2eAffectingChange(
       ) ||
       hasImportGraphImpactOnTargets(
         relevantPaths,
-        [
-          ...uiE2eRealGatewayTestFiles,
-          ...new Set(
-            createUiRealGatewayTestShards([]).flatMap((shard) =>
-              shard.groups.flatMap((group) => group.configs),
-            ),
-          ),
-        ],
+        [...uiE2eRealGatewayTestFiles, UI_REAL_GATEWAY_TEST_CONFIG],
         cwd,
         { tooling: true, resolveAliases: true },
       )
@@ -261,6 +252,7 @@ const BUILT_ARTIFACT_TEST_INPUTS = new Set([
   "extensions/browser/chrome-extension/relay-key.test-support.ts",
   "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
   "extensions/browser/src/browser/extension-install.test-support.ts",
+  "scripts/test-built-source-verifiers.mts",
 ]);
 
 /**
@@ -419,6 +411,20 @@ const protectedRuntimeTestFiles = new Set(PR_PROTECTED_RUNTIME_TEST_FILES);
 // opt-in scripts/control-ui-retention census, keep their own config and command.
 const CHANGED_TEST_ROOTS = ["src", "test", "extensions", "packages", "ui"];
 
+function isIndependentMarkdownCompanion(file: string, cwd: string): boolean {
+  // Canonical inventories resolve against the process root, even for explicit targets.
+  if (
+    path.resolve(cwd) !== process.cwd() ||
+    !isTestFileTarget(file) ||
+    !lstatSync(path.resolve(cwd, file), { throwIfNoEntry: false })?.isFile()
+  ) {
+    return false;
+  }
+  const config = resolveCompleteCanonicalNodeTestConfig(file, buildVitestRunPlans([file], cwd));
+  // Companions must execute outside the Markdown worker.
+  return config !== undefined && config !== "test/vitest/vitest.markdown.config.ts";
+}
+
 /** Resolve owner areas and transitive consumers once, before projecting platform jobs. */
 export function resolveChangedNodeTestTargets(
   changedPaths: string[],
@@ -426,6 +432,7 @@ export function resolveChangedNodeTestTargets(
 ): string[] {
   const cwd = options.cwd ?? process.cwd();
   const paths = changedPaths.filter((file) => !isIndependentlyCheckedDocumentation(file, cwd));
+  const policyTargets = resolvePolicyTestTargets(changedPaths, { cwd, baseRef: options.baseRef });
   const aggressive = options.selectionMode === "aggressive";
   const smoke = aggressive ? AGGRESSIVE_PR_SMOKE_TEST_FILES : PR_SMOKE_TEST_FILES;
   const selections: { rule: string; input: string; targets: string[] }[] = [];
@@ -436,6 +443,9 @@ export function resolveChangedNodeTestTargets(
     boundedOwners: true,
     baseRef: options.baseRef,
     aggressive: aggressive ? { maxDirectImporters: 20, maxDirectoryTests: 30 } : undefined,
+    adaptiveMarkdown: options.adaptiveMarkdown
+      ? { isIndependentCompanion: (file) => isIndependentMarkdownCompanion(file, cwd) }
+      : undefined,
     combineSiblingWithImportGraph: true,
     resolveAliases: true,
     runtimeOnly: true,
@@ -469,8 +479,8 @@ export function resolveChangedNodeTestTargets(
   recordSelection({ rule: "protected-owner", input: paths.join(", "), targets: ownerOptIns });
   recordSelection({
     rule: "policy-watch",
-    input: paths.join(", "),
-    targets: resolvePolicyTestTargets(paths),
+    input: changedPaths.join(", "),
+    targets: policyTargets,
   });
   recordSelection({ rule: "fixed-smoke", input: "PR", targets: smoke });
   const owners = [
@@ -489,7 +499,7 @@ export function resolveChangedNodeTestTargets(
       ...(paths.some((file) => listRunnableVitestConfigTargets().includes(file))
         ? ["test/vitest-projects-config.test.ts"]
         : []),
-      ...resolvePolicyTestTargets(paths),
+      ...policyTargets,
     ]),
   ];
   let inventory: string[] | undefined;
@@ -547,6 +557,13 @@ export function resolveChangedNodeTestTargets(
     const selectedSet = new Set(selected);
     const explained = new Set<string>();
     for (const selection of selections) {
+      if (selection.rule === "adaptive-qualified-unchanged") {
+        const targets = selection.targets.filter((file) => !selectedSet.has(file));
+        if (targets.length > 0) {
+          options.onSelection({ ...selection, targets });
+        }
+        continue;
+      }
       const targets = [
         ...new Set(selection.targets.flatMap((target) => expanded.get(target) ?? [target])),
       ].filter((file) => selectedSet.has(file));
@@ -1029,7 +1046,7 @@ export function createChangedNodeTestShards(
   const selectedTargets =
     options.selectedTestTargets ?? resolveChangedNodeTestTargets(changedPaths, options);
   const livePaths = changedPaths.filter((file) => existsSync(path.join(cwd, file)));
-  const policyTargets = new Set(resolvePolicyTestTargets(changedPaths));
+  const policyTargets = new Set(resolvePolicyTestTargets(changedPaths, { cwd }));
   const resolvedTargetPlans = resolvePreciseChangedTargets(selectedTargets, cwd);
   if (resolvedTargetPlans.some(({ plans }) => plans.length === 0)) {
     return fallback("selected test lacks an executable owner");

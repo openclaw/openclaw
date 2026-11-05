@@ -648,7 +648,7 @@ describe("Codex native configuration", () => {
       const bindModelExecution = vi.fn<
         NonNullable<typeof params.hostCapabilities.bindModelExecution>
       >((model) => {
-        expect(model).toEqual(runtimeSelection);
+        expect(model).toEqual({ ...runtimeSelection, cyberAccessProgram: "standard" });
         if (modelPolicyAction === "deny") {
           throw new Error("operator role cannot use this model");
         }

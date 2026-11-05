@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, Errored, For, latest, Loading, onSettled, Repeat } from "solid-js";
+import { createMemo, Errored, For, latest, Loading, onSettled, Repeat, Reveal } from "solid-js";
 import { comparePluginCatalogEntries } from "../../../../packages/plugin-package-contract/src/catalog-order.js";
 import {
   CatalogDiscoveryChip,
@@ -9,16 +9,19 @@ import {
 } from "../../components/solid/catalog-discovery.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
-import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
+import { SettingsSection, SettingsUnavailable } from "../../components/solid/settings-ui.tsx";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PageReadResult } from "../../lib/page-request.ts";
+import { isPhoneLayout } from "../../lib/phone-layout.ts";
 import type {
   PluginCatalogItem,
   PluginDiscoveryEntry,
   PluginInstallRequest,
 } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { categoryIcon } from "./catalog-category-icon.tsx";
+import { PluginCatalogGrid } from "./catalog-grid.tsx";
 import { PluginCatalogSkeleton, renderCatalogGridSkeleton } from "./catalog-skeleton.tsx";
 import { PluginArtTile } from "./consent-dialog.tsx";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
@@ -44,6 +47,7 @@ export type PluginCatalogResultsProps = PluginDiscoveryState & {
   iconLoading?: (url: string) => boolean;
   pluginIconLoading?: (pluginId: string) => boolean;
   canInstall: boolean;
+  installTitle?: string;
   busy?: Readonly<Record<string, PluginMutationAction>>;
   installProgress?: ReadonlyMap<string, PluginInstallProgress>;
   /** Installed inventory; publishes local state before catalog pages are read again. */
@@ -72,115 +76,6 @@ const PROMOTED_SECTIONS = [
   ["featured", "pluginsPage.featuredTitle", "star"],
   ["trending", "pluginsPage.intentTrending", "barChart"],
 ] as const;
-
-function CategoryStrokeIcon(props: { children: JSX.Element }) {
-  return <StrokeIcon> {props.children}</StrokeIcon>;
-}
-
-// Category-only SVGs stay in the deferred Plugins page, outside the startup icon registry.
-const CATEGORY_ICONS: Readonly<Record<string, () => JSX.Element>> = {
-  activity: () => <Icon name="activity" />,
-  "book-open": () => <Icon name="book" />,
-  brain: () => <Icon name="brain" />,
-  bot: () => <Icon name="bot" />,
-  database: () => (
-    <CategoryStrokeIcon>
-      <ellipse cx="12" cy="5" rx="9" ry="3" />
-      <path d="M3 5V19A9 3 0 0 0 21 19V5" />
-      <path d="M3 12A9 3 0 0 0 21 12" />
-    </CategoryStrokeIcon>
-  ),
-  "git-branch": () => <Icon name="gitPullRequest" />,
-  globe: () => <Icon name="globe" />,
-  "message-circle": () => <Icon name="messageSquare" />,
-  "message-square": () => <Icon name="messageSquare" />,
-  mic: () => <Icon name="mic" />,
-  monitor: () => <Icon name="monitor" />,
-  package: () => <Icon name="box" />,
-  palette: () => <Icon name="palette" />,
-  shield: () => <Icon name="shield" />,
-  wrench: () => <Icon name="settings" />,
-  plug: () => <Icon name="plug" />,
-  "code-xml": () => (
-    <CategoryStrokeIcon>
-      <path d="m18 16 4-4-4-4" />
-      <path d="m6 8-4 4 4 4" />
-      <path d="m14.5 4-5 16" />
-    </CategoryStrokeIcon>
-  ),
-  server: () => <Icon name="server" />,
-  files: () => (
-    <CategoryStrokeIcon>
-      <path d="M15 2h-4a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V8" />
-      <path d="M16.706 2.706A2.4 2.4 0 0 0 15 2v5a1 1 0 0 0 1 1h5a2.4 2.4 0 0 0-.706-1.706z" />
-      <path d="M5 7a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h8a2 2 0 0 0 1.732-1" />
-    </CategoryStrokeIcon>
-  ),
-  inbox: () => <Icon name="inbox" />,
-  "list-todo": () => (
-    <CategoryStrokeIcon>
-      <path d="M13 5h8" />
-      <path d="M13 12h8" />
-      <path d="M13 19h8" />
-      <path d="m3 17 2 2 4-4" />
-      <rect x="3" y="4" width="6" height="6" rx="1" />
-    </CategoryStrokeIcon>
-  ),
-  "calendar-days": () => (
-    <CategoryStrokeIcon>
-      <path d="M8 2v3" />
-      <path d="M16 2v3" />
-      <rect x="3" y="3" width="18" height="18" rx="2" />
-      <path d="M3 9h18" />
-      <path d="M8 13h.01" />
-      <path d="M12 13h.01" />
-      <path d="M16 13h.01" />
-      <path d="M8 17h.01" />
-      <path d="M12 17h.01" />
-      <path d="M16 17h.01" />
-    </CategoryStrokeIcon>
-  ),
-  "wallet-cards": () => (
-    <CategoryStrokeIcon>
-      <path d="M3 11h3.75a2 2 0 0 1 1.6.8l.45.6a4 4 0 0 0 6.4 0l.45-.6a2 2 0 0 1 1.6-.8H21" />
-      <path d="M3 7h18" />
-      <rect x="3" y="3" width="18" height="18" rx="2" />
-    </CategoryStrokeIcon>
-  ),
-  megaphone: () => (
-    <CategoryStrokeIcon>
-      <path d="M11 6a13 13 0 0 0 8.4-2.8A1 1 0 0 1 21 4v12a1 1 0 0 1-1.6.8A13 13 0 0 0 11 14H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z" />
-      <path d="M6 14a12 12 0 0 0 2.4 7.2 2 2 0 0 0 3.2-2.4A8 8 0 0 1 10 14" />
-      <path d="M8 6v8" />
-    </CategoryStrokeIcon>
-  ),
-  "chart-no-axes-combined": () => (
-    <CategoryStrokeIcon>
-      <path d="M12 16v5" />
-      <path d="M16 14.639V21" />
-      <path d="M20 10.656V21" />
-      <path d="m22 3-8.646 8.646a.5.5 0 0 1-.708 0L9.354 8.354a.5.5 0 0 0-.707 0L2 15" />
-      <path d="M4 18.463V21" />
-      <path d="M8 14.656V21" />
-    </CategoryStrokeIcon>
-  ),
-  workflow: () => (
-    <CategoryStrokeIcon>
-      <rect width="8" height="8" x="3" y="3" rx="2" />
-      <path d="M7 11v4a2 2 0 0 0 2 2h4" />
-      <rect width="8" height="8" x="13" y="13" rx="2" />
-    </CategoryStrokeIcon>
-  ),
-  search: () => <Icon name="search" />,
-};
-
-function categoryIcon(icon: string | undefined): JSX.Element {
-  return icon && Object.hasOwn(CATEGORY_ICONS, icon) ? (
-    CATEGORY_ICONS[icon]!()
-  ) : (
-    <Icon name="box" />
-  );
-}
 
 function CatalogIcon(props: {
   plugin: PluginDiscoveryEntry;
@@ -224,6 +119,7 @@ export function formatCompactCount(value: number): string {
 function CatalogCard(props: {
   plugin: PluginDiscoveryEntry;
   state: CatalogResultsState;
+  contentRef?: (element: HTMLDivElement) => void;
 }): JSX.Element {
   const inventoryEntry = createMemo(() => props.state.installedByCatalogId.get(props.plugin.id));
   const installedState = () => {
@@ -255,49 +151,54 @@ function CatalogCard(props: {
           handleNavigationClick(event, () => props.state.onOpenEntry(props.plugin.id))
         }
       />
-      <div class="plugin-catalog-card__head">
-        <div class="installed-plugins-card__head">
-          <span
-            class="installed-plugins-card__art plugin-catalog-card__art"
-            aria-hidden="true"
-            data-plugin-icon-id={props.plugin.local.pluginId ?? undefined}
-          >
-            <CatalogIcon plugin={props.plugin} state={props.state} />
-          </span>
-          <div class="installed-plugins-card__identity">
-            <div class="plugin-card-title-row">
-              <h3>{props.plugin.catalog.name}</h3>
-              {props.plugin.catalog.official ? renderPluginOfficialBadge() : undefined}
+      <div class="plugin-catalog-card__content" ref={props.contentRef}>
+        <div class="plugin-catalog-card__head">
+          <div class="installed-plugins-card__head">
+            <span
+              class="installed-plugins-card__art plugin-catalog-card__art"
+              aria-hidden="true"
+              data-plugin-icon-id={props.plugin.local.pluginId ?? undefined}
+            >
+              <CatalogIcon plugin={props.plugin} state={props.state} />
+            </span>
+            <div class="installed-plugins-card__identity">
+              <div class="plugin-card-title-row">
+                <h3>{props.plugin.catalog.name}</h3>
+                {props.plugin.catalog.official ? renderPluginOfficialBadge() : undefined}
+                <div class="plugin-catalog-card__action">
+                  {installed() ? (
+                    renderPluginStateStatus(installedState()!, "plugin-catalog-card__status")
+                  ) : (
+                    <PluginInstallAction
+                      registerInstallAction={props.state.registerInstallAction}
+                      buttonClass={
+                        "btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"
+                      }
+                      pluginName={props.plugin.catalog.name}
+                      busy={busy()}
+                      title={props.state.installTitle}
+                      disabled={!canInstall()}
+                      progress={progress()}
+                      onInstall={() => props.state.onInstall(props.plugin.id)}
+                    />
+                  )}
+                </div>
+              </div>
+              {renderPluginAuthor(props.plugin.catalog.author)}
             </div>
-            {renderPluginAuthor(props.plugin.catalog.author)}
           </div>
         </div>
-        <div class="plugin-catalog-card__action">
-          {installed() ? (
-            renderPluginStateStatus(installedState()!, "plugin-catalog-card__status")
-          ) : (
-            <PluginInstallAction
-              registerInstallAction={props.state.registerInstallAction}
-              buttonClass={"btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"}
-              pluginName={props.plugin.catalog.name}
-              busy={busy()}
-              disabled={!canInstall()}
-              progress={progress()}
-              onInstall={() => props.state.onInstall(props.plugin.id)}
-            />
-          )}
-        </div>
+        <PluginCardSummary
+          summary={props.plugin.catalog.summary || t("pluginsPage.optionalCapability")}
+        />
+        {renderPluginRowMessage(props.state.messages?.[`install:${props.plugin.id}`], {
+          busy: busy(),
+          onContinue:
+            props.state.canInstall && props.state.onContinueInstall
+              ? (request) => props.state.onContinueInstall?.(props.plugin.id, request)
+              : undefined,
+        })}
       </div>
-      <PluginCardSummary
-        summary={props.plugin.catalog.summary || t("pluginsPage.optionalCapability")}
-      />
-      {renderPluginRowMessage(props.state.messages?.[`install:${props.plugin.id}`], {
-        busy: busy(),
-        onContinue:
-          props.state.canInstall && props.state.onContinueInstall
-            ? (request) => props.state.onContinueInstall?.(props.plugin.id, request)
-            : undefined,
-      })}
     </article>
   );
 }
@@ -369,15 +270,18 @@ function CatalogSection(params: {
         >
           {params.loading ? (
             renderCatalogGridSkeleton({ cards: SECTION_SIZE })
-          ) : (
+          ) : params.onViewAll ? (
             <div class="plugin-catalog-grid">
-              <For
-                each={params.onViewAll ? params.items.slice(0, SECTION_SIZE) : params.items}
-                keyed={(plugin) => plugin.id}
-              >
+              <For each={params.items.slice(0, SECTION_SIZE)} keyed={(plugin) => plugin.id}>
                 {(plugin) => <CatalogCard plugin={plugin()} state={params.state} />}
               </For>
             </div>
+          ) : (
+            <PluginCatalogGrid items={params.items}>
+              {(plugin, contentRef) => (
+                <CatalogCard plugin={plugin()} state={params.state} contentRef={contentRef} />
+              )}
+            </PluginCatalogGrid>
           )}
         </CatalogDiscoverySection>
       ) : undefined}
@@ -521,7 +425,9 @@ function RawResults(props: CatalogResultsState): JSX.Element {
   return (
     <>
       {!props.connected ? (
-        <p class="plugin-catalog-results__empty">{t("pluginsPage.discoveryOffline")}</p>
+        <SettingsSection>
+          <SettingsUnavailable message={t("pluginsPage.discoveryOffline")} />
+        </SettingsSection>
       ) : items().length === 0 ? (
         renderCatalogEmptyState()
       ) : (
@@ -542,11 +448,11 @@ function RawResults(props: CatalogResultsState): JSX.Element {
               />
             </>
           ) : (
-            <div class="plugin-catalog-grid plugin-catalog-grid--results">
-              <For each={items()} keyed={(plugin) => plugin.id}>
-                {(plugin) => <CatalogCard plugin={plugin()} state={props} />}
-              </For>
-            </div>
+            <PluginCatalogGrid items={items()} results>
+              {(plugin, contentRef) => (
+                <CatalogCard plugin={plugin()} state={props} contentRef={contentRef} />
+              )}
+            </PluginCatalogGrid>
           )}
           <LoadMore {...props} />
         </>
@@ -630,6 +536,8 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
   const category = createMemo(() => props.category);
   const connected = createMemo(() => props.connected);
   const grouped = () => !query() && intent() === "all" && category() === null;
+  // Publisher headers must not repeat the virtualizer's scroll compensation.
+  const windowed = () => !grouped() && (props.result?.items.length ?? 0) > 60;
   const readCatalog = () => {
     // Same-selection refreshes must not hold live installation state or card controls.
     if (props.hasCurrentResult) {
@@ -640,7 +548,12 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
     return null;
   };
   let input!: HTMLInputElement;
+  // Focusing the search on a phone would open the keyboard on arrival.
+  const focusOnArrival = !isPhoneLayout();
   onSettled(() => {
+    if (!focusOnArrival) {
+      return undefined;
+    }
     input.dataset.autofocused = "true";
     input.focus();
     let secondFrame = 0;
@@ -661,20 +574,19 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
       <CatalogDiscoverySearch>
         <input
           type="search"
-          class="oc-input"
-          autofocus
+          class="settings-input"
+          autofocus={focusOnArrival}
           aria-label={t("pluginsPage.searchPlugins")}
           placeholder={t("pluginsPage.searchPlugins")}
           value={props.query}
-          ref={(element) => {
-            input = element;
-          }}
+          ref={(element) => (input = element)}
           onInput={(event) => props.onQueryChange(event.currentTarget.value)}
         />
       </CatalogDiscoverySearch>
-      <CategoryChips {...props} />
-      {props.remoteError ? renderError(props.remoteError, props.onRetry, true) : undefined}
-      <div class="plugin-catalog-results__body">
+      {/* First results enter below the settled categories; later reads keep their own boundaries. */}
+      <Reveal collapsed>
+        <CategoryChips {...props} />
+        {props.remoteError ? renderError(props.remoteError, props.onRetry, true) : undefined}
         <Loading
           on={[
             query(),
@@ -685,36 +597,44 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
             resultAvailable() ? null : receipt().promise,
           ]}
           fallback={
-            grouped() ? (
-              <GroupedCatalog
-                {...props}
-                installedByCatalogId={installedByCatalogId()}
-                loading={true}
-              />
-            ) : (
-              <PluginCatalogSkeleton label={t("pluginsPage.loadingDiscovery")} />
-            )
+            <div
+              class="plugin-catalog-results__body"
+              style={{ "overflow-anchor": windowed() ? "none" : undefined }}
+            >
+              {grouped() ? (
+                <GroupedCatalog
+                  {...props}
+                  installedByCatalogId={installedByCatalogId()}
+                  loading={true}
+                />
+              ) : (
+                <PluginCatalogSkeleton label={t("pluginsPage.loadingDiscovery")} />
+              )}
+            </div>
           }
         >
-          <Errored
-            fallback={(error, reset) => (
-              <>
-                {renderError(formatUiError(error()), () => {
+          <div
+            class="plugin-catalog-results__body"
+            style={{ "overflow-anchor": windowed() ? "none" : undefined }}
+          >
+            <Errored
+              fallback={(error, reset) =>
+                renderError(formatUiError(error()), () => {
                   props.onRetry();
                   reset();
-                })}
-              </>
-            )}
-          >
-            {readCatalog()}
-          </Errored>
-          {grouped() ? (
-            <GroupedCatalog {...props} installedByCatalogId={installedByCatalogId()} />
-          ) : props.hasCurrentResult || !recordedError() ? (
-            <RawResults {...props} installedByCatalogId={installedByCatalogId()} />
-          ) : undefined}
+                })
+              }
+            >
+              {readCatalog()}
+            </Errored>
+            {grouped() ? (
+              <GroupedCatalog {...props} installedByCatalogId={installedByCatalogId()} />
+            ) : props.hasCurrentResult || !recordedError() ? (
+              <RawResults {...props} installedByCatalogId={installedByCatalogId()} />
+            ) : undefined}
+          </div>
         </Loading>
-      </div>
+      </Reveal>
     </section>
   );
 }

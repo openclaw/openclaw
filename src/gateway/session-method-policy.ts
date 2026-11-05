@@ -19,12 +19,14 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
   ["skills.library.activate", { fields: ["sessionKey"], required: true }],
   ["agent", { fields: ["sessionKey"], runStart: true }],
   ["board.event", { fields: ["sessionKey"], required: true }],
+  ["board.get", { fields: ["sessionKey"], required: true }],
   ["board.update", { fields: ["sessionKey"], required: true }],
   ["board.widget.grant", { fields: ["sessionKey"], required: true }],
   ["board.widget.put", { fields: ["sessionKey"], required: true }],
   ["chat.abort", { fields: ["sessionKey"], required: true }],
   ["chat.inject", { fields: ["sessionKey"], required: true }],
   ["chat.send", { fields: ["sessionKey"], required: true, runStart: true, mayCreate: true }],
+  ["chat.steerNow", { fields: ["sessionKey"], required: true }],
   ["mcp.app.onboard", { fields: ["sessionKey"], required: true, runStart: true }],
   ["mcp.app.launch", { fields: ["sessionKey"], required: true }],
   ["mcp.app.settings", { fields: ["sessionKey"], required: true }],
@@ -64,7 +66,6 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
   ["sessions.goal.clear", { fields: ["sessionKey"], required: true }],
   ["sessions.providerReview.continue", { fields: ["sessionKey"], required: true, runStart: true }],
   ["sessions.pluginPatch", { fields: ["key"], required: true }],
-  ["sessions.recover", { fields: ["key"], required: true }],
   ["sessions.reset", { fields: ["key"], required: true }],
   ["sessions.rewind", { fields: ["sessionKey"], required: true }],
   ["sessions.send", { fields: ["key"], required: true, runStart: true, mayCreate: true }],
@@ -118,13 +119,17 @@ const DIRECT_SESSION_READ_METHODS = new Set([
   "sessions.files.get",
   "sessions.files.download",
   "sessions.files.assets",
+  "sessions.files.preview",
+  "sessions.files.preview.release",
   "sessions.files.list",
   "sessions.files.reveal",
   "sessions.github.options",
+  "sessions.github.readiness",
   "sessions.github.status",
   "sessions.messages.unsubscribe",
   "sessions.setInvolvement",
   "talk.voice.get",
+  "tools.effective",
 ]);
 
 const INDIRECT_SESSION_READ_METHODS = new Set([
@@ -157,6 +162,16 @@ export function isSessionTargetMethod(method: string): boolean {
 /** Only these reads are wholly bounded by their direct session keys. */
 export function isDirectSessionReadMethod(method: string): boolean {
   return DIRECT_SESSION_READ_METHODS.has(method);
+}
+
+/** Read admission is separate from whether direct keys wholly bound authorization. */
+export function sessionMethodDatabaseAdmission(method: string): "read" | "write" {
+  return isDirectSessionReadMethod(method) ||
+    method === "sessions.messages.subscribe" ||
+    method === "sessions.resolve" ||
+    method === "chat.metadata"
+    ? "read"
+    : "write";
 }
 
 export function sessionMutationTargetFields(method: string): readonly SessionMutationTargetField[] {

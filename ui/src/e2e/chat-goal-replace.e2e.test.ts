@@ -99,7 +99,7 @@ suite.define(() => {
           .poll(() => card.locator(".agent-chat__goal-objective").textContent())
           .toBe(proposed);
         expect(await card.locator(".agent-chat__goal-label").textContent()).toBe("Goal paused");
-        expect(await card.locator(".agent-chat__goal-elapsed").textContent()).toBe("1m 00s");
+        expect(await card.locator(".agent-chat__goal-elapsed").textContent()).toBe("1m");
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.goal.clear")).toHaveLength(0);
         if (artifacts) {
@@ -191,7 +191,7 @@ suite.define(() => {
         await page.goto(suite.server.baseUrl + "chat/main");
         const card = page.locator(".agent-chat__goal");
         const input = page.locator(".agent-chat__composer-combobox textarea");
-        await exactButton(page, "Stop generating").waitFor();
+        await exactButton(page, "Stop").waitFor();
         const proposal = "Verify the deployment and write the rollout notes";
         await input.fill("/goal " + proposal);
         await exactButton(page, "Replace objective").waitFor();
@@ -202,7 +202,7 @@ suite.define(() => {
         const dialog = page.getByRole("dialog", { name: "Replace goal objective?" });
         await dialog.waitFor();
         expect(await dialog.textContent()).toContain(
-          "Interrupt this turn, update the objective, then resume the goal.",
+          "Interrupt this reply, replace the objective, and resume the goal.",
         );
         if (artifacts) {
           await captureFrame(artifacts, "running-confirmation.png", page.locator("body"), [
@@ -288,7 +288,7 @@ suite.define(() => {
           })
           .waitFor();
         await card.getByText("Pursuing goal", { exact: true }).waitFor();
-        await exactButton(page, "Stop generating").waitFor();
+        await exactButton(page, "Stop").waitFor();
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         if (artifacts) {
           await captureFrame(artifacts, "running-after.png", page.locator("body"), [card, input]);

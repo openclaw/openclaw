@@ -21,6 +21,7 @@ import type {
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { hasSameOriginGatewayTransport } from "../dev-gateway.ts";
+import { i18n } from "../i18n/lib/translate.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
@@ -299,7 +300,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
           const grantError = !sameOrigin
             ? `Native plugin UI requires the Control UI served by the connected Gateway. Open ${gatewayUrl.origin} and reconnect there.`
             : !bootstrap
-              ? "Could not authenticate native plugin assets. Reconnect and retry."
+              ? "Couldn’t authenticate native plugin assets. Reconnect and try again."
               : controlUiPluginAssetGrantError(descriptor, bootstrap, context.resourceBasePath);
           if (grantError) {
             installed.delete(descriptor.pluginId);
@@ -417,15 +418,15 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
         );
       };
       const complete = await raceWithTimeout(
-        racePromiseWithAbortSignal(
-          initialize(),
-          abort.signal,
-          () => new Error("Plugin UI activation ended."),
-        ),
+        racePromiseWithAbortSignal(initialize(), abort.signal),
         ACTIVATION_TIMEOUT_MS,
         () => {
+          const message = i18n.t("pluginUi.activationTimedOut");
+          // A stalled loader has not registered its lazy copy; keep the deadline synchronous.
           throw new Error(
-            "Plugin UI initialization timed out. Check the plugin and reload its UI.",
+            message === "pluginUi.activationTimedOut"
+              ? i18n.t("pluginUi.inlineUnavailable")
+              : message,
           );
         },
       );
@@ -568,6 +569,9 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
           key: `${owner.descriptor.pluginId}/${id}`,
           pluginId: owner.descriptor.pluginId,
           value: entry.value,
+          ...(kind === "panels" && owner.descriptor.panelIcon
+            ? { panelIcon: owner.descriptor.panelIcon }
+            : {}),
           host: owner.host,
           signal: entry.signal,
         });

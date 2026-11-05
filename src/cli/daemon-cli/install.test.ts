@@ -27,6 +27,7 @@ const {
   resolveNodeStartupTlsEnvironmentMock,
   runDaemonInstall,
   runExecMock,
+  runtimeLogs,
   service,
   setupInstallTests,
 } = await import("./install.test-support.js");
@@ -76,6 +77,19 @@ function performServiceInstall() {
 describe("runDaemonInstall", () => {
   setupInstallTests();
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it("returns without a readiness wait and names gateway start as the readiness step", async () => {
+    installDaemonServiceAndEmitMock.mockImplementationOnce(async (params) => {
+      await (params as { onVerified: () => Promise<void> }).onVerified();
+    });
+
+    await runDaemonInstall({});
+
+    expect(actionState.failed).toEqual([]);
+    expect(runtimeLogs.at(-1)).toContain(
+      "Runtime readiness has not been checked; startup may still be in progress. Run openclaw gateway start to wait until it is ready.",
+    );
+  });
 
   it("runs pin admission before planning and preserves the service on refusal", async () => {
     pinMigrationMock.mockRejectedValueOnce(
@@ -204,7 +218,7 @@ describe("runDaemonInstall", () => {
           const probe = nodeProbeOutput("26.12.1");
           runExecMock.mockResolvedValue({
             ...probe,
-            stdout: JSON.stringify({ ...JSON.parse(probe.stdout), bunVersion: "1.4.3" }),
+            stdout: JSON.stringify({ ...JSON.parse(probe.stdout), bunVersion: "1.4.4" }),
           });
         }
         performServiceInstall();

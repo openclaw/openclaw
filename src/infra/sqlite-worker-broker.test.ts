@@ -14,11 +14,15 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
 import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
+import { withDatabaseEngineSelection } from "./database-engine/context.js";
+import { createSqliteFamilyEngines } from "./database-engine/selection-fixture.test-support.js";
 import { onInternalDiagnosticEvent, waitForDiagnosticEventsDrained } from "./diagnostic-events.js";
 import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
 import { readGatewayLockProcessNamespace } from "./gateway-lock-payload.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
 import * as stateOwner from "./gateway-state-owner.js";
+import { runWithSqliteDatabaseAdmissionTurn } from "./sqlite-database-admission-turn.js";
+import { withSqliteDatabaseAdmissionExchange } from "./sqlite-database-admission.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import {
   useSqliteWorkerStoreFixture,
@@ -53,6 +57,39 @@ const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRun
 const poolIt = explicitSqliteCloseReleasesNativeResources ? it : it.skip;
 const queueRows = Array.from({ length: 128 }, (_, index) => String(index));
 const rejectedOutcome = (reason: unknown) => ({ status: "rejected", reason });
+
+it.each([false, true])(
+  "dispatches captured SQLite selection without an engine scope (different ambient: %s)",
+  async (differentAmbient) => {
+    const file = databasePath();
+    const store = await open(file);
+    const selected = { effectiveEngines: createSqliteFamilyEngines() };
+    const ambient = differentAmbient
+      ? {
+          effectiveEngines: createSqliteFamilyEngines({ state: "postgres" }),
+          postgres: { connection: "postgresql://localhost/synthetic", schemaPrefix: "test" },
+        }
+      : selected;
+    await withDatabaseEngineSelection(ambient, async () => {
+      const enterContext = vi.spyOn(AsyncLocalStorage.prototype, "run");
+      try {
+        await runSqliteWorkerStoreOperation(
+          store,
+          async (scope) => {
+            await scope.execute({ type: "append", input: { value: "captured SQLite selection" } });
+            expect(await scope.execute({ type: "read", input: undefined })).toEqual([
+              "captured SQLite selection",
+            ]);
+          },
+          { databaseEngineSelection: selected, environment: { OPENCLAW_STATE_DIR: file } },
+        );
+        expect(enterContext.mock.calls.filter(([value]) => value === selected)).toHaveLength(0);
+      } finally {
+        enterContext.mockRestore();
+      }
+    });
+  },
+);
 
 it("retires a disk-full nested transaction without claiming a definite write outcome", async () => {
   const file = databasePath();
@@ -205,8 +242,8 @@ it.for(["resume", "replace", "replace-inode", "symlink", "release"] as const)(
 
 async function openWithRetainedAccess(pathname: string) {
   const capture = stateOwner.captureStateDatabaseAccess;
-  const access = capture(pathname);
-  vi.spyOn(stateOwner, "captureStateDatabaseAccess").mockImplementation((location) =>
+  const access = await capture(pathname);
+  vi.spyOn(stateOwner, "captureStateDatabaseAccess").mockImplementation(async (location) =>
     location === pathname ? access : capture(location),
   );
   return { store: await open(pathname), access };
@@ -214,7 +251,7 @@ async function openWithRetainedAccess(pathname: string) {
 
 function holdDatabaseAdmission(
   pathname: string,
-  access: ReturnType<typeof stateOwner.captureStateDatabaseAccess>,
+  access: Awaited<ReturnType<typeof stateOwner.captureStateDatabaseAccess>>,
 ) {
   const pending = new StateDatabaseAdmissionPendingError(pathname, "Schema publication pending");
   const prepareAccess = access.prepareAccess.bind(access);
@@ -482,6 +519,64 @@ it("borrows an open database while an unrelated cold open awaits its reply", asy
     await broker.close();
   }
 });
+
+it("releases broker client capacity and drains after synchronous cold path failures", async ({
+  signal,
+  skip,
+}) => {
+  if (process.platform === "win32") {
+    skip(); // File symlinks require privileges on Windows.
+  }
+  const broker = new SqliteWorkerBroker();
+  const loop = databasePath();
+  fs.symlinkSync(loop, loop);
+  // Exhaust the client limit if any failed open keeps its reservation.
+  for (let index = 0; index < 64; index++) {
+    await expect(openBroker(broker, loop)).rejects.toMatchObject({ code: "ELOOP" });
+  }
+  try {
+    const store = await withinTest(openBroker(broker, databasePath()), signal);
+    assert(store);
+    expect(await append(store, "capacity recovered")).toMatchObject({ writes: 1 });
+  } finally {
+    await withinTest(broker.close(), signal);
+  }
+});
+
+it("lets a cold admission turn open its database while a later open waits on that turn", async ({
+  signal,
+}) =>
+  withSqliteDatabaseAdmissionExchange(
+    () => [],
+    async () => {
+      const broker = new SqliteWorkerBroker();
+      const file = databasePath();
+      const entered = createDeferredCore();
+      const proceed = createDeferredCore();
+      // A cold agent writer holds the database's turn, then opens its worker inside it.
+      const owner = runWithSqliteDatabaseAdmissionTurn([file], async () => {
+        entered.resolve();
+        await proceed.promise;
+        return await openBroker(broker, file);
+      });
+      const pending: Promise<unknown>[] = [owner];
+      try {
+        await withinTest(entered.promise, signal);
+        // An unrelated open of the same cold file arrives outside that turn.
+        const later = openBroker(broker, file);
+        pending.push(later);
+        proceed.resolve();
+        const [ownerStore, laterStore] = await withinTest(Promise.all([owner, later]), signal);
+        assert(ownerStore && laterStore, "Fixture stores missing");
+        expect(await append(ownerStore, "turn owner")).toMatchObject({ writes: 1 });
+        expect(await read(laterStore)).toEqual(["turn owner"]);
+      } finally {
+        proceed.resolve();
+        await Promise.allSettled(pending);
+        await broker.close();
+      }
+    },
+  ));
 
 it("cancels queued opens without overtaking an accepted open or abandoning its settlement", async ({
   signal,
