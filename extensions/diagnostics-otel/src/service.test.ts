@@ -1,11 +1,11 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { LogRecord } from "@opentelemetry/api-logs";
+import type { LogRecord } from "@opentelemetry/api";
 import { ExportResultCode, type ExportResult } from "@opentelemetry/core";
 import type { BatchLogRecordProcessor } from "@opentelemetry/sdk-logs";
 import type { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
-import type { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
+import type { BatchSpanProcessorOptions } from "@opentelemetry/sdk-trace";
 import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 type TestSpanOptions = {
@@ -14,7 +14,7 @@ type TestSpanOptions = {
   startTime?: unknown;
 };
 type TestParentContext = { spanContext?: { traceId?: string; spanId?: string } };
-type TestSpanProcessorOptions = ConstructorParameters<typeof BatchSpanProcessor>[1];
+type TestSpanProcessorOptions = Omit<BatchSpanProcessorOptions, "exporter">;
 type TestLogProcessorOptions = ConstructorParameters<typeof BatchLogRecordProcessor>[0];
 type TestMetricReaderOptions = ConstructorParameters<typeof PeriodicExportingMetricReader>[0];
 
@@ -192,8 +192,8 @@ vi.mock("@opentelemetry/sdk-metrics", () => ({
   },
 }));
 
-vi.mock("@opentelemetry/sdk-trace-base", () => ({
-  BasicTracerProvider: class {
+vi.mock("@opentelemetry/sdk-trace", () => ({
+  TracerProvider: class {
     constructor(options?: unknown) {
       traceProviderCtor(options);
     }
@@ -201,12 +201,14 @@ vi.mock("@opentelemetry/sdk-trace-base", () => ({
     getTracer = () => telemetryState.tracer;
     shutdown = traceProviderShutdown;
   },
-  BatchSpanProcessor: function BatchSpanProcessor(
-    exporter?: unknown,
-    options?: TestSpanProcessorOptions,
-  ) {
+  BatchSpanProcessor: function BatchSpanProcessor({
+    exporter,
+    ...options
+  }: BatchSpanProcessorOptions) {
     spanProcessorCtor(exporter, options);
   },
+  AlwaysOffSampler: function AlwaysOffSampler() {},
+  AlwaysOnSampler: function AlwaysOnSampler() {},
   ParentBasedSampler: function ParentBasedSampler() {},
   TraceIdRatioBasedSampler: function TraceIdRatioBasedSampler() {},
 }));
@@ -676,7 +678,7 @@ afterAll(() => {
   vi.doUnmock("@opentelemetry/exporter-logs-otlp-proto");
   vi.doUnmock("@opentelemetry/sdk-logs");
   vi.doUnmock("@opentelemetry/sdk-metrics");
-  vi.doUnmock("@opentelemetry/sdk-trace-base");
+  vi.doUnmock("@opentelemetry/sdk-trace");
   vi.doUnmock("openclaw/plugin-sdk/fetch-runtime");
   vi.doUnmock("@opentelemetry/resources");
   vi.doUnmock("@opentelemetry/semantic-conventions");

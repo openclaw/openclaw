@@ -1,6 +1,12 @@
 import { createServer, type IncomingMessage } from "node:http";
-import { context, diag, metrics as otelMetrics, propagation, trace } from "@opentelemetry/api";
-import { logs as otelLogs } from "@opentelemetry/api-logs";
+import {
+  context,
+  diag,
+  logs as otelLogs,
+  metrics as otelMetrics,
+  propagation,
+  trace,
+} from "@opentelemetry/api";
 import {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,
@@ -216,6 +222,7 @@ export function createTestTrace(spanId: string, parentSpanId?: string): Diagnost
 type OtelGlobals = {
   context?: Parameters<typeof context.setGlobalContextManager>[0];
   diag?: Parameters<typeof diag.setLogger>[0];
+  logs?: Parameters<typeof otelLogs.setGlobalLoggerProvider>[0];
   metrics?: Parameters<typeof otelMetrics.setGlobalMeterProvider>[0];
   propagation?: Parameters<typeof propagation.setGlobalPropagator>[0];
   trace?: Parameters<typeof trace.setGlobalTracerProvider>[0];
@@ -226,8 +233,7 @@ export const registeredOtelGlobals = (): OtelGlobals | undefined =>
     Symbol.for("opentelemetry.js.api.1")
   ];
 
-export const registeredOtelLogs = (): unknown =>
-  (globalThis as unknown as Record<symbol, unknown>)[Symbol.for("io.opentelemetry.js.api.logs")];
+export const registeredOtelLogs = (): unknown => registeredOtelGlobals()?.logs;
 
 export function clearOtelGlobals() {
   context.disable();

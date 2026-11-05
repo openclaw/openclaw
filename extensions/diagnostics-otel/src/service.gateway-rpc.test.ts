@@ -1,7 +1,7 @@
 // Real SDK ids and aggregations protect RPC parents, phase timing, and signal gating.
 import { context, ROOT_CONTEXT, trace } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
-import type { ReadableSpan } from "@opentelemetry/sdk-trace-base";
+import type { ReadableSpan } from "@opentelemetry/sdk-trace";
 import {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,
