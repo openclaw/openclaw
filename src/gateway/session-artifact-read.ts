@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { MAX_DOCUMENT_BYTES } from "@openclaw/media-core/constants";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as asNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import type {
@@ -17,7 +18,9 @@ import { resolveSessionTranscriptReadFence } from "../config/sessions/session-tr
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { hasUncommittedSqliteWrites } from "../infra/sqlite-schema-facts.js";
+import { parseInboundMediaUri } from "../media/inbound-media-uri.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
+import { readMediaBuffer } from "../media/store.js";
 import type { TranscriptReadWindow } from "../sessions/transcript-read-window.js";
 import {
   ASSISTANT_DISPLAY_CONTENT_FIELD,
@@ -178,6 +181,31 @@ function collectArtifactsFromMessage(
     return;
   }
   const content = readAssistantDisplayContent(msg);
+  const storedMedia = new Map<number, string | undefined>();
+  if (!params.imagesOnly) {
+    for (const [index, fact] of (readPersistedMediaFacts(msg) ?? []).entries()) {
+      // Only the canonical custody URI can make an uploaded fact downloadable.
+      // Keep paths and malformed references visible without granting file access.
+      let inbound: string | undefined;
+      try {
+        if (fact.url?.startsWith("media://inbound/") && parseInboundMediaUri(fact.url)) {
+          inbound = fact.url;
+        }
+      } catch {
+        // Invalid media references retain an unsupported download.
+      }
+      storedMedia.set(content.length, inbound);
+      content.push({
+        type:
+          fact.kind === "image" || fact.kind === "audio" || fact.kind === "video"
+            ? fact.kind
+            : "file",
+        title: fact.fileName ?? `attachment ${index + 1}`,
+        mimeType: fact.contentType,
+        sizeBytes: fact.sizeBytes,
+      });
+    }
+  }
   if (params.imagesOnly) {
     const texts =
       typeof msg.content === "string" && !Array.isArray(msg[ASSISTANT_DISPLAY_CONTENT_FIELD])
@@ -209,7 +237,10 @@ function collectArtifactsFromMessage(
     }
     // Fallback titles participate in existing artifact IDs. Count omitted roles
     // too so adding a role filter cannot rename an otherwise identical artifact.
-    params.collection.count += 1;
+    // New media facts must not rename existing fallback-titled content blocks.
+    if (!storedMedia.has(contentIndex)) {
+      params.collection.count += 1;
+    }
     if (params.messageRole && msg.role !== params.messageRole) {
       continue;
     }
@@ -267,6 +298,10 @@ function collectArtifactsFromMessage(
         : resolveBlockDownload(attachment ?? block, {
             includeData: params.imagesOnly || params.includeDownloadData !== false,
           });
+    const inbound = storedMedia.get(contentIndex);
+    if (inbound) {
+      download.mode = "bytes";
+    }
     const source = asOptionalRecord(block.source);
     const previewOnly =
       params.imagesOnly && !transcriptImage && !parseManagedOutgoingArtifactId(id);
@@ -307,7 +342,11 @@ function collectArtifactsFromMessage(
       download: { mode: previewOnly ? "unsupported" : download.mode },
       ...(imageUrl ? { image: { url: imageUrl } } : {}),
       ...(download.data !== undefined ? { data: download.data } : {}),
-      ...(params.includeDownloadData !== false && download.url ? { url: download.url } : {}),
+      ...(params.includeDownloadData !== false && inbound
+        ? { url: inbound }
+        : params.includeDownloadData !== false && download.url
+          ? { url: download.url }
+          : {}),
     };
     params.collection.artifacts.push(summary);
   }
@@ -397,7 +436,51 @@ async function readArtifactList(
 ): Promise<ArtifactRecord[]> {
   const { artifacts, visit } = createArtifactListCollector(query);
   await readers.visitSessionMessagesAsync(scope, visit);
-  return artifacts;
+  if (!query.downloadArtifactIds || query.includeDownloadData === false) {
+    return artifacts;
+  }
+  const inbound = artifacts.filter(
+    (artifact) => artifact.download.mode === "bytes" && artifact.url,
+  );
+  if (inbound.length === 0) {
+    return artifacts;
+  }
+  const loaded = new Map<string, Buffer | undefined>();
+  for (const artifact of inbound) {
+    const media = parseInboundMediaUri(artifact.url!);
+    const bytes = media
+      ? await readMediaBuffer(media.id, "inbound", MAX_DOCUMENT_BYTES, scope.env).catch(
+          () => undefined,
+        )
+      : undefined;
+    loaded.set(artifact.id, bytes?.buffer);
+  }
+  // A media read yields outside the transcript owner. Re-select membership before
+  // returning bytes so a removed or retargeted message cannot keep its old grant.
+  const current = createArtifactListCollector(query);
+  await readers.visitSessionMessagesAsync(scope, current.visit);
+  return current.artifacts.flatMap((artifact) => {
+    if (!loaded.has(artifact.id)) {
+      return [artifact];
+    }
+    const original = inbound.find((candidate) => candidate.id === artifact.id);
+    if (
+      !original ||
+      original.url !== artifact.url ||
+      original.mimeType !== artifact.mimeType ||
+      original.sizeBytes !== artifact.sizeBytes
+    ) {
+      return [];
+    }
+    const bytes = loaded.get(artifact.id);
+    return [
+      {
+        ...artifact,
+        download: { mode: bytes ? ("bytes" as const) : ("unsupported" as const) },
+        ...(bytes ? { data: bytes.toString("base64"), sizeBytes: bytes.length } : {}),
+      },
+    ];
+  });
 }
 
 /** Select transcript artifacts inside the caller's admitted read owner. */

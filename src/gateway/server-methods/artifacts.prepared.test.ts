@@ -1,6 +1,10 @@
+import { writeFile, truncate, unlink } from "node:fs/promises";
 import { createServer } from "node:http";
 import { performance } from "node:perf_hooks";
+import { MAX_DOCUMENT_BYTES } from "@openclaw/media-core/constants";
+import { Value } from "typebox/value";
 import { afterEach, expect, it, vi } from "vitest";
+import { ArtifactsListResultSchema } from "../../../packages/gateway-protocol/src/schema/artifacts.js";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -10,6 +14,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { saveMediaBuffer } from "../../media/store.js";
 import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -39,7 +44,7 @@ import type { RespondFn } from "./types.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it("admits session-only artifact readers with current session visibility and prepared facts", async () => {
+it.each(["inline", "inbound"] as const)("authorizes %s artifact reads", async (source) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
     const scope = {
@@ -54,16 +59,38 @@ it("admits session-only artifact readers with current session visibility and pre
       createdActor: { type: "human" as const, source: "profile" as const, id: "owner" },
     };
     await replaceSessionEntry(scope, entry);
-    const data = Buffer.alloc(912, "x").toString("base64");
-    await replaceTranscriptEvents(scope, [
+    const bytes = Buffer.alloc(912, "x");
+    const data = bytes.toString("base64");
+    const inbound =
+      source === "inbound"
+        ? await saveMediaBuffer(bytes, "text/plain", "inbound", bytes.length, "result.txt")
+        : undefined;
+    const events = [
       { type: "session", version: 3, id: scope.sessionId },
       {
         type: "message",
         id: "artifact",
         parentId: null,
-        message: { role: "assistant", content: [{ type: "file", title: "result.txt", data }] },
+        message: inbound
+          ? {
+              role: "user",
+              content: "Read this file.",
+              __openclaw: {
+                media: [
+                  {
+                    url: `media://inbound/${inbound.id}`,
+                    contentType: "text/plain",
+                    kind: "document",
+                    fileName: "result.txt",
+                    sizeBytes: bytes.length,
+                  },
+                ],
+              },
+            }
+          : { role: "assistant", content: [{ type: "file", title: "result.txt", data }] },
       },
-    ]);
+    ];
+    await replaceTranscriptEvents(scope, events);
     await waitForSessionTranscriptProjection(scope);
     expect(loadSessionEntry(scope)?.visibility).toBe("shared");
     const context = await createHistoryReadContext();
@@ -102,16 +129,51 @@ it("admits session-only artifact readers with current session visibility and pre
     const listed = await request("artifacts.list");
     expect(listed[0]).toBe(true);
     const payload = listed[1] as { artifacts: { id: string; sizeBytes: number }[] };
+    expect(Value.Check(ArtifactsListResultSchema, payload)).toBe(true);
     expect(payload.artifacts).toHaveLength(1);
     expect(payload.artifacts[0]?.sizeBytes).toBe(912);
+    expect(payload.artifacts[0]).not.toHaveProperty("url");
+    expect(payload.artifacts[0]).not.toHaveProperty("data");
     const artifactId = payload.artifacts[0]!.id;
+    if (inbound) {
+      expect((await request("artifacts.list", { messageRole: "assistant" }))[1]).toMatchObject({
+        artifacts: [],
+      });
+    }
     const granted = await request("artifacts.download", { artifactId, transport: "http" });
-    expect(granted[0]).toBe(true);
+    expect(granted[0], JSON.stringify(granted[2])).toBe(true);
     const download = granted[1] as { url: string };
     expect(download.url).toMatch(/^\/api\/artifacts\/download\//);
     const fetched = await fetchSessionFileDownload(client, download.url);
     expect(fetched.response.statusCode).toBe(200);
     expect(fetched.body).toEqual(new Uint8Array(Buffer.from(data, "base64")));
+    if (inbound) {
+      const filtered = await request("artifacts.download", {
+        artifactId,
+        messageRole: "assistant",
+      });
+      expect(filtered[2]).toMatchObject({
+        code: "INVALID_REQUEST",
+        details: { type: "artifact_not_found" },
+      });
+      await writeFile(inbound.path, "replacement");
+      expect((await fetchSessionFileDownload(client, download.url)).response.statusCode).toBe(404);
+      await truncate(inbound.path, MAX_DOCUMENT_BYTES + 1);
+      expect((await request("artifacts.download", { artifactId }))[2]).toMatchObject({
+        details: { type: "artifact_download_unsupported" },
+      });
+      await unlink(inbound.path);
+      expect((await request("artifacts.list"))[1]).toMatchObject({
+        artifacts: [{ id: artifactId }],
+      });
+      expect((await request("artifacts.download", { artifactId }))[2]).toMatchObject({
+        details: { type: "artifact_download_unsupported" },
+      });
+      await writeFile(inbound.path, bytes);
+      await replaceTranscriptEvents(scope, []);
+      expect((await fetchSessionFileDownload(client, download.url)).response.statusCode).toBe(404);
+      await replaceTranscriptEvents(scope, events);
+    }
     for (const method of ["artifacts.get", "artifacts.download"] as const) {
       const missing = await request(method, { artifactId: "artifact_missing" });
       expect(missing[0]).toBe(false);
@@ -132,7 +194,10 @@ it("admits session-only artifact readers with current session visibility and pre
     for (const method of ["artifacts.get", "artifacts.download"] as const) {
       const unrelated = await request(method, { sessionKey: otherScope.sessionKey, artifactId });
       expect(unrelated[0]).toBe(false);
-      expect(unrelated[2]).toMatchObject({ details: { type: "artifact_not_found" } });
+      expect(unrelated[2]).toMatchObject({
+        code: "INVALID_REQUEST",
+        details: { type: "artifact_not_found" },
+      });
     }
     const prepare = vi.spyOn(preparation, "prepareSessionMutationFacts");
     const samples: Record<string, number[]> = {
