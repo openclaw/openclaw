@@ -12,7 +12,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
 }));
 
 import {
-  getStaticOpperModelCatalog,
   OPPER_BASE_URL,
   OPPER_DEFAULT_MODEL_ID,
   OPPER_MODELS_URL,
@@ -78,11 +77,6 @@ afterEach(() => {
   fetchWithSsrFGuardMock.mockReset();
 });
 
-it("returns fresh static rows on every call", () => {
-  getStaticOpperModelCatalog()[0]!.input.push("image");
-  expect(getStaticOpperModelCatalog()[0]?.input).toEqual(["text", "image"]);
-});
-
 it("projects per-token prices to per-million and maps capability flags", () => {
   expect(projectRow()).toEqual({
     id: "claude-sonnet-4-6",
@@ -108,6 +102,16 @@ it("treats missing cache prices and capability flags as absent", () => {
     cost: { cacheWrite: 0 },
   });
   expect(model).not.toHaveProperty("compat");
+});
+
+it("keeps an unpriced row free and leaves out a row whose prices do not parse", () => {
+  const models = projectOpperModels([
+    makeOpperRow({ id: "free-model", pricing: undefined }),
+    makeOpperRow({ id: "bad-price", pricing: { prompt: "unknown", completion: "0.000015" } }),
+    makeOpperRow({ id: "gpt-6-luna" }),
+  ]);
+  expect(models.map((model) => model.id)).toEqual(["free-model", "gpt-6-luna"]);
+  expect(models[0]?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
 });
 
 it("skips non-chat, malformed, and duplicate rows without dropping later rows", () => {

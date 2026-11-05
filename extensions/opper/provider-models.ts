@@ -33,8 +33,21 @@ export function getStaticOpperModelCatalog(): ModelDefinitionConfig[] {
   return OPPER_STATIC_MODELS.map((model) => ({ ...model, input: [...model.input] }));
 }
 
+/**
+ * Opper documents a row without a pricing object as a free-priced model. A pricing
+ * object that does not parse is not free, so that row is left out rather than
+ * accounted at zero.
+ */
+function readOpperCost(pricing: unknown): ModelDefinitionConfig["cost"] | undefined {
+  return pricing === undefined ? { ...OPPER_ZERO_COST } : normalizeOpenRouterModelPricing(pricing);
+}
+
 /** Opper's `/models` rows use OpenRouter's shape plus an `opper` metadata block. */
-function toModelDefinition(row: Record<string, unknown>, id: string): ModelDefinitionConfig {
+function toModelDefinition(
+  row: Record<string, unknown>,
+  id: string,
+  cost: ModelDefinitionConfig["cost"],
+): ModelDefinitionConfig {
   const fallback = OPPER_STATIC_MODELS.find((model) => model.id === id);
   const opper = asOptionalRecord(row.opper);
   const architecture = asOptionalRecord(row.architecture);
@@ -49,7 +62,7 @@ function toModelDefinition(row: Record<string, unknown>, id: string): ModelDefin
     // The gateway's base URL reads as a custom endpoint, which disables effort
     // selection by default; Opper parses plain `reasoning_effort`.
     ...(reasoning ? { compat: { supportsReasoningEffort: true } } : {}),
-    cost: normalizeOpenRouterModelPricing(row.pricing) ?? { ...OPPER_ZERO_COST },
+    cost,
     contextWindow:
       asPositiveSafeInteger(row.context_length) ??
       fallback?.contextWindow ??
@@ -77,7 +90,11 @@ export function projectOpperModels(rows: readonly unknown[]): ModelDefinitionCon
     if ((kind && kind !== "llm") || (outputs.length > 0 && !outputs.includes("text"))) {
       continue;
     }
-    models.push(toModelDefinition(record, id));
+    const cost = readOpperCost(record.pricing);
+    if (!cost) {
+      continue;
+    }
+    models.push(toModelDefinition(record, id, cost));
     discoveredIds.add(id);
   }
   return models;

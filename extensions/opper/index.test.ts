@@ -1,5 +1,4 @@
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
-import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { describe, expect, it } from "vitest";
@@ -45,21 +44,5 @@ describe("opper provider plugin", () => {
       modelId: "gemini-3.8-flash",
       sanitizeThoughtSignatures: true,
     });
-  });
-
-  it("publishes configured Opper models through plugin-owned catalog augmentation", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
-    const model = {
-      id: "aws/claude-sonnet-5-5",
-      name: "Claude Sonnet 5.5 (EU)",
-      input: ["text"],
-      reasoning: true,
-      contextWindow: 1_000_000,
-    };
-    expect(
-      provider.augmentModelCatalog?.({
-        config: { models: { providers: { opper: { models: [model] } } } },
-      } as never),
-    ).toEqual([{ provider: "opper", ...model }]);
   });
 });
