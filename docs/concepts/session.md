@@ -341,6 +341,9 @@ special recovery predecessor.
 
 A crash or `SIGKILL` writes no shutdown markers. Startup uses the existing persisted
 nonterminal run identity to resume an eligible root whose execution owner is gone.
+Successful chat commands do not create a running marker or trigger a recovery turn.
+Queued turns publish their running marker when execution starts, so a crash during
+their execution resumes that work once.
 Both sources produce one resume input per session. The agent must inspect uncertain
 effects before repeating them. The Control UI shows the ordinary
 conversation and resume turn without restart banners or interrupted-input notices.
