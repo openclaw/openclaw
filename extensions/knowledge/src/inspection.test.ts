@@ -200,7 +200,7 @@ it("ontology definition pages are exhaustive and JSON-safe; the UI follows all p
 
 it("source view is opt-in, bounded, and refuses arbitrary paths; invalid YAML remains diagnosable", async () => {
   const { root, vault } = await fixture(),
-    broken = "format: [broken\n" + "# comment\n".repeat(80);
+    broken = "format: [broken\n" + "x".repeat(239) + "😀tail\n" + "# comment\n".repeat(80);
   await writeFile(path.join(root, "ontology.yaml"), broken);
   const catalog = checked("ontology", await inspectOntology(vault, {}));
   expect(catalog.available).toBe(false);
@@ -221,10 +221,14 @@ it("source view is opt-in, bounded, and refuses arbitrary paths; invalid YAML re
         offset,
       }),
     );
+    expect(Buffer.from(page.source.raw, "utf8").toString("utf8")).toBe(page.source.raw);
     raw += page.source.raw;
     offset = page.nextOffset;
   } while (offset !== null);
   expect(raw).toBe(broken);
+  await expect(
+    inspectOntology(vault, { view: "sources", sourcePath: "ontology.yaml", offset: 256 }),
+  ).rejects.toThrow(/Unicode/);
   const diagnostics = checked(
     "ontology",
     await inspectOntology(vault, { view: "diagnostics", limit: 1 }),
