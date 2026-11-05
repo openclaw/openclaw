@@ -11,13 +11,18 @@ import type {
   SkillStatusEntry,
   SkillStatusReport,
 } from "../../api/types.ts";
+import { i18n } from "../../i18n/lib/translate.ts";
+import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import {
   createConfigMutationRunner,
   type ConfigMutationOwner,
 } from "../config/config-mutation-runner.ts";
 import { formatUiError, formatUiExternalText } from "../format-error.ts";
+import { registerEnglishCatalog } from "../reactive/i18n.ts";
 import type { ClawHubSearchResult } from "./clawhub-search.ts";
 import { loadSkillStatusReport } from "./status-report.ts";
+
+registerEnglishCatalog(registerSkillsBrowserEnglish);
 
 export type ClawHubSkillDetail = SkillsDetailResult;
 export type ClawHubSkillSecurityVerdict = SkillsSecurityVerdictsResult["items"][number];
@@ -86,6 +91,7 @@ export type SkillsState = {
   clawhubDetailRef: string | null;
   clawhubDetailError: string | null;
   clawhubInstallMessage: {
+    ref: string;
     kind: "success" | "error";
     text: string;
   } | null;
@@ -266,9 +272,7 @@ export async function loadSkills(
       return;
     }
     if (res && Array.isArray(res.skills)) {
-      state.skillsReport = res;
-      pruneSkillCardState(state, res);
-      void loadClawHubSecurityVerdicts(state, res);
+      acceptSkillsReport(state, res);
     }
   } catch (err) {
     if (!isCurrent()) {
@@ -286,6 +290,26 @@ export async function loadSkills(
       error: isCurrent() ? state.skillsError : null,
     });
   }
+}
+
+export function acceptSkillsReport(state: SkillsState, report: SkillStatusReport) {
+  state.skillsReport = report;
+  const result = state.clawhubInstallMessage;
+  if (
+    result?.kind === "success" &&
+    !report.skills.some(
+      ({ clawhub }) =>
+        isValidClawHubLink(clawhub) &&
+        (clawhub.requestedReference === result.ref ||
+          clawhub.slug === result.ref ||
+          `@${clawhub.ownerHandle}/${clawhub.slug}` === result.ref),
+    )
+  ) {
+    // A later inventory can disprove an earlier successful install, including after removal.
+    state.clawhubInstallMessage = null;
+  }
+  pruneSkillCardState(state, report);
+  void loadClawHubSecurityVerdicts(state, report);
 }
 
 /**
@@ -444,7 +468,7 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
   }
 }
 
-export async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStatusReport) {
+async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStatusReport) {
   const client = state.client;
   const isCurrentAgent = captureSkillsAgentScope(state);
   retireSkillsRead(state.clawhubVerdictsRead);
@@ -537,7 +561,11 @@ async function runSkillMutation(
     if (operation.kind === "skill") {
       setSkillMessage(state, operation.skillKey, message);
     } else {
-      state.clawhubInstallMessage = { kind: message.kind, text: message.message };
+      state.clawhubInstallMessage = {
+        ref: operation.ref,
+        kind: message.kind,
+        text: message.message,
+      };
     }
   } catch (err) {
     if (!isCurrent()) {
@@ -550,6 +578,7 @@ async function runSkillMutation(
     } else {
       const trustDetails = getClawHubTrustDetailsFromError(err);
       state.clawhubInstallMessage = {
+        ref: operation.ref,
         kind: "error",
         text: formatClawHubInstallMessage(message, trustDetails?.warning),
       };
@@ -572,7 +601,7 @@ export async function updateSkillEnabled(
     state,
     skillKey,
     { enabled },
-    enabled ? "Skill enabled" : "Skill disabled",
+    i18n.t(enabled ? "skillsPage.skillEnabled" : "skillsPage.skillDisabled"),
     canDispatch,
   );
 }
@@ -683,7 +712,7 @@ export async function installFromClawHub(state: SkillsState, ref: string, versio
     return {
       kind: "success",
       message: formatClawHubInstallMessage(
-        formatUiExternalText(result?.message, `Installed ${ref}`),
+        formatUiExternalText(result?.message, i18n.t("skillsPage.installedRef", { ref })),
         result?.warning ? formatUiExternalText(result.warning) : undefined,
       ),
     };

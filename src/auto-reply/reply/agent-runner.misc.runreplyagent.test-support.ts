@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
@@ -9,6 +10,8 @@ import {
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { clearMemoryPluginState } from "../../plugins/memory-state.test-fixtures.js";
@@ -20,6 +23,32 @@ import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 
 const tempDirs = createTempDirTracker();
 let rootDir: string;
+
+export function sessionFixture(overrides: Partial<SessionEntry> = {}): SessionEntry {
+  return { sessionId: "session", updatedAt: Date.now(), ...overrides };
+}
+
+export function sessionState(sessionKey: string, sessionEntry: SessionEntry) {
+  return { sessionKey, sessionEntry, sessionStore: { [sessionKey]: sessionEntry } };
+}
+
+export async function storedSession(
+  overrides: Partial<SessionEntry> = {},
+  sessionKey = "main",
+  tmp = tempDirs.make("openclaw-reply-"),
+) {
+  const storePath = path.join(tmp, "sessions.json");
+  const sessionEntry = sessionFixture(overrides);
+  await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
+  return {
+    tmp,
+    storePath,
+    sessionKey,
+    sessionEntry,
+    scope: { agentId: "main", sessionId: sessionEntry.sessionId, sessionKey, storePath },
+    reply: { ...sessionState(sessionKey, sessionEntry), storePath },
+  };
+}
 
 function registerCliBackendsForTest(): void {
   const backends = [

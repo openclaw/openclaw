@@ -58,7 +58,12 @@ it.each(["error", "timeout"] as const)(
       setDiagnosticsEnabledForProcess(true);
       let repeatedWrites = 0;
       const unsubscribe = onWorkerRequestMetrics((kind, requestClass, phase) => {
-        if (kind === "sqlite_writer" && requestClass === "sessions" && phase === "completed") {
+        if (
+          kind === "sqlite_writer" &&
+          (requestClass === "session.entries.replace" ||
+            requestClass === "session.entry.replacements.commit") &&
+          phase === "completed"
+        ) {
           repeatedWrites++;
         }
       });

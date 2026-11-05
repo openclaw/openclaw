@@ -13,7 +13,9 @@ import { logVerbose } from "../../globals.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { ReplyRunLifecycleAdmissionBlockedError } from "../../sessions/session-controller.contracts.js";
 import type { ReplyOperation, ReplyTurnKind } from "../../sessions/session-controller.js";
+import { deferSessionControllerClaimBeforeExecution } from "../../sessions/session-controller.mailbox-claim.js";
 import {
   attachSessionControllerInputOperation,
   bindSessionControllerInputOperation,
@@ -54,6 +56,7 @@ import {
   type FollowupRun,
 } from "./queue/types.js";
 import {
+  admitReplyMaintenance,
   prepareReplySourceAdmission,
   prepareReplySystemPrincipalAuthority,
 } from "./reply-source-admission.js";
@@ -94,18 +97,6 @@ export type AdmittedFollowupTurn = {
   preflightError?: Error;
   releaseSourceAdmission?: () => Promise<void>;
 };
-
-function isSameSessionGeneration(
-  left: SessionEntry | undefined,
-  right: SessionEntry | undefined,
-): boolean {
-  return Boolean(
-    left &&
-    right &&
-    left.sessionId === right.sessionId &&
-    left.lifecycleRevision === right.lifecycleRevision,
-  );
-}
 
 type PrepareReplyAgentTurnParams<TConfigured> = {
   queued: FollowupRun;
@@ -460,7 +451,12 @@ export async function prepareReplyAgentTurn<TConfigured>(
         entry: SessionEntry | undefined,
         previousEntry: SessionEntry | undefined,
       ) => {
-        const generationRotated = Boolean(entry && !isSameSessionGeneration(entry, previousEntry));
+        const generationRotated = Boolean(
+          entry &&
+          (!previousEntry ||
+            entry.sessionId !== previousEntry.sessionId ||
+            entry.lifecycleRevision !== previousEntry.lifecycleRevision),
+        );
         if (entry && generationRotated) {
           operation.updateSessionId(entry.sessionId);
           turn.queued = {
@@ -567,6 +563,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
               // Compaction decides whether work is needed, then replans from the
               // checkpoint result. A queued source must not bypass this memory write.
               beforeCompaction: async (entry) => {
+                await admitReplyMaintenance(turn, replySessionKey, assertAdmissionCurrent);
                 const flushed = await tracePhase("reply.memory_flush", () =>
                   runMemoryFlushIfNeeded({
                     ...preparation,
@@ -709,6 +706,15 @@ export async function prepareReplyAgentTurn<TConfigured>(
       }
     }
   } catch (error) {
+    if (
+      error instanceof ReplyRunLifecycleAdmissionBlockedError &&
+      mailboxClaim &&
+      !mailboxClaim.operation
+    ) {
+      // The admission owner refused before acquiring an operation; its receipt retains
+      // the exact sources for the existing FIFO drain.
+      deferSessionControllerClaimBeforeExecution(mailboxClaim);
+    }
     if (!existingClaim && mailboxClaim) {
       releaseSessionControllerClaim(mailboxClaim);
     }

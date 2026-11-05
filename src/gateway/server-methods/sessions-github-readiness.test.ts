@@ -33,6 +33,7 @@ import {
 } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { OpenClawSchema } from "../../config/zod-schema.js";
+import * as sqliteBackup from "../../infra/sqlite-backup.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "../../infra/sqlite-private-directory.js";
 import { SQLITE_SNAPSHOT_PREFIX } from "../../infra/sqlite-snapshot-retirement.js";
 import { inspectDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
@@ -261,27 +262,60 @@ it("registers a separate source-qualified read for broad and internal operators"
     }
   });
 });
-it("qualifies real managed Git, retains cached freshness, and never stages files", async () => {
-  await fixture(async (f) => {
-    const worktree = await bind();
-    await fs.writeFile(path.join(worktree.path, "unpublished.txt"), "preserve me");
-    const head = await git(worktree.path, "rev-parse", "HEAD");
-    const status = await git(worktree.path, "status", "--porcelain");
-    const first = await observe(f);
-    expect(first).toMatchObject({
-      custody: { kind: "qualified", source: "worktree" },
-      target: { kind: "supported", basis: "registered-repository", freshness: "observed" },
+it.each(["github.com", "github.example.test"])(
+  "qualifies real managed Git for %s without cross-host cache reuse or file staging",
+  async (host) => {
+    await fixture(async (f) => {
+      const config = f.context.getRuntimeConfig();
+      const selectHost = (selected: string) => {
+        const next = {
+          ...config,
+          gateway: {
+            ...config.gateway,
+            github: {
+              ...config.gateway?.github,
+              host: selected,
+              apiBaseUrl:
+                selected === "github.com" ? "https://api.github.com" : `https://${selected}/api/v3`,
+            },
+          },
+        };
+        expect(OpenClawSchema.safeParse(next).success).toBe(true);
+        setRuntimeConfigSnapshot(next);
+      };
+      selectHost(host);
+      const worktree = await bind(`https://${host}/example/project.git`);
+      await fs.writeFile(path.join(worktree.path, "unpublished.txt"), "preserve me");
+      const head = await git(worktree.path, "rev-parse", "HEAD");
+      const status = await git(worktree.path, "status", "--porcelain");
+      openOpenClawStateDatabase();
+      const backups = vi.spyOn(sqliteBackup, "backupNodeSqliteDatabase");
+      const repositoryReads = vi.spyOn(managedWorktrees, "resolveRepositoryIdentity");
+      const first = await observe(f);
+      expect(first).toMatchObject({
+        custody: { kind: "qualified", source: "worktree" },
+        target: { kind: "supported", basis: "registered-repository", freshness: "observed" },
+      });
+      expect(repositoryReads).toHaveBeenCalledTimes(1);
+      expect((await observe(f)).target).toMatchObject({ freshness: "cached" });
+      expect(repositoryReads).toHaveBeenCalledTimes(1);
+      selectHost(host === "github.com" ? "github.example.test" : "github.com");
+      expect((await observe(f)).target).toEqual({ kind: "unsupported" });
+      expect(repositoryReads).toHaveBeenCalledTimes(2);
+      selectHost(host);
+      expect((await observe(f)).target).toMatchObject({ kind: "supported", freshness: "cached" });
+      expect(repositoryReads).toHaveBeenCalledTimes(2);
+      expect(backups).not.toHaveBeenCalled();
+      expect(await git(worktree.path, "rev-parse", "HEAD")).toBe(head);
+      expect(await git(worktree.path, "status", "--porcelain")).toBe(status);
+      expect(await fs.readFile(path.join(worktree.path, "unpublished.txt"), "utf8")).toBe(
+        "preserve me",
+      );
+      await updateRegistryWorktree(process.env, worktree.id, { removedAt: 2 });
+      expect((await observe(f)).custody).toEqual({ kind: "changed" });
     });
-    expect((await observe(f)).target).toMatchObject({ freshness: "cached" });
-    expect(await git(worktree.path, "rev-parse", "HEAD")).toBe(head);
-    expect(await git(worktree.path, "status", "--porcelain")).toBe(status);
-    expect(await fs.readFile(path.join(worktree.path, "unpublished.txt"), "utf8")).toBe(
-      "preserve me",
-    );
-    await updateRegistryWorktree(process.env, worktree.id, { removedAt: 2 });
-    expect((await observe(f)).custody).toEqual({ kind: "changed" });
-  });
-});
+  },
+);
 it.each(["", "https://example.test/project.git"])(
   "distinguishes an unsupported origin %s from unbound custody",
   async (origin) => {
@@ -392,6 +426,7 @@ it("observes repository-only shared receipts while personal receipts remain priv
       };
       personal.request_digest = repositoryGitHubPublicationDigest(personal);
       insertRepositoryGitHubPublicationFixture(personal, () => {});
+      const backups = vi.spyOn(sqliteBackup, "backupNodeSqliteDatabase");
       expect(await observe(f)).toMatchObject({
         custody: { kind: "qualified", source: "repository" },
         target: { kind: "supported", basis: "repository-url" },
@@ -409,6 +444,7 @@ it("observes repository-only shared receipts while personal receipts remain priv
         reason: "not-observable",
         selectedRequestId: personal.request_id,
       });
+      expect(backups).not.toHaveBeenCalled();
     },
     { personal: true },
   );

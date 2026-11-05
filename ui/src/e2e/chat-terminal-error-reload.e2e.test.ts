@@ -64,7 +64,7 @@ suite.define(() => {
         },
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      const stop = page.getByRole("button", { name: "Stop generating" });
+      const stop = page.getByRole("button", { name: "Stop", exact: true });
       const failure = page.locator(".chat-run-failure");
       const draft = page.locator(".agent-chat__input textarea");
       await stop.waitFor();

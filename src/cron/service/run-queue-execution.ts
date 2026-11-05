@@ -30,6 +30,7 @@ import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.j
 
 /** Transient payloads and reply promises only; the worker owns queue order and capacity. */
 export type CronLaunchContext = {
+  job: CronQueuedRun["job"];
   receipt: CronQueuedRun["runReceipt"];
   context: OpenClawStateWorkerContext;
   options: RunOptions;
@@ -59,11 +60,9 @@ export async function launchCronRun(
   }
   await ensureLoaded(state);
   pending.context.admission.assertCurrent();
-  // Transfer ends the plugin's admission authority; this accepted occurrence
-  // executes under live Cron/run/tool authority, not the retired source lease.
-  if (!pending.eventTransferred) {
-    options.commitGuard?.();
-  }
+  // Request authority ends at enqueue; occurrences restore the job's scheduled authority.
+  // On-exit watchers still own their source until execution consumes the exit.
+  options.onExit?.commitGuard();
   const current = state.store?.jobs.find((job) => job.id === entry.job.id);
   const force = options.mode === "force" || options.onExit !== undefined;
   const unavailable =
@@ -76,12 +75,18 @@ export async function launchCronRun(
     isPluginCommandCronJob(current ?? entry.job) &&
     !isJobEnabled(entry.job) &&
     current?.updatedAtMs === entry.job.updatedAtMs;
+  const disabledBeforeLaunch =
+    current !== undefined &&
+    isJobEnabled(pending.job) &&
+    !isJobEnabled(current) &&
+    !retiredByThisLaunch;
   // One final live owner/eligibility check; a disable may still race dispatch.
   if (
     state.stopped ||
     pending.generation !== state.lifecycleGeneration ||
     !current ||
     unavailable ||
+    disabledBeforeLaunch ||
     current.state.runningReceiptId !== entry.runReceipt.receiptId ||
     (options.event && cronSourceIdentity(current) !== options.event.input.sourceIdentity) ||
     (!force && ((!isJobEnabled(current) && !retiredByThisLaunch) || current.state.autoDisabled)) ||
@@ -91,7 +96,11 @@ export async function launchCronRun(
     await cancel(
       unavailable
         ? describeUnavailableCronAgent(entry.runReceipt.agentId)
-        : "cron: job became ineligible before launch",
+        : !current
+          ? "cron: job removed before launch"
+          : disabledBeforeLaunch
+            ? "cron: job disabled before launch"
+            : "cron: job became ineligible before launch",
     );
     return;
   }

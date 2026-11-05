@@ -8,7 +8,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
-import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -486,9 +485,6 @@ describe("monitorTlonProvider reply prefixes", () => {
     authenticateMock.mockResolvedValueOnce("urbauth-~zod=proof");
     ingressMock.receive.mockResolvedValueOnce({ kind: "ignored" });
     inboundRuntimeMock.buildContext.mockImplementationOnce(actual.buildChannelInboundEventContext);
-    inboundRuntimeMock.resolveEffectiveMessagesConfig.mockImplementationOnce((cfg, agentId) => ({
-      responsePrefix: createChannelMessageReplyPipeline({ cfg, agentId }).responsePrefix,
-    }));
     inboundRuntimeMock.dispatch.mockImplementationOnce((params) =>
       actual.dispatchChannelInboundTurn({
         ...params,

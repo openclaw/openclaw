@@ -283,9 +283,24 @@ describe("operator role policy", () => {
         );
         const original = expectDefined(first, "first source");
         const independent = expectDefined(second, "independent source");
+        if (dependencyKind === "invocation") {
+          expect(independent.source).toBe(original.source);
+          const transport = await capture({ client, context });
+          expect(transport.source).toBe(original.source);
+          expect(resolveReplyOperatorAuthorityKey(transport)).not.toBe(
+            resolveReplyOperatorAuthorityKey(original),
+          );
+        }
         const originalKey = resolveReplyOperatorAuthorityKey(original);
         expect(resolveReplyOperatorAuthorityKey(independent)).not.toBe(originalKey);
         const narrowed = await capture({ client: narrowClient(client, original), context });
+        const narrowedIndependent = await capture({
+          client: narrowClient(client, independent),
+          context,
+        });
+        expect(resolveReplyOperatorAuthorityKey(narrowedIndependent)).not.toBe(
+          resolveReplyOperatorAuthorityKey(narrowed),
+        );
         expect(narrowed.source).toBe(original.source);
         expect(narrowed.scopes).toEqual([]);
         expect(resolveReplyOperatorAuthorityKey(narrowed)).not.toBe(originalKey);

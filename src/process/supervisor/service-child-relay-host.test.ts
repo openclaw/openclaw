@@ -57,8 +57,8 @@ const startRelay = (
   > = {},
 ) => createServiceChildRelayAdapter({ ...relayDefaults, ...params });
 
-function mockWritableRelay() {
-  const stub = buildRelay((child) => mocks.spawn.mockReturnValue(child));
+function mockWritableRelay(platform: "darwin" | "linux" = "darwin") {
+  const stub = buildRelay((child) => mocks.spawn.mockReturnValue(child), platform);
   cleanups.push(() => {
     closeStub(stub);
     stub.stdout.destroy();
@@ -173,6 +173,31 @@ it.each(["dispatch-revoked", "post-dispatch", "prepared-current", "prepared-revo
   },
 );
 
+it("reports a Linux startup failure ahead of its unconfirmed cleanup", async () => {
+  const stub = mockWritableRelay("linux");
+  const outcome = startRelay().then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  const { emit } = relayPeer(stub);
+  emit({ type: "startup-error", anchorPid: 1235, error: "spawn synthetic-command ENOENT" });
+  // A closing receipt without native extinction cannot certify cleanup.
+  emit({ type: "closing", reason: "lineage-lost", descendantsReaped: undefined });
+  stub.control.destroy();
+  stub.lineage.end();
+  stub.disconnectMock();
+  stub.emitExit(1);
+  const error = await outcome;
+  expect(error).toBeInstanceOf(AggregateError);
+  expect((error as AggregateError).message).toBe("spawn synthetic-command ENOENT");
+  expect((error as AggregateError).errors).toEqual([
+    expect.objectContaining({ message: "spawn synthetic-command ENOENT" }),
+    expect.objectContaining({
+      message: expect.stringContaining("service child cleanup identity lost"),
+    }),
+  ]);
+});
+
 it("bounds a refused launch when the waiting anchor never answers its cancel", async () => {
   clock();
   const stub = mockWritableRelay();
@@ -188,8 +213,15 @@ it("bounds a refused launch when the waiting anchor never answers its cancel", a
   relayPeer(stub).emit({ type: "prepared" });
   await nextTurn();
   await vi.advanceTimersByTimeAsync(GRACEFUL_CANCEL_TIMEOUT_MS * 2);
-  // Without the anchor's receipt the refusal cannot prove extinction, so cleanup stays fenced.
-  expect(await outcome).toMatchObject({ message: expect.stringContaining("hard deadline") });
+  // Without the anchor's receipt the refusal cannot prove extinction, so cleanup stays fenced
+  // and its failure follows the refusal that caused it.
+  expect(await outcome).toMatchObject({
+    message: "launch authority revoked",
+    errors: [
+      expect.objectContaining({ message: "launch authority revoked" }),
+      expect.objectContaining({ message: expect.stringContaining("hard deadline") }),
+    ],
+  });
 });
 
 it("checks input authority after readiness before writing private stdin", async () => {
@@ -612,50 +644,50 @@ it.each(["before", "after", "queued", "short"] as const)(
   },
 );
 
-it.each(["before", "after"])(
-  "joins forced stdio cleanup when control closes %s the force request",
-  async (controlCloses) => {
-    const f = await createRelay();
-    f.completeRoot();
-    await f.adapter.wait();
-    f.lineage.end();
-    f.groupProbe.mockReturnValue(true);
+it.each(["darwin", "linux", "uncertified"] as const)(
+  "retires %s stdio owner only after certified channel closure",
+  async (platform) => {
+    const f = mockWritableRelay(platform === "darwin" ? "darwin" : "linux");
+    const starting = startRelay();
+    const { emit } = relayPeer(f);
+    emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
+    const adapter = await starting;
+    const groupProbe = vi.spyOn(process, "kill").mockReturnValue(true);
+    emit({ type: "root-result", ...rootResult });
+    f.stdout.end();
+    f.stderr.end();
+    await adapter.wait();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    f.emit({ type: "closing", reason: "lineage-closed" });
-    await nextTurn();
-    expect(f.acknowledgements).toContainEqual(expect.objectContaining({ type: "closing-ack" }));
-    const [, extinct] = observeSettlement(f.adapter.waitForExtinction());
-    if (controlCloses === "before") {
-      f.closeControl();
-      await nextTurn();
-    }
     const [closing, finished] = observeSettlement(
-      closeOwnedStdioProcess(f.adapter, { force: true }),
+      closeOwnedStdioProcess(adapter, { force: platform === "darwin" }),
     );
-    await vi.advanceTimersByTimeAsync(500);
-    expect(finished).not.toHaveBeenCalled();
-    expect(extinct).not.toHaveBeenCalled();
-    expect(f.killSpy).not.toHaveBeenCalled();
-    if (controlCloses === "after") {
-      f.closeControl();
-      await nextTurn();
+    const descendantsReaped = platform === "linux" ? true : undefined;
+    emit({ type: "closing", reason: "lineage-closed", descendantsReaped });
+    f.control.destroy();
+    await nextTurn();
+    expect(f.killMock).not.toHaveBeenCalled();
+    f.lineage.end();
+    await nextTurn();
+    if (platform === "uncertified") {
+      await expect(closing).rejects.toThrow("without kernel descendant extinction");
+      expect(f.killMock).not.toHaveBeenCalled();
+      return;
     }
-    f.groupProbe.mockImplementation(() => {
-      throw Object.assign(new Error("synthetic absent group"), { code: "ESRCH" });
-    });
+    if (platform === "darwin") {
+      expect(f.killMock).not.toHaveBeenCalled();
+      groupProbe.mockImplementation(failGroup("ESRCH"));
+    }
     await vi.advanceTimersByTimeAsync(100);
-    expect(f.killSpy).toHaveBeenCalledExactlyOnceWith("SIGKILL");
-    expect(f.cancellations).toHaveLength(0);
+    expect(f.killMock).toHaveBeenCalledExactlyOnceWith("SIGKILL");
     expect(finished).not.toHaveBeenCalled();
-    expect(extinct).not.toHaveBeenCalled();
-    f.exitRelay();
+    f.disconnectMock();
+    f.emitExit(0);
     await expect(closing).resolves.toMatchObject({
       reason: "forced-relay-exit",
       signalRequested: "SIGKILL",
       exit: { code: 0, signal: null },
     });
-    expect(f.groupProbe.mock.calls.every(([, signal]) => signal === 0)).toBe(true);
-    expect(f.cancellations).toHaveLength(0);
+    expect(platform === "linux" ? groupProbe.mock.calls : []).toEqual([]);
   },
 );
 

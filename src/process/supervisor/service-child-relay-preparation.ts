@@ -149,6 +149,8 @@ export function createServiceChildStart(
 ): ServiceChildStart {
   return {
     type: params.initiateSpawn ? "prepare" : "start",
+    executionIntent: params.executionIntent,
+    executionScopeKey: params.executionScopeKey,
     generation,
     command: params.command,
     args: params.args,

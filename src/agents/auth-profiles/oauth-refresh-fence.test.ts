@@ -1,7 +1,7 @@
 import "./external-auth.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it as baseIt, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
@@ -42,8 +42,33 @@ let settleManagerWork: (() => Promise<void>) | undefined;
 type RefreshResult = { apiKey: string; credential: OAuthCredential };
 type Refresh = (credential: OAuthCredential) => Promise<RefreshResult | null>;
 
+const it = baseIt.extend<{ agentDir: string }>({
+  agentDir: async ({ task }, use) => {
+    await withOAuthTempRoot(`oauth-manager-${task.id}-`, async (root) => {
+      const agentDir = path.join(root, "agents", "main", "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      await use(agentDir);
+    });
+  },
+});
+
+function deferredRefresh(beforeRefresh: () => void = () => {}) {
+  const started = createDeferredCore();
+  const release = createDeferredCore<RefreshResult>();
+  const refresh = vi.fn(() => {
+    beforeRefresh();
+    started.resolve();
+    return release.promise;
+  });
+  return { started: started.promise, release: release.resolve, refresh };
+}
+
 function oauth(access: string, refresh: string, overrides: Partial<OAuthCredential> = {}) {
   return createCredential({ access, refresh, ...overrides });
+}
+
+function expiredCredential(accountId = "acct-123") {
+  return oauth("expired-access", "expired-refresh", { expires: 1, accountId });
 }
 
 function refreshed(access: string, refresh: string, identity: Partial<OAuthCredential> = {}) {
@@ -153,23 +178,14 @@ afterEach(async () => {
 describe("OAuth refresh generation fence", () => {
   it("keeps serialized provider I/O outside locks and settles after observer timeout", async () => {
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
-    const expired = oauth("serialized-access", "serialized-refresh", {
-      expires: 1,
-      accountId: "acct-123",
-    });
+    const expired = expiredCredential();
     const storage = serializedStore(expired, 100);
     const run = storage.run;
-    const started = createDeferredCore();
-    const release = createDeferredCore<{ apiKey: string; credential: OAuthCredential }>();
-    const refresh = vi.fn(async () => {
-      expect(storage.lockDepth).toBe(0);
-      started.resolve();
-      return await release.promise;
-    });
+    const { started, release, refresh } = deferredRefresh(() => expect(storage.lockDepth).toBe(0));
 
     const work = new AsyncWorkScope();
     const first = work.run(() => run(refresh));
-    await started.promise;
+    await started;
     expect(storage.read().access).toMatch(
       /^openclaw-oauth-refresh-fence:v1:[a-f0-9]{32}:access:[a-f0-9]{64}$/,
     );
@@ -183,7 +199,7 @@ describe("OAuth refresh generation fence", () => {
     const peerRefresh = vi.fn(async () => null);
     const peer = run(peerRefresh);
 
-    release.resolve(
+    release(
       refreshed("serialized-rotated-access", "serialized-rotated-refresh", {
         accountId: "acct-123",
       }),
@@ -202,32 +218,21 @@ describe("OAuth refresh generation fence", () => {
   });
 
   it("rejects a different-account replacement for serialized owner and observer settlement", async () => {
-    const expired = oauth("account-a-access", "account-a-refresh", {
-      expires: 1,
-      accountId: "acct-a",
-    });
+    const expired = expiredCredential("acct-a");
     const storage = serializedStore(expired);
     const run = storage.run;
-    const started = createDeferredCore();
-    const release = createDeferredCore<{ apiKey: string; credential: OAuthCredential }>();
-    const refresh = vi.fn(() => {
-      started.resolve();
-      return release.promise;
-    });
+    const { started, release, refresh } = deferredRefresh();
 
     const owner = run(refresh);
-    await started.promise;
+    await started;
     const peerRefresh = vi.fn(async () => null);
     const observer = run(peerRefresh);
     storage.write(
-      oauth("account-b-access", "account-b-refresh", {
-        expires: Date.now() + 600_000,
-        accountId: "acct-b",
-      }),
+      refreshed("account-b-access", "account-b-refresh", { accountId: "acct-b" }).credential,
     );
 
     await expect(observer).resolves.toBeNull();
-    release.resolve(refreshed("rotated-a-access", "rotated-a-refresh", { accountId: "acct-a" }));
+    release(refreshed("rotated-a-access", "rotated-a-refresh", { accountId: "acct-a" }));
     await expect(owner).rejects.toThrow("owner changed");
     expect(refresh).toHaveBeenCalledOnce();
     expect(peerRefresh).not.toHaveBeenCalled();
@@ -239,10 +244,7 @@ describe("OAuth refresh generation fence", () => {
   });
 
   it("terminally fences invalid serialized provider outcomes", async () => {
-    const expired = oauth("account-a-access", "account-a-refresh", {
-      expires: 1,
-      accountId: "acct-a",
-    });
+    const expired = expiredCredential("acct-a");
     const storage = serializedStore(expired);
     const run = storage.run;
 
@@ -280,10 +282,7 @@ describe("OAuth refresh generation fence", () => {
   it.each([{ outcome: "throw" as const }, { outcome: "null" as const }])(
     "surfaces one failed serialized terminal write after a $outcome refresh",
     async ({ outcome }) => {
-      const expired = oauth("expired-access", "expired-refresh", {
-        expires: 1,
-        accountId: "acct-123",
-      });
+      const expired = expiredCredential();
       let terminalAttempts = 0;
       const terminalError = new Error("failed to persist serialized terminal fence");
       const storage = serializedStore(expired, 1_000, (next) => {
@@ -317,46 +316,36 @@ describe("OAuth refresh generation fence", () => {
     },
   );
 
-  it("surfaces one failed manager terminal write after a null refresh", async () => {
-    await withOAuthTempRoot("oauth-manager-null-terminal-failure-", async (tempRoot) => {
-      const agentDir = path.join(tempRoot, "agents", "main", "agent");
-      await fs.mkdir(agentDir, { recursive: true });
-      const profileId = "openai:oauth";
-      const expired = oauth("expired-access", "expired-refresh", {
-        expires: 1,
-        accountId: "acct-123",
-      });
-      saveCredential(profileId, expired, agentDir);
-      const originalUpdate = authProfileStoreRuntime.updateAuthProfileStoreWithLock;
-      let terminalAttempts = 0;
-      vi.spyOn(authProfileStoreRuntime, "updateAuthProfileStoreWithLock").mockImplementation(
-        async (params) => {
-          const current =
-            ensureAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId];
-          if (current?.type === "oauth" && isPendingOAuthRefreshFence(current)) {
-            terminalAttempts += 1;
-            return null;
-          }
-          return await originalUpdate(params);
-        },
-      );
-      mockOAuthProviderOperations({});
-      const manager = createOAuthManager();
+  it("surfaces one failed manager terminal write after a null refresh", async ({ agentDir }) => {
+    const profileId = "openai:oauth";
+    const expired = expiredCredential();
+    saveCredential(profileId, expired, agentDir);
+    const originalUpdate = authProfileStoreRuntime.updateAuthProfileStoreWithLock;
+    let terminalAttempts = 0;
+    vi.spyOn(authProfileStoreRuntime, "updateAuthProfileStoreWithLock").mockImplementation(
+      async (params) => {
+        const current = ensureAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId];
+        if (current?.type === "oauth" && isPendingOAuthRefreshFence(current)) {
+          terminalAttempts += 1;
+          return null;
+        }
+        return await originalUpdate(params);
+      },
+    );
+    mockOAuthProviderOperations({});
+    const manager = createOAuthManager();
 
-      let caught: unknown;
-      try {
-        await resolve(manager, profileId, expired, agentDir);
-      } catch (error) {
-        caught = error;
-      }
-      expect(caught).toBeInstanceOf(OAuthManagerRefreshError);
-      const refreshError = caught as OAuthManagerRefreshError;
-      expect(refreshError.message).toContain("terminal OAuth refresh fence");
-      expect(terminalAttempts).toBe(1);
-      await expect(
-        withOAuthProfileLock({ provider: "openai", profileId }, async () => "reacquired"),
-      ).resolves.toBe("reacquired");
+    const caught = await resolve(manager, profileId, expired, agentDir).catch(
+      (error: unknown) => error,
+    );
+    expect(caught).toBeInstanceOf(OAuthManagerRefreshError);
+    expect(caught).toMatchObject({
+      message: expect.stringContaining("terminal OAuth refresh fence"),
     });
+    expect(terminalAttempts).toBe(1);
+    await expect(
+      withOAuthProfileLock({ provider: "openai", profileId }, async () => "reacquired"),
+    ).resolves.toBe("reacquired");
   });
 
   it.each(oauthRefreshReplacementCases())("settles owner and observer for $kind", async (row) => {
@@ -378,22 +367,16 @@ describe("OAuth refresh generation fence", () => {
         chatgptPlanType: "plus",
         ...identity,
       });
-      saveAuthProfileStore({ version: 1, profiles: { [profileId]: original } }, undefined);
+      saveAuthProfileStore({ version: 1, profiles: { [profileId]: original } });
 
       const refreshFinished = createDeferredCore();
       const refreshStarted = createDeferredCore();
       const refreshCredential = vi.fn(async () => {
         refreshStarted.resolve();
         await refreshFinished.promise;
-        return createCredential({
-          access: "rotated-a-access",
-          refresh: "rotated-a-refresh",
-          expires: Date.now() + 600_000,
-          ...identity,
-        });
+        return refreshed("rotated-a-access", "rotated-a-refresh", identity).credential;
       });
       mockOAuthProviderOperations({ refreshCredential });
-      const createManager = () => createOAuthManager();
       const work = new AsyncWorkScope();
       settleManagerWork = async () => {
         refreshFinished.resolve();
@@ -417,7 +400,7 @@ describe("OAuth refresh generation fence", () => {
           return store;
         });
 
-      const owner = work.track(() => resolve(createManager(), profileId, original, undefined));
+      const owner = work.track(() => resolve(createOAuthManager(), profileId, original));
       await refreshStarted.promise;
       const fenced = ensureAuthProfileStoreWithoutExternalProfiles().profiles[profileId];
       expect(fenced).toMatchObject({
@@ -458,29 +441,24 @@ describe("OAuth refresh generation fence", () => {
         return null;
       });
       const observer = work.track(() =>
-        resolve(createManager(), profileId, observerCredential, undefined, {
+        resolve(createOAuthManager(), profileId, observerCredential, undefined, {
           store: observerStore,
         }),
       );
       await observerEntered.promise;
       await observerReadFence.promise;
       watchObserverReads = false;
-      const relogin = persistAuthProfileBatch({
+      await persistAuthProfileBatch({
         profiles: [
           {
             profileId,
-            credential: createCredential({
-              access: "account-b-access",
-              refresh: "account-b-refresh",
-              expires: Date.now() + 600_000,
-              ...replacementIdentity,
-            }),
+            credential: refreshed("account-b-access", "account-b-refresh", replacementIdentity)
+              .credential,
           },
         ],
         resetFailureState: true,
         allowOAuthGenerationReplacement: true,
       });
-      await relogin;
 
       if (sameIdentity) {
         await expect(observer).resolves.toMatchObject({ apiKey: "account-b-access" });
@@ -503,46 +481,39 @@ describe("OAuth refresh generation fence", () => {
     });
   });
 
-  it.each(["unsupported", "terminal"] as const)(
+  it.for(["unsupported", "terminal"] as const)(
     "preserves a %s credential without provider I/O",
-    async (kind) => {
-      await withOAuthTempRoot("oauth-manager-refresh-unowned-", async (tempRoot) => {
-        const agentDir = path.join(tempRoot, "agents", "main", "agent");
-        await fs.mkdir(agentDir, { recursive: true });
-        const profileId = kind === "unsupported" ? "unowned:default" : "openai:default";
-        const expired = oauth("claimed-access", "claimed-refresh", {
-          provider: kind === "unsupported" ? "unowned" : "openai",
-          expires: 1,
-          accountId: "acct-123",
-        });
-        const credential =
-          kind === "terminal"
-            ? createFailedOAuthRefreshFence(
-                createOAuthRefreshFence({ profileId, credential: expired }),
-              )
-            : expired;
-        saveCredential(profileId, credential, agentDir);
-        if (kind === "terminal") {
-          vi.spyOn(externalCliSync, "readExternalCliBootstrapCredential").mockReturnValue(
-            oauth("recovered-access", "recovered-refresh", {
-              expires: Date.now() + 600_000,
-              accountId: "acct-123",
-            }),
-          );
-        }
-        const refreshCredential = vi.fn(async () => null);
-        mockOAuthProviderOperations({
-          ...(kind === "unsupported" ? { canRefreshCredential: async () => false } : {}),
-          refreshCredential,
-        });
-        const manager = createOAuthManager();
-
-        await expect(resolve(manager, profileId, credential, agentDir)).resolves.toBeNull();
-        expect(refreshCredential).not.toHaveBeenCalled();
-        expect(ensureAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId]).toEqual(
-          credential,
-        );
+    async (kind, { agentDir }) => {
+      const profileId = kind === "unsupported" ? "unowned:default" : "openai:default";
+      const expired = oauth("claimed-access", "claimed-refresh", {
+        provider: kind === "unsupported" ? "unowned" : "openai",
+        expires: 1,
+        accountId: "acct-123",
       });
+      const credential =
+        kind === "terminal"
+          ? createFailedOAuthRefreshFence(
+              createOAuthRefreshFence({ profileId, credential: expired }),
+            )
+          : expired;
+      saveCredential(profileId, credential, agentDir);
+      if (kind === "terminal") {
+        vi.spyOn(externalCliSync, "readExternalCliBootstrapCredential").mockReturnValue(
+          refreshed("recovered-access", "recovered-refresh", { accountId: "acct-123" }).credential,
+        );
+      }
+      const refreshCredential = vi.fn(async () => null);
+      mockOAuthProviderOperations({
+        ...(kind === "unsupported" ? { canRefreshCredential: async () => false } : {}),
+        refreshCredential,
+      });
+      const manager = createOAuthManager();
+
+      await expect(resolve(manager, profileId, credential, agentDir)).resolves.toBeNull();
+      expect(refreshCredential).not.toHaveBeenCalled();
+      expect(ensureAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId]).toEqual(
+        credential,
+      );
     },
   );
 
@@ -551,15 +522,8 @@ describe("OAuth refresh generation fence", () => {
     const firstCredential = oauth("first-access", "stable-refresh", { expires: 1 });
     const storage = serializedStore(firstCredential, 10);
     const run = storage.run;
-    let settleFirst:
-      | ((result: { apiKey: string; credential: OAuthCredential }) => void)
-      | undefined;
-    const first = run(
-      () =>
-        new Promise((settle) => {
-          settleFirst = settle;
-        }),
-    );
+    const pending = deferredRefresh();
+    const first = run(pending.refresh);
     const firstTimedOut = expect(first).rejects.toThrow("exceeded hard timeout (10ms)");
     await vi.advanceTimersByTimeAsync(10);
     await firstTimedOut;
@@ -569,7 +533,7 @@ describe("OAuth refresh generation fence", () => {
       run(async () => refreshed("second-rotated-access", "second-rotated-refresh")),
     ).resolves.toMatchObject({ apiKey: "second-rotated-access" });
 
-    settleFirst?.(refreshed("late-first-access", "late-first-refresh"));
+    pending.release(refreshed("late-first-access", "late-first-refresh"));
     await new Promise<void>((settle) => {
       setImmediate(settle);
     });
@@ -579,99 +543,84 @@ describe("OAuth refresh generation fence", () => {
     });
   });
 
-  it.each(
+  it.for(
     oauthRefreshFailureFallbackCases().filter(({ buildError }) => typeof buildError === "string"),
-  )("$name after a forced refresh failure", async ({ candidate, buildError }) => {
-    await withOAuthTempRoot("oauth-manager-force-fallback-", async (tempRoot) => {
-      const agentDir = path.join(tempRoot, "agents", "main", "agent");
-      await fs.mkdir(agentDir, { recursive: true });
-      const profileId = "openai:oauth";
-      const supplied = oauth("failed-access", "failed-refresh", { accountId: "acct-123" });
-      saveCredential(profileId, supplied, agentDir);
-      mockOAuthProviderOperations({
-        buildApiKey: async (_provider, credential) => {
-          if (credential.access === candidate.access) {
-            throw new Error(buildError);
-          }
-          return credential.access;
-        },
-        refreshCredential: async () => {
-          // The provider result is fresh at publication, not at table collection.
-          saveAuthProfileStore(
-            {
-              version: 1,
-              profiles: {
-                [profileId]: createCredential({ ...candidate, expires: Date.now() + 600_000 }),
-              },
-            },
-            agentDir,
-            { filterExternalAuthProfiles: false },
-          );
-          throw new Error("forced refresh failed");
-        },
-      });
-      const manager = createOAuthManager();
-      const resolution = resolve(manager, profileId, supplied, agentDir, { forceRefresh: true });
+  )("$name after a forced refresh failure", async ({ candidate, buildError }, { agentDir }) => {
+    const profileId = "openai:oauth";
+    const supplied = oauth("failed-access", "failed-refresh", { accountId: "acct-123" });
+    saveCredential(profileId, supplied, agentDir);
+    mockOAuthProviderOperations({
+      buildApiKey: async (_provider, credential) => {
+        if (credential.access === candidate.access) {
+          throw new Error(buildError);
+        }
+        return credential.access;
+      },
+      refreshCredential: async () => {
+        // The provider result is fresh at publication, not at table collection.
+        saveCredential(
+          profileId,
+          createCredential({ ...candidate, expires: Date.now() + 600_000 }),
+          agentDir,
+        );
+        throw new Error("forced refresh failed");
+      },
+    });
+    const manager = createOAuthManager();
+    const resolution = resolve(manager, profileId, supplied, agentDir, { forceRefresh: true });
 
-      await expect(resolution).rejects.toSatisfy((caught: unknown) => {
-        expect(caught).toBeInstanceOf(OAuthManagerRefreshError);
-        const error = caught as OAuthManagerRefreshError;
-        expect(error.message).toContain("forced refresh failed");
-        expect(error.cause).toBeInstanceOf(AggregateError);
-        expect((error.cause as AggregateError).errors.map(formatErrorMessage)).toEqual([
-          "forced refresh failed",
-          buildError,
-        ]);
-        return true;
-      });
+    await expect(resolution).rejects.toSatisfy((caught: unknown) => {
+      expect(caught).toBeInstanceOf(OAuthManagerRefreshError);
+      const error = caught as OAuthManagerRefreshError;
+      expect(error.message).toContain("forced refresh failed");
+      expect(error.cause).toBeInstanceOf(AggregateError);
+      expect((error.cause as AggregateError).errors.map(formatErrorMessage)).toEqual([
+        "forced refresh failed",
+        buildError,
+      ]);
+      return true;
     });
   });
 
-  it.each([
+  it.for([
     { name: "access changed", change: "access", expectedCalls: 0 },
     { name: "only expiry changed", change: "expires", expectedCalls: 1 },
   ] as const)(
     "checks authoritative $name before forced provider I/O",
-    async ({ change, expectedCalls }) => {
-      await withOAuthTempRoot("oauth-manager-force-authoritative-", async (tempRoot) => {
-        const agentDir = path.join(tempRoot, "agents", "main", "agent");
-        await fs.mkdir(agentDir, { recursive: true });
-        const profileId = "openai:oauth";
-        const supplied = oauth("supplied-access", "supplied-refresh", {
-          expires: Date.now() + 600_000,
-          accountId: "acct-123",
-        });
-        const live = createCredential({
-          ...supplied,
-          ...(change === "access" ? { access: "live-access" } : {}),
-          ...(change === "expires" ? { expires: supplied.expires + 600_000 } : {}),
-        });
-        const staleStore = { version: 1 as const, profiles: { [profileId]: supplied } };
-        saveCredential(profileId, live, agentDir);
-        const refreshCredential = vi.fn(async (credential: OAuthCredential) => {
-          expect(credential).toEqual(live);
-          return createCredential({
-            ...credential,
-            access: "provider-rotated-access",
-            refresh: "provider-rotated-refresh",
-            expires: Date.now() + 600_000,
-          });
-        });
-        mockOAuthProviderOperations({
-          refreshCredential,
-        });
-        const manager = createOAuthManager();
-
-        await expect(
-          resolve(manager, profileId, supplied, agentDir, {
-            store: staleStore,
-            forceRefresh: true,
-          }),
-        ).resolves.toMatchObject({
-          apiKey: expectedCalls === 0 ? "live-access" : "provider-rotated-access",
-        });
-        expect(refreshCredential).toHaveBeenCalledTimes(expectedCalls);
+    async ({ change, expectedCalls }, { agentDir }) => {
+      const profileId = "openai:oauth";
+      const supplied = oauth("supplied-access", "supplied-refresh", {
+        expires: Date.now() + 600_000,
+        accountId: "acct-123",
       });
+      const live = createCredential({
+        ...supplied,
+        ...(change === "access" ? { access: "live-access" } : {}),
+        ...(change === "expires" ? { expires: supplied.expires + 600_000 } : {}),
+      });
+      const staleStore = { version: 1 as const, profiles: { [profileId]: supplied } };
+      saveCredential(profileId, live, agentDir);
+      const refreshCredential = vi.fn(async (credential: OAuthCredential) => {
+        expect(credential).toEqual(live);
+        return createCredential({
+          ...credential,
+          access: "provider-rotated-access",
+          refresh: "provider-rotated-refresh",
+          expires: Date.now() + 600_000,
+        });
+      });
+      mockOAuthProviderOperations({ refreshCredential });
+      const manager = createOAuthManager();
+
+      await expect(
+        resolve(manager, profileId, supplied, agentDir, {
+          store: staleStore,
+          forceRefresh: true,
+        }),
+      ).resolves.toMatchObject({
+        apiKey: expectedCalls === 0 ? "live-access" : "provider-rotated-access",
+      });
+      expect(refreshCredential).toHaveBeenCalledTimes(expectedCalls);
     },
   );
 });

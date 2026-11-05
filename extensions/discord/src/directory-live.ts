@@ -36,6 +36,7 @@ async function listDiscordDirectoryLive(
     return [];
   }
   const { token, query, accountId } = access;
+  const channelQuery = normalizeDiscordDisplaySlug(query);
   const guilds = await listGuilds(token, fetch, { timeoutMs: DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS });
   const rows: ChannelDirectoryEntry[] = [];
   const seenUserIds = new Set<string>();
@@ -52,10 +53,7 @@ async function listDiscordDirectoryLive(
         if (!name) {
           continue;
         }
-        if (
-          query &&
-          !normalizeDiscordDisplaySlug(name).includes(normalizeDiscordDisplaySlug(query))
-        ) {
+        if (channelQuery && !normalizeDiscordDisplaySlug(name).includes(channelQuery)) {
           continue;
         }
         rows.push({

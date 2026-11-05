@@ -13,6 +13,7 @@ import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-cache.ts";
 import {
   nativeHistoryMessageIdentity,
   nativeHistoryMessageSourceIdentity,
+  oldestNativeHistoryMessage,
 } from "../../lib/chat/history-message-identity.ts";
 import {
   isUiSelectedGlobalSessionKey,
@@ -226,7 +227,9 @@ export function reopenChatHistoryBoundary(
   boundary: string,
   pagination: ChatHistoryPagination,
 ): void {
-  if (nativeHistoryMessageSourceIdentity(state.chatMessages[0]) !== boundary) {
+  if (
+    nativeHistoryMessageSourceIdentity(oldestNativeHistoryMessage(state.chatMessages)) !== boundary
+  ) {
     throw new Error(t("chat.thread.earlierInterrupted"));
   }
   state.chatHistoryPagination = pagination;

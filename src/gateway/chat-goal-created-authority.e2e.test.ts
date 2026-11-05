@@ -405,7 +405,7 @@ it(
           loadSessionEntry({ agentId: "main", sessionKey: scenario.sessionKey })?.goal,
         ).toMatchObject(
           scenario.revoke
-            ? { status: "active", continuationTurns: 0 }
+            ? { status: "paused", continuationTurns: 0 }
             : { status: "complete", continuationTurns: 1 },
         );
         if (!scenario.revoke) {

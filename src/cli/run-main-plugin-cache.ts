@@ -16,7 +16,9 @@ export async function withCliPluginInvocation<T>(
       async release() {
         // Gateway publication transfers the same inventory to process custody.
         if (cache.kind === "operation") {
-          const result = await retirePluginCache(cache);
+          // One-shot commands close shared state immediately after this owner releases.
+          // Join timed-out plugin tails so native admission publication cannot outlive it.
+          const result = await retirePluginCache(cache, undefined, { waitForSettlement: true });
           if (result.failures.length > 0) {
             throw new AggregateError(
               result.failures.map((failure) => failure.error),

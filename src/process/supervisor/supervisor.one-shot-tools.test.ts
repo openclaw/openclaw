@@ -56,9 +56,7 @@ function prepareOneShotTools() {
     cwd: "/workspace",
     sandbox: createAgentToolsSandboxContext({ workspaceDir: "/workspace" }),
     oneShotCliRun: true,
-    registerRunCleanup: (cleanup) => {
-      generationCleanups.push(cleanup);
-    },
+    registerRunCleanup: (cleanup) => generationCleanups.push(cleanup),
     toolConstructionPlan: {
       includeBaseCodingTools: false,
       includeShellTools: false,
@@ -67,8 +65,9 @@ function prepareOneShotTools() {
       includePluginTools: false,
     },
   });
-  expect(generationCleanups).toHaveLength(1);
-  return generationCleanups[0]!;
+  return async (reason: string) => {
+    await Promise.all(generationCleanups.map((cleanup) => cleanup(reason)));
+  };
 }
 
 describe("one-shot tool-generation process cleanup", () => {

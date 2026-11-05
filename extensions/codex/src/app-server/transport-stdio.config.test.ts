@@ -80,7 +80,7 @@ async function readNativeConfig(startOptions: CodexAppServerStartOptions, env: N
   const closed = new Promise<void>((resolve) => {
     child.once("close", () => resolve());
   });
-  const client = CodexAppServerClient.fromTransportForTests(child);
+  const client = CodexAppServerClient.fromTransport(child);
   try {
     const deadline = performance.now() + 60_000;
     const initialized = await client.request<CodexInitializeResponse>(

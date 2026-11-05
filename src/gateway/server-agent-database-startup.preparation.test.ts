@@ -3,7 +3,10 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
+import {
+  PreparedModelRuntimePluginGenerationRetiredError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "../agents/prepared-model-runtime.errors.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { AgentDatabaseSchemaAdmissionChangedError } from "../state/agent-database-admission-error.js";
@@ -29,6 +32,24 @@ const mocks = vi.hoisted(() => ({
   revision: vi.fn(),
   info: vi.fn(),
   warn: vi.fn(),
+  integrityCheck: vi.fn(),
+  corruption: vi.fn(),
+}));
+
+// mock-isolation: Keep the real background verdict owner while controlling its native I/O.
+vi.mock("../infra/sqlite-integrity-worker.js", () => ({
+  assertSqliteIntegrityInWorker: mocks.integrityCheck,
+}));
+// mock-isolation: Native execution transport must not open the synthetic identity files.
+vi.mock("../state/openclaw-agent-execution.js", () => ({
+  captureOpenClawAgentDatabaseExecution: () => ({
+    onTerminal: () => () => {},
+    release: async () => {},
+  }),
+}));
+// mock-isolation: Observe corruption revocation without retiring unrelated database handles.
+vi.mock("../state/openclaw-agent-db-lifecycle.js", () => ({
+  recordOpenClawAgentDatabaseOpenFailure: mocks.corruption,
 }));
 
 // mock-isolation: This suite owns startup timers; filesystem observation has separate coverage.
@@ -44,6 +65,11 @@ vi.mock("../agents/auth-profiles/sqlite.js", () => ({
 // mock-isolation: Exercise admission and Gateway sequencing without native worker processes.
 vi.mock("../infra/sqlite-readonly-worker.js", () => ({
   withSqliteReadOnlyWorkerScope: (run: () => Promise<unknown>) => run(),
+}));
+// mock-isolation: Retry delays are not the behavior under test.
+vi.mock("../infra/backoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/backoff.js")>()),
+  sleepWithAbort: async () => {},
 }));
 // mock-isolation: Journal transport is independent of the real pending-admission owner.
 vi.mock("../state/agent-deletion-journal.read.js", () => ({
@@ -80,7 +106,7 @@ vi.mock("../secrets/runtime.js", () => ({
 }));
 // mock-isolation: Capture startup diagnostics without process logging state.
 vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ info: mocks.info, warn: mocks.warn }),
+  createSubsystemLogger: () => ({ info: mocks.info, warn: mocks.warn, error: mocks.warn }),
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -153,10 +179,14 @@ function createFleet(
     return gate;
   };
   const inspections = agentIds.map(() =>
-    createDeferredCore<{ incompatible: []; indeterminate: [] }>(),
+    createDeferredCore<{ incompatible: []; indeterminate: []; readReadyAgentPaths?: string[] }>(),
   );
-  const inspect = (index: number) =>
-    inspections[index]!.resolve({ incompatible: [], indeterminate: [] });
+  const inspect = (index: number, readReady = false) =>
+    inspections[index]!.resolve({
+      incompatible: [],
+      indeterminate: [],
+      ...(readReady ? { readReadyAgentPaths: [paths[index]!] } : {}),
+    });
   return {
     env,
     opened: opened.promise,
@@ -416,6 +446,22 @@ it("holds the publication turn through models and the final deletion check", asy
   });
 });
 
+it("retries publication when a config reload retires its plugin generation", async ({ signal }) => {
+  const fleet = createFleet(["idle"]);
+  mocks.refreshModels.mockRejectedValueOnce(
+    new PreparedModelRuntimePluginGenerationRetiredError(
+      "Prepared plugin generation retired before publication",
+    ),
+  );
+  await fleet.run(async (admission) => {
+    fleet.inspect(0);
+    await withinTest(admission.waitForAgentPreparation("idle", fleet)!, signal);
+    expectAdmission(fleet, "idle");
+    expect(mocks.refreshModels).toHaveBeenCalledTimes(2);
+    expectLog(mocks.warn, supersededRetryMessage, { agentId: "idle", attempt: 1 });
+  });
+});
+
 it("keeps database opens off readiness and retains the four-agent migration pool", async ({
   signal,
 }) => {
@@ -624,7 +670,7 @@ it.for(["secrets", "model runtime"] as const)(
       expect(readAgentDatabaseAdmissionRefusal("large", fleet)).toMatchObject({
         code: "agent-database-inspection-failed",
         reason: expect.stringContaining("preparation was superseded"),
-        repairHint: expect.stringContaining("openclaw doctor --fix"),
+        repairHint: expect.stringContaining("does not require database repair"),
       });
       expect(mocks.refreshModels).toHaveBeenCalledTimes(4);
       expect(mocks.opened).toHaveBeenCalledTimes(1);
@@ -657,6 +703,36 @@ it.for(["initial", "successor"] as const)(
       });
       expect(mocks.refreshModels).toHaveBeenCalledTimes(1);
       expect(mocks.info).not.toHaveBeenCalledWith(recoveredMessage, expect.anything());
+    });
+  },
+);
+
+it.for(["agent removal", "database move"] as const)(
+  "does not quarantine a replacement after %s during background integrity verification",
+  async (change, { signal }) => {
+    const fleet = createFleet(["large"]);
+    const entered = createDeferredCore();
+    const release = fleet.hold();
+    mocks.integrityCheck.mockImplementation(async () => {
+      entered.resolve();
+      await release.promise;
+      throw Object.assign(new Error("synthetic full-check corruption"), {
+        name: "SqliteIntegrityError",
+      });
+    });
+    await fleet.run(async (admission) => {
+      fleet.inspect(0, true);
+      await withinTest(entered.promise, signal);
+      expectAdmission(fleet, "large");
+      fleet.changeAgentDatabase("large", change);
+      release.resolve();
+      await withinTest(admission.pendingPreparation!, signal);
+      expectAdmission(fleet, "large");
+      expect(mocks.corruption).not.toHaveBeenCalled();
+      expectLog(mocks.warn, "agent database background integrity verification incomplete", {
+        agentId: "large",
+        reason: expect.stringContaining("database configuration changed"),
+      });
     });
   },
 );

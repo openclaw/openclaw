@@ -4,6 +4,10 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CodexThreadListParams } from "./app-server/protocol.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
+import {
+  freezeCatalogDirectoryClocks,
+  watchWithControlledEvents,
+} from "./session-catalog-index.test-support.js";
 import { projectNativeCatalogFixture as projectCodexCatalogPage } from "./session-catalog-projection.test-support.js";
 import {
   measureCatalogLists,
@@ -182,6 +186,8 @@ describe("resident Codex catalog", () => {
   });
 
   it("reconciles a new rollout with only bounded reads of that file", async () => {
+    const { notifyRename } = watchWithControlledEvents("linux");
+    freezeCatalogDirectoryClocks();
     const root = localRoot();
     const existing = idleThread({ id: "existing", source: "cli", originator: "codex_cli_rs" });
     existing.path = await writeCatalogRollout(root, existing);
@@ -189,7 +195,7 @@ describe("resident Codex catalog", () => {
     const index = await initializedIndex("currency", readNative, root);
     await vi.advanceTimersByTimeAsync(0);
     await index.reconcile();
-    const stat = vi.spyOn(fs, "lstat");
+    const stat = vi.spyOn(fs, "lstat").mockClear();
     await vi.advanceTimersByTimeAsync(30_000);
     expect(stat).not.toHaveBeenCalled();
     expect(readNative).toHaveBeenCalledOnce();
@@ -197,6 +203,8 @@ describe("resident Codex catalog", () => {
       root,
       idleThread({ id: "new-thread", preview: "New request" }),
     );
+    // Filesystem completion does not acknowledge the scanner's watcher delivery.
+    notifyRename(added);
     const open = vi.spyOn(fs, "open");
     await vi.advanceTimersByTimeAsync(14 * 60_000 + 30_000);
     await index.reconcile();
@@ -249,21 +257,21 @@ describe("resident Codex catalog", () => {
     await index.reconcile();
     readNative.mockRejectedValueOnce(new Error("native unavailable"));
     readNative.mockRejectedValueOnce(new Error("native retry unavailable"));
-    const stat = vi.spyOn(fs, "lstat");
+    const scan = vi.spyOn(fs, "opendir");
     await advance(index, 15 * 60_000);
-    expect(stat).toHaveBeenCalled();
+    expect(scan).toHaveBeenCalled();
     expect(readNative).toHaveBeenCalledOnce();
-    stat.mockClear();
+    scan.mockClear();
     for (const calls of [2, 3]) {
       await index.upsertThread(existing);
       await advance(index, 30_000);
       expect(readNative).toHaveBeenCalledTimes(calls);
-      expect(stat).not.toHaveBeenCalled();
+      expect(scan).not.toHaveBeenCalled();
     }
 
     await writeCatalogRollout(root, idleThread({ id: "external", preview: "External request" }));
     await advance(index, 14 * 60_000);
-    expect(stat).toHaveBeenCalled();
+    expect(scan).toHaveBeenCalled();
     expect(index.get("external")?.preview).toBe("External request");
   });
 
