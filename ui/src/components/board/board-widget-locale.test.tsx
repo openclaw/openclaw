@@ -74,7 +74,7 @@ it("keeps mixed named-query approval details localized when the locale changes",
       'repository="owner/repo"; workflow="ci.yml"; branch="main"; status=null; created=null; perPage=1; excludePullRequests=true',
     );
     expect(surface.textContent).toContain("fields=id, conclusion");
-    expect(surface.textContent).toContain("private and future results");
+    expect(surface.textContent).toContain("résultats privés sélectionnés et les résultats futurs");
     expect(surface.textContent).not.toContain("Network access:");
     expect(surface.textContent).not.toContain("Tool access:");
   }

@@ -1351,11 +1351,7 @@ extension TalkModeRuntime {
     }
 
     func applyTalkConfig(_ cfg: TalkModeGatewayConfigState) async {
-        guard let locale = await MainActor.run(body: { () -> String? in
-            guard let state = self.state() else { return nil }
-            state.seamColorHex = cfg.seamColorHex
-            return state.voiceWakeLocaleID
-        }) else { return }
+        guard let locale = await MainActor.run(body: { self.state()?.voiceWakeLocaleID }) else { return }
         self.commitTalkConfig(cfg, locale: locale)
     }
 
