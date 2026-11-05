@@ -176,7 +176,9 @@ describe("native plugin browser builds", () => {
   it("requires author-installed compilers without replacing existing builds", async () => {
     const missing = await fixture();
     await fs.unlink(path.join(missing.rootDir, "node_modules/esbuild"));
-    await expect(buildPluginControlUi(missing)).rejects.toHaveProperty("humanOutput");
+    const failure = buildPluginControlUi(missing);
+    await expect(failure).rejects.toHaveProperty("humanOutput");
+    await expect(failure).rejects.toHaveProperty("cause.code", "MODULE_NOT_FOUND");
     const project = await fixture();
     await writeFiles(project.rootDir, {
       "renderer.js":
