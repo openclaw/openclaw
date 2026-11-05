@@ -370,9 +370,8 @@ describe("queued ingress acceptance", () => {
           if (multipleInputs) {
             const claim = run.controllerClaim ?? run.controllerInput?.claim;
             selectedGroups.push(claim?.sources.map((source) => source.prompt) ?? []);
-            rejectQueuePreparation(run, new Error("ENOSPC: queued preparation failed"));
           }
-          throw new Error("ENOSPC: queued preparation failed");
+          rejectQueuePreparation(run, new Error("ENOSPC: queued preparation failed"));
         });
         const drain = createChannelIngressDrain({
           queue,
