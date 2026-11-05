@@ -152,6 +152,10 @@ confirm that the group has disappeared after graceful shutdown. A completed
 command or closed output pipe alone does not establish that its descendants have
 stopped. Forced termination without confirmed cleanup remains uncertain. Local
 TUI shell shutdown uses the same cleanup owner for its own commands.
+A descendant that leaves the process group, such as a daemonized tmux server,
+can outlive cleanup. Exec preserves a completed, noncanceled command's own exit
+and adds a note that a detached process may still be running. Cleanup remains
+uncertain; failed or canceled commands still report the cleanup failure.
 Permission-denied group probes still count as present; cleanup continues waiting
 within its original deadline for confirmed disappearance.
 On Linux, cleanup reaps already-exited descendants adopted by this process from

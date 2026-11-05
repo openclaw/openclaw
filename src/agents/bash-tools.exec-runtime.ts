@@ -127,6 +127,8 @@ export const DEFAULT_APPROVAL_TIMEOUT_MS = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
 export const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = DEFAULT_APPROVAL_TIMEOUT_MS + 10_000;
 const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
 const APPROVAL_SLUG_LENGTH = 8;
+const UNCONFIRMED_DESCENDANT_CLEANUP_NOTE =
+  "OpenClaw could not confirm that every process started by this command stopped; a detached process (such as a daemon or tmux server) may still be running. Use background: true for long-running services.";
 
 /** Live handle returned after an exec process has started. */
 export type ExecProcessHandle = {
@@ -687,6 +689,7 @@ export async function runExecProcess({
   let terminateSandboxProcess: (() => Promise<void>) | undefined;
   let sandboxTermination: Promise<{ error: unknown } | undefined> | undefined;
   let secretEgressGrant: SecretEgressProcessGrant | undefined;
+  let internalFinalizerCancel = false;
   const beginSandboxTermination = () => {
     const terminate = terminateSandboxProcess;
     if (!terminate || sandboxTermination || session.exited) {
@@ -723,10 +726,20 @@ export async function runExecProcess({
     session.finalizing = true;
     onActivity?.(Date.now());
     try {
+      let descendantCleanupFailure: { error: unknown } | undefined;
       if (!opts.sandbox && managedRun?.waitForExtinction) {
         // Root completion does not release descendants that retained the group's lineage fd.
-        managedRun.cancel();
-        await managedRun.waitForExtinction();
+        internalFinalizerCancel = true;
+        try {
+          managedRun.cancel();
+        } finally {
+          internalFinalizerCancel = false;
+        }
+        try {
+          await managedRun.waitForExtinction();
+        } catch (error) {
+          descendantCleanupFailure = { error };
+        }
       }
       if (outcome.exitReason !== "exit") {
         beginSandboxTermination();
@@ -747,6 +760,25 @@ export async function runExecProcess({
       }
       if (errors.length > 0) {
         throw new AggregateError(errors, errors.map(formatErrorMessage).join("\n"));
+      }
+      if (descendantCleanupFailure) {
+        // Recheck stop intent after all awaited finalization, not just root settlement.
+        if (outcome.status !== "completed" || session.cancellationRequested) {
+          throw descendantCleanupFailure.error;
+        }
+        session.finalizationFailed = true;
+        recordAgentCleanupFailure();
+        logWarn(
+          `exec: descendant cleanup after completion was not confirmed (${redactToolPayloadText(formatErrorMessage(descendantCleanupFailure.error))}).`,
+        );
+        appendOutput(session, "stderr", `\n${UNCONFIRMED_DESCENDANT_CLEANUP_NOTE}\n`);
+        finalOutcome = {
+          ...outcome,
+          aggregated: joinExecFailureOutput(
+            outcome.aggregated,
+            UNCONFIRMED_DESCENDANT_CLEANUP_NOTE,
+          ),
+        };
       }
     } catch (error) {
       session.finalizationFailed = true;
@@ -812,7 +844,10 @@ export async function runExecProcess({
   };
 
   let managedRun: ManagedRun | null = null;
-  const onOperatorRevoked = () => managedRun?.cancel("manual-cancel");
+  const onOperatorRevoked = () => {
+    session.cancellationRequested = true;
+    managedRun?.cancel("manual-cancel");
+  };
   let usingPty = opts.usePty && !opts.sandbox;
   const assertPreSpawnAuthorized = async () => {
     assertSourceActive?.();
@@ -845,6 +880,10 @@ export async function runExecProcess({
           ...input,
           ...(grant ? { env: { ...input.env, ...grant.env } } : {}),
           onCancel: () => {
+            // Suppress only the synchronous cleanup request we own, never later scope stops.
+            if (!internalFinalizerCancel) {
+              session.cancellationRequested = true;
+            }
             beginSandboxTermination();
             grant?.revoke();
           },
@@ -859,6 +898,10 @@ export async function runExecProcess({
   };
 
   try {
+    operatorSignal?.addEventListener("abort", onOperatorRevoked, { once: true });
+    if (operatorSignal?.aborted) {
+      onOperatorRevoked();
+    }
     assertSourceActive?.();
     operatorAuthority?.assertCurrent();
     releaseOperatorAuthority = operatorAuthority?.retain?.();
@@ -903,7 +946,6 @@ export async function runExecProcess({
       });
     }
     // Background execution outlives the turn, but never its original access grant.
-    operatorSignal?.addEventListener("abort", onOperatorRevoked, { once: true });
     if (operatorSignal?.aborted) {
       onOperatorRevoked();
     }
@@ -989,6 +1031,7 @@ export async function runExecProcess({
     pid: session.pid ?? undefined,
     promise,
     kill: () => {
+      session.cancellationRequested = true;
       managedRun?.cancel("manual-cancel");
     },
     disableUpdates: () => {
