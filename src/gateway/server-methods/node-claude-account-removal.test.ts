@@ -109,6 +109,12 @@ it("traces paired-node Claude dispatch and account removal on a loopback Gateway
     context.preparedBackend.prepareCredentialUse = check;
     if (history) {
       context.cliHistoryWriter = {
+        target: {
+          agentId: "main",
+          sessionId: "account-trace",
+          sessionKey: "agent:main:account-trace",
+          storePath: "account-trace",
+        },
         runId: "account-trace",
         authFingerprint: "trace",
         assertCurrent: () => {},
