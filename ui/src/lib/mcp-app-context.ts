@@ -77,6 +77,13 @@ export function mcpAppContextThumbnail(content: ContentBlock): string | null {
   if (isRecord(thumbnail) && "src" in thumbnail && isQuestionThumbnail(thumbnail.src)) {
     return thumbnail.src;
   }
+  const icon =
+    content.type === "resource_link"
+      ? content.icons?.find((candidate) => isQuestionThumbnail(candidate.src))?.src
+      : undefined;
+  if (icon) {
+    return icon;
+  }
   return content.type === "image" &&
     /^image\/(png|jpeg|webp|gif)$/u.test(content.mimeType) &&
     /^[A-Za-z0-9+/]*={0,2}$/u.test(content.data)
