@@ -23,6 +23,13 @@ vi.mock("../infra/push-web-store.worker.js", () => {
 vi.mock("../agents/worktrees/dispatch.worker.js", () => {
   throw new Error("APNs preparation loaded worktrees");
 });
+vi.mock(
+  "../agents/subagents/completion/subagent-completion-admission.worker.js",
+  async (importOriginal) => {
+    loaded.push("subagent-completion");
+    return importOriginal();
+  },
+);
 
 import { stateWorkerRegistry } from "./openclaw-state-worker-registry.js";
 
@@ -94,4 +101,18 @@ it("prepares exact operations before their namespace fallback", async () => {
   expect(registry.prepare("session.write")).toBe(refused);
   expect(loadWrite).toHaveBeenCalledOnce();
   expect(registry.has({ type: "session.write", input: "entry" })).toBe(false);
+});
+
+it("prepares session delivery recovery without loading subagent completion", async () => {
+  await stateWorkerRegistry.prepare("sessionDelivery.list");
+  expect(loaded).not.toContain("subagent-completion");
+  expect(stateWorkerRegistry.has({ type: "sessionDelivery.list", input: undefined })).toBe(true);
+  for (const type of [
+    "sessionDelivery.admitSubagentCompletion",
+    "sessionDelivery.mutateSubagentCompletion",
+  ]) {
+    await stateWorkerRegistry.prepare(type);
+    expect(stateWorkerRegistry.has({ type, input: undefined })).toBe(true);
+  }
+  expect(loaded.filter((name) => name === "subagent-completion")).toHaveLength(1);
 });
