@@ -602,7 +602,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.fs.workspaceOnly":
     "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
   "tools.sessions.visibility":
-    'Controls session targets. "all" (default) allows any Gateway session; "agent" allows the current agent; "channel" allows self plus verified same-agent sessions sharing provider/account/channel/workspace; "tree" allows self plus spawned subagents; "self" allows only the current session. Cross-agent access follows tools.agentToAgent. Narrower scopes restrict reads and ordinary sends; explicit send destinations can add send-only exceptions, but never widen channel.',
+    'Session scope: "all" (default) = any Gateway session; "agent" = current agent; "channel" = verified same-agent sessions on the current provider/account/channel/workspace; "tree" = current session and spawned subagents; "self" = current session. Cross-agent access follows tools.agentToAgent. Narrow scopes limit reads and sends. Explicit destinations grant send-only exceptions, never channel access.',
   "tools.sessions.allowThreadTargets":
     "Allow sessions_send to target thread- or topic-scoped chat sessions such as Telegram forum topics or Slack/Discord threads (default: false). The target runs in that session; anything it sends with the message tool lands in the human-facing thread.",
   "tools.message.crossContext.allowWithinProvider":
