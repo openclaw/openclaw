@@ -69,7 +69,10 @@ function scanDowngradedToolCalls(
   let codeRegions: ReturnType<typeof findCodeRegions> | undefined = protectedRegions;
   let result = "";
   let cursor = 0;
-  let pending = input.lastIndexOf("[") > input.lastIndexOf("]");
+  const pendingStart = input.lastIndexOf("[");
+  let pending =
+    pendingStart > input.lastIndexOf("]") &&
+    !isInsideCode(pendingStart, (codeRegions ??= findCodeRegions(input)));
   for (const match of input.matchAll(/\[Tool Call:[^\]]*\]/gi)) {
     const start = match.index;
     if (start < cursor || isInsideCode(start, (codeRegions ??= findCodeRegions(input)))) {
@@ -131,7 +134,10 @@ function scanDowngradedPattern(
   protectedRegions?: ReturnType<typeof findCodeRegions>,
 ): DowngradedToolCallScan {
   let codeRegions = protectedRegions;
-  let pending = input.lastIndexOf("[") > input.lastIndexOf("]");
+  const pendingStart = input.lastIndexOf("[");
+  let pending =
+    pendingStart > input.lastIndexOf("]") &&
+    !isInsideCode(pendingStart, (codeRegions ??= findCodeRegions(input)));
   const text = input.replace(pattern, (match, offset: number) => {
     if (isInsideCode(offset, (codeRegions ??= findCodeRegions(input)))) {
       return match;
