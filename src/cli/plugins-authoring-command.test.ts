@@ -690,6 +690,37 @@ describe("plugin authoring commands", () => {
     expect(log).not.toHaveBeenCalled();
   });
 
+  it.each([false, true])(
+    "rejects invalid feature ids before writing with force=%s",
+    async (force) => {
+      silenceRuntime("log");
+      const projectDir = path.join(tempDirs.make("openclaw-feature-invalid-id-"), "project");
+      if (force) {
+        fs.mkdirSync(projectDir);
+        fs.writeFileSync(path.join(projectDir, "keep.txt"), "unchanged");
+      }
+      await expect(
+        runPluginsInitCommand("Invalid_ID", { directory: projectDir, type: "feature", force }),
+      ).rejects.toMatchObject({
+        humanOutput:
+          "Feature plugin ids must start with a lowercase letter and contain lowercase letters, digits, or hyphens.",
+      });
+      if (force) {
+        expect(fs.readdirSync(projectDir)).toEqual(["keep.txt"]);
+        expect(readText(projectDir, "keep.txt")).toBe("unchanged");
+      } else {
+        expect(fs.existsSync(projectDir)).toBe(false);
+      }
+      await runPluginsInitCommand("valid-feature", {
+        directory: projectDir,
+        type: "feature",
+        force,
+      });
+      expect(readJson(projectDir, "openclaw.plugin.json").id).toBe("valid-feature");
+      expect(fs.existsSync(path.join(projectDir, "src", "index.ts"))).toBe(true);
+    },
+  );
+
   it("finishes init with an absolute directory after the launch directory is removed", async () => {
     const tmpDir = tempDirs.make("openclaw-plugin-deleted-cwd-init-");
     const projectDir = path.join(tmpDir, "demo");

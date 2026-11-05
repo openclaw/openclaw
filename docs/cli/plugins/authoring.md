@@ -40,7 +40,7 @@ regular files are supported; pipes and other special files are rejected before r
 `plugins init`, `build`, and `validate` report their specific input errors, such as
 an existing output directory, missing entry, or malformed package metadata,
 without requiring debug output. These rejected inputs still exit with code 1
-before writing project files.
+before writing project files. Feature plugin IDs must start with a lowercase letter and contain only lowercase letters, digits, or hyphens; an invalid ID leaves the target directory untouched.
 
 `plugins lint --root <path>` inspects a plugin and its materialized runtime
 dependencies without importing plugin code or reading operator configuration.
