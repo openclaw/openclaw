@@ -385,22 +385,21 @@ export function createOpenClawIdService(params: {
   // them (seconds), and each device key's live activity read from this Gateway.
   const describeMembers = async (
     members: Record<string, { role: MemberRole; peer_keys: IrohEndpointKey[] }>,
-    reports: StoredClaw["invite_reports"],
+    approvedAt: StoredClaw["member_approved_at"],
   ) => {
     const effects = await getEffects();
+    const profiles = await (await getAuthority()).memberProfiles(Object.keys(members));
     const keys = Object.values(members).flatMap((member) => member.peer_keys);
     const activity = effects?.describeActivity?.(keys) ?? {};
     return Object.entries(members).map(([accountId, member]) => {
-      const report = Object.values(reports ?? {}).find(
-        (entry) => entry.account_id === accountId && entry.resolution === "approved",
-      );
+      const profile = profiles[accountId];
       return {
         accountId,
         role: member.role,
         peerKeys: member.peer_keys,
-        email: report?.email ?? null,
-        displayName: report?.display_name ?? null,
-        approvedAt: report?.resolved_at ?? null,
+        email: profile?.email ?? null,
+        displayName: profile?.displayName ?? null,
+        approvedAt: approvedAt?.[accountId] ?? null,
         devices: member.peer_keys.map((peerKey) => ({
           peerKey,
           ...(activity[peerKey] ?? { connections: 0, lastSeenAt: null, runs: [] }),
@@ -578,7 +577,7 @@ export function createOpenClawIdService(params: {
       rootPub: state?.anchor.root_pub,
       seq: state?.seq,
       ownerDevices: state ? describeOwnerDevices(state, Math.floor(Date.now() / 1000)) : [],
-      members: state ? await describeMembers(state.members, record?.invite_reports) : [],
+      members: state ? await describeMembers(state.members, record?.member_approved_at) : [],
       invites: listInviteViews(record, Math.floor(Date.now() / 1000)),
       // After a restart, the last publication recorded with the claw stands in.
       publication:

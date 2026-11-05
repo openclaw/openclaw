@@ -17,6 +17,7 @@ import {
 import { createOpenClawIdAuthority } from "./authority.js";
 import type { StoredClaw } from "./claw-store.js";
 import { applyMailboxMessage } from "./mailbox-reader.js";
+import { memoryStore as profileFixture } from "./openclaw-id.test-support.js";
 import { createOpenClawIdService, type OpenClawIdEffects } from "./service.js";
 
 const K_SRV = formatIrohEndpointKey(randomBytes(32)) as IrohEndpointKey;
@@ -25,6 +26,7 @@ const now = () => Math.floor(Date.now() / 1000);
 function memoryStore() {
   let record: StoredClaw | undefined;
   return {
+    profiles: profileFixture().profiles,
     read: async () => record,
     write: async (next: StoredClaw) => {
       record = structuredClone(next);

@@ -24,6 +24,7 @@ import type { GatewayOpenClawIdConfig } from "../../config/types.gateway.js";
 import { serializePluginStoreJson } from "../../plugin-state/plugin-store-validation.js";
 import { createOpenClawIdAuthority } from "./authority.js";
 import type { StoredClaw } from "./claw-store.js";
+import type { MemberProfileDisplay, OpenClawIdMemberProfiles } from "./member-profiles.js";
 import { createOpenClawIdService, type OpenClawIdEffects } from "./service.js";
 
 const TEST_K_SRV = formatIrohEndpointKey(randomBytes(32)) as IrohEndpointKey;
@@ -32,7 +33,25 @@ export const nowSeconds = () => Math.floor(Date.now() / 1000);
 /** A claw record store kept in memory. */
 export function memoryStore() {
   let record: StoredClaw | undefined;
+  const profiles = new Map<string, MemberProfileDisplay>();
   return {
+    profiles: {
+      save: async (input: { accountId: string; name?: string | null; email?: string | null }) => {
+        const previous = profiles.get(input.accountId);
+        profiles.set(input.accountId, {
+          id: previous?.id ?? `profile:${input.accountId}`,
+          displayName: previous?.displayName ?? input.name ?? null,
+          email: input.email ?? previous?.email ?? null,
+        });
+      },
+      read: async (accountIds: readonly string[]) =>
+        Object.fromEntries(
+          accountIds.flatMap((id) => {
+            const profile = profiles.get(id);
+            return profile ? [[id, profile]] : [];
+          }),
+        ),
+    },
     read: async () => record,
     write: async (next: StoredClaw) => {
       // Match the durable store's strict JSON contract, including absent optional fields.
@@ -50,7 +69,13 @@ export function memoryStore() {
 }
 
 /** A linked claw and helpers that sign as owner device D1. */
-export async function linkedClaw(store = memoryStore()) {
+export async function linkedClaw(
+  store: {
+    read: () => Promise<StoredClaw | undefined>;
+    write: (record: StoredClaw) => Promise<void>;
+    profiles?: OpenClawIdMemberProfiles;
+  } = memoryStore(),
+) {
   const authority = createOpenClawIdAuthority(store);
   const kGw = formatEd25519PublicKey((await generateEd25519Signer()).publicKey);
   const prep = await authority.prepareLink({

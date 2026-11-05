@@ -81,6 +81,19 @@ describe("device tokens bound to the authenticated endpoint key", () => {
     await expect(check).resolves.toEqual({ ok: false, reason: "device-token-peer-mismatch" });
   });
 
+  it("fails token checks closed while the authority cannot reconcile a write", async () => {
+    setDeviceTokenBindingOwner({
+      lookup: () => {
+        throw new Error("uncertain storage outcome");
+      },
+      record: async () => {},
+      reportMismatch: vi.fn(),
+    });
+    expect(
+      await checkDeviceTokenPeer({ deviceId: "e", role: "operator", peerKey: undefined }),
+    ).toEqual({ ok: false, reason: "device-token-bindings-unreadable" });
+  });
+
   it("refuses every device token while the saved bindings are unreadable", async () => {
     setDeviceTokenBindingOwner("unreadable");
     expect(

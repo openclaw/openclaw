@@ -69,7 +69,13 @@ export async function checkDeviceTokenPeer(params: {
   if (owner === "unreadable") {
     return { ok: false, reason: "device-token-bindings-unreadable" };
   }
-  const boundTo = owner.lookup(params.deviceId, params.role);
+  let boundTo: string | undefined;
+  try {
+    boundTo = owner.lookup(params.deviceId, params.role);
+  } catch {
+    // An uncertain claw commit cannot distinguish unbound tokens from newly bound ones.
+    return { ok: false, reason: "device-token-bindings-unreadable" };
+  }
   if (boundTo === undefined && params.peerKey === undefined) {
     return { ok: true };
   }

@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // The Gateway's OpenClaw ID membership authority (spec sections 4 and 7). It
 // owns the claw record: it loads it once, applies writes with the protocol's
 // reference rules, writes through to SQLite and reports the side effects the
@@ -17,7 +19,6 @@ import {
   bytesToHex,
   submitRedemption,
   submitStatement,
-  withoutSpentInvites,
   type AuthorityEvent,
   type AuthorityState,
   type Channel,
@@ -36,6 +37,7 @@ import { verifyBinding } from "./binding-check.js";
 import { needsAllowlistUpgrade, upgradeToAllowlist } from "./claw-migration.js";
 import {
   assertSameClawIdentity,
+  clawStoreRows,
   readStoredClaw,
   writeStoredClaw,
   storedOwnerProfile,
@@ -43,8 +45,14 @@ import {
   type OpenClawIdAccount,
   type StoredClaw,
 } from "./claw-store.js";
-import { expirePendingRedemptions, nextPeopleExpiry } from "./invite-expiry.js";
+import { nextPeopleExpiry } from "./invite-expiry.js";
+import { withSweptInvites, resolveReport, resolvedInvite } from "./invite-sweep.js";
 import { listInviteViews } from "./invites-view.js";
+import {
+  canonicalMemberProfiles,
+  retainMemberProfiles,
+  type OpenClawIdMemberProfiles,
+} from "./member-profiles.js";
 import type { OpenClawIdTunnelPrincipal } from "./tunnel-principal.js";
 
 /** What the local link ceremony signs for: the claw's identity and keys. */
@@ -90,80 +98,6 @@ export type RedemptionSender = {
   location_hint?: string | null;
 };
 
-// Sweeps invites before a write sees the state: consumes expired pending redemptions
-// (recorded as expired), then deletes spent invite records with their reports, so
-// stored invites stay within the protocol's cap. Returns the record to write from
-// and the owner notices.
-function withSweptInvites(
-  record: StoredClaw & { authority: NonNullable<StoredClaw["authority"]> },
-  now: number,
-): {
-  record: StoredClaw & { authority: NonNullable<StoredClaw["authority"]> };
-  events: AuthorityEvent[];
-} {
-  const swept = expirePendingRedemptions(record.authority, now);
-  const spent = withoutSpentInvites(swept.state, now);
-  if (swept.expired.length === 0 && spent.removed.length === 0) {
-    return { record, events: [] };
-  }
-  let reports = record.invite_reports;
-  for (const inviteId of swept.expired) {
-    reports = resolveReport(reports, inviteId, "expired", now);
-  }
-  return {
-    record: {
-      ...record,
-      authority: spent.state,
-      invite_reports: withoutReports(reports, spent.removed),
-    },
-    events: swept.expired.map((ref) => ({
-      type: "notify_owners" as const,
-      event: "redemption_resolved" as const,
-      ref,
-    })),
-  };
-}
-
-// Drops the reports of deleted invites.
-function withoutReports(
-  reports: StoredClaw["invite_reports"],
-  inviteIds: readonly string[],
-): StoredClaw["invite_reports"] {
-  if (!reports || inviteIds.length === 0) {
-    return reports;
-  }
-  const gone = new Set(inviteIds);
-  return Object.fromEntries(Object.entries(reports).filter(([inviteId]) => !gone.has(inviteId)));
-}
-
-// Marks how an invite ended in its report (kept for display).
-function resolveReport(
-  reports: StoredClaw["invite_reports"],
-  inviteId: string,
-  resolution: NonNullable<InviteReport["resolution"]>,
-  now: number,
-): StoredClaw["invite_reports"] {
-  const report = reports?.[inviteId] ?? { email: null, display_name: null, location_hint: null };
-  return { ...reports, [inviteId]: { ...report, resolution, resolved_at: now } };
-}
-
-// The invite an accepted MembershipChange approved or denied, if any.
-function resolvedInvite(
-  input: unknown,
-): { inviteId: string; resolution: "approved" | "denied" } | undefined {
-  const parsed = parseStatement(input, "MembershipChange");
-  if (!parsed.ok) {
-    return undefined;
-  }
-  const target = parsed.statement.body.target;
-  if (target.op === "add" && target.invite_id) {
-    return { inviteId: target.invite_id, resolution: "approved" };
-  }
-  return target.op === "deny_invite"
-    ? { inviteId: target.invite_id, resolution: "denied" }
-    : undefined;
-}
-
 function emptyRecord(clawId: string): StoredClaw {
   return {
     v: 1,
@@ -195,32 +129,53 @@ export function createOpenClawIdAuthority(
   store: {
     read: () => Promise<StoredClaw | undefined>;
     write: (record: StoredClaw) => Promise<void>;
+    profiles?: OpenClawIdMemberProfiles;
   } = {
     read: readStoredClaw,
     write: writeStoredClaw,
   },
 ) {
+  const profiles = store.profiles ?? canonicalMemberProfiles;
   let record: StoredClaw | undefined;
   let loading: Promise<StoredClaw | undefined> | undefined;
+  let writeFailure: Error | undefined;
   const peopleListeners = new Set<() => void>();
   // Writes run one at a time so each sees the state the previous one committed.
   let queue: Promise<unknown> = Promise.resolve();
 
-  // Reads the stored record; a pre-allowlist record is upgraded and written back first.
+  // Complete local storage upgrades before publishing the loaded record or token bindings.
   const readInitial = async (): Promise<void> => {
     const stored = await store.read();
-    if (stored && needsAllowlistUpgrade(stored)) {
-      const upgraded = await upgradeToAllowlist(stored, nowSeconds());
-      await store.write(upgraded);
-      record = upgraded;
-    } else {
-      record = stored;
+    if (!stored) {
+      return;
+    }
+    let current = needsAllowlistUpgrade(stored)
+      ? await upgradeToAllowlist(stored, nowSeconds())
+      : stored;
+    if (
+      Object.keys(current.authority?.members ?? {}).some(
+        (id) => !Object.hasOwn(current.member_approved_at ?? {}, id),
+      )
+    ) {
+      current = await retainMemberProfiles(stored, current, profiles);
+    }
+    if (current !== stored) {
+      await store.write(current);
+    }
+    record = current;
+  };
+
+  // Check the live failure cell after awaits instead of retaining a narrowed pre-await value.
+  const assertReadable = () => {
+    if (writeFailure) {
+      throw writeFailure;
     }
   };
 
   // Loads the record once. Every caller shares the first read, so a second, later
   // read can never replace a change committed after the first one.
   const load = async (): Promise<StoredClaw | undefined> => {
+    assertReadable();
     loading ??= readInitial().then(
       () => record,
       (error: unknown) => {
@@ -230,6 +185,7 @@ export function createOpenClawIdAuthority(
       },
     );
     await loading;
+    assertReadable();
     return record;
   };
 
@@ -239,9 +195,38 @@ export function createOpenClawIdAuthority(
     return next;
   };
 
-  const commit = async (next: StoredClaw) => {
-    await store.write(next);
+  const commit = async (candidate: StoredClaw) => {
+    const next = await retainMemberProfiles(record, candidate, profiles);
     const previous = record;
+    try {
+      await store.write(next);
+    } catch (error) {
+      // A rejected acknowledgement can follow a durable commit. Withdraw cached authority
+      // before reconciliation; no synchronous admission or later write may use a stale row.
+      writeFailure = new Error(
+        "OpenClaw ID storage outcome is uncertain; restart to reload authority",
+        { cause: error },
+      );
+      record = undefined;
+      notifyListeners(peopleListeners, undefined);
+      let stored: StoredClaw | undefined;
+      try {
+        stored = await store.read();
+      } catch {
+        throw writeFailure;
+      }
+      if (!stored || !isDeepStrictEqual(clawStoreRows(stored), clawStoreRows(next))) {
+        if (
+          isDeepStrictEqual(stored && clawStoreRows(stored), previous && clawStoreRows(previous))
+        ) {
+          record = previous;
+          writeFailure = undefined;
+        }
+        throw error;
+      }
+      // One coherent read confirmed this exact postimage. Continue its effects once, no replay.
+      writeFailure = undefined;
+    }
     record = next;
     // Publish only committed People/display facts, before any network side effects.
     if (
@@ -290,6 +275,9 @@ export function createOpenClawIdAuthority(
         );
       };
     },
+
+    /** Reads member display from the canonical profile owner, never as access authority. */
+    memberProfiles: profiles.read,
 
     /** The current record, if loaded. */
     current(): StoredClaw | undefined {
@@ -475,11 +463,13 @@ export function createOpenClawIdAuthority(
           return { ok: false, code: result.code, detail: result.detail };
         }
         const inviteId = parseStatement(input, "InviteRedemption");
+        const display = (value: string | null | undefined) =>
+          value ? truncateUtf16Safe(value.trim(), 256) : null;
         const report: InviteReport = {
           account_id: sender.account_id,
-          email: sender.email,
-          display_name: sender.display_name ?? null,
-          location_hint: sender.location_hint ?? null,
+          email: display(sender.email),
+          display_name: display(sender.display_name),
+          location_hint: display(sender.location_hint),
         };
         await commit({
           ...current,
@@ -494,6 +484,7 @@ export function createOpenClawIdAuthority(
 
     /** The device key a tunnel-issued token belongs to (from memory; load first). */
     tokenBinding(deviceId: string, role: string): string | undefined {
+      assertReadable();
       return record?.token_bindings?.find(
         (binding) => binding.device_id === deviceId && binding.role === role,
       )?.peer_key;

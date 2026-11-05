@@ -1,11 +1,12 @@
 // Durable OpenClaw ID claw record in the shared state database (core-owned
 // plugin-state namespace). The Gateway is the only writer: it loads the record
 // once and writes through on every accepted change.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   AuthorityState,
   SignedStatement,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
-import { createCorePluginStateKeyedStore } from "../../plugin-state/plugin-state-store.js";
+import { prepareCorePluginStateReplacement } from "../../plugin-state/plugin-state-store.js";
 import type { DeviceTokenBinding } from "./device-token-binding.js";
 
 /** The signed-in account the Gateway's verified sign-in reports. */
@@ -37,9 +38,11 @@ export type StoredClaw = {
   invite_reports?: Record<string, InviteReport>;
   /**
    * Device tokens issued over the tunnel and the device key W each belongs to. Stored in their
-   * own row (see writeStoredClaw), so neither row outgrows the plugin-state value limit.
+   * own row alongside the partitioned authority (see writeStoredClaw).
    */
   token_bindings?: DeviceTokenBinding[];
+  /** Gateway approval times, bounded by current membership rather than invite lifetime. */
+  member_approved_at?: Record<string, number | null>;
   /** Discovery publication state (a mirror; never authority). */
   discovery: {
     owner_account_id: string | null;
@@ -83,61 +86,100 @@ export function storedOwnerProfile(
 ): NonNullable<StoredClaw["owner_profile"]> {
   return {
     sub: account.sub,
-    ...(typeof account.email === "string" ? { email: account.email } : {}),
-    ...(typeof account.name === "string" ? { name: account.name } : {}),
+    ...(typeof account.email === "string" ? { email: truncateUtf16Safe(account.email, 256) } : {}),
+    ...(typeof account.name === "string" ? { name: truncateUtf16Safe(account.name, 256) } : {}),
   };
 }
 
-const RECORD_KEY = "current";
-const TOKEN_BINDINGS_KEY = "token-bindings";
+// The persisted core names its format; all sections are installed atomically beside it.
+type StoredClawCore = Omit<
+  StoredClaw,
+  "v" | "authority" | "invite_reports" | "token_bindings" | "member_approved_at"
+> & {
+  v: 2;
+  authority: Omit<AuthorityState, "owner_devices" | "members" | "invites"> | null;
+};
 
-/** The device-token bindings row, kept beside the claw record. */
+type ClawRows = {
+  current: StoredClawCore;
+  "owner-devices": AuthorityState["owner_devices"];
+  members: AuthorityState["members"];
+  invites: AuthorityState["invites"];
+  "invite-reports": NonNullable<StoredClaw["invite_reports"]>;
+  "member-approvals": NonNullable<StoredClaw["member_approved_at"]>;
+  "token-bindings": StoredTokenBindings;
+};
+type ClawRow = ClawRows[keyof ClawRows] | StoredClaw;
+
+/** The device-token bindings row, kept beside membership authority. */
 export type StoredTokenBindings = { v: 1; bindings: DeviceTokenBinding[] };
 
-function openStore<T>() {
-  return createCorePluginStateKeyedStore<T>({
+// The authority is the sole writer; this existing catalog owner binds every row to one store.
+function openStore() {
+  return prepareCorePluginStateReplacement<ClawRow>({
     ownerId: "core:openclaw-id",
     namespace: "claw",
     retention: "retained",
   });
 }
 
-/**
- * Splits the claw record into its two stored rows: the record without its token bindings,
- * and the bindings. At every protocol cap each row stays within the plugin-state value limit,
- * which the record as one value would not.
- */
-export function clawStoreRows(record: StoredClaw): {
-  claw: StoredClaw;
-  tokenBindings: StoredTokenBindings;
-} {
-  const { token_bindings: bindings, ...claw } = record;
-  return { claw, tokenBindings: { v: 1, bindings: bindings ?? [] } };
-}
-
-/**
- * Reads the claw record, or undefined before the first link attempt. The bindings row wins
- * over bindings still inside a record written before they had their own row; the next write
- * moves them out.
- */
-export async function readStoredClaw(): Promise<StoredClaw | undefined> {
-  const [record, bindings] = await Promise.all([
-    openStore<StoredClaw>().lookup(RECORD_KEY),
-    openStore<StoredTokenBindings>().lookup(TOKEN_BINDINGS_KEY),
-  ]);
-  if (!record || !bindings) {
-    return record;
+/** Partitions current authority into bounded values without changing any signed statement. */
+export function clawStoreRows(record: StoredClaw): ClawRows {
+  const { authority, invite_reports, member_approved_at, token_bindings, ...core } = record;
+  let anchor: StoredClawCore["authority"] = null;
+  if (authority) {
+    const { owner_devices: _owners, members: _members, invites: _invites, ...rest } = authority;
+    anchor = rest;
   }
-  return { ...record, token_bindings: bindings.bindings };
+  return {
+    current: { ...core, v: 2, authority: anchor },
+    "owner-devices": authority?.owner_devices ?? {},
+    members: authority?.members ?? {},
+    invites: authority?.invites ?? {},
+    "invite-reports": invite_reports ?? {},
+    "member-approvals": member_approved_at ?? {},
+    "token-bindings": { v: 1, bindings: token_bindings ?? [] },
+  };
 }
 
-/**
- * Replaces the claw record. The bindings row is written before the record row. Apart from
- * moving bindings out of an older record, a write changes only one of the two, so an
- * interrupted write leaves the rows as they were or with only its own change.
- */
+/** Reads every claw section from one catalog snapshot, or the prior monolithic layout. */
+export async function readStoredClaw(): Promise<StoredClaw | undefined> {
+  const entries = new Map((await openStore().entries()).map(({ key, value }) => [key, value]));
+  // SAFETY: only this module writes current; its v field distinguishes the two persisted layouts.
+  const record = entries.get("current") as StoredClawCore | StoredClaw | undefined;
+  if (!record) {
+    return undefined;
+  }
+  if (record.v === 1) {
+    // The existing bindings row wins, including an empty row after successful revocation.
+    const bindings = entries.get("token-bindings") as StoredTokenBindings | undefined;
+    return bindings ? { ...record, token_bindings: bindings.bindings } : record;
+  }
+  const section = <Key extends keyof ClawRows>(key: Key): ClawRows[Key] => {
+    if (!entries.has(key)) {
+      throw new Error(`OpenClaw ID claw storage is incomplete: missing ${key}`);
+    }
+    // SAFETY: these fixed keys are written together by clawStoreRows under this module's owner.
+    return entries.get(key) as ClawRows[Key];
+  };
+  return {
+    ...record,
+    v: 1,
+    authority: record.authority
+      ? {
+          ...record.authority,
+          owner_devices: section("owner-devices"),
+          members: section("members"),
+          invites: section("invites"),
+        }
+      : null,
+    invite_reports: section("invite-reports"),
+    member_approved_at: section("member-approvals"),
+    token_bindings: section("token-bindings").bindings,
+  };
+}
+
+/** Replaces all claw sections in the existing state worker's single write transaction. */
 export async function writeStoredClaw(record: StoredClaw): Promise<void> {
-  const rows = clawStoreRows(record);
-  await openStore<StoredTokenBindings>().register(TOKEN_BINDINGS_KEY, rows.tokenBindings);
-  await openStore<StoredClaw>().register(RECORD_KEY, rows.claw);
+  await openStore().replace(new Map(Object.entries(clawStoreRows(record))));
 }

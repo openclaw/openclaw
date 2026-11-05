@@ -119,15 +119,22 @@ export function createOpenClawIdConnectionAccess(params: {
         };
       }
       if (peer?.kind === "member") {
-        const report = Object.values(record?.invite_reports ?? {}).find(
-          (entry) => entry.account_id === peer.accountId && entry.resolution === "approved",
-        );
+        const member = (await store.memberProfiles([peer.accountId]))[peer.accountId];
+        const current = peerKey ? await store.resolvePeer(peerKey) : undefined;
+        if (
+          !params.enabled() ||
+          current?.kind !== "member" ||
+          current.accountId !== peer.accountId ||
+          current.role !== peer.role
+        ) {
+          return { kind: "none" };
+        }
         return {
           kind: "member",
           role: peer.role,
           accountId: peer.accountId,
-          email: report?.email ?? null,
-          displayName: report?.display_name ?? null,
+          email: member?.email ?? null,
+          displayName: member?.displayName ?? null,
           invitedBy:
             profile && (profile.name || profile.email)
               ? { name: profile.name ?? null, email: profile.email ?? null }

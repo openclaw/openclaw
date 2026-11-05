@@ -13,7 +13,7 @@ import {
 } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { createOpenClawIdAuthority, type LinkPreparation } from "./authority.js";
 import type { StoredClaw } from "./claw-store.js";
-import { linkedClaw } from "./openclaw-id.test-support.js";
+import { linkedClaw, memoryStore as profileFixture } from "./openclaw-id.test-support.js";
 
 const K_SRV = formatIrohEndpointKey(randomBytes(32)) as IrohEndpointKey;
 
@@ -22,6 +22,7 @@ function memoryStore() {
   const writes: StoredClaw[] = [];
   return {
     writes,
+    profiles: profileFixture().profiles,
     read: async () => record,
     write: async (next: StoredClaw) => {
       record = structuredClone(next);
@@ -189,4 +190,34 @@ describe("OpenClaw ID membership authority: linking", () => {
     expect(read).toHaveBeenCalledTimes(1);
     expect((await authority.load())?.discovery.mailbox_cursor).toBe("after-load");
   });
+});
+
+it("withdraws all authority and refuses later writes if a rejected write cannot be reconciled", async () => {
+  const backing = (await linkedClaw()).store;
+  let uncertain = false;
+  const read = vi.fn(async () => {
+    if (uncertain) {
+      throw new Error("read unavailable");
+    }
+    return backing.read();
+  });
+  const write = vi.fn(async (next: StoredClaw) => {
+    await backing.write(next);
+    if (uncertain) {
+      throw new Error("acknowledgement lost");
+    }
+  });
+  const authority = createOpenClawIdAuthority({ read, write, profiles: backing.profiles });
+  const ownerPeer = (await authority.admittedPeerKeys()).admitted[0]!;
+  const isOwner = await authority.prepareOwnerPeerCheck(ownerPeer);
+  uncertain = true;
+  await expect(authority.recordDiscovery({ mailbox_cursor: "committed" })).rejects.toThrow(
+    "uncertain",
+  );
+  expect(authority.current()).toBeUndefined();
+  expect(isOwner()).toBe(false);
+  expect(() => authority.tokenBinding("browser", "operator")).toThrow("uncertain");
+  await expect(authority.load()).rejects.toThrow("uncertain");
+  await expect(authority.recordDiscovery({ mailbox_cursor: "stale" })).rejects.toThrow("uncertain");
+  expect(write).toHaveBeenCalledOnce();
 });

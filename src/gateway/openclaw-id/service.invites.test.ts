@@ -106,6 +106,43 @@ describe("Gateway invites (spec section 6.3)", () => {
     expect(link.invites?.[0]).toMatchObject({ status: "approved" });
   });
 
+  it("keeps approved member details after their expired invite is swept", async () => {
+    const { claw, service, invite } = await invitedClaw();
+    const { peerKey } = await redeem(claw, invite);
+    const approval = await claw.sign({
+      op: "add",
+      account_id: "acct-bob",
+      role: "operator",
+      peer_keys: [peerKey],
+      invite_id: invite.inviteId,
+    });
+    expect(await service.submitStatement("tunnel", approval)).toMatchObject({ ok: true });
+    const [before] = (await service.linkStatus()).members ?? [];
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + (7 * 86400 + 301) * 1000);
+    const next = await ownerInvite(claw, { email: "carol@example.com" });
+    expect(
+      await service.registerInvite("local_operator", {
+        cap: next.cap,
+        proofKey: next.proofKey,
+      }),
+    ).toMatchObject({ ok: true });
+    expect(claw.authority.current()?.invite_reports?.[invite.inviteId]).toBeUndefined();
+    expect((await service.linkStatus()).members).toEqual([
+      expect.objectContaining({
+        accountId: "acct-bob",
+        email: "bob@example.com",
+        displayName: "Bob",
+        approvedAt: before?.approvedAt,
+      }),
+    ]);
+    expect(await service.connectionIdentity("tunnel", peerKey)).toMatchObject({
+      kind: "member",
+      email: "bob@example.com",
+      displayName: "Bob",
+    });
+  });
+
   it("denies a pending redemption: the invite is used up and nobody is admitted", async () => {
     const { claw, service, invite } = await invitedClaw();
     const { peerKey } = await redeem(claw, invite);
