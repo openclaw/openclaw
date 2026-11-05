@@ -108,11 +108,11 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): SolidJSX.Ele
   const environment = () => host.sessionDataContext?.config?.current?.environment ?? null;
   const menuOpen = () => host.sidebarMenus.agentMenuPosition !== null;
   function AgentCard() {
-    const gateway = useAvatarGatewayContext();
+    const avatarGateway = useAvatarGatewayContext();
     const avatar = () => {
       const url = avatarUrl();
       // Keep the sidebar's canonical-route policy; the avatar owns image loading.
-      return url?.startsWith("/") ? resolveTrustedAvatarUrl(url, gateway().origin) : url;
+      return url?.startsWith("/") ? resolveTrustedAvatarUrl(url, avatarGateway().origin) : url;
     };
     const menuLabel = () =>
       cardAgents().length > 1 ? t("agentChip.switchAgent") : t("agentChip.menuLabel");
