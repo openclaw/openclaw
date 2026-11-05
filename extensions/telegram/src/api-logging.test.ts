@@ -204,7 +204,9 @@ it.each([
 
 it("logs a final the flood wait kept from Telegram past the delivery budget", async () => {
   const token = "123:final-over-budget";
-  onTestFinished(() => releaseAccountThrottler(token));
+  onTestFinished(async () => {
+    await releaseAccountThrottler(token);
+  });
   const methods: string[] = [];
   const api = new Api(token, {
     fetch: asTelegramClientFetch(async (input: unknown) => {
