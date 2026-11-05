@@ -3,27 +3,25 @@ import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import { i18n } from "../../i18n/lib/translate.ts";
 import { projectSource } from "./projection.ts";
 
-type TranslationSource = {
-  getLocale(): Locale;
-  t(key: string, params?: Record<string, string>): string;
-  subscribe(listener: () => void): () => void;
-};
-
 const englishListeners = createChangeListeners({ snapshot: true });
 const registeredEnglish = new WeakSet<() => unknown>();
 
-/** Solid callers register their lazy English before reading its keys. */
-export function registerEnglishCatalog<T>(register: () => T): T {
-  const result = register();
-  if (!registeredEnglish.has(register)) {
-    registeredEnglish.add(register);
-    englishListeners.publish();
+/** Each lazy catalog installs once, before its consumers read its keys. */
+export function registerEnglishCatalog(register: () => void): void {
+  if (registeredEnglish.has(register)) {
+    return;
   }
-  return result;
+  register();
+  registeredEnglish.add(register);
+  englishListeners.publish();
 }
 
 /** A revision also invalidates when a catalog changes without a locale change. */
-export function projectI18n(source: TranslationSource) {
+export function projectI18n(source: {
+  getLocale(): Locale;
+  t(key: string, params?: Record<string, string>): string;
+  subscribe(listener: () => void): () => void;
+}) {
   const projection = projectSource(source, {
     read: (current) => current,
     subscribe: (current, notify) => {
@@ -48,3 +46,5 @@ const translation = projectI18n(i18n);
 export const t = translation.t;
 export const getLocale = translation.locale;
 export const i18nRevision = translation.revision;
+/** Plain owners observe both locale changes and newly registered lazy English catalogs. */
+export const subscribeI18n = translation.subscribe;

@@ -1,5 +1,7 @@
 import type { JSX } from "@solidjs/web";
+import { t } from "../../../i18n/index.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import {
   normalizeRoleForGrouping,
   resolveMessageRole,
@@ -15,14 +17,14 @@ import {
   isProviderVoiceTranscript,
   resolveAssistantReplyPhase,
 } from "../chat-assistant-reply.ts";
-import { readPendingSendStatus } from "../chat-thread.ts";
+import { isChatSendReconnecting } from "../chat-send-presentation.ts";
+import { readPendingSendStatus } from "../chat-thread-items.ts";
 import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import type { RenderMessageGroupOptions } from "./chat-message-group-options.ts";
 import {
   FULL_MESSAGE_RETRY_REVISION_LIMIT,
   hasMessageActionButtons,
-  prepareChatMessageRender,
   resolveMessageActionDetails,
 } from "./chat-message-markdown-view.tsx";
 import {
@@ -35,6 +37,8 @@ import { NO_REPLY_LINE, resolveGroupReplyLine } from "./chat-reply-attribution.t
 
 export type NativeMessageGroupOptions = Omit<RenderMessageGroupOptions, "frameContent"> & {
   frameContent?: JSX.Element[];
+  frameHeader?: boolean;
+  frameFooter?: boolean;
 };
 
 export type GroupMessage = MessageGroupData["messages"][number];
@@ -58,11 +62,13 @@ export function prepareGroupMessage(
   });
   const fullMessage = details?.fullMessage;
   if (fullMessage) {
-    const { messageId, state: expansion } = fullMessage;
+    const { messageId } = fullMessage;
+    const expansion = opts.getAssistantMessageExpansion?.(messageId);
     // Retry transient failures on later renders, bounded so a dead loader cannot hot-loop.
     if (
-      !expansion ||
-      (expansion.status === "error" && expansion.revision < FULL_MESSAGE_RETRY_REVISION_LIMIT)
+      opts.loadFullAssistantMessage &&
+      (!expansion ||
+        (expansion.status === "error" && expansion.revision < FULL_MESSAGE_RETRY_REVISION_LIMIT))
     ) {
       opts.onToggleAssistantMessageExpanded?.(messageId);
     }
@@ -118,6 +124,14 @@ export function resolveFileLinkOwnerOptions(
             )),
       }
     : options;
+  if (
+    group.senderSession &&
+    (sourceSessionKey !== options.sessionKey ||
+      (group.senderSession.agentId && group.senderSession.agentId !== options.agentId))
+  ) {
+    // Files search belongs to the current pane, unlike source-bound direct file references.
+    return { ...owned, onFindWorkspaceFile: undefined };
+  }
   return owned;
 }
 
@@ -131,7 +145,7 @@ export function prepareMessageGroupFrame(
   const sourceOnly = isSourceOnlyUserGroup(group);
   const showAvatar =
     normalizedRole !== "user" || Boolean(group.sender || group.senderLabel?.trim());
-  const assistantName = opts.assistantName ?? "Assistant";
+  const assistantName = opts.assistantName ?? t("chat.messages.agentName");
   const isOwnGroup = isOwnSenderGroup(group, opts.userId);
   const isPeerGroup =
     normalizedRole === "user" && Boolean(opts.userId && group.sender) && !isOwnGroup;
@@ -179,7 +193,8 @@ export function prepareMessageGroupFrame(
   // no identity, footer or actions of their own, only the run-block gap.
   const isTurnBlock =
     normalizedRole === "tool" ||
-    group.messages.every(({ message }) => isProviderVoiceTranscript(message)) ||
+    (group.messages.length > 0 &&
+      group.messages.every(({ message }) => isProviderVoiceTranscript(message))) ||
     (normalizedRole === "assistant" &&
       !opts.searchResult &&
       !ownsRunFrame &&
@@ -198,15 +213,23 @@ export function prepareMessageGroupFrame(
   const hasUserFooterActions =
     normalizedRole === "user" &&
     ((opts.onRewind && !opts.rewindDisabled) || hasMessageActionButtons(footerActionDetails, opts));
-  // Source sessions share the stable sender hue machinery; CSS owns contrast
-  // in each theme. Unattributed local messages keep the accent skin.
+  // Source sessions share stable sender hues; the shared participant palette owns contrast
+  // in each theme. Own and unattributed messages keep the theme-derived accent skin.
   const senderHue =
     isForwarded && sourceSessionKey
       ? resolveIdentityHue({ id: sourceSessionKey })
-      : normalizedRole === "user" && group.sender
+      : normalizedRole === "user" && group.sender && !isOwnGroup
         ? resolveIdentityHue(group.sender)
         : null;
-  const sendStatus = readPendingSendStatus(group.messages.at(-1)?.message);
+  const pendingSend = readPendingSendStatus(group.messages.at(-1)?.message);
+  // Normal delivery uses the settled footer; only recovery needs an interruption.
+  const sendStatus =
+    pendingSend &&
+    (pendingSend.state === "failed" ||
+      pendingSend.state === "held" ||
+      isChatSendReconnecting(pendingSend.state, opts.connected))
+      ? pendingSend
+      : null;
 
   const inlineUserAvatar =
     normalizedRole === "user" &&
@@ -214,6 +237,7 @@ export function prepareMessageGroupFrame(
     (isPeerGroup || Boolean(preparedMessages[lastMessageIndex]?.source.displayMarkdown));
   const hasAvatar =
     showAvatar &&
+    opts.frameHeader !== false &&
     !isTurnBlock &&
     avatarPlacement === "gutter" &&
     (isForwarded || normalizedRole !== "assistant" || opts.showAssistantAvatar !== false);
@@ -255,9 +279,10 @@ export function prepareMessageGroupFrame(
         "chat-group--forwarded": isForwarded,
         "chat-group--sender-tint": senderHue !== null,
         "chat-group--reply": holdsReplyRow,
+        "chat-group--frame-fragment": opts.frameFooter === false,
       },
     ],
-    style: senderHue === null ? undefined : `--chat-sender-hue: ${senderHue}`,
+    senderHue,
     sessionKey: sourceSessionKey ?? undefined,
   };
 }

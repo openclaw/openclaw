@@ -77,7 +77,6 @@ declare module "*openclaw-changelog-update/scripts/verify-release-notes.mjs" {
         references: number[];
         subject: string;
       }>;
-      coauthorsByReference: Map<number, Set<string>>;
       pullRequests: Set<number>;
       target: string;
     };

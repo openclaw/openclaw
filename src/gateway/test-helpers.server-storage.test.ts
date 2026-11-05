@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, expect, onTestFinished, test, vi } from "vitest";
@@ -49,14 +50,15 @@ test("joins a direct history projection's accepted read before retiring the Gate
   const reader = vi.spyOn(stateReader, "captureOpenClawStateReadSource").mockImplementation(() => {
     const source = captureSource();
     return {
-      ...source,
+      own: (close) => source.own(close),
       createTransport(command) {
         const transport = source.createTransport(command);
         if (command.type !== "sessionRows.sharedFacts") {
           return transport;
         }
         return {
-          ...transport,
+          startValidateFresh: (...args) => transport.startValidateFresh(...args),
+          startClose: () => transport.startClose(),
           async startRead(...args) {
             const reply = await transport.startRead(...args);
             entered.resolve();
@@ -131,9 +133,7 @@ test("joins external-store workers before deleting their Gateway lease coordinat
   const identity = stateCache.captureOpenClawStateDatabaseReadAdmission(sharedStatePath).identity;
   const sharedState = stateDb.openOpenClawStateDatabase({ env });
   let retained = stateCache.retainOpenClawStateDatabaseForIndependentRead(sharedState.path);
-  if (!retained) {
-    throw new Error("Expected the fixture shared-state owner to be open");
-  }
+  assert(retained, "Expected the fixture shared-state owner to be open");
   const closedOwners: Array<string | undefined> = [];
   const unregister = stateCache.registerOpenClawStateDatabaseAsyncResource({
     close: async (closedIdentity) => {

@@ -125,10 +125,8 @@ describe("application update status response ownership", () => {
 
   it("settles a manual refresh when its administrator grant is renewed", async () => {
     const discovery = pendingReply({});
-    const { harness, overlays } = automaticTest((method, params) =>
-      method === "update.status" && (params as { refreshCheckout?: boolean }).refreshCheckout
-        ? discovery.promise
-        : Promise.resolve({}),
+    const { harness, overlays } = automaticTest(
+      updateStatusRequest((checkout) => (checkout ? discovery.promise : {})),
     );
     await flushMicrotasks();
     const refresh = overlays.refreshUpdateStatus();

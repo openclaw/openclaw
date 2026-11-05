@@ -42,7 +42,7 @@ export type AgentSummary = {
   bindingDetails?: string[];
   routes?: string[];
   providers?: string[];
-  createdVia?: "operator" | "agent" | "claw";
+  createdVia?: "operator" | "agent" | "template";
   creatorAgentId?: string | null;
   createdAt?: number;
   isDefault: boolean;
@@ -134,10 +134,17 @@ export function applyAgentConfig(
   },
 ): OpenClawConfig {
   const agentId = normalizeAgentId(params.agentId);
-  const name = params.name?.trim();
   const list = listAgentEntries(cfg);
   const index = findAgentEntryIndex(list, agentId);
   const base = (index >= 0 ? list[index] : undefined) ?? { id: agentId };
+  const previousName = normalizeOptionalString(base.name);
+  // Follow identity renames only while the roster label shares that identity;
+  // a distinct operator label keeps its separate meaning.
+  const name =
+    normalizeOptionalString(params.name) ??
+    (previousName && previousName === normalizeOptionalString(base.identity?.name)
+      ? normalizeOptionalString(params.identity?.name)
+      : undefined);
   const mergedIdentity = params.identity ? { ...base.identity, ...params.identity } : undefined;
   const nextEntry: AgentEntry = {
     ...base,

@@ -1,8 +1,8 @@
 import { toErrorObject } from "@openclaw/normalization-core";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { showToast } from "../../../lib/toast.ts";
 import { readFileDraft } from "./chat-file-drafts.ts";
 import {
-  clearSessionWorkspaceError,
   captureSessionWorkspaceNavigation,
   setSessionWorkspaceError,
   isCurrentSessionWorkspace,
@@ -15,7 +15,7 @@ import type {
 } from "./chat-session-workspace-types.ts";
 import type { SessionWorkspacePreview, SidebarContent } from "./chat-sidebar-content-types.ts";
 
-type PreviewRead = {
+export type PreviewRead = {
   order: number;
   published?: ReturnType<typeof capturePreview>;
   settled?: Promise<SessionWorkspacePreview | undefined>;
@@ -27,7 +27,7 @@ export function openWorkspaceItem<T>(
   state: SessionWorkspaceHost,
   workspace: SessionWorkspaceState,
   itemId: string,
-  load: () => Promise<T | null | undefined>,
+  load: (signal: AbortSignal) => Promise<T | null | undefined>,
   render: (result: T) => SidebarContent | null,
   missingMessage: string,
   options: {
@@ -35,6 +35,8 @@ export function openWorkspaceItem<T>(
     intent?: "navigate";
     line?: number | null;
     revalidate?: boolean;
+    /** Document links must validate their captured source before even a dirty tab is selected. */
+    revalidateBeforeSelect?: boolean;
     label: string;
     resolveLabel?: (result: T) => string | undefined;
     resolveKey?: (result: T) => string | undefined;
@@ -137,10 +139,22 @@ export function openWorkspaceItem<T>(
       read.published = capturePreview(preview);
       workspace.previews = [...workspace.previews];
     };
+    const controller = new AbortController();
+    const stopWatching = sessionWorkspaceForHost(state).subscribe(() => {
+      if (!isCurrent()) {
+        controller.abort();
+      }
+    });
     read.settled = (async () => {
       setSessionWorkspaceError(workspace, null);
       try {
-        const result = await readResult();
+        const resultPromise = readResult(controller.signal);
+        const [result, applyPreview] = await Promise.all([
+          resultPromise,
+          import("./chat-session-workspace-preview.runtime.ts").then(
+            ({ applyWorkspacePreview }) => applyWorkspacePreview,
+          ),
+        ]);
         const content = result == null ? null : render(result);
         const label = result == null ? undefined : options.resolveLabel?.(result);
         const canonicalKey = result == null ? undefined : options.resolveKey?.(result);
@@ -149,89 +163,53 @@ export function openWorkspaceItem<T>(
           return undefined;
         }
         if (isCurrent()) {
-          if (workspace.activeId === selectionId && canonicalKey) {
-            workspace.activeId = canonicalKey;
-          }
-          const canonical = canonicalKey
-            ? workspace.previews.find(
-                (entry) => entry !== preview && entry.canonicalKey === canonicalKey,
-              )
-            : undefined;
-          if (canonical) {
-            canonical.requestIds = [
-              ...new Set([
-                ...(canonical.requestIds ?? []),
-                preview.id,
-                ...(preview.requestIds ?? []),
-              ]),
-            ];
-            if (
-              preview.navigation &&
-              (preview.navigationOrder ?? 0) > (canonical.navigationOrder ?? 0)
-            ) {
-              canonical.navigation = preview.navigation;
-              canonical.navigationOrder = preview.navigationOrder;
-              if (canonical.content.kind === "file") {
-                canonical.content.navigation = canonical.navigation;
-              }
-            }
-            const captured = candidates.get(canonical);
-            const currentRead = previewReads.get(canonical);
-            const snapshot =
-              currentRead === captured?.read && currentRead?.published === captured?.published
-                ? captured?.snapshot
-                : currentRead?.published;
-            if (
-              options.revalidate &&
-              (currentRead?.order ?? 0) <= read.order &&
-              canReplacePreview(canonical, snapshot)
-            ) {
-              updatePreviewContent(canonical, content, label);
-              if (currentRead) {
-                clearSessionWorkspaceError(workspace, currentRead);
-              }
-              // Even unchanged bytes settle newer intent and retire older alias reads.
-              read.published = capturePreview(canonical);
-              previewReads.set(canonical, read);
-            }
-            if (preview.pinned === true) {
-              canonical.pinned = true;
-            }
-            workspace.previews = workspace.previews.filter((entry) => entry !== preview);
-            if (workspace.activePreviewId === preview.id) {
-              canonical.catalogNavigation =
-                preview.catalogNavigation ?? canonical.catalogNavigation;
-              workspace.activePreviewId = canonical.id;
-            }
-            return canonical;
-          }
-          preview.canonicalKey = canonicalKey;
-          updatePreviewContent(preview, content, label);
-          read.published = capturePreview(preview);
-          workspace.previews = [...workspace.previews];
-          return preview;
+          return applyPreview({
+            workspace,
+            preview,
+            read,
+            previewReads,
+            candidates,
+            selectionId,
+            canonicalKey,
+            content,
+            label,
+            revalidate: options.revalidate,
+          });
         }
       } catch (error) {
         fail(options.resolveError?.(error) ?? formatUiError(error));
       } finally {
+        stopWatching();
         if (isCurrentSessionWorkspace(state, workspace)) {
           sessionWorkspaceForHost(state).publish();
         }
       }
       return undefined;
     })();
+    preview.readResult = read.settled;
+    sessionWorkspaceForHost(state).publish();
     return read.settled;
   };
-  if (options.disposition && !known) {
+  if ((options.disposition && !known) || options.revalidateBeforeSelect) {
+    const previousActiveId = workspace.activeId;
     workspace.pendingPreview = intent;
     workspace.activeId = itemId;
     setSessionWorkspaceError(workspace, null);
     sessionWorkspaceForHost(state).publish();
+    const controller = new AbortController();
+    const stopWatching = sessionWorkspaceForHost(state).subscribe(() => {
+      if (workspace.pendingPreview !== intent || !isCurrentSessionWorkspace(state, workspace)) {
+        controller.abort();
+      }
+    });
     return (async () => {
       try {
-        const result = await load();
+        const result = await load(controller.signal);
         if (workspace.pendingPreview !== intent || !isCurrentSessionWorkspace(state, workspace)) {
           return undefined;
+        }
+        if (options.revalidateBeforeSelect && result == null) {
+          throw new Error(missingMessage);
         }
         return begin(
           () => Promise.resolve(result),
@@ -241,8 +219,18 @@ export function openWorkspaceItem<T>(
         if (workspace.pendingPreview !== intent || !isCurrentSessionWorkspace(state, workspace)) {
           return undefined;
         }
+        if (options.revalidateBeforeSelect) {
+          workspace.pendingPreview = undefined;
+          workspace.activeId = previousActiveId;
+          const message = options.resolveError?.(error) ?? formatUiError(error);
+          setSessionWorkspaceError(workspace, message, read);
+          sessionWorkspaceForHost(state).publish();
+          showToast({ message, severity: "error" });
+          return undefined;
+        }
         return begin(() => Promise.reject(toErrorObject(error, formatUiError(error))));
       } finally {
+        stopWatching();
         if (workspace.pendingPreview === intent) {
           workspace.pendingPreview = undefined;
         }
@@ -253,7 +241,7 @@ export function openWorkspaceItem<T>(
   return begin(load);
 }
 
-function capturePreview(preview: SessionWorkspacePreview) {
+export function capturePreview(preview: SessionWorkspacePreview) {
   const content = preview.content;
   return {
     content,
@@ -262,7 +250,7 @@ function capturePreview(preview: SessionWorkspacePreview) {
   };
 }
 
-function canReplacePreview(
+export function canReplacePreview(
   preview: SessionWorkspacePreview,
   captured: ReturnType<typeof capturePreview> | undefined,
 ) {
@@ -275,32 +263,4 @@ function canReplacePreview(
         content.content === captured.text &&
         content.edit?.hash === captured.hash))
   );
-}
-
-function updatePreviewContent(
-  preview: SessionWorkspacePreview,
-  content: SidebarContent,
-  label: string | undefined,
-) {
-  const previous = preview.content;
-  if (content.kind === "file" && preview.navigation) {
-    content.line = preview.navigation.line;
-    content.navigation = preview.navigation;
-  }
-  // A confirming read must preserve the mounted editor, cursor, and undo history.
-  if (
-    !(
-      previous.kind === "file" &&
-      content.kind === "file" &&
-      previous.content === content.content &&
-      previous.edit?.hash === content.edit?.hash &&
-      previous.draftKey === content.draftKey &&
-      previous.path === content.path &&
-      previous.root === content.root &&
-      previous.mimeType === content.mimeType
-    )
-  ) {
-    preview.content = content;
-  }
-  preview.label = label || preview.label;
 }

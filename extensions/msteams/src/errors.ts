@@ -1,4 +1,4 @@
-import { asFiniteNumberInRange } from "openclaw/plugin-sdk/number-runtime";
+import { asFiniteNumberInRange, asSafeIntegerInRange } from "openclaw/plugin-sdk/number-runtime";
 import {
   isTransientNetworkError,
   parseRetryAfterHeaderSeconds,
@@ -26,27 +26,14 @@ export function formatUnknownError(err: unknown): string {
 }
 
 function extractStatusCode(err: Record<string, unknown>): number | null {
-  const parseStatusCode = (value: unknown): number | null => {
-    if (typeof value === "number") {
-      return Number.isInteger(value) && value >= 100 && value <= 599 ? value : null;
-    }
-    return null;
-  };
-  const direct = err.statusCode ?? err.status;
-  const directStatus = parseStatusCode(direct);
-  if (directStatus !== null) {
+  const range = { min: 100, max: 599 };
+  const directStatus = asSafeIntegerInRange(err.statusCode ?? err.status, range);
+  if (directStatus !== undefined) {
     return directStatus;
   }
 
   const response = err.response;
-  if (isRecord(response)) {
-    const responseStatus = parseStatusCode(response.status);
-    if (responseStatus !== null) {
-      return responseStatus;
-    }
-  }
-
-  return null;
+  return isRecord(response) ? (asSafeIntegerInRange(response.status, range) ?? null) : null;
 }
 
 function extractRetryAfterMs(err: Record<string, unknown>): number | null {

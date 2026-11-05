@@ -2,25 +2,14 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatReasoningMessage } from "../agents/embedded-agent-utils.js";
 import { compactProgressText } from "../shared/text-truncate.js";
 import { type CodeRegion, findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
+import { THINKING_TAG_NAMES } from "../shared/text/reasoning-tags.js";
 import { stripInlineDirectiveTagsForDelivery } from "../utils/directive-tags.js";
 
 const REASONING_PROGRESS_TAG_RE =
   /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/giu;
 const REASONING_PROGRESS_HEADING_RE =
   /^\s*(?:>\s*)?(?:Reasoning:\s*(?:\r?\n|\r)\s*|Thinking\.{0,3}\s*(?:\r?\n|\r)\s*(?:\r?\n|\r)\s*)/i;
-const REASONING_PROGRESS_TAG_NAMES = [
-  "think",
-  "thinking",
-  "thought",
-  "antthinking",
-  "antml:think",
-  "antml:thinking",
-  "antml:thought",
-  "mm:think",
-  "mm:thinking",
-  "mm:thought",
-] as const;
-const REASONING_PROGRESS_TAG_PREFIXES = REASONING_PROGRESS_TAG_NAMES.flatMap((name) => [
+const REASONING_PROGRESS_TAG_PREFIXES = THINKING_TAG_NAMES.flatMap((name) => [
   `<${name}`,
   `</${name}`,
 ]);
@@ -48,7 +37,7 @@ function readReasoningProgressTextOutsideCode(text: string): string | undefined 
   let cursor = 0;
   const chunks: string[] = [];
   for (const match of text.matchAll(REASONING_PROGRESS_TAG_RE)) {
-    const offset = match.index ?? 0;
+    const offset = match.index;
     if (isInsideCode(offset, (codeRegions ??= findCodeRegions(text)))) {
       // Preserve code examples that mention reasoning tags; only actual model
       // wrapper tags outside code delimit private reasoning progress.
@@ -171,7 +160,7 @@ function shouldAppendEmptyReasoningProgressDelta(current: string, incoming: stri
 function hasReasoningProgressTagOutsideCode(text: string): boolean {
   let codeRegions: CodeRegion[] | undefined;
   for (const match of text.matchAll(REASONING_PROGRESS_TAG_RE)) {
-    if (!isInsideCode(match.index ?? 0, (codeRegions ??= findCodeRegions(text)))) {
+    if (!isInsideCode(match.index, (codeRegions ??= findCodeRegions(text)))) {
       return true;
     }
   }

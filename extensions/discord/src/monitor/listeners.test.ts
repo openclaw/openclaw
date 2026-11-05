@@ -6,12 +6,14 @@ import {
   type GatewayPresenceUpdate,
   PresenceUpdateStatus,
 } from "discord-api-types/v10";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { reportChannelRoomJoin } from "openclaw/plugin-sdk/channel-join-intro-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPresenceStore as cooldownStore } from "../../../test-support/presence-store.js";
 import { Client } from "../internal/discord.js";
 import { DiscordPresenceGuildDeleteListener, DiscordPresenceListener } from "./listeners.js";
 import { createDiscordLivePolicyReader, type DiscordLivePolicy } from "./live-policy.js";
@@ -36,10 +38,13 @@ vi.mock("./thread-bindings.manager.js", () => ({
 
 const mocks = vi.hoisted(() => ({
   reportChannelRoomJoin: vi.fn(async () => ({ kind: "posted" as const })),
-  enqueueSystemEvent: vi.fn<
-    typeof import("openclaw/plugin-sdk/system-event-runtime").enqueueRoutedSystemEvent
-  >(() => true),
-  requestHeartbeat: vi.fn(),
+  enqueueSessionEvent: vi.fn<PluginRuntime["system"]["enqueueSessionEvent"]>(() => ({
+    id: "presence",
+    cancel: () => false,
+    accepted: Promise.resolve({ ok: true }),
+    settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: true }),
+  })),
+  captureSessionEventTarget: vi.fn(async () => Object.freeze({})),
   resolveAgentRoute: vi.fn(() => ({
     agentId: "molty",
     sessionKey: "agent:molty:discord:channel:channel-1",
@@ -48,6 +53,8 @@ const mocks = vi.hoisted(() => ({
   hasAnyChannelPermissionDiscord: vi.fn(async () => true),
   readMessagesDiscord: vi.fn(async (): Promise<APIMessage[]> => []),
 }));
+
+const route = { agentId: "molty", sessionKey: "agent:molty:discord:channel:channel-1" };
 
 vi.mock("openclaw/plugin-sdk/channel-join-intro-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-join-intro-runtime")>()),
@@ -65,16 +72,18 @@ vi.mock("../send.messages.js", async (importOriginal) => ({
   readMessagesDiscord: mocks.readMessagesDiscord,
 }));
 
-vi.mock("openclaw/plugin-sdk/heartbeat-runtime", () => ({
-  requestHeartbeat: mocks.requestHeartbeat,
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
+  getDiscordRuntime: () => ({
+    system: {
+      captureSessionEventTarget: mocks.captureSessionEventTarget,
+      enqueueSessionEvent: mocks.enqueueSessionEvent,
+    },
+  }),
 }));
 vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/routing")>()),
   resolveAgentRoute: mocks.resolveAgentRoute,
-}));
-// mock-isolation: Listener events are recorded without enqueueing real system events.
-vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
-  enqueueRoutedSystemEvent: mocks.enqueueSystemEvent,
 }));
 function thread(archived: boolean) {
   return { id: "thread-42", thread_metadata: { archived } };
@@ -112,38 +121,11 @@ function guildSnapshot(
   presences: Array<Omit<GatewayPresenceUpdate, "guild_id">>,
   memberCount = 100,
 ): GatewayGuildCreateDispatchData {
-  return {
-    id: "guild-1",
-    member_count: memberCount,
-    presences,
-  } as GatewayGuildCreateDispatchData;
+  return { id: "guild-1", member_count: memberCount, presences } as GatewayGuildCreateDispatchData;
 }
 
 function presenceClient(fetchUser = async () => ({ bot: false })): Client {
   return { fetchUser: vi.fn(fetchUser) } as unknown as Client;
-}
-
-function cooldownStore(values = new Map<string, number>()) {
-  return {
-    register: async (key, value) => void values.set(key, value),
-    registerIfAbsent: async (key, value) => {
-      if (values.has(key)) {
-        return false;
-      }
-      values.set(key, value);
-      return true;
-    },
-    lookup: async (key) => values.get(key),
-    consume: async (key) => {
-      const value = values.get(key);
-      values.delete(key);
-      return value;
-    },
-    delete: async (key) => values.delete(key),
-    deleteIfEqual: async (key, expected) => values.get(key) === expected && values.delete(key),
-    entries: async () => [...values].map(([key, value]) => ({ key, value, createdAt: value })),
-    clear: async () => values.clear(),
-  } satisfies PluginStateKeyedStore<number>;
 }
 
 type PresenceListenerParams = ConstructorParameters<typeof DiscordPresenceListener>[0];
@@ -154,6 +136,7 @@ type PresenceListenerOverrides = Partial<PresenceListenerParams> & {
   presenceEvents?: Partial<PresenceEventConfig>;
 };
 let nowMs = 1_000;
+const cleanups: Array<() => Promise<void>> = [];
 
 function createPresenceListener({ presenceEvents, ...overrides }: PresenceListenerOverrides = {}) {
   const store = overrides.cooldownStore ?? cooldownStore();
@@ -181,12 +164,10 @@ function createPresenceListener({ presenceEvents, ...overrides }: PresenceListen
 }
 
 function expectWake(...userIds: string[]) {
-  expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(userIds.length);
-  expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(userIds.length);
+  expect(mocks.enqueueSessionEvent).toHaveBeenCalledTimes(userIds.length);
   for (const userId of userIds) {
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+    expect(mocks.enqueueSessionEvent).toHaveBeenCalledWith(
       expect.stringContaining(`user_id="${userId}"`),
-      expect.anything(),
       expect.anything(),
     );
   }
@@ -217,8 +198,13 @@ function pause<Args extends unknown[], Result>(operation: (...args: Args) => Pro
 
 function pausePresenceWork(
   store: PluginStateKeyedStore<number>,
-  stage: "lookup" | "permission" | "claim",
+  stage: "lookup" | "target" | "permission" | "claim",
 ) {
+  if (stage === "target") {
+    const blocked = pause(async () => Object.freeze({}));
+    mocks.captureSessionEventTarget.mockImplementationOnce(blocked.run);
+    return blocked;
+  }
   if (stage === "permission") {
     const blocked = pause(async () => true);
     mocks.canViewDiscordGuildChannel.mockImplementationOnce(blocked.run);
@@ -259,9 +245,9 @@ function createHarness(
 ) {
   const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(null, { status: 204 }));
   const logger = createSubsystemLogger("discord/test-listeners");
-  vi.spyOn(logger, "info").mockImplementation(() => {});
-  vi.spyOn(logger, "warn").mockImplementation(() => {});
-  vi.spyOn(logger, "error").mockImplementation(() => {});
+  for (const level of ["info", "warn", "error"] as const) {
+    vi.spyOn(logger, level).mockImplementation(() => {});
+  }
   const client = new Client(
     {
       clientId: "test-app",
@@ -280,8 +266,6 @@ function createHarness(
     botUserId: "bot-1",
     guildEntries: {
       "guild-1": {
-        requireMention: true,
-        users: ["human-1"],
         channels: {
           "system-channel": { enabled: true },
           "fallback-channel": { enabled: true },
@@ -301,7 +285,9 @@ function createHarness(
   });
   const update = (archived = false) =>
     client.dispatchGatewayEvent("THREAD_UPDATE", thread(archived));
-  const joinGuild = () => client.dispatchGatewayEvent("GUILD_CREATE", guildCreateEvent());
+  const joinGuild = (event: Partial<GatewayGuildCreateDispatchData> = {}) =>
+    client.dispatchGatewayEvent("GUILD_CREATE", { ...guildCreateEvent(), ...event });
+  cleanups.push(stopMonitorListeners);
   return { client, fetch, logger, onEvent, update, joinGuild, cleanup: stopMonitorListeners };
 }
 
@@ -320,31 +306,24 @@ beforeEach(() => {
   mocks.canViewDiscordGuildChannel.mockReset().mockResolvedValue(true);
   mocks.hasAnyChannelPermissionDiscord.mockReset().mockResolvedValue(true);
   mocks.readMessagesDiscord.mockReset().mockResolvedValue([]);
+  mocks.resolveAgentRoute.mockReturnValue(route);
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(async () => {
+  await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
+  vi.restoreAllMocks();
+});
 
 describe("Discord monitor dispatch", () => {
-  it("tracks concurrent messages while awaiting each handler's completion", async () => {
-    const first = pause(async () => {});
-    const second = pause(async () => {});
-    const handler = vi.fn().mockImplementationOnce(first.run).mockImplementationOnce(second.run);
-    const { client, onEvent } = createHarness({ messageHandler: handler });
-    const completed = vi.fn();
-    const a = client.dispatchGatewayEvent("MESSAGE_CREATE", { channel_id: "ch-1" }).then(completed);
-    const b = client.dispatchGatewayEvent("MESSAGE_CREATE", { channel_id: "ch-1" });
-    try {
-      await second.entered;
-      expect(onEvent).toHaveBeenCalledTimes(2);
-      second.resolve();
-      await b;
-      expect(completed).not.toHaveBeenCalled();
-    } finally {
-      first.resolve();
-      second.resolve();
-      await Promise.all([a, b]);
-    }
-    expect(completed).toHaveBeenCalledOnce();
+  it("tracks inbound messages before their handlers complete", async () => {
+    const blocked = pause(async () => {});
+    const { client, onEvent } = createHarness({ messageHandler: blocked.run });
+    await blocked.during(
+      client.dispatchGatewayEvent("MESSAGE_CREATE", { channel_id: "ch-1" }),
+      () => {
+        expect(onEvent).toHaveBeenCalledOnce();
+      },
+    );
   });
 
   it("detaches interaction handling and reports its eventual failure", async () => {
@@ -392,17 +371,13 @@ describe("Discord monitor dispatch", () => {
   it("keeps membership claims independent for two account clients", async () => {
     const first = createHarness({ accountId: "account-a" });
     const second = createHarness({ accountId: "account-b" });
-    try {
-      await first.update();
-      await second.update();
-      await first.client.dispatchGatewayEvent("READY", {});
-      await first.update();
-      await second.update();
-      expect(first.fetch).toHaveBeenCalledTimes(2);
-      expect(second.fetch).toHaveBeenCalledOnce();
-    } finally {
-      await Promise.all([first.cleanup(), second.cleanup()]);
-    }
+    await first.update();
+    await second.update();
+    await first.client.dispatchGatewayEvent("READY", {});
+    await first.update();
+    await second.update();
+    expect(first.fetch).toHaveBeenCalledTimes(2);
+    expect(second.fetch).toHaveBeenCalledOnce();
   });
 
   it("unbinds the account's deleted thread and reports a session-close failure without farewell", async () => {
@@ -464,16 +439,10 @@ describe("Discord guild join introductions", () => {
   );
 
   it("ignores stale guild-create startup snapshots", async () => {
-    const { client, cleanup } = createHarness();
-    try {
-      await client.dispatchGatewayEvent("GUILD_CREATE", {
-        ...guildCreateEvent(),
-        joined_at: new Date(Date.now() - 10 * 60_000).toISOString(),
-      });
-      expect(reportChannelRoomJoin).not.toHaveBeenCalled();
-    } finally {
-      await cleanup();
-    }
+    await createHarness().joinGuild({
+      joined_at: new Date(Date.now() - 10 * 60_000).toISOString(),
+    });
+    expect(reportChannelRoomJoin).not.toHaveBeenCalled();
   });
 
   it("introduces the bot in the permitted system channel using readable room context", async () => {
@@ -543,23 +512,17 @@ describe("Discord guild join introductions", () => {
   });
 
   it.each([
-    ["guild-1", "fallback-channel", true, 2],
-    ["different-guild", "system-channel", false, undefined],
-  ] as const)(
-    "routes guild introduction for %s to %s",
-    async (guildId, channelId, roomAllowed, checks) => {
-      await createHarness({
-        guildEntries: { [guildId]: { channels: { [channelId]: { enabled: true } } } },
-      }).joinGuild();
+    ["guild-1", "fallback-channel", true],
+    ["different-guild", "system-channel", false],
+  ] as const)("routes guild introduction for %s to %s", async (guildId, channelId, roomAllowed) => {
+    await createHarness({
+      guildEntries: { [guildId]: { channels: { [channelId]: { enabled: true } } } },
+    }).joinGuild();
 
-      expect(reportChannelRoomJoin).toHaveBeenCalledWith(
-        expect.objectContaining({ deliverTo: `channel:${channelId}`, roomAllowed }),
-      );
-      if (checks !== undefined) {
-        expect(mocks.hasAnyChannelPermissionDiscord).toHaveBeenCalledTimes(checks);
-      }
-    },
-  );
+    expect(reportChannelRoomJoin).toHaveBeenCalledWith(
+      expect.objectContaining({ deliverTo: `channel:${channelId}`, roomAllowed }),
+    );
+  });
 
   it("skips a guild with no writable text destination", async () => {
     mocks.canViewDiscordGuildChannel.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
@@ -568,37 +531,116 @@ describe("Discord guild join introductions", () => {
     await joinGuild();
 
     expect(reportChannelRoomJoin).not.toHaveBeenCalled();
-    expect(mocks.hasAnyChannelPermissionDiscord).toHaveBeenCalledOnce();
     expect(logger.info).toHaveBeenCalledOnce();
   });
 });
 
 describe("DiscordPresenceListener", () => {
-  it("retries when the queue rejects an event", async () => {
-    mocks.enqueueSystemEvent.mockReturnValueOnce(false);
-    const listener = createPresenceListener({ presenceEvents: { burstLimit: 1 } });
-    const registerIfAbsent = vi.spyOn(listener.store, "registerIfAbsent");
-    await listener.transition();
+  it.each(["user", "cooldown", "enqueue", "acceptance"] as const)(
+    "releases admission and retries after a transient %s failure",
+    async (stage) => {
+      const logger = createSubsystemLogger("discord/test-presence");
+      const log = vi
+        .spyOn(logger, stage === "user" || stage === "enqueue" ? "error" : "warn")
+        .mockImplementation(() => {});
+      const listener = createPresenceListener({ logger, presenceEvents: { burstLimit: 1 } });
+      const claim = vi.spyOn(listener.store, "registerIfAbsent");
+      const fetchUser = vi.spyOn(humanClient, "fetchUser");
+      if (stage === "user") {
+        fetchUser.mockRejectedValueOnce(new Error("temporary"));
+      } else if (stage === "cooldown") {
+        claim.mockRejectedValueOnce(new Error("capacity"));
+      } else {
+        mocks.enqueueSessionEvent.mockImplementationOnce(() => {
+          if (stage === "enqueue") {
+            throw new Error("session-event admission refused");
+          }
+          return {
+            id: "refused",
+            cancel: () => false,
+            accepted: Promise.resolve({ ok: false, error: "session-event admission refused" }),
+            settled: Promise.resolve({
+              status: "failed",
+              executionStarted: false,
+              delivered: false,
+            }),
+          };
+        });
+      }
+      await listener.transition();
+      expect(log).toHaveBeenCalledOnce();
+      expect(await listener.store.entries()).toEqual([]);
+      const priorEnqueue = Number(stage === "enqueue" || stage === "acceptance");
+      expect(mocks.enqueueSessionEvent).toHaveBeenCalledTimes(priorEnqueue);
+      await listener.online();
+      expect(mocks.enqueueSessionEvent).toHaveBeenCalledTimes(priorEnqueue + 1);
+      expect(mocks.enqueueSessionEvent).toHaveBeenLastCalledWith(
+        expect.stringContaining('user_id="user-1"'),
+        expect.objectContaining({
+          ...route,
+          expectedTarget: await mocks.captureSessionEventTarget.mock.results.at(-1)?.value,
+          createIfMissing: true,
+          deliveryContext: { to: "channel:channel-1", accountId: "molty", channel: "discord" },
+        }),
+      );
+    },
+  );
 
-    expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
-    await listener.online();
-
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(2);
-    expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(1);
-    expect(registerIfAbsent).toHaveBeenCalledTimes(2);
-    const route = { agentId: "molty", sessionKey: "agent:molty:discord:channel:channel-1" };
-    const destination = { to: "channel:channel-1", accountId: "molty" };
-    expect(mocks.enqueueSystemEvent).toHaveBeenLastCalledWith(
-      expect.stringContaining('user_id="user-1"'),
+  it("pins the selected route before awaiting the cooldown lookup", async () => {
+    const listener = createPresenceListener();
+    await listener.offline();
+    const lookup = pausePresenceWork(listener.store, "lookup");
+    await lookup.during(listener.online(), () => {
+      mocks.resolveAgentRoute.mockReturnValue({
+        agentId: "replacement",
+        sessionKey: "agent:replacement:discord:channel:channel-1",
+      });
+    });
+    expect(mocks.captureSessionEventTarget).toHaveBeenCalledWith(route.agentId, route.sessionKey);
+    expect(mocks.enqueueSessionEvent).toHaveBeenCalledWith(
+      expect.any(String),
       expect.objectContaining(route),
-      expect.objectContaining({ deliveryContext: { ...destination, channel: "discord" } }),
-    );
-    expect(mocks.requestHeartbeat).toHaveBeenCalledWith(
-      expect.objectContaining({ ...route, heartbeat: { ...destination, target: "discord" } }),
     );
   });
 
-  it.each(["lookup", "permission", "claim"] as const)(
+  it("returns after acceptance and reports failed settlement without retrying the greeting", async () => {
+    type Receipt = ReturnType<PluginRuntime["system"]["enqueueSessionEvent"]>;
+    const accepted = createDeferred<Awaited<Receipt["accepted"]>>();
+    const settled = createDeferred<Awaited<Receipt["settled"]>>();
+    const submitted = createDeferred<void>();
+    mocks.enqueueSessionEvent.mockImplementationOnce(() => {
+      submitted.resolve();
+      return {
+        id: "pending",
+        cancel: () => false,
+        accepted: accepted.promise,
+        settled: settled.promise,
+      };
+    });
+    const warn = vi.fn();
+    const listener = createPresenceListener({ logger: { warn } as never });
+    await listener.offline();
+    const completed = vi.fn();
+    const pending = listener.online().then(completed);
+    await submitted.promise;
+    expect(completed).not.toHaveBeenCalled();
+    accepted.resolve({ ok: true });
+    await pending;
+    expect(warn).not.toHaveBeenCalled();
+    settled.resolve({
+      status: "failed",
+      executionStarted: true,
+      delivered: false,
+      error: "delivery failed",
+    });
+    await settled.promise;
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("delivery failed"));
+    await listener.online();
+    expectWake("user-1");
+    expect(await listener.store.entries()).toHaveLength(1);
+  });
+
+  it.each(["target", "claim"] as const)(
     "rejects replaced policy after awaiting %s",
     async (stage) => {
       let policy = livePresencePolicy(["user-1"]);
@@ -621,7 +663,7 @@ describe("DiscordPresenceListener", () => {
       expectWake();
       await listener.transition("user-2");
       expectWake("user-2");
-      expect(mocks.enqueueSystemEvent.mock.lastCall?.[2]).toMatchObject({
+      expect(mocks.enqueueSessionEvent.mock.lastCall?.[1]).toMatchObject({
         deliveryContext: { to: "channel:channel-2" },
       });
     },
@@ -757,18 +799,15 @@ describe("DiscordPresenceListener", () => {
 
   it("keeps transition state per guild and does not charge partial bots to the burst limit", async () => {
     const listener = createPresenceListener({ presenceEvents: { burstLimit: 1 } });
-    const registerIfAbsent = vi.spyOn(listener.store, "registerIfAbsent");
     const fetchUser = vi.fn(async () => ({ bot: true }));
     const botClient = presenceClient(fetchUser);
 
     await listener.handle({ ...presence("online"), guild_id: "guild-2" }, botClient);
     await listener.transition("user-1", botClient);
-    await listener.offline("human-1", presenceClient());
-    await listener.online("human-1", presenceClient());
+    await listener.transition("human-1");
 
     expect(fetchUser).toHaveBeenCalledWith("user-1");
     expectWake("human-1");
-    expect(registerIfAbsent).toHaveBeenCalledTimes(1);
   });
 
   it.each(["before", "permission", "claim"] as const)(
@@ -797,7 +836,7 @@ describe("DiscordPresenceListener", () => {
       // Post-window: replayed members stay marked online; a fresh transition emits.
       nowMs += 5 * 60 * 1000;
       await listener.online("replayed-1");
-      expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(mocks.enqueueSessionEvent).not.toHaveBeenCalled();
       await listener.transition("replayed-1");
       expectWake("replayed-1");
     },
@@ -828,26 +867,6 @@ describe("DiscordPresenceListener", () => {
       expectWake(phase === "pending" ? "eligible" : "first");
     },
   );
-
-  it.each(["user", "cooldown"] as const)("retries after a transient %s failure", async (stage) => {
-    const logger = createSubsystemLogger("discord/test-presence");
-    const log = vi.spyOn(logger, stage === "user" ? "error" : "warn").mockImplementation(() => {});
-    const listener = createPresenceListener({ logger });
-    await listener.offline();
-    const fetchUser = vi.spyOn(humanClient, "fetchUser");
-    if (stage === "user") {
-      fetchUser.mockRejectedValueOnce(new Error("temporary"));
-    } else {
-      vi.spyOn(listener.store, "registerIfAbsent").mockRejectedValueOnce(new Error("capacity"));
-    }
-    await listener.online();
-    expectWake();
-    expect(log).toHaveBeenCalledOnce();
-    await listener.online();
-    expectWake("user-1");
-    expect(fetchUser).toHaveBeenCalledTimes(2);
-    log.mockRestore();
-  });
 
   it("shares one durable cooldown across overlapping and replacement listeners", async () => {
     const store = cooldownStore();

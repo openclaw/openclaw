@@ -173,7 +173,7 @@ export class TelegramPollingSession {
     if (this.opts.abortSignal?.aborted) {
       return "exit";
     }
-    if (!isRecoverableTelegramNetworkError(err, { context: "unknown" })) {
+    if (!isRecoverableTelegramNetworkError(err)) {
       throw err;
     }
     return this.#waitBeforeRestart(
@@ -264,7 +264,7 @@ export class TelegramPollingSession {
       this.#webhookCleared = true;
       return "ready";
     } catch (err) {
-      if (isRecoverableTelegramNetworkError(err, { context: "unknown" })) {
+      if (isRecoverableTelegramNetworkError(err)) {
         this.opts.log(
           `[telegram] deleteWebhook failed with a recoverable network error; continuing to polling so getUpdates can confirm webhook state: ${formatErrorMessage(err)}`,
         );
@@ -286,7 +286,8 @@ export class TelegramPollingSession {
       cycleAbortController.abort();
     };
     try {
-      await bot.init();
+      // SAFETY: grammY types a legacy signal; init only uses aborted and abort event listeners.
+      await bot.init(this.opts.abortSignal as Parameters<(typeof bot)["init"]>[0]);
     } catch (err) {
       abortMedia();
       return await this.#waitBeforeRetryOnRecoverableSetupError(err, "Telegram bot init failed");
@@ -518,7 +519,7 @@ export class TelegramPollingSession {
           this.#transportState.markDirty();
         } else if (
           pollState.error &&
-          !isRecoverableTelegramNetworkError(new Error(pollState.error), { context: "polling" })
+          !isRecoverableTelegramNetworkError(new Error(pollState.error))
         ) {
           this.#status.noteError(
             pollState.error,

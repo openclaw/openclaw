@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseCompactionDetails } from "../../../packages/agent-core/src/harness/compaction/compaction-details.js";
+import { readBackgroundResultPlacement } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
 import {
   advanceCliHistoryBoundary,
@@ -14,6 +15,7 @@ import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import { normalizeSessionContextEntryBoundaries } from "./session-entry-navigation.js";
 import type { SessionMetadataOperations } from "./session-manager-write-contract.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
+import { rewriteSessionPriorWorkspaceBoundary } from "./session-prior-workspace-boundary.js";
 import {
   hasTranscriptMessage,
   shouldProjectActiveEvent,
@@ -183,7 +185,7 @@ export function createSessionActorMemoryEvents(options: {
   const parent = (input: { parentId?: string | null; appendIntent?: "active-branch" }) =>
     resolveTranscriptAppendParent({
       ...input,
-      tailId: tree().appendParentId,
+      readTailId: () => tree().appendParentId,
       parentId: input.parentId,
       isAncestor,
     });
@@ -245,12 +247,16 @@ export function createSessionActorMemoryEvents(options: {
   };
   const appendRaw = (event: unknown, input: TranscriptEventAppendOptions = {}, bytes?: string) => {
     checkMutation(input.expectedMutationAt);
-    const resolved =
+    let resolved =
       isRecord(event) &&
       (event.parentId === null || typeof event.parentId === "string") &&
       input.appendIntent === "active-branch"
         ? { ...event, parentId: parent({ ...input, parentId: event.parentId }) }
         : event;
+    const placement = readBackgroundResultPlacement(resolved);
+    if (placement && isRecord(resolved)) {
+      resolved = { ...resolved, data: { ...placement, afterEntryId: resolved.parentId } };
+    }
     const appended = writeEvent(resolved, resolved === event ? bytes : undefined);
     return appended
       ? {
@@ -270,6 +276,26 @@ export function createSessionActorMemoryEvents(options: {
       ? state.hot.transcript.version.generation
       : randomUUID();
     const updatedAt = Math.max(Date.now(), (state.hot.transcript.version.updatedAt ?? -1) + 1);
+    const entry = requireEntry();
+    if (entry.priorWorkspace) {
+      state.hot.entry = rewriteSessionPriorWorkspaceBoundary(
+        entry,
+        state.hot.transcript.version.generation,
+        generation,
+        {
+          previous: state.events.map((row) => ({
+            id: isRecord(row.event) && typeof row.event.id === "string" ? row.event.id : null,
+            seq: row.rawSeq,
+          })),
+          next: rows.map((row) => ({
+            id: isRecord(row.event) && typeof row.event.id === "string" ? row.event.id : null,
+            seq: row.rawSeq,
+            message: hasTranscriptMessage(row.event),
+          })),
+          unchangedBeforeSeq: 0,
+        },
+      );
+    }
     state.events = rows;
     pruneSessionActorMemoryReactions(state);
     state.hot.transcript.version = { generation, rawSeq: rows.at(-1)?.rawSeq ?? null, updatedAt };

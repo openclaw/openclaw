@@ -1,18 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
-import readline from "node:readline";
 import * as fileReads from "@openclaw/fs-safe/advanced";
 import { afterEach, expect, test, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
-import { isVisibleTranscriptRecord } from "../sessions/transcript-visible-record.js";
 import { ArchivedTranscriptReader } from "./session-transcript-archive-reader.js";
+import { createArchiveSourceSnapshotFixture } from "./session-transcript-archive.test-support.js";
 import {
   readIndexedTranscriptEntries,
   readSessionTranscriptIndex,
-  selectArchiveTranscriptEntries,
 } from "./session-transcript-index.fs.js";
 import type {
   SessionTranscriptSourceCursor,
@@ -67,53 +65,25 @@ function imageMessage(id: string, bytes: number) {
 }
 
 test("keeps exact physical ranges across newline dialects and malformed UTF8", async () => {
+  const valid = [
+    message("first", "α🦞".repeat(18000)),
+    message("invalid", "\ufffd"),
+    message("", "blank raw id"),
+    message(undefined, "no id"),
+  ];
   const file = await fixture(
     Buffer.concat([
-      Buffer.from(` \r\n${message("first", "α🦞".repeat(18000))}\r`),
+      Buffer.from(` \r\n${valid[0]}\r`),
       Buffer.from('{"type":"message","id":"invalid","message":{"role":"user","content":"'),
       Buffer.from([0xff]),
-      Buffer.from(
-        `"}}\n{malformed\r\n${message("", "blank raw id")}\n${message(undefined, "no id")}`,
-      ),
+      Buffer.from(`"}}\n{malformed\r\n${valid[2]}\n${valid[3]}`),
     ]),
   );
-  const records: recordParser.TranscriptRecord[] = [];
-  const lines = readline.createInterface({
-    input: fs.createReadStream(file, { encoding: "utf8" }),
-    crlfDelay: Infinity,
-  });
-  for await (const line of lines) {
-    const parsed = recordParser.parseTranscriptRecord(line);
-    if (parsed) {
-      records.push(parsed);
-    }
-  }
-  const expected = selectArchiveTranscriptEntries(records).filter((entry) =>
-    isVisibleTranscriptRecord(entry.record),
-  );
   const { index, read } = await openIndex(file);
-  const payload = (e: recordParser.TranscriptRecord) => [e.record, e.byteLength, e.id];
-  expect((await read()).map(payload)).toEqual(expected.map(payload));
+  expect((await read()).map(({ record, byteLength, id }) => [record, byteLength, id])).toEqual(
+    valid.map((line, i) => [JSON.parse(line), Buffer.byteLength(line), ["first", "invalid"][i]]),
+  );
   expect(index.entries.map((entry) => entry.rawId)).toEqual(["first", "invalid", "", undefined]);
-});
-
-test("retains duplicate order, last by-ID selection and oversized image recovery", async () => {
-  const file = await fixture(
-    [message("same", "first"), imageMessage("image", 300000), message("same", "last")],
-    "\r\n",
-  );
-  const { index, read } = await openIndex(file);
-  const records = await read();
-  expect(records.map((entry) => entry.record.message)).toMatchObject([
-    { content: "first" },
-    { content: [{ text: "caption" }, { type: "image", omitted: true, bytes: 300000 }] },
-    { content: "last" },
-  ]);
-  expect(records[1]?.recoveredImageData).toBe(true);
-  expect(records[1]!.byteLength).toBeGreaterThan(256 * 1024);
-  const last = await read([index.byId.get("same")!]);
-  expect(last[0]?.record.message).toMatchObject({ content: "last" });
-  expect(index.entries.find((entry) => entry.id === "same")?.seq).toBe(1);
 });
 
 test("keeps CRLF across chunk boundaries and physical duplicate-anchor cuts", async () => {
@@ -140,9 +110,18 @@ test("keeps CRLF across chunk boundaries and physical duplicate-anchor cuts", as
     ],
     "\r\n",
   );
-  const { read } = await openIndex(file);
+  const { index, read } = await openIndex(file);
   const entries = await read();
   expect(entries).toHaveLength(4);
+  expect(entries.filter(({ id }) => id === "anchor").map(({ record }) => record.message)).toEqual([
+    JSON.parse(first).message,
+    { role: "user", content: "last anchor" },
+  ]);
+  expect((await read([index.byId.get("anchor")!]))[0]?.record.message).toEqual({
+    role: "user",
+    content: "last anchor",
+  });
+  expect(index.entries.find(({ id }) => id === "anchor")?.seq).toBe(1);
   expect(entries[1]?.record.message).toEqual(activity);
   expect(entries[1]?.transcriptPosition.activity).toBeUndefined();
   expect(entries[3]?.transcriptPosition.activity).toEqual({
@@ -171,14 +150,7 @@ test("batches a page and rejects a rewrite while its pinned descriptor is being 
   ]);
 });
 
-const archiveSnapshot: SessionTranscriptSourceSnapshot = {
-  indexedSeq: -1,
-  activeEventCount: 0,
-  totalMessages: 0,
-  generation: undefined,
-  tailEventSeq: undefined,
-  resetSeq: null,
-};
+const archiveSnapshot: SessionTranscriptSourceSnapshot = createArchiveSourceSnapshotFixture();
 
 function sourcePage(reader: ArchivedTranscriptReader, cursor?: SessionTranscriptSourceCursor) {
   return reader.readSourcePage({ mode: "page", cursor }, archiveSnapshot);

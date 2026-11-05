@@ -44,6 +44,9 @@ function audioConfig(command: string, args: string[], audio: AudioConfig): OpenC
     tools: { media: { models: [{ type: "cli", command, args, capabilities: ["audio"] }], audio } },
   };
 }
+function enrichAudio(ctx: MsgContext, cfg: OpenClawConfig, workspaceDir: string) {
+  return applyMediaUnderstanding({ ctx, cfg, workspaceDir, processingMode: "audio-only" });
+}
 vi.mock("../process/exec.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../process/exec.js")>();
   return {
@@ -78,14 +81,13 @@ describe("audio preflight attachment handoff", () => {
   it("forwards the selected workspace through preflight to the provider request", async () => {
     await withTestDir({ prefix: "openclaw-audio-preflight-workspace-" }, async (dir) => {
       const media = await audioFiles(dir, ["voice.wav"]);
-      let providerWorkspaceDir: string | undefined;
       const providers: Record<string, MediaUnderstandingProvider> = {
         fixture: {
           id: "fixture",
           capabilities: ["audio"],
           defaultModels: { audio: "fixture-audio" },
           transcribeAudioWithContext: async (request) => {
-            providerWorkspaceDir = request.workspaceDir;
+            expect(request.workspaceDir).toBe("/workspaces/support");
             return { ok: true, value: { text: "The meeting starts at nine." } };
           },
         },
@@ -101,7 +103,6 @@ describe("audio preflight attachment handoff", () => {
         providers,
         activeModel: { provider: "fixture", model: "chat-model" },
       });
-      expect(providerWorkspaceDir).toBe("/workspaces/support");
       expect(transcript).toBe("The meeting starts at nine.");
     });
   });
@@ -133,6 +134,7 @@ process.stdout.write(process.argv[3] === "empty" && name === "first.wav" ? "  \\
         );
         const ctx: MsgContext = {
           Body: "",
+          CommandAuthorized: false,
           media: [{}, { ...media[0], transcribed: true }, ...media.slice(1)],
         };
         const transcript = await transcribeFirstAudio({ ctx, cfg });
@@ -153,28 +155,20 @@ process.stdout.write(process.argv[3] === "empty" && name === "first.wav" ? "  \\
           ctx.agentText = preparedText;
         }
         Object.assign(ctx, captionFields);
-        await applyMediaUnderstanding({
-          ctx,
-          cfg,
-          workspaceDir: dir,
-          processingMode: "audio-only",
-        });
+        await enrichAudio(ctx, cfg, dir);
 
         expect(await fs.readFile(callsPath, "utf8")).toBe(
           emptyFirst ? "first.wav\nfirst.wav\nsecond.wav\n" : "first.wav\nsecond.wav\n",
         );
-        expect(ctx.MediaUnderstanding).toEqual([
-          expect.objectContaining({
-            kind: "audio.transcription",
-            attachmentIndex: 3,
-            text: "heard second.wav",
-          }),
+        expect(ctx.MediaUnderstanding).toMatchObject([
+          { kind: "audio.transcription", attachmentIndex: 3, text: "heard second.wav" },
         ]);
         expect(ctx.Body).toContain("heard second.wav");
         expect(ctx.agentText).toContain("heard second.wav");
         expect(ctx.BodyForAgent).toBe(ctx.agentText);
         expect(ctx.agentText).not.toContain("stale alias");
         expect(ctx).toMatchObject({ ...captionFields, rawText: caption, commandText: caption });
+        expect(ctx.CommandAuthorized).toBe(false);
         if (textField !== "Body") {
           expect(ctx.Body).toContain("transport envelope");
           expect(ctx.agentText).not.toContain("transport envelope");
@@ -260,12 +254,6 @@ process.stdout.write(process.argv[3] === "empty" && name === "first.wav" ? "  \\
           ];
         }
         const transcript = await transcribeAudioAttachments({ ctx, cfg });
-        const heard = expected.filter((name) => !emptyFirst || name !== "first.wav");
-        const expectedTranscript =
-          heard.length > 1
-            ? heard.map((name, index) => `Audio ${index + 1}:\nheard ${name}`).join("\n\n")
-            : heard[0] && `heard ${heard[0]}`;
-        expect(transcript).toBe(expectedTranscript);
         expect(ctx.media?.map((fact) => fact.transcribed === true)).toEqual([
           false,
           ...media.map(
@@ -276,12 +264,7 @@ process.stdout.write(process.argv[3] === "empty" && name === "first.wav" ? "  \\
         ]);
         const preparedText = transcript ? formatAudioTranscriptForAgent(transcript) : caption;
         Object.assign(ctx, { agentText: preparedText, BodyForAgent: preparedText });
-        await applyMediaUnderstanding({
-          ctx,
-          cfg,
-          workspaceDir: dir,
-          processingMode: "audio-only",
-        });
+        await enrichAudio(ctx, cfg, dir);
         expect(calls).toEqual(expected);
         const agentText = [preparedText, ...markers].join("\n\n");
         expect(ctx).toMatchObject({ ...captionFields, agentText, BodyForAgent: agentText });

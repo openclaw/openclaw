@@ -22,6 +22,7 @@ import {
   McpAppViewExpiredError,
   type McpAppOperation,
   requireMcpAppInteraction,
+  supportsMcpAppInteraction,
   resolveMcpAppActiveView,
   withMcpAppActiveView,
 } from "../mcp-app-operations.js";
@@ -274,13 +275,8 @@ export const mcpAppHandlers: GatewayRequestHandlers = {
             stop();
           }
         }
-        let interactive = false;
-        try {
-          await requireMcpAppInteraction(view);
-          interactive = true;
-        } catch {
-          // Stale board leases remain renderable but lose every interactive capability.
-        }
+        // Stale board leases remain renderable but lose every interactive capability.
+        const interactive = await supportsMcpAppInteraction(view);
         const openFilesSupported =
           interactive && Boolean(active.runtime.sessionKey) && (await canOpenMcpAppFiles(view));
         const updateModelContextSupported =

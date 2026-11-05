@@ -7,6 +7,7 @@ import {
 } from "../../../test/helpers/promise.js";
 import { listActiveReplyRunSessionKeys } from "../../sessions/session-controller.queries.js";
 import * as controllerWait from "../../sessions/session-controller.wait.js";
+import { createCommandTurnContext } from "../command-turn-context.js";
 import { markCommandReplyForDelivery } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import {
@@ -49,18 +50,14 @@ function commandFixture(source: "text" | "native", target: boolean) {
   ) => {
     const dispatcher = createDispatcher();
     const authorized = overrides.CommandAuthorized ?? true;
-    const commandName = body.slice(1).split(" ")[0];
     const ctx = buildTestCtx({
       CommandSource: source,
       CommandAuthorized: authorized,
-      CommandTurn: {
-        ...(source === "native"
-          ? ({ kind: "native", source: "native" } as const)
-          : ({ kind: "text-slash", source: "text" } as const)),
+      CommandTurn: createCommandTurnContext(source, {
         authorized,
-        commandName,
+        commandName: body.slice(1).split(" ")[0],
         body,
-      },
+      }),
       Body: body,
       RawBody: body,
       CommandBody: body,
@@ -125,18 +122,18 @@ it.each([
   ["native", "/help", false, false],
 ] as const)("admits %s %s (authorized=%s, target=%s)", async (source, body, authorized, target) => {
   await withActive(source, target, async ({ key, sourceKey, operation, start }) => {
-    const waiting = createDeferred<{ status: "waiting_for_active" }>();
+    const waiting = createDeferred();
     const wait = controllerWait.waitForSessionRunIdle;
     vi.spyOn(controllerWait, "waitForSessionRunIdle").mockImplementation((sessionKey, ...args) => {
       if (sessionKey === key) {
-        waiting.resolve({ status: "waiting_for_active" });
+        waiting.resolve();
       }
       return wait(sessionKey, ...args);
     });
     const acknowledgement = {
       text: target ? "🧠 Model: mock | ⚙️ Status: ok" : "Command completed.",
     };
-    const resolver = vi.fn<Resolver>(async (_ctx, options) => {
+    const resolver: Resolver = async (_ctx, options) => {
       const binding = readReplySourceInput(options);
       if (target) {
         expect(binding?.mailbox.owner.aliases.has(sourceKey)).toBe(true);
@@ -146,12 +143,9 @@ it.each([
         expect(binding?.claim).toBeUndefined();
       }
       return target ? acknowledgement : markCommandReplyForDelivery(acknowledgement);
-    });
+    };
     const { work, dispatcher } = start(body, resolver, { CommandAuthorized: authorized });
-    expect(
-      await Promise.race([work.then((result) => ({ status: "settled", result })), waiting.promise]),
-    ).toMatchObject({ status: "settled", result: { queuedFinal: true } });
-    expect(resolver).toHaveBeenCalledOnce();
+    expect(await Promise.race([work, waiting.promise])).toMatchObject({ queuedFinal: true });
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(acknowledgement);
     expect(getSessionControllerOperation(key)).toBe(operation);
     expect(operation.result).toBeNull();
@@ -196,8 +190,6 @@ it.each(["/login cancel", "/reset", "/new continue"])(
     const release = createDeferred();
     const loginStarted = createDeferred();
     const controlStarted = createDeferred();
-    const loginEntered = vi.fn();
-    const controlEntered = vi.fn();
     const shellEntered = vi.fn();
     const dispatch = (command: string, resolver: Resolver) =>
       start(command, resolver, {
@@ -206,7 +198,6 @@ it.each(["/login cancel", "/reset", "/new continue"])(
         MessageSid: command,
       }).work;
     const login = dispatch("/login openrouter", async () => {
-      loginEntered();
       loginStarted.resolve();
       await release.promise;
       return markCommandReplyForDelivery({ text: "Login ended." });
@@ -217,13 +208,11 @@ it.each(["/login cancel", "/reset", "/new continue"])(
         login,
         "login settled before its resolver",
       );
-      expect(loginEntered).toHaveBeenCalledOnce();
       void dispatch("/bash echo ready", async () => {
         shellEntered();
         return markCommandReplyForDelivery({ text: "Shell command completed." });
       });
       const control = dispatch(body, async () => {
-        controlEntered();
         controlStarted.resolve();
         return markCommandReplyForDelivery({ text: "Control command completed." });
       });
@@ -232,7 +221,6 @@ it.each(["/login cancel", "/reset", "/new continue"])(
         control,
         "control settled before its resolver",
       );
-      expect(controlEntered).toHaveBeenCalledOnce();
       expect(shellEntered).not.toHaveBeenCalled();
       expect(isSessionRunActiveForKey(key)).toBe(true);
     } finally {

@@ -4,7 +4,7 @@ import type { JSX } from "@solidjs/web";
 import { createSignal, onCleanup } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
-import type { SolidRouteProps } from "../app-route-types.ts";
+import type { SolidRouteProps } from "../app-route-types.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { mountRouterOutlet, settleRouterOutlet } from "./router-outlet.test-support.tsx";
 

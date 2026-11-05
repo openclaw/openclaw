@@ -20,38 +20,30 @@ describe("ambient transcript watermark", () => {
     await withOpenClawTestState({ label: "ambient-watermark" }, async (state) => {
       const storePath = state.statePath("sessions.json");
       const scope = { sessionKey, storePath };
-      const stamp = (expectedSessionId?: string) =>
+      const stamp = (messageId: string, timestampMs: number, expectedSessionId?: string) =>
         updateAmbientTranscriptWatermark({
           ...scope,
           key,
-          messageId: "12",
-          timestampMs: 1_700_000_002_000,
+          messageId,
+          timestampMs,
           expectedSessionId,
         });
       const read = () => readAmbientTranscriptWatermarkFromEntry(loadSessionEntry(scope), key);
       await replaceSessionEntry(scope, { sessionId: "before-reset", updatedAt: 1_700_000_000_000 });
 
-      await updateAmbientTranscriptWatermark({
-        storePath,
-        sessionKey,
-        key,
-        messageId: "11",
-        timestampMs: 1_700_000_001_000,
-      });
+      await stamp("11", 1_700_000_001_000);
 
       const persistedEntry = loadSessionEntry(scope);
       if (!persistedEntry) {
         throw new Error("Expected persisted session entry");
       }
-      expect(persistedEntry?.ambientTranscriptWatermarks?.[key]).toMatchObject({
+      const expected = {
         sessionId: "before-reset",
         messageId: "11",
         timestampMs: 1_700_000_001_000,
-      });
-      expect(read()).toMatchObject({
-        sessionId: "before-reset",
-        messageId: "11",
-      });
+      };
+      expect(persistedEntry.ambientTranscriptWatermarks?.[key]).toMatchObject(expected);
+      expect(read()).toMatchObject(expected);
 
       await replaceSessionEntry(scope, {
         ...persistedEntry,
@@ -60,9 +52,9 @@ describe("ambient transcript watermark", () => {
       });
 
       expect(read()).toBeUndefined();
-      await stamp("before-reset");
+      await stamp("12", 1_700_000_002_000, "before-reset");
       expect(read()).toBeUndefined();
-      await stamp("after-reset");
+      await stamp("12", 1_700_000_002_000, "after-reset");
       expect(read()).toMatchObject({
         sessionId: "after-reset",
         messageId: "12",

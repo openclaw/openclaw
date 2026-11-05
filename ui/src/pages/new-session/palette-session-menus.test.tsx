@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { mount } from "../../test-helpers/palette-session-draft.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -56,14 +57,23 @@ it("keeps agent navigation and Escape inside the nested menu", async () => {
   trigger.click();
   const menu = get(host, ".agent-select__menu");
   await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(true));
-  const first = get(menu, '[data-value="option:main"]');
-  const last = get(menu, '[data-value="option:other"]');
-  expectArrow(workspace, "ArrowUp", last);
-  pressKey(last, "ArrowDown");
-  await waitForSolid(() => expect(document.activeElement).toBe(first));
+  const list = get(menu, '[role="listbox"]');
+  const first = get(menu, '[data-value="main"]');
+  const last = get(menu, '[data-value="other"]');
+  await waitForSolid(() => {
+    expect(document.activeElement).toBe(list);
+    expect(list.getAttribute("aria-activedescendant")).toBe(first.id);
+  });
+  pressKey(list, "ArrowUp");
+  await waitForSolid(() => expect(list.getAttribute("aria-activedescendant")).toBe(last.id));
+  pressKey(list, "ArrowDown");
+  await waitForSolid(() => {
+    expect(document.activeElement).toBe(list);
+    expect(list.getAttribute("aria-activedescendant")).toBe(first.id);
+  });
   expect(menu.matches(":popover-open")).toBe(true);
   expect(settings.matches(":popover-open")).toBe(true);
-  pressKey(first, "Escape");
+  pressKey(list, "Escape");
   await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(false));
   expect(settings.matches(":popover-open")).toBe(true);
   expect(document.activeElement).toBe(trigger);
@@ -155,7 +165,7 @@ it("keeps filtered choices and unavailable rows in DOM order before the existing
         ? {
             projects: [
               { id: "alpha", displayName: "Alpha", repoRoot: "/alpha", source: "registered" },
-              { id: "beta", displayName: "Beta", repoRoot: "/beta", source: "registered" },
+              { id: "beta", displayName: "Be\u0301ta", repoRoot: "/beta", source: "registered" },
             ],
           }
         : {},
@@ -177,11 +187,16 @@ it("keeps filtered choices and unavailable rows in DOM order before the existing
   );
   const content = get(host, ".palette-session-settings__content");
   const back = get(content, ".palette-session-settings__back");
+  get(content, ".header-search__toggle").click();
+  await waitForSolid(() =>
+    expect(content.querySelector(".palette-session-settings__search")).not.toBeNull(),
+  );
   const search = expectDefined(
     content.querySelector<HTMLInputElement>(".palette-session-settings__search"),
     "settings search",
   );
   const connect = get(content, ":scope > .palette-session-settings__row");
+  expect(connect.textContent).toContain("Connect a device");
   const unavailable = expectDefined(
     content.querySelector<HTMLButtonElement>('[data-machine="runtime:hosted"]'),
     "unavailable machine",
@@ -196,7 +211,7 @@ it("keeps filtered choices and unavailable rows in DOM order before the existing
   expectArrow(connect, "ArrowDown", retry);
   expectArrow(retry, "ArrowDown", back);
 
-  search.value = "Beta";
+  search.value = "BÉTA";
   search.dispatchEvent(new Event("input", { bubbles: true }));
   await host.updateComplete;
   expectArrow(search, "ArrowDown", beta);
@@ -205,4 +220,54 @@ it("keeps filtered choices and unavailable rows in DOM order before the existing
   await host.updateComplete;
   const restoredAlpha = get(content, '[data-machine="local"][data-project="alpha"]');
   expectArrow(beta, "ArrowUp", restoredAlpha);
+});
+
+it("retains focused place choices through a quiet cloud catalog refresh failure", async () => {
+  const refresh = createDeferred<unknown>();
+  const readCatalog = vi.fn<() => Promise<unknown>>().mockResolvedValue({
+    environments: [],
+    profiles: [{ id: "aws", providerId: "crabbox" }],
+  });
+  const { host } = await mount({
+    scopes: ["operator.admin", "operator.read", "operator.write"],
+    methods: ["agents.list", "environments.list", "projects.list", "sessions.create"],
+    request: async (method) => {
+      if (method === "projects.list") {
+        return { projects: [] };
+      }
+      if (method === "environments.list") {
+        return readCatalog();
+      }
+      return {};
+    },
+  });
+  await openSettings(host);
+  const draft = expectDefined(host.draft.settingsView(), "palette settings").options.draft;
+  await draft.gateway.refreshCloudProfiles();
+  get(host, ".palette-session-settings__workspace").click();
+  await waitForSolid(() => expect(host.querySelector(".header-search__toggle")).not.toBeNull());
+  get(host, ".header-search__toggle").click();
+  await waitForSolid(() =>
+    expect(host.querySelector(".palette-session-settings__search")).not.toBeNull(),
+  );
+  const search = get(host, ".palette-session-settings__search");
+  const choice = get(host, '[data-machine="cloud:aws"]');
+  search.focus();
+  readCatalog.mockReturnValue(refresh.promise);
+  const pending = draft.gateway.refreshCloudProfiles();
+  await waitForSolid(() =>
+    expect(host.querySelector('.palette-session-settings__choices [role="status"]')).not.toBeNull(),
+  );
+  expect(get(host, '[data-machine="cloud:aws"]')).toBe(choice);
+  expect(document.activeElement).toBe(search);
+  refresh.reject(new Error("Catalog temporarily unavailable"));
+  await pending;
+  await waitForSolid(() =>
+    expect(host.querySelector('.palette-session-settings__choices [role="status"]')).toBeNull(),
+  );
+  expect(get(host, '[data-machine="cloud:aws"]')).toBe(choice);
+  expect(get(host, ".palette-session-settings__search")).toBe(search);
+  expect(document.activeElement).toBe(search);
+  expect(draft.gateway.cloudProfiles.map((profile) => profile.id)).toEqual(["aws"]);
+  expect(host.querySelector('.palette-session-settings [role="alert"]')).toBeNull();
 });

@@ -146,6 +146,10 @@ Rebuild indexes, related blocks, dashboards, and the compiled query/prompt snaps
 
 If `render.createDashboards` is enabled, compile also refreshes report pages.
 
+Page names use the frontmatter `title`, then the first level-one heading outside
+code blocks, then the filename. Comments inside fenced code blocks do not become
+page names; inline code in a real heading remains part of its name.
+
 ### `wiki lint`
 
 Lint the vault and write a report covering:
@@ -199,6 +203,10 @@ retain their existing lookup fallbacks and may scan the vault.
 Wiki-page reads support large files and hard links. Reads refuse paths that
 escape the vault or pass through a symbolic link inside it.
 
+Pagination counts real body lines, not the empty split element after a terminal
+newline. A read ending on the last line reports `truncated: false`; intentional
+blank lines are preserved.
+
 ```bash
 openclaw wiki get entity.alpha
 openclaw wiki get syntheses/alpha-summary.md --from 1 --lines 80
@@ -213,6 +221,15 @@ Apply narrow mutations without freeform page surgery:
 
 Both accept `--source-id`, `--contradiction`, `--question` (each repeatable), `--confidence <n>` (0-1), and `--status <status>`. `apply metadata` also accepts `--clear-confidence` to remove a stored confidence value. This is the supported way to evolve wiki pages so managed generated blocks stay intact.
 
+Metadata updates preserve comments and numeric spellings on untouched keys in ordinary string-keyed YAML mappings. Pages containing anchors, aliases, explicit tags, or non-string keys retain the existing value-rendering behavior instead; their parsed values remain authoritative, but source formatting is not preserved.
+
+Refreshing a synthesis without `--status` preserves its existing status. New synthesis pages default to `active`; an explicit `--status` sets or replaces the value.
+
+For `apply synthesis`, pass the summary with `--body <text>` or `--body-file <path>`.
+Body files must be regular files containing nonempty UTF-8 text. Symlinks to
+regular files are supported. FIFOs and other special files, blank files, and
+invalid UTF-8 are rejected before changing the existing synthesis page.
+
 ### `wiki bridge import`
 
 Import public memory artifacts from the active memory plugin into bridge-backed source pages. Use this in `bridge` mode to pull the latest exported memory artifacts into the wiki vault.
@@ -226,6 +243,13 @@ Import from explicitly configured local paths (`unsafeLocal.paths`) in `unsafe-l
 ### `wiki chatgpt import`
 
 Import a ChatGPT export into draft wiki source pages.
+
+`--export` accepts a JSON file or a directory containing `conversations.json`.
+The path's file type determines which is used, so renamed JSON files and
+directories whose names end in `.json` work the same way.
+
+Imported transcript text preserves line breaks, code indentation, and internal
+spacing, including text parts stored as serialized JSON in the export.
 
 ```bash
 openclaw wiki chatgpt import --export ./chatgpt-export
@@ -243,7 +267,11 @@ Malformed UTF-8 exports are rejected before the vault is initialized or imported
 pages are changed. If the error names an invalid export, download a fresh ChatGPT
 export and retry the import.
 
-Re-imports preserve handwritten Notes, including literal marker examples inside a complete Notes block. If a Notes marker is missing, restore it before retrying; the import leaves the affected page unchanged.
+Export files and existing source pages must resolve to regular files. Named pipes
+and other special files are rejected without waiting for data. Replace the affected
+path with a regular file and retry.
+
+Re-imports preserve handwritten Notes, including literal marker examples inside a complete Notes block. Markers inside transcript code blocks or inline code remain part of the transcript and do not prevent it from refreshing. If a Notes marker is missing, restore it before retrying; the import leaves the affected page unchanged.
 
 ### `wiki chatgpt rollback <run-id>`
 

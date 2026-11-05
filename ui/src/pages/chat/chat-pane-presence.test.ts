@@ -8,6 +8,8 @@ import { settleLitElement } from "../../test-helpers/lit-settle.ts";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
+} from "./chat-application-context.test-support.ts";
+import {
   createRenderTestChatPane,
   connectPaneTestView,
   type TestChatPane,
@@ -65,8 +67,11 @@ async function createPane(presence: PresenceEntry[]) {
     gatewayListeners.add(listener);
     return () => gatewayListeners.delete(listener);
   };
-  const publishGateway = () =>
+  const publishGateway = async (changes: Partial<ApplicationContext["gateway"]["snapshot"]>) => {
+    Object.assign(context.gateway.snapshot, changes);
     gatewayListeners.forEach((listener) => listener(context.gateway.snapshot));
+    await settleLitElement(pane);
+  };
   const state = pane.initialize(context);
   pane.sessionKey = sessionKey;
   state.sessionKey = sessionKey;
@@ -93,11 +98,6 @@ it.each([
       person("Riley", {
         ts: 2,
         lastInputSeconds: 150,
-        onlineSince: 2,
-        lastActivityAt: 2,
-        platform: "linux",
-        deviceFamily: "Desktop",
-        timeZone: "Europe/Vienna",
       }),
       person("self", { ts: 2, lastInputSeconds: 10 }),
     ],
@@ -123,19 +123,39 @@ it.each([
   },
 );
 
-it("refreshes the fallback self identity and defers to the authoritative profile", async () => {
+it("refreshes fallback identity, retains it through reconnect, and follows authoritative replacement", async () => {
   const { pane, context, publishGateway, update } = await createPane([self("self")]);
   await publishPresence(pane, [self("Updated self", "/self-v2.png")]);
   expect(update).toHaveBeenCalledOnce();
   expect(pane.chatProps).toMatchObject({ userName: "Updated self", userAvatar: "/self-v2.png" });
 
-  context.gateway.snapshot.selfUser = self("Authoritative self").user;
-  publishGateway();
-  await settleLitElement(pane);
+  await publishGateway({ selfUser: self("Authoritative self").user });
   update.mockClear();
   await publishPresence(pane, [
     person("self", { watchedSessions: [], user: { id: "self", name: "Old tab label" } }),
   ]);
   expect(update).not.toHaveBeenCalled();
   expect(pane.chatProps?.userName).toBe("Authoritative self");
+  for (const phase of ["reconnecting", "connected"] as const) {
+    await publishGateway({ phase, selfUser: undefined });
+    expect(pane.chatProps?.userName).toBe("Authoritative self");
+  }
+
+  await publishGateway({
+    selfUser: {
+      id: "blair",
+      identity: { type: "profile", id: "blair" },
+      name: "Blair",
+    },
+  });
+  expect(pane.chatProps?.userName).toBe("Blair");
+
+  await publishGateway({ selfUser: null });
+  expect(pane.chatProps?.userName).not.toBe("Blair");
+  const owner = pane as unknown as TestChatPane;
+  const accepted = withSelf(person("Blair"));
+  owner.context = { ...context, gateway: { ...context.gateway, readPresence: () => accepted } };
+  owner.connectedClient = null;
+  owner.applyGatewaySnapshot(context.gateway.snapshot);
+  expect(pane.presence.snapshot).toEqual({ presence: accepted });
 });

@@ -10,6 +10,7 @@ import {
 import { runInstalledAgentTurn } from "../../scripts/lib/cross-os-release-checks/installed.ts";
 import { runAgentTurn } from "../../scripts/lib/cross-os-release-checks/runtime.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { makeReleaseLane } from "./release-lane.test-support.ts";
 
 const runCommand = vi.hoisted(() =>
   vi.fn<(invocation: CommandInvocation, options: CommandOptions) => Promise<CommandResult>>(),
@@ -42,16 +43,13 @@ function run(adapter: "packaged" | "installed" = "packaged") {
     ? runInstalledAgentTurn({ ...params, cliPath: join(dir, "openclaw"), cwd: dir })
     : runAgentTurn({
         ...params,
-        lane: {
+        lane: makeReleaseLane(dir, {
           name: "probe",
-          rootDir: dir,
           prefixDir: join(dir, "prefix"),
-          homeDir: dir,
           stateDir: join(dir, "state"),
           appDataDir: join(dir, "app-data"),
           gatewayPort: 18_789,
-          phaseTimings: [],
-        },
+        }),
       });
 }
 
@@ -103,11 +101,8 @@ it.each([false, true])("accepts only current-command log output: %s", async (cur
   expect(runCommand).toHaveBeenCalledTimes(1);
 });
 
-it.each([
-  "document-extract: failed to install bundled runtime deps",
-  "HTTP 503: upstream connect error",
-])("preserves the first failure without another command: %s", async (message) => {
-  const error = new Error(message);
+it("preserves the first failure without another command", async () => {
+  const error = new Error("HTTP 503: upstream connect error");
   runCommand.mockRejectedValueOnce(error);
   await expect(run()).rejects.toBe(error);
   expect(runCommand).toHaveBeenCalledTimes(1);

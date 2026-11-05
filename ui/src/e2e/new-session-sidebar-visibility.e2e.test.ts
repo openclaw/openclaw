@@ -10,16 +10,11 @@ import {
   waitForCommittedChatRoute,
   waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
+import { ownerRoster, sessionPerson } from "./session-ownership-fixtures.test-support.ts";
 import { chooseSidebarOwner } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "New session sidebar visibility" });
 const prompt = "Investigate sidebar updates";
-const human = (id: string, label: string) => ({
-  type: "human" as const,
-  id: `profile-${id}`,
-  label,
-  identity: { type: "profile" as const, id: `profile-${id}` },
-});
 suite.define(() => {
   it("clears accepted text and attachments while the preview route is still loading", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
@@ -55,7 +50,7 @@ suite.define(() => {
   });
   it("shows an accepted running session under Involving me before event refresh timers or run completion", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const viewer = human("ada", "Ada");
+      const viewer = sessionPerson("profile-ada", "Ada");
       const old = {
         key: "agent:main:planning",
         sessionId: "planning",
@@ -74,14 +69,10 @@ suite.define(() => {
         status: "running",
       };
       const response = (sessions: unknown[]) => ({
-        sessions,
+        ...ownerRoster(sessions, [viewer, sessionPerson("profile-bob", "Bob")]),
         ts: 2,
-        path: "",
-        count: sessions.length,
         hasMore: false,
         nextOffset: null,
-        defaults: { model: null, modelProvider: null, contextTokens: null },
-        owners: [viewer, human("bob", "Bob")],
       });
       const gateway = await installMockGateway(page, {
         sessionKey: old.key,
@@ -111,13 +102,14 @@ suite.define(() => {
       await gateway.setMethodResponse("sessions.list", response([created, old]));
       await gateway.resolveDeferred("sessions.create");
       await page.clock.runFor(200);
-      await waitForCommittedChatRoute(page);
       // Only presentation frames may elapse: no collection window, cooldown,
       // manual refresh, or terminal message may make the new row appear.
       await page.clock.runFor(0);
       const row = page.locator(`.sidebar-recent-session[data-session-key="${created.key}"]`);
       await expect.poll(() => row.count()).toBe(1);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
+      await page.clock.resume();
+      await waitForCommittedChatRoute(page);
     });
   });
 });

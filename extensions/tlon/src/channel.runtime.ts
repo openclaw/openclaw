@@ -5,7 +5,6 @@ import type {
   ChannelOutboundContext,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { monitorTlonProvider } from "./monitor/index.js";
 import { formatTargetHint, normalizeShip, parseTlonTarget } from "./targets.js";
@@ -29,38 +28,34 @@ type ConfiguredTlonAccount = ResolvedTlonAccount & {
   code: string;
 };
 
-function resolveOutboundContext(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  to: string;
-}) {
-  const account = resolveTlonAccount(params.cfg, params.accountId);
-  if (!account.configured || !account.ship || !account.url || !account.code) {
-    const missingFields = [
-      account.ship ? undefined : "ship",
-      account.url ? undefined : "url",
-      account.code ? undefined : "code",
-    ].filter((field) => field !== undefined);
-    throw new Error(
-      `Tlon account ${account.accountId} not configured (missing ${missingFields.join(", ")})`,
-    );
-  }
-
-  const parsed = parseTlonTarget(params.to);
-  if (!parsed) {
-    throw new Error(`Invalid Tlon target. Use ${formatTargetHint()}`);
-  }
-
-  return { account: account as ConfiguredTlonAccount, parsed };
-}
-
 function resolveReplyId(replyToId?: string | null, threadId?: string | number | null) {
   return (replyToId ?? threadId) ? String(replyToId ?? threadId) : undefined;
 }
 
 async function sendTlonOutbound(params: ChannelOutboundContext, kind: "text" | "media") {
   const { cfg, to, text, accountId, replyToId, threadId, assertDirectAdapterHandoff } = params;
-  const { account, parsed } = resolveOutboundContext({ cfg, accountId, to });
+  const resolvedAccount = resolveTlonAccount(cfg, accountId);
+  if (
+    !resolvedAccount.configured ||
+    !resolvedAccount.ship ||
+    !resolvedAccount.url ||
+    !resolvedAccount.code
+  ) {
+    const missingFields = [
+      resolvedAccount.ship ? undefined : "ship",
+      resolvedAccount.url ? undefined : "url",
+      resolvedAccount.code ? undefined : "code",
+    ].filter((field) => field !== undefined);
+    throw new Error(
+      `Tlon account ${resolvedAccount.accountId} not configured (missing ${missingFields.join(", ")})`,
+    );
+  }
+
+  const parsed = parseTlonTarget(to);
+  if (!parsed) {
+    throw new Error(`Invalid Tlon target. Use ${formatTargetHint()}`);
+  }
+  const account = resolvedAccount as ConfiguredTlonAccount;
 
   let uploadedUrl: string | undefined;
   if (kind === "media") {

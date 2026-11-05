@@ -98,15 +98,11 @@ export function defineFinalizableLivePreviewAdapter<TPayload, TId, TEdit>(
 }
 
 export function createLiveMessageState<TPayload = unknown>(params?: {
-  receipt?: MessageReceipt;
-  lastRendered?: RenderedMessageBatch<TPayload>;
   canFinalizeInPlace?: boolean;
 }): LiveMessageState<TPayload> {
   return {
-    phase: params?.receipt ? "previewing" : "idle",
-    canFinalizeInPlace: params?.canFinalizeInPlace ?? Boolean(params?.receipt),
-    ...(params?.receipt ? { receipt: params.receipt } : {}),
-    ...(params?.lastRendered ? { lastRendered: params.lastRendered } : {}),
+    phase: "idle",
+    canFinalizeInPlace: params?.canFinalizeInPlace ?? false,
   };
 }
 

@@ -34,19 +34,17 @@ const defaultLsOperations: LsOperations = {
     })),
 };
 
-export interface LsToolOptions {
-  /** Custom operations for directory listing. Default: local filesystem */
-  operations?: LsOperations;
-  modelBudget?: ToolResultBudget;
-}
-
 function formatLsContinuation(after: string): string {
   return `\n\n[More entries. Continue with the same path and after=${JSON.stringify(after)}.]`;
 }
 
 export function createLsTool(
   cwd: string,
-  options?: LsToolOptions,
+  options?: {
+    /** Custom operations for directory listing. Default: local filesystem */
+    operations?: LsOperations;
+    modelBudget?: ToolResultBudget;
+  },
 ): AgentTool<typeof lsSchema, LsToolDetails> {
   const ops = options?.operations ?? defaultLsOperations;
   const resolvePath = options?.operations ? resolveToCwd : resolveLocalPathToCwd;

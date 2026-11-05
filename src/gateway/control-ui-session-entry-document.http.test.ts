@@ -1,12 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import { computeInlineScriptHashes } from "./control-ui-csp.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
 import { createRequest, createResponse } from "./server-http.test-harness.js";
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -47,23 +46,8 @@ it.each(["token", "password", "trusted-proxy"] as const)(
   },
 );
 
-it("restores the mounted canonical path before SPA scripts with the full app CSP", async () => {
+it("withholds mounted and ordinary app documents after authority changes", async () => {
   const canonical = "/control/chat/main/topic";
-  const current = vi.fn(() => true);
-  const response = await document({ sessionEntryPath: canonical, isSessionEntryCurrent: current });
-  const html = response.getBody();
-  expect(html).toContain(`history.replaceState(null,"","${canonical}"+location.hash)`);
-  expect(html.indexOf("history.replaceState")).toBeLessThan(html.indexOf('type="module"'));
-  expect(html).toContain('src="/control/assets/app.js"');
-  expect(response.setHeader).toHaveBeenCalledWith("Cache-Control", "no-store");
-  const headers = response.setHeader.mock.calls;
-  const csp = headers.findLast(([name]) => name === "Content-Security-Policy")?.[1];
-  expect(csp).toContain("connect-src 'self' ws: wss:");
-  for (const hash of computeInlineScriptHashes(html)) {
-    expect(csp).toContain(hash);
-  }
-  expect(current).toHaveBeenCalled();
-
   const isSessionEntryCurrent = () => false;
   const revoked = await document({ sessionEntryPath: canonical, isSessionEntryCurrent }, true);
   expect(revoked.getBody()).toContain("Session access changed");

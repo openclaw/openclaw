@@ -46,10 +46,8 @@ export function registerSharedClientLifetimeTests(
       vi.useFakeTimers();
       const harness = createClientHarness({ autoEmitExit: false });
       const stdinClosed = once(harness.process.stdin, "close");
-      let finishStart!: (client: CodexAppServerClient) => void;
-      const starting = new Promise<CodexAppServerClient>((resolve) => {
-        finishStart = resolve;
-      });
+      const { promise: starting, resolve: finishStart } =
+        Promise.withResolvers<CodexAppServerClient>();
       const startSpy = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(starting);
       const acquire =
         kind === "shared"

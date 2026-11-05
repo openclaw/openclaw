@@ -51,6 +51,11 @@ export function createComposerMobileInteraction(
     setEditing(next);
   };
   const mobileEditing = createMemo(() => mobileComposer() && editing());
+  // Leaving the editor with a typed draft keeps the open surface and its controls;
+  // only an empty composer rests as the one-line capsule.
+  const mobileResting = createMemo(
+    () => mobileComposer() && !editing() && !context().visibleDraft.trim(),
+  );
   const editingTransition = createMemo(
     () => ({
       editing: mobileEditing(),
@@ -171,15 +176,15 @@ export function createComposerMobileInteraction(
           }
           pointerOrigin = event.composedPath()[0];
           setKeyboardNavigation(false);
-          // Closing the keyboard may retain focus, so the next editor tap has
-          // no focusin edge. Keep its origin before restoring the writing layout.
+          // Focus during the tap, before expansion moves the native hit target.
+          // iOS needs this user gesture to open the software keyboard.
           if (
             event.button === 0 &&
-            pointerOrigin instanceof Node &&
+            pointerOrigin instanceof HTMLTextAreaElement &&
             pointerOrigin === state.composerTextarea &&
-            doc.activeElement === pointerOrigin &&
             editable(pointerOrigin)
           ) {
+            pointerOrigin.focus({ preventScroll: true });
             changeEditing(true);
           }
           if (pointerOrigin instanceof Node && !insideComposer(pointerOrigin)) {
@@ -271,6 +276,9 @@ export function createComposerMobileInteraction(
     ];
     if (props.mobileComposer && insideEditor(doc.activeElement) && editable(doc.activeElement)) {
       changeEditing(true);
+      // A composer that mounts focused (a handed-off boot draft) never showed
+      // its compact form; opening it must not animate from that height.
+      previousInputHeight = undefined;
     }
     return () => {
       disposed = true;
@@ -279,5 +287,5 @@ export function createComposerMobileInteraction(
       props.onComposerEditingChange?.(false);
     };
   });
-  return { mobileEditing, keyboardNavigation, lifecycle };
+  return { mobileEditing, mobileResting, keyboardNavigation, lifecycle };
 }

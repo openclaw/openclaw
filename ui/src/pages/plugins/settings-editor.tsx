@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal } from "solid-js";
+import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
 import { resolveStructuredDraftInitialValue } from "../../components/config-form-structured-draft.ts";
 import { ConfigStructuredDraft } from "../../components/config-form-structured-draft.tsx";
 import { ConfigMapField } from "../../components/config-form.node.collection-map.tsx";
@@ -21,7 +21,7 @@ import {
 } from "../../components/config-form.shared.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
-import { SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
+import { SettingsEmpty, SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
@@ -31,6 +31,7 @@ import "./custom-elements.ts";
 import { renderPluginDetailBreadcrumb } from "./detail-shell.tsx";
 import "./settings-editor.css";
 import { pluginEntryValue, type PluginSettingsEditorModel } from "./settings-model.ts";
+import { PluginSettingsReadStatus } from "./settings-read-status.tsx";
 
 registerPluginManagementEnglish();
 export type PluginSettingsField = ConfigNodeRenderParams & {
@@ -50,6 +51,7 @@ export function pluginSettingsNodeOptions(model: PluginSettingsEditorModel) {
     commitOnBlur: true,
     maskSensitive: true,
     rawAvailable: false,
+    secretFields: model.configSecretFields,
     onPatch: model.onConfigPatch,
     onRemove: model.onConfigRemove,
   };
@@ -222,10 +224,14 @@ function EditorSection(props: {
   children: SolidJSX.Element;
   ref?: (element: HTMLElement) => void;
 }) {
+  let section!: HTMLElement;
+  onSettled(() => {
+    props.ref?.(section);
+  });
   return (
     <section
       class="plugin-editor__section"
-      ref={(element) => props.ref?.(element)}
+      ref={(element) => (section = element)}
       id={props.id}
       tabindex={props.id === undefined ? undefined : -1}
     >
@@ -363,9 +369,9 @@ function PluginSettingsGroups(props: GroupsProps) {
           </EditorSection>
         ) : null}
         {!fields().length && !additional() && !props.permissions ? (
-          <p class="plugin-editor__empty">
-            {t(query() ? "pluginsPage.editor.noMatches" : "pluginsPage.editor.empty")}
-          </p>
+          <SettingsEmpty
+            message={t(query() ? "pluginsPage.editor.noMatches" : "pluginsPage.editor.empty")}
+          />
         ) : null}
       </div>
     </div>
@@ -436,24 +442,20 @@ export function PluginSettingsEditor(props: PluginSettingsEditorProps) {
               onInput={(event) => setQuery(event.currentTarget.value)}
             />
           </label>
-          {props.model.configError ? (
-            <div class="callout danger" role="alert">
-              {props.model.configError}
-              <button
-                class="btn btn--sm"
-                onClick={() =>
-                  props.model?.configValue && props.model.configSchema
-                    ? props.model.onConfigWriteRetry()
-                    : props.model?.onConfigReadRetry()
-                }
-              >
-                {t("common.retry")}
-              </button>
-            </div>
-          ) : null}
-          {props.model.configSchemaLoading || !props.model.configValue ? (
-            <SettingsLoadingSkeleton {...{ rows: 2, carapace: true }} />
-          ) : params() ? (
+          <PluginSettingsReadStatus
+            model={props.model}
+            loading={props.model.configSchemaLoading || !props.model.configValue}
+            rows={2}
+            renderError={(error, retry) => (
+              <div class="callout danger" role="alert">
+                {error}
+                <button class="btn btn--sm" onClick={() => retry()}>
+                  {t("common.retry")}
+                </button>
+              </div>
+            )}
+          />
+          {!props.model.configSchemaLoading && props.model.configValue && params() ? (
             <PluginSettingsDraft
               params={params()!}
               permissions={permissions()}

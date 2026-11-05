@@ -3,19 +3,37 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
 import { observeRootWork } from "../../agents/subagents/registry/subagent-registry.browser-cleanup.test-support.js";
-import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
+import {
+  settleSubagentRegistryPersistenceWork,
+  writeSubagentSessionEntry,
+} from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { observeSwarmSchedulerWork } from "../../agents/subagents/swarm/swarm-scheduler.lifecycle.test-support.js";
+import {
+  enqueueSwarmRun,
+  observeSwarmSchedulerWork,
+} from "../../agents/subagents/swarm/swarm-scheduler.lifecycle.test-support.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
+import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { LegacyContextEngine } from "../../context-engine/legacy.js";
 import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 
-vi.mock("../server-recovery-runtime-context.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../server-recovery-runtime-context.js")>()),
+type RegisteredRun = Parameters<typeof registerSubagentRun>[0];
+type RunDefaults = "requesterAgentId" | "requesterDisplayKey" | "task" | "cleanup" | "collect";
+type FixtureRun = Omit<RegisteredRun, RunDefaults> & Partial<Pick<RegisteredRun, RunDefaults>>;
+type QueuedRun = Parameters<typeof enqueueSwarmRun>[0];
+type SeedRun = Omit<FixtureRun, "sessionEntry" | "childAgentId" | "requesterSessionKey"> &
+  Partial<Pick<FixtureRun, "childAgentId" | "requesterSessionKey">> & {
+    sessionId?: string;
+    lifecycleRevision?: string;
+  };
+
+vi.mock("../server-lifecycle-runtime-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server-lifecycle-runtime-context.js")>()),
   bindGatewayLifecycleRequest:
     () =>
     async ({ method }: { method: string }) => {
@@ -98,8 +116,55 @@ export function useChatAbortRegistryFixture() {
     }
   });
 
+  const registerRun = (params: FixtureRun) =>
+    registerSubagentRun({
+      requesterAgentId: "main",
+      requesterDisplayKey: params.requesterSessionKey,
+      task: params.runId,
+      cleanup: "keep",
+      collect: true,
+      ...params,
+    });
   return {
     settle,
+    writeSession: (sessionKey: string, sessionId: string) =>
+      writeSubagentSessionEntry({
+        stateDir,
+        agentId: "main",
+        sessionKey,
+        defaultSessionId: sessionId,
+      }),
+    registerRun,
+    async seedRun(params: SeedRun) {
+      const {
+        sessionId = `${params.runId}-session`,
+        lifecycleRevision,
+        childAgentId = "main",
+        requesterSessionKey = "agent:main:main",
+        ...run
+      } = params;
+      const storePath = await writeSubagentSessionEntry({
+        stateDir,
+        agentId: childAgentId,
+        sessionKey: params.childSessionKey,
+        defaultSessionId: sessionId,
+        lifecycleRevision,
+      });
+      await registerRun({
+        requesterTurnRunId: "parent",
+        expectsCompletionMessage: false,
+        ...run,
+        childAgentId,
+        requesterSessionKey,
+        sessionEntry: loadExactSessionEntryReadOnly({
+          storePath,
+          sessionKey: params.childSessionKey,
+        })?.entry,
+      });
+      return storePath;
+    },
+    queueRun: (params: Omit<QueuedRun, "maxConcurrent" | "onStartFailure">) =>
+      enqueueSwarmRun({ maxConcurrent: 1, onStartFailure: () => true, ...params }),
     get stateDir() {
       return stateDir;
     },

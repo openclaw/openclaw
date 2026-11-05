@@ -52,26 +52,31 @@ export function CandidateRows(
           <h2>{t("modelSetup.candidates.title")}</h2>
         </div>
         <div class="model-setup__rows">
-          <For each={candidates()}>
+          <For
+            each={candidates()}
+            keyed={(candidate) =>
+              JSON.stringify([candidate.kind, candidate.modelRef, candidate.modelTarget])
+            }
+          >
             {(candidate) => {
               const active = () =>
                 (props.activation.phase === "testing" || props.activation.phase === "failure") &&
                 props.activation.targetId ===
-                  activationTargetId(candidate.kind, candidate.modelRef);
+                  activationTargetId(candidate().kind, candidate().modelRef);
               const testing = () => active() && props.activation.phase === "testing";
               const failure = () => active() && props.activation.phase === "failure";
               return (
-                <div class="model-setup__row" data-candidate-kind={candidate.kind}>
+                <div class="model-setup__row" data-candidate-kind={candidate().kind}>
                   <div class="model-setup__row-main">
                     <div class="model-setup__row-title">
-                      {renderProviderIcon(props, candidate)}
-                      <strong>{candidate.label}</strong>
-                      <span class="model-setup__chip">{candidateStatus(candidate)}</span>
+                      {renderProviderIcon(props, candidate())}
+                      <strong>{candidate().label}</strong>
+                      <span class="model-setup__chip">{candidateStatus(candidate())}</span>
                     </div>
                     <div class="muted">
-                      {candidate.modelRef} · {formatUiExternalText(candidate.detail)}
+                      {candidate().modelRef} · {formatUiExternalText(candidate().detail)}
                     </div>
-                    {candidate.modelTarget === "utility" ? (
+                    {candidate().modelTarget === "utility" ? (
                       <div class="muted">{t("modelSetup.utility.hint")}</div>
                     ) : undefined}
                   </div>
@@ -80,7 +85,7 @@ export function CandidateRows(
                       type="button"
                       class={["btn", { primary: !failure() }]}
                       disabled={props.actionsDisabled || props.detecting}
-                      onClick={() => props.onActivateCandidate(candidate)}
+                      onClick={() => props.onActivateCandidate(candidate())}
                     >
                       <span>
                         {t(
@@ -88,7 +93,7 @@ export function CandidateRows(
                             ? "modelSetup.candidates.testingButton"
                             : failure()
                               ? "modelSetup.candidates.retry"
-                              : candidate.modelTarget === "utility"
+                              : candidate().modelTarget === "utility"
                                 ? props.result.configuredModel
                                   ? "modelSetup.utility.useUtility"
                                   : "modelSetup.utility.useSetup"

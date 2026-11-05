@@ -2,6 +2,7 @@
 import { StringDecoder } from "node:string_decoder";
 import type { CommandOutputStream } from "../process/exec-output.js";
 import type { CommandOptions } from "../process/exec.js";
+import { parseDoctorProgressLine, parseDoctorRetirementWideningLine } from "./doctor-progress.js";
 import { isTruthyEnvValue } from "./env.js";
 import { UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import type { UpdateStepResult } from "./update-step-result.js";
@@ -35,14 +36,17 @@ export type UpdateDoctorSectionTiming = {
 /** Collects bounded diagnostics from the Doctor's existing startup trace. */
 export function createUpdateDoctorSectionTiming(
   parentEnv: NodeJS.ProcessEnv = process.env,
+  onPhase?: (line: string) => void,
 ): UpdateDoctorSectionTiming {
   const operatorTrace = isTruthyEnvValue(parentEnv[TRACE_ENV]);
   const phases = new Map<string, number>();
   const decoder = new StringDecoder("utf8");
   let pending = "";
   let droppingLine = false;
+  let retirementWidening: string | undefined;
 
   const observeLine = (line: string) => {
+    retirementWidening ??= parseDoctorRetirementWideningLine(line);
     const match = DOCTOR_TRACE.exec(line);
     if (!match) {
       return;
@@ -72,6 +76,15 @@ export function createUpdateDoctorSectionTiming(
     pending = lines.pop() ?? "";
     for (const line of lines) {
       observeLine(line);
+      const phase = onPhase && parseDoctorProgressLine(line);
+      if (phase) {
+        try {
+          onPhase?.(phase);
+        } catch {
+          // Advisory display failures must not become child-observer cancellation.
+          // The CLI's existing asynchronous broken-output exit policy still applies.
+        }
+      }
     }
     if (pending.length > MAX_PENDING_CHARS) {
       pending = "";
@@ -141,8 +154,9 @@ export function createUpdateDoctorSectionTiming(
     stripTrace,
     annotate: (step) => {
       const line = diagnostic();
-      if (line) {
-        step.diagnostics = [line, ...(step.diagnostics ?? [])];
+      const diagnostics = [line, retirementWidening].filter((value) => value !== undefined);
+      if (diagnostics.length) {
+        step.diagnostics = [...diagnostics, ...(step.diagnostics ?? [])];
       }
       return step;
     },

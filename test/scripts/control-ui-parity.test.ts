@@ -139,7 +139,7 @@ it("fails changed dimensions even for known nondeterministic shots", async () =>
   ).toBe(1);
 });
 
-it.each<[string, (manifest: parity.Capture) => void]>([
+it.each<[string, (manifest: parity.Capture) => void, number?]>([
   ["metadata", (m) => Object.assign(m, { browser: "" })],
   [
     "missing-shot",
@@ -152,24 +152,18 @@ it.each<[string, (manifest: parity.Capture) => void]>([
   ["duplicate", (m) => m.shots.push(m.shots[0]!)],
   ["unsafe-path", (m) => Object.assign(m.shots[0]!, { file: "../outside.png" })],
   ["checksum", (m) => Object.assign(m.shots[0]!, { sha256: parity.hash("changed-file") })],
-])("rejects %s evidence", async (_defect, corrupt) => {
+  ["incompatible browser", (m) => Object.assign(m, { browser: "another-browser" }), 1],
+])("rejects %s evidence", async (_defect, corrupt, exitCode) => {
   const a = await fixture(0),
     b = await fixture(0);
   corrupt(b.manifest);
   await saveManifest(b);
-  await expect(
-    parity.compareCaptures(a.directory, b.directory, temporary.make("parity-output-")),
-  ).rejects.toThrow();
-});
-
-it("rejects incompatible browser metadata even with identical images", async () => {
-  const a = await fixture(0),
-    b = await fixture(0);
-  b.manifest.browser = "another-browser";
-  await saveManifest(b);
-  expect(
-    await parity.compareCaptures(a.directory, b.directory, temporary.make("parity-output-")),
-  ).toBe(1);
+  const result = parity.compareCaptures(a.directory, b.directory, temporary.make("parity-output-"));
+  if (exitCode === undefined) {
+    await expect(result).rejects.toThrow();
+  } else {
+    expect(await result).toBe(exitCode);
+  }
 });
 
 it("fingerprints resolved fixture changes independently of checkout location", () => {

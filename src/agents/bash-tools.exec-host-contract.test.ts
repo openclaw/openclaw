@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
@@ -20,6 +21,33 @@ const sandbox = {
   workspaceDir: "/workspace",
   containerWorkdir: "/workspace",
 };
+
+it("reuses host and continuation schemas across interleaved sessions", () => {
+  const schemas = ["first", "second", "first"].map((sessionId) =>
+    [false, true].flatMap((hasProcess) =>
+      [undefined, sandbox].map((sessionSandbox) => {
+        const tool = createLazyExecTool({ sessionId, sandbox: sessionSandbox });
+        finalizeAgentToolAvailability([
+          tool,
+          ...(hasProcess
+            ? [{ name: "process", description: "Process control", parameters: {} }]
+            : []),
+        ]);
+        expect(tool.parameters).toMatchObject({
+          properties: {
+            host: { enum: sessionSandbox ? ["auto", "sandbox"] : ["auto", "gateway", "node"] },
+          },
+        });
+        for (const field of ["background", "yieldMs", "durable"]) {
+          const assertion = expect(tool.parameters);
+          (hasProcess ? assertion : assertion.not).toHaveProperty(`properties.${field}`);
+        }
+        return tool.parameters;
+      }),
+    ),
+  );
+  expect(new Set(schemas.flat()).size).toBe(4);
+});
 
 it("preserves the runtime rejection for an explicit unavailable sandbox through input validation", async () => {
   for (const createTool of [createExecTool, createLazyExecTool]) {
@@ -56,9 +84,8 @@ describe.each(["agent:main:main", "agent:main:subagent:child"])(
             hookContext: {},
             wrapBeforeToolCallHook: false,
           });
-          expect(direct!.parameters).toMatchObject({
-            properties: { host: { enum: hosts } },
-          });
+          const expectedSchema = { properties: { host: { enum: hosts } } };
+          expect(direct!.parameters).toMatchObject(expectedSchema);
           const catalogRef = createToolSearchCatalogRef();
           const ctx = { catalogRef, sessionKey, config: { tools: { codeMode: true } } };
           applyCodeModeCatalog({
@@ -67,13 +94,9 @@ describe.each(["agent:main:main", "agent:main:subagent:child"])(
           });
           const signature = `host?: ${hosts.map((host) => JSON.stringify(host)).join(" | ")}`;
           expect(buildCodeModeCatalogPrompt(ctx, catalogRef.current!.entries)).toContain(signature);
-          const described = await new ToolSearchRuntime(
-            ctx,
-            resolveToolSearchConfig(ctx.config),
-          ).describe("exec");
-          expect(described.parameters).toMatchObject({
-            properties: { host: { enum: hosts } },
-          });
+          const runtime = new ToolSearchRuntime(ctx, resolveToolSearchConfig(ctx.config));
+          const described = await runtime.describe("exec");
+          expect(described.parameters).toMatchObject(expectedSchema);
           expect(described.input).toContain(signature);
         }
       },

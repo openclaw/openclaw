@@ -8,13 +8,14 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { initialWizardValue } from "../model-setup/state.ts";
 import {
   ModelSetupWizardRunner,
   type ModelSetupWizardCompletion,
 } from "../model-setup/wizard-runner.ts";
-import { resolveCustodianConfiguredInferenceState } from "./custodian-session-variant.ts";
+import type { CustodianConfiguredInferenceState } from "./custodian-session-variant.ts";
 
 export type { SetupAutoCandidate, SetupAutoResult };
 
@@ -52,24 +53,50 @@ export class CustodianAutoSetup {
     },
     onBackgroundCompletion: (completion) => this.finishSignIn(completion),
     requestFailedMessage: () => t("custodian.autoSetup.failed"),
-    cancelledMessage: () => t("custodian.cancel"),
+    cancelledMessage: () => t("modelSetup.wizard.cancelled"),
     sessionExpiredMessage: () => t("modelSetup.wizard.sessionExpired"),
     gatewayNotRespondingMessage: () => t("modelSetup.wizard.gatewayNotResponding"),
   });
 
   constructor(private readonly changed: () => void) {}
 
+  get operationEpoch(): number {
+    return this.epoch;
+  }
+
   get ready(): boolean {
     return this.result?.status === "configured" || this.result?.status === "activated";
   }
 
-  get configuredInferenceState() {
+  get configuredInferenceState(): CustodianConfiguredInferenceState {
     if (this.blocksGreeting) {
       return "unresolved";
     }
-    return this.supported && this.ready
+    if (this.supported && this.ready) {
+      return "ready";
+    }
+    const context = this.context;
+    if (!context || context.gateway.snapshot.phase !== "connected") {
+      return "unresolved";
+    }
+    const agentsList = context.agents.state.agentsList;
+    if (!agentsList) {
+      return "unresolved";
+    }
+    const selectedId = normalizeAgentId(
+      context.gateway.snapshot.assistantAgentId ?? agentsList.defaultId ?? "",
+    );
+    const selectedAgent = agentsList.agents.find(
+      (agent) => normalizeAgentId(agent.id) === selectedId,
+    );
+    if (!selectedAgent) {
+      return "unresolved";
+    }
+    return selectedAgent.model?.primary?.trim()
       ? "ready"
-      : resolveCustodianConfiguredInferenceState(this.context);
+      : selectedAgent.utilityModel?.trim()
+        ? "utility"
+        : "required";
   }
 
   get blocksGreeting(): boolean {
@@ -216,10 +243,14 @@ export class CustodianAutoSetup {
       await this.wizard.requestCancellation();
     } catch (error) {
       if (epoch === this.epoch) {
-        this.error = formatUiError(error, t("custodian.autoSetup.failed"));
-        this.changed();
+        this.reportError(error);
       }
     }
+  }
+
+  reportError(error: unknown): void {
+    this.error = formatUiError(error, t("custodian.autoSetup.failed"));
+    this.changed();
   }
 
   setWizardValue(value: unknown): void {

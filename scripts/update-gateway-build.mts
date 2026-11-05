@@ -1,12 +1,16 @@
 // Source-update lifecycle adapter. Both entry paths share the output transaction.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { assertManagedGatewayArtifactPublication } from "../src/cli/update-cli/update-command-service-revalidation.js";
 import { resolvePathViaExistingAncestorSync } from "../src/infra/boundary-path.js";
 import { sha256File } from "../src/infra/crypto-digest.js";
 import { hasErrnoCode } from "../src/infra/errno.js";
+import { readPackageVersion } from "../src/infra/package-json.js";
 import { isPathInside } from "../src/infra/path-guards.js";
+import { runUpdateCandidateAdmission } from "../src/infra/update-candidate-admission.js";
 import {
   readBuiltRuntimeCommit,
   verifyGitUpdateRecovery,
@@ -378,6 +382,8 @@ async function runReferenceSourceUpdate(
       };
       const beforeSha = (await git(["rev-parse", "HEAD"])).trim();
       const branch = (await git(["rev-parse", "--abbrev-ref", "HEAD"])).trim();
+      const installedVersion = await readPackageVersion(root);
+      const runId = randomUUID();
       const beforeBuiltCommit = await readBuiltRuntimeCommit(root);
       const sourceRuntimePrepared = await inspectOwnedSourceUpdateArtifacts(root, assertCurrent);
       const inputs = await captureReferenceInputs(root, git);
@@ -502,6 +508,52 @@ async function runReferenceSourceUpdate(
                     ) {
                       throw new Error(
                         "Prepared source runtime could not be verified; the serving checkout is unchanged.",
+                      );
+                    }
+                    // The candidate owns migration compatibility. Refuse before stopping the
+                    // incumbent; this adapter has no installed-admission fallback.
+                    const admission = await runUpdateCandidateAdmission({
+                      candidateRoot: candidate,
+                      env,
+                      timeoutMs: PROBE_TIMEOUT_MS,
+                      context: {
+                        protocol: 1,
+                        installation: {
+                          root,
+                          canonicalRoot: root,
+                          version: installedVersion,
+                          installKind: "git",
+                          packageManager: "pnpm",
+                        },
+                        target: {
+                          spec: head.stdout.trim(),
+                          version: await readPackageVersion(candidate),
+                          source: "artifact",
+                          channel: "dev",
+                        },
+                        request: {
+                          yes: true,
+                          noRestart: false,
+                          acceptCapabilities: false,
+                          json: true,
+                          timeoutMs: PROBE_TIMEOUT_MS,
+                        },
+                        run: { id: runId },
+                        supervisor: {
+                          version: installedVersion ?? "unknown",
+                          host: os.hostname(),
+                          pid: process.pid,
+                        },
+                      },
+                    });
+                    if (admission.verdict?.verdict !== "admit") {
+                      throw new Error(
+                        admission.verdict?.reasons
+                          .map((reason) =>
+                            [reason.message, reason.nextAction].filter(Boolean).join(" "),
+                          )
+                          .join("\n") ||
+                          `Candidate admission unavailable (${admission.fallbackReason ?? "missing verdict"}); the serving checkout is unchanged. Repair the candidate admission failure before retrying this source update.`,
                       );
                     }
                   },

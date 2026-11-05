@@ -39,9 +39,41 @@ function candidateFixture(esm = true) {
 async function expectLegacy(f: ReturnType<typeof candidateFixture>) {
   const legacy = await f.load(`dist/${chunk.path}`);
   for (const { exported, origin } of chunk.exports) {
-    expect(legacy[exported]()).toBe(origin.symbol);
+    expect(await legacy[exported]()).toBe(origin.symbol);
   }
 }
+
+it("keeps the published recovery predicate bound to its current command owner", async () => {
+  const owner = "src/cli/update-cli/update-command-service-command.ts";
+  const recovery = "src/cli/update-cli/update-command-service-recovery.ts";
+  const release = previousReleaseInventory.releases.find((entry) =>
+    entry.chunks.some((candidate) =>
+      candidate.exports.some(
+        (binding) =>
+          binding.origin.module === recovery && binding.exported === "isPackageManagerUpdateMode",
+      ),
+    ),
+  )!;
+  const published = release.chunks.find((candidate) =>
+    candidate.exports.some((binding) => binding.origin.module === recovery),
+  )!;
+  const f = fixtureFiles(createTempDir("update-compat-recovery-binding-"));
+  f.json("package.json", { type: "module" });
+  for (const source of [recovery, owner]) {
+    f.write(source, fs.readFileSync(new URL(`../../${source}`, import.meta.url), "utf8"));
+  }
+  f.write(
+    "dist/current-mode.mjs",
+    `//#region ${owner}\nexport function isPackageManagerUpdateMode() { return "current predicate"; }\n`,
+  );
+  writeUpdateCompatibilityChunks({
+    distDir: f.file("dist"),
+    sourceDir: f.root,
+    inventory: { schemaVersion: 1, releases: [{ ...release, chunks: [published] }] },
+  });
+  const legacy = await f.load(`dist/${published.path}`);
+  expect(legacy.isPackageManagerUpdateMode()).toBe("current predicate");
+});
 
 it.each([
   'import { safePath as helper } from "@openclaw/fs-safe/path"; export { helper };',
@@ -121,4 +153,68 @@ it.each([
       integrity: `sha512-${Buffer.alloc(64).toString("base64")}`,
     }),
   ).toThrow("Cannot trace surface-abcdefgh.mjs export external to its release source");
+});
+
+it("bridges Rolldown module labels without confusing an unrelated same-named export", async () => {
+  const f = candidateFixture();
+  for (const file of fs.readdirSync(f.file("dist"))) {
+    if (file.startsWith("candidate-")) {
+      const source = fs.readFileSync(f.file("dist/" + file), "utf8");
+      f.write("dist/" + file, source.replaceAll("//#region ", "// "));
+    }
+  }
+  const origin = chunk.exports[0]!.origin;
+  f.write(
+    "dist/optional-worker.mjs",
+    "// src/infra/unrelated.ts\nconst example = " +
+      String.fromCharCode(96) +
+      "\n// " +
+      origin.module +
+      "\n" +
+      String.fromCharCode(96) +
+      ";\nfunction " +
+      origin.symbol +
+      '() { return "wrong owner"; }\nexport { ' +
+      origin.symbol +
+      " };\n",
+  );
+  f.emit();
+  await expectLegacy(f);
+});
+
+it("records updater imports and export origins from Rolldown module labels", () => {
+  const f = fixtureFiles(createTempDir("update-compat-module-labels-"));
+  f.json("package.json", { name: "openclaw", version: "2026.10.1" });
+  f.json("dist/build-info.json", {
+    version: "2026.10.1",
+    buildId: "fixture",
+    commit: "0".repeat(40),
+  });
+  f.write(
+    "dist/command.mjs",
+    '// src/cli/update-cli/update-command-service-command.ts\nexport async function restart() { return (await import("./surface-abcdefgh.mjs")).owned(); }\n',
+  );
+  f.write(
+    "dist/surface-abcdefgh.mjs",
+    '// src/daemon/inspect.ts\nexport function owned() { return "owned"; }\n',
+  );
+  const recorded = recordUpdateCompatibilityRelease({
+    packageDir: f.root,
+    integrity: "sha512-Zml4dHVyZQ==",
+  });
+  expect(recorded.chunks).toEqual([
+    {
+      path: "surface-abcdefgh.mjs",
+      imports: [
+        {
+          importer: "command.mjs",
+          owner: "src/cli/update-cli/update-command-service-command.ts",
+          exports: ["owned"],
+        },
+      ],
+      exports: [
+        { exported: "owned", origin: { module: "src/daemon/inspect.ts", symbol: "owned" } },
+      ],
+    },
+  ]);
 });

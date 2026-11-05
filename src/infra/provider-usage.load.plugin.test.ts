@@ -36,17 +36,22 @@ const snapshot: ProviderUsageSnapshot = {
   displayName: "OpenAI",
   windows: [{ label: "5h", usedPercent: 9 }],
 };
-const expected = { updatedAt: usageNow, providers: [snapshot] };
+const expected = {
+  updatedAt: usageNow,
+  providers: [{ ...snapshot, authProfileId: "openai:quota" }],
+};
 const env = { HTTP_PROXY: "", HTTPS_PROXY: "http://proxy.test:8080" };
 const url = "https://chatgpt.com/backend-api/wham/usage";
 const options = {
-  now: usageNow,
-  auth: [{ provider: "openai", token: "codex-token", accountId: "acc-1" }],
+  auth: [
+    { provider: "openai", token: "codex-token", accountId: "acc-1", authProfileId: "openai:quota" },
+  ],
   env,
 };
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.spyOn(Date, "now").mockReturnValue(usageNow);
   mocks.resolve.mockResolvedValue(null);
   vi.stubGlobal(
     "fetch",
@@ -55,37 +60,32 @@ beforeEach(() => {
     }),
   );
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 it("routes synthetic usage to the Codex hook with the original OpenAI account context", async () => {
   mocks.resolve.mockResolvedValueOnce(snapshot);
   const auth = { provider: "openai", token: "codex-app-server", authProfileId: "openai:work" };
   const result = await loadProviderUsageSummary({
-    now: usageNow,
     env: {},
     auth: [{ ...auth, hookProvider: "codex" }],
   });
-  expect(result).toEqual(expected);
+  expect(result).toEqual({
+    updatedAt: usageNow,
+    providers: [{ ...snapshot, authProfileId: "openai:work" }],
+  });
   expect(mocks.resolve.mock.calls).toMatchObject([[{ provider: "codex", context: auth }]]);
 });
 
-it.each([false, true])("routes plugin fetch with explicit override=%s", async (explicit) => {
-  const fetch = vi.fn(async () => new Response("{}"));
+it("routes plugin fetch through the configured proxy", async () => {
   mocks.fetch.mockResolvedValueOnce(new Response("{}"));
   mocks.resolve.mockImplementationOnce(async ({ context }) => {
     await context.fetchFn(url);
     return snapshot;
   });
-  expect(await loadProviderUsageSummary({ ...options, ...(explicit ? { fetch } : {}) })).toEqual(
-    expected,
-  );
-  if (explicit) {
-    expect(fetch).toHaveBeenCalledOnce();
-    for (const mock of [mocks.runtime, mocks.proxyAgent, mocks.fetch]) {
-      expect(mock).not.toHaveBeenCalled();
-    }
-    return;
-  }
+  expect(await loadProviderUsageSummary(options)).toEqual(expected);
   expect(mocks.proxyAgent.mock.calls).toEqual([
     [{ httpsProxy: "http://proxy.test:8080" }, undefined, env],
   ]);

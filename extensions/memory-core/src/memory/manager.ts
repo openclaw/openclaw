@@ -1,3 +1,4 @@
+import type { AcquireConfiguredProviderLocalService } from "openclaw/plugin-sdk/embedding-providers";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
@@ -17,7 +18,6 @@ import {
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import type { openOpenClawAgentSqliteWorkerStoreV2 } from "openclaw/plugin-sdk/sqlite-runtime";
-import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import { getMemoryManagerLifecycle, markMemoryIndexingLive } from "./lifecycle.js";
 import { runMemoryStatus } from "./manager-cpu-worker-runtime.js";
 import { captureMemoryDatabaseWriteOptions } from "./manager-database-admission.js";
@@ -64,7 +64,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   }
   protected readonly cacheKey: string;
   protected readonly purpose: MemoryIndexManagerPurpose;
-  protected override readonly acquireLocalService?: MemoryCoreAcquireLocalService;
+  protected override readonly acquireLocalService?: AcquireConfiguredProviderLocalService;
   private readonly backgroundRunner?: MemoryCoreRuntimeHost["runInBackgroundContext"];
   protected readonly runInBackgroundContext = <T>(run: () => T): T => {
     if (!this.backgroundRunner) {
@@ -100,7 +100,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     agentId: string;
     purpose?: MemoryIndexManagerPurpose;
     inspectSources?: boolean;
-    acquireLocalService?: MemoryCoreAcquireLocalService;
+    acquireLocalService?: AcquireConfiguredProviderLocalService;
     runInBackgroundContext?: MemoryCoreRuntimeHost["runInBackgroundContext"];
     maintenanceSource?: MemoryIndexManager;
   }): Promise<MemoryIndexManager | null> {
@@ -230,7 +230,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     settings: ResolvedMemorySearchConfig;
     providerRequirement: MemoryEmbeddingProviderRequirement;
     purpose: MemoryIndexManagerPurpose;
-    acquireLocalService?: MemoryCoreAcquireLocalService;
+    acquireLocalService?: AcquireConfiguredProviderLocalService;
     runInBackgroundContext?: MemoryCoreRuntimeHost["runInBackgroundContext"];
     maintenanceSource?: MemoryIndexManager;
     databaseOptions: Parameters<typeof openOpenClawAgentSqliteWorkerStoreV2>[0] & { path: string };
@@ -304,7 +304,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     }
     this.batch = this.resolveBatchConfig();
     if (!transient) {
-      markMemoryIndexingLive();
+      markMemoryIndexingLive(this.agentId);
       this.runInBackgroundContext(() => {
         this.ensureWatcher();
         this.ensureSessionListener();
@@ -336,8 +336,9 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   }
 
   protected async syncPublishedIndexInBackground(params: { reason: string }): Promise<void> {
-    if (this.syncing || this.reindexProgress) {
-      return await this.syncBackground(params);
+    await this.syncing?.catch(() => undefined);
+    if (this.reindexProgress) {
+      return await this.syncAdmitted(params);
     }
     await this.syncOutcomes.track(() =>
       runMemorySearchMaintenance({
@@ -387,18 +388,18 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         return this.sessionSyncQueue.enqueue(params);
       }
       try {
+        const joinedWatchGeneration = this.syncingMemoryWatchGeneration;
         await this.syncing;
-        // Watch events accepted after source planning belong to the next pass.
-        // Joining the old promise alone would strand them until another search.
-        if (
-          !this.closing &&
-          !this.closed &&
-          (this.reindexProgress ||
-            (params?.reason === "watch" &&
-              this.dirty &&
-              this.memoryWatchGeneration > this.syncingMemoryWatchGeneration))
-        ) {
-          return await this.syncAdmitted(params, options);
+        if (!this.closing && !this.closed) {
+          // MemoryManagerSessionSyncOps resumes yielded work via syncBackground after idle.
+          // Join only newer watch generations; another waiter may already own that pass.
+          const nextSync = this.syncing;
+          if (nextSync !== null && this.syncingMemoryWatchGeneration > joinedWatchGeneration) {
+            return await nextSync;
+          }
+          if (this.dirty && this.memoryWatchGeneration > joinedWatchGeneration) {
+            return await this.syncAdmitted(params, options);
+          }
         }
         return;
       } catch (err) {
@@ -415,8 +416,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         throw err;
       }
     }
-    // An intentional no-progress pass may remain dirty. Only newly accepted
-    // watch facts can admit another pass; joined callers cannot spin on dirty.
     this.syncingMemoryWatchGeneration = this.memoryWatchGeneration;
     const run = async () => {
       this.syncIsBackground = options?.background ?? false;
@@ -603,8 +602,9 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
         this.dirty ||
         this.sessionsDirty ||
         this.indexIdentityDirty ||
+        this.sessionBackgroundIndexing ||
         this.syncing !== null ||
-        this.activeBackgroundSearchSyncs.size > 0,
+        this.activeBackgroundCleanup.size > 0,
       lastSyncError: this.syncOutcomes.lastError,
       workspaceDir: this.workspaceDir,
       dbPath: this.settings.store.databasePath,

@@ -49,7 +49,10 @@ it.runIf(process.env.OPENCLAW_DB_WORKER_BENCH === "1")(
         });
         expect(result.sessions).toHaveLength(200);
         expect(result.totalCount).toBe(rows);
-        return { ms: performance.now() - start, bytes: Buffer.byteLength(frame) };
+        return {
+          ms: performance.now() - start,
+          bytes: typeof frame === "string" ? Buffer.byteLength(frame) : frame.byteLength,
+        };
       };
       const cold = await Promise.all(clients.map(measure));
       const coldSelections = filter.mock.calls.length;

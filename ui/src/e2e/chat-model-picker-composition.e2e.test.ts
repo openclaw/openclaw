@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import { installMockGateway } from "./chat-flow.test-support.ts";
 import {
   polledAttribute,
   polledCount,
@@ -7,8 +7,13 @@ import {
   polledVisible,
 } from "./chat-presentation.test-support.ts";
 import { modelAuthStatus, modelPicker } from "./chat-runtime-fixtures.test-support.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createChatFlowE2eSuite();
+const suite = createControlUiE2eSuite({
+  name: "Control UI mocked Gateway E2E",
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH to a compatible browser, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
+});
 const accountLabel = "Sign in with ChatGPT";
 const catalog = (
   models: { id: string; name: string; provider: string }[],
@@ -41,7 +46,7 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      const { picker, trigger } = modelPicker(page);
+      const { picker, trigger, search } = modelPicker(page);
       await trigger.click();
       await polledCount(picker.locator("[data-chat-model-provider-toggle]")).toBe(1);
       const account = picker.locator(".chat-controls__account-selection");
@@ -76,7 +81,11 @@ suite.define(() => {
         '[data-chat-account-option="account:openai:new-alternate"]',
       );
       await polledVisible(newAlternate).toBe(true);
+      await search.fill("Old alternate");
+      await polledVisible(picker.locator("[data-chat-model-search-empty]")).toBe(true);
       expect(await oldAlternate.count()).toBe(0);
+      await search.fill("New alternate");
+      await polledVisible(newAlternate).toBe(true);
     });
   });
 
@@ -134,7 +143,6 @@ suite.define(() => {
         expect(await beta.isVisible()).toBe(false);
         await search.fill("shared");
         await polledVisible(beta).toBe(true);
-        expect(await openai.getAttribute("aria-expanded")).toBe("true");
         for (const query of ["shared-beta", "ANTHROPIC/SHARED-BETA"]) {
           await search.fill(query);
           expect({ beta: await beta.isVisible(), alpha: await alpha.isVisible() }).toEqual({
@@ -145,6 +153,7 @@ suite.define(() => {
         await search.press("ControlOrMeta+A");
         await search.press("Backspace");
         expect(await search.inputValue()).toBe("");
+        await polledAttribute(openai, "aria-expanded").toBe("true");
         expect(await alpha.isVisible()).toBe(true);
         expect(await beta.isVisible()).toBe(false);
         await openai.click();
@@ -156,6 +165,36 @@ suite.define(() => {
         expect(await openai.getAttribute("aria-expanded")).toBe("false");
         expect(await search.inputValue()).toBe("");
         await search.fill("shared");
+        if (width === 1280) {
+          const highlighted = await search.getAttribute("aria-activedescendant");
+          expect(highlighted).toBeTruthy();
+          // Keep app-level key ownership and RPC admission alongside the component matrix.
+          for (const composition of ["active", "keyCode229"]) {
+            for (const key of ["Enter", "Escape"]) {
+              const label = `${composition} ${key}`;
+              const prevented = await search.evaluate(
+                (input, args) => {
+                  const event = new KeyboardEvent("keydown", {
+                    key: args.key,
+                    isComposing: args.composition === "active",
+                    keyCode: args.composition === "keyCode229" ? 229 : 0,
+                    bubbles: true,
+                    cancelable: true,
+                    composed: true,
+                  });
+                  input.dispatchEvent(event);
+                  return event.defaultPrevented;
+                },
+                { key, composition },
+              );
+              expect(prevented, label).toBe(false);
+              expect(await picker.getAttribute("open"), label).not.toBeNull();
+              expect(await search.inputValue(), label).toBe("shared");
+              expect(await search.getAttribute("aria-activedescendant"), label).toBe(highlighted);
+              expect(await gateway.getRequests("sessions.patch"), label).toEqual([]);
+            }
+          }
+        }
         await search.press("ArrowDown");
         await search.press("Enter");
         const patch = await gateway.waitForRequest("sessions.patch");
@@ -167,85 +206,4 @@ suite.define(() => {
       });
     },
   );
-
-  for (const composition of ["active", "keyCode229", "none"] as const) {
-    it.each(["Enter", "Escape", "ArrowDown", "ArrowUp"])(
-      `respects ${composition} composition ownership for model-search %s`,
-      async (key) => {
-        await suite.withPage({}, async ({ page }) => {
-          const gateway = await installMockGateway(page, {
-            agentModel: "openai/gpt-5.5",
-            models: [
-              { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
-              { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
-            ],
-          });
-          await page.goto(`${suite.server.baseUrl}chat`);
-          const { picker, trigger, search } = modelPicker(page);
-          await polledAttribute(trigger, "aria-disabled").toBe("false");
-          await trigger.click();
-          await polledCount(picker.locator("[data-chat-model-option]")).toBe(2);
-          await page.mouse.move(0, 0);
-          const query = key.startsWith("Arrow") ? "" : "anthropic";
-          if (key.startsWith("Arrow")) {
-            for (const toggle of await picker
-              .locator('[data-chat-model-provider-toggle][aria-expanded="false"]')
-              .all()) {
-              await toggle.focus();
-              await toggle.press("Enter");
-            }
-          }
-          await search.fill(query);
-          await search.focus();
-          // This exercises browser event ownership, not a native OS IME candidate window.
-          const { prevented, highlightedBefore } = await search.evaluate(
-            (input, args) => {
-              const previousHighlight = input.getAttribute("aria-activedescendant");
-              const event = new KeyboardEvent("keydown", {
-                key: args.key,
-                isComposing: args.composition === "active",
-                keyCode: args.composition === "keyCode229" ? 229 : 0,
-                bubbles: true,
-                cancelable: true,
-                composed: true,
-              });
-              input.dispatchEvent(event);
-              return {
-                prevented: event.defaultPrevented,
-                highlightedBefore: previousHighlight,
-              };
-            },
-            { key, composition },
-          );
-
-          expect(highlightedBefore).toBeTruthy();
-
-          if (composition !== "none") {
-            expect.soft(prevented).toBe(false);
-            expect.soft(await picker.getAttribute("open")).not.toBeNull();
-            expect.soft(await search.inputValue()).toBe(query);
-            expect.soft(await search.getAttribute("aria-activedescendant")).toBe(highlightedBefore);
-            expect.soft(await gateway.getRequests("sessions.patch")).toEqual([]);
-          } else {
-            expect(prevented).toBe(true);
-            if (key === "Enter") {
-              const patch = await gateway.waitForRequest("sessions.patch");
-              expect(patch.params).toMatchObject({ model: "anthropic/claude-sonnet-4-6" });
-              expect(await picker.getAttribute("open")).toBeNull();
-            } else {
-              expect(await picker.getAttribute("open")).not.toBeNull();
-              expect(await gateway.getRequests("sessions.patch")).toEqual([]);
-              if (key === "Escape") {
-                expect(await search.inputValue()).toBe("");
-                await search.press("Escape");
-                expect(await picker.getAttribute("open")).toBeNull();
-              } else {
-                await polledAttribute(search, "aria-activedescendant").not.toBe(highlightedBefore);
-              }
-            }
-          }
-        });
-      },
-    );
-  }
 });

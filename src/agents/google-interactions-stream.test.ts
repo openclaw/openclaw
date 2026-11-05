@@ -4,6 +4,7 @@ import { configureAiTransportHost } from "../../packages/ai/src/host.js";
 import { streamSimpleGoogleInteractions } from "../../packages/ai/src/providers/google-interactions.js";
 import { classifyFailoverSignalCore } from "./failover/classify-core.js";
 import { shouldRetryFailoverSignal } from "./failover/retry-evidence.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 describe("Google Interactions stream recovery", () => {
   afterEach(() => {
@@ -14,18 +15,15 @@ describe("Google Interactions stream recovery", () => {
   it.each(["EOF", "[DONE]"])(
     "keeps partial replies retryable after %s without completion",
     async (ending) => {
-      const model: Model<"google-interactions"> = {
+      const model: Model<"google-interactions"> = makeProviderModelFixture({
         id: "gemini-3-flash-preview",
         name: "Gemini 3 Flash",
         api: "google-interactions",
         provider: "google",
         baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 128_000,
         maxTokens: 8_192,
-      };
+      });
       const payload =
         'data: {"event_type":"step.delta","delta":{"type":"text","text":"Partial reply"}}\n\n' +
         (ending === "[DONE]" ? "data: [DONE]\n\n" : "");

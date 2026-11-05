@@ -10,6 +10,7 @@ import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { safeParseJson, truncateCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+import { startWebSocketKeepalive } from "openclaw/plugin-sdk/websocket-runtime";
 import { resolveClickClackInboundAccess } from "./access.js";
 import { resolveClickClackAccount } from "./accounts.js";
 import {
@@ -42,14 +43,6 @@ function commandArgsHint(spec: NativeCommandSpec): string {
     );
   }
   return spec.acceptsArgs ? "[args]" : "";
-}
-
-function errorStatus(error: unknown): number | undefined {
-  if (!error || typeof error !== "object" || !("status" in error)) {
-    return undefined;
-  }
-  const status = error.status;
-  return typeof status === "number" ? status : undefined;
 }
 
 function mapNativeCommandSpecsToClickClackMenu(
@@ -204,7 +197,7 @@ export async function startClickClackGatewayAccount(
       const commands = mapNativeCommandSpecsToClickClackMenu(specs, ctx.log);
       await client.setBotCommands(commands);
     } catch (error) {
-      const status = errorStatus(error);
+      const status = error instanceof ClickClackHttpError ? error.status : undefined;
       const messagePrefix = `[${account.accountId}] ClickClack command menu sync`;
       if (status === 403) {
         ctx.log?.warn?.(
@@ -276,11 +269,13 @@ export async function startClickClackGatewayAccount(
         let loggedMessageFailure = false;
         let messageQueue = Promise.resolve();
         let removeAbortListener: (() => void) | undefined;
+        let stopKeepalive: (() => void) | undefined;
         const finishSocketCycle = () => {
           if (settled) {
             return;
           }
           settled = true;
+          stopKeepalive?.();
           removeAbortListener?.();
           removeAbortListener = undefined;
           resolve();
@@ -320,6 +315,16 @@ export async function startClickClackGatewayAccount(
         removeAbortListener = () => ctx.abortSignal.removeEventListener("abort", abort);
         socket.on("open", () => {
           ctx.setStatus(channelReadyPatch({ accountId: account.accountId }));
+          // A network path that dies without a FIN never emits close; the missed
+          // pong ends this cycle so the reconnect replays the backlog. Start on
+          // open: the helper stops for good if its first tick finds the socket
+          // still connecting.
+          stopKeepalive = startWebSocketKeepalive(socket, () => {
+            ctx.log?.warn?.(
+              `[${account.accountId}] ClickClack websocket heartbeat timed out; reconnecting`,
+            );
+            socket.terminate();
+          });
         });
         socket.on("message", (data) => {
           if (closing || settled) {

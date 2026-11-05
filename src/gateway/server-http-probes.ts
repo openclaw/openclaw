@@ -9,37 +9,6 @@ import { isLocalDirectRequest } from "./net.js";
 import { getHttpAuthUtilsModule } from "./server-http-modules.js";
 import type { ReadinessChecker, StartupChecker, StartupResult } from "./server/readiness.js";
 
-async function shouldIncludeGatewayProbeDetails(params: {
-  req: IncomingMessage;
-  resolvedAuth: ResolvedGatewayAuth;
-  trustedProxies: string[];
-  allowRealIpFallback: boolean;
-  rateLimiter?: AuthRateLimiter;
-}): Promise<boolean> {
-  if (
-    readPreparedGatewayIngressAttribution(params.req)?.kind === "direct-local" ||
-    (!readPreparedGatewayIngressAttribution(params.req) && isLocalDirectRequest(params.req))
-  ) {
-    return true;
-  }
-  if (params.resolvedAuth.mode === "none") {
-    return false;
-  }
-  const { getBearerToken, resolveHttpBrowserOriginPolicy } = await getHttpAuthUtilsModule();
-  const bearerToken = getBearerToken(params.req);
-  return (
-    await authorizeHttpGatewayConnect({
-      auth: params.resolvedAuth,
-      connectAuth: bearerToken ? { token: bearerToken, password: bearerToken } : null,
-      req: params.req,
-      trustedProxies: params.trustedProxies,
-      allowRealIpFallback: params.allowRealIpFallback,
-      rateLimiter: params.rateLimiter,
-      browserOriginPolicy: resolveHttpBrowserOriginPolicy(params.req),
-    })
-  ).ok;
-}
-
 function startupProbeBody(result: StartupResult, includeDetails: boolean): string {
   if (!includeDetails) {
     return JSON.stringify({ ok: result.ok, status: result.status });
@@ -87,13 +56,31 @@ export async function handleGatewayProbeRequest(
   let body: string;
   if ((status === "ready" && getReadiness) || status === "startup") {
     // Subsystem details belong only to local direct or authenticated callers.
-    const includeDetails = await shouldIncludeGatewayProbeDetails({
-      req,
-      resolvedAuth,
-      trustedProxies,
-      allowRealIpFallback,
-      rateLimiter,
-    });
+    async function shouldIncludeGatewayProbeDetails(): Promise<boolean> {
+      if (
+        readPreparedGatewayIngressAttribution(req)?.kind === "direct-local" ||
+        (!readPreparedGatewayIngressAttribution(req) && isLocalDirectRequest(req))
+      ) {
+        return true;
+      }
+      if (resolvedAuth.mode === "none") {
+        return false;
+      }
+      const { getBearerToken, resolveHttpBrowserOriginPolicy } = await getHttpAuthUtilsModule();
+      const bearerToken = getBearerToken(req);
+      return (
+        await authorizeHttpGatewayConnect({
+          auth: resolvedAuth,
+          connectAuth: bearerToken ? { token: bearerToken, password: bearerToken } : null,
+          req,
+          trustedProxies,
+          allowRealIpFallback,
+          rateLimiter,
+          browserOriginPolicy: resolveHttpBrowserOriginPolicy(req),
+        })
+      ).ok;
+    }
+    const includeDetails = await shouldIncludeGatewayProbeDetails();
     const readiness = status === "ready" ? getReadiness : undefined;
     try {
       if (readiness) {
@@ -110,7 +97,7 @@ export async function handleGatewayProbeRequest(
       body = readiness
         ? JSON.stringify(
             includeDetails
-              ? { ready: false, failing: ["internal"], uptimeMs: 0 }
+              ? { ready: false, coreReady: false, failing: ["internal"], uptimeMs: 0 }
               : { ready: false },
           )
         : startupProbeBody(

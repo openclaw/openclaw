@@ -6,19 +6,13 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { createMSTeamsSsoTokenStoreFs } from "./sso-token-store.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
+import { useMSTeamsStateTempDirs } from "./test-support/state.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterAll(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
-    cleanup();
-  }),
-);
+const tempDirs = useMSTeamsStateTempDirs();
 
 const makeToken = (connectionName: string, userId: string, token: string) => ({
   connectionName,
@@ -27,6 +21,7 @@ const makeToken = (connectionName: string, userId: string, token: string) => ({
   updatedAt: "2026-04-10T00:00:00.000Z",
 });
 let stateDir: string;
+const legacyPath = () => path.join(stateDir, "msteams-sso-tokens.json");
 
 afterEach(() => vi.unstubAllEnvs());
 beforeEach(() => {
@@ -36,29 +31,47 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
 });
 
-it("keeps distinct tokens when connectionName and userId contain the legacy delimiter", async () => {
-  const storePath = path.join(stateDir, "msteams-sso-tokens.json");
+it("keeps long delimiter-colliding token keys distinct through removal", async () => {
   const store = createMSTeamsSsoTokenStoreFs();
-  const first = makeToken("conn::alpha", "user", "token-a");
-  const second = {
-    ...makeToken("conn", "alpha::user", "token-b"),
-    updatedAt: "2026-04-10T00:00:01.000Z",
-  };
+  const connection = `conn-${"c".repeat(1000)}`;
+  const user = `user-${"u".repeat(2000)}`;
+  const first = makeToken(`${connection}::alpha`, user, "token-a");
+  const second = makeToken(connection, `alpha::${user}`, "token-b");
 
   await store.save(first);
   await store.save(second);
 
   expect(await store.get(first)).toEqual(first);
   expect(await store.get(second)).toEqual(second);
+  expect(await store.remove(first)).toBe(true);
+  expect(await store.get(first)).toBeNull();
+  expect(await store.get(second)).toEqual(second);
 
-  await expect(fs.access(storePath)).rejects.toThrow();
+  await expect(fs.access(legacyPath())).rejects.toThrow();
   await fs.access(path.join(stateDir, "state", "openclaw.sqlite"));
 });
 
+it("orders concurrent token changes while isolating account namespaces", async () => {
+  const store = createMSTeamsSsoTokenStoreFs();
+  const sibling = createMSTeamsSsoTokenStoreFs();
+  const named = createMSTeamsSsoTokenStoreFs({ accountId: "support" });
+  const first = makeToken("graph", "same-user", "first");
+  const replacement = { ...first, token: "replacement" };
+  const namedToken = { ...first, token: "named" };
+
+  const save = store.save(first);
+  const saveNamed = named.save(namedToken);
+  const remove = sibling.remove(first);
+  const replace = store.save(replacement);
+  await Promise.all([save, saveNamed, expect(remove).resolves.toBe(true), replace]);
+
+  expect(await sibling.get(first)).toEqual(replacement);
+  expect(await named.get(first)).toEqual(namedToken);
+});
+
 it("ignores legacy flat-key token files at runtime", async () => {
-  const storePath = path.join(stateDir, "msteams-sso-tokens.json");
   await fs.writeFile(
-    storePath,
+    legacyPath(),
     JSON.stringify({
       version: 1,
       tokens: { "legacy::wrong-key": makeToken("conn", "user-1", "token-1") },
@@ -68,7 +81,7 @@ it("ignores legacy flat-key token files at runtime", async () => {
 
   const store = createMSTeamsSsoTokenStoreFs();
   expect(await store.get({ connectionName: "conn", userId: "user-1" })).toBeNull();
-  await fs.access(storePath);
+  await fs.access(legacyPath());
 });
 
 it("preserves migrated default tokens and isolates named-account updates and removal", async () => {
@@ -94,14 +107,4 @@ it("preserves migrated default tokens and isolates named-account updates and rem
   expect(await createMSTeamsSsoTokenStoreFs().get(token)).toEqual(token);
   await reopened.remove(token);
   expect(await createMSTeamsSsoTokenStoreFs().get(token)).toEqual(token);
-});
-
-it("keeps plugin-state keys bounded for long Teams identifiers", async () => {
-  const store = createMSTeamsSsoTokenStoreFs();
-  const token = makeToken(`conn-${"c".repeat(1000)}`, `user-${"u".repeat(2000)}`, "token-long");
-
-  await store.save(token);
-  expect(await store.get(token)).toEqual(token);
-  expect(await store.remove(token)).toBe(true);
-  expect(await store.get(token)).toBeNull();
 });

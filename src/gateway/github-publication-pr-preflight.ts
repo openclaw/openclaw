@@ -1,22 +1,20 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionGitHubPullRequestInspectResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
-import {
-  githubPublicationApiArgs,
-  runPublicationCommand,
-} from "./github-publication-git-transport.js";
+import { createGitHubPublicationJsonReader } from "./github-publication-json-read.js";
 
 type PullRequest = Pick<
   SessionGitHubPullRequestInspectResult,
   "host" | "number" | "author" | "state" | "base" | "head"
 >;
 
-/** Recheck the selected original head at the effect owner; this creates no durable grant. */
+/** Recheck eligibility and return the observed PR for the caller's remaining effect preconditions. */
 export async function assertExistingPullRequestWriteAccess(params: {
   pullRequest: PullRequest;
   identity: PreparedGitHubPublicationIdentity;
   assertCurrent: () => void;
-}): Promise<void> {
+  requirePublicRepositories?: boolean;
+}): Promise<unknown> {
   const { pullRequest: pr, identity, assertCurrent } = params;
   assertCurrent();
   if ((identity.host ?? "github.com") !== pr.host) {
@@ -35,25 +33,13 @@ export async function assertExistingPullRequestWriteAccess(params: {
     new Error(
       "The original PR's write eligibility could not be verified. Check the head branch and the publisher's access, then retry preparation.",
     );
-  const read = async (endpoint: string): Promise<unknown> => {
-    assertCurrent();
-    const response = await runPublicationCommand(
-      githubPublicationApiArgs(endpoint, "GET", pr.host),
-      { env: identity.env, beforeRun: assertCurrent },
-    ).catch(() => {
-      assertCurrent();
-      throw unavailable();
-    });
-    assertCurrent();
-    if (response.code !== 0) {
-      throw unavailable();
-    }
-    try {
-      return JSON.parse(response.stdout.toString("utf8"));
-    } catch {
-      throw unavailable();
-    }
-  };
+  const read = createGitHubPublicationJsonReader({
+    host: pr.host,
+    env: identity.env,
+    assertCurrent,
+    unavailable,
+    requireSuccess: true,
+  });
   const repository = async (ref: NonNullable<PullRequest["head"]>) => {
     const value = await read(`repos/${ref.repository}`);
     if (
@@ -65,6 +51,11 @@ export async function assertExistingPullRequestWriteAccess(params: {
       typeof value.owner.type !== "string"
     ) {
       throw unavailable();
+    }
+    if (params.requirePublicRepositories && value.private !== false) {
+      throw new Error(
+        "The recorded PR must remain public to continue without a linked GitHub account.",
+      );
     }
     const permissions = isRecord(value.permissions) ? value.permissions : undefined;
     return {
@@ -136,4 +127,5 @@ export async function assertExistingPullRequestWriteAccess(params: {
     );
   }
   assertCurrent();
+  return current;
 }

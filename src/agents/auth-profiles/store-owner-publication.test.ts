@@ -50,7 +50,10 @@ import {
   updateAuthProfileStoreWithLock,
 } from "./store-runtime.js";
 import { authProfileScopeCwdEntrypoint } from "./store-scope-cwd-runtime.test-support.js";
-import { createAuthOwnerTestFixtures } from "./store-state-owner.test-support.js";
+import {
+  createAuthOwnerTestFixtures,
+  persistOwnerProfile as persistProfile,
+} from "./store-state-owner.test-support.js";
 import {
   captureAuthProfileStorePersistenceSnapshot as capturePersistence,
   restoreAuthProfileStorePersistenceSnapshot as restorePersistence,
@@ -58,7 +61,6 @@ import {
   withEnvOnlyAuthProfileStore,
 } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
-import { persistAuthProfileBatch } from "./upsert-with-lock.js";
 
 const { tempDirs, saveOptions, apiKey, store, snapshotAt, unreadableOuter, seedRoot } =
   createAuthOwnerTestFixtures();
@@ -92,18 +94,6 @@ function saveProfiles(profiles: AuthProfileStore["profiles"], agentDir?: string)
 }
 function writeRaw(profiles: unknown, agentDir: string) {
   writePersistedAuthProfileStoreRaw({ version: 1, profiles }, agentDir);
-}
-function persistProfile(
-  root: Pick<Root, "stateDir">,
-  profileId: string,
-  credential: AuthProfileCredential,
-  agentDir?: string,
-) {
-  return persistAuthProfileBatch({
-    stateDir: root.stateDir,
-    agentDir,
-    profiles: [{ profileId, credential }],
-  });
 }
 function refuseMigration(root: Root) {
   markAuthProfileMigrationRequired(
@@ -314,39 +304,27 @@ describe("auth publication owner receipts", () => {
   it("keeps runtime-only rows out of unrelated agent-local batch persistence", async () => {
     const root = await seedRoot("original");
     const { agentDir, agentPath: databasePath } = root;
-    const durableProfileId = "local";
     const durableCredential = apiKey("original-local");
-    const staleProfileId = "openai:removed";
-    const staleFenceId = "openai:stale-fence";
-    const externalProfileId = "anthropic:runtime-external";
-    const expiredOAuth = oauth("openai", "expired-access", "consumed-refresh", Date.now() - 60_000);
-    const staleFence = createOAuthRefreshFence({
-      profileId: staleFenceId,
-      credential: expiredOAuth,
-    });
+    const stale = {
+      removed: apiKey("removed"),
+      fence: createOAuthRefreshFence({
+        profileId: "fence",
+        credential: oauth("openai", "expired-access", "consumed-refresh", Date.now() - 60_000),
+      }),
+    };
+    const external = oauth("anthropic", "external-access", "external-refresh");
 
     withEnv(root.env, () => {
-      writeRaw(
-        {
-          [durableProfileId]: durableCredential,
-          [staleProfileId]: apiKey("removed"),
-          [staleFenceId]: staleFence,
-        },
-        agentDir,
-      );
+      writeRaw({ local: durableCredential, ...stale }, agentDir);
       setSnapshot(readStore(agentDir), agentDir);
-      writeRaw({ [durableProfileId]: durableCredential }, agentDir);
-
+      writeRaw({ local: durableCredential }, agentDir);
       const runtimeStore = snapshotAt(databasePath);
       assert(runtimeStore, "missing runtime auth profile snapshot");
       setSnapshot(
         {
           ...runtimeStore,
-          profiles: {
-            ...runtimeStore.profiles,
-            [externalProfileId]: oauth("anthropic", "external-access", "external-refresh"),
-          },
-          runtimeExternalProfileIds: [externalProfileId],
+          profiles: { ...runtimeStore.profiles, external },
+          runtimeExternalProfileIds: ["external"],
         },
         agentDir,
       );
@@ -356,16 +334,16 @@ describe("auth publication owner receipts", () => {
 
     const persisted = readPersistedStore(agentDir);
     expect(persisted?.profiles).toEqual({
-      [durableProfileId]: durableCredential,
+      local: durableCredential,
       "openai:unrelated": apiKey("unrelated"),
     });
     expect(snapshotAt(databasePath)?.profiles).toMatchObject({
-      [durableProfileId]: durableCredential,
+      local: durableCredential,
       "openai:unrelated": apiKey("unrelated"),
-      [externalProfileId]: { access: "external-access", refresh: "external-refresh" },
+      external: { access: "external-access", refresh: "external-refresh" },
     });
-    expect(snapshotAt(databasePath)?.profiles[staleProfileId]).toBeUndefined();
-    expect(snapshotAt(databasePath)?.profiles[staleFenceId]).toBeUndefined();
+    expect(snapshotAt(databasePath)?.profiles.removed).toBeUndefined();
+    expect(snapshotAt(databasePath)?.profiles.fence).toBeUndefined();
   });
 
   it("validates empty committed shared migration facts with an unreadable local store", async () => {

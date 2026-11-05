@@ -6,6 +6,7 @@ import { resolveTextCommand } from "../auto-reply/commands-registry.js";
 import { shouldForwardModelCommandToServer } from "../auto-reply/commands-registry.shared.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
+import { parseSoftResetCommand } from "../auto-reply/reply/commands-reset-mode.js";
 import {
   isSessionDefaultDirectiveValue,
   listThinkingLevelOptions,
@@ -747,7 +748,15 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       normalizeGroupActivation,
     ),
     new: () => changeSession("new"),
-    reset: () => changeSession("reset"),
+    reset: async (args, raw) => {
+      if (!parseSoftResetCommand(`/reset ${args}`).matched) {
+        await changeSession("reset");
+      } else if (opts.local) {
+        addUnsupportedLocalCommand("reset soft");
+      } else {
+        await sendMessage(raw);
+      }
+    },
     abort: async () => {
       context.localCli?.cancel();
       await abortActive();

@@ -38,6 +38,18 @@ describe("formatBytes", () => {
 });
 
 describe("collectDiskSpaceHealthFindings", () => {
+  it("uses an explicit state environment at the 100 MB warning boundary", () => {
+    mockDiskSpace(100 * 1024 * 1024);
+    expect(collectDiskSpaceHealthFindings({ OPENCLAW_STATE_DIR: "/operator/state" })).toEqual([
+      expect.objectContaining({
+        path: "/operator/state",
+        severity: "warning",
+        requirement: "low-free-space",
+      }),
+    ]);
+    expect(diskSpace.tryReadDiskSpace).toHaveBeenCalledWith("/operator/state");
+  });
+
   it("returns critical at exactly 0 bytes", () => {
     expect(collectFindingsAt(0)).toEqual([
       expect.objectContaining({ target: "0 B", requirement: "critical-free-space" }),

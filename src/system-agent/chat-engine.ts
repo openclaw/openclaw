@@ -57,10 +57,6 @@ import {
   type SystemAgentApprovalIntent,
 } from "./operator-approval.js";
 import { loadSystemAgentOverview, type SystemAgentOverview } from "./overview.js";
-import {
-  resolveConfigWriteRepair,
-  verifyConfigAfterSystemAgentWrite,
-} from "./post-write-verification.js";
 import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
 
 export { SystemAgentWizardAnswerError } from "./chat-wizard-host.js";
@@ -82,6 +78,13 @@ export type SystemAgentChatEngineOptions = {
 
 type CaptureRuntime = RuntimeEnv & { read: () => string };
 type PersistentApplyGuard = () => void;
+
+function unavailable(reason: string): string {
+  return [
+    `⚠ The write was applied, but post-write verification is unavailable: ${reason}.`,
+    "Run `openclaw doctor --fix` on the machine running OpenClaw, then verify the configuration before continuing.",
+  ].join("\n");
+}
 
 function createCaptureRuntime(): CaptureRuntime {
   const lines: string[] = [];
@@ -331,9 +334,46 @@ export class SystemAgentChatEngine {
   }
 
   private async verifyConfigAfterWrite(): Promise<string | null> {
-    return await verifyConfigAfterSystemAgentWrite((message) =>
-      this.resolveAssistantTurn(message, false),
-    );
+    let issuesText: string;
+    try {
+      const { readConfigFileSnapshot } = await import("../config/config.js");
+      const snapshot = await readConfigFileSnapshot();
+      if (!snapshot.exists) {
+        return unavailable("openclaw.json was not found");
+      }
+      if (snapshot.valid) {
+        return null;
+      }
+      const issues = (snapshot.issues ?? []).map(
+        (issue: { path?: string; message: string }) =>
+          `${issue.path ? `${issue.path}: ` : ""}${issue.message}`,
+      );
+      issuesText = issues.length > 0 ? issues.join("\n") : "unknown validation failure";
+    } catch {
+      return unavailable("openclaw.json could not be read");
+    }
+    return await this.resolveConfigWriteRepair(issuesText, true);
+  }
+
+  private async resolveConfigWriteRepair(issuesText: string, applied = false): Promise<string> {
+    const notice = applied
+      ? `⚠ openclaw.json failed validation after that write:\n${issuesText}`
+      : `The config write failed; proposing a fix.\n${issuesText}`;
+    let recovery: { text: string };
+    try {
+      recovery = await this.resolveAssistantTurn(
+        `[config-verify] ${applied ? "The config file is now invalid" : "The config write failed"}:\n${issuesText}\n${applied ? "" : "If the report says the config was written, inspect the current value before correcting it. "}Propose one corrective command from the allowed list.`,
+        false,
+      );
+    } catch (error) {
+      if (!isSystemAgentInferenceUnavailableError(error)) {
+        throw error;
+      }
+      return `${notice}\n${applied ? "The write was applied, but inference" : "Inference"} could not propose a repair. Run \`openclaw doctor --fix\` on the machine running OpenClaw, then try again.`;
+    }
+    return recovery.text
+      ? `${notice}\n\n${recovery.text}`
+      : `${notice}\nUse \`config schema <path>\` here to check the expected shape. Or, with OpenClaw stopped, run \`openclaw doctor --fix\` on the machine running it.`;
   }
 
   private async resolveTurn(
@@ -443,9 +483,7 @@ export class SystemAgentChatEngine {
       operation.kind === "config-set-ref";
     if (configWrite && result === undefined) {
       return {
-        text: await resolveConfigWriteRepair(capture.read(), (message) =>
-          this.resolveAssistantTurn(message, false),
-        ),
+        text: await this.resolveConfigWriteRepair(capture.read()),
         action: "none",
         applied: false,
       };

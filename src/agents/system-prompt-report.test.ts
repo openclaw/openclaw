@@ -1,24 +1,16 @@
 import { createHash } from "node:crypto";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { publishRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
-import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
 import { buildSystemPromptReport } from "./system-prompt-report.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
-function makeTool(name: string): AnyAgentTool {
-  return {
-    name,
-    label: name,
-    description: name,
-    parameters: Type.Object({ value: Type.String() }),
-    execute: async () => ({ content: [], details: {} }),
-  };
-}
+const makeTool = (name: string) => fakeTool(name, name);
 
 const makeReport = (overrides: Partial<Parameters<typeof buildSystemPromptReport>[0]> = {}) =>
   buildSystemPromptReport({
@@ -47,7 +39,49 @@ function catalogEntry(
   };
 }
 
+const catalog = [
+  "<available_skills>",
+  "<skill><name>weather</name><description>Weather reports</description><location>/skills/weather/SKILL.md</location></skill>",
+  "</available_skills>",
+].join("\n");
+
+function expectSkills(systemPrompt: string, rendered: string, skillsPrompt = catalog) {
+  const report = makeReport({ systemPrompt, skillsPrompt }).skills;
+  expect(report).toMatchObject({
+    promptChars: rendered.length,
+    hash: createHash("sha256").update(rendered).digest("hex"),
+  });
+  expect(report.entries.map(({ name }) => name)).toEqual(rendered ? ["weather"] : []);
+}
+
 describe("buildSystemPromptReport", () => {
+  it("resolves catalog provenance with linear work and preserves first visible matches", () => {
+    const tools = Array.from({ length: 400 }, (_, index) => makeTool(`tool_${index}`));
+    let nameReads = 0;
+    const catalogEntries = tools.map((tool, index) =>
+      catalogEntry(tool, {
+        sourceName: `plugin_${index % 40}`,
+        directVisible: true,
+      }),
+    );
+    for (const [index, entry] of catalogEntries.entries()) {
+      Object.defineProperty(entry, "name", {
+        get: () => {
+          nameReads++;
+          return tools[index]!.name;
+        },
+      });
+    }
+    catalogEntries.unshift(catalogEntry(tools[0]!, { sourceName: "hidden" }));
+    catalogEntries.push(catalogEntry(tools[0]!, { sourceName: "later", directVisible: true }));
+    const report = makeReport({ tools, catalogEntries });
+    expect(report.tools.entries.map(({ name, sourceName }) => ({ name, sourceName }))).toEqual(
+      tools.map((tool, index) => ({ name: tool.name, sourceName: `plugin_${index % 40}` })),
+    );
+    expect(report.tools.deferred?.entries[0]?.sourceName).toBe("hidden");
+    expect(nameReads).toBeLessThanOrEqual(3 * catalogEntries.length);
+  });
+
   it("separates catalog availability from consumed schemas using owner provenance", () => {
     const visible = makeTool("visible");
     const deferred = makeTool("deferred");
@@ -80,12 +114,12 @@ describe("buildSystemPromptReport", () => {
         ),
       }),
     ];
-    const report = makeReport({ tools: [visible], catalogEntries });
-    expect(report.tools.entries).toMatchObject([
-      { source: "mcp", sourceName: "docs", serverName: "Docs Server" },
-    ]);
-    expect(report.tools.schemaChars).toBe(JSON.stringify(visible.parameters).length);
-    expect(report.tools.deferred).toEqual({
+    const tools = makeReport({ tools: [visible], catalogEntries }).tools;
+    expect(tools).toMatchObject({
+      entries: [{ source: "mcp", sourceName: "docs", serverName: "Docs Server" }],
+      schemaChars: JSON.stringify(visible.parameters).length,
+    });
+    expect(tools.deferred).toEqual({
       schemaChars: deferredChars + remoteChars,
       entries: [
         { name: "deferred", source: "openclaw", sourceName: "core", schemaChars: deferredChars },
@@ -103,18 +137,13 @@ describe("buildSystemPromptReport", () => {
   });
 
   it("ignores malformed injected file paths and still matches valid entries", () => {
-    const file = {
-      name: "AGENTS.md",
-      path: "/tmp/workspace/policies/AGENTS.md",
-      content: "alpha",
-      missing: false,
-    } as const;
+    const path = "/tmp/workspace/policies/AGENTS.md";
     const report = makeReport({
       injectedWorkspaceFiles: buildBootstrapInjectionStats({
-        bootstrapFiles: [file],
+        bootstrapFiles: [{ name: "AGENTS.md", path, content: "alpha", missing: false }],
         injectedFiles: [
           { path: 123 as unknown as string, content: "bad" },
-          { path: "/tmp/workspace/policies/AGENTS.md", content: "trimmed" },
+          { path, content: "trimmed" },
         ],
       }),
     });
@@ -132,17 +161,27 @@ describe("buildSystemPromptReport", () => {
     });
   });
 
-  it("reports unnamed complete skill blocks in order", () => {
-    const skillsPrompt = "<skill></skill><skill><name> </name></skill>";
-    const report = makeReport({
-      systemPrompt: `## Skills\n${skillsPrompt.trim()}`,
-      skillsPrompt,
-    });
-    expect(report.skills.promptChars).toBe(skillsPrompt.trim().length);
-    expect(report.skills.entries).toEqual([
-      { name: "(unknown)", blockChars: "<skill></skill>".length },
-      { name: "(unknown)", blockChars: "<skill><name> </name></skill>".length },
-    ]);
+  it.each([
+    [
+      ["<skill></skill>", "<skill><name> </name></skill>"],
+      ["(unknown)", "(unknown)"],
+    ],
+    ...["long-synthetic-skill-name", "技能🦞-long-skill-name", "lone-\ud800-surrogate-name"].map(
+      (name) => [[`<skill><name>  ${name}\n</name></skill>`], [name]] as const,
+    ),
+    [
+      [
+        "<skill><name><invalid/></name><NAME> valid-skill-name-after-markup </NAME><name>later</name></skill>",
+      ],
+      ["valid-skill-name-after-markup"],
+    ],
+  ] as const)("reports complete skill blocks in order: %s", (blocks, names) => {
+    const skillsPrompt = blocks.join("");
+    const report = makeReport({ systemPrompt: `## Skills\n${skillsPrompt}`, skillsPrompt }).skills;
+    expect(report.promptChars).toBe(skillsPrompt.length);
+    expect(report.entries).toEqual(
+      names.map((name, index) => ({ name, blockChars: blocks[index]!.length })),
+    );
   });
 
   it("keeps reporting when a tool schema cannot be stringified", () => {
@@ -165,63 +204,38 @@ describe("buildSystemPromptReport", () => {
   });
 });
 
-const catalog = [
-  "<available_skills>",
-  "<skill><name>weather</name><description>Weather reports</description><location>/skills/weather/SKILL.md</location></skill>",
-  "</available_skills>",
-].join("\n");
-
-function reportSkills(systemPrompt: string, skillsPrompt = catalog) {
-  return makeReport({ systemPrompt, skillsPrompt }).skills;
-}
-
-function renderPrompt(params: Partial<Parameters<typeof buildAgentSystemPrompt>[0]>) {
-  return buildAgentSystemPrompt({ workspaceDir: "/workspace", skillsPrompt: catalog, ...params });
-}
-
-function expectSkills(systemPrompt: string, rendered: string, skillsPrompt = catalog) {
-  const report = reportSkills(systemPrompt, skillsPrompt);
-  expect(report.promptChars).toBe(rendered.length);
-  expect(report.hash).toBe(createHash("sha256").update(rendered).digest("hex"));
-  expect(report.entries.map(({ name }) => name)).toEqual(rendered ? ["weather"] : []);
-}
-
 describe("rendered skills diagnostics", () => {
-  it.each<[Partial<Parameters<typeof buildAgentSystemPrompt>[0]>, boolean]>([
+  it.each<[Partial<Parameters<typeof buildAgentSystemPrompt>[0]>, boolean, boolean?]>([
     [{ toolNames: ["skills_read"] }, true],
-    [{ codeModeActive: true, toolNames: ["exec"] }, true],
+    [{ codeModeActive: true, toolNames: ["exec"] }, false],
+    [{ codeModeActive: true, toolNames: ["exec"], capabilityToolNames: ["skills_read"] }, true],
     [{ promptSurface: "cli_backend" }, true],
     [{ promptMode: "minimal", toolNames: ["read"] }, true],
     [{ promptMode: "none", toolNames: ["read"] }, false],
-  ])("reports the catalog actually rendered for %j", (params, included) => {
-    const systemPrompt = renderPrompt(params);
-    expect(systemPrompt.includes(catalog)).toBe(included);
-    expectSkills(systemPrompt, included ? catalog : "");
-  });
-
-  it("measures the trimmed catalog that the renderer includes", () => {
-    const skillsPrompt = `\n  ${catalog}\n\n`;
-    const systemPrompt = renderPrompt({ toolNames: ["read"], skillsPrompt });
-    expectSkills(systemPrompt, catalog, skillsPrompt);
-  });
-
-  it("ignores a workspace catalog copy when read is unavailable", () => {
-    const systemPrompt = renderPrompt({
-      toolNames: ["message"],
-      contextFiles: [{ path: "/workspace/AGENTS.md", content: `## Skills\n${catalog}` }],
+    [{ toolNames: ["read"], skillsPrompt: `\n  ${catalog}\n\n` }, true],
+    [
+      {
+        toolNames: ["message"],
+        contextFiles: [{ path: "/workspace/AGENTS.md", content: `## Skills\n${catalog}` }],
+      },
+      false,
+      true,
+    ],
+    [
+      {
+        toolNames: ["read"],
+        promptContribution: { stablePrefix: "# Project Context\nProvider guidance." },
+      },
+      true,
+    ],
+  ])("reports the catalog actually rendered for %j", (params, included, workspaceCopy = false) => {
+    const skillsPrompt = params.skillsPrompt ?? catalog;
+    const systemPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/workspace",
+      skillsPrompt,
+      ...params,
     });
-    expect(systemPrompt).toContain(catalog);
-    expect(reportSkills(systemPrompt).promptChars).toBe(0);
-    expect(reportSkills(systemPrompt).entries.map(({ name }) => name)).toEqual([]);
-  });
-
-  it("finds the rendered catalog after provider Project Context guidance", () => {
-    const systemPrompt = renderPrompt({
-      toolNames: ["read"],
-      promptContribution: { stablePrefix: "# Project Context\nProvider guidance." },
-    });
-    expect(systemPrompt).toContain(catalog);
-    expect(reportSkills(systemPrompt).promptChars).toBe(catalog.length);
-    expect(reportSkills(systemPrompt).entries.map(({ name }) => name)).toEqual(["weather"]);
+    expect(systemPrompt.includes(catalog)).toBe(included || workspaceCopy);
+    expectSkills(systemPrompt, included ? catalog : "", skillsPrompt);
   });
 });

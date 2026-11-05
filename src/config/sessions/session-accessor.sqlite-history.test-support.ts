@@ -1,8 +1,10 @@
 import { afterAll, afterEach, beforeEach, vi } from "vitest";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
 import type { TranscriptAnchorPageOptions } from "../../sessions/transcript-anchor-page.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import { withRecentSessionTranscriptActiveEventsInSnapshot } from "./session-accessor.sqlite-active-events-read.js";
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import type {
@@ -18,6 +20,52 @@ import {
 } from "./session-accessor.sqlite-history-query.js";
 import { readVisibleTranscriptStats } from "./session-accessor.sqlite-reset-window.js";
 import { createTranscriptEventInserter } from "./transcript-payload.js";
+
+export function historyMessage(
+  id: string,
+  parentId: string | null,
+  content: unknown,
+  role: "user" | "assistant" = "user",
+) {
+  return { type: "message", id, parentId, message: { role, content } };
+}
+
+export function historyActivity(
+  options: Pick<
+    Parameters<typeof createNestedToolActivity>[0],
+    "afterEntryId" | "startOrder" | "toolCallId"
+  > &
+    Partial<Parameters<typeof createNestedToolActivity>[0]>,
+) {
+  return createNestedToolActivity({
+    runId: "run",
+    scopeId: "attempt",
+    toolName: "read",
+    input: {},
+    result: { content: [] },
+    isError: false,
+    startedAt: 1,
+    timestamp: 2,
+    ...options,
+  });
+}
+
+export function clearHistoryNavigation(database: OpenClawAgentDatabase, sessionId: string) {
+  database.db
+    .prepare(`UPDATE transcript_events
+    SET navigation_type = NULL, navigation_custom_type = NULL,
+        navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
+        navigation_last_custom_type = NULL, navigation_valid = 1
+    WHERE session_id = ?`)
+    .run(sessionId);
+}
+
+export function persistHistory(
+  scope: Parameters<typeof persistSessionTranscriptTurn>[0],
+  messages: Parameters<typeof persistSessionTranscriptTurn>[1]["messages"],
+) {
+  return persistSessionTranscriptTurn(scope, { messages, touchSessionEntry: false });
+}
 
 export function readActiveTranscriptStats(scope: SessionTranscriptReadScope) {
   return withCurrentProjectionSnapshot(scope, (projection) => {

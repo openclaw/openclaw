@@ -121,7 +121,6 @@ async function waitForApprovalEvent(params: {
 async function waitForObservedApprovalEvent(params: {
   context: MatrixQaScenarioContext;
   expectedApprovalId: string;
-  expectedKind: ChannelApprovalKind;
   excludedRoomIds?: string[];
   roomIds: string[];
   timeoutMs: number;
@@ -140,6 +139,7 @@ async function waitForObservedApprovalEvent(params: {
     return roomIds.some((roomId) =>
       isExpectedApprovalEvent(event, {
         ...params,
+        expectedKind: "exec",
         roomId,
       }),
     );
@@ -150,12 +150,9 @@ async function waitForObservedApprovalEvent(params: {
     if (observedMatch) {
       assertApprovalMetadata({
         event: observedMatch,
-        expectedKind: params.expectedKind,
+        expectedKind: "exec",
       });
-      return {
-        event: observedMatch,
-        since: undefined,
-      };
+      return observedMatch;
     }
     const remainingMs = params.timeoutMs - (Date.now() - startedAt);
     if (remainingMs <= 0) {
@@ -230,14 +227,12 @@ function requestExecApproval(params: {
 async function resolveApprovalDecision(params: {
   approvalId: string;
   context: MatrixQaScenarioContext;
-  decision: MatrixQaApprovalDecision;
-  kind: ChannelApprovalKind;
 }) {
   return resolveLiveQaApprovalDecision({
     approvalId: params.approvalId,
-    decision: params.decision,
+    decision: "allow-once",
     gateway: { call: params.context.gatewayCall },
-    kind: params.kind,
+    kind: "exec",
     timeoutMs: 5_000,
   });
 }
@@ -490,18 +485,15 @@ export async function runApprovalChannelTargetBothScenario(context: MatrixQaScen
     context,
     excludedRoomIds: [context.roomId],
     expectedApprovalId: approvalId,
-    expectedKind: "exec",
     roomIds: dmRoomIds,
     timeoutMs: context.timeoutMs,
   });
-  if (channelApproval.event.approval?.id !== dmApproval.event.approval?.id) {
+  if (channelApproval.event.approval?.id !== dmApproval.approval?.id) {
     throw new Error("target=both delivered different approval ids to channel and DM");
   }
   await resolveApprovalDecision({
     approvalId,
     context,
-    decision: "allow-once",
-    kind: "exec",
   });
   const lateDuplicate = await client.waitForOptionalRoomEvent({
     observedEvents: context.observedEvents,
@@ -510,7 +502,7 @@ export async function runApprovalChannelTargetBothScenario(context: MatrixQaScen
       event.type === "m.room.message" &&
       event.approval?.id === approvalId &&
       event.eventId !== channelApproval.event.eventId &&
-      event.eventId !== dmApproval.event.eventId,
+      event.eventId !== dmApproval.eventId,
     roomId: context.roomId,
     timeoutMs: MATRIX_QA_APPROVAL_SHORT_WINDOW_MS,
   });
@@ -520,7 +512,7 @@ export async function runApprovalChannelTargetBothScenario(context: MatrixQaScen
   return {
     details: [
       `channel approval event: ${channelApproval.event.eventId}`,
-      `dm approval event: ${dmApproval.event.eventId}`,
+      `dm approval event: ${dmApproval.eventId}`,
       `approval id: ${approvalId}`,
       `cleanup decision: allow-once`,
     ].join("\n"),

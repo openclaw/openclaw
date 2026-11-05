@@ -5,6 +5,7 @@ import type { ExecResult } from "./exec-file.js";
 const exec = vi.hoisted(() => vi.fn<typeof import("./exec-file.js").execFileUtf8>());
 vi.mock("./exec-file.js", () => ({ execFileUtf8: exec }));
 import { readSystemdDefinitionMutationCapability } from "./systemd-definition-mutation.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 import {
   admitUserUnitActivationPastUnverifiableOwnership,
   isSystemdServiceAbsent,
@@ -16,12 +17,8 @@ const owner = ":1.4";
 const home = "/openclaw-systemd-cleanup-proof";
 const env = { HOME: home, OPENCLAW_SYSTEMD_UNIT: unit };
 const notFound = () => Object.assign(new Error("missing"), { code: "ENOENT" });
-const commandResult = (stdout = "", stderr = "", code = 0): ExecResult => ({
-  code,
-  termination: "exit",
-  stdout,
-  stderr,
-});
+const commandResult = (stdout = "", stderr = "", code = 0): ExecResult =>
+  nativeExit(stdout, stderr, code);
 const success = (type: string, data: unknown) => commandResult(JSON.stringify({ type, data }));
 const missing = () => commandResult("", `Call failed: Unit ${unit} not loaded.`, 1);
 function reply(args: readonly string[]): ExecResult {
@@ -95,6 +92,13 @@ it("proves absence using the existing manager and load paths without activation"
   }
   expect(fs.lstat).toHaveBeenCalledWith(`/etc/systemd/system/${unit}`);
   expect(fs.lstat).toHaveBeenCalledWith(`/run/systemd/system/${unit}`);
+});
+it("proves absence when systemd 245 busctl colors the missing-unit line", async () => {
+  const colored = `\u001b[0;1;31mCall failed: Unit ${unit} not loaded.\u001b[0m\n`;
+  exec.mockImplementation(async (_command, args) =>
+    args.includes("GetUnit") ? commandResult("", colored, 1) : reply(args),
+  );
+  await expect(absent()).resolves.toBeUndefined();
 });
 it("refuses filesystem uncertainty", async () => {
   vi.spyOn(fs, "lstat").mockRejectedValue(Object.assign(new Error("denied"), { code: "EACCES" }));

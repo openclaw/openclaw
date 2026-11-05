@@ -5,11 +5,6 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 
 type TelegramGroups = Record<string, TelegramGroupConfig>;
 
-type TelegramGroupMigrationResult = {
-  migrated: boolean;
-  skippedExisting: boolean;
-};
-
 function resolveAccountGroups(
   cfg: OpenClawConfig,
   accountId?: string | null,
@@ -37,7 +32,7 @@ export function migrateTelegramGroupConfig(params: {
   accountId?: string | null;
   oldChatId: string;
   newChatId: string;
-}): TelegramGroupMigrationResult {
+}) {
   let migrated = false;
   let skippedExisting = false;
 

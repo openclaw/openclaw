@@ -1,4 +1,5 @@
 import { normalizeUpdatePostInstallDoctorWarnings } from "../infra/update-doctor-result.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
   DoctorContributionHealthCheck,
   DoctorHealthCheckContext,
@@ -41,7 +42,23 @@ export function createDoctorHealthContribution(
 ): DoctorHealthContribution {
   const params: DoctorContributionOptions =
     typeof options === "function" ? { run: options } : options;
-  const healthChecks = normalizeHealthChecks(id, params.healthChecks);
+  const declaredChecks = params.healthChecks;
+  let healthChecks: readonly DoctorHealthCheck[] = [];
+  if (declaredChecks !== undefined) {
+    const checks = Array.isArray(declaredChecks) ? declaredChecks : [declaredChecks];
+    const defaultId = id.startsWith("doctor:")
+      ? `core/doctor/${id.slice("doctor:".length)}`
+      : `core/doctor/${id}`;
+    healthChecks = checks.map((check: DoctorContributionHealthCheck): DoctorHealthCheck => {
+      const checkId = check.id ?? (checks.length === 1 ? defaultId : undefined);
+      if (checkId === undefined) {
+        throw new Error(
+          `doctor contribution ${id} must specify health check ids when it declares multiple healthChecks`,
+        );
+      }
+      return Object.assign({}, check, { id: checkId, kind: "core" as const, source: "doctor" });
+    });
+  }
   const healthCheckIds = params.healthCheckIds ?? healthChecks.map((check) => check.id);
   if (params.run === undefined && healthChecks.length === 0) {
     throw new Error(`doctor contribution ${id} must define run or healthChecks`);
@@ -55,85 +72,54 @@ export function createDoctorHealthContribution(
     ...(params.updateWork ? { updateWork: params.updateWork } : {}),
     run:
       params.run ??
-      ((ctx) =>
-        runStructuredDoctorHealthContribution({
-          ctx,
+      (async (ctx) => {
+        const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
+        const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
+        const dryRun = !ctx.prompter.shouldRepair;
+        const configBeforeRepair = JSON.stringify(ctx.cfg);
+        const context: HealthRepairContext & DoctorHealthCheckContext = {
+          mode: "fix",
+          runtime: ctx.runtime,
+          cfg: ctx.cfg,
+          env: ctx.env,
+          cwd: workspaceDir,
+          configPath: ctx.configPath,
+          dryRun,
+          allowExecSecretRefs: ctx.options.allowExec === true,
+          agentDatabaseRefusals: ctx.agentDatabaseRefusals,
+        };
+        const result = await runDoctorHealthRepairs(context, {
           checks: healthChecks,
-        })),
+          dryRun,
+          progress: ctx.options.json !== true,
+        });
+        ctx.cfg = result.config;
+        renderStructuredHealthFindings(ctx, dryRun ? result.findings : result.remainingFindings);
+        // Repaired findings are absent from both the summary and updater warnings.
+        recordDoctorHealthWarnings(
+          ctx,
+          dryRun ? result.findings : result.remainingFindings,
+          result.warnings,
+        );
+        for (const warning of result.warnings) {
+          ctx.runtime.error(warning);
+        }
+        if (configBeforeRepair !== JSON.stringify(result.config)) {
+          ctx.configResult.pendingChangePanels = [
+            ...(ctx.configResult.pendingChangePanels ?? []),
+            ...result.changes,
+          ];
+        } else {
+          for (const change of result.changes) {
+            ctx.runtime.log(change);
+          }
+        }
+      }),
   };
-}
-
-function normalizeHealthChecks(
-  contributionId: string,
-  healthChecks?: DoctorContributionHealthCheck | readonly DoctorContributionHealthCheck[],
-): readonly DoctorHealthCheck[] {
-  if (healthChecks === undefined) {
-    return [];
-  }
-  const checks = Array.isArray(healthChecks) ? healthChecks : [healthChecks];
-  const defaultId = contributionId.startsWith("doctor:")
-    ? `core/doctor/${contributionId.slice("doctor:".length)}`
-    : `core/doctor/${contributionId}`;
-  return checks.map((check: DoctorContributionHealthCheck): DoctorHealthCheck => {
-    const id = check.id ?? (checks.length === 1 ? defaultId : undefined);
-    if (id === undefined) {
-      throw new Error(
-        `doctor contribution ${contributionId} must specify health check ids when it declares multiple healthChecks`,
-      );
-    }
-    return Object.assign({}, check, { id, kind: "core" as const, source: "doctor" });
-  });
-}
-
-async function runStructuredDoctorHealthContribution(params: {
-  ctx: DoctorHealthFlowContext;
-  checks: readonly DoctorHealthCheck[];
-}): Promise<void> {
-  const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
-  const workspaceDir = resolveDoctorWorkspaceDir(params.ctx.cfg, params.ctx.env);
-  const dryRun = !params.ctx.prompter.shouldRepair;
-  const configBeforeRepair = JSON.stringify(params.ctx.cfg);
-  const context: HealthRepairContext & DoctorHealthCheckContext = {
-    mode: "fix",
-    runtime: params.ctx.runtime,
-    cfg: params.ctx.cfg,
-    env: params.ctx.env,
-    cwd: workspaceDir,
-    configPath: params.ctx.configPath,
-    dryRun,
-    allowExecSecretRefs: params.ctx.options.allowExec === true,
-    agentDatabaseRefusals: params.ctx.agentDatabaseRefusals,
-  };
-  const result = await runDoctorHealthRepairs(context, {
-    checks: params.checks,
-    dryRun,
-    progress: params.ctx.options.json !== true,
-  });
-  params.ctx.cfg = result.config;
-  renderStructuredHealthFindings(params.ctx, result.findings);
-  // Display retains original findings; finalization records only unresolved warnings.
-  recordDoctorHealthWarnings(
-    params.ctx,
-    dryRun ? result.findings : result.remainingFindings,
-    result.warnings,
-  );
-  for (const warning of result.warnings) {
-    params.ctx.runtime.error(warning);
-  }
-  if (configBeforeRepair !== JSON.stringify(result.config)) {
-    params.ctx.configResult.pendingChangePanels = [
-      ...(params.ctx.configResult.pendingChangePanels ?? []),
-      ...result.changes,
-    ];
-  } else {
-    for (const change of result.changes) {
-      params.ctx.runtime.log(change);
-    }
-  }
 }
 
 export function recordDoctorHealthWarnings(
-  ctx: DoctorHealthFlowContext,
+  ctx: Pick<DoctorHealthFlowContext, "updateWarnings">,
   findings: readonly HealthFinding[],
   warnings: readonly string[] = [],
   options?: { prepend?: boolean },
@@ -153,17 +139,92 @@ export function recordDoctorHealthWarnings(
   );
 }
 
+export function reportDoctorHealthFinding(
+  ctx: Pick<DoctorHealthFlowContext, "runtime" | "healthFindings" | "updateWarnings">,
+  finding: HealthFinding,
+): void {
+  recordDoctorHealthWarnings(
+    ctx,
+    [finding],
+    finding.severity === "error" ? [`${finding.checkId}: ${finding.message}`] : [],
+  );
+  renderStructuredHealthFindings(ctx, [finding]);
+}
+
 export function renderStructuredHealthFindings(
-  ctx: DoctorHealthFlowContext,
+  ctx: Pick<DoctorHealthFlowContext, "runtime" | "healthFindings">,
   findings: readonly HealthFinding[],
 ): void {
+  ctx.healthFindings ??= [];
+  ctx.healthFindings.push(...findings);
+}
+
+export function showDoctorHealthSummary(
+  ctx: Pick<DoctorHealthFlowContext, "runtime" | "healthFindings">,
+): void {
+  const findings = ctx.healthFindings?.splice(0) ?? [];
+  const log = createSubsystemLogger("doctor");
   for (const finding of findings) {
-    const write = finding.severity === "error" ? ctx.runtime.error : ctx.runtime.log;
-    const where = finding.path !== undefined ? ` ${finding.path}` : "";
-    const line = finding.line !== undefined ? `:${finding.line}` : "";
-    write(`[${finding.severity}] ${finding.checkId}${where}${line} - ${finding.message}`);
-    if (finding.fixHint !== undefined) {
-      ctx.runtime.log(`  fix: ${finding.fixHint}`);
-    }
+    // Debug console lines do not automatically print structured metadata.
+    log.debug("Doctor finding", { ...finding, consoleMessage: JSON.stringify(finding) });
   }
+  const selected = findings.filter(
+    (finding) =>
+      finding.severity === "error" ||
+      (finding.severity === "warning" && (finding.category ?? "fix-now") === "fix-now"),
+  );
+  if (selected.length === 0) {
+    return;
+  }
+  ctx.runtime.log("Fix now:");
+  for (const finding of selected) {
+    const write = finding.severity === "error" ? ctx.runtime.error : ctx.runtime.log;
+    write(`- ${finding.message}`);
+    if (finding.path !== undefined) {
+      const line = finding.line !== undefined ? `:${finding.line}` : "";
+      ctx.runtime.log(`  Location: ${finding.path}${line}`);
+    }
+    if (finding.fixHint !== undefined) {
+      ctx.runtime.log(`  Next step: ${finding.fixHint}`);
+    }
+    ctx.runtime.log(
+      `  Docs: ${finding.docsUrl ?? "https://docs.openclaw.ai/cli/doctor/running#understanding-findings"}`,
+    );
+  }
+}
+
+/** Preserve priority order in the updater receipt independently of summary rendering. */
+export function collectDoctorHealthResultWarnings(params: {
+  healthContext?: Pick<DoctorHealthFlowContext, "updateWarnings" | "updateBudget">;
+  startupWarnings?: readonly string[];
+  resultWarnings?: readonly string[];
+  maintenanceWarnings?: readonly string[];
+}): string[] {
+  const contributionWarnings = [
+    ...(params.healthContext?.updateWarnings ?? []),
+    ...(params.startupWarnings ?? []),
+  ];
+  const deferredCount = params.healthContext?.updateBudget?.deferred.size ?? 0;
+  return normalizeUpdatePostInstallDoctorWarnings([
+    ...contributionWarnings.slice(0, deferredCount),
+    ...(params.resultWarnings ?? []),
+    ...(params.maintenanceWarnings ?? []).filter(
+      (warning) => !params.resultWarnings?.includes(warning),
+    ),
+    ...contributionWarnings.slice(deferredCount),
+  ]);
+}
+
+/** Startup repairs may report before the full health context exists. */
+export function createDoctorHealthFindingBuffer(runtime: DoctorHealthFlowContext["runtime"]) {
+  const buffer: Pick<DoctorHealthFlowContext, "runtime" | "healthFindings" | "updateWarnings"> & {
+    healthFindings: HealthFinding[];
+  } = { runtime, healthFindings: [] };
+  return {
+    buffer,
+    reportFindings(this: void, findings: readonly HealthFinding[], warnings?: readonly string[]) {
+      buffer.healthFindings.push(...findings);
+      recordDoctorHealthWarnings(buffer, warnings ? [] : findings, warnings);
+    },
+  };
 }

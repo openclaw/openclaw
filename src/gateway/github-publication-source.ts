@@ -20,6 +20,7 @@ import {
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
+import { projectGitHubPublicationSessionFacts } from "../state/github-publication-session-facts.js";
 import type { GitHubPublicationSourcePredicate } from "../state/github-publication-source-contract.js";
 import type {
   GitHubPublicationSourceSelector,
@@ -133,21 +134,7 @@ function readMemorySourceFacts(
         { type: "session.members.read", input: {} },
         captured.authority,
       );
-  const entry = snapshot?.entry;
-  return {
-    entry: entry && {
-      sessionId: entry.sessionId,
-      lifecycleRevision: entry.lifecycleRevision,
-      archivedAt: entry.archivedAt,
-      visibility: entry.visibility,
-      incognito: entry.incognito,
-      createdActor: entry.createdActor,
-      owner: entry.owner,
-      worktree: entry.worktree,
-      repositoryWorkspaceId: entry.repositoryWorkspaceId,
-    },
-    members: snapshot?.members ?? [],
-  };
+  return projectGitHubPublicationSessionFacts(snapshot?.entry, snapshot?.members ?? []);
 }
 
 async function prepareMemoryPublicationSource(
