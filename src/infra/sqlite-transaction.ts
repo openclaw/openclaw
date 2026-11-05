@@ -562,7 +562,9 @@ function settleSqliteTransactionSync<T>(
     } finally {
       if (timing) {
         timing.preparedAtMs = Date.now();
-        timing.hydrationActiveEvents = undefined;
+        if (timing.hydrationActiveEvents !== undefined) {
+          timing.hydrationActiveEvents = undefined;
+        }
       }
     }
   }
