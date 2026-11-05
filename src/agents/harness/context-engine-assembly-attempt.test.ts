@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { resolveContextEngineCompletionRuntimeContext } from "./context-engine-assembly-attempt.js";
-import { createBaseAttemptParams, createAttemptResult } from "./lifecycle.test-support.js";
+import { createAttemptResult } from "./lifecycle.test-support.js";
 
 describe("resolveContextEngineCompletionRuntimeContext", () => {
   const promptCache = {
@@ -15,7 +14,7 @@ describe("resolveContextEngineCompletionRuntimeContext", () => {
   ] as const)(
     "records the attempt's last-call prompt usage for %s",
     (_case, nativeSession, runtimeModelSelection) => {
-      const params = createBaseAttemptParams() as EmbeddedRunAttemptParams;
+      const params = { provider: "codex", modelId: "gpt-5.4", sessionKey: "session-key" };
       const result = {
         ...createAttemptResult(),
         promptCache,

@@ -61,7 +61,15 @@ export function readContextEngineAssemblyBudget(
 }
 
 export function resolveContextEngineCompletionRuntimeContext(
-  params: EmbeddedRunAttemptParams,
+  params: Pick<
+    EmbeddedRunAttemptParams,
+    | "provider"
+    | "modelId"
+    | "sessionKey"
+    | "contextTokenBudget"
+    | "modelContextWindow"
+    | "authoredContextTokenCap"
+  >,
   result: EmbeddedRunAttemptResult,
   nativeSession: boolean,
   assembly: ContextEngineAssemblySnapshot | undefined,
