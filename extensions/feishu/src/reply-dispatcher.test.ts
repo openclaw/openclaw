@@ -1077,6 +1077,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["fence sol", ["~~~\n~~~\r```a", null, "~~~\n~~~\r```a`b\nD"], ["~~~\n~~~\r```a", "`b\nD"]],
     ["fence eot", ["~~~\na\n~~~x", null, "~~~\na\n~~~xy"], ["~~~\na\n~~~x", "~~~\ny"]],
     ["partial base", ["A. B.", "A", 2, "B.", true, false, "B. C."], ["A\n\nB.", "B. C."]],
+    ["partial start", ["A. X.", true, "A. X. E.", 2, "N.", false], ["A. X.", "A. X. E.\n\nN."]],
+    ["idle start", ["A. X.", null, "A. X. E.", 2, "N."], ["A. X.", "E.\n\nN."]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
@@ -1148,7 +1150,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expectNoStaticReply();
     expect(finalized).toMatchObject(accepted(text, ["om_stream"]));
   });
-
   it.each([false, true])(
     "keeps TTS caption visibility when already delivered=%s",
     async (visible) => {
@@ -1189,7 +1190,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       }
     },
   );
-
   it("discards partial streaming text when final replies send voice media", async () => {
     const { result, options } = createDispatcherHarness();
     result.replyOptions.onPartialReply?.({ text: "spoken reply" });

@@ -261,6 +261,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let previewText = "";
   let previewBlockOffset = 0;
   let closedPreviewText = "";
+  let undoProvisionalCredit: (() => void) | undefined;
   let previewEpoch = 0;
   let reasoningText = "";
   let statusLine = "";
@@ -514,6 +515,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       // Provisional, so a card opened while this close is in flight continues after it.
       // The settled result below confirms or corrects it.
       closedPreviewText = closingPreview;
+      undoProvisionalCredit = () => setClosedPreview(priorClosedPreview, closingEpoch);
     }
     resetStreamingState();
     try {
@@ -589,6 +591,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         result: noVisibleFeishuReplyDelivery,
         error,
       };
+    } finally {
+      undoProvisionalCredit = undefined;
     }
   };
 
@@ -1553,6 +1557,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         : undefined,
       onAssistantMessageStart: previewStreamingEnabled
         ? () => {
+            // A close still in flight credited its preview provisionally, and its settlement cannot
+            // correct a card opened after this start. Freeze the earlier prose without that credit.
+            undoProvisionalCredit?.();
             // Snapshots cover one assistant message. Freeze earlier prose at the
             // source boundary so tool continuations cannot replace it.
             snapshotBaseText = streamText ? `${streamText}\n\n` : "";
