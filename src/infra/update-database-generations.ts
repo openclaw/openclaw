@@ -114,7 +114,7 @@ function readWalIndexHeader(pathname: string): Buffer | null {
   }
 }
 
-/** A non-writing open can create a zero-commit WAL index and the last close removes it. */
+/** Without journal data or WAL frames, the verified family proves no commit; the index can come or go. */
 function sameWalCommitPublication(
   before: Buffer | null,
   after: Buffer | null,
@@ -123,14 +123,14 @@ function sameWalCommitPublication(
   if (before === null ? after === null : after?.equals(before)) {
     return true;
   }
-  const appeared = before ?? after;
-  // iChange and the last commit checksum stay zero until a commit is published.
+  if (generation.journal || (generation.wal?.size ?? 0n) !== 0n) {
+    return false;
+  }
+  // The last close removes the index, even one with commit evidence; bind the closed state.
+  // A non-writing open builds one whose iChange and commit checksum stay zero.
   return (
-    (before === null || after === null) &&
-    !generation.journal &&
-    (generation.wal?.size ?? 0n) === 0n &&
-    appeared?.readUInt32LE(8) === 0 &&
-    appeared.readBigUInt64LE(24) === 0n
+    after === null ||
+    (before === null && after.readUInt32LE(8) === 0 && after.readBigUInt64LE(24) === 0n)
   );
 }
 
