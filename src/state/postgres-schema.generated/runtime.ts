@@ -665,7 +665,7 @@ export const statePostgresRuntime = {
       indexes: [],
       dependencies: [],
       activation: "version-additive",
-      sql: '-- Generated runtime DDL; the owner supplies search_path and the transaction.\n\nCREATE TABLE "device_pairing_browser_requests" (\n  "request_id" text COLLATE "C" NOT NULL,\n  "code" text COLLATE "C" NOT NULL,\n  "device_id" text COLLATE "C" NOT NULL,\n  "public_key" text COLLATE "C" NOT NULL,\n  "remote_ip" text COLLATE "C",\n  "user_agent" text COLLATE "C",\n  "origin" text COLLATE "C",\n  "status" text COLLATE "C" NOT NULL,\n  "created_at_ms" bigint NOT NULL,\n  "expires_at_ms" bigint NOT NULL,\n  PRIMARY KEY ("request_id"),\n  CHECK (("status" IN (\'pending\', \'approved\', \'rejected\'))),\n  UNIQUE ("code"),\n  UNIQUE ("device_id")\n);\n',
+      sql: '-- Generated runtime DDL; the owner supplies search_path and the transaction.\n\nCREATE TABLE "device_pairing_browser_requests" (\n  "request_id" text COLLATE "C" NOT NULL,\n  "code" text COLLATE "C" NOT NULL,\n  "device_id" text COLLATE "C" NOT NULL,\n  "public_key" text COLLATE "C" NOT NULL,\n  "remote_ip" text COLLATE "C",\n  "user_agent" text COLLATE "C",\n  "origin" text COLLATE "C",\n  "status" text COLLATE "C" NOT NULL,\n  "approved_token_sha256" text COLLATE "C",\n  "created_at_ms" bigint NOT NULL,\n  "expires_at_ms" bigint NOT NULL,\n  PRIMARY KEY ("request_id"),\n  CHECK (("status" IN (\'pending\', \'approved\', \'rejected\'))),\n  UNIQUE ("code"),\n  UNIQUE ("device_id")\n);\n',
     },
     {
       id: "skill_workshop_changes",
@@ -4981,12 +4981,24 @@ export const statePostgresRuntime = {
       table: "device_pairing_browser_requests",
       kind: "column",
       value: {
+        name: "approved_token_sha256",
+        type: "text",
+        nullable: true,
+        identity: false,
+        default: null,
+        position: 9,
+      },
+    },
+    {
+      table: "device_pairing_browser_requests",
+      kind: "column",
+      value: {
         name: "created_at_ms",
         type: "bigint",
         nullable: false,
         identity: false,
         default: null,
-        position: 9,
+        position: 10,
       },
     },
     {
@@ -4998,7 +5010,7 @@ export const statePostgresRuntime = {
         nullable: false,
         identity: false,
         default: null,
-        position: 10,
+        position: 11,
       },
     },
     {

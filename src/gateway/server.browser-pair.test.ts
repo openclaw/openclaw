@@ -309,6 +309,27 @@ describe("browser device-code pairing", () => {
     expect(readFinalEffect(requestId).pending).toEqual({ total: 0 });
   });
 
+  it("stops answering a replayed collect once the approved token is rotated", async () => {
+    const browser = newBrowser();
+    const { requestId, code } = await start(browser);
+    expect((await decide(code, requestId)).ok).toBe(true);
+    // The same signed body a network capture of the waiting page would hold.
+    const captured = signedBody(browser, "collect", requestId);
+    const first = await post("collect", captured);
+    const { deviceToken } = (await first.json()) as { deviceToken: string };
+    expect(deviceToken).toBeTruthy();
+    // A dropped reply is collected again until the token changes.
+    expect(await (await post("collect", captured)).json()).toMatchObject({ deviceToken });
+
+    const rotated = await rpcReq(adminSocket, "device.token.rotate", {
+      deviceId: browser.identity.deviceId,
+      role: "operator",
+      scopes: [...CONTROL_UI_OPERATOR_SCOPES],
+    });
+    expect(rotated.ok).toBe(true);
+    expect(await (await post("collect", captured)).json()).toEqual({ status: "expired" });
+  });
+
   it("refuses to restore an operator token an administrator reduced", async () => {
     const browser = newBrowser();
     await approveAndCollect(browser);

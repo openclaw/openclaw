@@ -9,6 +9,7 @@ CREATE TABLE "device_pairing_browser_requests" (
   "user_agent" text COLLATE "C",
   "origin" text COLLATE "C",
   "status" text COLLATE "C" NOT NULL,
+  "approved_token_sha256" text COLLATE "C",
   "created_at_ms" bigint NOT NULL,
   "expires_at_ms" bigint NOT NULL,
   PRIMARY KEY ("request_id"),

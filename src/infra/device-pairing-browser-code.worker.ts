@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -45,6 +46,7 @@ type BrowserRequestRow = {
   user_agent: string | null;
   origin: string | null;
   status: string;
+  approved_token_sha256: string | null;
   created_at_ms: number;
   expires_at_ms: number;
 };
@@ -107,6 +109,11 @@ function hasReducedOperatorToken(device: PairedDevice | undefined): boolean {
   );
 }
 
+/** Identifies the exact token an approval handed over without keeping a second copy of it. */
+function tokenDigest(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
 /** File one browser's request, keeping its live code across repeated clicks. */
 export function startBrowserPairRequestInWorker(
   db: EngineConnection,
@@ -165,6 +172,7 @@ export function startBrowserPairRequestInWorker(
       user_agent: input.userAgent ?? null,
       origin: input.origin ?? null,
       status: "pending",
+      approved_token_sha256: null,
       created_at_ms: input.nowMs,
       expires_at_ms: input.expiresAtMs,
     }),
@@ -202,8 +210,15 @@ export function collectBrowserPairRequestInWorker(
   }
   const device = loadDevicePairingStateForMutation(input.nowMs).pairedByDeviceId[row.device_id];
   const token = device?.tokens?.[OPERATOR_ROLE];
-  // Removed, re-keyed, or revoked since approval: the owner's later decision wins.
-  if (!device || device.publicKey !== row.public_key || !token || token.revokedAtMs) {
+  // Removed, re-keyed, revoked or rotated since approval: the owner's later decision
+  // wins, so only the token this approval issued is ever handed over.
+  if (
+    !device ||
+    device.publicKey !== row.public_key ||
+    !token ||
+    token.revokedAtMs ||
+    tokenDigest(token.token) !== row.approved_token_sha256
+  ) {
     return { status: "expired" as const };
   }
   return {
@@ -332,11 +347,19 @@ export function decideBrowserPairRequestInWorker(
       `Browser pairing approval was refused: ${approved?.reason ?? "request missing"}`,
     );
   }
+  const issued = approved.device.tokens?.[OPERATOR_ROLE];
+  if (!issued) {
+    throw new Error("Browser pairing approval issued no operator token");
+  }
   executeSqliteQuerySync(
     db,
     kysely
       .updateTable("device_pairing_browser_requests")
-      .set({ status: "approved", expires_at_ms: input.collectExpiresAtMs })
+      .set({
+        status: "approved",
+        approved_token_sha256: tokenDigest(issued.token),
+        expires_at_ms: input.collectExpiresAtMs,
+      })
       .where("request_id", "=", row.request_id),
   );
   return {
