@@ -121,7 +121,7 @@ function resolveConfiguredKeyProviderOrder(params: {
     .filter(Boolean);
   const supportedProviders = uniqueStrings(configuredProviders).filter((providerId) =>
     providerSupportsCapability(
-      params.providerRegistry.get(normalizeMediaProviderId(providerId)),
+      getMediaUnderstandingProvider(providerId, params.providerRegistry),
       params.capability,
     ),
   );
