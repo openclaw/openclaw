@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
@@ -158,12 +158,11 @@ it("restores a prepared legacy source fixture through its changelog owner", () =
     "package-changelog.mjs",
     "lib/check-limits.mts",
     "lib/release-changelog.mjs",
+    "lib/release-context.mjs",
     "lib/release-notes-compaction.mjs",
+    "lib/release-version.mjs",
   ]) {
-    writeFileSync(
-      join(scriptsDir, file),
-      readFileSync(new URL(`../../scripts/${file}`, import.meta.url)),
-    );
+    copyFileSync(new URL(`../../scripts/${file}`, import.meta.url), join(scriptsDir, file));
   }
   runNode(root, "scripts/package-changelog.mjs", "prepare");
   expect(readFileSync(join(root, "CHANGELOG.md"), "utf8")).not.toBe(sourceChangelog);
