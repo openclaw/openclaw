@@ -41,9 +41,9 @@ describe("statement envelope versions", () => {
 
   it("refuses a missing or invalid envelope version as malformed", () => {
     const { v: _v, ...unversioned } = binding;
-    const invalid = [null, 0, -1, 1.5, "1", Number.MAX_SAFE_INTEGER + 1];
-    for (const bad of [unversioned, ...invalid.map((v) => ({ ...binding, v }))]) {
-      expect(parseStatement(bad)).toMatchObject({ ok: false, code: "malformed" });
+    expect(parseStatement(unversioned)).toMatchObject({ ok: false, code: "malformed" });
+    for (const v of [null, 0, -1, 1.5, "1", Number.MAX_SAFE_INTEGER + 1]) {
+      expect(parseStatement({ ...binding, v })).toMatchObject({ ok: false, code: "malformed" });
     }
   });
 
