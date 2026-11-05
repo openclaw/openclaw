@@ -2,6 +2,7 @@ import { addAbortListener } from "node:events";
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS } from "./attempt-timeouts.js";
+import { recordCodexNativeModelContext } from "./native-model-context.js";
 import { readCodexRetainedBackgroundCommands } from "./native-process-authority.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
@@ -21,6 +22,8 @@ export async function beginCodexAttemptSettlement(
   const { state, deadlines, settlementExpired } = turnRuntime;
   const { drainNotificationQueue } = notifications;
   const { activeProjector, activeTurnId } = activeTurn;
+  // Native completion has persisted this turn's model context; report it before settling.
+  await recordCodexNativeModelContext(resources);
   const drainGraceElapsed = createDeferred<void>();
   let settlementPhase: "active" | "expired" | "closed" = "active";
   let drainGraceTimer: ReturnType<typeof setTimeout> | undefined;

@@ -171,6 +171,71 @@ describe("Codex app-server attempt context", () => {
     ]);
   });
 
+  it("reports Codex-recorded base instructions and confirms native AGENTS.md", () => {
+    const agentsMd = "# Workspace rules\n\nKeep it short.";
+    const reportParams: Parameters<typeof buildCodexSystemPromptReport>[0] = {
+      attempt: { sessionId: "session-1" } as EmbeddedRunAttemptParams,
+      sessionKey: "agent:main:session-1",
+      workspaceDir: "/workspace",
+      developerInstructions: "developer policy",
+      workspaceBootstrapContext: {
+        bootstrapFiles: [
+          {
+            name: "AGENTS.md",
+            path: "/workspace/AGENTS.md",
+            content: `${agentsMd}\n`,
+            missing: false,
+          },
+        ],
+        contextFiles: [],
+        promptContextFiles: [],
+      },
+      skillsPrompt: "",
+      tools: [],
+    };
+    const nativeText = `# Parent rules\n\n${agentsMd}\n`;
+    const fragment = `# AGENTS.md instructions for /workspace\n\n<INSTRUCTIONS>\n${nativeText}\n</INSTRUCTIONS>`;
+
+    const report = buildCodexSystemPromptReport({
+      ...reportParams,
+      nativeModelContext: {
+        baseInstructions: "base policy",
+        agentsMd: { directory: "/workspace", text: nativeText },
+      },
+    });
+    expect(report.systemPrompt).toMatchObject({
+      chars: "developer policy".length + "base policy".length + fragment.length,
+      projectContextChars: fragment.length,
+      nonProjectContextChars: "developer policy".length + "base policy".length,
+    });
+    expect(report.injectedWorkspaceFiles).toEqual([
+      expect.objectContaining({
+        rawChars: agentsMd.length,
+        injectedChars: agentsMd.length,
+        truncated: false,
+      }),
+    ]);
+    expect(report.injectedWorkspaceFiles[0]).not.toHaveProperty("injectionStatus");
+
+    // Codex recorded no AGENTS.md: confirmed absent, not unknown.
+    const absent = buildCodexSystemPromptReport({
+      ...reportParams,
+      nativeModelContext: { agentsMd: { directory: null, text: null } },
+    });
+    expect(absent.systemPrompt.chars).toBe("developer policy".length);
+    expect(absent.injectedWorkspaceFiles[0]).toMatchObject({ injectedChars: 0, truncated: false });
+
+    // Content Codex did not record (edited since, or truncated) stays unverified.
+    const stale = buildCodexSystemPromptReport({
+      ...reportParams,
+      nativeModelContext: { agentsMd: { directory: "/workspace", text: "older rules" } },
+    });
+    expect(stale.injectedWorkspaceFiles[0]).toMatchObject({
+      injectionStatus: "native_unverified",
+      injectedChars: null,
+    });
+  });
+
   it("reuses each Codex definition hash until its schema JSON changes", () => {
     const stabilize = vi.spyOn(fingerprints, "stabilizeJsonValue");
     const frozen = Object.freeze({
