@@ -2,6 +2,10 @@ import { InMemoryTransport } from "@modelcontextprotocol/client";
 import { App } from "@modelcontextprotocol/ext-apps";
 import { expect, it, vi } from "vitest";
 import { z } from "zod";
+import {
+  createTestGatewayClient,
+  createGatewayRequestMock,
+} from "../test-helpers/gateway-client.ts";
 import { bindMcpAppResourceHandlers, OpenClawAppBridge } from "./mcp-app-bridge.ts";
 import { buildMcpAppHostCapabilities } from "./mcp-app-security.ts";
 
@@ -28,8 +32,13 @@ it("round-trips opaque list cursors through the installed AppBridge transport", 
     bridge,
     request,
     releaseResourceSubscription: vi.fn(() => Promise.resolve({})),
-    sessionKey: "one",
-    viewId: "app",
+    binding: () => ({
+      sessionKey: "one",
+      viewId: "app",
+      client: createTestGatewayClient(createGatewayRequestMock()),
+      scope: 1,
+      connectionRevision: 1,
+    }),
     iframe: document.createElement("iframe"),
     confirmOpenFile: async () => false,
     isDisposed: () => false,

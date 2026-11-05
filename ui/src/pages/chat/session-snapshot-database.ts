@@ -13,7 +13,8 @@ const CHAT_SNAPSHOT_DB_NAME = "openclaw-chat-snapshots";
 export const CHAT_SNAPSHOT_STORE_NAME = "snapshots";
 export const CHAT_SNAPSHOT_METADATA_STORE_NAME = "snapshotMetadata";
 export const SIDEBAR_SNAPSHOT_STORE_NAME = "sidebarSnapshots";
-const CHAT_SNAPSHOT_DB_VERSION = 8;
+export const BOARD_APP_SNAPSHOT_STORE_NAME = "boardAppDisplays";
+const CHAT_SNAPSHOT_DB_VERSION = 9;
 
 export function isPersistableChatSnapshotKey(key: string): boolean {
   return key.startsWith("scope:[") && !isIncognitoSessionKey(key.slice(key.indexOf("\u0000") + 1));
@@ -62,6 +63,9 @@ function openIndexedDb(factory: IDBFactory): Promise<IDBDatabase> {
         // Retire unbounded transcripts without reading them onto the main thread.
         request.transaction?.objectStore(CHAT_SNAPSHOT_STORE_NAME).clear();
         request.transaction?.objectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME).clear();
+      }
+      if (event.oldVersion < 9) {
+        database.createObjectStore(BOARD_APP_SNAPSHOT_STORE_NAME, { keyPath: "sessionKey" });
       }
       // The unified projection replaces this disposable cache; retirement never gates startup.
       try {
@@ -206,6 +210,7 @@ export async function deleteSessionSnapshotEntries(
         CHAT_SNAPSHOT_STORE_NAME,
         CHAT_SNAPSHOT_METADATA_STORE_NAME,
         SIDEBAR_SNAPSHOT_STORE_NAME,
+        BOARD_APP_SNAPSHOT_STORE_NAME,
       ];
       const transaction = database.transaction(names, "readwrite");
       void transactionComplete(transaction).then(resolve, reject);
@@ -214,11 +219,15 @@ export async function deleteSessionSnapshotEntries(
         if (name === SIDEBAR_SNAPSHOT_STORE_NAME && reason === "cache-eviction") {
           continue;
         }
-        if (!byPrefix && name !== SIDEBAR_SNAPSHOT_STORE_NAME) {
+        if (
+          !byPrefix &&
+          name !== SIDEBAR_SNAPSHOT_STORE_NAME &&
+          name !== BOARD_APP_SNAPSHOT_STORE_NAME
+        ) {
           store.delete(key);
           continue;
         }
-        if (!byPrefix) {
+        if (!byPrefix && name === SIDEBAR_SNAPSHOT_STORE_NAME) {
           const request = store.openCursor();
           request.onsuccess = () => {
             const cursor = request.result;
@@ -242,13 +251,14 @@ export async function deleteSessionSnapshotEntries(
           };
           continue;
         }
+        const prefix = !byPrefix && name === BOARD_APP_SNAPSHOT_STORE_NAME ? `${key}\0board:` : key;
         const request = store.openKeyCursor();
         request.onsuccess = () => {
           const cursor = request.result;
           if (!cursor) {
             return;
           }
-          if (typeof cursor.primaryKey === "string" && cursor.primaryKey.startsWith(key)) {
+          if (typeof cursor.primaryKey === "string" && cursor.primaryKey.startsWith(prefix)) {
             store.delete(cursor.primaryKey);
           }
           cursor.continue();

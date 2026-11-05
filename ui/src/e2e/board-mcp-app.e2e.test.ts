@@ -3,6 +3,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import {
   installMockGateway,
@@ -354,6 +355,70 @@ suite.define(() => {
         params: expect.objectContaining({ viewId: "retired-view" }),
       }),
     );
+  });
+
+  it("paints the cached app within 1000 ms of the warm pane without any board skeleton", async () => {
+    const page = await newPage({ viewport: { width: 1440, height: 1000 } });
+    const gateway = await installApp(page, appLease("first-live-view"), {
+      heldMethods: ["board.widget.appView"],
+      app: appViewPayload(`<script>
+        const send = message => parent.postMessage({jsonrpc:"2.0", ...message}, "*");
+        addEventListener("message", ({source, data}) => {
+          if (source !== parent) return;
+          if (data.id === 1 && data.result) send({method:"ui/notifications/initialized"});
+          if (data.method === "ui/notifications/tool-result") {
+            document.querySelector("output").textContent = data.params.content[0].text;
+          }
+          if (data.method === "ui/resource-teardown") send({id:data.id, result:{}});
+        });
+        send({id:1, method:"ui/initialize", params:{appInfo:{name:"Warm board",version:"1"},
+          appCapabilities:{}, protocolVersion:${JSON.stringify(LATEST_PROTOCOL_VERSION)}}});
+      </script>`),
+    });
+    await suite.openDashboard(page, sessionKey);
+    await gateway.waitForRequest("board.widget.appView");
+    await gateway.resolveDeferred("board.widget.appView");
+    await appFrame(page).getByText("ready", { exact: true }).waitFor();
+    await page.evaluate(async () => {
+      const pane = document.querySelector("openclaw-chat-pane");
+      const store = Reflect.get(pane!, "sessionSnapshotStore");
+      await store.flush();
+      await store.whenWritesIdle();
+    });
+    await page.addInitScript(() => {
+      let paneAt: number | undefined;
+      let skeletonFrames = 0;
+      const sample = () => {
+        if (document.querySelector("[data-cached-session]")) paneAt ??= performance.now();
+        if (document.querySelector(".board-session-surface openclaw-panel-loading-skeleton"))
+          skeletonFrames++;
+        Reflect.set(window, "warmBoardFrames", { paneAt, skeletonFrames });
+        requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+    });
+    await gateway.setOnline(false);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.locator("[data-cached-session]").waitFor();
+    await appFrame(page).getByText("ready", { exact: true }).waitFor({ timeout: 1000 });
+    await page.waitForFunction(
+      () => typeof Reflect.get(window, "warmBoardFrames")?.paneAt === "number",
+    );
+    const elapsed = await page.evaluate(() => {
+      const frames = Reflect.get(window, "warmBoardFrames");
+      return { skeletonFrames: frames.skeletonFrames, elapsed: performance.now() - frames.paneAt };
+    });
+    expect(elapsed.skeletonFrames).toBe(0);
+    expect(elapsed.elapsed).toBeLessThan(1000);
+    await readBoardIdentity(page, true);
+    await gateway.setOnline(true);
+    await waitForControlUiGatewayReady(page);
+    await gateway.waitForRequest("board.widget.appView");
+    await gateway.resolveDeferred("board.widget.appView", appLease("fresh-live-view"));
+    await gateway.waitForRequest("mcp.app.view");
+    await expect
+      .poll(() => readBoardIdentity(page))
+      .toEqual({ connected: true, hidden: false, inert: false, same: true });
   });
 
   it("retains one board runtime across split, expanded, and inactive panel states", async () => {

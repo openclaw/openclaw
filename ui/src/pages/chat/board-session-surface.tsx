@@ -42,7 +42,11 @@ export function BoardSessionSurface(props: BoardSessionSurfaceProps) {
       {props.controls}
       <div class="board-session-surface__board">
         <ChatLazyBoundary
-          fallback={<PanelLoadingSkeleton variant="board" label={t("common.loading")} overlay />}
+          fallback={
+            props.snapshot ? undefined : (
+              <PanelLoadingSkeleton variant="board" label={t("common.loading")} overlay />
+            )
+          }
         >
           <BoardView
             ref={[boardRef]}

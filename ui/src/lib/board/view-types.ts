@@ -1,4 +1,5 @@
 import type { BoardOp } from "@openclaw/gateway-protocol";
+import type { BoardAppDisplayAccess } from "../../components/mcp-app-view-types.ts";
 
 export type BoardGrantDecision = "granted" | "rejected";
 export type BoardWidgetAppViewState =
@@ -6,6 +7,7 @@ export type BoardWidgetAppViewState =
   | { status: "stale" };
 
 export type BoardViewCallbacks = {
+  appDisplay?: BoardAppDisplayAccess;
   appViewGeneration?: number;
   applyOps: (ops: BoardOp[]) => Promise<void>;
   grant: (name: string, decision: BoardGrantDecision) => Promise<void>;

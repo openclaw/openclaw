@@ -13,6 +13,7 @@ import {
   MCP_APP_FILE_OPEN_EVENT,
   type McpAppFileOpenEventDetail,
 } from "./mcp-app-security.ts";
+import type { McpAppBinding } from "./mcp-app-view-types.ts";
 
 const extensionRecordSchema = z.record(z.string(), z.unknown());
 const fileOpenResultSchema = z.object({ path: z.string(), name: z.string() });
@@ -68,9 +69,7 @@ export function bindMcpAppResourceHandlers(owner: {
   bridge: OpenClawAppBridge;
   request: (method: string, params: Record<string, unknown>) => Promise<unknown>;
   releaseResourceSubscription: (uri: string) => Promise<unknown>;
-  sessionKey: string;
-  viewId: string;
-  agentId?: string;
+  binding: () => McpAppBinding;
   iframe: HTMLIFrameElement;
   fileResourcesSupported?: boolean;
   openFilesSupported?: boolean;
@@ -84,7 +83,7 @@ export function bindMcpAppResourceHandlers(owner: {
     listener: Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0],
   ) => (() => void) | undefined;
 }): { start(): void; reconnect(): Promise<void> } {
-  const { bridge, request, sessionKey, viewId, iframe } = owner;
+  const { bridge, request, iframe } = owner;
   bridge.oncalltool = async (params) =>
     requireMcpResult(
       specTypeSchemas.CallToolResult,
@@ -153,6 +152,7 @@ export function bindMcpAppResourceHandlers(owner: {
   }
   if (owner.openFilesSupported) {
     bridge.setHostRequestHandler("openai/files/open", async (params) => {
+      owner.binding();
       if (
         owner.isDisposed() ||
         !isWidgetFrameInteractable(iframe) ||
@@ -167,6 +167,7 @@ export function bindMcpAppResourceHandlers(owner: {
       if (owner.isDisposed()) {
         return { isError: true };
       }
+      const { sessionKey, viewId } = owner.binding();
       return new Promise<Record<string, unknown>>((resolve) => {
         const accepted = !owner.dispatchEvent(
           new CustomEvent<McpAppFileOpenEventDetail>(MCP_APP_FILE_OPEN_EVENT, {
@@ -200,6 +201,7 @@ export function bindMcpAppResourceHandlers(owner: {
         if (owner.isDisposed()) {
           return;
         }
+        const { sessionKey, viewId, agentId } = owner.binding();
         const value = asOptionalRecord(event.payload);
         const input =
           event.event === "question.requested" && value?.status === "pending"
@@ -209,7 +211,7 @@ export function bindMcpAppResourceHandlers(owner: {
               : undefined;
         if (
           input?.sessionKey === sessionKey &&
-          (!owner.agentId || !input.agentId || input.agentId === owner.agentId)
+          (!agentId || !input.agentId || input.agentId === agentId)
         ) {
           owner.onConversationInputRequested();
         }

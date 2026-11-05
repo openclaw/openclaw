@@ -85,6 +85,8 @@ export const McpAppView = defineSolidBridge<McpAppViewProps, ViewMethods>(
   },
   {
     properties: {
+      widget: { default: undefined, attribute: false },
+      appDisplay: { default: undefined, attribute: false },
       sessionKey: { default: "", attribute: false },
       agentId: { default: "", attribute: false },
       viewId: { default: "", attribute: false },

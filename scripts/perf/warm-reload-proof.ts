@@ -219,6 +219,16 @@ async function inspectWarmCache(page: Page, sessionKey: string, removeTarget = f
               { once: true },
             );
           });
+        const boardDisplays = database.objectStoreNames.contains("boardAppDisplays")
+          ? await new Promise<unknown[]>((resolve, reject) => {
+              const request = database
+                .transaction("boardAppDisplays")
+                .objectStore("boardAppDisplays")
+                .getAll();
+              request.onsuccess = () => resolve(request.result);
+              request.onerror = () => reject(request.error);
+            })
+          : [];
         const snapshots = await readKeys("snapshots");
         const sidebar = await readKeys("sidebarSnapshots");
         const sidebarRecords = await Promise.all(
@@ -284,6 +294,11 @@ async function inspectWarmCache(page: Page, sessionKey: string, removeTarget = f
           });
         }
         return {
+          boardAppDisplays: boardDisplays.length,
+          boardAppDisplayBytes: boardDisplays.reduce<number>(
+            (bytes, value) => bytes + new TextEncoder().encode(JSON.stringify(value)).length,
+            0,
+          ),
           targetSnapshots: targetKeys.length,
           targetSnapshotBytes: targetRecords.reduce<number>(
             (bytes, value) => bytes + new TextEncoder().encode(JSON.stringify(value)).length,

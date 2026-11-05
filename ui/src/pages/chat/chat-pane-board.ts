@@ -46,6 +46,7 @@ import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { readChatSessionSnapshot } from "./session-message-cache.ts";
+import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
   fitSidebarLayout,
@@ -333,15 +334,14 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           presentationScope,
           (snapshot, receivedAtMs) => {
             const currentState = this.state;
-            if (!currentState) {
-              return;
-            }
+            if (!currentState) return;
             cacheChatBoardSnapshotAfterHydration(
               currentState,
               session,
               snapshot,
               receivedAtMs,
               () => active && gatewayPresentationScope(context.gateway) === presentationScope,
+              this.sessionSnapshotStore,
             );
           },
         );
@@ -673,7 +673,22 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     if (!this.isBoardPanelAvailable(board)) {
       return null;
     }
+    const { state, sessionSnapshotStore: store } = this;
+    const key = state && resolveChatSnapshotKey(state, this.resolveBoardConversation());
     return {
+      appDisplay:
+        state && key && store
+          ? (widget, payload) =>
+              state === this.state &&
+              key === resolveChatSnapshotKey(state, this.resolveBoardConversation())
+                ? store.boardAppDisplay(
+                    key,
+                    this.resolveBoardView().snapshot.widgets,
+                    widget,
+                    payload,
+                  )
+                : Promise.resolve(null)
+          : undefined,
       owner: this,
       board,
       layout,

@@ -1,5 +1,7 @@
 import type { ApplicationContext } from "../app/context.ts";
+import type { BoardWidget } from "../lib/board/types.ts";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
+import type { BoardAppDisplay } from "../pages/chat/session-board-app-snapshot.ts";
 import type { OpenClawAppBridge } from "./mcp-app-bridge.ts";
 import type { McpAppContextState, McpAppHostSandboxCsp } from "./mcp-app-security.ts";
 
@@ -25,6 +27,8 @@ export type McpAppViewPayload = {
 };
 
 export type McpAppResources = {
+  binding: McpAppBinding | null;
+  adopt?: (binding: McpAppBinding, payload: McpAppViewPayload) => Promise<boolean>;
   bridge: OpenClawAppBridge | null;
   requestAbort: AbortController;
   cleanups: Set<() => void>;
@@ -44,7 +48,14 @@ export type McpAppBinding = {
   scope: number;
 };
 
+export type BoardAppDisplayAccess = (
+  widget: BoardWidget,
+  payload?: McpAppViewPayload,
+) => Promise<BoardAppDisplay | null>;
+
 export type McpAppViewProps = {
+  widget: BoardWidget | undefined;
+  appDisplay: BoardAppDisplayAccess | undefined;
   sessionKey: string;
   agentId: string;
   viewId: string;

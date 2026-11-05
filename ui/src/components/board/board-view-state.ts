@@ -248,6 +248,8 @@ export function createBoardViewState(
   }
 
   const cellCallbacks: BoardWidgetCellCallbacks = {
+    appDisplay: async (widget, payload) =>
+      (await props.callbacks?.appDisplay?.(widget, payload)) ?? null,
     presentationReady: reconcileInitialPresentation,
     appViewGeneration: () => props.callbacks?.appViewGeneration ?? 0,
     grant: async (name, decision) => {
