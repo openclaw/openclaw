@@ -320,3 +320,30 @@ it.each(["publication", "activation"])(
     );
   },
 );
+
+it("runs the caller's recovery hook before rollback restarts the previous unit", async () => {
+  const { installArgs } = await createInstallFixture();
+  const events: string[] = [];
+  let activationFailed = false;
+  native.active.mockResolvedValue({ ok: true, value: true });
+  native.exec.mockImplementation(async (_env, args) => {
+    if (args[0] === "restart") {
+      if (!activationFailed) {
+        activationFailed = true;
+        return { code: 1, termination: "exit", stdout: "", stderr: "candidate failed" };
+      }
+      events.push("previous unit restarted");
+    }
+    return nativeExit(args[0] === "is-enabled" ? "enabled" : "");
+  });
+
+  await expect(
+    installSystemdService({
+      ...installArgs,
+      beforeRecovery: async () => {
+        events.push("recovery hook");
+      },
+    }),
+  ).rejects.toThrow("candidate failed");
+  expect(events).toEqual(["recovery hook", "previous unit restarted"]);
+});

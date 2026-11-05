@@ -46,6 +46,12 @@ export type GatewayServiceInstallArgs = {
   /** Preserve the existing enable policy during an update-owned definition rebind. */
   preserveAutoStart?: boolean;
   beforeMutation?: () => Promise<void>;
+  /**
+   * Runs when a failed install recovers, before native recovery restores and restarts the
+   * previous definition, so state that definition depends on is back in place first. It reports
+   * its own failures instead of throwing.
+   */
+  beforeRecovery?: () => Promise<void>;
   /** Live caller authority, retained at every native write boundary. */
   assertCurrent?: () => void;
   env: GatewayServiceEnv;

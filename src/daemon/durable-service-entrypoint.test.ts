@@ -10,6 +10,7 @@ import {
   installDurableServiceCli,
   resolveDurableServiceCli,
 } from "./durable-service-entrypoint.js";
+import { withGatewayServiceInstallationRecovery } from "./service-update-authority.js";
 
 const { runGlobalPackageUpdateSteps, installedCopyErrors, packageLock } = vi.hoisted(() => ({
   // Reaches the activation gate the way the package updater does, then finishes.
@@ -69,6 +70,8 @@ describe("resolveDurableServiceCli", () => {
   afterEach(() => {
     fs.rmSync(root, { recursive: true, force: true });
     vi.clearAllMocks();
+    runGlobalPackageUpdateSteps.mockReset();
+    installedCopyErrors.mockReset();
   });
   const stateEnv = () => ({ OPENCLAW_STATE_DIR: path.join(root, "state") });
   const npxEntrypoint = (version = "1.2.3") => {
@@ -235,4 +238,33 @@ describe("resolveDurableServiceCli", () => {
       expect(liveVersion()).toBe(nodeVersion);
     },
   );
+
+  it("puts the previous copy back before native recovery restarts the old service", async () => {
+    const liveVersion = liveCopy();
+    let restartedOn: string | undefined;
+
+    await expect(
+      installDurableServiceCli({
+        env: stateEnv(),
+        replacement: await plan("2.0.0", "gateway"),
+        // Activating 2.0.0 fails; the installer's recovery restarts the previous definition.
+        install: (beforeMutation, beforeRecovery) =>
+          withGatewayServiceInstallationRecovery(
+            async () => {
+              await beforeMutation?.();
+              throw new Error("activation failed");
+            },
+            async () => {
+              restartedOn = liveVersion();
+              return true;
+            },
+            { beforeRecovery },
+          ),
+        verify: async () => true,
+        warn: vi.fn(),
+      }),
+    ).rejects.toThrow("activation failed");
+    expect(restartedOn).toBe("1.0.0");
+    expect(liveVersion()).toBe("1.0.0");
+  });
 });

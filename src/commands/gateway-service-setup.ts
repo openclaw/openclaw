@@ -32,13 +32,14 @@ export async function prepareGatewayServiceInstall(params: {
         replacement: durableCliReplacement,
         verify: () => params.service.isLoaded({ env: process.env }),
         warn: (message) => params.warn(message, "Gateway service"),
-        install: (beforeMutation) =>
+        install: (beforeMutation, beforeRecovery) =>
           params.service.install({
             env: process.env,
             stdout: process.stdout,
             ...plan,
             runtimePinUpdate,
             beforeMutation,
+            beforeRecovery,
           }),
       }),
   };

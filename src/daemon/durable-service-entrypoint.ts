@@ -199,7 +199,11 @@ export async function resolveDurableServiceCli(
 export async function installDurableServiceCli(params: {
   env: NodeJS.ProcessEnv;
   replacement: DurableServiceCliReplacement | undefined;
-  install: (beforeMutation?: () => Promise<void>) => Promise<void>;
+  /** Passes both hooks to service.install as `beforeMutation` and `beforeRecovery`. */
+  install: (
+    beforeMutation?: () => Promise<void>,
+    beforeRecovery?: () => Promise<void>,
+  ) => Promise<void>;
   verify: () => Promise<boolean>;
   warn: (message: string) => void;
 }): Promise<void> {
@@ -242,13 +246,36 @@ async function installUnderPackageLock(
   const staged = await stageDurableCopy(params.env, replacement);
   let activation: Promise<void> | undefined;
   let swapped = false;
+  let settled = false;
   let outcome: "installed" | "verified" | "failed" = "failed";
+  // Cleanup reports through warn so it never replaces the install's own error.
+  const settle = async (decision: "restore" | "retain" | "retire") => {
+    settled = true;
+    try {
+      (await staged.settle(decision)).forEach(params.warn);
+    } catch (error) {
+      params.warn(`Durable OpenClaw copy cleanup failed: ${String(error)}`);
+    }
+  };
+  // A failed first install keeps its swapped-in copy: nothing to restore.
+  const failedInstallDecision = () => (swapped && !replacesExisting ? "retire" : "restore");
+  // Native recovery restarts the previous definition, so its copy must be back first.
+  const beforeRecovery = async () => {
+    if (!activation || settled) {
+      return;
+    }
+    await activation.catch(() => undefined);
+    if (failedInstallDecision() === "restore") {
+      await settle("restore");
+    }
+  };
   try {
     await params.install(
       () =>
         (activation ??= staged.activate().then(() => {
           swapped = true;
         })),
+      beforeRecovery,
     );
     if (!activation) {
       throw new Error(
@@ -259,23 +286,20 @@ async function installUnderPackageLock(
     outcome = "installed";
     outcome = (await params.verify()) ? "verified" : "installed";
   } finally {
-    // Cleanup reports through warn so it never replaces the install's own error.
-    try {
-      const warnings = !activation
-        ? await staged.cancel()
-        : await staged.settle(
-            outcome === "verified"
-              ? "retire"
-              : outcome === "installed"
-                ? "retain"
-                : // A failed first install keeps its swapped-in copy: nothing to restore.
-                  swapped && !replacesExisting
-                  ? "retire"
-                  : "restore",
-          );
-      warnings.forEach(params.warn);
-    } catch (error) {
-      params.warn(`Durable OpenClaw copy cleanup failed: ${String(error)}`);
+    if (!activation) {
+      try {
+        (await staged.cancel()).forEach(params.warn);
+      } catch (error) {
+        params.warn(`Durable OpenClaw copy cleanup failed: ${String(error)}`);
+      }
+    } else if (!settled) {
+      await settle(
+        outcome === "verified"
+          ? "retire"
+          : outcome === "installed"
+            ? "retain"
+            : failedInstallDecision(),
+      );
     }
   }
 }

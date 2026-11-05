@@ -606,12 +606,14 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     installDurableCli: true,
     warn,
   });
-  // beforeMutation carries the durable-copy swap into the service's own mutation boundary.
+  // The hooks carry the durable-copy swap into the service's own mutation boundary and put
+  // the previous copy back before a failed install's native recovery restarts the old service.
   const install =
-    (beforeMutation?: () => Promise<void>) =>
+    (beforeMutation?: () => Promise<void>, beforeRecovery?: () => Promise<void>) =>
     async (definitionTransaction?: GatewayServiceDefinitionTransactionHooks) => {
       await service.install({
         beforeMutation,
+        beforeRecovery,
         runtimePinUpdate: {
           expected: pinSnapshot,
           pin: pinnedRuntimePath ? { runtime, path: pinnedRuntimePath } : undefined,
@@ -654,7 +656,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         replacement: durableCliReplacement,
         verify: () => service.isLoaded({ env: process.env }),
         warn,
-        install: async (beforeMutation) => {
+        install: async (beforeMutation, beforeRecovery) => {
           if (
             isUpdateOwnedGatewayServiceCommand() ||
             isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS)
@@ -669,11 +671,11 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
                 environment,
                 environmentValueSources,
               },
-              install: install(beforeMutation),
+              install: install(beforeMutation, beforeRecovery),
               warn,
             });
           } else {
-            await install(beforeMutation)();
+            await install(beforeMutation, beforeRecovery)();
           }
         },
       }),

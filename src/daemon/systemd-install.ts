@@ -208,6 +208,7 @@ async function writeSystemdUnit(
     description,
     definitionTransaction,
     warn,
+    beforeRecovery,
   }: Omit<GatewayServiceInstallArgs, "stdout">,
   load?: (beforeAction?: (action: string) => void) => Promise<void>,
 ): Promise<{ unitPath: string; backedUp: boolean }> {
@@ -432,11 +433,13 @@ async function writeSystemdUnit(
       if (definitionTransaction) {
         await publish();
       } else {
-        await withGatewayServiceInstallationRecovery(publish, restore);
+        await withGatewayServiceInstallationRecovery(publish, restore, { beforeRecovery });
       }
       if (load) {
         if (recovery) {
-          await withGatewayServiceInstallationRecovery(() => load(recovery.beforeAction), restore);
+          await withGatewayServiceInstallationRecovery(() => load(recovery.beforeAction), restore, {
+            beforeRecovery,
+          });
         } else {
           await load();
         }

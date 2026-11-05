@@ -341,9 +341,10 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
         replacement: durableCliReplacement,
         verify: () => service.isLoaded({ env: process.env }),
         warn,
-        install: (beforeMutation) =>
+        install: (beforeMutation, beforeRecovery) =>
           service.install({
             beforeMutation,
+            beforeRecovery,
             runtimePinUpdate: {
               expected: pinSnapshot,
               pin: pinnedRuntimePath ? { runtime: runtimeRaw, path: pinnedRuntimePath } : undefined,

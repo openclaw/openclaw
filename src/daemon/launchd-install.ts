@@ -196,29 +196,33 @@ export async function installLaunchAgent(
   const { plistPath, stdoutPath } =
     publication.kind === "transaction"
       ? await install()
-      : await withGatewayServiceInstallationRecovery(install, async () => {
-          const files = publication.files;
-          if (activationAttempted) {
-            await files.assertCurrent();
-            const current = await probeLaunchAgentState(serviceTarget);
-            if (current.state === "unknown") {
-              throw new Error(
-                `launchctl print could not determine whether ${serviceTarget} is loaded during LaunchAgent rollback: ${current.detail ?? "unknown error"}`,
-              );
-            }
-            if (current.state !== "not-loaded") {
+      : await withGatewayServiceInstallationRecovery(
+          install,
+          async () => {
+            const files = publication.files;
+            if (activationAttempted) {
               await files.assertCurrent();
-              await bootoutLaunchAgent(serviceTarget);
+              const current = await probeLaunchAgentState(serviceTarget);
+              if (current.state === "unknown") {
+                throw new Error(
+                  `launchctl print could not determine whether ${serviceTarget} is loaded during LaunchAgent rollback: ${current.detail ?? "unknown error"}`,
+                );
+              }
+              if (current.state !== "not-loaded") {
+                await files.assertCurrent();
+                await bootoutLaunchAgent(serviceTarget);
+              }
             }
-          }
-          const restored = await files.restore();
-          if (activationAttempted && restoreLoaded) {
-            await files.assertCurrent();
-            await assertNoSystemLaunchDaemonOwnership(label);
-            await bootstrap(targetPlistPath, "openclaw gateway start");
-          }
-          return restored || activationAttempted;
-        });
+            const restored = await files.restore();
+            if (activationAttempted && restoreLoaded) {
+              await files.assertCurrent();
+              await assertNoSystemLaunchDaemonOwnership(label);
+              await bootstrap(targetPlistPath, "openclaw gateway start");
+            }
+            return restored || activationAttempted;
+          },
+          { beforeRecovery: args.beforeRecovery },
+        );
   // `bootstrap` already loads RunAtLoad agents. Avoid `kickstart -k` here:
   // on slow macOS guests it SIGTERMs the freshly booted gateway and pushes the
   // real listener startup past setup's health deadline.

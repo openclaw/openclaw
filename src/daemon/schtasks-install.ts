@@ -513,12 +513,16 @@ export async function installScheduledTask(
     // The caller's definition transaction owns rollback and native lifecycle recovery.
     return install();
   }
-  return withGatewayServiceInstallationRecovery(install, async () => {
-    if (!recovery || !restoreTask) {
-      return false;
-    }
-    return restoreTask.restore(recovery, activationAttempted);
-  }).catch((error: unknown) => {
+  return withGatewayServiceInstallationRecovery(
+    install,
+    async () => {
+      if (!recovery || !restoreTask) {
+        return false;
+      }
+      return restoreTask.restore(recovery, activationAttempted);
+    },
+    { beforeRecovery: args.beforeRecovery },
+  ).catch((error: unknown) => {
     if (
       (error instanceof GatewayServiceAuthorityError && error.outcome === "recovery-pending") ||
       error instanceof AggregateError
