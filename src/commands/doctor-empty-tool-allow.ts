@@ -41,7 +41,10 @@ function isBareToolPolicy(value: unknown): value is Record<string, unknown> {
  * A non-empty deny or a profile is a real restriction, so Doctor stays silent.
  * `alsoAllow` suppresses the note only where that scope merges it into `[]`.
  */
-function looksLikeIntendedDenyAll(policy: unknown, alsoAllowNarrows: boolean): boolean {
+function looksLikeIntendedDenyAll(
+  policy: unknown,
+  alsoAllowNarrows: boolean,
+): policy is Record<string, unknown> {
   if (!isRecord(policy) || !Array.isArray(policy.allow) || policy.allow.length > 0) {
     return false;
   }
@@ -51,7 +54,10 @@ function looksLikeIntendedDenyAll(policy: unknown, alsoAllowNarrows: boolean): b
   if (alsoAllowNarrows && isNonEmptyList(policy.alsoAllow)) {
     return false;
   }
-  return typeof policy.profile !== "string" || policy.profile.length === 0;
+  if (typeof policy.profile === "string" && policy.profile.length > 0) {
+    return false;
+  }
+  return true;
 }
 
 function pushToolRoot(
@@ -157,16 +163,18 @@ function remediationFor(path: string): string {
  * unchanged, and `allow: []` stays a supported allow-all setting. Refs #147342.
  */
 export function collectEmptyToolAllowHints(cfg: OpenClawConfig): SecurityAuditFinding[] {
-  return collectPolicySlots(cfg)
-    .filter((slot) => looksLikeIntendedDenyAll(slot.policy, slot.alsoAllowNarrows))
-    .map((slot) => {
-      const policy = slot.policy as Record<string, unknown>;
-      return {
+  return collectPolicySlots(cfg).flatMap((slot) => {
+    if (!looksLikeIntendedDenyAll(slot.policy, slot.alsoAllowNarrows)) {
+      return [];
+    }
+    return [
+      {
         checkId: "doctor.empty_tool_allow",
         severity: "info" as const,
         title: "Note",
-        detail: detailFor(slot.path, policy),
+        detail: detailFor(slot.path, slot.policy),
         remediation: remediationFor(slot.path),
-      };
-    });
+      },
+    ];
+  });
 }

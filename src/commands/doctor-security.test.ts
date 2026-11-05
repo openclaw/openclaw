@@ -238,7 +238,8 @@ describe("noteSecurityWarnings gateway exposure", () => {
     cfg: OpenClawConfig | OpenClawConfigWithLegacyRoster;
     allowPath: string;
   }[])("notes $name allow: [] that reads as deny-all", async ({ cfg, allowPath }) => {
-    await noteSecurityWarnings(cfg);
+    // satisfies checks the legacy roster row, but it.each keeps the narrow agents.list member.
+    await noteSecurityWarnings(cfg as OpenClawConfig);
 
     expectMessage(`${allowPath} is [] with no deny or profile`, 'deny to ["*"]');
   });
