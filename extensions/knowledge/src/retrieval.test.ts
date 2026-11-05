@@ -600,12 +600,15 @@ it("superseded-record edits update the persistent history index and the search s
   expect(after.index.snapshot).not.toBe(before.index.snapshot);
   expect(await f.total({ query: "quillword" })).toBe(0);
 
-  // A dropped history index is rebuilt instead of served empty under a matching snapshot.
+  // A dropped history index is rebuilt instead of served empty under a matching
+  // snapshot, even when its row tracking survives.
   f.store.withDatabase((db) => {
     for (const { name } of db
-      .prepare("SELECT name FROM sqlite_master WHERE name LIKE 'keyword_history_%'")
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE name LIKE 'keyword_history_fts_v1_%' AND sql LIKE 'CREATE VIRTUAL%'",
+      )
       .all()) {
-      db.exec(`DROP TABLE IF EXISTS ${String(name)}`);
+      db.exec(`DROP TABLE ${String(name)}`);
     }
   });
   expect(ids(await f.service.grep({ query: "inkword" }, f.owner))).toStrictEqual(["plan_two"]);

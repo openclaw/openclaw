@@ -315,15 +315,17 @@ function reconcileKeywordIndex(
   );
   let untracked = false;
   for (const { table, rows } of tables) {
-    const tracked = tableExists(db, rows);
+    const tracked = tableExists(db, rows) && tableExists(db, table);
     db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS ${table} USING fts5(${FTS_COLUMNS})`);
     db.exec(
       `CREATE TABLE IF NOT EXISTS ${rows} (id TEXT PRIMARY KEY, hash TEXT NOT NULL, fts_rowid INTEGER NOT NULL) STRICT`,
     );
-    // A table without row tracking (built before it existed, or partially
-    // dropped) has unknown contents: start it over and repopulate below.
+    // A table without row tracking (built before it existed), or tracking without
+    // its table (partially dropped), has unknown contents: start both over and
+    // repopulate below.
     if (!tracked) {
       db.exec(`DELETE FROM ${table}`);
+      db.exec(`DELETE FROM ${rows}`);
       untracked = true;
     }
   }
@@ -370,31 +372,20 @@ function followReplacements(
     return [];
   }
   const byId = new Map(historical.map((r) => [r.id, r])),
-    now = new Map(current.map((r) => [r.id, r])),
-    resolved = new Map<string, LoadedRecord | null>();
+    now = new Map(current.map((r) => [r.id, r]));
+  // Chains are short; the visited set only stops a cycle.
   const resolve = (from: string) => {
-    const path = new Set<string>();
-    let next: string | undefined = from,
-      found: LoadedRecord | null = null;
-    while (next !== undefined && !path.has(next)) {
-      const known = resolved.get(next);
-      if (known !== undefined) {
-        found = known;
-        break;
-      }
-      path.add(next);
+    const visited = new Set<string>();
+    for (let next: string | undefined = from; next !== undefined && !visited.has(next);) {
+      visited.add(next);
       const target = now.get(next);
       if (target) {
-        found = target;
-        break;
+        return target;
       }
       const r = byId.get(next);
       next = r?.lifecycle === "superseded" ? r.metadata.superseded_by : undefined;
     }
-    for (const id of path) {
-      resolved.set(id, found);
-    }
-    return found;
+    return undefined;
   };
   const seen = direct(),
     out: { record: LoadedRecord; via: LoadedRecord }[] = [];
