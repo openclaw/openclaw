@@ -8,7 +8,7 @@ import {
   waitForConfirmDialogActions,
 } from "../../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { chatGoalCreationObjective, chatGoalRecovery } from "./chat-goals.ts";
+import { chatGoalCreationObjective, chatGoalPresentation, chatGoalRecovery } from "./chat-goals.ts";
 import { makeChatHost, requestCalls } from "./chat-host.test-support.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 
@@ -51,6 +51,7 @@ function fixture(
   };
   const host = makeChatHost({
     sessionKey: row.key,
+    assistantAgentId: "main",
     currentSessionId: row.sessionId,
     chatMessage: "/goal Write rollout notes",
     sessionsResult: { ...createSessionsListResult(), sessions: [row] },
@@ -210,14 +211,135 @@ it("preserves a newer composer draft while an accepted edit is saving", async ()
   expect(await pending).toBe(true);
   expect(host.chatMessage).toBe("A newer conversation draft");
 });
-it("keeps completed goals read-only rather than clearing or resuming them", async () => {
-  const { host, row } = fixture();
+it.each(["start", "new", "structured"] as const)(
+  "starts a fresh goal after confirming a completed-goal %s proposal",
+  async (mode) => {
+    const nextGoal = {
+      ...goal,
+      id: "goal-b",
+      objective: mode === "new" ? "new objective" : "Write rollout notes",
+      status: "active" as const,
+      // A fresh identity does not share the completed goal’s revision clock.
+      createdAt: mode === "new" ? 1 : 3,
+      updatedAt: mode === "new" ? 1 : 3,
+      tokenStart: 12_500,
+      tokensUsed: 0,
+      continuationTurns: 0,
+    };
+    const { host, row } = fixture({
+      status: "started",
+      action: "restart",
+      goalId: nextGoal.id,
+      goal: nextGoal,
+      runId: "fresh-turn",
+    });
+    row.goal.status = "complete";
+    const applyGoal = vi.spyOn(host.sessions, "patchRowLocal");
+    onTestFinished(() => applyGoal.mockRestore());
+    host.chatMessage =
+      mode === "structured"
+        ? nextGoal.objective
+        : mode === "new"
+          ? "/goal " + nextGoal.objective
+          : "/goal start " + nextGoal.objective;
+    const pending = dialogs.track(
+      handleSendChat(
+        host,
+        undefined,
+        mode === "structured"
+          ? { intent: { kind: "session-goal-start", version: 1, issuedAtMs: Date.now() } }
+          : undefined,
+      ),
+    );
+    await waitForConfirmDialogActions();
+    expect(document.body.textContent).toContain(
+      "Do you want to replace the current goal with the new goal?",
+    );
+    await answer("Replace objective");
+    expect(await pending).toBe(true);
+    expect(requestCalls(host.request, "sessions.goal.update")[0]?.[1]).toMatchObject({
+      action: "restart",
+      goalId: goal.id,
+      objective: nextGoal.objective,
+      expectedGoalUpdatedAt: goal.updatedAt,
+    });
+    expect(requestCalls(host.request, "sessions.goal.clear")).toHaveLength(0);
+    expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
+    expect(applyGoal).toHaveBeenCalledWith(
+      row.key,
+      { goal: nextGoal },
+      { agentId: "main", sessionId: row.sessionId },
+    );
+    expect(chatGoalPresentation(host, nextGoal)?.executionConfirmed).toBe(true);
+    expect(host.chatRunId).toBe("fresh-turn");
+    expect(host.chatMessage).toBe("");
+  },
+);
+it("preserves a completed goal and its proposal when replacement is cancelled or uncertain", async () => {
+  const failed = createDeferred<never>();
+  const { host, row } = fixture(() => failed.promise);
   row.goal.status = "complete";
-  expect(await handleSendChat(host)).toBe(false);
-  expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+  const previous = { ...row.goal };
+  const draft = host.chatMessage;
+  const cancelled = dialogs.track(handleSendChat(host));
+  await answer("Cancel");
+  expect(await cancelled).toBe(false);
+  expect(row.goal).toEqual(previous);
+  expect(host.chatMessage).toBe(draft);
   expect(requestCalls(host.request, "sessions.goal.update")).toHaveLength(0);
-  expect(host.chatError).toContain("Goal editing is unavailable");
+  const pending = dialogs.track(handleSendChat(host));
+  await answer("Replace objective");
+  try {
+    await vi.waitFor(() => expect(chatGoalRecovery(host)?.pending).toBe(true));
+    expect(await handleSendChat(host)).toBe(false);
+  } finally {
+    failed.reject(new Error("Connection closed"));
+  }
+  expect(await pending).toBe(false);
+  expect(row.goal).toEqual(previous);
+  expect(host.chatMessage).toBe(draft);
+  expect(chatGoalRecovery(host)?.action).toBe("restart");
+  expect(await handleSendChat(host)).toBe(false);
+  expect(requestCalls(host.request, "sessions.goal.update")).toHaveLength(1);
+  expect(requestCalls(host.request, "sessions.goal.clear")).toHaveLength(0);
 });
+it.each(["session", "incarnation", "connection", "goal", "revision", "status", "run"] as const)(
+  "does not restart a completed goal after its %s changes while confirming",
+  async (change) => {
+    const { host, row } = fixture();
+    row.goal.status = "complete";
+    const draft = host.chatMessage;
+    const pending = dialogs.track(handleSendChat(host));
+    await waitForConfirmDialogActions();
+    switch (change) {
+      case "session":
+        host.sessionKey = "agent:main:other";
+        break;
+      case "incarnation":
+        host.currentSessionId = "session-b";
+        break;
+      case "connection":
+        host.connectionEpoch += 1;
+        break;
+      case "goal":
+        row.goal.id = "goal-b";
+        break;
+      case "revision":
+        row.goal.updatedAt += 1;
+        break;
+      case "status":
+        row.goal.status = "active";
+        break;
+      case "run":
+        host.chatRunId = "newer-turn";
+        break;
+    }
+    await answer("Replace objective");
+    expect(await pending).toBe(false);
+    expect(requestCalls(host.request, "sessions.goal.update")).toHaveLength(0);
+    expect(host.chatMessage).toBe(draft);
+  },
+);
 it.each(["status", "edit", "pause", "resume", "complete", "done", "block", "blocked", "clear"])(
   "leaves explicit %s syntax alone",
   (action) => {

@@ -31,6 +31,7 @@ const enChatGoals = {
       admissionImmutable: "Retry or remove this request. To edit it, start a new goal.",
       replaceTitle: "Replace goal objective?",
       replaceMessage: "Update the objective without changing the goal’s status.",
+      replaceCompletedMessage: "Do you want to replace the current goal with the new goal?",
       replaceRunningMessage: "Interrupt this reply, replace the objective, and resume the goal.",
       replace: "Replace objective",
       goalChanged: "The goal changed. Review it and try again. Your draft is unchanged.",

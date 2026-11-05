@@ -18,8 +18,11 @@ Session sharing distinguishes owners, members, and viewers. A read-only session 
 
 A goal belongs to a session. Saving an edited goal does not start a reply. Replacing
 its objective during a reply interrupts that reply, updates the objective, and
-resumes the goal. If you switch sessions while entering a goal, cancel the entry
-and select **Goal** again in the session you want to use.
+resumes the goal. Starting a new goal after the current goal is complete asks you
+to confirm the replacement. Confirming starts a fresh goal with new usage accounting;
+canceling keeps the completed goal and your draft. A completed goal remains read-only
+when editing its objective. If you switch sessions while entering a goal, cancel the
+entry and select **Goal** again in the session you want to use.
 
 If an answer cannot be sent, its draft stays saved so you can retry. If browser
 storage fails, keep the tab open or copy the draft before reloading. A goal update

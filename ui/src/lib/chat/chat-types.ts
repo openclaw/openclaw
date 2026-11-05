@@ -129,7 +129,7 @@ export type ChatGoalAction = "pause" | "resume" | "clear";
 export type ChatGoalRecovery = {
   pending: boolean;
   goalId?: string;
-  action?: ChatGoalAction | "edit" | "replace" | "complete" | "block";
+  action?: ChatGoalAction | "edit" | "replace" | "restart" | "complete" | "block";
   retired?: "expired" | "invalid";
   onCheck: () => Promise<boolean>;
 };
@@ -546,5 +546,6 @@ export type ToolCardOutcome =
 export type ChatGoalMutationAction = { goalId: string } & (
   | { action: ChatGoalAction }
   | { action: "edit"; objective: string }
+  | { action: "restart"; objective: string; expectedGoalUpdatedAt: number }
   | { action: "replace"; objective: string; expectedRunId: string; expectedGoalUpdatedAt: number }
 );

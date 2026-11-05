@@ -57,6 +57,42 @@ async function expectError(
 const toolBindings = { browser: { kind: "tab", tabId: 1, targetId: "target" } };
 const mention = (start: number, end: number, profileId = "bob") => ({ profileId, start, end });
 const goalIntent = () => ({ kind: "session-goal-start", version: 1, issuedAtMs: Date.now() });
+it.each(["resume", "restart"] as const)(
+  "retains %s Goal admission without treating a new human objective as a system continuation",
+  async (action) => {
+    const message = "/stop";
+    const operation = {
+      operationId: "request-1",
+      issuedAtMs: Date.now(),
+      requestFingerprint: "reviewed-request",
+      goalId: "completed-goal",
+      ...(action === "restart"
+        ? { action, objective: message, expectedGoalUpdatedAt: 2 }
+        : { action }),
+    };
+    const result = await normalizeChatSendRequest({
+      params: requestParams({ message }),
+      client: null,
+      goalResume: operation,
+    });
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        goalOperation: operation,
+        inboundMessage: message,
+        suppressCommandInterpretation: true,
+        stopCommand: false,
+      },
+    });
+    if (result.ok) {
+      expect(result.value.systemInputProvenance).toEqual(
+        action === "resume"
+          ? { kind: "internal_system", sourceTool: "session_goal_resume" }
+          : undefined,
+      );
+    }
+  },
+);
 async function expectRejected(overrides: Record<string, unknown>, client: Client = humanClient()) {
   expect(await normalize(overrides, client)).toMatchObject({ ok: false });
 }

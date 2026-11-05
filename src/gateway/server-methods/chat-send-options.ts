@@ -5,7 +5,7 @@ import type { createGatewayChatUserTurnController } from "./chat-user-turn-recor
 
 export type ChatSendInternalOptions = {
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
-  goalResume?: SessionGoalOperation & { action: "resume" };
+  goalResume?: SessionGoalOperation & { action: "resume" | "restart" };
   trustedSystemInput?: boolean;
   /** The creation owner has validated an agent-authored opening turn and its source authority. */
   stageCreatedInput?: true;

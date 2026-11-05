@@ -47,6 +47,13 @@ export const SessionsGoalUpdateParamsSchema = Type.Union([
   closedObject({
     ...GoalOperationIdentity,
     sessionId: NonEmptyString,
+    action: Type.Literal("restart"),
+    objective: Type.String({ minLength: 1, maxLength: 16_000 }),
+    expectedGoalUpdatedAt: Type.Number(),
+  }),
+  closedObject({
+    ...GoalOperationIdentity,
+    sessionId: NonEmptyString,
     action: Type.Literal("replace"),
     objective: Type.String({ minLength: 1, maxLength: 16_000 }),
     expectedGoalUpdatedAt: Type.Number(),
@@ -70,6 +77,7 @@ export const SessionsGoalMutationResultSchema = closedObject({
     "start",
     "edit",
     "replace",
+    "restart",
     "pause",
     "resume",
     "complete",

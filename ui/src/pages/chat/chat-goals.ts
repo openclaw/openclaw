@@ -309,9 +309,6 @@ export async function replaceExistingChatGoal(
     if (recovery) {
       return t(recovery.pending ? "chat.goals.actionPending" : "chat.goals.outcomeUnknown");
     }
-    if (currentGoal()?.status === "complete") {
-      return t("chat.goals.editUnavailable");
-    }
     if ((isChatBusy(host) || hasDirectSessionRun(host)) && !expectedRunId) {
       return t("chat.goals.busy");
     }
@@ -427,12 +424,16 @@ export async function mutateChatGoal(
       !params ||
       params.goalId !== action.goalId ||
       ("action" in params ? params.action : "clear") !== action.action ||
-      ((action.action === "edit" || action.action === "replace") &&
+      ((action.action === "edit" || action.action === "replace" || action.action === "restart") &&
         (!("objective" in params) || params.objective !== action.objective)) ||
       (action.action === "replace" &&
         (!("action" in params) ||
           params.action !== "replace" ||
           params.expectedRunId !== action.expectedRunId ||
+          params.expectedGoalUpdatedAt !== action.expectedGoalUpdatedAt)) ||
+      (action.action === "restart" &&
+        (!("action" in params) ||
+          params.action !== "restart" ||
           params.expectedGoalUpdatedAt !== action.expectedGoalUpdatedAt))
     ) {
       return rejectGoalOperation(host, t("chat.goals.outcomeUnknown"));
@@ -446,7 +447,10 @@ export async function mutateChatGoal(
     if (!sessionId || isInitialChatHistoryUnavailable(host)) {
       return rejectGoalOperation(host, t("chat.thread.loading"));
     }
-    if (action.action === "resume" && (isChatBusy(host) || hasDirectSessionRun(host))) {
+    if (
+      (action.action === "resume" || action.action === "restart") &&
+      (isChatBusy(host) || hasDirectSessionRun(host))
+    ) {
       return rejectGoalOperation(host, t("chat.goals.busy"));
     }
     const identity = {
@@ -458,21 +462,7 @@ export async function mutateChatGoal(
       issuedAtMs: Date.now(),
     };
     operation = {
-      params:
-        action.action === "clear"
-          ? identity
-          : action.action === "replace"
-            ? {
-                ...identity,
-                sessionId,
-                action: "replace",
-                objective: action.objective,
-                expectedRunId: action.expectedRunId,
-                expectedGoalUpdatedAt: action.expectedGoalUpdatedAt,
-              }
-            : action.action === "edit"
-              ? { ...identity, action: "edit", objective: action.objective }
-              : { ...identity, action: action.action },
+      params: action.action === "clear" ? identity : { ...action, ...identity },
       pending: false,
     };
     const validate =
