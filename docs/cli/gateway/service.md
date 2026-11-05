@@ -21,11 +21,14 @@ openclaw gateway uninstall
 ```
 
 When `openclaw gateway install` runs from `npx`, `pnpm dlx`, or another
-temporary copy, it first installs the same OpenClaw version with npm into the
-`npm` folder of the state directory (`~/.openclaw/npm` by default) and points the
-service there, because the temporary copy can be deleted. `openclaw update`
-updates that copy in place. An existing service that still points into a temporary
-copy is refreshed by the next `openclaw gateway install`.
+temporary copy, the service runs the same OpenClaw version from the `npm` folder
+of the state directory (`~/.openclaw/npm` by default) instead, because the
+temporary copy can be deleted. After the runtime and wrapper checks pass, npm
+stages that copy while any existing service keeps running; the copy is replaced
+only as the service definition is written. If the install fails after that, the
+previous copy is restored. `openclaw update` updates that copy in place. An
+existing service that still points into a temporary copy is refreshed by the next
+`openclaw gateway install`.
 
 Queued native service commands use elapsed-time deadlines, so system-clock
 corrections do not prematurely expire or extend their admission budgets.

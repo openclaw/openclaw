@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { PackageUpdateTransaction } from "../infra/package-update-swap-contract.js";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../infra/update-npm-prefix.js";
 
 const realpathOrResolve = (target: string) => fs.realpath(target).catch(() => path.resolve(target));
@@ -52,29 +53,44 @@ function resolveDurableLayout(env: NodeJS.ProcessEnv) {
   return { layout, packageRoot, entrypoint: path.join(packageRoot, "openclaw.mjs") };
 }
 
-/** Launcher folder of an installed durable copy, for the service PATH. */
+/**
+ * Launcher folder of the durable copy, for the service PATH: when it is installed, or when
+ * the planned install will (re)place it.
+ */
 export function resolveDurableServiceBinDir(
   env: NodeJS.ProcessEnv,
   platform: NodeJS.Platform = process.platform,
+  options: { planned?: boolean } = {},
 ): string | undefined {
   const { binDir } = resolveDurableLayout(env).layout;
   const launcher = path.join(binDir, platform === "win32" ? "openclaw.cmd" : "openclaw");
-  return fsSync.existsSync(launcher) ? binDir : undefined;
+  return options.planned || fsSync.existsSync(launcher) ? binDir : undefined;
 }
+
+/** A durable copy that a service install must (re)place before the service runs it. */
+export type DurableServiceCliReplacement = {
+  version: string;
+  globalRoot: string;
+  packageRoot: string;
+  /** An earlier copy exists; only then can a failed install restore something. */
+  replacesExisting: boolean;
+};
 
 /**
  * Entrypoint a service should run instead of a disposable CLI copy, or undefined when
  * this CLI is already durable.
  *
- * `install: false` (planning, Doctor, repair) never installs: it reuses an existing copy
- * only when it matches this CLI's version and passes the package integrity checks, and
- * throws DurableServiceCliError naming the explicit reinstall otherwise.
+ * Neither mode installs. `install: false` (Doctor, repair, install comparisons) reuses an
+ * existing copy only when it matches this CLI's version and passes the package integrity
+ * checks, and throws DurableServiceCliError naming the explicit reinstall otherwise.
+ * `install: true` instead returns the replacement for installDurableServiceCli to perform
+ * inside the service install, after planning has validated everything else.
  */
-export async function resolveDurableServiceEntrypoint(
+export async function resolveDurableServiceCli(
   env: NodeJS.ProcessEnv,
   options: { install: boolean },
   entrypoint = process.argv[1],
-): Promise<string | undefined> {
+): Promise<{ entrypoint: string; replacement?: DurableServiceCliReplacement } | undefined> {
   if (!entrypoint || !(await isDisposableEntrypoint(entrypoint))) {
     return undefined;
   }
@@ -86,7 +102,7 @@ export async function resolveDurableServiceEntrypoint(
   if (!options.install && !exists) {
     return undefined;
   }
-  // Package-inspection and install machinery loads only for a disposable CLI.
+  // Package-inspection machinery loads only for a disposable CLI.
   const [
     { resolveOpenClawPackageRoot },
     { collectPackageDistContentInventoryErrors },
@@ -116,37 +132,100 @@ export async function resolveDurableServiceEntrypoint(
     );
   }
   if (errors.length === 0) {
-    return durableEntrypoint;
+    return { entrypoint: durableEntrypoint };
   }
   if (!options.install) {
     throw new DurableServiceCliError(
       `The background service's OpenClaw copy at ${packageRoot} cannot be reused (${errors.slice(0, 2).join("; ")}). Reinstall it with: ${formatDurableInstallCommand(version, "gateway install --force", env)}`,
     );
   }
-  await installDurableCopy({ env, version, globalRoot: layout.globalRoot, packageRoot });
-  return durableEntrypoint;
+  return {
+    entrypoint: durableEntrypoint,
+    replacement: { version, globalRoot: layout.globalRoot, packageRoot, replacesExisting: exists },
+  };
 }
 
-async function installDurableCopy(params: {
+/**
+ * Runs a service install whose plan carries a durable-copy replacement.
+ *
+ * npm stages and verifies the new copy first while an existing service keeps serving the old
+ * one. The swap waits at the package updater's activation gate until the service install's
+ * mutation hook, which runs under the service operation lock just before the service's own
+ * runtime-pin checks and definition write. The previous copy stays backed up until the
+ * install settles: if the install fails, the previous copy is restored (a first install keeps
+ * its new copy, which nothing else uses); if it succeeds, the backup retires only once the
+ * service is verified loaded.
+ */
+export async function installDurableServiceCli(params: {
   env: NodeJS.ProcessEnv;
-  version: string;
-  globalRoot: string;
-  packageRoot: string;
+  replacement: DurableServiceCliReplacement | undefined;
+  install: (beforeMutation?: () => Promise<void>) => Promise<void>;
+  verify: () => Promise<boolean>;
+  warn: (message: string) => void;
 }): Promise<void> {
+  if (!params.replacement) {
+    await params.install();
+    return;
+  }
+  const replacement = params.replacement;
+  const staged = await stageDurableCopy(params.env, replacement);
+  let activation: Promise<void> | undefined;
+  let swapped = false;
+  let outcome: "installed" | "verified" | "failed" = "failed";
+  try {
+    await params.install(
+      () =>
+        (activation ??= staged.activate().then(() => {
+          swapped = true;
+        })),
+    );
+    if (!activation) {
+      throw new Error(
+        "The service install finished without its mutation hook; the durable OpenClaw copy was not installed.",
+      );
+    }
+    // A throwing verify still leaves an installed service.
+    outcome = "installed";
+    outcome = (await params.verify()) ? "verified" : "installed";
+  } finally {
+    // Cleanup reports through warn so it never replaces the install's own error.
+    try {
+      const warnings = !activation
+        ? await staged.cancel()
+        : await staged.settle(
+            outcome === "verified"
+              ? "retire"
+              : outcome === "installed"
+                ? "retain"
+                : // A failed first install keeps its swapped-in copy: nothing to restore.
+                  swapped && !replacement.replacesExisting
+                  ? "retire"
+                  : "restore",
+          );
+      warnings.forEach(params.warn);
+    } catch (error) {
+      params.warn(`Durable OpenClaw copy cleanup failed: ${String(error)}`);
+    }
+  }
+}
+
+async function stageDurableCopy(env: NodeJS.ProcessEnv, replacement: DurableServiceCliReplacement) {
   const [
     { runGlobalPackageUpdateSteps },
     { createGlobalInstallEnv, resolveGlobalInstallTarget },
     { runStep },
     { runCommandWithTimeout },
     { applyPathPrepend },
+    { createDeferredCore },
   ] = await Promise.all([
     import("../infra/package-update-steps.js"),
     import("../infra/update-global.js"),
     import("../infra/update-runner-command.js"),
     import("../process/exec.js"),
     import("../infra/path-prepend.js"),
+    import("../shared/deferred.js"),
   ]);
-  const installEnv = await createGlobalInstallEnv(params.env, { manager: "npm" });
+  const installEnv = await createGlobalInstallEnv(env, { manager: "npm" });
   // npm runs lifecycle scripts (openclaw's runtime guard) with the first `node` on
   // PATH, which can be an older system Node; pin them to this runtime as update does.
   applyPathPrepend(installEnv, [path.dirname(process.execPath)]);
@@ -156,13 +235,25 @@ async function installDurableCopy(params: {
     timeoutMs: 30_000,
     env: installEnv,
   });
-  await fs.mkdir(params.globalRoot, { recursive: true });
-  const result = await runGlobalPackageUpdateSteps({
-    installTarget: { ...target, globalRoot: params.globalRoot, packageRoot: params.packageRoot },
-    installSpec: `openclaw@${params.version}`,
+  await fs.mkdir(replacement.globalRoot, { recursive: true });
+  const prepared = createDeferredCore();
+  const gate = createDeferredCore<boolean>();
+  const cancelled = new Error("Durable OpenClaw copy replacement cancelled before activation");
+  let transaction: PackageUpdateTransaction | undefined;
+  const failure = (step: { name: string; stderrTail?: string | null }) =>
+    new Error(
+      `Cannot install durable OpenClaw ${replacement.version} for the background service: ${step.stderrTail || step.name}`,
+    );
+  const completed = runGlobalPackageUpdateSteps({
+    installTarget: {
+      ...target,
+      globalRoot: replacement.globalRoot,
+      packageRoot: replacement.packageRoot,
+    },
+    installSpec: `openclaw@${replacement.version}`,
     requirePackageReplacement: true,
     packageName: "openclaw",
-    packageRoot: params.packageRoot,
+    packageRoot: replacement.packageRoot,
     runCommand: runCommandWithTimeout,
     runStep: (step) =>
       runStep({
@@ -175,10 +266,67 @@ async function installDurableCopy(params: {
     timeoutMs: 30_000,
     workTimeoutMs: null,
     env: installEnv,
+    beforeActivate: async () => {
+      prepared.resolve();
+      if (!(await gate.promise)) {
+        throw cancelled;
+      }
+    },
+    // A retained transaction keeps the previous copy until settle restores or retires it.
+    onTransaction: (registered) => {
+      transaction = registered;
+    },
   });
-  if (result.failedStep) {
-    throw new Error(
-      `Cannot install durable OpenClaw ${params.version} for the background service: ${result.failedStep.stderrTail || result.failedStep.name}`,
-    );
+  const outcome = await Promise.race([prepared.promise.then(() => null), completed]);
+  if (outcome) {
+    throw failure(outcome.failedStep ?? { name: "the package update stopped before activation" });
   }
+  // Service install has no update-run fence; the service operation lock serializes it.
+  const unfenced = () => undefined;
+  return {
+    activate: async () => {
+      gate.resolve(true);
+      const result = await completed;
+      if (result.failedStep) {
+        throw failure(result.failedStep);
+      }
+    },
+    cancel: async (): Promise<string[]> => {
+      gate.resolve(false);
+      // Staging cleanup must not replace the install failure that caused the cancel.
+      return await completed.then(
+        () => [],
+        (error: unknown) =>
+          error === cancelled ? [] : [`Durable OpenClaw staging cleanup failed: ${String(error)}`],
+      );
+    },
+    /**
+     * restore: put the previous copy back (or remove a failed swap's partial copy);
+     * retain: keep the new copy and the backup, for an install not verified loaded;
+     * retire: keep the new copy and drop the backup.
+     */
+    settle: async (decision: "restore" | "retain" | "retire"): Promise<string[]> => {
+      await completed.catch(() => undefined);
+      if (!transaction) {
+        return [];
+      }
+      const warnings: string[] = [];
+      if (decision === "restore") {
+        const restored = await transaction.rollback(unfenced);
+        if (restored.exitCode !== 0) {
+          warnings.push(
+            `Could not restore the previous durable OpenClaw copy: ${restored.stderrTail ?? restored.name}`,
+          );
+        }
+      }
+      const retirement = await transaction.complete(
+        { activationVerified: decision !== "retain" },
+        unfenced,
+      );
+      if (retirement && retirement.exitCode !== 0) {
+        warnings.push(retirement.stderrTail ?? retirement.name);
+      }
+      return warnings;
+    },
+  };
 }

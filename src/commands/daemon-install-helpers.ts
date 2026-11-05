@@ -584,6 +584,11 @@ export async function buildGatewayInstallPlan(params: {
   pinnedRuntimePath?: string;
   /** Retained CLI to plan for instead of this process's own entrypoint and executable. */
   serviceCli?: { executable: string; entrypoint: string | null };
+  /**
+   * Plan for an install that may (re)place the durable copy of a disposable CLI; the plan's
+   * durableCliReplacement goes to installDurableServiceCli. Comparisons and Doctor omit it.
+   */
+  installDurableCli?: boolean;
   wrapperPath?: string;
   platform?: NodeJS.Platform;
   warn?: DaemonInstallWarnFn;
@@ -625,12 +630,13 @@ export async function buildGatewayInstallPlan(params: {
   const wrapperPath = wrapperPointsAtGeneratedScript
     ? undefined
     : await resolveOpenClawWrapperPath(wrapperInput);
-  // Planning never installs: install callers create the durable copy first.
-  const { devMode, runtime, runtimePath, cliEntrypoint } = await resolveDaemonInstallPlanInputs({
-    ...params,
-    env,
-    wrapperPath,
-  });
+  // The normalized wrapper decides whether the service runs the CLI entrypoint at all.
+  const { devMode, runtime, runtimePath, cliEntrypoint, durableCliReplacement } =
+    await resolveDaemonInstallPlanInputs({
+      ...params,
+      env,
+      wrapperPath,
+    });
   const serviceInputEnv = { ...env };
   if (wrapperPath) {
     serviceInputEnv[OPENCLAW_WRAPPER_ENV_KEY] = wrapperPath;
@@ -679,6 +685,7 @@ export async function buildGatewayInstallPlan(params: {
       ],
       env: serviceInputEnv,
       platform,
+      durableCliPlanned: durableCliReplacement !== undefined,
     }),
   });
 
@@ -702,6 +709,7 @@ export async function buildGatewayInstallPlan(params: {
       (platform === "darwin" ? resolveGatewayStateDir(serviceInputEnv) : undefined),
     environment,
     ...(Object.keys(environmentValueSources).length > 0 ? { environmentValueSources } : {}),
+    ...(durableCliReplacement ? { durableCliReplacement } : {}),
   };
 }
 

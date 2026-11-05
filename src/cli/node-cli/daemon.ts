@@ -14,6 +14,7 @@ import {
   resolveNodeWindowsTaskName,
   resolveNodeServiceIdentityEnvironment,
 } from "../../daemon/constants.js";
+import { installDurableServiceCli } from "../../daemon/durable-service-entrypoint.js";
 import { resolveNodeService } from "../../daemon/node-service.js";
 import { resolveNodeProgramArguments } from "../../daemon/program-args.js";
 import {
@@ -251,17 +252,19 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   const retainedRuntime = recordedRuntime?.status === "supported" ? recordedRuntime : undefined;
 
   const wrapperPath = installEnv.OPENCLAW_WRAPPER;
-  const { devMode, runtime, runtimePath, cliEntrypoint } = await resolveDaemonInstallPlanInputs({
-    env: installEnv,
-    runtime: retainedRuntime?.runtime ?? runtimeRaw,
-    runtimeExplicit: opts.runtime !== undefined || opts.runtimePath !== undefined,
-    runtimePath: restoredRuntimePath ?? retainedRuntime?.path,
-    pinnedRuntimePath,
-    serviceCli: restoreServiceCli,
-    wrapperPath,
-    installDurableCli: true,
-    warn,
-  });
+  // Planning validates the runtime and wrapper; a durable-copy replacement waits for install.
+  const { devMode, runtime, runtimePath, cliEntrypoint, durableCliReplacement } =
+    await resolveDaemonInstallPlanInputs({
+      env: installEnv,
+      runtime: retainedRuntime?.runtime ?? runtimeRaw,
+      runtimeExplicit: opts.runtime !== undefined || opts.runtimePath !== undefined,
+      runtimePath: restoredRuntimePath ?? retainedRuntime?.path,
+      pinnedRuntimePath,
+      serviceCli: restoreServiceCli,
+      wrapperPath,
+      installDurableCli: true,
+      warn,
+    });
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
     cliEntrypoint,
     host,
@@ -331,38 +334,45 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     warnings,
     emit: (payload) => emit({ ...payload, message: installationMessage }),
     fail,
-    install: async () => {
-      await service.install({
-        runtimePinUpdate: {
-          expected: pinSnapshot,
-          pin: pinnedRuntimePath ? { runtime: runtimeRaw, path: pinnedRuntimePath } : undefined,
-          ...(opts.expectedRuntimePin !== undefined
-            ? {
-                requireDefinitionMatch: true as const,
-                ...(!restoreServiceCli && pinSnapshot.definition !== undefined
-                  ? { requireRunning: true as const }
-                  : {}),
-              }
-            : {}),
-        },
+    install: () =>
+      installDurableServiceCli({
         env: installEnv,
-        stdout,
+        replacement: durableCliReplacement,
+        verify: () => service.isLoaded({ env: process.env }),
         warn,
-        programArguments,
-        workingDirectory,
-        environment,
-        environmentValueSources: {
-          OPENCLAW_GATEWAY_TOKEN: "file",
-          OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
-          CF_ACCESS_CLIENT_ID: "file",
-          CF_ACCESS_CLIENT_SECRET: "file", // pragma: allowlist secret
-        },
-        description: "OpenClaw Node Host",
-        ...(restoreServiceCli
-          ? { workingDirectory: existingManagedCommand?.workingDirectory }
-          : {}),
-      });
-    },
+        install: (beforeMutation) =>
+          service.install({
+            beforeMutation,
+            runtimePinUpdate: {
+              expected: pinSnapshot,
+              pin: pinnedRuntimePath ? { runtime: runtimeRaw, path: pinnedRuntimePath } : undefined,
+              ...(opts.expectedRuntimePin !== undefined
+                ? {
+                    requireDefinitionMatch: true as const,
+                    ...(!restoreServiceCli && pinSnapshot.definition !== undefined
+                      ? { requireRunning: true as const }
+                      : {}),
+                  }
+                : {}),
+            },
+            env: installEnv,
+            stdout,
+            warn,
+            programArguments,
+            workingDirectory,
+            environment,
+            environmentValueSources: {
+              OPENCLAW_GATEWAY_TOKEN: "file",
+              OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
+              CF_ACCESS_CLIENT_ID: "file",
+              CF_ACCESS_CLIENT_SECRET: "file", // pragma: allowlist secret
+            },
+            description: "OpenClaw Node Host",
+            ...(restoreServiceCli
+              ? { workingDirectory: existingManagedCommand?.workingDirectory }
+              : {}),
+          }),
+      }),
     // Failed installation must not carry a misleading linger warning (#107033).
     onVerified: () => warnIfSystemdUserLingerDisabled(warn),
   });

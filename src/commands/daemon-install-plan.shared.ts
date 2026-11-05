@@ -4,7 +4,8 @@ import { isStandaloneRuntimeExecutable } from "../../cli-invocation.mjs";
 import {
   isDisposableInstallPath,
   resolveDurableServiceBinDir,
-  resolveDurableServiceEntrypoint,
+  resolveDurableServiceCli,
+  type DurableServiceCliReplacement,
 } from "../daemon/durable-service-entrypoint.js";
 import {
   resolveBunRuntimeInfo,
@@ -23,6 +24,8 @@ export type GatewayInstallPlan = {
   workingDirectory?: string;
   environment: Record<string, string | undefined>;
   environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
+  /** Durable copy the service install must (re)place; see installDurableServiceCli. */
+  durableCliReplacement?: DurableServiceCliReplacement;
 };
 
 function resolveGatewayDevMode(): boolean {
@@ -118,7 +121,9 @@ function runsCliEntrypoint(params: { runtime: GatewayDaemonRuntime; wrapperPath?
 /**
  * Runtime inputs plus the CLI entrypoint the service runs: the retained `serviceCli`, the
  * durable copy that replaces a disposable npx, dlx, or bunx CLI, or undefined for this CLI.
- * Only `installDurableCli` installs that copy; planning reuses a checked copy or none.
+ * Runtime and wrapper inputs are validated first. Nothing installs here: with
+ * `installDurableCli` a missing or unusable durable copy becomes `durableCliReplacement`
+ * for the service install to perform; otherwise only a checked copy is reused.
  */
 export async function resolveDaemonInstallPlanInputs(
   params: Parameters<typeof resolveDaemonInstallRuntimeInputs>[0] & {
@@ -126,34 +131,25 @@ export async function resolveDaemonInstallPlanInputs(
     installDurableCli?: boolean;
   },
 ): Promise<
-  Awaited<ReturnType<typeof resolveDaemonInstallRuntimeInputs>> & { cliEntrypoint?: string }
+  Awaited<ReturnType<typeof resolveDaemonInstallRuntimeInputs>> & {
+    cliEntrypoint?: string;
+    durableCliReplacement?: DurableServiceCliReplacement;
+  }
 > {
   const inputs = await resolveDaemonInstallRuntimeInputs({
     ...params,
     devMode: params.serviceCli ? false : params.devMode,
   });
-  const cliEntrypoint =
-    params.serviceCli?.entrypoint ??
-    (inputs.devMode || !runsCliEntrypoint({ ...inputs, wrapperPath: params.wrapperPath })
+  const retained = params.serviceCli?.entrypoint;
+  const durable =
+    retained || inputs.devMode || !runsCliEntrypoint({ ...inputs, wrapperPath: params.wrapperPath })
       ? undefined
-      : await resolveDurableServiceEntrypoint(params.env, {
-          install: params.installDurableCli === true,
-        }));
-  return { ...inputs, cliEntrypoint };
-}
-
-/**
- * Install callers run this before planning so a service planned from npx or dlx points
- * at a durable copy; planning itself only reuses a checked copy.
- */
-export async function prepareDurableServiceCli(params: {
-  env: NodeJS.ProcessEnv;
-  runtime: GatewayDaemonRuntime;
-  wrapperPath?: string;
-}): Promise<void> {
-  if (runsCliEntrypoint(params)) {
-    await resolveDurableServiceEntrypoint(params.env, { install: true });
-  }
+      : await resolveDurableServiceCli(params.env, { install: params.installDurableCli === true });
+  return {
+    ...inputs,
+    cliEntrypoint: retained ?? durable?.entrypoint,
+    ...(durable?.replacement ? { durableCliReplacement: durable.replacement } : {}),
+  };
 }
 
 export function resolveDaemonRuntimeBinDir(runtimePath?: string): string[] | undefined {
@@ -177,6 +173,8 @@ export function resolveDaemonServicePathDirs(params: {
   argv?: string[];
   env?: Record<string, string | undefined>;
   platform?: NodeJS.Platform;
+  /** The service install (re)places the durable copy, so its launcher does not exist yet. */
+  durableCliPlanned?: boolean;
 }): string[] | undefined {
   const platform = params.platform ?? process.platform;
   const argv = params.argv ?? process.argv;
@@ -193,7 +191,7 @@ export function resolveDaemonServicePathDirs(params: {
   // From npx or dlx the service runs the durable copy, so its launcher replaces the cache's.
   const durableBinDir =
     argv1 && isDisposableInstallPath(safeRealpathSync(argv1) ?? path.resolve(argv1))
-      ? resolveDurableServiceBinDir(env, platform)
+      ? resolveDurableServiceBinDir(env, platform, { planned: params.durableCliPlanned })
       : undefined;
   if (durableBinDir) {
     dirs.add(durableBinDir);

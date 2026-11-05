@@ -3,12 +3,19 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../infra/update-npm-prefix.js";
-import { resolveDurableServiceEntrypoint } from "./durable-service-entrypoint.js";
+import {
+  installDurableServiceCli,
+  resolveDurableServiceCli,
+} from "./durable-service-entrypoint.js";
 
 const { runGlobalPackageUpdateSteps, installedCopyErrors } = vi.hoisted(() => ({
-  runGlobalPackageUpdateSteps: vi.fn(async (_params: { env?: NodeJS.ProcessEnv }) => ({
-    failedStep: null,
-  })),
+  // Reaches the activation gate the way the package updater does, then finishes.
+  runGlobalPackageUpdateSteps: vi.fn(
+    async (params: { env?: NodeJS.ProcessEnv; beforeActivate?: () => Promise<void> }) => {
+      await params.beforeActivate?.();
+      return { failedStep: null };
+    },
+  ),
   installedCopyErrors: vi.fn(
     async (_params: { packageRoot: string; expectedVersion?: string | null }) => ["missing"],
   ),
@@ -33,7 +40,7 @@ vi.mock("../infra/update-global.js", async () => ({
   resolveGlobalInstallTarget: async () => ({ manager: "npm", command: "npm" }),
 }));
 
-describe("resolveDurableServiceEntrypoint", () => {
+describe("resolveDurableServiceCli", () => {
   let root: string;
   beforeEach(() => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "durable-cli-")));
@@ -67,7 +74,7 @@ describe("resolveDurableServiceEntrypoint", () => {
     installedCopyErrors.mockResolvedValueOnce(["expected version 1.2.3, found 1.0.0"]);
 
     await expect(
-      resolveDurableServiceEntrypoint(stateEnv(), { install: false }, entrypoint),
+      resolveDurableServiceCli(stateEnv(), { install: false }, entrypoint),
     ).rejects.toThrow(/found 1\.0\.0.*npx openclaw@1\.2\.3 gateway install --force/u);
     expect(installedCopyErrors).toHaveBeenCalledWith(
       expect.objectContaining({ expectedVersion: "1.2.3" }),
@@ -81,31 +88,29 @@ describe("resolveDurableServiceEntrypoint", () => {
     installedCopyErrors.mockResolvedValueOnce([]);
 
     await expect(
-      resolveDurableServiceEntrypoint(stateEnv(), { install: false }, entrypoint),
-    ).resolves.toBe(durable);
+      resolveDurableServiceCli(stateEnv(), { install: true }, entrypoint),
+    ).resolves.toEqual({ entrypoint: durable });
     expect(runGlobalPackageUpdateSteps).not.toHaveBeenCalled();
   });
 
   it("runs npm lifecycle scripts with this Node, not an older one first on PATH", async () => {
-    const npxPackage = path.join(root, ".npm", "_npx", "abc", "node_modules", "openclaw");
-    fs.mkdirSync(npxPackage, { recursive: true });
-    fs.writeFileSync(
-      path.join(npxPackage, "package.json"),
-      '{"name":"openclaw","version":"1.2.3"}',
-    );
-    fs.writeFileSync(path.join(npxPackage, "openclaw.mjs"), "");
-    const olderNode = path.resolve("/run/current-system/sw/bin");
+    const env = { ...stateEnv(), PATH: path.resolve("/run/current-system/sw/bin") };
+    const durable = await resolveDurableServiceCli(env, { install: true }, npxEntrypoint());
+    expect(durable?.replacement).toMatchObject({ version: "1.2.3" });
+    expect(runGlobalPackageUpdateSteps).not.toHaveBeenCalled();
 
-    await resolveDurableServiceEntrypoint(
-      { OPENCLAW_STATE_DIR: path.join(root, "state"), PATH: olderNode },
-      { install: true },
-      path.join(npxPackage, "openclaw.mjs"),
-    );
+    await installDurableServiceCli({
+      env,
+      replacement: durable?.replacement,
+      install: async (beforeMutation) => await beforeMutation?.(),
+      verify: async () => true,
+      warn: vi.fn(),
+    });
 
-    const env = runGlobalPackageUpdateSteps.mock.calls[0]?.[0].env;
-    expect(env?.PATH?.split(path.delimiter).slice(0, 2)).toEqual([
+    const installEnv = runGlobalPackageUpdateSteps.mock.calls[0]?.[0].env;
+    expect(installEnv?.PATH?.split(path.delimiter).slice(0, 2)).toEqual([
       path.dirname(process.execPath),
-      olderNode,
+      env.PATH,
     ]);
   });
 });

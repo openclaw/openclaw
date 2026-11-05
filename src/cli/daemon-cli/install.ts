@@ -4,7 +4,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { SUPPORTED_NODE_VERSIONS } from "../../../node-version.mjs";
 import { resolveNodeStartupTlsEnvironment } from "../../bootstrap/node-startup-env.js";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
-import { prepareDurableServiceCli } from "../../commands/daemon-install-plan.shared.js";
 import {
   resolveGatewayDaemonRuntime,
   isGatewayDaemonRuntime,
@@ -14,7 +13,10 @@ import { resolveFutureConfigActionBlock } from "../../config/future-version-guar
 import { readConfigFileSnapshotForWrite } from "../../config/io.js";
 import { replaceConfigFile } from "../../config/mutate.js";
 import { resolveGatewayPort } from "../../config/paths.js";
-import { isDisposableEntrypoint } from "../../daemon/durable-service-entrypoint.js";
+import {
+  installDurableServiceCli,
+  isDisposableEntrypoint,
+} from "../../daemon/durable-service-entrypoint.js";
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "../../daemon/program-args.js";
 import { isNodeRuntime } from "../../daemon/runtime-binary.js";
 import {
@@ -406,7 +408,10 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     }
   }
   const buildInstallPlan = (
-    options: Pick<Parameters<typeof buildGatewayInstallPlan>[0], "runtimeExplicit" | "warn">,
+    options: Pick<
+      Parameters<typeof buildGatewayInstallPlan>[0],
+      "runtimeExplicit" | "warn" | "installDurableCli"
+    >,
   ) =>
     buildGatewayInstallPlan({
       allowUnconfigured: opts.allowUnconfigured,
@@ -589,39 +594,47 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     warn(warning);
   }
 
-  if (!restoreServiceCli) {
-    await prepareDurableServiceCli({ env: installEnv, runtime, wrapperPath });
-  }
-  const { programArguments, workingDirectory, environment, environmentValueSources } =
-    await buildInstallPlan({
-      runtimeExplicit: opts.runtime !== undefined || opts.runtimePath !== undefined,
-      warn,
-    });
-  const install = async (definitionTransaction?: GatewayServiceDefinitionTransactionHooks) => {
-    await service.install({
-      runtimePinUpdate: {
-        expected: pinSnapshot,
-        pin: pinnedRuntimePath ? { runtime, path: pinnedRuntimePath } : undefined,
-        ...(opts.expectedRuntimePin !== undefined
-          ? {
-              requireDefinitionMatch: true as const,
-              // Recovery replaces a failed service; definition and pin custody still fence changes.
-              ...(!restoreServiceCli && pinSnapshot.definition !== undefined
-                ? { requireRunning: true as const }
-                : {}),
-            }
-          : {}),
-      },
-      env: installEnv,
-      stdout,
-      warn,
-      programArguments,
-      workingDirectory,
-      environment,
-      environmentValueSources,
-      definitionTransaction,
-    });
-  };
+  // Planning validates the runtime and wrapper; a durable-copy replacement waits for install.
+  const {
+    programArguments,
+    workingDirectory,
+    environment,
+    environmentValueSources,
+    durableCliReplacement,
+  } = await buildInstallPlan({
+    runtimeExplicit: opts.runtime !== undefined || opts.runtimePath !== undefined,
+    installDurableCli: true,
+    warn,
+  });
+  // beforeMutation carries the durable-copy swap into the service's own mutation boundary.
+  const install =
+    (beforeMutation?: () => Promise<void>) =>
+    async (definitionTransaction?: GatewayServiceDefinitionTransactionHooks) => {
+      await service.install({
+        beforeMutation,
+        runtimePinUpdate: {
+          expected: pinSnapshot,
+          pin: pinnedRuntimePath ? { runtime, path: pinnedRuntimePath } : undefined,
+          ...(opts.expectedRuntimePin !== undefined
+            ? {
+                requireDefinitionMatch: true as const,
+                // Recovery replaces a failed service; definition and pin custody still fence changes.
+                ...(!restoreServiceCli && pinSnapshot.definition !== undefined
+                  ? { requireRunning: true as const }
+                  : {}),
+              }
+            : {}),
+        },
+        env: installEnv,
+        stdout,
+        warn,
+        programArguments,
+        workingDirectory,
+        environment,
+        environmentValueSources,
+        definitionTransaction,
+      });
+    };
   const successMessage = `Gateway service installed. Runtime readiness has not been checked; startup may still be in progress. Check with ${formatCliCommand("openclaw gateway status")} and ${formatCliCommand("openclaw health")}.`;
   await installDaemonServiceAndEmit({
     serviceNoun: "Gateway",
@@ -635,27 +648,34 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     warnings,
     emit,
     fail,
-    install: async () => {
-      if (
-        isUpdateOwnedGatewayServiceCommand() ||
-        isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS)
-      ) {
-        definitionBackup = await reconcileGatewayServiceDefinition({
-          env: installEnv,
-          root: (await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url })) ?? undefined,
-          command: existingServiceCommand,
-          expectedCommand: {
-            programArguments,
-            workingDirectory,
-            environment,
-            environmentValueSources,
-          },
-          install,
-          warn,
-        });
-      } else {
-        await install();
-      }
-    },
+    install: () =>
+      installDurableServiceCli({
+        env: installEnv,
+        replacement: durableCliReplacement,
+        verify: () => service.isLoaded({ env: process.env }),
+        warn,
+        install: async (beforeMutation) => {
+          if (
+            isUpdateOwnedGatewayServiceCommand() ||
+            isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS)
+          ) {
+            definitionBackup = await reconcileGatewayServiceDefinition({
+              env: installEnv,
+              root: (await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url })) ?? undefined,
+              command: existingServiceCommand,
+              expectedCommand: {
+                programArguments,
+                workingDirectory,
+                environment,
+                environmentValueSources,
+              },
+              install: install(beforeMutation),
+              warn,
+            });
+          } else {
+            await install(beforeMutation)();
+          }
+        },
+      }),
   });
 }

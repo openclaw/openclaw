@@ -1,2 +1,3 @@
-# npx/dlx/bunx Gateway services: durable-copy install, reuse checks, PATH filtering, and Doctor fallback.
-241
+# npx/dlx/bunx Gateway services: durable-copy reuse checks, PATH filtering, Doctor fallback, and the
+# service-install composition (runtime and wrapper decided before staging; swap, restore, and backup retirement inside the service install).
+431

@@ -6,20 +6,21 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { ServiceStartRefusalError } from "../../daemon/service-inspection-error.js";
 import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
+import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../../infra/update-npm-prefix.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { nodeProbeOutput } from "./install.test-helpers.js";
 import { expectNoCalls, expectPartialCall } from "./lifecycle-assertions.test-support.js";
 import type { DaemonInstallOptions } from "./types.js";
 
-// Records durable-copy promotion; the npm install itself is the owner's own contract.
-const { resolveDurableServiceEntrypointMock } = vi.hoisted(() => ({
-  resolveDurableServiceEntrypointMock: vi.fn(
-    async (_env: NodeJS.ProcessEnv, _options: { install: boolean }) => undefined,
-  ),
+const { runGlobalPackageUpdateSteps } = vi.hoisted(() => ({
+  runGlobalPackageUpdateSteps: vi.fn(),
 }));
-vi.mock("../../daemon/durable-service-entrypoint.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../daemon/durable-service-entrypoint.js")>()),
-  resolveDurableServiceEntrypoint: resolveDurableServiceEntrypointMock,
+// mock-isolation: records any durable-copy replacement instead of running npm on the test host.
+vi.mock("../../infra/package-update-steps.js", () => ({ runGlobalPackageUpdateSteps }));
+// mock-isolation: no npm prefix probe may spawn on the test host.
+vi.mock("../../infra/update-global.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-global.js")>()),
+  resolveGlobalInstallTarget: async () => ({ manager: "npm", command: "npm" }),
 }));
 
 const {
@@ -439,47 +440,48 @@ describe("runDaemonInstall", () => {
     );
   });
 
-  function standaloneArtifact() {
-    const root = tempDirs.make("openclaw-standalone-");
-    fs.mkdirSync(path.join(root, "runtime"));
-    fs.writeFileSync(path.join(root, "standalone"), "", { mode: 0o755 });
+  it("rejects an unsupported --runtime bun before replacing the durable copy a service runs", async () => {
+    // A service already runs the durable 1.0.0 copy; this CLI is npx openclaw@1.2.3.
+    const root = tempDirs.make("openclaw-npx-bun-");
+    const npxPackage = path.join(root, ".npm", "_npx", "abc", "node_modules", "openclaw");
+    fs.mkdirSync(npxPackage, { recursive: true });
     fs.writeFileSync(
-      path.join(root, "manifest.json"),
-      JSON.stringify({
-        schemaVersion: 1,
-        mode: "aot",
-        executable: { path: "standalone" },
-        runtime: { path: "runtime" },
-        openclaw: { version: "2026.10.25" },
-        bun: { version: "1.4.4" },
-      }),
+      path.join(npxPackage, "package.json"),
+      '{"name":"openclaw","version":"1.2.3"}',
     );
-    // The pinned-runtime check probes the standalone executable for its Bun version.
-    const probe = nodeProbeOutput("26.12.1");
-    runExecMock.mockResolvedValue({
-      ...probe,
-      stdout: JSON.stringify({ ...JSON.parse(probe.stdout), bunVersion: "1.4.4" }),
-    });
-    return path.join(root, "standalone");
-  }
+    fs.writeFileSync(path.join(npxPackage, "openclaw.mjs"), "");
+    const durablePackage = path.join(
+      resolveNpmGlobalPrefixLayoutFromPrefix(path.join(root, ".openclaw", "npm")).globalRoot,
+      "openclaw",
+    );
+    fs.mkdirSync(durablePackage, { recursive: true });
+    const durableManifest = path.join(durablePackage, "package.json");
+    fs.writeFileSync(durableManifest, '{"name":"openclaw","version":"1.0.0"}');
+    fs.writeFileSync(path.join(durablePackage, "openclaw.mjs"), "");
+    // The install guard requires the account's canonical state dir.
+    process.env.HOME = root;
+    delete process.env.OPENCLAW_STATE_DIR;
+    process.env.PATH = path.join(root, "no-bun");
+    vi.spyOn(process, "argv", "get").mockReturnValue([
+      process.execPath,
+      path.join(npxPackage, "openclaw.mjs"),
+      "gateway",
+      "install",
+    ]);
+    // The real planner selects the runtime; every Bun probe reports no supported Bun.
+    const { buildGatewayInstallPlan } = await vi.importActual<
+      typeof import("../../commands/daemon-install-helpers.js")
+    >("../../commands/daemon-install-helpers.js");
+    buildGatewayInstallPlanMock.mockImplementation(
+      buildGatewayInstallPlan as unknown as typeof buildGatewayInstallPlanMock,
+    );
 
-  it.each([
-    ["node", () => ({}), 1],
-    ["standalone", () => ({ runtime: "standalone", runtimePath: standaloneArtifact() }), 0],
-  ] as const)(
-    "promotes the CLI to a durable copy only for services that run it (%s)",
-    async (_name, options, promotions) => {
-      resolveDurableServiceEntrypointMock.mockClear();
-      await runDaemonInstall({ json: true, ...options() });
-
-      expect(actionState.failed).toEqual([]);
-      expect(installDaemonServiceAndEmitMock).toHaveBeenCalledOnce();
-      const installs = resolveDurableServiceEntrypointMock.mock.calls.filter(
-        ([, { install }]) => install,
-      );
-      expect(installs).toHaveLength(promotions);
-    },
-  );
+    await expect(runDaemonInstall({ json: true, force: true, runtime: "bun" })).rejects.toThrow(
+      "No supported Bun runtime was selected",
+    );
+    expectNoCalls(runGlobalPackageUpdateSteps, installDaemonServiceAndEmitMock, service.install);
+    expect(fs.readFileSync(durableManifest, "utf8")).toContain('"1.0.0"');
+  });
 
   it("moves a loaded service off a temporary npx copy onto a durable one", async () => {
     const npxPackage = path.join(path.sep, "home", "test", ".npm", "_npx", "abc", "node_modules");
