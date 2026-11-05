@@ -540,6 +540,9 @@ async function dispatchSlackMessageWithSetup(
   if (dispatchError || agentRunFailed) {
     // A failed turn without a reply has no other visible outcome.
     await progress.finalizeDraftProgressCard("error", { postIfMissing: !anyReplyDelivered });
+  } else if (anyReplyDelivered) {
+    // Media replies are force-sent as blocks, so the final-kind branch may never settle the card.
+    await progress.finalizeDraftProgressCard("success");
   }
   await progress.dropDetachedProgressCards();
 
