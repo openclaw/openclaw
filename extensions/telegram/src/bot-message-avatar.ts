@@ -19,6 +19,8 @@ export function createTelegramDirectAvatarResolver(params: {
   transport?: TelegramTransport;
   abortSignal?: AbortSignal;
 }) {
+  // Portrait expiry runs on elapsed time so a wall-clock step cannot freeze a portrait.
+  const now = (): number => performance.now();
   const cache = new Map<number, { expiresAt: number; path?: string }>();
   const pending = new Set<number>();
   return (
@@ -38,7 +40,7 @@ export function createTelegramDirectAvatarResolver(params: {
       return undefined;
     }
     const cached = cache.get(senderId);
-    if (cached && cached.expiresAt > Date.now()) {
+    if (cached && cached.expiresAt > now()) {
       return cached.path;
     }
     if (pending.has(senderId) || pending.size >= AVATAR_MAX_ENTRIES) {
@@ -102,7 +104,10 @@ export function createTelegramDirectAvatarResolver(params: {
           return;
         }
         cache.delete(senderId);
-        cache.set(senderId, { path: path ?? cached?.path, expiresAt: Date.now() + AVATAR_TTL_MS });
+        cache.set(senderId, {
+          path: path ?? cached?.path,
+          expiresAt: now() + AVATAR_TTL_MS,
+        });
         pruneMapToMaxSize(cache, AVATAR_MAX_ENTRIES);
       })
       .finally(() => pending.delete(senderId));
