@@ -138,6 +138,7 @@ jobs:
       preflight_artifact_run_id: ${{ steps.preflight_artifact.outputs.run_id }}
       preflight_tarball_sha256: ${{ steps.manifest.outputs.tarball_sha256 }}
       full_release_validation_run_attempt: ${{ steps.full_run.outputs.attempt }}
+      plugin_npm_artifact: ${{ steps.full_manifest.outputs.plugin_npm_artifact }}
       focused_release_evidence_run_attempt: ${{ steps.focused_run.outputs.attempt }}
       focused_release_evidence_workflow_full_ref: ${{ steps.focused_run.outputs.workflow_full_ref }}
       focused_release_evidence_workflow_sha: ${{ steps.focused_run.outputs.workflow_sha }}
@@ -545,10 +546,24 @@ jobs:
           node --input-type=module <<'NODE'
           import { appendFileSync, readFileSync } from 'node:fs';
           import { preparedDockerEvidenceFromFullRelease } from './.release-validation-tooling/scripts/docker-release-artifacts.mjs';
+          import { validatePreparedNpmArtifactDescriptor } from './.release-validation-tooling/scripts/plugin-npm-prepared-release.mjs';
           const env = process.env;
-          const prepared = preparedDockerEvidenceFromFullRelease({ manifest: JSON.parse(readFileSync(`${env.RUNNER_TEMP}/full-release-validation-manifest/full-release-validation-manifest.json`, 'utf8')), sourceSha: env.EXPECTED_SHA, runId: env.FULL_RELEASE_VALIDATION_RUN_ID, runAttempt: env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT });
+          const manifest = JSON.parse(readFileSync(`${env.RUNNER_TEMP}/full-release-validation-manifest/full-release-validation-manifest.json`, 'utf8'));
+          const prepared = preparedDockerEvidenceFromFullRelease({ manifest, sourceSha: env.EXPECTED_SHA, runId: env.FULL_RELEASE_VALIDATION_RUN_ID, runAttempt: env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT });
           if (prepared) {
             appendFileSync(env.GITHUB_OUTPUT, `prepared_docker_run_id=${prepared.preparedRunId}\nprepared_docker_run_attempt=${prepared.preparedRunAttempt}\nprepared_docker_artifact_name=${prepared.preparedArtifactName}\nprepared_docker_manifest_sha256=${prepared.preparedManifestSha256}\n`);
+          }
+          if (env.PLUGIN_PUBLISH_SCOPE === 'all-publishable' && env.PUBLISH_DOCKER_ONLY !== 'true') {
+            const descriptor = manifest.publicationArtifacts?.pluginNpm;
+            if (!descriptor && manifest.sourceAdmission?.qualificationAdmission) {
+              throw new Error('Candidate-owned all-plugin publication requires the original FRV npm artifact; repacking is not allowed.');
+            }
+            if (descriptor) {
+              const npm = validatePreparedNpmArtifactDescriptor(descriptor, {
+                repository: env.GITHUB_REPOSITORY, sourceSha: env.EXPECTED_SHA, workflowSha: manifest.workflowSha,
+              });
+              appendFileSync(env.GITHUB_OUTPUT, `plugin_npm_artifact=${JSON.stringify(npm)}\n`);
+            }
           }
           NODE
 
@@ -1476,6 +1491,9 @@ jobs:
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}
         run: |
           node --input-type=module <<'NODE'
           import { prefetchPreparedPlugins } from './.release-harness/scripts/openclaw-release-ready.mjs';
@@ -1484,8 +1502,12 @@ jobs:
             throw new Error('Prepared publication must retain the complete selected roster.');
           }
           await prefetchPreparedPlugins({
-            plugins: JSON.parse(env.PREPARED_PLUGINS), inputs: { npm_dist_tag: env.RELEASE_NPM_DIST_TAG },
-            sourceSha: env.TARGET_SHA, toolingSha: env.GITHUB_WORKFLOW_SHA, sourceRoot: process.cwd(),
+            plugins: JSON.parse(env.PREPARED_PLUGINS), inputs: {
+              tag: env.RELEASE_TAG, npm_dist_tag: env.RELEASE_NPM_DIST_TAG,
+              full_release_validation_run_id: env.FULL_RELEASE_VALIDATION_RUN_ID,
+              full_release_validation_run_attempt: env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT,
+            },
+            sourceSha: env.TARGET_SHA, toolingSha: env.GITHUB_WORKFLOW_SHA, toolingFullRef: env.GITHUB_REF, sourceRoot: process.cwd(),
             outputDir: `${env.RUNNER_TEMP}/prepared-release-packages`, token: env.GH_TOKEN,
           });
           NODE
@@ -1716,6 +1738,7 @@ jobs:
           FOCUSED_RELEASE_EVIDENCE_DIR: ${{ runner.temp }}/authorized-beta-focused-evidence
           CLAWHUB_PLAN_PATH: ${{ runner.temp }}/openclaw-release-clawhub-plan.json
           PREPARED_PLUGINS: ${{ inputs.prepared_plugins }}
+          QUALIFIED_PLUGIN_NPM: ${{ needs.resolve_release_target.outputs.plugin_npm_artifact }}
         run: |
           set -euo pipefail
           source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"
@@ -1789,6 +1812,11 @@ jobs:
           npm_args+=(-f defer_registry_verification="${PUBLISH_OPENCLAW_NPM}")
           if [[ -n "${PREPARED_PLUGINS}" ]]; then
             npm_args+=(-f prepared_artifact="$(jq -cer '.npm' <<< "$PREPARED_PLUGINS")")
+          elif [[ -n "${QUALIFIED_PLUGIN_NPM}" ]]; then
+            npm_args+=(-f prepared_artifact="$QUALIFIED_PLUGIN_NPM")
+          fi
+          if [[ -n "${PREPARED_PLUGINS}" || -n "${QUALIFIED_PLUGIN_NPM}" ]]; then
+            npm_args+=(-f full_release_validation_run_id="$FULL_RELEASE_VALIDATION_RUN_ID" -f full_release_validation_run_attempt="$FULL_RELEASE_VALIDATION_RUN_ATTEMPT")
           fi
           if [[ "${RELEASE_NPM_DIST_TAG}" == extended-stable ]]; then
             npm_args+=(-f npm_dist_tag=extended-stable)
