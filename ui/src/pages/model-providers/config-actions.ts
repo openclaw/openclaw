@@ -1,5 +1,9 @@
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ModelsProbeResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import type { createModelProviderMutationPresentation } from "./config-mutation-presentation.ts";
@@ -66,6 +70,58 @@ export function createModelProviderConfigActions(deps: {
       : null;
   }
 
+  // The same check as Test access, run on the key just saved. Null when the Gateway can't check.
+  async function checkSavedKey(params: {
+    client: GatewayBrowserClient;
+    agentId: string;
+    provider: string;
+    configKey: string;
+    action: "edit" | "add";
+  }): Promise<ModelProviderRowMessage | null> {
+    if (isGatewayMethodAdvertised(context.gateway.snapshot, "models.probe") === false) {
+      return null;
+    }
+    let result: ModelsProbeResult;
+    try {
+      result = await params.client.request<ModelsProbeResult>("models.probe", {
+        provider: params.configKey,
+        agentId: params.agentId,
+      });
+    } catch (error) {
+      return {
+        kind: "warning",
+        text: t("modelProviders.apiKey.checkUnavailable"),
+        warning: modelProviderErrorMessage(error),
+      };
+    }
+    if (result.status === "ok") {
+      return {
+        kind: "success",
+        text: t(
+          params.action === "add"
+            ? "modelProviders.add.verified"
+            : "modelProviders.apiKey.verified",
+          { provider: params.provider },
+        ),
+      };
+    }
+    // The Gateway reports a fixed, secret-free reason per status; fall back to the status label.
+    const reason = formatUiExternalText(
+      result.error ?? t(`modelProviders.probe.status.${result.status}`),
+    );
+    // Only a refused credential or account is about the key; anything else leaves it unproven.
+    const inconclusive = result.status !== "auth" && result.status !== "billing";
+    return {
+      kind: inconclusive ? "warning" : "error",
+      text: t(
+        inconclusive
+          ? "modelProviders.apiKey.checkInconclusive"
+          : "modelProviders.apiKey.checkFailed",
+        { reason },
+      ),
+    };
+  }
+
   async function mutateApiKey(
     provider: string,
     configKey: string,
@@ -79,6 +135,7 @@ export function createModelProviderConfigActions(deps: {
     }
     const clientEpoch = gateway.epoch;
     const capturedAgentEpoch = getAgentEpoch();
+    const agentId = state.selectedAgentId;
     const isCurrent = () =>
       gateway.isCurrent({ client, epoch: clientEpoch }) && getAgentEpoch() === capturedAgentEpoch;
     clearProbe(provider);
@@ -91,6 +148,20 @@ export function createModelProviderConfigActions(deps: {
             isCurrentClient: isCurrent,
             isCurrentAgent: isCurrent,
             canMutate: () => canMutate(),
+            checkSavedKey: async () => {
+              setBusy(`check:${key}`, true);
+              try {
+                return await checkSavedKey({
+                  client,
+                  agentId,
+                  provider,
+                  configKey,
+                  action,
+                });
+              } finally {
+                setBusy(`check:${key}`, false);
+              }
+            },
             refreshProviders: async () => {
               const previous = state.data;
               await refresh();
@@ -111,7 +182,7 @@ export function createModelProviderConfigActions(deps: {
           },
           {
             client,
-            agentId: state.selectedAgentId,
+            agentId,
             provider: configKey,
             apiKey,
             success: t(
@@ -127,6 +198,10 @@ export function createModelProviderConfigActions(deps: {
         }),
     );
     if (!result?.ok || !isCurrent()) {
+      return;
+    }
+    // A key the provider rejected stays in its form, ready to correct.
+    if (!result.verified) {
       return;
     }
     if (action === "add") {
