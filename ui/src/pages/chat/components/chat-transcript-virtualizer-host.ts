@@ -216,15 +216,12 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
         // A read-back inside the committed window can share the next frame.
         // A fast scroll reaching new rows still needs them before this paint.
         const defer = redraw && !(moved || this.canAutoFollow() || offsetState.hasPendingAnchor);
-        const restoringReader =
-          this.prependAnchor.messageKey !== null && !this.initialRange.pending;
         this.presentation.commitChange(
           () => (redraw ? (this.renderPreviousRows ?? invalidate) : invalidate)(),
-          restoringReader ||
-            (defer &&
-              (offsetState.measuringOffset
-                ? this.renderer.coversViewport(view.calculateRange())
-                : !sync)),
+          defer &&
+            (offsetState.measuringOffset
+              ? this.renderer.coversViewport(view.calculateRange())
+              : !sync),
         );
         // A caller render can replace the queued redraw without replacing this geometry receipt.
         // Retiring a reader correction can grow the native extent without changing row totals.
