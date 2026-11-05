@@ -701,7 +701,9 @@ it("records the update's own Gateway stop so repair can restore it after the upd
     const env = { ...process.env };
     const run = createUpdateRun({ trigger: "cli" }, { env });
     mockMaintenanceService(home, {
-      stop: vi.fn(async ({ onMutation }: { onMutation?: () => void }) => onMutation?.()),
+      stop: vi.fn<GatewayService["stop"]>(async ({ onMutation }) => {
+        onMutation?.();
+      }),
     });
     const updateRun = { runId: run.runId, env };
     const { recordPhase } = createUpdateCommandExecutionGuards({ run: updateRun }, process.cwd());

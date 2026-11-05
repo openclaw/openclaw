@@ -33,6 +33,7 @@ import {
 } from "./update-command-executor.js";
 import type { InitializedUpdate } from "./update-command-initialization.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
+import { runMutableUpdateRecovery } from "./update-command-mutable-signals.js";
 import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
 import type { StagedPackageInstallUpdate } from "./update-command-package.js";
 import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
@@ -417,7 +418,6 @@ async function updateCommandInternal(
       continueMigratedUpdateInFreshProcess,
       inspectActivatedUpdateState,
       restoreFailedUpdateDatabases,
-      runMutableUpdateRecovery,
       createUpdateCommandFinalizationFence,
     } = await import("./update-execution.runtime.js");
 
