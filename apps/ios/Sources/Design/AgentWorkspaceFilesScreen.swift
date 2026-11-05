@@ -63,9 +63,10 @@ struct WorkspaceListPagination {
         requestOffset: Int,
         fetchedCount: Int,
         totalEntries: Int,
-        localRowCount: Int) -> Outcome {
+        localRowCount: Int) -> Outcome
+    {
         self.nextOffset = requestOffset + fetchedCount
-        if self.nextOffset >= totalEntries && localRowCount < totalEntries {
+        if self.nextOffset >= totalEntries, localRowCount < totalEntries {
             return .driftDetected
         }
         return .advanced
@@ -227,7 +228,8 @@ struct AgentWorkspaceDirectoryList: View {
                 requestOffset: requestOffset,
                 fetchedCount: result.entries.count,
                 totalEntries: result.totalentries,
-                localRowCount: self.entries.count) == .driftDetected {
+                localRowCount: self.entries.count) == .driftDetected
+            {
                 // The directory changed between pages and the inserted rows
                 // sit before the cursor; restart the listing so they show up
                 // instead of re-requesting the same final page.

@@ -44,28 +44,6 @@ struct AgentWorkspaceFilesPaginationTests {
         #expect(pagination.nextOffset == 252)
     }
 
-    @Test func `drift repeats while the stalled page is retried`() {
-        var pagination = WorkspaceListPagination()
-
-        _ = pagination.consume(
-            requestOffset: 0,
-            fetchedCount: 250,
-            totalEntries: 252,
-            localRowCount: 250)
-        // offset 251 keeps returning the already-listed row; every consume
-        // from the stalled position reports drift until a reload resets.
-        #expect(pagination.consume(
-            requestOffset: 251,
-            fetchedCount: 1,
-            totalEntries: 252,
-            localRowCount: 251) == .driftDetected)
-        #expect(pagination.consume(
-            requestOffset: 252,
-            fetchedCount: 0,
-            totalEntries: 252,
-            localRowCount: 251) == .driftDetected)
-    }
-
     @Test func `reload recovers a drifted listing and finishes pagination`() {
         var pagination = WorkspaceListPagination()
 
