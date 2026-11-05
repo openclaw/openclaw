@@ -395,6 +395,27 @@ describePosix("scripts/pr finalized-task closeout", () => {
     f.preserved();
   });
 
+  for (const kind of ["directory", "symlink"] as const) {
+    it(`preserves a selected ${kind} inside another checkout's shared dependencies`, async ({
+      f,
+    }) => {
+      const installation = f.artifacts[2]!;
+      const packages = join(installation, ".pnpm");
+      mkdirSync(packages);
+      writeFileSync(join(packages, "keep"), "shared package bytes\n");
+      const link = join(installation, "package-link");
+      symlinkSync(packages, link);
+      symlinkSync(installation, join(f.template, "node_modules"));
+      const result = await f.runArtifacts([kind === "directory" ? packages : link]);
+      expect(result.status, result.output).not.toBe(0);
+      expect(result.output).toMatch(/shared dependencies/iu);
+      expect(result.output).toContain(f.template);
+      expect(readFileSync(join(packages, "keep"), "utf8")).toBe("shared package bytes\n");
+      expect(lstatSync(link).isSymbolicLink()).toBe(true);
+      f.preserved();
+    });
+  }
+
   it("preserves nested credential stores and unlinks protected-store symlinks safely", async ({
     f,
   }) => {

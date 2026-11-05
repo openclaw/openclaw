@@ -178,11 +178,13 @@ function inventory(plan) {
       throw new Error(`Artifact contains a registered worktree; use its native owner: ${checkout}`);
     }
     const dependencies = path.join(checkout, "node_modules");
+    const shared = stat(dependencies) && physical(dependencies);
     if (
-      stat(dependencies) &&
+      shared &&
       artifacts.some(
         (resource) =>
-          !stat(resource.path)?.isSymbolicLink() && within(resource.path, physical(dependencies)),
+          within(shared, resource.path) ||
+          (!stat(resource.path)?.isSymbolicLink() && within(resource.path, shared)),
       )
     ) {
       throw new Error(`Shared dependencies are referenced by ${checkout}`);
