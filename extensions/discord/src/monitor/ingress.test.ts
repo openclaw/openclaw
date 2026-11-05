@@ -83,12 +83,14 @@ afterEach(async () => {
 function createPausedMonitor(
   dispatch: Parameters<typeof createDiscordIngressMonitor>[0]["dispatch"],
   ingressQueue = queue,
+  abortSignal?: AbortSignal,
 ) {
   const monitor = createDiscordIngressMonitor({
     accountId: "default",
     client: {} as never,
     runtime: { error: vi.fn(), log: vi.fn() },
     queue: ingressQueue,
+    abortSignal,
     dispatch,
   });
   monitors.add(monitor);
@@ -101,6 +103,16 @@ function createMonitor(...args: Parameters<typeof createPausedMonitor>) {
 }
 
 describe("Discord durable ingress", () => {
+  it("refuses new ingress after the account aborts", async () => {
+    const controller = new AbortController();
+    const dispatch = vi.fn();
+    const monitor = createMonitor(dispatch, queue, controller.signal);
+    controller.abort();
+    await expect(monitor.accept(createRawMessage("aborted"))).rejects.toThrow("stopped");
+    expect(await queue.listPending()).toEqual([]);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   it("stores only the awaited ingress transform, before any message dispatch", async () => {
     const raw = {
       ...createRawMessage("privacy-event"),

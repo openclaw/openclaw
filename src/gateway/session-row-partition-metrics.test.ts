@@ -46,7 +46,7 @@ it("attributes retained hits and misses separately from winner revisions and vie
   const beforeTask = before.partitions.find((counter) => counter.task === "sessions.subscribe");
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   const monitor = createMainThreadStallMonitor();
-  const select = (retained: WeakMap<object, SessionListFilteredEntries>) =>
+  const select = (retained: Map<object, SessionListFilteredEntries>) =>
     runWithMainThreadTask("gateway:rpc:sessions.subscribe", () => {
       const prepared = selection.read();
       return selectSessionEntries({
@@ -60,7 +60,7 @@ it("attributes retained hits and misses separately from winner revisions and vie
       }).entries.map(([key]) => key);
     });
   try {
-    const retained = new WeakMap<object, SessionListFilteredEntries>();
+    const retained = new Map<object, SessionListFilteredEntries>();
     expect(select(retained)).toEqual([second.key, first.key]);
     expect(select(retained)).toEqual([second.key, first.key]);
     revisions.withChangeScope("automation", () =>
@@ -75,7 +75,7 @@ it("attributes retained hits and misses separately from winner revisions and vie
     );
     expect(select(retained)).toEqual([first.key, second.key]);
     // A discarded view misses unchanged revisions too.
-    expect(select(new WeakMap())).toEqual([first.key, second.key]);
+    expect(select(new Map())).toEqual([first.key, second.key]);
     const after = getSessionRowSelectionMetrics();
     const counter = after.partitions.find((value) => value.task === "sessions.subscribe")!;
     expect(counter.hits - (beforeTask?.hits ?? 0)).toBe(5);

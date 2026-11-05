@@ -56,9 +56,12 @@ Send `Accept: application/json` and an identifying User-Agent, e.g.
 
 ## Enforced release-owner checkpoint
 
-The release owner must complete this checkpoint after every branch-head change
-and again at handoff. The manager rejects a handoff without it; do not publish,
-handoff, or claim the ledger current while any item remains unsynchronized.
+The release owner records a checkpoint after every branch-head change and again
+at handoff. When the service is usable, complete the synchronization below before
+claiming the ledger current. If access, availability, or required capabilities
+prevent use, follow [Fallback and privacy](#fallback-and-privacy): retain the
+checkpoint and pending updates in local release evidence without delaying
+publication or handoff.
 
 1. Resolve the configured release ref from the remote and record its exact SHA.
    GET the release record, then PATCH `observedHeadSha` with its current

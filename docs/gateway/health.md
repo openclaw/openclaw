@@ -62,7 +62,9 @@ preparation clears the degraded status when all runtimes are ready.
 If a newer model-runtime refresh replaces preparation in progress, startup
 follows the admitted replacement through preparation and publication. Cancelling
 the retired acquisition does not stop the Gateway; genuine replacement failures
-still propagate.
+still propagate. A config reload that retires the plugins behind that preparation
+follows the same bounded retry. If replacements outlast those retries, the agent's
+refusal asks for a Gateway restart; it does not require database repair.
 
 Transcript projection repair runs after readiness in yielding worker-backed work.
 Pending GitHub publication recovery runs in the background and does not delay
@@ -130,6 +132,19 @@ The Gateway exposes three unauthenticated `GET`/`HEAD` check pairs:
 | `/startup`, `/startupz` | Startup sidecars and agent database inspection/preparation have settled, and the Gateway is not draining. Channel health is not consulted.                                                                        | Startup-phase monitoring and update verification. |
 | `/ready`, `/readyz`     | Startup sidecars and fresh-chat admission are ready, the Gateway is not draining, required agent databases have completed admission without failures, and configured channel accounts pass deep readiness checks. | Traffic admission and operator monitoring.        |
 
+All three check pairs share the Gateway HTTP transport; there is no separate
+always-on check listener. Connection refusal is expected before the initial bind
+and after transport closure. An in-process restart can close and reopen the
+listener while the same PID stays alive; requests racing closure can also reset.
+
+Supervisors should combine HTTP checks with process and exit information, allow
+bounded startup/restart grace, and honor the process owner's shutdown budget.
+One refusal or reset during these transitions does not prove a wedged Gateway.
+Choose deployment-specific budgets and investigate persistent unavailability
+after they expire; a living PID does not justify indefinite grace. Use `/readyz`
+and normal admission for traffic; neither `/healthz` `200` nor `/startupz` `200`
+certifies readiness.
+
 The HTTP listener opens before the initial session projection is complete. During
 that build, `/healthz` can return `200`, while `/startupz` and `/readyz` remain
 pending. Other HTTP requests and WebSocket upgrades wait for the complete
@@ -140,6 +155,8 @@ on-demand skill reads still prepare the requested workspace. Readiness
 also waits for the reply and WebSocket connection modules to load, so immediate
 connections and first turns reuse the prepared runtime.
 Update verification still waits for startup completion before checking readiness.
+The later `http server listening` startup summary is not the actual bind
+timestamp.
 
 These probe paths stay at the server root even when `gateway.controlUi.basePath`
 is set. A UI base path such as `/health` does not turn its child routes into

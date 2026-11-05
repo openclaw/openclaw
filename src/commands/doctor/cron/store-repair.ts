@@ -45,7 +45,8 @@ import {
   readCronStorePartitionInventoryInDatabase,
   selectCronDefaultStoreIdentityInDatabase,
 } from "../../../state/openclaw-state-db-cron-identity-migration.js";
-import { isStatePostgres, stateEngineInput } from "../../../state/openclaw-state-db-engine.js";
+import { stateEngineInput } from "../../../state/openclaw-state-db-engine-input.js";
+import { isStatePostgres } from "../../../state/openclaw-state-db-engine.js";
 import { withMaintenanceOpenClawStateDatabaseReadOnly } from "../../../state/openclaw-state-db-readonly-reuse.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,

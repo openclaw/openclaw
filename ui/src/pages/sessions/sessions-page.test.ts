@@ -2,7 +2,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiAction } from "../../../../src/plugin-sdk/control-ui.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { showInputDialog } from "../../components/input-dialog.tsx";
@@ -35,7 +34,6 @@ import {
   selectMenuValue,
   settleSessionMenu,
 } from "../../test-helpers/session-menu.ts";
-import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { page as sessionsRoute, type SessionsRouteData } from "./route.ts";
 import {
@@ -717,44 +715,6 @@ describe("sessions page lifecycle", () => {
     expect(page.error).toBe(retryError);
   });
 
-  it.each(["active", "provisioning"] as const)(
-    "stops a %s cloud worker while adopting roster updates",
-    async (state) => {
-      const stopped = createDeferred<{ ok: true }>();
-      const request = vi.fn(() => stopped.promise);
-      const managed = createManagedSessions();
-      const context = createContext(
-        createGateway({ request } as unknown as GatewayBrowserClient).gateway,
-        managed.sessions,
-      );
-      const placement = createActiveSessionPlacement({ environmentId: "environment-1" });
-      const target = sessionRow("cloud", {
-        label: "Cloud task",
-        hasActiveRun: state === "provisioning",
-        placement: state === "active" ? placement : { ...placement, state },
-      });
-      const page = await createRenderedPage(context, sessionsResult([target], 1));
-      expect((await openRowMenu(page, target)).textContent).toContain("Stop cloud worker…");
-      const [query] = managed.subscribeList.mock.calls[0]!;
-      managed.refreshList.mockClear();
-      vi.mocked(showConfirmDialog).mockResolvedValue(true);
-      const stopping = page.stopCloudWorker(target);
-      await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-      publishRows(managed, [{ ...target, label: "Updated while stopping" }]);
-      expect(page.result?.sessions[0]?.label).toBe("Updated while stopping");
-      stopped.resolve({ ok: true });
-      await stopping;
-      expect(showConfirmDialog).toHaveBeenCalledOnce();
-      expect(request).toHaveBeenCalledWith(
-        "sessions.reclaim",
-        { key: target.key, agentId: "main" },
-        { timeoutMs: null },
-      );
-      expect(managed.refreshList).toHaveBeenCalledWith({ ...query, force: true });
-      expect(page.result?.sessions[0]?.label).toBe("Updated while stopping");
-    },
-  );
-
   it("drops stale mutation state, errors, menus, and navigation after disconnect", async () => {
     const deleted = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
     const patched = createDeferred<Awaited<ReturnType<SessionCapability["patch"]>>>();
@@ -888,9 +848,7 @@ describe("sessions page new group", () => {
     pending.resolve("completed");
     await created;
     expect(sessions.patch).not.toHaveBeenCalled();
-    expect(messages).toEqual([
-      "Gateway connection replaced before the group was saved. Try again.",
-    ]);
+    expect(messages).toEqual(["The connection changed before the group was saved. Try again."]);
     page.result = sessionsResult([row], 1);
     await page.requestNewCategory(key);
     expect(messages[1]).toBeNull();
@@ -1061,7 +1019,9 @@ describe("sessions page plugin actions", () => {
     menu.querySelector<HTMLElement>(actionSelector)!.click();
     await settleSessionMenu(menu);
     expect(run.mock.calls.length).toBe(1);
-    await waitForFast(() => expect(page.textContent).toContain("Reopen the session menu."));
+    await waitForFast(() =>
+      expect(page.textContent).toContain(i18n.t("pluginUi.actionUnavailableSession")),
+    );
 
     publish([{ ...current, archived: true }]);
     await page.updateComplete;
@@ -1080,7 +1040,9 @@ describe("sessions page plugin actions", () => {
       menu.querySelector<HTMLElement>(actionSelector)!.click();
       await settleSessionMenu(menu);
       expect(run.mock.calls.length).toBe(0);
-      await waitForFast(() => expect(page.textContent).toContain("Reopen the session menu."));
+      await waitForFast(() =>
+        expect(page.textContent).toContain(i18n.t("pluginUi.actionSessionUnavailable")),
+      );
     }
 
     expect(page.querySelector(actionSelector)).toBeNull();

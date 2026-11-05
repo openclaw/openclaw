@@ -129,6 +129,16 @@ export async function finalizeCompletedCronRunOutcomes(
       for (const entry of result.logs) {
         state.deps.log[entry.level](entry.fields, entry.message);
       }
+      for (const job of result.upsertedJobs) {
+        if (job.state.admissionDeferred) {
+          emit(state, {
+            jobId: job.id,
+            action: "scheduled",
+            job,
+            nextRunAtMs: job.state.nextRunAtMs,
+          });
+        }
+      }
       for (const plan of result.eventPlans) {
         const outcome = outcomes[plan.outcomeIndex]!;
         if (!canPublish(outcome)) {
@@ -141,6 +151,9 @@ export async function finalizeCompletedCronRunOutcomes(
           if (quietTrigger) {
             eventContext = { ...eventContext, quietTrigger: true };
           }
+          // The terminal event publishes this wake time; only a different resident
+          // schedule (or a quiet evaluation without an event) still needs publication.
+          state.durableNextRunAtMsByJobId.set(plan.job.id, plan.job.state.nextRunAtMs);
           emit(
             state,
             cronRunResultEvent(plan.job, outcome),
@@ -184,7 +197,7 @@ export async function finalizeCompletedCronRunOutcomes(
                 ? {
                     recomputeExpired: true,
                     ...(request.request?.preserveCadence
-                      ? { preserveExpiredPacedNextRunJobId: request.jobId }
+                      ? { preserveDisabledJobId: request.jobId }
                       : {}),
                   }
                 : {}),

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { globSync } from "tinyglobby";
 import { afterEach, expect, it } from "vitest";
@@ -78,27 +78,22 @@ it.skipIf(process.platform === "win32")(
       { restored: "false", marker: undefined, entry: false, local: "empty" },
     ]) {
       const root = tempDirs.make("openclaw-transform-cache-");
-      const cache = path.join(root, "cache");
+      const cache = path.join(root, ".cache/openclaw-vitest-fs-cache");
       const githubEnv = path.join(root, "env");
       const marker = path.join(cache, ".openclaw-transform-generation");
       const entry = path.join(cache, "entry");
-      mkdirSync(cache);
+      mkdirSync(cache, { recursive: true });
       if (scenario.marker !== undefined) {
         writeFileSync(marker, scenario.marker);
       }
       if (scenario.entry) {
         writeFileSync(entry, "cached transform");
       }
-      // Only relocate the fixed cache root; execute the shipped action body.
-      const script = step.run.replace(
-        "cache_root=/var/tmp/openclaw-vitest-fs-cache",
-        'cache_root="$TEST_CACHE_ROOT"',
-      );
-      const result = spawnSync("/bin/bash", ["-c", script], {
+      const result = spawnSync("/bin/bash", ["-c", step.run], {
         encoding: "utf8",
         env: {
           PATH: process.env.PATH,
-          TEST_CACHE_ROOT: cache,
+          GITHUB_WORKSPACE: root,
           GITHUB_ENV: githubEnv,
           CACHE_GENERATION: generation,
           CACHE_WRITER: step.env.CACHE_WRITER,
@@ -117,6 +112,67 @@ it.skipIf(process.platform === "win32")(
       }
       expect(readFileSync(githubEnv, "utf8")).toBe(
         `OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT=${cache}\nOPENCLAW_VITEST_FS_MODULE_CACHE_WRITER=0\n`,
+      );
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "restores runtime cache archives across different workspace depths",
+  () => {
+    const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
+    const warmer = parse(readFileSync(".github/workflows/vitest-cache-warm.yml", "utf8"));
+    for (const [cacheName, envName] of [
+      ["Vitest transform cache", "OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT"],
+      ["Node compile cache", "NODE_COMPILE_CACHE"],
+    ] as const) {
+      const reader = action.runs.steps.find(
+        (step: { name: string }) => step.name === `Restore ${cacheName}`,
+      );
+      const configure = action.runs.steps.find(
+        (step: { name: string }) => step.name === `Configure ${cacheName}`,
+      );
+      const writer = warmer.jobs.warm.steps.find(
+        (step: { name: string }) => step.name === `Save ${cacheName}`,
+      );
+      const cachePath = reader.with.path;
+      expect(path.isAbsolute(cachePath)).toBe(false);
+      expect(writer.with.path).toBe(cachePath);
+      const root = tempDirs.make("openclaw-portable-cache-");
+      const source = path.join(root, "hosted/work/project/project");
+      const target = path.join(root, "boat/actions-runner/_work/project/project");
+      const archive = path.join(root, "cache.tar");
+      const configureAt = (workspace: string) => {
+        mkdirSync(workspace, { recursive: true });
+        const result = spawnSync("/bin/bash", ["-c", configure.run], {
+          cwd: workspace,
+          encoding: "utf8",
+          env: {
+            PATH: process.env.PATH,
+            GITHUB_WORKSPACE: workspace,
+            GITHUB_ENV: path.join(workspace, "env"),
+            CACHE_GENERATION: "a".repeat(64),
+            CACHE_WRITER: "0",
+            CACHE_RESTORED: "true",
+            CACHE_RUNNER_ENVIRONMENT: "self-hosted",
+          },
+        });
+        expect(result.status, result.stderr).toBe(0);
+      };
+      configureAt(source);
+      writeFileSync(path.join(source, cachePath, "entry"), "cached bytes\n");
+      const save = spawnSync("tar", ["-cf", archive, "-C", source, writer.with.path], {
+        encoding: "utf8",
+      });
+      expect(save.status, save.stderr).toBe(0);
+      rmSync(path.join(source, cachePath), { recursive: true });
+      mkdirSync(target, { recursive: true });
+      const restore = spawnSync("tar", ["-xf", archive, "-C", target], { encoding: "utf8" });
+      expect(restore.status, restore.stderr).toBe(0);
+      configureAt(target);
+      expect(readFileSync(path.join(target, cachePath, "entry"), "utf8")).toBe("cached bytes\n");
+      expect(readFileSync(path.join(target, "env"), "utf8")).toContain(
+        `${envName}=${path.join(target, cachePath)}\n`,
       );
     }
   },

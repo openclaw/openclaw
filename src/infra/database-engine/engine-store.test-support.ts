@@ -10,7 +10,7 @@ import { openEngineStore, readEngineAnchor } from "./open.js";
 export function openPostgresEngineTestStore(
   params: Pick<
     Parameters<typeof openEngineStore>[0],
-    "anchor" | "schema" | "input" | "existingVersion" | "existingOnly"
+    "anchor" | "schema" | "input" | "existingVersion" | "existingOnly" | "reusePostgresConnection"
   > & { openSqlite?: () => void },
 ) {
   return openEngineStore({

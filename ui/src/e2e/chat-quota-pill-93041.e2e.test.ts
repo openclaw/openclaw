@@ -23,7 +23,7 @@ const suite = createControlUiE2eSuite({
 const baseTime = Date.UTC(2026, 9, 21, 12);
 let artifactDir: string;
 
-function providerStatus<Usage>(
+function providerStatus<Usage extends { authProfileId: string }>(
   provider: string,
   displayName: string,
   usage: Usage,
@@ -33,7 +33,7 @@ function providerStatus<Usage>(
     provider,
     displayName,
     status: "ok",
-    profiles: [{ profileId: provider, type, status: "ok" }],
+    profiles: [{ profileId: usage.authProfileId, type, status: "ok" }],
     usage,
   };
 }
@@ -43,6 +43,7 @@ const authStatusWithUsage = {
   providers: [
     providerStatus("openai", "OpenAI", {
       providerId: "openai",
+      authProfileId: "openai:main",
       windows: [{ label: "Week", usedPercent: 71, resetAt: baseTime + 4 * 86_400_000 }],
     }),
     providerStatus(
@@ -50,6 +51,7 @@ const authStatusWithUsage = {
       "Copilot",
       {
         providerId: "github-copilot",
+        authProfileId: "github-copilot:main",
         windows: [{ label: "Day", usedPercent: 41 }],
       },
       "token",
@@ -90,6 +92,7 @@ function agentAuthStatus(agentId: "main" | "work") {
     providers: [
       providerStatus("openai", isMain ? "Main OpenAI" : "Work OpenAI", {
         providerId: "openai",
+        authProfileId: `openai:${agentId}`,
         plan: isMain ? "Main Pro" : "Work Team",
         accountEmail: `${agentId}@example.test`,
         windows: [
@@ -128,6 +131,7 @@ const claudeSubscriptionAuthStatus = {
   providers: [
     providerStatus("claude-cli", "Claude", {
       providerId: "anthropic",
+      authProfileId: "claude-cli:main",
       plan: "Max (20x)",
       windows: [
         { label: "5h", usedPercent: 22, resetAt: baseTime + 4 * 3_600_000 + 48 * 60_000 },
@@ -165,6 +169,7 @@ const claudeSubscriptionSessions = {
 async function withChat(
   authStatus: unknown,
   sessions: unknown,
+  authProfileId: string,
   run: (page: Page) => Promise<void>,
 ) {
   await suite.withPage(
@@ -172,7 +177,14 @@ async function withChat(
     async ({ page }) => {
       await page.clock.setFixedTime(baseTime);
       const gateway = await installMockGateway(page, {
-        methodResponses: { "models.authStatus": authStatus, "sessions.list": sessions },
+        methodResponses: {
+          "models.authStatus": authStatus,
+          "models.list": {
+            models: [],
+            accountSelection: { kind: "shared", label: "Selected account", authProfileId },
+          },
+          "sessions.list": sessions,
+        },
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("models.authStatus");
@@ -265,7 +277,7 @@ suite.define(() => {
     artifactDir = createControlUiE2eArtifactDir("chat-quota-pill-93041");
   });
   it("shows high context pressure without a compact action", async () => {
-    await withChat(authStatusWithUsage, highPressureSessions, async (page) => {
+    await withChat(authStatusWithUsage, highPressureSessions, "openai:main", async (page) => {
       const contextRing = page.locator(".context-ring");
       await contextRing.waitFor({ state: "visible" });
       expect(await contextRing.getAttribute("aria-label")).toBe(
@@ -284,7 +296,7 @@ suite.define(() => {
   });
 
   it("renders provider usage inside the desktop context popover", async () => {
-    await withChat(authStatusWithUsage, gatewayInjectedSessions, async (page) => {
+    await withChat(authStatusWithUsage, gatewayInjectedSessions, "openai:main", async (page) => {
       const contextRing = page.locator(".context-ring");
       const usageLinks = page.locator('[data-chat-provider-usage="true"]');
       const usageLink = usageLinks.first();
@@ -318,59 +330,69 @@ suite.define(() => {
   });
 
   it("shows plan bars, credits, and no dollar estimates for subscription sessions", async () => {
-    await withChat(claudeSubscriptionAuthStatus, claudeSubscriptionSessions, async (page) => {
-      const popover = await openVisibleQuotaPopover(page);
-      await popover.screenshot({
-        path: path.join(artifactDir, "03-claude-subscription-popover.png"),
-      });
+    await withChat(
+      claudeSubscriptionAuthStatus,
+      claudeSubscriptionSessions,
+      "claude-cli:main",
+      async (page) => {
+        const popover = await openVisibleQuotaPopover(page);
+        await popover.screenshot({
+          path: path.join(artifactDir, "03-claude-subscription-popover.png"),
+        });
 
-      expect(await page.locator(".context-usage__plan-badge").textContent()).toBe("Max (20x)");
-      expect(await popover.getByRole("progressbar").count()).toBe(4);
-      for (const [label, percent, value, reset] of [
-        ["5-hour", "22", "22%", "4:48 PM"],
-        ["Weekly", "25", "25%", "Fri"],
-        ["Fable", "45", "45%", "—"],
-        ["Usage credits", "39", "$157.85 of $400.00", null],
-      ] as const) {
-        const quota = popover.getByRole("progressbar", { name: label, exact: true });
-        expect(await quota.getAttribute("aria-valuenow")).toBe(percent);
-        expect(await quota.getAttribute("aria-valuetext")).toBe(value);
-        expect(await quota.locator(".context-usage__limit-value").textContent()).toBe(value);
-        if (reset === null) {
-          expect(await quota.locator(".context-usage__limit-reset").count()).toBe(0);
-        } else {
-          expect(await quota.locator(".context-usage__limit-reset").textContent()).toBe(reset);
-          expect(await quota.locator(".context-usage__limit-reset").getAttribute("title")).toBe(
-            `Resets ${reset}`,
-          );
+        expect(await page.locator(".context-usage__plan-badge").textContent()).toBe("Max (20x)");
+        expect(await popover.getByRole("progressbar").count()).toBe(4);
+        for (const [label, percent, value, reset] of [
+          ["5-hour", "22", "22%", "4:48 PM"],
+          ["Weekly", "25", "25%", "Fri"],
+          ["Fable", "45", "45%", "—"],
+          ["Usage credits", "39", "$157.85 of $400.00", null],
+        ] as const) {
+          const quota = popover.getByRole("progressbar", { name: label, exact: true });
+          expect(await quota.getAttribute("aria-valuenow")).toBe(percent);
+          expect(await quota.getAttribute("aria-valuetext")).toBe(value);
+          expect(await quota.locator(".context-usage__limit-value").textContent()).toBe(value);
+          if (reset === null) {
+            expect(await quota.locator(".context-usage__limit-reset").count()).toBe(0);
+          } else {
+            expect(await quota.locator(".context-usage__limit-reset").textContent()).toBe(reset);
+            expect(await quota.locator(".context-usage__limit-reset").getAttribute("title")).toBe(
+              `Resets ${reset}`,
+            );
+          }
         }
-      }
-      const popoverText = (await page.locator(".context-usage__popover").textContent()) ?? "";
-      expectTextExcludes(popoverText, "Est. cost", "Cost by Type");
-      const latest = (await popover.locator(".context-usage__latest").textContent()) ?? "";
-      expect(latest).toContain("Latest run");
-      expect(latest).toMatch(/In\s*2.4k/);
-      expect(latest).toMatch(/Out\s*830/);
-      expectTextExcludes(latest, "Cost", "$0.02");
-    });
+        const popoverText = (await page.locator(".context-usage__popover").textContent()) ?? "";
+        expectTextExcludes(popoverText, "Est. cost", "Cost by Type");
+        const latest = (await popover.locator(".context-usage__latest").textContent()) ?? "";
+        expect(latest).toContain("Latest run");
+        expect(latest).toMatch(/In\s*2.4k/);
+        expect(latest).toMatch(/Out\s*830/);
+        expectTextExcludes(latest, "Cost", "$0.02");
+      },
+    );
   });
 
   it("shows no plan usage when no provider usage windows are present", async () => {
-    await withChat({ ts: baseTime, providers: [] }, gatewayInjectedSessions, async (page) => {
-      const contextRing = page.locator(".context-ring");
-      await contextRing.waitFor({ state: "visible" });
-      await page.waitForFunction(() => {
-        const pane = document.querySelector<ChatPane>("openclaw-chat-pane");
-        return Array.isArray(pane?.state?.modelAuthStatusResult?.providers);
-      });
-      await contextRing.click();
-      const popover = page.locator(".context-usage__popover");
-      await popover.waitFor({ state: "visible" });
-      await popover.screenshot({ path: path.join(artifactDir, "04-usage-unavailable.png") });
-      expect(await page.locator('[data-chat-provider-usage="true"]').count()).toBe(0);
-      const popoverText = (await popover.textContent()) ?? "";
-      expectTextExcludes(popoverText, "openclaw", "gateway-injected", "Model:");
-    });
+    await withChat(
+      { ts: baseTime, providers: [] },
+      gatewayInjectedSessions,
+      "openai:main",
+      async (page) => {
+        const contextRing = page.locator(".context-ring");
+        await contextRing.waitFor({ state: "visible" });
+        await page.waitForFunction(() => {
+          const pane = document.querySelector<ChatPane>("openclaw-chat-pane");
+          return Array.isArray(pane?.state?.modelAuthStatusResult?.providers);
+        });
+        await contextRing.click();
+        const popover = page.locator(".context-usage__popover");
+        await popover.waitFor({ state: "visible" });
+        await popover.screenshot({ path: path.join(artifactDir, "04-usage-unavailable.png") });
+        expect(await page.locator('[data-chat-provider-usage="true"]').count()).toBe(0);
+        const popoverText = (await popover.textContent()) ?? "";
+        expectTextExcludes(popoverText, "openclaw", "gateway-injected", "Model:");
+      },
+    );
   });
 
   it.each(["scoped", "unscoped"])("scopes auth, quota, and %s identity", async (bootstrapScope) => {
@@ -401,6 +423,31 @@ suite.define(() => {
         ],
         methodResponses: {
           "agents.list": agentsList,
+          "models.list": {
+            cases: [
+              {
+                match: { agentId: "work" },
+                response: {
+                  models: [],
+                  accountSelection: {
+                    kind: "shared",
+                    label: "Work account",
+                    authProfileId: "openai:work",
+                  },
+                },
+              },
+              {
+                response: {
+                  models: [],
+                  accountSelection: {
+                    kind: "shared",
+                    label: "Main account",
+                    authProfileId: "openai:main",
+                  },
+                },
+              },
+            ],
+          },
           "sessions.list": {
             // Static rows seed Main; response cases never seed canonical fixture state.
             ...selectedGlobalSessions,

@@ -68,7 +68,12 @@ it("uses only prepared Gateway warnings in Doctor", async () => {
     expect.objectContaining({
       method: "models.list",
       sharedStateMode: "read-only",
-      params: { view: "all", includeDetails: true, preparedOnly: true },
+      params: {
+        view: "all",
+        includeDetails: true,
+        includeDefaultModels: true,
+        preparedOnly: true,
+      },
     }),
   );
 });

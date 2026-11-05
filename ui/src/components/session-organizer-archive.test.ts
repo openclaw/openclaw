@@ -190,7 +190,9 @@ describe("session organizer nested archive choice", () => {
     // The page retires, but the same connection still owns the captured Undo.
     vi.mocked(harness.host.sessionData.isSessionMutationScopeCurrent).mockReturnValue(false);
     archived.onAction!();
-    await waitForFast(() => expect(showToast).toHaveBeenCalledWith({ message: undoError.message }));
+    await waitForFast(() =>
+      expect(showToast).toHaveBeenCalledWith({ severity: "error", message: undoError.message }),
+    );
     expect(harness.request.mock.calls[1]?.[1]).toEqual({
       targets: [rows[0]!, rows[2]!].map(sessionTarget),
       patch: { archived: false },
@@ -227,7 +229,7 @@ describe("session organizer nested archive choice", () => {
       const pending = modal.track(archiveSessionWithUndo(harness.host, root, harness.scope));
       const actions = await waitForConfirmDialogActions();
       expect(document.body.textContent).toContain(
-        '"Batch 0" has 1 directly nested session. If you archive only this session, that nested session moves to the top level.',
+        "“Batch 0” has 1 directly nested session. If you archive only this session, that nested session moves to the top level.",
       );
       expect(document.body.textContent).toContain(t("sessionsView.archiveRunningSessions"));
       expect(actions.textContent).toContain(`Archive all (${count})`);

@@ -123,6 +123,8 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     },
   };
   // Each worker duplex owns a disposable native client, never a shared local process.
+  // Strict one-shot runs also need an attempt-owned process: a shared peer can legitimately
+  // keep the cached client alive after this run, which leaves its cleanup receipt unprovable.
   const workerHostedCloud =
     pluginConfig.appServer?.workerHostedCloud === true &&
     isCodexRemoteExecPlacementSandbox(sandbox);
@@ -137,7 +139,8 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
           assertCurrent: () => assertCurrent(),
           workspaceReadiness: params.hostCapabilities.workspaceReadiness,
         })
-      : isCodexPairedNodeRemoteExecPlacementSandbox(sandbox)
+      : isCodexPairedNodeRemoteExecPlacementSandbox(sandbox) ||
+          (params.oneShotCliRun === true && params.cleanupBundleMcpOnRunEnd === true)
         ? createIsolatedCodexAppServerClient
         : getLeasedSharedCodexAppServerClient);
   preDynamicStartupStages.mark("sandbox");
@@ -274,9 +277,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       bindingIdentity = physicalIdentity;
     }
   }
-  let modelExecution:
-    | ReturnType<NonNullable<typeof params.hostCapabilities.bindModelExecution>>
-    | undefined;
+  let modelExecution: ReturnType<NonNullable<typeof params.hostCapabilities.bindModelExecution>>;
   const assertModelExecutionCurrent = () => modelExecution?.assertCurrent();
   generationAuthorityTransferred = true;
   const {
@@ -315,10 +316,10 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     params.runtimePlan?.auth.forwardedAuthProfileId ??
     params.authProfileId ??
     startupBinding?.authProfileId;
+  // A resolved key can describe Gateway model availability, not worker auth intent.
+  // Worker-owned handoff below never forwards it; explicit account choices still reject.
   if (workerHostedCloud && (usesSupervisionConnection || selectedAuthProfileId)) {
-    throw new Error(
-      "Worker-hosted Codex requires worker-owned authentication; detach native supervision and clear the selected Gateway auth profile before retrying.",
-    );
+    throw new Error("Use worker auth: detach supervision and clear the Gateway auth profile.");
   }
   if (usesSupervisionConnection && isCodexResponsesOAuthRun(params)) {
     throw new Error(
@@ -354,9 +355,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     ).appServer;
   const initialStartupBindingHadInactiveThreadBootstrap =
     isInactiveThreadBootstrapBinding(startupBinding);
-  const appServerHomeScope = resolveCodexAppServerHomeScope({
-    appServer: pluginConfig.appServer,
-  });
+  const appServerHomeScope = resolveCodexAppServerHomeScope({ appServer: pluginConfig.appServer });
   const nativeCommandAuth = params.runtimePlan?.auth.selectedAuthMode === "native-command";
   if (nativeCommandAuth && usesSupervisionConnection) {
     throw new Error("Native command auth requires an OpenClaw-owned Codex session.");
@@ -380,9 +379,10 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
             agentDir,
             config: params.config,
           });
-  // Native-command selection still uses its handoff owner, including remote-exec refusal.
+  // Worker hosting keeps all authentication on the worker. Other native-command
+  // placements still use the handoff owner, including its remote-exec refusal.
   const authHandoff =
-    usesSupervisionConnection || (workerHostedCloud && !nativeCommandAuth)
+    usesSupervisionConnection || workerHostedCloud
       ? { authProfileId: undefined, nativeAuthProfile: true, preparedAuth: undefined }
       : await resolveCodexAppServerPreparedAuthHandoff({
           authRequirement: startupAuthRequirement,
@@ -531,6 +531,11 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     execution.assertCurrent();
   };
   try {
+    if (workerHostedCloud) {
+      // Worker initialization can execute native auth before turn-time model selection,
+      // including when Gateway discovery selected an API-key/subscription availability route.
+      bindModelExecution({ provider: params.provider, model: params.modelId });
+    }
     const startupBindingBeforeRotation = startupBinding;
     const startupBindingResolution = await rotateOversizedCodexAppServerStartupBinding({
       assertCurrent,
