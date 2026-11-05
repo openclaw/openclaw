@@ -141,15 +141,17 @@ process.env.NODE_OPTIONS = instrumentOptions({ env: process.env }).env.NODE_OPTI
 const originalSpawn = cp.spawn;
 cp.spawn = function(command, args, options) {
   const env = options && options.env || process.env;
+  const runsDoctor = args.includes('--doctor') ||
+    (args.includes('doctor') && (args.includes('--fix') || args.includes('--repair')));
   if (env.DOCTOR_BENCH_RETAINED_WAL === '1' &&
-      (args.includes('--doctor') || (args.includes('doctor') && args.includes('--repair')))) {
+      runsDoctor) {
     const filename = path.join(env.OPENCLAW_STATE_DIR, 'state', 'openclaw.sqlite');
     record({ type: 'doctor-wal-input',
       walBytes: fs.existsSync(filename + '-wal') ? fs.statSync(filename + '-wal').size : 0,
       shmExists: fs.existsSync(filename + '-shm') });
   }
   if (env.OPENCLAW_UPDATE_POST_CORE_CONVERGENCE === '1' &&
-      (args.includes('--doctor') || (args.includes('doctor') && args.includes('--repair')))) {
+      runsDoctor) {
     // Retain the first Doctor's receipt before the second replaces it with completion.
     const { DatabaseSync } = require('node:sqlite');
     const db = new DatabaseSync(path.join(env.OPENCLAW_STATE_DIR, 'state', 'openclaw.sqlite'), { readOnly: true });
