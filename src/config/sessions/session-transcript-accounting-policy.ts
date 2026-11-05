@@ -24,6 +24,20 @@ function isUnavailableContextBarrier(
   );
 }
 
+/**
+ * A stopped run's host-authored partial (`chat-transcript-inject.ts`) carries no
+ * model call: its zero usage is stamped unavailable so the session total is
+ * re-derived, not because the context after it is unknown. The previous usage
+ * anchor plus the messages appended since (this partial included) still bounds
+ * the next prompt, so the marker counts as trailing growth rather than a barrier.
+ * Without this, a session on a lossless context engine falls back to estimating
+ * its whole raw transcript after every abort and runs the memory flush and a
+ * forced compaction on the next turn.
+ */
+function isGatewayInjectedAbortMarker(message: Record<string, unknown> | undefined): boolean {
+  return asOptionalRecord(message?.openclawAbort)?.aborted === true;
+}
+
 function deriveTranscriptUsageSnapshot(
   usage: NonNullable<ReturnType<typeof normalizeUsage>>,
   trailingMessages: AgentMessage[],
@@ -85,7 +99,11 @@ function readTranscriptAccountingSnapshot(
         trailingMessages.length = 0;
       } else {
         const usage = normalizeUsage(usageFields);
-        if (usage && isUnavailableContextBarrier(usage)) {
+        if (
+          usage &&
+          isUnavailableContextBarrier(usage) &&
+          !isGatewayInjectedAbortMarker(messageRecord)
+        ) {
           scanUsage = false;
           trailingMessages.length = 0;
         } else if (usage && hasNonzeroUsage(usage)) {
