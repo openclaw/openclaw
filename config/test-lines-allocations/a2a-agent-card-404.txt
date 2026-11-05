@@ -1,0 +1,4 @@
+# The prefix/exact registration split must be asserted per route, and the descendant case needs a
+# handler-level request through the registered handler; the existing discovery cases cover only
+# the exact routes.
+24
