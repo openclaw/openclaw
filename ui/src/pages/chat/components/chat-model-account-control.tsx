@@ -3,7 +3,6 @@ import { createMemo, For, Show, useContext } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
-import { handleModelOptionMouseEnter } from "./chat-model-picker-search-view.ts";
 import { ChatModelSearchContext } from "./chat-model-picker-search.ts";
 import type { ModelPickerRowRenderer } from "./chat-model-picker-window.tsx";
 
@@ -34,9 +33,7 @@ export function ChatModelAccountSectionView(
             <Icon name="users" />
           </span>
           <span class="chat-controls__provider-label">{t("chat.modelAccounts.section")}</span>
-          <span class="chat-controls__account-selection" title={props.selectedIdentity}>
-            {props.selectedIdentity}
-          </span>
+          <span class="chat-controls__account-selection">{props.selectedIdentity}</span>
           <span class="chat-controls__inline-select-chevron" aria-hidden="true">
             <Icon name={props.open ? "chevronUp" : "chevronDown"} />
           </span>
@@ -87,7 +84,6 @@ export function ChatModelAccountSectionView(
                     disabled={
                       props.disabled || Boolean(option().disabled && option().value !== "more")
                     }
-                    onMouseEnter={handleModelOptionMouseEnter}
                     onClick={(event) => props.onSelect(option().value, event)}
                   >
                     <span class="chat-controls__model-option-provider" aria-hidden="true">
@@ -96,7 +92,7 @@ export function ChatModelAccountSectionView(
                     <span class="chat-controls__model-option-copy">
                       <span class="chat-controls__model-option-name">{option().label}</span>
                       <Show when={option().description}>
-                        <span class="chat-controls__auth-meta" title={option().description}>
+                        <span class="chat-controls__auth-meta">
                           <span class="chat-controls__model-option-name">
                             {option().description}
                           </span>

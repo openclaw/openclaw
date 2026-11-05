@@ -14,7 +14,6 @@ import {
   type ChatModelPickerOptionProps,
   type ChatModelPickerTargetOptionProps,
 } from "./chat-model-picker-options.ts";
-import { handleModelOptionMouseEnter } from "./chat-model-picker-search-view.ts";
 import { ChatModelSearchContext, type ChatModelSearchRow } from "./chat-model-picker-search.ts";
 
 function ModelShortcut(props: { rowKey: string }) {
@@ -34,6 +33,17 @@ function ModelShortcut(props: { rowKey: string }) {
 
 export function ChatModelProviderIcon(props: { provider: string }) {
   return <ProviderBrandIcon provider={props.provider} class="chat-controls__provider-icon" />;
+}
+
+export function ChatModelTargetIcon() {
+  return (
+    <span
+      class="chat-controls__provider-icon provider-brand-icon provider-brand-icon--fallback"
+      aria-hidden="true"
+    >
+      ›
+    </span>
+  );
 }
 
 type ModelPresentationProps = Omit<ChatModelPickerOptionProps, "onSelect" | "index">;
@@ -162,7 +172,6 @@ function ModelOptionButton(
       aria-setsize={search?.row(key())?.size}
       hidden={hidden()}
       aria-selected={props.presentation.selected ? "true" : "false"}
-      title={props.presentation.accessibleStatus || undefined}
       aria-label={[
         props.presentation.modelLabel,
         props.presentation.runtimeLabel,
@@ -179,7 +188,6 @@ function ModelOptionButton(
         )
       }
       data-chat-model-setup={props.presentation.onModelSetup ? "true" : undefined}
-      onMouseEnter={handleModelOptionMouseEnter}
       onClick={(event) => {
         // Auth-gated rows lead to setup rather than trapping a click on a disabled model.
         if (props.entry.disabled && !props.presentation.resetsPin) {
@@ -201,9 +209,6 @@ function ModelOptionButton(
               {defaultLabel()}
             </span>
           </Show>
-          <Show when={props.presentation.modelMeta}>
-            <span class="chat-controls__model-option-meta">{props.presentation.modelMeta}</span>
-          </Show>
           <Show when={props.presentation.needsAuth}>
             <span class="chat-controls__model-option-auth-warning" data-chat-model-auth-warning>
               <Icon name="alertTriangle" />
@@ -214,6 +219,9 @@ function ModelOptionButton(
             <span class="chat-controls__model-chat-only-info" aria-hidden="true">
               <Icon name="info" />
             </span>
+          </Show>
+          <Show when={props.presentation.modelMeta}>
+            <span class="chat-controls__model-option-meta">{props.presentation.modelMeta}</span>
           </Show>
         </span>
       </span>
@@ -269,14 +277,13 @@ export function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionPr
       aria-selected="false"
       type="button"
       disabled={props.disabled}
-      onMouseEnter={handleModelOptionMouseEnter}
       onClick={(event) => props.onSelect(props.groupId, props.entry.value, event)}
     >
       <span
         class="chat-controls__model-option-provider chat-controls__target-icon"
         aria-hidden="true"
       >
-        <Icon name="terminal" />
+        <ChatModelTargetIcon />
       </span>
       <span class="chat-controls__model-option-copy">
         <span class="chat-controls__model-option-title">

@@ -227,6 +227,7 @@ it("preserves composition ownership and ordinary model-search keyboard behavior"
   params.modelOptions = [
     modelOption("example", "alpha", { label: "Alpha" }),
     modelOption("other", "gamma", { label: "Gamma" }),
+    modelOption("other", "delta", { label: "Delta" }),
   ];
   update();
   for (const composition of ["active", "keyCode229", "none"]) {
@@ -237,13 +238,13 @@ it("preserves composition ownership and ordinary model-search keyboard behavior"
         expect(picker.querySelectorAll("[data-chat-model-option]"), label).toHaveLength(1),
       );
       const other = picker.querySelector<HTMLButtonElement>(
-        '[data-chat-model-provider-group="other"] [data-chat-model-provider-toggle]',
+        '[data-chat-model-provider-toggle="other"]',
       )!;
       if (key.startsWith("Arrow")) {
         await userEvent.click(other);
       }
       const search = getSearch();
-      const query = key.startsWith("Arrow") ? "" : "other";
+      const query = key.startsWith("Arrow") ? "" : "gamma";
       if (query) {
         search.value = query;
         search.dispatchEvent(new InputEvent("input", { bubbles: true }));
@@ -307,8 +308,10 @@ it("preserves composition ownership and ordinary model-search keyboard behavior"
         search.value = "";
         search.dispatchEvent(new InputEvent("input", { bubbles: true }));
         flush();
-        if (other.ariaExpanded === "true") {
-          await userEvent.click(other);
+        if (other.ariaSelected === "true") {
+          await userEvent.click(
+            picker.querySelector<HTMLButtonElement>('[data-chat-model-provider-toggle="example"]')!,
+          );
         }
         await toggle(() => userEvent.click(trigger));
         expect(picker.open, label).toBe(false);
@@ -366,13 +369,11 @@ it.each(["trigger", "Escape", "selection"])(
     await open();
     const search = getSearch();
     const providerToggle = (provider: string) =>
-      picker.querySelector<HTMLButtonElement>(
-        `[data-chat-model-provider-group="${provider}"] [data-chat-model-provider-toggle]`,
-      )!;
+      picker.querySelector<HTMLButtonElement>(`[data-chat-model-provider-toggle="${provider}"]`)!;
     const selectedToggle = providerToggle("example"),
       otherToggle = providerToggle("other");
     const expectExpanded = () =>
-      expect([selectedToggle.ariaExpanded, otherToggle.ariaExpanded]).toEqual(["false", "true"]);
+      expect([selectedToggle.ariaSelected, otherToggle.ariaSelected]).toEqual(["false", "true"]);
     await userEvent.click(selectedToggle);
     await userEvent.click(otherToggle);
     expectExpanded();
@@ -441,6 +442,8 @@ it("windows a large catalog while keeping keyboard choices and accessible positi
     const clip = viewport.getBoundingClientRect();
     expect(bounds.top).toBeGreaterThanOrEqual(clip.top);
     expect(bounds.bottom).toBeLessThanOrEqual(clip.bottom);
+    const heading = container.querySelector<HTMLElement>("[data-chat-model-heading]")!;
+    expect(heading.getBoundingClientRect().top).toBe(clip.top);
     expect(rows().length).toBeLessThan(40);
   });
   search.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
@@ -462,4 +465,36 @@ it("windows a large catalog while keeping keyboard choices and accessible positi
   expect(search.getAttribute("aria-activedescendant")).toBe(rows()[0]?.id);
   search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   expect(params.onModelSelect).toHaveBeenCalledWith("example/model-999", "main", undefined);
+});
+
+it("keeps the complete model panel above the composer", async () => {
+  await page.viewport(1280, 900);
+  container.style.cssText =
+    "position:fixed;bottom:16px;right:16px;width:min(600px, calc(100vw - 32px))";
+  const { toggle, trigger, picker, composer } = mountPicker();
+  try {
+    await toggle(async () => trigger.click());
+    const menu = picker.querySelector<HTMLElement>(".chat-controls__model-menu")!;
+    const surface = picker.querySelector<HTMLElement>(".chat-picker-overlay")!;
+    await vi.waitFor(() => {
+      const panel = menu.getBoundingClientRect();
+      const bounds = surface.getBoundingClientRect();
+      expect(bounds.bottom).toBeLessThanOrEqual(
+        composer.parentElement!.parentElement!.getBoundingClientRect().top - 8,
+      );
+      expect(panel.bottom).toBeLessThanOrEqual(bounds.bottom);
+      expect(menu.scrollHeight).toBeLessThanOrEqual(menu.clientHeight);
+      expect(option("example/beta").getBoundingClientRect().bottom).toBeLessThanOrEqual(
+        panel.bottom - 8,
+      );
+    });
+    const beta = option("example/beta");
+    const background = getComputedStyle(beta).backgroundColor;
+    const highlighted = getSearch().getAttribute("aria-activedescendant");
+    await page.getByText("Beta", { exact: true }).hover();
+    expect(getComputedStyle(beta).backgroundColor).toBe(background);
+    expect(getSearch().getAttribute("aria-activedescendant")).toBe(highlighted);
+  } finally {
+    container.removeAttribute("style");
+  }
 });

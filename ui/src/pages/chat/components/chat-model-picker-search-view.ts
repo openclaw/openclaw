@@ -46,28 +46,28 @@ export function createChatModelSearchView(
   // Selection resets provider defaults; catalog refreshes retain each surviving choice.
   const [disclosure, updateDisclosure] = createStore<{
     active: string | undefined;
-    groups: Record<string, { open?: boolean; more: boolean }>;
+    selected?: string;
+    groups: Record<string, { more: boolean }>;
   }>(
     (draft) => {
       const current = scope();
       const selectionChanged = draft.active !== current.active;
       draft.active = current.active;
+      if (selectionChanged || !current.providers.includes(draft.selected ?? "")) {
+        draft.selected = current.active ?? current.providers[0];
+      }
       for (const provider of Object.keys(draft.groups)) {
         if (!current.providers.includes(provider)) {
           delete draft.groups[provider];
         }
       }
       for (const provider of current.providers) {
-        const group = (draft.groups[provider] ??= { more: false });
-        if (selectionChanged) {
-          delete group.open;
-        }
+        draft.groups[provider] ??= { more: false };
       }
     },
     { active: undefined, groups: {} },
   );
-  const providerOpen = (provider: string) =>
-    disclosure.groups[provider]?.open ?? disclosure.active === provider;
+  const providerOpen = (provider: string) => disclosure.selected === provider;
   const matches = createMemo(
     () => {
       const term = normalizeSearch(query().trim());
@@ -155,9 +155,8 @@ export function createChatModelSearchView(
       return rowStates[key] ?? { hidden: true, rank: undefined, shortcut: undefined };
     },
     toggleProvider(provider: string) {
-      const next = !providerOpen(provider);
       updateDisclosure((draft) => {
-        draft.groups[provider]!.open = next;
+        draft.selected = provider;
       });
     },
     expandMore(provider: string, event: MouseEvent) {
@@ -188,16 +187,6 @@ export function createChatModelSearchView(
   };
   search.bindView(view);
   return view;
-}
-
-export function handleModelOptionMouseEnter(event: MouseEvent): void {
-  const state = chatModelSearchState(event.currentTarget);
-  if (event.currentTarget instanceof HTMLButtonElement) {
-    const key = event.currentTarget.dataset.chatModelKey;
-    if (key) {
-      state?.view?.highlight(key);
-    }
-  }
 }
 
 export function updateModelSearch(input: HTMLInputElement): void {
