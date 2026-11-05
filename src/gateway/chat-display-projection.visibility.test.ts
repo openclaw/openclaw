@@ -399,3 +399,20 @@ it.each(["state_contention", "unknown"])(
     expect(JSON.stringify(result)).not.toContain("PRIVATE_");
   },
 );
+
+it.each([
+  "PRIVATE_DIAGNOSTIC_CANARY",
+  "managed worktree allocation lease core:managed-worktrees:create/capacity was lost",
+])("does not attach an unrelated diagnostic to a curated startup report: %s", (diagnostic) => {
+  const [result] = projectChatDisplayMessages([
+    {
+      role: "custom",
+      customType: "run-failed-before-reply",
+      content:
+        "OpenClaw couldn't find the saved conversation data needed to continue. Start a new conversation and send your request again.",
+      details: { runId: "run-1", diagnostic },
+    },
+  ]);
+  expect(result).not.toHaveProperty("details");
+  expect(JSON.stringify(result)).not.toContain(diagnostic);
+});

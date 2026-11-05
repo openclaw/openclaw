@@ -6,6 +6,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/session-placement.ts";
 import { hasTerminalControl } from "../../../../packages/terminal-core/src/safe-text.js";
 import { readRunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
+import { resolveSessionStartupErrorPresentation } from "../../../../src/shared/session-startup-error-presentation.js";
 import { shellEscapeBackslash as shellQuote } from "../../../../src/shared/shell-quote.js";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
@@ -307,11 +308,13 @@ function ChatErrorNotice(props: {
   compact?: boolean;
   actionAvailable?: boolean;
 }) {
+  const startup = createMemo(() => resolveSessionStartupErrorPresentation(props.error));
   const displayError = () =>
     props.detail === undefined
       ? (props.displayError ?? formatWebUiIconErrorText(props.error))
       : formatUiErrorDetails(props.detail);
   const title = () =>
+    startup()?.title ??
     props.summary ??
     (props.detail === undefined
       ? displayError().trim().split(/\r?\n/u)[0]?.trim() || t("chat.errorSummary")
@@ -341,29 +344,45 @@ function ChatErrorNotice(props: {
           <span class="chat-composer-neighbor-card__icon" aria-hidden="true">
             <Icon name="alertTriangle" />
           </span>
-          <Show
-            when={hasDetails()}
-            fallback={
-              <span class="chat-error__content">
-                <strong>{title()}</strong>
-                <CopyButton text={error} idleLabel={t("chat.copyError")} />
-              </span>
-            }
-          >
-            <details class="chat-error__content">
-              <summary class="chat-error__summary">
-                <strong>{title()}</strong>
-                <span>{t("common.showDetails")}</span>
-                <span class="chat-error__chevron" aria-hidden="true">
-                  <Icon name="chevronDown" />
+          <div class="chat-error__content">
+            <Show when={startup()}>
+              {(presentation) => (
+                <div class="chat-composer-neighbor-card__copy">
+                  <strong>{presentation().title}</strong>
+                  <span>{presentation().recovery}</span>
+                </div>
+              )}
+            </Show>
+            <Show
+              when={hasDetails()}
+              fallback={
+                <span class="chat-error__content">
+                  <strong>{title()}</strong>
+                  <CopyButton text={error} idleLabel={t("chat.copyError")} />
                 </span>
-                <CopyButton text={error} idleLabel={t("chat.copyError")} />
-              </summary>
-              <pre class="chat-error__diagnostic" tabindex={0} aria-label={t("chat.errorDetails")}>
-                {displayError()}
-              </pre>
-            </details>
-          </Show>
+              }
+            >
+              <details class="chat-error__content">
+                <summary class="chat-error__summary">
+                  <Show when={!startup()}>
+                    <strong>{title()}</strong>
+                  </Show>
+                  <span>{t("common.showDetails")}</span>
+                  <span class="chat-error__chevron" aria-hidden="true">
+                    <Icon name="chevronDown" />
+                  </span>
+                  <CopyButton text={error} idleLabel={t("chat.copyError")} />
+                </summary>
+                <pre
+                  class="chat-error__diagnostic"
+                  tabindex={0}
+                  aria-label={t("chat.errorDetails")}
+                >
+                  {displayError()}
+                </pre>
+              </details>
+            </Show>
+          </div>
           {props.action}
         </div>
       }
@@ -413,6 +432,9 @@ function ChatErrorNotice(props: {
               <CopyButton text={error} idleLabel={t("chat.copyError")} bare />
             </div>
           </details>
+        </Show>
+        <Show when={startup()}>
+          {(presentation) => <div class="chat-error__recovery">{presentation().recovery}</div>}
         </Show>
       </div>
     </Show>

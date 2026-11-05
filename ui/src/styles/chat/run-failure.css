@@ -270,3 +270,29 @@
     transition: none;
   }
 }
+
+/* Startup guidance stays readable outside the optional diagnostic popover. */
+.chat-run-failure--startup {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.chat-run-failure--startup::before,
+.chat-run-failure--startup::after {
+  display: none;
+}
+
+.chat-run-failure--startup .chat-run-failure__toggle {
+  height: auto;
+  min-height: 26px;
+  white-space: normal;
+}
+
+.chat-run-failure--startup .chat-run-failure__title {
+  overflow: visible;
+}
+
+.chat-run-failure__recovery {
+  padding-inline: 8px;
+}

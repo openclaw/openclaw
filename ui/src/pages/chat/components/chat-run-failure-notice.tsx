@@ -1,4 +1,5 @@
 import { createMemo, createSignal, lazy, Loading, onSettled, Show } from "solid-js";
+import { resolveSessionStartupErrorPresentation } from "../../../../../src/shared/session-startup-error-presentation.js";
 import { formatWebUiIconErrorText } from "../../../components/error-presentation.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -32,6 +33,7 @@ export function ChatRunFailureNotice(props: {
   editSource?: FailedMessageEditSource;
   onFocusComposer?: () => void;
 }) {
+  const startup = createMemo(() => resolveSessionStartupErrorPresentation(props.summary));
   const panelId = `chat-run-failure-${++nextPanelId}`;
   const [line, setLine] = createSignal<HTMLElement>();
   const [open, setOpen] = createSignal(false);
@@ -63,11 +65,16 @@ export function ChatRunFailureNotice(props: {
   onSettled(() => () => stopFollowing?.());
   return (
     <openclaw-chat-run-failure-notice style={{ display: "contents" }}>
-      <div class="chat-run-failure" role="status" data-placement={placement()} ref={setLine}>
+      <div
+        class={["chat-run-failure", { "chat-run-failure--startup": startup() !== undefined }]}
+        role="status"
+        data-placement={placement()}
+        ref={setLine}
+      >
         <Popover
           id={panelId}
           class="chat-run-failure__panel"
-          label={t("chat.recovery.failedTitle")}
+          label={startup()?.title ?? t("chat.recovery.failedTitle")}
           positionAnchor={line()}
           placement={placement()}
           triggerClass="chat-run-failure__toggle"
@@ -77,7 +84,9 @@ export function ChatRunFailureNotice(props: {
               <span class="chat-run-failure__icon" aria-hidden="true">
                 <Icon name="circleX" />
               </span>
-              <span class="chat-run-failure__title">{t("chat.recovery.failedTitle")}</span>
+              <span class="chat-run-failure__title">
+                {startup()?.title ?? t("chat.recovery.failedTitle")}
+              </span>
               <Show when={(props.repeatCount ?? 1) > 1}>
                 <span class="chat-run-failure__repeat">
                   · {t("chat.recovery.failedRepeatCount", { count: String(props.repeatCount) })}
@@ -140,6 +149,11 @@ export function ChatRunFailureNotice(props: {
             </span>
           </div>
         </Popover>
+        <Show when={startup()}>
+          {(presentation) => (
+            <span class="chat-run-failure__recovery">{presentation().recovery}</span>
+          )}
+        </Show>
         <Show when={props.editSource}>
           <Loading fallback={null}>
             <ChatFailedMessageEditButton

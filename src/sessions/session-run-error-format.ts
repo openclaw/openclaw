@@ -6,6 +6,7 @@ import { renderUserFacingText } from "../agents/embedded-agent-helpers/user-faci
 import { renderStorageFailureSummary } from "../agents/failover/assistant-request-failure-copy.js";
 import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import { resolveSessionStartupErrorPresentation } from "../shared/session-startup-error-presentation.js";
 import { STATE_CONTENTION_SUMMARY } from "./session-run-error-presentation.js";
 
 const SESSION_RUN_ERROR_MAX_CHARS = 160;
@@ -51,6 +52,7 @@ export function resolveSessionRunError(
   }
   const error =
     renderStorageFailureSummary(classifyGatewayStorageFailure(outcome.error)) ??
+    resolveSessionStartupErrorPresentation(outcome.error)?.message ??
     sanitizeErrorText(renderUserFacingText(outcome.error, { errorContext: true }));
   return truncateSessionRunError(error) || undefined;
 }
