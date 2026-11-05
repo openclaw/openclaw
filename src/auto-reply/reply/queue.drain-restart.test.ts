@@ -260,7 +260,7 @@ it("restarts an idle drain across distinct enqueue and drain module instances wh
 });
 
 it.each(["open", "draining", "pending restart"] as const)(
-  "does not replay a selected turn after a draining error with %s admission",
+  "does not retry a selected turn inside the mailbox after a draining error with %s admission",
   async (admission) => {
     const firstFailed = createDeferred();
     const abandoned = vi.fn();

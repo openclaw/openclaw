@@ -56,6 +56,65 @@ describe("ingress retry policy", () => {
     ).toMatchObject({ kind: "fail", reason: "runtime-recovery-failed" });
   });
 
+  it.each([3_000, 180_000])("backs off pending custody up to the policy cap of %i ms", (maxMs) => {
+    const policy = createIngressRetryPolicy({});
+    const event = { id: "input", receivedAt: 0, attempts: 0 };
+    let now = 0;
+    for (const delay of [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 64_000, 128_000, 180_000]) {
+      expect(
+        policy.failure({
+          event,
+          err: new InboundDedupePendingError(),
+          now,
+          config: { maxMs },
+          formatError: coerceErrorMessage,
+        }),
+      ).toMatchObject({
+        kind: "release",
+        attempt: 0,
+        recordAttempt: false,
+      });
+      const expected = Math.min(delay, maxMs);
+      expect(policy.delay(event, { maxMs }, now)).toBe(expected);
+      now += expected;
+      expect(policy.delay(event, { maxMs }, now)).toBe(0);
+    }
+  });
+
+  it.each([0, undefined])(
+    "accounts for refused custody after 30 minutes with age floor %s",
+    (age) => {
+      const policy = createIngressRetryPolicy({});
+      const event = { id: "input", receivedAt: 0, attempts: 0 };
+      const failure = (now: number) =>
+        policy.failure({
+          event,
+          err: new InboundDedupePendingError(),
+          now,
+          config: { deadLetterMinAgeMs: age },
+          formatError: coerceErrorMessage,
+        });
+      expect(failure(0)).toMatchObject({ kind: "release", recordAttempt: false });
+      expect(failure(30 * 60_000 - 1)).toMatchObject({ kind: "release", recordAttempt: false });
+      for (let attempt = 1; attempt <= 8; attempt += 1) {
+        const result = failure(30 * 60_000 + (attempt - 1) * 180_000);
+        expect(result).toMatchObject({
+          kind: age === 0 && attempt === 8 ? "fail" : "release",
+          attempt,
+        });
+        expect(result).not.toHaveProperty("recordAttempt", false);
+        event.attempts = attempt;
+      }
+      if (age === undefined) {
+        expect(failure(DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS)).toMatchObject({
+          kind: "fail",
+          reason: "retry-limit-exceeded",
+          attempt: 9,
+        });
+      }
+    },
+  );
+
   it("counts real recovery failures independently of other dispatch attempts", () => {
     const policy = createIngressRetryPolicy({});
     const error = wrapError(new PreparedModelRuntimeRecoveryError("main", "attempt-failed", 7_000));

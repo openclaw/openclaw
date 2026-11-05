@@ -74,12 +74,16 @@ describe("dispatch retry after queued ingress abandonment", () => {
     "watchdog-after-deferral",
     "abandon-before-dispatch-return",
     "replay-before-abandon",
+    "custody-timeout-zero-floor",
+    "custody-timeout-default",
     "signal-post-dispatch-failure",
     "runner-throws-before-adoption",
     "explicit-consumption",
   ] as const)("preserves ingress custody after %s", async (abandonment) => {
     await withTempState(async (stateDir) => {
       let clock = Date.now();
+      const receivedAt = clock;
+      const custodyTimeout = abandonment.startsWith("custody-timeout");
       const key = `agent:main:discord:direct:ingress-${abandonment}`;
       const messageId = `retry-${abandonment}`;
       const text = "Please deliver this queued message";
@@ -107,7 +111,7 @@ describe("dispatch retry after queued ingress abandonment", () => {
         if (abandonment === "runner-throws-before-adoption") {
           throw new Error("correlation begin failed");
         }
-        if (abandonment === "replay-before-abandon") {
+        if (abandonment === "replay-before-abandon" || custodyTimeout) {
           preparationStarted.resolve();
           await releasePreparation.promise;
           expect(run.abortSignal?.aborted).toBe(true);
@@ -175,7 +179,11 @@ describe("dispatch retry after queued ingress abandonment", () => {
           queue,
           now: () => clock,
           adoptionStallTimeoutMs: 1_000,
-          retryPolicy: { baseMs: 1_000, maxMs: 30_000, deadLetterMinAgeMs: 0 },
+          retryPolicy: {
+            baseMs: 1_000,
+            maxMs: 30_000,
+            deadLetterMinAgeMs: abandonment === "custody-timeout-default" ? undefined : 0,
+          },
           onDeadLetter,
           dispatchClaimedEvent: async (_event, lifecycle) => {
             lifecycles.push(lifecycle);
@@ -222,11 +230,12 @@ describe("dispatch retry after queued ingress abandonment", () => {
         }
         if (
           abandonment === "replay-before-abandon" ||
+          custodyTimeout ||
           abandonment === "signal-post-dispatch-failure"
         ) {
           sourceSettlement = getExistingFollowupQueue(key)?.entries[0]?.settlement.promise;
           expect(sourceSettlement).toBeDefined();
-          if (abandonment === "replay-before-abandon") {
+          if (abandonment === "replay-before-abandon" || custodyTimeout) {
             scheduleFollowupDrain(key, finishAbortedFollowup);
             await preparationStarted.promise;
             drain.dispose();
@@ -242,8 +251,38 @@ describe("dispatch retry after queued ingress abandonment", () => {
           expect(resolver).toHaveBeenCalledOnce();
           expect((await queue.enqueue(messageId, { text })).kind).not.toBe("completed");
           expect(await queue.listPending()).toMatchObject([
-            { id: messageId, attempts: abandonment === "replay-before-abandon" ? 0 : 1 },
+            {
+              id: messageId,
+              attempts: abandonment === "replay-before-abandon" || custodyTimeout ? 0 : 1,
+            },
           ]);
+          if (custodyTimeout) {
+            clock += 30 * 60_000;
+            for (let attempt = 1; attempt <= 8; attempt += 1) {
+              expect(await drain.drainOnce()).toEqual({ started: 1 });
+              await drain.waitForIdle();
+              if (attempt < 8 || abandonment === "custody-timeout-default") {
+                expect(await queue.listPending()).toMatchObject([
+                  { id: messageId, attempts: attempt },
+                ]);
+                expect(onDeadLetter).not.toHaveBeenCalled();
+              }
+              clock += 30_000;
+            }
+            if (abandonment === "custody-timeout-default") {
+              clock = receivedAt + 24 * 60 * 60_000;
+              expect(await drain.drainOnce()).toEqual({ started: 1 });
+              await drain.waitForIdle();
+            }
+            expect(onDeadLetter).toHaveBeenCalledOnce();
+            expect(await queue.listFailed?.()).toMatchObject([
+              { id: messageId, reason: "retry-limit-exceeded" },
+            ]);
+            expect(await queue.listPending()).toEqual([]);
+            expect(resolver).toHaveBeenCalledOnce();
+            expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+            return;
+          }
           if (abandonment === "signal-post-dispatch-failure") {
             expect(lifecycles[0]?.abortSignal.aborted).toBe(false);
             clearSessionQueues([key]);

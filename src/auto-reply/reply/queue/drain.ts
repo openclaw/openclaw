@@ -328,9 +328,8 @@ async function executeClaim(
       error instanceof AgentDatabaseExecutionAdmissionClosedError;
     defaultRuntime.error?.("mailbox execution failed for " + queue.key + ": " + String(error));
   } finally {
-    // Only the execution producer can return an explicit pre-execution refusal.
-    // Generic throws/returns and the operation's broader preparation marker never
-    // grant or revoke replayability; the producer-local receipt is authoritative.
+    // Only a producer receipt retries within this mailbox. An escaped runner error
+    // instead abandons unadopted lifecycle-backed input for durable ingress replay.
     const preparationRefused = claim.retryBeforeExecution === true;
     if (preparationRefused && !pluginUnavailable) {
       // Every retry yields so failed preparation cannot starve reload or cancellation.
