@@ -4,6 +4,7 @@ import {
   attachInternalToolExecutionPreparer,
   getInternalToolExecutionPreparer,
 } from "../../packages/agent-core/src/internal-hooks.js";
+import { ToolInterruptedByUser } from "../../packages/agent-core/src/tool-interruption.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { createDeferred as deferred } from "../../test/helpers/promise.js";
@@ -38,6 +39,46 @@ function yieldTool(runAbort: AbortController, onYield = () => runAbort.abort(han
 }
 
 describe("wrapToolWithAbortSignal", () => {
+  it.each(["direct", "prepared"] as const)(
+    "joins interrupted tool cleanup before returning through %s execution",
+    async (mode) => {
+      const runAbort = new AbortController();
+      const callAbort = new AbortController();
+      const cleanup = deferred();
+      let settled = false;
+      const result = emptyResult();
+      const source = tool(async () => {
+        await cleanup.promise;
+        return result;
+      });
+      if (mode === "prepared") {
+        attachInternalToolExecutionPreparer(source, async ({ args }) => ({
+          kind: "ready",
+          args,
+          execute: () => source.execute("call", args, callAbort.signal),
+          dispose: () => undefined,
+        }));
+      }
+      const wrapped = wrapToolWithAbortSignal(source, runAbort.signal);
+      const prepare = getInternalToolExecutionPreparer(wrapped);
+      const prepared =
+        prepare && (await prepare({ toolCallId: "call", args: {}, signal: callAbort.signal }));
+      const pending = (
+        prepared?.kind === "ready"
+          ? prepared.execute().finally(prepared.dispose)
+          : wrapped.execute("call", {}, callAbort.signal)
+      ).finally(() => {
+        settled = true;
+      });
+      callAbort.abort(new ToolInterruptedByUser());
+      await flushMicrotasks();
+      expect(settled).toBe(false);
+      expect(runAbort.signal.aborted).toBe(false);
+      cleanup.resolve();
+      await expect(pending).resolves.toBe(result);
+    },
+  );
+
   it("handles a tool rejection when execute aborts the run synchronously", async () => {
     const runAbort = new AbortController();
     const pending = deferred<never>();
