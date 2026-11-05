@@ -954,57 +954,49 @@ describe("prepareCliRunContext", () => {
     },
   );
 
-  it.each([
-    {
-      label: "OAuth under the Claude CLI provider",
-      credential: {
-        type: "oauth" as const,
-        provider: "claude-cli",
-        access: "expired-imported-access",
-        refresh: "imported-refresh",
-        expires: Date.now() - 60_000,
-        email: "owner@example.com",
-      },
-    },
-  ])(
-    "runs an imported Claude CLI login stored as $label natively without forwarding a credential",
-    async ({ credential }) => {
-      const { dir } = fixture.session;
-      const agentDir = path.join(dir, "agents", "main", "agent");
-      const authProfileId = "anthropic:claude-cli";
-      const prepareExecution = vi.fn(async () => undefined);
-      fs.mkdirSync(agentDir, { recursive: true });
-      saveAuthProfileStore(
-        {
-          version: 1,
-          profiles: {
-            [authProfileId]: credential,
-          },
+  it("runs an imported Claude CLI OAuth login natively without forwarding a credential", async () => {
+    const credential = {
+      type: "oauth" as const,
+      provider: "claude-cli",
+      access: "expired-imported-access",
+      refresh: "imported-refresh",
+      expires: Date.now() - 60_000,
+      email: "owner@example.com",
+    };
+    const agentDir = path.join(fixture.session.dir, "agents", "main", "agent");
+    const authProfileId = "anthropic:claude-cli";
+    const prepareExecution = vi.fn(async () => undefined);
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: credential,
         },
-        agentDir,
-      );
-      setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
-      const resolveApiKeyForProfile = vi.fn<typeof resolveApiKeyForProfileImpl>(async () => null);
-      setCliRunnerPrepareTestDeps({
-        resolveApiKeyForProfile,
-      });
+      },
+      agentDir,
+    );
+    setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
+    const resolveApiKeyForProfile = vi.fn<typeof resolveApiKeyForProfileImpl>(async () => null);
+    setCliRunnerPrepareTestDeps({
+      resolveApiKeyForProfile,
+    });
 
-      await fixture.prepare({
-        sessionKey: "agent:main:main",
-        agentDir,
-        provider: "claude-cli",
-        model: "sonnet",
-        authProfileId,
-        config: {},
-      });
+    await fixture.prepare({
+      sessionKey: "agent:main:main",
+      agentDir,
+      provider: "claude-cli",
+      model: "sonnet",
+      authProfileId,
+      config: {},
+    });
 
-      expect(prepareExecution).toHaveBeenCalledTimes(1);
-      expect(prepareExecution).toHaveBeenCalledWith(
-        expect.objectContaining({ authProfileId: undefined, authCredential: undefined }),
-      );
-      expect(resolveApiKeyForProfile).not.toHaveBeenCalled();
-    },
-  );
+    expect(prepareExecution).toHaveBeenCalledTimes(1);
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ authProfileId: undefined, authCredential: undefined }),
+    );
+    expect(resolveApiKeyForProfile).not.toHaveBeenCalled();
+  });
 
   it.each(["missing", "different-profile"] as const)(
     "rejects a selected credential when auth resolution returns %s",
@@ -1039,20 +1031,19 @@ describe("prepareCliRunContext", () => {
         agentDir,
       );
       setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
-      setCliRunnerPrepareTestDeps({
-        resolveApiKeyForProfile: vi.fn<typeof resolveApiKeyForProfileImpl>(async () =>
-          resolution === "missing"
-            ? null
-            : {
-                apiKey: fallbackCredential.access,
-                provider: fallbackCredential.provider,
-                profileId: fallbackProfileId,
-                profileType: fallbackCredential.type,
-                credential: fallbackCredential,
-                readCurrentCredential: null,
-              },
-        ),
-      });
+      const resolveApiKeyForProfile = vi.fn<typeof resolveApiKeyForProfileImpl>(async () =>
+        resolution === "missing"
+          ? null
+          : {
+              apiKey: fallbackCredential.access,
+              provider: fallbackCredential.provider,
+              profileId: fallbackProfileId,
+              profileType: fallbackCredential.type,
+              credential: fallbackCredential,
+              readCurrentCredential: null,
+            },
+      );
+      setCliRunnerPrepareTestDeps({ resolveApiKeyForProfile });
 
       const preparation = fixture.prepare({
         sessionKey: "agent:main:main",
@@ -1075,6 +1066,13 @@ describe("prepareCliRunContext", () => {
         agentDir,
       });
       await expect(preparation).rejects.toThrow("openclaw models auth login --provider anthropic");
+      expect(resolveApiKeyForProfile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          profileId: authProfileId,
+          agentDir,
+          allowProfileFallback: false,
+        }),
+      );
       expect(prepareExecution).not.toHaveBeenCalled();
     },
   );

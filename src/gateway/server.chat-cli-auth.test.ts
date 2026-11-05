@@ -349,27 +349,28 @@ async function executeHookAuthCase(fixture: CliAuthFixture, signal: AbortSignal)
     expect(healthyStore.usageStats?.["anthropic:pasted"]?.lastUsed).toBeGreaterThan(0);
     let beforeRevocation: number[] = [];
     const originalMemory = cliSessions.ensureCliLiveSessionMemory;
+    const revokeBeforeLaunch: typeof originalMemory = async (context, runSignal) => {
+      // Remove both owners after credential preparation, before the fresh child starts.
+      for (const agentId of ["main", "native"]) {
+        expect(
+          await removeAuthProfilesAcrossOwnerStores({
+            agentDir: state.agentDir(agentId),
+            profileIds: ["anthropic:pasted"],
+          }),
+        ).toBe(true);
+      }
+      const revokedStore = await loadAuthProfileStoreForRuntimeAsync(state.agentDir("native"), {
+        readOnly: true,
+        allowKeychainPrompt: false,
+      });
+      expect(revokedStore.profiles["anthropic:pasted"]).toBeUndefined();
+      await settleCatalogs();
+      beforeRevocation = [await launches(), requests.length];
+      return originalMemory(context, runSignal);
+    };
     using gate = vi
       .spyOn(cliSessions, "ensureCliLiveSessionMemory")
-      .mockImplementationOnce(async (context, runSignal) => {
-        // Remove both owners after credential preparation, before the fresh child starts.
-        for (const agentId of ["main", "native"]) {
-          expect(
-            await removeAuthProfilesAcrossOwnerStores({
-              agentDir: state.agentDir(agentId),
-              profileIds: ["anthropic:pasted"],
-            }),
-          ).toBe(true);
-        }
-        const revokedStore = await loadAuthProfileStoreForRuntimeAsync(state.agentDir("native"), {
-          readOnly: true,
-          allowKeychainPrompt: false,
-        });
-        expect(revokedStore.profiles["anthropic:pasted"]).toBeUndefined();
-        await settleCatalogs();
-        beforeRevocation = [await launches(), requests.length];
-        return originalMemory(context, runSignal);
-      });
+      .mockImplementationOnce(revokeBeforeLaunch);
     const terminalEvents: unknown[] = [];
     const stopEvents = onAgentEvent((event) => {
       if (event.stream === "lifecycle") {
@@ -391,6 +392,51 @@ async function executeHookAuthCase(fixture: CliAuthFixture, signal: AbortSignal)
     );
     expect(gate).toHaveBeenCalledOnce();
     expect(await post("native")).toMatchObject({ status: 502, body: { ok: false } });
+    expect([await launches(), requests.length]).toEqual(beforeRevocation);
+
+    // Chat uses the reply renderer; hooks above retain their separate cron error surface.
+    for (const agentId of ["main", "native"]) {
+      await state.writeAuthProfiles(
+        { version: 1, profiles: { "anthropic:pasted": savedCredential } },
+        agentId,
+      );
+    }
+    await settleCatalogs();
+    const chatKey = `agent:native:revoked-chat-${randomUUID()}`;
+    await gateway.client.request("sessions.create", {
+      agentId: "native",
+      key: chatKey,
+      model: `${modelRef}@anthropic:pasted`,
+    });
+    gate.mockImplementationOnce(revokeBeforeLaunch);
+    const accepted = await gateway.client.request<{ runId: string }>("chat.send", {
+      sessionKey: chatKey,
+      message: "Reply using the selected account.",
+      deliver: false,
+      idempotencyKey: randomUUID(),
+    });
+    const recoveryText =
+      '⚠️ Saved account "anthropic:pasted" was removed. Select a connected account or sign in again under Models, then retry. OpenClaw did not submit this turn.';
+    expect
+      .soft(
+        await gateway.client.request(
+          "agent.wait",
+          { runId: accepted.runId, timeoutMs: 30_000 },
+          { timeoutMs: 35_000 },
+        ),
+      )
+      .toMatchObject({ status: "error", error: recoveryText });
+    const history = await gateway.client.request<{ messages: unknown[] }>("chat.history", {
+      sessionKey: chatKey,
+    });
+    expect.soft(history.messages).toContainEqual(
+      expect.objectContaining({
+        role: "custom",
+        customType: "run-failed-before-reply",
+        content: recoveryText,
+      }),
+    );
+    expect(gate).toHaveBeenCalledTimes(2);
     expect([await launches(), requests.length]).toEqual(beforeRevocation);
   } finally {
     try {

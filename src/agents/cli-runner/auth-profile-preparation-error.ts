@@ -1,3 +1,4 @@
+import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { buildOAuthRefreshFailureLoginCommand } from "../auth-profiles/oauth-refresh-failure.js";
 import { findPersistedAuthProfileCredentialAsync } from "../auth-profiles/store-runtime.js";
 import { FailoverError } from "../failover-error.js";
@@ -8,13 +9,30 @@ export function createCliCredentialUseCheck(profileId: string, agentDir: string)
     if (await findPersistedAuthProfileCredentialAsync({ profileId, agentDir })) {
       return;
     }
-    const error = new Error(
-      `Saved account "${profileId}" was removed. Select a connected account or sign in again, then retry. OpenClaw did not submit this turn.`,
-    );
-    error.name = "CliCredentialRemovedError";
+    const error = new CliCredentialRemovedError(profileId);
     recordModelFallbackStop(error);
     throw error;
   };
+}
+
+function credentialRemovedMessage(profileId?: string): string {
+  const account = profileId
+    ? isUserModelAuthProfileId(profileId)
+      ? "Selected personal account"
+      : `Saved account "${profileId}"`
+    : "The selected account";
+  return `${account} was removed. Select a connected account or sign in again under Models, then retry. OpenClaw did not submit this turn.`;
+}
+
+export class CliCredentialRemovedError extends Error {
+  constructor(readonly profileId: string) {
+    super(credentialRemovedMessage(profileId));
+    this.name = "CliCredentialRemovedError";
+  }
+
+  userMessage(includeAuthProfileId = false): string {
+    return credentialRemovedMessage(includeAuthProfileId ? this.profileId : undefined);
+  }
 }
 
 export function createCliProfileResolutionError(

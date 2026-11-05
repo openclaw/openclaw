@@ -138,7 +138,6 @@ export async function createChildAdapter(
       executionScopeKey: params.executionScopeKey,
       assertCurrent: params.assertCurrent,
       beforeSpawn: params.beforeSpawn,
-      prepareTargetSpawn: params.prepareTargetSpawn,
       initiateSpawn: params.initiateSpawn,
       command: process.platform === "win32" ? params.anchoredShellCommand : "/bin/sh",
       args: process.platform === "win32" ? [] : ["-c", params.anchoredShellCommand],

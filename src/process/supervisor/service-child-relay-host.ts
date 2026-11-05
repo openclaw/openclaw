@@ -74,10 +74,6 @@ export async function createServiceChildRelayAdapter(
     cleanup.completion.reject(error);
     throw error;
   }
-  const stopOnOutputFailure =
-    params.stdoutConsumption === "awaited"
-      ? () => requestedSignal !== "SIGKILL" && kill("SIGKILL")
-      : undefined;
   const events = createProcessAdapterEvents();
   const outputFailure = (stream: "stdout" | "stderr", error: Error) => {
     resultError ??= error;
@@ -87,7 +83,9 @@ export async function createServiceChildRelayAdapter(
   const stdoutRelay = createOutputRelay(
     child.stdout ?? undefined,
     false,
-    stopOnOutputFailure,
+    params.stdoutConsumption === "awaited"
+      ? () => requestedSignal !== "SIGKILL" && kill("SIGKILL")
+      : undefined,
     (error) => outputFailure("stdout", error),
   );
   const stderrRelay = createOutputRelay(
@@ -413,6 +411,9 @@ export async function createServiceChildRelayAdapter(
         } catch (error) {
           throw new ServiceChildLaunchNotInitiatedError(error);
         }
+        if (state !== "starting") {
+          return;
+        }
         await sendControlMessage({ type: "launch" }, params.initiateSpawn);
       })().catch((error: unknown) => {
         if (!(error instanceof ServiceChildLaunchNotInitiatedError) || state !== "starting") {
@@ -595,9 +596,7 @@ export async function createServiceChildRelayAdapter(
     retirement.observeExit(code, signal);
     relayExit.resolve();
     params.abortSignal?.removeEventListener("abort", onConstructionAbort);
-    if (useWindowsJobAnchor) {
-      finishWindowsAuthority();
-    }
+    finishWindowsAuthority();
   });
 
   const start = createServiceChildStart(params, preparation, generation, Boolean(control));

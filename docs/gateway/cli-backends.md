@@ -500,7 +500,7 @@ New sessions select saved subscription credentials through the configured accoun
 order and forward them to the CLI through a protected file descriptor. Existing
 sessions keep their account until you select another or remove its saved profile.
 Saved accounts are checked again before starting a CLI process and sending its first input.
-If the account was removed during preparation, select a connected account or sign in again and retry.
+If the account was removed during preparation, the reply and saved history explain that the turn was not submitted. Select a connected account or sign in again under **Models**, then retry. Group replies omit account identifiers; personal account storage identifiers are never included in this notice.
 Explicit account selections and empty account orders remain authoritative. API keys saved
 for the `anthropic` provider require an explicit selection; they do not replace
 native subscription login automatically.
