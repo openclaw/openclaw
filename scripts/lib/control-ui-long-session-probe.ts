@@ -10,7 +10,7 @@ const paneSelector = ".chat-pane-cache__pane--active";
 const needle = "long-session-search-needle";
 const cpuMetrics = ["TaskDuration", "ScriptDuration", "LayoutDuration", "RecalcStyleDuration"];
 
-async function sampleTranscriptScrollFrames(
+export async function sampleTranscriptScrollFrames(
   element: HTMLElement | SVGElement,
   options: { direction: "top" | "bottom"; trajectory: boolean; count: number },
 ) {
