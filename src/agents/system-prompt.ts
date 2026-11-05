@@ -561,11 +561,9 @@ export function buildAgentSystemPrompt(params: {
     }).filter((file) => file.path.trim().length > 0),
     { workspaceDir: sanitizedWorkspaceDir },
   );
-  // Cache keys use the prepared files with normalized heading paths and content hashes for cross-workspace sharing.
+  // Cache keys use heading paths (relative for workspace files) and content hashes for cross-workspace sharing.
   const stableContextFiles = preparedContextFiles.map(({ file, headingPath }) => ({
-    path: file.path,
     headingPath,
-    basename: headingPath.slice(headingPath.lastIndexOf("/") + 1).toLowerCase(),
     personalUser: file.personalUser,
     contentHash: sha256Hex(file.content),
   }));
