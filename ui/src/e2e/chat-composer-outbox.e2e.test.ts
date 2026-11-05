@@ -507,7 +507,7 @@ suite.define(() => {
       }
       expect(await notice.count()).toBe(0);
       expect(await page.getByRole("button", { name: "Dismiss all", exact: true }).count()).toBe(0);
-      expect(await page.getByRole("button", { name: /Dismiss cancelled message/ }).count()).toBe(0);
+      expect(await page.getByRole("button", { name: /Dismiss unsent message/ }).count()).toBe(0);
       expect(stopped.params).toMatchObject({ userInitiated: true });
       expect(await page.getByText(cancelText, { exact: true }).count()).toBe(0);
       expect(await page.getByText(cancelPrompt, { exact: true }).count()).toBe(0);
@@ -550,7 +550,7 @@ suite.define(() => {
       expect(await notice.count()).toBe(1);
       await page
         .getByRole("button", {
-          name: /Dismiss cancelled message: Keep an externally cancelled request/,
+          name: /Dismiss unsent message: Keep an externally cancelled request/,
         })
         .waitFor();
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
