@@ -1,6 +1,7 @@
 // Runtime config tests cover plugin runtime config normalization and lookup.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { enqueueSessionEventForHost } from "../../auto-reply/reply/session-event-handoff.js";
 import {
   createConfigResolutionFacts,
   getResolvedConfigEnvSecretRef,
@@ -33,7 +34,7 @@ describe("plugin runtime config", () => {
     const runtimeConfig = { plugins: { entries: {} } };
     setRuntimeConfigSnapshot(runtimeConfig);
 
-    expect(createRuntimeBase().config.current()).toBe(runtimeConfig);
+    expect(createRuntimeBase(enqueueSessionEventForHost).config.current()).toBe(runtimeConfig);
   });
 
   it("clones mutable config without losing its resolved secret facts", () => {
@@ -50,7 +51,7 @@ describe("plugin runtime config", () => {
     );
     setRuntimeConfigSnapshot(runtimeConfig);
 
-    const cloned = createRuntimeBase().config.current({ clone: true });
+    const cloned = createRuntimeBase(enqueueSessionEventForHost).config.current({ clone: true });
     expectDefined(cloned.env?.vars, "cloned config variables").FIXTURE_API_KEY = "changed";
 
     expect(runtimeConfig.env.vars.FIXTURE_API_KEY).toBe("synthetic-key");
@@ -64,7 +65,7 @@ describe("plugin runtime config", () => {
   it("exposes canonical mutation helpers", async () => {
     mutateConfigFileMock.mockResolvedValue({ result: "updated" });
     replaceConfigFileMock.mockResolvedValue({ persistedHash: "hash" });
-    const configApi = createRuntimeBase().config;
+    const configApi = createRuntimeBase(enqueueSessionEventForHost).config;
     const mutateParams = { mutate: vi.fn() };
     const replaceParams = { nextConfig: { plugins: {} } };
 
