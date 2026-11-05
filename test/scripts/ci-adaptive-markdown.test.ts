@@ -17,6 +17,38 @@ const changedTest = `${root}frontmatter.test.ts`;
 const unchanged = `${root}fences.test.ts`;
 const source = `${root}fences.ts`;
 
+it("keeps Markdown worker inputs independent of another lane's test inventory", () => {
+  const cwd = tempDirs.make("markdown-worker-inputs-");
+  const inputs = [
+    "test/vitest/vitest.node-policy.global-setup.ts",
+    "scripts/lib/vitest-node-args.mts",
+    "scripts/lib/vitest-process-env.mts",
+    "scripts/lib/arg-utils.mts",
+    "scripts/lib/vitest-cli-mode.mts",
+    "scripts/lib/vitest-local-scheduling.mts",
+    "test/vitest/vitest.agents-paths.mjs",
+    "test/vitest/vitest.cli-process-paths.mjs",
+    "test/vitest/vitest.database-worker-core-paths.mjs",
+  ];
+  for (const file of inputs) {
+    const original = new URL(`../../${file}`, import.meta.url);
+    // The old flag owner is copied too, so this exercises the pre-fix import chain.
+    if (fs.existsSync(original)) {
+      const destination = path.join(cwd, file);
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.copyFileSync(original, destination);
+    }
+  }
+  const roots = ["test/vitest/vitest.node-policy.global-setup.ts"];
+  const before = createTestInputFingerprint(cwd)(roots);
+  expect(before).not.toBeNull();
+  fs.appendFileSync(
+    path.join(cwd, "test/vitest/vitest.database-worker-core-paths.mjs"),
+    "\nexport const unrelatedInventoryChange = true;\n",
+  );
+  expect(createTestInputFingerprint(cwd)(roots)).toBe(before);
+});
+
 function fixture() {
   const cwd = tempDirs.make("adaptive-markdown-");
   const contents: Record<string, string> = {
