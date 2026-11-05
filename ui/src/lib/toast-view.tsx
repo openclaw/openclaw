@@ -15,6 +15,7 @@ import {
   type ToastPlacement,
   type ToastSeverity,
 } from "./toast.ts";
+import toastStyles from "../styles/toast.css?inline";
 
 type ToastController = ReturnType<typeof toastOwnerFor>;
 
@@ -34,6 +35,7 @@ export function ToastView(props: {
   const anchored = createMemo(() => props.toasts.filter((entry) => entry.lane === "anchored"));
   return (
     <>
+      <style>{toastStyles}</style>
       <div class="app-toast-lanes">
         <For each={TOAST_LANES}>
           {(lane) => (

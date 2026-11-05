@@ -1,12 +1,14 @@
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { createLimiterSpy } from "./auth-rate-limit.test-support.js";
 import {
   assertGatewayAuthConfigured,
+  gatewayPersonPrincipalAuthError,
   authorizeHttpGatewayConnect,
   authorizeControlUiReadHttpGatewayConnect,
   authorizeWsControlUiGatewayConnect,
@@ -760,3 +762,50 @@ describe("trusted-proxy auth", () => {
     });
   });
 });
+
+it.each(["ready", "mode", "roles", "user-header", "jwt-header"] as const)(
+  "shares complete person ingress eligibility: %s",
+  (change) => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        roles: {
+          default: "writer",
+          definitions: {
+            writer: {
+              scopes: ["operator.read", "operator.write"],
+              agents: "*",
+              sessions: { others: "none" },
+            },
+          },
+        },
+      },
+    };
+    const trustedProxy = {
+      userHeader: "cf-access-authenticated-user-email",
+      requiredHeaders: ["cf-access-jwt-assertion"],
+      allowUsers: ["person@example.test"],
+    };
+    const auth = {
+      ...resolveGatewayAuth({ authConfig: { mode: "trusted-proxy", trustedProxy }, env: {} }),
+      trustedProxy,
+    };
+    if (change === "mode") {
+      auth.mode = "token";
+    }
+    if (change === "roles") {
+      cfg.gateway = {};
+    }
+    if (change === "user-header") {
+      trustedProxy.userHeader = "x-unverified-email";
+    }
+    if (change === "jwt-header") {
+      trustedProxy.requiredHeaders = [];
+    }
+    const result = gatewayPersonPrincipalAuthError(auth, cfg, ["person@example.test"]);
+    if (change === "ready") {
+      expect(result).toBeUndefined();
+    } else {
+      expect(result).toContain("Person ingress requires");
+    }
+  },
+);
