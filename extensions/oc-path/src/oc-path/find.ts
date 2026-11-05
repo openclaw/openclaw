@@ -539,7 +539,7 @@ function walkMd(
   }
 
   if (level.kind === "item") {
-    walkMdItemField(level.item, subs.slice(i), walked, context);
+    walkMdItemField(level.item, subs, i, walked, context);
     return;
   }
 
@@ -557,6 +557,7 @@ function walkMd(
 function walkMdItemField(
   item: AstItem,
   subs: readonly SlotSub[],
+  i: number,
   walked: readonly SlotSub[],
   context: WalkContext,
 ): void {
@@ -566,8 +567,11 @@ function walkMdItemField(
   const key = item.kv.key;
   let field: SlotSub | undefined;
   let recursive: SlotSub | undefined;
-  for (const sub of subs) {
-    const alternatives = [sub.value];
+  const alternatives: string[] = [];
+  for (let j = i; j < subs.length; j++) {
+    const sub = expectDefined(subs[j], "Markdown field index checked above");
+    alternatives.length = 0;
+    alternatives.push(sub.value);
     let canSkip = false;
     let matches = false;
     for (const alternative of alternatives) {
