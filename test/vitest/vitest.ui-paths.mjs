@@ -194,6 +194,7 @@ export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/logs-lifecycle.e2e.test.ts",
   "ui/src/e2e/mcp-app-conformance.e2e.test.ts",
   "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
+  "ui/src/e2e/model-provider-remove-in-use.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-setup-provider-errors.real-gateway.e2e.test.ts",
   "ui/src/e2e/profile-page.real-gateway.e2e.test.ts",
   "ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts",
