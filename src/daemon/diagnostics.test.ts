@@ -1,3 +1,4 @@
+import { execFileSync, spawnSync } from "node:child_process";
 // Daemon diagnostics tests cover service diagnostic collection and formatting.
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
@@ -139,3 +140,55 @@ describe("readLastGatewayErrorLine", () => {
     );
   });
 });
+
+const FIFO = Symbol("writerless FIFO");
+const blocked = "gateway start blocked";
+const bindError = "failed to bind gateway socket";
+for (const [name, platform, stdout, stderr, expected] of [
+  ["stdout FIFO", "linux", FIFO, bindError, bindError],
+  ["stderr FIFO", "linux", blocked, FIFO, blocked],
+] as const) {
+  it.skipIf(process.platform === "win32" && (stdout === FIFO || stderr === FIFO))(name, () => {
+    const root = makeTempStateDir();
+    const env = { HOME: root, OPENCLAW_STATE_DIR: path.join(root, "state") };
+    const paths = (
+      platform === "darwin" ? resolveGatewaySupervisorLogPaths : resolveGatewayLogPaths
+    )(env);
+    fs.mkdirSync(paths.logDir, { recursive: true });
+    for (const key of ["stdoutPath", "stderrPath"] as const) {
+      const value = key === "stdoutPath" ? stdout : stderr;
+      if (value === FIFO) {
+        execFileSync("mkfifo", [paths[key]]);
+      } else if (value !== undefined) {
+        fs.writeFileSync(paths[key], value);
+      }
+    }
+    if (platform === "darwin") {
+      const stateLogs = resolveGatewayLogPaths(env);
+      fs.mkdirSync(stateLogs.logDir, { recursive: true });
+      fs.writeFileSync(stateLogs.stderrPath, `${bindError} stale\n`);
+    }
+    // Bound native FIFO opens outside the test worker, including on a regressed reader.
+    const probe = spawnSync(
+      process.execPath,
+      [
+        `--import=${new URL("../../scripts/tsx.mjs", import.meta.url).href}`,
+        "--input-type=module",
+        "-e",
+        `
+        import { readLastGatewayErrorLine } from ${JSON.stringify(new URL("./diagnostics.ts", import.meta.url).href)};
+        console.log(JSON.stringify(await readLastGatewayErrorLine(${JSON.stringify(env)}, { platform: ${JSON.stringify(platform)} })));
+      `,
+      ],
+      { encoding: "utf8", timeout: 5_000 },
+    );
+    expect([probe.error, probe.status]).toEqual([undefined, 0]);
+    expect(JSON.parse(probe.stdout)).toEqual(expected);
+    expect(probe.stdout).not.toContain("synthetic-private-host");
+    for (const key of ["stdoutPath", "stderrPath"] as const) {
+      if ((key === "stdoutPath" ? stdout : stderr) === FIFO) {
+        expect(fs.lstatSync(paths[key]).isFIFO()).toBe(true);
+      }
+    }
+  });
+}
