@@ -17,7 +17,7 @@ export function isLiteralLoopbackHost(host: string): boolean {
 
 // Clients such as Node 24 fetch tunnel cleartext HTTP through CONNECT. Identify
 // TLS by its handshake record without consuming the queued bytes.
-export function startsWithTlsHandshake(socket: Duplex): Promise<boolean> {
+export function startsWithTlsHandshake(socket: Duplex): Promise<boolean | null> {
   return new Promise((resolve) => {
     const settle = () => {
       clearTimeout(deadline);
@@ -27,7 +27,7 @@ export function startsWithTlsHandshake(socket: Duplex): Promise<boolean> {
       if (chunk) {
         socket.unshift(chunk);
       }
-      resolve(chunk?.[0] === 0x16);
+      resolve(chunk ? chunk[0] === 0x16 : null);
     };
     // Match the proxy's upstream connection deadline; silent peers must not
     // retain a process grant's socket indefinitely while choosing a protocol.

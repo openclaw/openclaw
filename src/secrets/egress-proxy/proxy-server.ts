@@ -643,14 +643,15 @@ export async function startSecretEgressProxyServer(params: {
         if (head.length > 0) {
           clientSocket.unshift(head);
         }
-        const plaintext =
-          isLiteralLoopbackHost(target.hostname) && !(await startsWithTlsHandshake(clientSocket));
+        const tls =
+          !isLiteralLoopbackHost(target.hostname) || (await startsWithTlsHandshake(clientSocket));
         // Sniffing awaits client bytes; authority can end before either handoff.
-        if (!authorization.isActive() || clientSocket.destroyed) {
+        // An empty read means EOF, not plaintext: HTTP cannot adopt an ended peer.
+        if (tls === null || !authorization.isActive() || clientSocket.destroyed) {
           clientSocket.destroy();
           return;
         }
-        if (plaintext) {
+        if (!tls) {
           createRequestServer(tunnelRequestHandler("http", target, authorization)).emit(
             "connection",
             clientSocket,

@@ -10,6 +10,7 @@ import net, { type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import tls from "node:tls";
+import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as proxyCa from "../../proxy-capture/ca.js";
@@ -196,9 +197,7 @@ afterEach(async () => {
   sockets.clear();
   await proxy?.stop();
   if (origin) {
-    await new Promise<void>((resolve) => {
-      origin.close(() => resolve());
-    });
+    await promisify(origin.close.bind(origin))();
   }
   fs.rmSync(caDir, { recursive: true, force: true });
 });
@@ -503,9 +502,7 @@ describe("secret egress registration lifecycle", () => {
       for (const peer of peers) {
         peer.destroy();
       }
-      await new Promise<void>((resolve) => {
-        stalled.close(() => resolve());
-      });
+      await promisify(stalled.close.bind(stalled))();
     }
     await sendCredential(await openTlsTunnel());
     expect(observed).toHaveLength(1);

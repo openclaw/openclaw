@@ -511,11 +511,10 @@ describe("secret egress proxy", () => {
         : kind === "noncanonical"
           ? encoded.replace(/=+$/u, "") + (encoded.endsWith("==") ? "=" : "==")
           : encoded;
-    const authorization = `Basic ${credential}`;
     expect(
       (
         await requestThroughProxy({
-          headers: { Authorization: authorization },
+          headers: { Authorization: `Basic ${credential}` },
         })
       ).status,
     ).toBe(502);
@@ -664,20 +663,26 @@ describe("secret egress proxy", () => {
     expect(auditEvents).toContainEqual(expect.objectContaining({ kind: "forwarded" }));
   });
 
-  it("survives a client that resets a refused tunnel instead of crashing the Gateway", async () => {
+  it("survives a refused reset and releases an accepted tunnel ended without bytes", async () => {
     // curl resets refused CONNECT tunnels; wait for the refusal before resetting.
     const refused = await rawConnect({});
     expect(refused.response).toContain("407 Proxy Authentication Required");
-    const closed = new Promise<void>((resolve) => {
-      refused.socket.once("close", () => resolve());
-    });
+    const closed = once(refused.socket, "close");
     refused.socket.resetAndDestroy();
     await closed;
 
     // The listener must still serve traffic after the reset.
-    const stillAlive = await rawConnect({ auth: basicProxyAuth(registeredPassword(proxyEnv)) });
+    const getPeer = captureProxySocket();
+    const stillAlive = await rawConnect({
+      auth: basicProxyAuth(registeredPassword(proxyEnv)),
+      target: "127.0.0.1:9",
+    });
     expect(stillAlive.response).toContain("200 Connection Established");
-    stillAlive.socket.destroy();
+    const peer = getPeer();
+    const ended = Promise.race([once(peer, "end"), once(peer, "close")]);
+    stillAlive.socket.end();
+    await ended;
+    expect(peer.destroyed).toBe(true);
   });
 
   it.each([
