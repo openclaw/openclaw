@@ -312,16 +312,16 @@ describe("canonical model-reference migration", () => {
     expect(warnings).toHaveLength(1);
   });
 
-  it("keeps both selected routes through the complete Doctor normalization pass", () => {
+  it("keeps both selected routes through the complete Doctor normalization pass", async () => {
     const model = selection("anthropic/claude-opus-4-7", "claude-cli/claude-opus-4-7");
     const raw = defaults({ model });
     const seeded = applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw });
-    const result = normalizeCompatibilityConfigValues(seeded.next ?? raw);
+    const result = await normalizeCompatibilityConfigValues(seeded.next ?? raw);
     expect(result.config.agents?.defaults?.model).toEqual(model);
     expect(runtime(result.config, "anthropic", "claude-opus-4-7")?.id).not.toBe("claude-cli");
   });
 
-  it("canonicalizes a seeded legacy Claude CLI allowlist in one doctor pass", () => {
+  it("canonicalizes a seeded legacy Claude CLI allowlist in one doctor pass", async () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "");
     vi.stubEnv("ANTHROPIC_OAUTH_TOKEN", "");
     // #124952: the seeded allowlist and its model map must migrate in one pass.
@@ -335,7 +335,7 @@ describe("canonical model-reference migration", () => {
       "claude-cli/claude-sonnet-4-6",
     ]);
 
-    const res = normalizeCompatibilityConfigValues(seeded.next);
+    const res = await normalizeCompatibilityConfigValues(seeded.next);
     expect(res.config.agents?.defaults?.models).toEqual({
       "anthropic/*": { agentRuntime: { id: "claude-cli" } },
       "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
@@ -345,6 +345,6 @@ describe("canonical model-reference migration", () => {
     expect(res.config.agents?.defaults?.modelPolicy).toEqual({
       allow: ["anthropic/claude-opus-4-7", "anthropic/claude-sonnet-4-6"],
     });
-    expect(normalizeCompatibilityConfigValues(res.config).changes).toEqual([]);
+    expect((await normalizeCompatibilityConfigValues(res.config)).changes).toEqual([]);
   });
 });

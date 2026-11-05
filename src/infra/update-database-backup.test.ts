@@ -506,7 +506,7 @@ async function originalCaptureFixture(externalAgents = false) {
 
   // Only declaration producers are synthetic; acquisition, copying, revalidation,
   // manifest parsing, and publication all use their production owners.
-  const registry = await import("../plugins/doctor-contract-registry.js");
+  const registry = await import("../plugins/doctor-contract-preparation.js");
   vi.spyOn(registry, "preparePluginDoctorMigrationBackupResources").mockResolvedValue({
     resources: [
       { path: plugin, kind: "directory" },

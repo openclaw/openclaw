@@ -8,6 +8,8 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { requireGit } from "../../agents/worktrees/git.js";
+import { withWorktreePreparationTiming } from "../../agents/worktrees/preparation-timing.js";
+import * as diagnostics from "../../infra/diagnostic-events.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { prepareSandboxCheckpointFixture } from "./local-workspace-incremental.test-support.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
@@ -20,6 +22,77 @@ const expectText = async (directory: string, relative: string, expected: string)
   expect(await fs.readFile(path.join(directory, relative), "utf8")).toBe(expected);
 const expectMissing = async (directory: string, relative: string) =>
   expect(fs.stat(path.join(directory, relative))).rejects.toMatchObject({ code: "ENOENT" });
+
+export async function proveWorkspaceWaitAttribution(owner: LocalWorkspaceOwner) {
+  using _ = await prepareSandboxCheckpointFixture(owner);
+  const stores = await import("./local-workspace-store.js");
+  const projections = await import("./local-workspace-projection.js");
+  const entered = createDeferred();
+  const release = createDeferred();
+  const admitted = createDeferred();
+  const joined = createDeferred();
+  const events: diagnostics.DiagnosticPhaseSnapshot[] = [];
+  vi.spyOn(diagnostics, "createQueuedDiagnosticPhaseEmitter").mockReturnValue((event) =>
+    events.push(event),
+  );
+  let clock = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => clock);
+  const holder = stores.withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  await awaitGateBeforeSettlement(entered.promise, holder, "Projection custody was not acquired");
+  const withStore = stores.withLocalWorkspaceStore;
+  vi.spyOn(stores, "withLocalWorkspaceStore").mockImplementation((...args) => {
+    const result = withStore(...args);
+    admitted.resolve();
+    return result;
+  });
+  const join = projections.withLocalWorkspacePreparation;
+  let callers = 0;
+  vi.spyOn(projections, "withLocalWorkspacePreparation").mockImplementation((...args) => {
+    const result = join(...args);
+    if (++callers === 2) {
+      joined.resolve();
+    }
+    return result;
+  });
+  const prepare = () =>
+    withWorktreePreparationTiming("sandbox", () => prepareSandboxCheckpointFixture(owner));
+  const first = prepare();
+  let second: typeof first | undefined;
+  try {
+    await awaitGateBeforeSettlement(
+      admitted.promise,
+      first,
+      "Preparation did not wait for custody",
+    );
+    second = prepare();
+    await awaitGateBeforeSettlement(
+      joined.promise,
+      second,
+      "Preparation did not join its producer",
+    );
+    clock = 100;
+  } finally {
+    release.resolve();
+    const results = await Promise.allSettled([holder, first, second]);
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        result.value?.[Symbol.dispose]();
+      }
+    }
+  }
+  await Promise.all([holder, first, second]);
+  expect(events).toHaveLength(2);
+  for (const event of events) {
+    expect(event).toMatchObject({
+      durationMs: 100,
+      details: { kind: "sandbox", workspaceWait: 100, unattributedMs: 0 },
+    });
+  }
+  expect(events.some((event) => event.details?.template === "reused")).toBe(true);
+}
 
 export async function proveConcurrentWorkspacePreparation(owner: LocalWorkspaceOwner) {
   const stores = await import("./local-workspace-store.js");

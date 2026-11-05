@@ -7,7 +7,7 @@ import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { AgentSideConnection, ndJsonStream, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
+import { agent, methods, ndJsonStream, PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
 
 const directory = process.argv[2];
 const modelControls = process.argv.slice(3).includes("--model-controls");
@@ -81,48 +81,47 @@ async function holdControl(name, value) {
     }
   }
 }
-const connection = new AgentSideConnection(
-  (client) => ({
-    async initialize() {
-      return {
-        protocolVersion: PROTOCOL_VERSION,
-        agentCapabilities: { loadSession, sessionCapabilities: { close: {} } },
-        authMethods: [],
-      };
-    },
-    async newSession({ mcpServers }) {
-      const sessionId = randomUUID();
-      const state = {
-        history: [],
-        tone: "plain",
-        mode: "normal",
-        mcpServers,
-        argv: process.argv.slice(3),
-        ...(captureWorkerEnv ? { workerThreads: process.env.TOKIO_WORKER_THREADS ?? null } : {}),
-        ...(modelControls ? { currentModelId: "initial", modelChanges: [] } : {}),
-      };
-      sessions.set(sessionId, state);
-      await save(sessionId);
-      if (holdNewSession) {
-        await holdControl("session-new", sessionId);
-      }
-      return { sessionId, ...describe(state) };
-    },
-    async loadSession({ sessionId, mcpServers }) {
-      const state = JSON.parse(await fs.readFile(file(sessionId), "utf8"));
-      state.loadedMcpServers = mcpServers;
-      sessions.set(sessionId, state);
-      return describe(state);
-    },
-    async setSessionMode({ sessionId, modeId }) {
-      if (holdModeControl && modeId === "review") {
-        await holdControl("mode-control", modeId);
-      }
-      sessions.get(sessionId).mode = modeId;
-      await save(sessionId);
-      return {};
-    },
-    async setSessionConfigOption({ sessionId, configId, value }) {
+agent()
+  .onRequest(methods.agent.initialize, () => ({
+    protocolVersion: PROTOCOL_VERSION,
+    agentCapabilities: { loadSession, sessionCapabilities: { close: {} } },
+    authMethods: [],
+  }))
+  .onRequest(methods.agent.session.new, async ({ params: { mcpServers } }) => {
+    const sessionId = randomUUID();
+    const state = {
+      history: [],
+      tone: "plain",
+      mode: "normal",
+      mcpServers,
+      argv: process.argv.slice(3),
+      ...(captureWorkerEnv ? { workerThreads: process.env.TOKIO_WORKER_THREADS ?? null } : {}),
+      ...(modelControls ? { currentModelId: "initial", modelChanges: [] } : {}),
+    };
+    sessions.set(sessionId, state);
+    await save(sessionId);
+    if (holdNewSession) {
+      await holdControl("session-new", sessionId);
+    }
+    return { sessionId, ...describe(state) };
+  })
+  .onRequest(methods.agent.session.load, async ({ params: { sessionId, mcpServers } }) => {
+    const state = JSON.parse(await fs.readFile(file(sessionId), "utf8"));
+    state.loadedMcpServers = mcpServers;
+    sessions.set(sessionId, state);
+    return describe(state);
+  })
+  .onRequest(methods.agent.session.setMode, async ({ params: { sessionId, modeId } }) => {
+    if (holdModeControl && modeId === "review") {
+      await holdControl("mode-control", modeId);
+    }
+    sessions.get(sessionId).mode = modeId;
+    await save(sessionId);
+    return {};
+  })
+  .onRequest(
+    methods.agent.session.setConfigOption,
+    async ({ params: { sessionId, configId, value } }) => {
       const state = sessions.get(sessionId);
       if (modelControls && configId === "model") {
         if (value !== "initial" && value !== "selected") {
@@ -138,62 +137,57 @@ const connection = new AgentSideConnection(
       await save(sessionId);
       return { configOptions: configOptions(state) };
     },
-    async prompt({ sessionId, prompt }) {
-      const state = sessions.get(sessionId);
-      state.history.push(
-        prompt
-          .filter((block) => block.type === "text")
-          .map((block) => block.text)
-          .join(""),
-      );
-      await save(sessionId);
-      if (modelControls) {
-        const effectsDirectory = path.join(directory, "effects");
-        await fs.mkdir(effectsDirectory, { recursive: true });
-        await fs.writeFile(
-          path.join(effectsDirectory, `${sessionId}.txt`),
-          state.history.join("\n"),
-        );
-      }
-      await client.sessionUpdate({
+  )
+  .onRequest(methods.agent.session.prompt, async ({ client, params: { sessionId, prompt } }) => {
+    const state = sessions.get(sessionId);
+    state.history.push(
+      prompt
+        .filter((block) => block.type === "text")
+        .map((block) => block.text)
+        .join(""),
+    );
+    await save(sessionId);
+    if (modelControls) {
+      const effectsDirectory = path.join(directory, "effects");
+      await fs.mkdir(effectsDirectory, { recursive: true });
+      await fs.writeFile(path.join(effectsDirectory, `${sessionId}.txt`), state.history.join("\n"));
+    }
+    await client.notify(methods.client.session.update, {
+      sessionId,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: {
+          type: "text",
+          text: holdPromptReply ? "First chunk" : JSON.stringify({ sessionId, ...state }),
+        },
+      },
+    });
+    if (promptGateUrl) {
+      await new Promise((resolve, reject) => {
+        const request = http.get(promptGateUrl, { agent: false }, (response) => {
+          response.resume();
+          response.once("end", resolve);
+          response.once("error", reject);
+        });
+        request.once("error", reject);
+      });
+    }
+    if (holdPromptReply) {
+      await holdControl("prompt-reply", sessionId);
+      await client.notify(methods.client.session.update, {
         sessionId,
         update: {
           sessionUpdate: "agent_message_chunk",
-          content: {
-            type: "text",
-            text: holdPromptReply ? "First chunk" : JSON.stringify({ sessionId, ...state }),
-          },
+          content: { type: "text", text: " second chunk" },
         },
       });
-      if (promptGateUrl) {
-        await new Promise((resolve, reject) => {
-          const request = http.get(promptGateUrl, { agent: false }, (response) => {
-            response.resume();
-            response.once("end", resolve);
-            response.once("error", reject);
-          });
-          request.once("error", reject);
-        });
-      }
-      if (holdPromptReply) {
-        await holdControl("prompt-reply", sessionId);
-        await client.sessionUpdate({
-          sessionId,
-          update: {
-            sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text: " second chunk" },
-          },
-        });
-      }
-      return { stopReason: "end_turn" };
-    },
-    async closeSession({ sessionId }) {
-      sessions.delete(sessionId);
-      await fs.rm(file(sessionId), { force: true });
-      return {};
-    },
-    async cancel() {},
-  }),
-  ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin)),
-);
-void connection;
+    }
+    return { stopReason: "end_turn" };
+  })
+  .onRequest(methods.agent.session.close, async ({ params: { sessionId } }) => {
+    sessions.delete(sessionId);
+    await fs.rm(file(sessionId), { force: true });
+    return {};
+  })
+  .onNotification(methods.agent.session.cancel, () => {})
+  .connect(ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin)));

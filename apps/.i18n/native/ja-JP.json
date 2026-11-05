@@ -1743,6 +1743,7 @@
     "native.android.e541942ff77b53eb": "聞き取り中 (PTT)",
     "native.android.e54941cceace936d": "ここまで巻き戻す",
     "native.android.e54afc3de5a87a03": "音声を開始",
+    "native.android.e559007177ac681d": "チャットのメタデータを更新できませんでした。「更新」をタップして再試行してください。",
     "native.android.e5799ce1b2df6f8c": "スマートフォンでOpenClawを開く",
     "native.android.e587a3bd7b40ceed": "$count 個の設定済みモデル",
     "native.android.e5ad8016516600bb": "最後に完了したメッセージから分岐",
