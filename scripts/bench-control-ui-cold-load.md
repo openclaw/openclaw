@@ -26,8 +26,11 @@ observations increase time without increasing flow count. File totals sum leaf
 samples rather than inclusive stacks, so a sample is never charged to both a
 caller and its callee. Failed assertions do not enter the aggregate.
 
-The denominator excludes root and idle samples; their sampled durations remain
-in the observation records. Browser/native frames (including GC and V8's
+The denominator excludes root and idle samples. It also excludes the leading
+`(program)` interval: this harness awaits `Profiler.start` before running the
+action, and V8 charges profiler initialization to that first sample. Raw sampled,
+idle and profiler lead-in durations remain in the observation records. Later
+browser/native frames (including GC and V8's
 unattributed `(program)` bucket), Solid, application sources, other dependencies,
 automation, and unmapped frames remain separate owners. Ownership is based on
 source paths, not inferred from a caller: a WebAssembly address without a map

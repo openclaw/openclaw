@@ -59,6 +59,19 @@ function event(
 }
 
 describe("cold-load trace accounting", () => {
+  it("separates profiler initialization from later native work", () => {
+    const census = createControlUiCpuCensus();
+    census.add("action", {
+      nodes: [node(1, frame("(program)", "")), node(2, frame("render", "ui/src/app.ts"))],
+      samples: [1, 2, 1],
+      timeDeltas: [100_000, 5_000, 3_000],
+    });
+    const report = census.report();
+    expect(report.activeMs).toBe(8);
+    expect(report.observations[0]).toMatchObject({ sampledMs: 108, profilerLeadInMs: 100 });
+    expect(report.owners).toEqual({ app: 5, browser: 3 });
+  });
+
   it("aggregates active leaf time across flows without charging ancestors or idle", () => {
     const census = createControlUiCpuCensus();
     census.add("route", {

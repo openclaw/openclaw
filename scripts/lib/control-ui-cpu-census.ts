@@ -42,17 +42,30 @@ export function createControlUiCpuCensus() {
     flow: string;
     sampledMs: number;
     idleMs: number;
+    profilerLeadInMs: number;
     activeMs: number;
     outOfOrderSamples: number;
   }> = [];
   function add(flow: string, profile: ColdLoadCpuProfile) {
     const summary = summarizeCpuProfile(profile, { includeTables: true });
+    const firstFrame = profile.nodes.find((node) => node.id === profile.samples?.[0])?.callFrame;
+    // The engine harness awaits Profiler.start before running the action. V8
+    // charges its initialization delay to the first (program) sample.
+    const profilerLeadInMs =
+      firstFrame?.functionName === "(program)" ? profile.timeDeltas![0]! / 1_000 : 0;
     let activeMs = 0;
     for (const row of summary.tables!.functions) {
-      if (row.selfMs === 0) {
+      const isFirstFrame =
+        firstFrame &&
+        row.functionName === firstFrame.functionName &&
+        row.url === firstFrame.url &&
+        row.lineNumber === firstFrame.lineNumber &&
+        row.columnNumber === firstFrame.columnNumber;
+      const selfMs = row.selfMs - (isFirstFrame ? profilerLeadInMs : 0);
+      if (selfMs === 0) {
         continue;
       }
-      activeMs += row.selfMs;
+      activeMs += selfMs;
       const entry: Entry = {
         name: row.functionName || "(anonymous)",
         file: row.url,
@@ -68,8 +81,8 @@ export function createControlUiCpuCensus() {
         [files, entry.file],
       ] as const) {
         const total = table.get(key) ?? { ...entry, flows: new Map<string, number>() };
-        total.selfMs += row.selfMs;
-        total.flows.set(flow, (total.flows.get(flow) ?? 0) + row.selfMs);
+        total.selfMs += selfMs;
+        total.flows.set(flow, (total.flows.get(flow) ?? 0) + selfMs);
         table.set(key, total);
       }
     }
@@ -77,6 +90,7 @@ export function createControlUiCpuCensus() {
       flow,
       sampledMs: summary.sampledMs,
       idleMs: summary.idleMs,
+      profilerLeadInMs,
       activeMs,
       outOfOrderSamples: summary.outOfOrderSamples,
     });
@@ -110,7 +124,7 @@ export function createControlUiCpuCensus() {
       functions: ranked(functions),
       files: ranked(files, true),
       contract:
-        "Sampled active self time, excluding root/idle; includes GC/native, dependencies, automation and unmapped frames. Each scenario is one flow; repeated observations sum time but not flow count. Diagnostic attribution only, not latency or exact consumed CPU. File totals sum self time, not inclusive stacks.",
+        "Sampled active self time, excluding root/idle and the leading (program) profiler initialization interval; includes later GC/native, dependencies, automation and unmapped frames. Each scenario is one flow; repeated observations sum time but not flow count. Diagnostic attribution only, not latency or exact consumed CPU. File totals sum self time, not inclusive stacks.",
     };
   }
   return { add, report };
