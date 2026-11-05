@@ -1,2 +1,2 @@
-# Covers submitted MCP App references, persistence, redaction, retry identity, and structured-only selections.
-161
+# Covers submitted MCP App references, persistence, redaction, retry identity, and deferred metadata rendering.
+201

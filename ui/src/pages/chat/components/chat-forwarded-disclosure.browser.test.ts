@@ -148,6 +148,7 @@ it.each([
       expect(getComputedStyle(short).maskImage).toBe("none");
       expect(short.scrollHeight - short.clientHeight).toBeLessThanOrEqual(1);
     }
+    await expect.poll(() => host.querySelector(".chat-reply-attribution a")).not.toBeNull();
     const link = host.querySelector<HTMLAnchorElement>(".chat-reply-attribution a")!;
     expect(link).not.toBeNull();
     expect(getComputedStyle(link).backgroundColor).toBe("rgba(0, 0, 0, 0)");

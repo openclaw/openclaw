@@ -45,11 +45,12 @@ import {
   InlineToolCards,
   ToolMessage,
 } from "./chat-message-bubble-tools.tsx";
-import { MessageWorkContext } from "./chat-message-context-view.tsx";
 import {
   AssistantAttachments,
   ChatClawHubCard,
   MessageAttachment,
+  MessageWorkContext,
+  SubmittedAppContext,
 } from "./chat-message-deferred.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
 import type { MarkdownMedia, PositionedMedia } from "./chat-message-media-markdown.ts";
@@ -66,7 +67,6 @@ import { ChatRowDisplayContext } from "./chat-row-display-context.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { TranscriptMessageElementsContext } from "./chat-transcript-message-elements.ts";
 import { WorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.tsx";
-import { SubmittedAppContext } from "./submitted-app-context.tsx";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
 
@@ -344,6 +344,12 @@ function BubbleContents(props: ContentProps) {
   );
   const hasText = () =>
     Boolean(props.state().bodyMarkdown || props.state().asyncQuestions || props.state().jsonResult);
+  const hasSubmittedAppContext = () => {
+    const value = asNullableRecord(
+      asNullableRecord(props.state().message)?.["__openclaw"],
+    )?.appContext;
+    return Array.isArray(value) && value.length > 0;
+  };
   return (
     <>
       <Show when={props.state().sourceRole === "assistant"}>
@@ -389,7 +395,9 @@ function BubbleContents(props: ContentProps) {
       </Show>
       <Show when={props.state().normalizedRole === "user"} fallback={<MessageText {...props} />}>
         <Show when={hasText() || props.options.avatar}>
-          <SubmittedAppContext message={props.state().message} />
+          <Show when={hasSubmittedAppContext()}>
+            <SubmittedAppContext message={props.state().message} />
+          </Show>
           <div class="chat-message-avatar-anchor">
             <MessageText {...props} />
             <MessageAvatar render={props.options.avatar} />

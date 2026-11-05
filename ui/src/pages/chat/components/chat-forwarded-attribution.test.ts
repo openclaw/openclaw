@@ -27,7 +27,7 @@ it.each([
   ["user", "agent:research:bench", "agent:research:bench", "Research Agent ·", false],
   ["assistant", "agent:main:subagent:audit", "agent:main:subagent:audit", null, false],
   ["user", "agent:research:subagent:audit", "agent:research:subagent:audit", null, false],
-] as const)("labels %s forwarding from %s", (role, key, chipText, prefix, titled) => {
+] as const)("labels %s forwarding from %s", async (role, key, chipText, prefix, titled) => {
   container = document.createElement("div");
   const group: MessageGroup = {
     kind: "group",
@@ -62,6 +62,9 @@ it.each([
     container,
   );
 
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-reply-attribution a")).not.toBeNull(),
+  );
   const chip = container.querySelector<HTMLAnchorElement>(
     `a.markdown-session-link[data-session-key="${key}"]`,
   )!;

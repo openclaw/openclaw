@@ -156,9 +156,3 @@
   height: 16px;
   object-fit: contain;
 }
-
-.mcp-app-context--submitted {
-  margin-bottom: 8px;
-  border-bottom: 0;
-  padding: 0;
-}

@@ -16,6 +16,64 @@ const Preview = lazy(() => import("./widget-card-view.tsx"), { export: "ToolPrev
 const Recommendation = lazy(() => import("./chat-clawhub-card.tsx"), {
   export: "ChatClawHubCard",
 });
+const ForwardedSource = lazy(() => import("./chat-message-metadata-view.tsx"), {
+  export: "ForwardedAttribution",
+});
+const WorkContext = lazy(() => import("./chat-message-metadata-view.tsx"), {
+  export: "MessageWorkContext",
+});
+const AppContext = lazy(() => import("./chat-message-metadata-view.tsx"), {
+  export: "SubmittedAppContext",
+});
+
+// Callers gate these views on the metadata actually present in the message.
+export function ForwardedAttribution(
+  props: Parameters<typeof import("./chat-forwarded-attribution.tsx").ForwardedAttribution>[0],
+) {
+  return (
+    <ChatLazyBoundary
+      fallback={
+        <span
+          class="chat-reply-attribution chat-reply-attribution--forwarded"
+          style="height: 1lh;"
+          aria-hidden="true"
+        />
+      }
+    >
+      <ForwardedSource {...props} />
+    </ChatLazyBoundary>
+  );
+}
+
+export function MessageWorkContext(
+  props: Parameters<typeof import("./chat-message-context-view.tsx").MessageWorkContext>[0],
+) {
+  return (
+    <ChatLazyBoundary
+      fallback={
+        <div class="chat-context-attachment" aria-hidden="true">
+          <div class="chat-context-attachment__summary" />
+        </div>
+      }
+    >
+      <WorkContext {...props} />
+    </ChatLazyBoundary>
+  );
+}
+
+export function SubmittedAppContext(
+  props: Parameters<typeof import("./submitted-app-context.tsx").SubmittedAppContext>[0],
+) {
+  return (
+    <ChatLazyBoundary
+      fallback={
+        <div style="min-height: calc(1lh + 10px); margin-bottom: 8px;" aria-hidden="true" />
+      }
+    >
+      <AppContext {...props} />
+    </ChatLazyBoundary>
+  );
+}
 
 // Pending New Session images use this adapter; transcript images render with the row.
 // Empty collections keep deferred renderers and their players asleep.

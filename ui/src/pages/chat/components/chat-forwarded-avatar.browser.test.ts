@@ -68,6 +68,9 @@ it.each(
       ],
       { container },
     );
+    await expect
+      .poll(() => container.querySelectorAll(".chat-reply-attribution:not([aria-hidden])").length)
+      .toBe(2);
     const groups = [...container.querySelectorAll<HTMLElement>(".chat-group")];
     const normalGroup = groups[0]!;
     const reference = rect(normalGroup, ".chat-group-messages");
