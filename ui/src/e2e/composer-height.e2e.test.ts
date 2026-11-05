@@ -73,9 +73,9 @@ suite.define(() => {
         // Native sizing and the pane's scheduled limit must settle before saving the cap.
         await page.evaluate(
           () =>
-            new Promise<void>((resolve) =>
-              requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-            ),
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            }),
         );
         const capped = await measure();
         for (const lines of [5, 20, 40, 200]) {
