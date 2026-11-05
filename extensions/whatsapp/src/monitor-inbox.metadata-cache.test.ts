@@ -129,7 +129,7 @@ describe("web monitor inbox metadata cache", () => {
     }
   });
   it("group metadata cache never extends hydrated participant identities beyond their provider expiry", async () => {
-    const dateNow = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const elapsedClock = vi.spyOn(performance, "now").mockReturnValue(0);
     const sock = getSock();
     sock.groupFetchAllParticipating.mockResolvedValueOnce({
       "123@g.us": phoneGroup("Expiring Group"),
@@ -139,15 +139,13 @@ describe("web monitor inbox metadata cache", () => {
     const { listener, baileysCache } = await startInboxMonitorWithBaileysCache();
     try {
       await vi.waitFor(() => {
-        expect(baileysCache.baileysGroupMetaCache.get("123@g.us")?.expiresAt).toBe(
-          1_700_000_300_000,
-        );
+        expect(baileysCache.baileysGroupMetaCache.get("123@g.us")?.expiresAt).toBe(300_000);
       });
 
-      dateNow.mockReturnValue(1_700_000_299_000);
+      elapsedClock.mockReturnValue(299_000);
       await listener.sendMessage("123@g.us", "fresh @15551234567");
 
-      dateNow.mockReturnValue(1_700_000_300_001);
+      elapsedClock.mockReturnValue(300_001);
       await listener.sendMessage("123@g.us", "expired @15551234567");
 
       expectGroupSend("fresh @15551234567", ["15551234567@s.whatsapp.net"]);
@@ -155,7 +153,7 @@ describe("web monitor inbox metadata cache", () => {
       expect(sock.groupMetadata).toHaveBeenCalledTimes(1);
       expect(baileysCache.baileysGroupMetaCache.has("123@g.us")).toBe(false);
     } finally {
-      dateNow.mockRestore();
+      elapsedClock.mockRestore();
       await listener.close();
     }
   });
@@ -298,7 +296,8 @@ describe("web monitor inbox metadata cache", () => {
   });
 
   it("group metadata cache expires Baileys retry and metadata entries", async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    const elapsedClock = vi.spyOn(performance, "now").mockReturnValue(0);
+    const wallClock = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
     const baileysCache = createBaileysCacheSupport();
     const onMessage = vi.fn(async (_msg: Parameters<InboxOnMessage>[0]) => {});
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
@@ -321,13 +320,16 @@ describe("web monitor inbox metadata cache", () => {
         participants: [{ id: "555@s.whatsapp.net" }],
       });
 
-      now.mockReturnValue(1_700_000_000_000 + 5 * 60 * 1000 + 1);
+      // A backward wall-clock step must not keep expired entries alive.
+      wallClock.mockReturnValue(1_700_000_000_000 - 600_000);
+      elapsedClock.mockReturnValue(5 * 60 * 1000 + 1);
       await expectCacheMiss(baileysCache);
 
-      now.mockReturnValue(1_700_000_000_000 + 10 * 60 * 1000 + 1);
+      elapsedClock.mockReturnValue(10 * 60 * 1000 + 1);
       await expect(baileysCache.socketOptions.getMessage(key)).resolves.toBeUndefined();
     } finally {
-      now.mockRestore();
+      elapsedClock.mockRestore();
+      wallClock.mockRestore();
       await listener.close();
     }
   });
