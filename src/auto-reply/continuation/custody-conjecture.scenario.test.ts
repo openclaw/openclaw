@@ -1003,6 +1003,21 @@ describe("RFC §2.2/§2.6 tool and token forms converge on one custody record (�
   });
 });
 
+describe("continue_delegate receipts mean accepted, not completed", () => {
+  it("a scheduled receipt has spawned nothing; the delegate spawns once its turn ends", async () => {
+    await withGateway(async (gateway) => {
+      const receipt = await gateway
+        .delegateTool("accepted-run")
+        .execute("accepted-call", { task: "audit the ledger" });
+      expect(receipt?.details).toMatchObject({ status: "scheduled" });
+      expect(spawnedTasks()).toEqual([]);
+
+      await gateway.completeTurn({ runId: "accepted-run", finalText: "turn done" });
+      expect(spawnedTasks()).toEqual([expect.stringContaining("audit the ledger")]);
+    });
+  });
+});
+
 describe("RFC §2.5 / §5.4 unchanged: request_compaction has no durable custody", () => {
   it("a compaction request in flight at a crash leaves nothing to replay", async () => {
     await withGateway(async (gateway) => {

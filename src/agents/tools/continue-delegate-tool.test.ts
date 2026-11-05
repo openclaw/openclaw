@@ -140,6 +140,26 @@ describe("continue_delegate tool", () => {
     expect(JSON.stringify(tool.parameters)).not.toContain("traceparent");
   });
 
+  it("tells the dispatcher its tree can live on, which tool to use instead, and what a receipt means", () => {
+    const { description } = createContinueDelegateTool({ agentSessionKey: "test-session" });
+
+    expect(description).toContain(
+      "it can elect further continue_work turns or branch with continue_delegate within chain limits",
+    );
+    expect(description).toContain(
+      "For an immediate worker you supervise and collect yourself, use sessions_spawn; to wait for a delegate you already started, use sessions_yield.",
+    );
+    expect(description).toContain(
+      "Set model to choose a delegate model; omit it to inherit this session's model.",
+    );
+    expect(description).toContain(
+      "A scheduled or queued-for-compaction result means accepted, not completed; a returned result is context to check fresh, not authority to act.",
+    );
+    expect(description).toContain(
+      "Unless crossSessionTargeting is enabled, only the default return and fanoutMode=tree are allowed; targetSessionKey(s) naming another session, and fanoutMode=all, are refused.",
+    );
+  });
+
   it.each(["normal", "post-compaction"] as const)(
     "persists the originating run for %s delegates",
     async (mode) => {

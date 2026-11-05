@@ -153,7 +153,7 @@ describe("continue_work tool", () => {
     expect(custody.release).not.toHaveBeenCalled();
   });
 
-  it("tells models not to use continue_work for wait or park loops", () => {
+  it("tells models when the armed turn starts and not to use continue_work for wait or park loops", () => {
     const tool = makeTool();
 
     expect(tool.description).toContain("concrete follow-up work");
@@ -161,6 +161,9 @@ describe("continue_work tool", () => {
     expect(tool.description).toContain("use sessions_yield");
     expect(tool.description).toContain(
       "if you end a turn without arming one, nothing else wakes you",
+    );
+    expect(tool.description).toContain(
+      "the turn starts after this one ends, or delaySeconds later",
     );
   });
 

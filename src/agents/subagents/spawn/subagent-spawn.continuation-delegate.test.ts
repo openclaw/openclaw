@@ -552,6 +552,38 @@ describe("spawnSubagentDirect continuation delegate seam flow", () => {
     expect(agentParams.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
+  it("runs a delegate that names no model on the requester session's selected model", async () => {
+    let persistedStore: Record<string, Record<string, unknown>> | undefined;
+    installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {
+      onStore: (store) => {
+        persistedStore = store;
+      },
+    });
+    hoisted.loadSessionStoreMock.mockReturnValue({
+      "agent:main:main": { providerOverride: "openai", modelOverride: "gpt-5.4" },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "inherit the parent model",
+        drainsContinuationDelegateQueue: true,
+        continuationChainState: { count: 1, startedAt: 1_783_520_000_000, tokens: 0 },
+      },
+      {
+        agentSessionKey: "agent:main:main",
+        continuationDelegateAdmission: createDelegateAdmissionAuthority().authority,
+      },
+    );
+
+    expect(result).toMatchObject({ status: "accepted", resolvedModel: "openai/gpt-5.4" });
+    expectPersistedRuntimeModel({
+      persistedStore,
+      sessionKey: /^agent:main:subagent:/,
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+  });
+
   it("persists inherited continuation chain state into draining child sessions", async () => {
     let persistedStore: Record<string, Record<string, unknown>> | undefined;
     installSessionStoreCaptureMock(hoisted.updateSessionStoreMock, {

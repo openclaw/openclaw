@@ -11,6 +11,11 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../../config/config.js";
+import { listAncestorSessionKeys } from "../subagents/registry/subagent-registry-read.js";
+import {
+  resetSubagentRegistryForTests,
+  seedSubagentRunForReadTest,
+} from "../subagents/registry/subagent-registry.test-helpers.js";
 import { createContinueDelegateTool } from "./continue-delegate-tool.js";
 
 const DISPATCHING_SESSION = "agent:main:self";
@@ -142,6 +147,36 @@ describe("continue_delegate cross-session targeting gate", () => {
     expect(await consumePendingDelegates(DISPATCHING_SESSION)).toEqual([
       expect.objectContaining({ targetSessionKeys: [DISPATCHING_SESSION] }),
     ]);
+  });
+
+  it("disabled refuses an explicit target naming a tree member, while fanoutMode=tree passes", async () => {
+    // The gate reads the targeting form, not tree membership: the dispatcher's
+    // own requester is an ancestor, yet only fanoutMode=tree reaches it.
+    setRuntimeConfigSnapshot(continuationConfig("disabled"));
+    seedSubagentRunForReadTest({
+      runId: "tree-member-run",
+      childSessionKey: DISPATCHING_SESSION,
+      requesterSessionKey: "agent:main:root",
+    });
+    try {
+      expect(listAncestorSessionKeys(DISPATCHING_SESSION)).toContain("agent:main:root");
+      await expect(
+        executeContinueDelegate({
+          crossSessionTargeting: "disabled",
+          args: { targetSessionKey: "agent:main:root" },
+        }),
+      ).rejects.toThrow("cross-session continuation targeting is disabled");
+      expect(await consumePendingDelegates(DISPATCHING_SESSION)).toEqual([]);
+
+      await expect(
+        executeContinueDelegate({
+          crossSessionTargeting: "disabled",
+          args: { fanoutMode: "tree" },
+        }),
+      ).resolves.toMatchObject({ status: "scheduled", fanoutMode: "tree" });
+    } finally {
+      await resetSubagentRegistryForTests({ persist: false });
+    }
   });
 
   it("case 8: enabled allows targetSessionKey for another session", async () => {
