@@ -576,7 +576,13 @@ describe("attachment sidebar source ownership", () => {
     {
       code: "unsupported-format",
       label: "settings.toml",
-      reason: "Rejected by the local attachment allowlist. Send a supported file type.",
+      reason:
+        "This file type cannot be attached here. If it is saved in this session, download it from Files, or ask for a ZIP containing the original file.",
+    },
+    {
+      code: "file-too-large",
+      label: "orders-large.zip",
+      reason: "Too large to attach. Look for this file in Files.",
     },
     {
       code: "invalid-reference",
@@ -608,6 +614,34 @@ describe("attachment sidebar source ownership", () => {
         ".chat-assistant-attachment-card__download, .chat-assistant-attachment-card__expand, .chat-assistant-attachment-card__retry",
       ),
     ).toBeNull();
+  });
+
+  it("offers filename search only for size failures with a current Files owner", () => {
+    const failure: AssistantAttachmentItem = {
+      type: "attachment_error",
+      attachment: { code: "file-too-large", kind: "document", label: "orders-large.zip" },
+    };
+    const onFindWorkspaceFile = vi.fn();
+    const onOpenSidebar = vi.fn();
+    const options = { sessionKey: "agent:main:orders", agentId: "main", onFindWorkspaceFile };
+    draw([failure], options, onOpenSidebar);
+    const find = expectDefined(
+      container.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__action"),
+      "Find in Files action",
+    );
+    expect(find.textContent?.trim()).toBe("Find in Files");
+    expect(find.getAttribute("aria-label")).toBe("Find orders-large.zip in Files");
+    find.click();
+    expect(onFindWorkspaceFile).toHaveBeenCalledExactlyOnceWith({
+      name: "orders-large.zip",
+      sessionKey: "agent:main:orders",
+      agentId: "main",
+    });
+    expect(onOpenSidebar).not.toHaveBeenCalled();
+    draw([failure], { sessionKey: options.sessionKey });
+    expect(card("__action")).toBeNull();
+    draw([{ ...failure, attachment: { ...failure.attachment, code: "delivery-failed" } }], options);
+    expect(card("__action")).toBeNull();
   });
 
   it("renders normalized base64 audio with inline playback and Files actions", () => {

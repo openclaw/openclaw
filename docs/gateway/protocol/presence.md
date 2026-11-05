@@ -13,7 +13,8 @@ How the Gateway reports which nodes are connected, and which server-pushed event
 ## Presence
 
 - `system-presence` returns one row per live operator connection, including
-  `deviceId`, `roles`, and `scopes`. Separate tabs keep their own watched-session
+  `deviceId`, `roles`, and `scopes` for operator readers (see
+  [broadcast event scoping](#broadcast-event-scoping) for session-only readers). Separate tabs keep their own watched-session
   facts. Reconnecting removes offline rows for the same identity: device ID,
   then client instance ID, then connection ID. When the last connection closes,
   at most one offline row for that identity remains until the five-minute TTL.
@@ -147,27 +148,25 @@ updates appear as `hostStats` in `node.list` and `node.describe` and broadcast
 `dropIfSlow: true`. Stats are operator-facing and do not update model-visible
 node context. The first accepted snapshot is persisted immediately as
 `lastHostStats` on the paired node record. Later snapshots stay in the live
-session until the last successfully saved snapshot's receipt time plus five
-minutes, when the latest snapshot is checkpointed. New reports do not postpone
-that deadline. Disconnect folds the final snapshot into its connection-history
-write, and orderly Gateway shutdown drains pending snapshots before closing
-storage. Disconnecting or reconnecting without a new snapshot leaves the
-previous value intact. Pairing identity, approval, revocation, token, name, and
-consent changes remain immediately durable.
+session without periodic persistence. Disconnect folds the final snapshot into
+its connection-history write, and orderly Gateway shutdown drains pending
+snapshots before closing storage. Disconnecting or reconnecting without a new
+snapshot leaves the previous value intact. Pairing identity, approval, revocation,
+token, name, and consent changes remain immediately durable.
 
 `node.list` and `node.describe` use live session stats while connected and project
 the saved snapshot as `hostStats` while offline, keeping its original `updatedAtMs`
 so clients can show the last-known age. The offline view can briefly show the
-previous saved snapshot while the disconnect write completes. A crash can lose
-roughly the last five minutes of accepted telemetry while reports continue and
-checkpoints succeed; scheduling or write delays extend that interval. Failed
-writes are logged and retried on a later report or final drain, without an
-immediate retry loop. Sensor silence can leave the saved sample arbitrarily old.
+previous saved snapshot while the disconnect write completes. After a Gateway
+crash, the offline view shows the connection's first successfully saved snapshot,
+or an older snapshot if that save never completed. Failed writes are logged and
+retried on a later report or final drain, without an immediate retry loop. Sensor
+silence can leave the saved sample arbitrarily old.
 
 The structured `node.event` result uses `reason: "updated"`, `"stale_connection"`,
 or `"invalid_payload"`. An older Gateway may return `handled: false`; the node
 continues at the normal cadence without an immediate retry. An accepted result
-and live broadcast do not wait for checkpoint persistence.
+and live broadcast do not wait for persistence.
 
 ### Node background alive event
 
@@ -215,8 +214,15 @@ sessions do not passively receive session content
   `plugin.approval.requested` / `plugin.approval.resolved` use
   `operator.approvals` instead.
 - Presence events require operator read access (`operator.read`, also satisfied
-  by `operator.write` or `operator.admin`). Watched-session references are filtered
-  for each recipient, including in hello snapshots and `system-presence` replies.
+  by `operator.write` or `operator.admin`) or session read access
+  (`operator.sessions.read`, also satisfied by `operator.sessions.write`).
+  Watched-session references are filtered for each recipient, including in hello
+  snapshots and `system-presence` replies.
+- Session-only readers, such as guests, receive a person-only view: `ts`,
+  `lastActivityAt`, the profile's `id`, `identity`, `name`, and `avatarUrl`,
+  a `disconnect` reason, and their visible watched sessions. Device, network,
+  connection, scope, and email fields are omitted, and rows without a resolved
+  profile carry no person. `presence.query` remains `operator.read` only.
 - Transport events such as `heartbeat` and `tick` remain available to every
   authenticated session.
 - Unknown broadcast event families are blocked unless the caller has the required scope

@@ -216,6 +216,7 @@ export function createJob(
   delete initialState.scheduleActivatedAtMs;
   delete initialState.runningScheduleChangeId;
   delete initialState.autoDisabled;
+  delete initialState.admissionDeferred;
   delete initialState.lastMeaningfulResult;
   delete initialState.sourceIdentity;
   delete initialState.streamSourceIdentity;
@@ -307,6 +308,9 @@ export function applyJobPatch(
   const previouslyUsedToolRuntime = cronJobUsesToolRuntime(job);
   const explicitlyClearsToolsAllow = patch.payload?.toolsAllow === null;
   const previousScheduleKind = job.schedule.kind;
+  if (patch.ownerProfileId !== undefined) {
+    job.ownerProfileId = patch.ownerProfileId;
+  }
   if ("name" in patch) {
     job.name = normalizeRequiredName(patch.name);
   }
@@ -442,6 +446,7 @@ export function applyJobPatch(
     delete statePatch.scheduleActivatedAtMs;
     delete statePatch.runningScheduleChangeId;
     delete statePatch.autoDisabled;
+    delete statePatch.admissionDeferred;
     delete statePatch.lastMeaningfulResult;
     delete statePatch.sourceIdentity;
     delete statePatch.streamSourceIdentity;

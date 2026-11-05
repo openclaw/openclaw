@@ -33,6 +33,7 @@ export type AssistantAttachmentStatusCardProps = {
   reason?: string;
   onRetry?: () => void;
   onOpen?: () => void;
+  onFindWorkspaceFile?: () => void;
   onAllow?: () => void;
   path?: string;
 };
@@ -42,11 +43,11 @@ export function AssistantAttachmentStatusCard(
 ): JSX.Element {
   const copyRef = attachmentContextCopyRef(() => ({ name: props.label }));
   const unavailable = () => props.reason !== undefined;
-  const action = () => props.onAllow ?? props.onRetry ?? props.onOpen;
+  const action = () => props.onAllow ?? props.onRetry ?? props.onFindWorkspaceFile ?? props.onOpen;
   const statusClass = () =>
     !unavailable()
       ? "chat-assistant-attachment-card--checking"
-      : props.onRetry || props.onAllow || props.onOpen
+      : props.onRetry || props.onAllow || props.onFindWorkspaceFile || props.onOpen
         ? "chat-assistant-attachment-card--recoverable"
         : "chat-assistant-attachment-card--definitive";
   return (
@@ -120,6 +121,11 @@ export function AssistantAttachmentStatusCard(
               },
             ]}
             type="button"
+            aria-label={
+              !props.onAllow && !props.onRetry && props.onFindWorkspaceFile
+                ? t("chat.attachments.findInFilesFor", { name: props.label })
+                : undefined
+            }
             onClick={() => action()?.()}
           >
             <Show when={!props.onAllow && Boolean(props.onRetry)}>
@@ -129,7 +135,9 @@ export function AssistantAttachmentStatusCard(
               ? t("chat.attachments.allowImage")
               : props.onRetry
                 ? t("common.retry")
-                : t("chat.attachments.openOriginal")}
+                : props.onFindWorkspaceFile
+                  ? t("chat.attachments.findInFiles")
+                  : t("chat.attachments.openOriginal")}
           </button>
         </Show>
       </div>

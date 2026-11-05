@@ -336,7 +336,8 @@ it("updates composer text on a live locale change without disturbing an IME draf
   );
   const textarea = view.textarea();
   const heading = view.query(".chat-controls__permission-heading")!;
-  expect(heading.textContent).toBe("Execution permissions");
+  const learnMore = () => view.query(".chat-controls__permission-learn-more")?.textContent?.trim();
+  expect(learnMore()).toBe("Learn more");
   expect(textarea.placeholder).toBe("Message Locale fixture");
 
   textarea.focus();
@@ -349,7 +350,7 @@ it("updates composer text on a live locale change without disturbing an IME draf
   await i18n.setLocale("de");
   flush();
 
-  expect(heading.textContent).toBe("Ausführungsberechtigungen");
+  expect(learnMore()).toBe("Mehr erfahren");
   expect(textarea.placeholder).toBe("Nachricht an Locale fixture");
   expect(view.query(".chat-controls__permission-heading")).toBe(heading);
   expect(view.textarea()).toBe(textarea);

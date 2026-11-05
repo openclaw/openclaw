@@ -6,6 +6,7 @@ import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
+import { writeFixtureJson } from "../../plugins/loader-fixture-builders.test-support.js";
 import { acquirePluginRegistryForInspection } from "../../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -177,14 +178,11 @@ module.exports = {
   },
 };`,
   });
-  fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id,
-      contracts: { [`${kind}GenerationProviders`]: [id] },
-      configSchema: { type: "object", additionalProperties: false, properties: {} },
-    }),
-  );
+  writeFixtureJson(dir, "openclaw.plugin.json", {
+    id,
+    contracts: { [`${kind}GenerationProviders`]: [id] },
+    configSchema: { type: "object", additionalProperties: false, properties: {} },
+  });
   const config: OpenClawConfig = {
     agents: { defaults: { mediaModels: { [kind]: { primary: `${id}/fixture-${kind}` } } } },
     plugins: { allow: [id], load: { paths: [plugin.file] }, slots: { memory: "none" } },

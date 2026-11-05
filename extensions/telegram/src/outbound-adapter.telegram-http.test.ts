@@ -13,6 +13,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { getSessionBindingService } from "openclaw/plugin-sdk/session-binding-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -20,7 +21,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { apiThrottler } from "./bot.runtime.js";
 import { deliverReplies } from "./bot/delivery.js";
@@ -58,6 +59,7 @@ const telegramRegistry = () =>
   createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]);
 const approveId = "plugin:123e4567-e89b-12d3-a456-426614174000";
 const location = { latitude: 48.858844, longitude: 2.294351 };
+const effectId = "5104841245755180586";
 const droppedButton = () => ({ label: "Copy manually", value: "x".repeat(65) });
 const uploadBytes = async (fields: Record<string, unknown>, key: string) =>
   Buffer.from(await resolveTelegramTestUpload(fields, key).arrayBuffer());
@@ -117,19 +119,62 @@ describe("Telegram registered adapter conformance over HTTP", () => {
   });
   afterEach(resetTelegramAccountThrottlersForTest);
 
+  it.each([false, true])(
+    "renders copied recap as native code without mentions or previews (rich=%s)",
+    async (richMessages) => {
+      const capability = vi.spyOn(getSessionBindingService(), "getCapabilities").mockReturnValue({
+        adapterAvailable: true,
+        bindSupported: true,
+        unbindSupported: true,
+        placements: ["current"],
+      });
+      try {
+        const prepareFork = telegramPlugin.conversationBindings?.prepareFork;
+        assert(prepareFork, "Telegram must expose /fork through its channel binding contract");
+        const prepared = await prepareFork({
+          cfg,
+          accountId: "default",
+          source: { conversationId: "-100123:topic:7" },
+          isGroup: true,
+          assertCurrent() {},
+        });
+        if (!prepared.ok) {
+          throw new Error(prepared.reason);
+        }
+        const text =
+          "User: @someone https://example.invalid/ ![image](https://example.invalid/x.png)\n" +
+          "```\nMEDIA:https://example.invalid/a\n[[reply_to:literal]]";
+        await sendPayload(prepared.formatRecap!(text), {
+          cfg: {
+            channels: { telegram: { ...cfg.channels.telegram, richMessages, linkPreview: true } },
+          },
+        });
+        expect(requests).toHaveLength(1);
+        const fields = requestFields();
+        if (richMessages) {
+          expect(fields.rich_message).toMatchObject({ skip_entity_detection: true });
+          expect(JSON.stringify(fields.rich_message)).toContain("MEDIA:https://example.invalid/a");
+          expect(JSON.stringify(fields.rich_message)).not.toContain('"type":"mention"');
+        } else {
+          expect(fields.link_preview_options).toEqual({ is_disabled: true });
+          expect(fields.text).toContain("<pre>");
+          expect(fields.text).toContain("[[reply_to:literal]]");
+          expect(fields.text).not.toContain("<a href");
+        }
+      } finally {
+        capability.mockRestore();
+      }
+    },
+  );
+
   it("rejects ambiguous account ownership before dispatch and sends with an explicit owner", async () => {
     const ownerCfg: OpenClawConfig = {
       ...cfg,
       agents: { ownership: "explicit", entries: { main: {}, other: {} } },
     };
-    const request = {
-      cfg: ownerCfg,
-      accountId: "default",
-      to: "123",
-      text: "Owner routing control",
-      payload: { text: "Owner routing control" },
-    };
-    await expect(registeredSend(request)).rejects.toMatchObject({
+    const sendControl = () =>
+      sendPayload({ text: "Owner routing control" }, { cfg: ownerCfg, accountId: "default" });
+    await expect(sendControl()).rejects.toMatchObject({
       name: "PlatformMessageNotDispatchedError",
       retryable: false,
       message: expect.stringContaining("no explicit owner"),
@@ -137,17 +182,25 @@ describe("Telegram registered adapter conformance over HTTP", () => {
     expect(requests).toEqual([]);
 
     ownerCfg.bindings = [{ agentId: "main", match: { channel: "telegram", accountId: "default" } }];
-    await registeredSend(request);
+    await sendControl();
     expectMethods("sendMessage");
     expect(requests[0]!.fields.text).toBe("Owner routing control");
   });
 
-  it.each([false, true])(
-    "delivers selected-account rich presentations with explicit HTML=%s",
-    async (html) => {
+  it.each([
+    [false, "123", effectId],
+    [true, "123", effectId],
+    [true, "-1001", undefined],
+  ] as const)(
+    "delivers selected-account presentations with explicit HTML=%s to %s",
+    async (html, to, expectedEffect) => {
       await sendPayload(
-        { presentation: { blocks: [pipelineTable, ...buttonPresentation(continueButton).blocks] } },
         {
+          presentation: { blocks: [pipelineTable, ...buttonPresentation(continueButton).blocks] },
+          channelData: { telegram: { messageEffectId: effectId } },
+        },
+        {
+          to,
           cfg: accountConfig(
             "selected",
             { botToken: cfg.channels.telegram.botToken, richMessages: true },
@@ -158,6 +211,7 @@ describe("Telegram registered adapter conformance over HTTP", () => {
         },
       );
       expectMethods(html ? "sendMessage" : "sendRichMessage");
+      expect(requestFields().message_effect_id).toBe(expectedEffect);
       const fields = requests[0]!.fields;
       if (!html) {
         expect(fields.rich_message).toMatchObject({
@@ -394,7 +448,7 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       {
         text: "[origin: another conversation]",
         location: { ...location, accuracy: 5 },
-        channelData: { telegram: { quoteText: "exact quote" } },
+        channelData: { telegram: { quoteText: "exact quote", messageEffectId: effectId } },
       },
       { replyToId: "888" },
     );
@@ -402,11 +456,13 @@ describe("Telegram registered adapter conformance over HTTP", () => {
     expect(requests[0]!.fields.text).toBe("[origin: another conversation]");
     expect(requests[0]!.fields.reply_parameters).toBeUndefined();
     expect(requests[0]!.fields.reply_to_message_id).toBeUndefined();
+    expect(requestFields().message_effect_id).toBeUndefined();
     expectFields(
       {
         ...location,
         reply_parameters: { message_id: 888, quote: "exact quote" },
         horizontal_accuracy: 5,
+        message_effect_id: effectId,
       },
       1,
     );
@@ -530,12 +586,8 @@ describe("Telegram registered adapter conformance over HTTP", () => {
 
     it("returns bounded cancellation rather than fake delivery or hook diagnostics", async () => {
       const registry = telegramRegistry();
-      addTestHook({
-        registry,
-        pluginId: "cancel",
-        hookName: "message_sending",
-        handler: () => ({ cancel: true, cancelReason: "private-hook-diagnostics" }),
-      });
+      const cancel = () => ({ cancel: true, cancelReason: "private-hook-diagnostics" });
+      addTestHook({ registry, pluginId: "cancel", hookName: "message_sending", handler: cancel });
       initializeGlobalHookRunner(registry);
       const result = await action("send", { to: "123", message: "cancel me" });
       expect(result.details).toEqual({
@@ -551,6 +603,7 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       const result = await send({
         to: "tg:123",
         message: "Quarterly results",
+        effect: effectId,
         presentation: {
           blocks: [
             { type: "text", text: "Do not duplicate this block" },
@@ -563,6 +616,7 @@ describe("Telegram registered adapter conformance over HTTP", () => {
         expect(text).toContain(content);
       }
       expect(text).not.toContain("Do not duplicate this block");
+      expect(requestFields().message_effect_id).toBe(effectId);
       expect(requests[0]!.fields.reply_markup).toEqual(
         replyMarkup({ text: "Deploy", callback_data: "env|prod" }),
       );
@@ -732,12 +786,10 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       expect(requests[0]!.fields.name).toBe("Primary");
       expectFields({ message_thread_id: 99, icon_custom_emoji_id: "5231419410191111111" }, 2);
       resetTelegramTopicNameCacheForTest();
-      await expect(
-        getTopicName("-1001", 99, resolveStorePath(actionCfg.session?.store, { agentId: "ops" })),
-      ).resolves.toBe("Renamed");
-      await expect(
-        getTopicName("-1001", 99, resolveStorePath(actionCfg.session?.store, { agentId: "main" })),
-      ).resolves.toBeUndefined();
+      const opsStore = resolveStorePath(actionCfg.session?.store, { agentId: "ops" });
+      const mainStore = resolveStorePath(actionCfg.session?.store, { agentId: "main" });
+      await expect(getTopicName("-1001", 99, opsStore)).resolves.toBe("Renamed");
+      await expect(getTopicName("-1001", 99, mainStore)).resolves.toBeUndefined();
     });
   });
 });

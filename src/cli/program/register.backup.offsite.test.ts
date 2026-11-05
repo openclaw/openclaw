@@ -264,7 +264,7 @@ describe("offsite backup CLI", () => {
         path.join(state.workspaceDir, "workspace-note.txt"),
         "excluded workspace\n",
       );
-      const { run, create, from, reject } = createCliHarness();
+      const { run, create, from, reject, errors } = createCliHarness();
       openOpenClawStateDatabase();
       await closeOpenClawStateDatabaseAsync();
       expect((await fs.stat(resolveOpenClawStateSqlitePath())).isFile()).toBe(true);
@@ -366,6 +366,11 @@ describe("offsite backup CLI", () => {
       });
       expect(await from("verify", "test-host", "latest")).toMatchObject({ ok: true });
       const target = state.path("staged");
+      await expect(
+        from("restore", "test-host", "latest", "--target", target, "--local-companion"),
+      ).rejects.toThrow("CLI exit 1");
+      expect(errors.mock.calls.flat().join(" ")).toContain("requires a local-companion checkpoint");
+      await expectAbsent(target);
       await from("restore", "test-host", "latest", "--target", target);
       const capturedState = created.assets.find((asset) => asset.kind === "state");
       expect(capturedState).toBeDefined();

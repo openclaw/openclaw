@@ -159,7 +159,7 @@ describe("ConfigPage model catalog lifecycle", () => {
 
       first.reject(new Error("catalog unavailable"));
       await waitForSolid(() =>
-        expect(section.textContent).toContain("Session source settings are unavailable."),
+        expect(section.textContent).toContain("Couldn’t load session sources."),
       );
       expect(section.querySelector("a")).toBe(manage);
       source.publish({ ...source.gateway.snapshot, hello: hello() });

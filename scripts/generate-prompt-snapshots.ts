@@ -21,12 +21,7 @@ import {
 } from "./prompt-snapshot-files.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const oxfmtPath = path.resolve(
-  repoRoot,
-  "node_modules",
-  ".bin",
-  process.platform === "win32" ? "oxfmt.cmd" : "oxfmt",
-);
+const oxfmtPath = path.resolve(repoRoot, "node_modules", "oxfmt", "bin", "oxfmt");
 const execFileAsync = promisify(execFile);
 
 type PromptSnapshotFile = Awaited<ReturnType<typeof createHappyPathPromptSnapshotFiles>>[number];
@@ -160,13 +155,15 @@ async function writeSnapshotFiles(root: string, files: PromptSnapshotFile[]) {
 }
 
 async function formatSnapshotFiles(root: string, files: PromptSnapshotFile[]) {
+  // JSON snapshots already use canonical JSON.stringify bytes. Formatting them
+  // would depend on whether the temporary root inherits the repository ignores.
   const filePaths = files
-    .filter((file) => file.path.endsWith(".md") || file.path.endsWith(".json"))
+    .filter((file) => file.path.endsWith(".md"))
     .map((file) => path.resolve(root, file.path));
   if (filePaths.length === 0) {
     return;
   }
-  await execFileAsync(oxfmtPath, ["--write", "--threads=1", ...filePaths], {
+  await execFileAsync(process.execPath, [oxfmtPath, "--write", "--threads=1", ...filePaths], {
     cwd: repoRoot,
   });
 }

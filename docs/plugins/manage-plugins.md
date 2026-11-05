@@ -314,7 +314,9 @@ of a loaded, enabled bundled plugin refreshes registrations and reports
 `restartRequired: true`, even when its files are unchanged. Restart the Gateway to
 load updated bundled code; rebuild compiled output first, and install a new
 executable for embedded code changes. Replacing captured external code returns
-`restartRequired: false`. Explicit actions also work with `gateway.reload.mode: "off"`.
+`restartRequired: false`. For bundled plugin development, see
+[Development: reload edited bundled code](/cli/plugins/uninstall-and-update#development-reload-edited-bundled-code).
+Explicit actions also work with `gateway.reload.mode: "off"`.
 See [Plugin management RPCs](/gateway/protocol).
 
 Cleanup is best effort: disabling removes the plugin's registered capabilities
@@ -339,13 +341,16 @@ Installing new local, npm, Git, or archive sources still uses the CLI workflow
 above.
 
 When the current turn uses the plugin being reloaded, use `reloadAndResume`.
-It checks administrator authority before yielding, finishes turn cleanup, then
-reloads and resumes the same conversation with the result. The resumed turn keeps
+It checks administrator authority before accepting the handoff. Acceptance ends
+the current turn, including any running Code Mode program, without another
+`sessions_yield` call. Already-started work settles or is canceled through normal
+turn cleanup before the reload. The result then resumes the same conversation. The resumed turn keeps
 the requesting turn's owner access for as long as that requester's authority stays
 current; a non-owner or system turn never gains owner tools this way. Permission
 revocation still stops the reload; do not repeat a completed mutation.
 
-In the embedded agent runtime, an applied change refreshes tools before the next
+For mutations without a handoff, an applied change in the embedded agent runtime
+refreshes tools before the next
 model request after running code programs have settled. A parked program may need
 further model steps to wait for completion; completed actions and accepted steering
 remain in the transcript and are not replayed. Finish a running program before
@@ -366,6 +371,11 @@ Inventory and result output are bounded. Narrow `list` with `query`, inspect a
 specific plugin, or use the Control UI Plugins page for omitted details and
 capability reviews. A saved install can outlive a failed runtime activation:
 inspect that result before retrying activation, rather than reinstalling it.
+
+Local plugin search lowercases text before NFC normalization, so canonically
+equivalent Unicode names match in inventory queries and the Installed plugins
+view. It does not remove accents or fold compatibility characters, and it does
+not change plugin identities or installation matching.
 
 ## Update plugins
 
@@ -439,7 +449,7 @@ managed install directory is removed once unless you pass `--keep-files`. With a
 running Gateway, ordinary uninstall waits for the package's runtime owners to
 stop before removing files and returns after the new inventory is applied.
 
-Claw Add installs plugins as shared dependencies. Deleting an agent created by
+Template Add installs plugins as shared dependencies. Deleting an agent created by
 Add does not uninstall its plugins. Before uninstalling a plugin, check which
 agents use it; uninstall may break those agents.
 

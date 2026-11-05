@@ -1,10 +1,72 @@
 import { createSignal, flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
+import type { ChatRowDisplayFacts } from "../lib/chat/row-display-facts.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { renderSolidRef } from "../test-helpers/render-solid-ref.ts";
 import { createMarkdownRef } from "./markdown-dom-ref.ts";
+import { updateLinkReaderDisplay } from "./markdown-link-display.ts";
 import { toStreamingMarkdownDomParts } from "./markdown-live.ts";
 import { partitionMarkdownHtml, toSanitizedMarkdownHtml } from "./markdown.ts";
+
+it("publishes only differing PR facts and excludes query-bearing URLs from the cache", () => {
+  const pr = "https://github.com/example/project/pull/42";
+  const queryPr = `${pr}?access_token=synthetic-fixture`;
+  let facts: ChatRowDisplayFacts = {
+    links: {
+      [`pr:${pr}`]: { title: "Synthetic change", badge: { label: "Open", tone: "positive" } },
+    },
+  };
+  const write = vi.fn((update: Partial<ChatRowDisplayFacts>) => {
+    facts = { ...facts, ...update };
+  });
+  const display = { read: () => ({ scope: "cached-markdown", facts }), write };
+  const html = toSanitizedMarkdownHtml(`${pr}\n\n${queryPr}`);
+  const view = renderSolidRef(
+    () =>
+      createMarkdownRef(
+        () => ({ content: html }),
+        () => display,
+      ),
+    {
+      targetElement: document.createElement("div"),
+    },
+  );
+  onTestFinished(() => view.unmount());
+  const link = view.container.querySelector<HTMLAnchorElement>("a.markdown-github-item")!;
+  expect(link.getAttribute("aria-description")).toBe("Open");
+  expect(link.dataset.linkReaderTone).toBe("positive");
+  const queryLink =
+    view.container.querySelectorAll<HTMLAnchorElement>("a.markdown-github-item")[1]!;
+  expect(queryLink.getAttribute("aria-description")).toBeNull();
+  const observer = new MutationObserver(() => undefined);
+  observer.observe(view.container, { attributes: true, childList: true, subtree: true });
+  try {
+    updateLinkReaderDisplay(link, {
+      url: pr,
+      title: "Synthetic change",
+      badge: { label: "Open", tone: "positive" },
+    });
+    expect(observer.takeRecords()).toEqual([]);
+    expect(write).not.toHaveBeenCalled();
+    updateLinkReaderDisplay(link, {
+      url: pr,
+      title: "Synthetic change",
+      badge: { label: "Merged", tone: "accent" },
+    });
+    expect(link.dataset.linkReaderTone).toBe("accent");
+    expect(facts.links?.[`pr:${pr}`]?.badge).toEqual({ label: "Merged", tone: "accent" });
+    expect(write).toHaveBeenCalledOnce();
+    updateLinkReaderDisplay(queryLink, {
+      url: queryPr,
+      title: "Query-specific preview",
+      badge: { label: "Closed", tone: "neutral" },
+    });
+    expect(write).toHaveBeenCalledOnce();
+    expect(Object.keys(facts.links ?? {})).toEqual([`pr:${pr}`]);
+  } finally {
+    observer.disconnect();
+  }
+});
 
 it("commits Markdown before onUpdate and retires a replaced island", () => {
   const container = document.body.appendChild(document.createElement("div"));

@@ -19,9 +19,11 @@ vi.mock("../../llm/oauth.js", () => ({
   getOAuthProviders: () => [{ id: "openai" }],
 }));
 
+// mock-isolation: OAuth store fixtures do not discover installed provider hints.
+vi.mock("./doctor.js", () => ({ formatAuthDoctorHint: async () => "" }));
+
 // mock-isolation: The fixture controls refresh outcomes without loading installed provider plugins.
 vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
-  buildProviderAuthDoctorHintWithPlugin: async () => undefined,
   formatProviderAuthProfileApiKeyWithPlugin: async (params: { context?: OAuthCredential }) =>
     params.context?.access,
   resolveProviderOAuthCredentialWithPlugin: async (params: { credential: OAuthCredential }) => {

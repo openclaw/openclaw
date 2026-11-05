@@ -25,7 +25,7 @@ export const INTERNAL_SESSION_PATH_PARAM = "__openclawSessionPath";
 export const INTERNAL_MEMORY_PATH_PARAM = "__openclawMemoryPath";
 export const INTERNAL_PLUGINS_PATH_PARAM = "__openclawPluginsPath";
 export const INTERNAL_PLUGIN_SETTINGS_PATH_PARAM = "__openclawPluginSettingsPath";
-export const INTERNAL_CLAWS_PATH_PARAM = "__openclawClawsPath";
+export const INTERNAL_TEMPLATES_PATH_PARAM = "__openclawTemplatesPath";
 export const INTERNAL_WORKBOARD_PATH_PARAM = "__openclawWorkboardPath";
 export const CONTROL_UI_DOCUMENT_ROUTE_PATHS = {
   approval: "/approve",
@@ -53,7 +53,7 @@ const APP_ROUTE_DEFINITIONS = {
   meetings: { path: "/meetings" },
   apps: { path: "/apps" },
   portals: { path: "/portals" },
-  claws: { path: "/claws" },
+  templates: { path: "/templates" },
   agents: { path: "/settings/agents" },
   channels: { path: "/settings/channels", aliases: ["/channels"] },
   connection: { path: "/settings/connection" },
@@ -352,19 +352,19 @@ export function pluginCatalogIdFromPath(pathname: string, basePath = ""): string
   return id ? pluginCatalogIdFromRouteSuffix(id) : null;
 }
 
-export function pathForClawCatalogEntry(packageName: string, basePath = ""): string {
+export function pathForTemplateCatalogEntry(packageName: string, basePath = ""): string {
   if (!isClawCatalogPackageName(packageName)) {
-    throw new Error("Invalid Claw package name for a route path.");
+    throw new Error("Invalid Template package name for a route path.");
   }
-  return `${pathForRoute("claws", basePath)}/packages/${encodeURIComponent(packageName)}`;
+  return `${pathForRoute("templates", basePath)}/packages/${encodeURIComponent(packageName)}`;
 }
 
 function isClawCatalogPackageName(value: string): boolean {
   return /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(value);
 }
 
-export function clawCatalogPackageNameFromPath(pathname: string, basePath = ""): string | null {
-  const slug = routePathSuffix(pathname, "claws", basePath);
+export function templateCatalogPackageNameFromPath(pathname: string, basePath = ""): string | null {
+  const slug = routePathSuffix(pathname, "templates", basePath);
   if (slug?.startsWith("packages/")) {
     const packageName = decodeRouteSegment(slug.slice("packages/".length));
     return packageName && isClawCatalogPackageName(packageName) ? packageName : null;
@@ -453,7 +453,7 @@ const DYNAMIC_ROUTE_PATH_PARAMS = {
   workboard: INTERNAL_WORKBOARD_PATH_PARAM,
   memory: INTERNAL_MEMORY_PATH_PARAM,
   plugins: INTERNAL_PLUGINS_PATH_PARAM,
-  claws: INTERNAL_CLAWS_PATH_PARAM,
+  templates: INTERNAL_TEMPLATES_PATH_PARAM,
   "plugin-settings": INTERNAL_PLUGIN_SETTINGS_PATH_PARAM,
   chat: INTERNAL_SESSION_PATH_PARAM,
   dashboard: INTERNAL_SESSION_PATH_PARAM,
@@ -484,8 +484,8 @@ function dynamicRouteIdFromPath(
   pathname: string,
   basePath = "",
 ): keyof typeof DYNAMIC_ROUTE_PATH_PARAMS | null {
-  if (clawCatalogPackageNameFromPath(pathname, basePath)) {
-    return "claws";
+  if (templateCatalogPackageNameFromPath(pathname, basePath)) {
+    return "templates";
   }
   return (
     DYNAMIC_ROUTE_MATCHERS.find(([, matches]) => matches(pathname, basePath))?.[0] ??
@@ -496,8 +496,8 @@ function dynamicRouteIdFromPath(
 export function dynamicRouteFromPath(pathname: string, basePath: string) {
   const routeId = pluginCatalogIdFromPath(pathname, basePath)
     ? "plugins"
-    : clawCatalogPackageNameFromPath(pathname, basePath)
-      ? "claws"
+    : templateCatalogPackageNameFromPath(pathname, basePath)
+      ? "templates"
       : dynamicRouteIdFromPath(pathname, basePath);
   // The overview is a static route; only its subpages need the pathname bridge.
   return routeId && !(routeId === "memory" && memoryTabFromPath(pathname, basePath) === "overview")
@@ -521,8 +521,8 @@ export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null
   if (pluginCatalogIdFromPath(normalizedPath, normalizedBasePath)) {
     return "plugins";
   }
-  if (clawCatalogPackageNameFromPath(normalizedPath, normalizedBasePath)) {
-    return "claws";
+  if (templateCatalogPackageNameFromPath(normalizedPath, normalizedBasePath)) {
+    return "templates";
   }
   // uirouter matches static paths case-insensitively (pathKey lowercases), so
   // this pre-gate must too — otherwise /Usage is rewritten to /chat before the

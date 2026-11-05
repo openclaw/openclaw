@@ -61,11 +61,12 @@ export function CommentPreviewChip(props: {
 }) {
   const ref = scrollRef();
   let trigger: HTMLButtonElement | undefined;
+  // Wide previews need the full inline area to flip without covering their trigger.
   return (
     <openclaw-tooltip
       ref={props.previewRef}
       class={["chat-comment-preview", { "chat-comment-preview--editable": Boolean(props.removal) }]}
-      prop:placement="top-start"
+      prop:placement="top"
       prop:autoSize={true}
       prop:describe={false}
       prop:descriptionTarget={props.removal ? () => trigger ?? null : undefined}

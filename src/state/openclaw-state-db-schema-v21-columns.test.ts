@@ -19,6 +19,7 @@ import {
 import { resolveOpenClawStateSqlitePath as resolveStatePath } from "./openclaw-state-db.paths.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
   withStateMigrationBackupForTest,
 } from "./openclaw-state-schema.test-support.js";
 
@@ -213,6 +214,7 @@ describe("schema 20 migration through shared-state owners", () => {
     template = current.path;
     await closeState();
     using db = new DatabaseSync(template);
+    restorePreTemplateStateIdentifiersForTest(db);
     addPreCutoverClientCredentialTablesForTest(db);
     db.exec(`DROP INDEX idx_meeting_transcript_sessions_source;
       DROP INDEX idx_meeting_transcript_sessions_account;

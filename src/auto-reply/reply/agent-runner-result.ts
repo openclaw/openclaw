@@ -49,7 +49,6 @@ export async function finalizeReplyAgentRun(
       writer: context.execution.sessionWriter,
       operation: context.replyOperation,
       activitySummaryCompletion: context.activitySummaryCompletion,
-      prepareRestartClaimCleanup: context.prepareRestartClaimCleanup,
       publish(entry) {
         context.activeSessionEntry = entry;
         if (context.activeSessionStore && context.sessionKey) {
@@ -304,9 +303,6 @@ export async function finalizeReplyAgentRun(
                 agentId: followupRun.run.agentId,
                 deliveryId,
                 intentId: pendingFinalDeliveryIntentId,
-                ...(activeSessionEntry?.restartRecoveryDeliveryRunId
-                  ? { recoveryRunId: activeSessionEntry.restartRecoveryDeliveryRunId }
-                  : {}),
                 sessionId: expectedSessionId,
                 sessionKey,
                 storePath,

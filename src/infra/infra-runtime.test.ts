@@ -436,31 +436,32 @@ describe("infra runtime", () => {
       expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
     });
 
-    it("uses the latest preparation hook when scheduled restarts coalesce", async () => {
-      const firstBeforeEmit = vi.fn(async () => {});
-      const latestBeforeEmit = vi.fn(async () => {});
-      const emitSpy = vi.spyOn(process, "emit");
-      using _ = listenForRestartSignal();
-      const first = scheduleGatewayRestart({
-        delayMs: 1_000,
-        reason: "first",
-        emitHooks: { beforeEmit: firstBeforeEmit },
-      });
-      const second = scheduleGatewayRestart({
-        delayMs: 1_000,
-        reason: "second",
-        emitHooks: { beforeEmit: latestBeforeEmit },
-      });
+    it.each(["replacement", "hookless"])(
+      "keeps the expected preparation hook when a %s restart coalesces",
+      async (nextHook) => {
+        const firstBeforeEmit = vi.fn(async () => {});
+        const latestBeforeEmit = vi.fn(async () => {});
+        const emitSpy = vi.spyOn(process, "emit");
+        using _ = listenForRestartSignal();
+        const first = scheduleGatewayRestart({
+          delayMs: 1_000,
+          reason: nextHook === "replacement" ? "first" : undefined,
+          emitHooks: { beforeEmit: firstBeforeEmit },
+        });
+        const second = scheduleGatewayRestart({
+          delayMs: 1_000,
+          reason: nextHook === "replacement" ? "second" : "hookless",
+          ...(nextHook === "replacement" ? { emitHooks: { beforeEmit: latestBeforeEmit } } : {}),
+        });
 
-      expect(first.coalesced).toBe(false);
-      expect(second.coalesced).toBe(true);
-
-      await vi.advanceTimersByTimeAsync(1_000);
-
-      expect(firstBeforeEmit).not.toHaveBeenCalled();
-      expect(latestBeforeEmit).toHaveBeenCalledTimes(1);
-      expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
-    });
+        expect(first.coalesced).toBe(false);
+        expect(second.coalesced).toBe(true);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(firstBeforeEmit).toHaveBeenCalledTimes(nextHook === "replacement" ? 0 : 1);
+        expect(latestBeforeEmit).toHaveBeenCalledTimes(nextHook === "replacement" ? 1 : 0);
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
+      },
+    );
 
     it("reports emitHooksQueued=false for hookless coalesced restart requests", () => {
       const first = scheduleGatewayRestart({ delayMs: 1_000, reason: "first" });
@@ -557,36 +558,10 @@ describe("infra runtime", () => {
       expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
     });
 
-    it("keeps existing preparation hook when a hookless restart coalesces", async () => {
-      const beforeEmit = vi.fn(async () => {});
-      const emitSpy = vi.spyOn(process, "emit");
-      using _ = listenForRestartSignal();
-      scheduleGatewayRestart({
-        delayMs: 1_000,
-        emitHooks: { beforeEmit },
-      });
-      const second = scheduleGatewayRestart({
-        delayMs: 1_000,
-        reason: "hookless",
-      });
-
-      expect(second.coalesced).toBe(true);
-
-      await vi.advanceTimersByTimeAsync(1_000);
-
-      expect(beforeEmit).toHaveBeenCalledTimes(1);
-      expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
-    });
-
     it("keeps restart requests coalesced while preparation is in flight", async () => {
-      let releaseFirstPrep: () => void = () => {};
+      const { promise: firstPrep, resolve: releaseFirstPrep } = createDeferred();
       const firstRollback = vi.fn(async () => {});
-      const firstBeforeEmit = vi.fn(
-        () =>
-          new Promise<void>((resolve) => {
-            releaseFirstPrep = resolve;
-          }),
-      );
+      const firstBeforeEmit = vi.fn(() => firstPrep);
       const latestBeforeEmit = vi.fn(async () => {});
       const emitSpy = vi.spyOn(process, "emit");
       using _ = listenForRestartSignal();
@@ -819,81 +794,66 @@ describe("infra runtime", () => {
       expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
     });
 
-    it("applies restart cooldown between emitted restart cycles", async () => {
-      const emitSpy = vi.spyOn(process, "emit");
-      using _ = listenForRestartSignal();
-      expect(consumeGatewayRestartAuthorization()).toBe(false);
-      const first = scheduleGatewayRestart({ delayMs: 0, reason: "first" });
-      expect(first.coalesced).toBe(false);
-      expect(first.delayMs).toBe(0);
-      expect(consumeGatewayRestartAuthorization()).toBe(false);
+    it.each([
+      { elapsedMs: 0, reason: "second" },
+      { elapsedMs: 30_000, reason: "update.run" },
+    ])(
+      "admits the next restart with $elapsedMs ms of cooldown elapsed",
+      async ({ elapsedMs, reason }) => {
+        const emitSpy = vi.spyOn(process, "emit");
+        using _ = listenForRestartSignal();
+        expect(consumeGatewayRestartAuthorization()).toBe(false);
+        const first = scheduleGatewayRestart({ delayMs: 0, reason: "first" });
+        expect(first.coalesced).toBe(false);
+        expect(first.delayMs).toBe(0);
+        expect(consumeGatewayRestartAuthorization()).toBe(false);
 
-      await vi.advanceTimersByTimeAsync(0);
-      expect(consumeGatewayRestartAuthorization()).toBe(true);
-      expect(consumeGatewayRestartAuthorization()).toBe(false);
-      expect(isGatewayWorkAdmissionClosed()).toBe(true);
-      expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
-      markGatewayRestartHandled();
-      expect(isGatewayWorkAdmissionClosed()).toBe(false);
-      const root = tryBeginGatewayRootWorkAdmission();
-      expect(root).not.toBeNull();
-      root?.release();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(consumeGatewayRestartAuthorization()).toBe(true);
+        expect(consumeGatewayRestartAuthorization()).toBe(false);
+        expect(isGatewayWorkAdmissionClosed()).toBe(true);
+        expect(tryBeginGatewayRootWorkAdmission()).toBeNull();
+        markGatewayRestartHandled();
+        expect(isGatewayWorkAdmissionClosed()).toBe(false);
+        const root = tryBeginGatewayRootWorkAdmission();
+        expect(root).not.toBeNull();
+        root?.release();
+        await vi.advanceTimersByTimeAsync(elapsedMs);
 
-      const second = scheduleGatewayRestart({ delayMs: 0, reason: "second" });
-      expect(second.coalesced).toBe(false);
-      expect(second.delayMs).toBe(30_000);
-      expect(second.cooldownMsApplied).toBe(30_000);
-
-      await vi.advanceTimersByTimeAsync(29_999);
-      expect(countRestartSignalEmits(emitSpy.mock.calls)).toBe(1);
-
-      await vi.advanceTimersByTimeAsync(1);
-      expect(countRestartSignalEmits(emitSpy.mock.calls)).toBe(2);
-    });
-
-    it("admits another restart after its cooldown expires", async () => {
-      const emitSpy = vi.spyOn(process, "emit");
-      using _ = listenForRestartSignal();
-      scheduleGatewayRestart({ delayMs: 0, reason: "first" });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(consumeGatewayRestartAuthorization()).toBe(true);
-      markGatewayRestartHandled();
-      await vi.advanceTimersByTimeAsync(30_000);
-
-      const next = scheduleGatewayRestart({
-        delayMs: 0,
-        reason: "update.run",
-      });
-
-      expect(next.coalesced).toBe(false);
-      expect(next.delayMs).toBe(0);
-      expect(next.cooldownMsApplied).toBe(0);
-
-      await vi.advanceTimersByTimeAsync(0);
-      expect(countRestartSignalEmits(emitSpy.mock.calls)).toBe(2);
-      expect(peekGatewayRestartReason()).toBe("update.run");
-    });
+        const second = scheduleGatewayRestart({ delayMs: 0, reason });
+        const remainingMs = 30_000 - elapsedMs;
+        expect(second.coalesced).toBe(false);
+        expect(second.delayMs).toBe(remainingMs);
+        expect(second.cooldownMsApplied).toBe(remainingMs);
+        if (remainingMs > 0) {
+          await vi.advanceTimersByTimeAsync(remainingMs - 1);
+          expect(countRestartSignalEmits(emitSpy.mock.calls)).toBe(1);
+          await vi.advanceTimersByTimeAsync(1);
+        } else {
+          await vi.advanceTimersByTimeAsync(0);
+        }
+        expect(countRestartSignalEmits(emitSpy.mock.calls)).toBe(2);
+        expect(peekGatewayRestartReason()).toBe(reason);
+      },
+    );
   });
 
   describe("pre-restart deferral check", () => {
     setupRestartSignalSuite();
 
-    it("emits SIGUSR2 immediately when no deferral check is registered", async () => {
-      const emitSpy = vi.spyOn(process, "emit");
-      using _ = listenForRestartSignal();
-      scheduleGatewayRestart({ delayMs: 0 });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
-    });
-
-    it("emits SIGUSR2 immediately when deferral check returns 0", async () => {
-      const emitSpy = vi.spyOn(process, "emit");
-      using _ = listenForRestartSignal();
-      setPreRestartDeferralCheck(() => 0);
-      scheduleGatewayRestart({ delayMs: 0 });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
-    });
+    it.each(["absent", "idle"])(
+      "emits SIGUSR2 immediately when the deferral check is %s",
+      async (check) => {
+        const emitSpy = vi.spyOn(process, "emit");
+        using _ = listenForRestartSignal();
+        if (check === "idle") {
+          setPreRestartDeferralCheck(() => 0);
+        }
+        scheduleGatewayRestart({ delayMs: 0 });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR2");
+      },
+    );
 
     it.each(["drained", "timed out"])("defers SIGUSR2 until work is %s", async (outcome) => {
       const emitSpy = vi.spyOn(process, "emit");

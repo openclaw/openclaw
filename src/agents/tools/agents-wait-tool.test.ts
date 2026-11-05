@@ -796,17 +796,19 @@ describe("agents_wait", () => {
     });
   });
 
-  it("marks entirely missing collector batches as failures without losing per-id errors", async () => {
-    const tool = createMainSessionWaitTool();
-
-    const result = await tool.execute("call", { ids: ["missing"], timeoutSeconds: 0 });
-
-    expect(result.details).toEqual({
-      completed: [],
-      pending: [],
-      errors: [{ runId: "missing", error: "not_found" }],
-      success: false,
-    });
+  it("fails missing batches and guides announcing-only waits without dropping results", async () => {
+    const child = { collect: undefined, expectsCompletionMessage: true };
+    records.set("announcing", { ...collectorRun("announcing", MAIN), ...child });
+    records.set("quiet", { ...collectorRun("quiet", MAIN), collect: undefined });
+    records.set("plain", { ...collectorRun("plain", "agent:other:main"), ...child });
+    addRun("done", { status: "done" });
+    await expect(executeWait(["announcing"])).rejects.toThrow("report back to this session");
+    const notFound = (ids: string[]) => ids.map((runId) => ({ runId, error: "not_found" }));
+    const mix = (await executeWait(["done", "announcing"])).details;
+    expect(mix).toMatchObject({ completed: [{ runId: "done" }], errors: notFound(["announcing"]) });
+    const result = await executeWait(["missing", "plain", "quiet"]);
+    const errors = notFound(["missing", "plain", "quiet"]);
+    expect(result.details).toEqual({ completed: [], pending: [], errors, success: false });
     expect(isToolResultError(result)).toBe(true);
   });
 
