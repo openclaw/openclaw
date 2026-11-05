@@ -8,10 +8,13 @@ import { swapStagedPackageInstall } from "../infra/package-update-swap.js";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../infra/update-npm-prefix.js";
 import { installDurableServiceCli } from "./durable-service-entrypoint.js";
 
-const { runGlobalPackageUpdateSteps, duringBackupVerification } = vi.hoisted(() => ({
-  runGlobalPackageUpdateSteps: vi.fn(),
-  duringBackupVerification: { run: undefined as (() => Promise<void>) | undefined },
-}));
+const { runGlobalPackageUpdateSteps, duringBackupVerification, failLauncherCopy } = vi.hoisted(
+  () => ({
+    runGlobalPackageUpdateSteps: vi.fn(),
+    duringBackupVerification: { run: undefined as (() => Promise<void>) | undefined },
+    failLauncherCopy: { run: undefined as (() => Promise<void>) | undefined },
+  }),
+);
 
 // mock-isolation: npm staging is replaced by a prepared stage; the real package swap and its
 // rollback still run against the durable copy on disk.
@@ -32,6 +35,23 @@ vi.mock("../infra/package-update-npm-root.js", async (importOriginal) => {
     },
   };
 });
+// mock-isolation: the real copy runs except once, when a test fails the install's launcher copy
+// after its package was published, optionally after a competing update publishes first.
+vi.mock("../infra/package-update-filesystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/package-update-filesystem.js")>();
+  return {
+    ...actual,
+    copyPackagePathEntry: async (...args: Parameters<typeof actual.copyPackagePathEntry>) => {
+      const failing = failLauncherCopy.run;
+      if (!failing) {
+        return actual.copyPackagePathEntry(...args);
+      }
+      failLauncherCopy.run = undefined;
+      await failing();
+      throw new Error("launcher copy failed");
+    },
+  };
+});
 // mock-isolation: no npm prefix probe may spawn on the test host.
 vi.mock("../infra/update-global.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-global.js")>()),
@@ -46,6 +66,7 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
   runGlobalPackageUpdateSteps.mockReset();
   duringBackupVerification.run = undefined;
+  failLauncherCopy.run = undefined;
 });
 
 const env = () => ({ OPENCLAW_STATE_DIR: path.join(root, "state") });
@@ -81,6 +102,7 @@ async function publish(
     validateCandidate?: (packageRoot: string) => Promise<Array<{ exitCode: number | null }>>;
     onTransaction?: (transaction: PackageUpdateTransaction) => void | Promise<void>;
   } = {},
+  options: { mayFail?: boolean } = {},
 ) {
   const staged = await stage(name, version);
   const validation = (await updater.validateCandidate?.(staged.packageRoot)) ?? [];
@@ -91,7 +113,10 @@ async function publish(
     stage: staged,
     ...(updater.onTransaction ? { onTransaction: updater.onTransaction } : {}),
   });
-  expect(result.status, result.step.stderrTail ?? "").toBe("committed");
+  if (!options.mayFail) {
+    expect(result.status, result.step.stderrTail ?? "").toBe("committed");
+  }
+  return result;
 }
 
 it.each([
@@ -107,6 +132,12 @@ it.each([
     "after-publication",
     "3.0.0",
   ],
+  ["restores the previous copy after its launcher copy fails", "launcher-copy-fails", "1.0.0"],
+  [
+    "keeps an update published before its failed launcher copy",
+    "update-then-launcher-copy-fails",
+    "3.0.0",
+  ],
 ] as const)("a failed install %s", async (_name, when, expected) => {
   await writePackageRoot(packageRoot(), "1.0.0");
   fs.mkdirSync(durable().binDir, { recursive: true });
@@ -114,12 +145,19 @@ it.each([
   runGlobalPackageUpdateSteps.mockImplementation(
     async (params: Parameters<typeof publish>[2] & { beforeActivate?: () => Promise<void> }) => {
       await params.beforeActivate?.();
-      await publish("install-stage", "2.0.0", params);
+      if (when === "launcher-copy-fails") {
+        failLauncherCopy.run = async () => {};
+      } else if (when === "update-then-launcher-copy-fails") {
+        failLauncherCopy.run = async () => {
+          await publish("update-stage", "3.0.0");
+        };
+      }
+      const result = await publish("install-stage", "2.0.0", params, { mayFail: true });
       if (when === "after-publication") {
         // The updater still awaits its stage cleanup after publishing this install's copy.
         await publish("update-stage", "3.0.0");
       }
-      return { failedStep: null };
+      return { failedStep: result.status === "committed" ? null : result.step };
     },
   );
   const warn = vi.fn();
@@ -139,7 +177,9 @@ it.each([
       install: async (beforeMutation) => {
         await beforeMutation?.();
         expect(liveVersion()).toBe(when === "after-publication" ? "3.0.0" : "2.0.0");
-        const update = () => publish("update-stage", "3.0.0");
+        const update = async () => {
+          await publish("update-stage", "3.0.0");
+        };
         if (when === "before-restore") {
           await update();
         } else if (when === "during-backup-verification") {
@@ -150,12 +190,19 @@ it.each([
       verify: async () => true,
       warn,
     }),
-  ).rejects.toThrow("node activation failed");
+  ).rejects.toThrow(
+    when.includes("launcher-copy-fails")
+      ? "Cannot install durable OpenClaw 2.0.0"
+      : "node activation failed",
+  );
 
   expect(duringBackupVerification.run).toBeUndefined();
+  expect(failLauncherCopy.run).toBeUndefined();
   expect(liveVersion()).toBe(expected);
   if (when === "none") {
     expect(warn).not.toHaveBeenCalled();
+  } else if (expected === "1.0.0") {
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("replaced by another install"));
   } else {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("replaced by another install"));
   }

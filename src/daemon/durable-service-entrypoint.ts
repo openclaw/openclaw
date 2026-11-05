@@ -340,19 +340,20 @@ async function stageDurableCopy(env: NodeJS.ProcessEnv, replacement: DurableServ
   const cancelled = new Error("Durable OpenClaw copy replacement cancelled before activation");
   let transaction: PackageUpdateTransaction | undefined;
   // `openclaw update` does not take the package lock and can publish its own copy meanwhile.
-  // The rollback calls its authority check synchronously right before each rename, so the
-  // check admits only trees this install owns: the copy it published, the backup it restores
-  // (renames keep identity), or none while the copy is moved aside.
+  // Every rollback this install starts is fenced, whether its publication completed, stopped
+  // part way, or its service activation failed. The rollback calls the fence synchronously
+  // right before each rename, and the fence admits only trees this install owns (renames keep
+  // identity): its validated candidate, the copy that was live when the updater registered the
+  // transaction (before any live change), that copy as the backup, or none while moved aside.
   type Identity = { dev: bigint; ino: bigint };
-  let published: Identity | undefined;
+  let original: Identity | undefined;
   let replacedByAnotherInstall = false;
   const identityOf = (entry: string): Identity | undefined => {
     const stat = fsSync.lstatSync(entry, { bigint: true, throwIfNoEntry: false });
     return stat ? { dev: stat.dev, ino: stat.ino } : undefined;
   };
   // The swap renames this validated candidate into place, so its identity is the published
-  // copy's. Reading it here, not after the updater returns, keeps a copy that another owner
-  // publishes while the updater finishes from being taken for this install's.
+  // copy's. It is read here, never from the live path after the updater returns.
   let candidate: Identity | undefined;
   const failure = (step: { name: string; stderrTail?: string | null }) =>
     new Error(
@@ -412,6 +413,7 @@ async function stageDurableCopy(env: NodeJS.ProcessEnv, replacement: DurableServ
     // A retained transaction keeps the previous copy until settle restores or retires it.
     onTransaction: (registered) => {
       transaction = registered;
+      original = identityOf(replacement.packageRoot);
     },
   });
   const outcome = await Promise.race([prepared.promise.then(() => null), completed]);
@@ -422,9 +424,9 @@ async function stageDurableCopy(env: NodeJS.ProcessEnv, replacement: DurableServ
   const unfenced = () => undefined;
   const sameIdentity = (a: Identity | undefined, b: Identity | undefined) =>
     a !== undefined && b !== undefined && a.dev === b.dev && a.ino === b.ino;
-  const restoreAuthority = (backup: Identity | undefined) => () => {
+  const restoreAuthority = (owned: Array<Identity | undefined>) => () => {
     const live = identityOf(replacement.packageRoot);
-    if (live && !sameIdentity(live, published) && !sameIdentity(live, backup)) {
+    if (live && !owned.some((identity) => sameIdentity(live, identity))) {
       replacedByAnotherInstall = true;
       throw new Error(
         `The durable OpenClaw copy at ${replacement.packageRoot} was replaced by another install before this failed install could restore it; keeping the current copy.`,
@@ -438,7 +440,6 @@ async function stageDurableCopy(env: NodeJS.ProcessEnv, replacement: DurableServ
       if (result.failedStep) {
         throw failure(result.failedStep);
       }
-      published = candidate;
     },
     cancel: async (): Promise<string[]> => {
       gate.resolve(false);
@@ -462,9 +463,11 @@ async function stageDurableCopy(env: NodeJS.ProcessEnv, replacement: DurableServ
       const warnings: string[] = [];
       if (decision === "restore") {
         // The transaction keeps this authority for the rest of its restore and retirement.
-        const authority = published
-          ? restoreAuthority(identityOf(transaction.backupRoot))
-          : unfenced;
+        const authority = restoreAuthority([
+          candidate,
+          original,
+          identityOf(transaction.backupRoot),
+        ]);
         const restored = await transaction.rollback(authority).catch((error: unknown) => {
           if (!replacedByAnotherInstall) {
             throw error;
