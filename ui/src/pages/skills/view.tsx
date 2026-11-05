@@ -76,7 +76,11 @@ export function Skills(props: SkillsProps) {
   const emptyMessage = () =>
     !props.state.connected && !props.state.skillsReport
       ? t("skillsPage.disconnected")
-      : t("skillsPage.empty");
+      : props.state.skillsFilter.trim()
+        ? t("skillsPage.noMatches")
+        : skills().length > 0
+          ? t("skillsPage.noFilteredSkills")
+          : t("skillsPage.empty");
   const statusCounts = createMemo(() => {
     const counts: Record<SkillsStatusFilter, number> = {
       all: skills().length,

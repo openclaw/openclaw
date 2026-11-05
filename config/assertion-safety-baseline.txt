@@ -1260,7 +1260,7 @@ src/agents/tools-effective-inventory.ts	4
 src/agents/tools/agents-wait-tool.ts	1
 src/agents/tools/ask-user-tool.ts	2
 src/agents/tools/chat-history-text.ts	1
-src/agents/tools/common.ts	2
+src/agents/tools/common.ts	1
 src/agents/tools/computer-tool-node.ts	1
 src/agents/tools/computer-tool-request.ts	3
 src/agents/tools/computer-tool.ts	2
@@ -1357,7 +1357,7 @@ src/boards/sqlite-board-codec.ts	7
 src/bootstrap/node-startup-env.ts	1
 src/canvas/documents.ts	1
 src/canvas/serve.runtime.ts	1
-src/canvas/widget-tool.ts	2
+src/canvas/widget-tool.ts	1
 src/channels/account-snapshot-fields.ts	1
 src/channels/allowlist-match.ts	1
 src/channels/allowlists/resolve-utils.ts	3

@@ -14,6 +14,7 @@ import {
   prepareClaudeCli,
   recordCredentialBuffers,
   waitForProcessExit,
+  withClaudeCliTestDeadline,
 } from "./cli-runtime.test-support.js";
 import { createClaudeCliTransport } from "./cli-transport.js";
 import { executeClaudeCli } from "./cli.runtime.js";
@@ -115,11 +116,12 @@ async function transportFor(
   context: CliBackendExecuteContext,
   options: Partial<Parameters<typeof createClaudeCliTransport>[0]> = {},
 ) {
+  const request = withClaudeCliTestDeadline(context);
   const transport = await createClaudeCliTransport({
-    context,
+    context: request,
     args: [...context.args],
     initialize: {},
-    currentContext: () => context,
+    currentContext: () => request,
     onMessage: async () => {},
     onRequest: async () => () => ({}),
     onError: () => {},
@@ -194,7 +196,7 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
       );
       context.env.CLAUDE_FIXTURE_SCENARIO = "cancel";
       const current = attachLiveSession(context);
-      const events = executeClaudeCli(context);
+      const events = executeClaudeCli(withClaudeCliTestDeadline(context));
       const iterator = events[Symbol.asyncIterator]();
       const first = await withinTest(iterator.next(), signal);
       expect(first.value).toMatchObject({ type: "system", subtype: "hook_started", hook_id: "0" });
@@ -275,8 +277,9 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
       context.argv0 = "/opt/shims/claude";
       context.env.OPENCLAW_CHILD_OOM_SCORE_ADJ = "1";
       const parentScore = await readFile("/proc/self/oom_score_adj", "utf8");
-      using owner = cliProcess.createClaudeCliProcessOwner(() => context);
-      const child = await owner.spawn(context);
+      const request = withClaudeCliTestDeadline(context);
+      using owner = cliProcess.createClaudeCliProcessOwner(() => request);
+      const child = await owner.spawn({ ...request, signal: request.abortSignal });
       let output = "";
       const consumed = child.consumeStdout((chunk) => {
         output += chunk;
@@ -398,7 +401,10 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
     `,
       );
       context.systemPrompt = LARGE_INPUT;
-      context.abortSignal = AbortSignal.any([controller.signal, context.abortSignal ?? signal]);
+      context.abortSignal = AbortSignal.any([
+        controller.signal,
+        withClaudeCliTestDeadline(context).abortSignal,
+      ]);
       const result = collect(context);
       void result.catch(() => {});
       try {

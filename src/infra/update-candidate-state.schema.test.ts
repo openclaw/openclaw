@@ -6,6 +6,7 @@ import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 import {
   readUpdateDatabaseGenerationsIsolated,
@@ -315,9 +316,7 @@ it("fences WAL schema migration without copying a large registered agent payload
   const migrated = await read();
   expect(migrated).toContainEqual({ path: agentPath, userVersion: 5 });
   expect(updateStateSchemaVersionsMatch(baseline, migrated, comparison)).toBe(false);
-  expect(
-    fs.existsSync(path.join(cache, "openclaw")) ? fs.readdirSync(path.join(cache, "openclaw")) : [],
-  ).toEqual([]);
+  expect(fs.readdirSync(resolvePrivateSqliteSnapshotStagingRoot(env))).toEqual([]);
 });
 
 async function writeInstalledCandidateWorkers(packageRoot: string, legacy: boolean): Promise<void> {

@@ -1,7 +1,6 @@
 {
   "version": 2,
   "locale": "sv",
-  "glossaryHash": "47cf80de6cebb6ba1ac7a0bfd60e96de12a8611785bae9ca4f82c14912db9bd1",
   "translations": {
     "native.android.000452ffd65ee11a": "1 verktyg hoppades över",
     "native.android.004fd715ebe3d013": "Senaste konversationer",
@@ -2301,6 +2300,7 @@
     "native.apple.1e95c351636ace48": "Visa anslutningsinstruktioner. Att en Gateway visas under I närheten innebär inte att dess ägare har verifierats.",
     "native.apple.1eb5cb3fa091bfaa": "Arbetar",
     "native.apple.1eec0c3f30993373": "Ett fel uppstod i röstfunktionen. Försök tala igen.",
+    "native.apple.1eec26d04ba179e3": "Den här översikten kräver ett Gateway-gränssnitt som stöder inloggning via appen. Om det inte går att ansluta behöver du uppdatera Gateway. Appens inbyggda chatt och inställningar är fortfarande tillgängliga.",
     "native.apple.1ef295c1fbce7883": "Visas nu",
     "native.apple.1ef2c9a8cf3055e1": "Konfigurationskoden har tillämpats. Ansluter...",
     "native.apple.1f000764a8ae9309": "Kopiera ID",
@@ -2407,6 +2407,7 @@
     "native.apple.287d7ee22143fe4f": "Byt till en lokal Gateway i den här Mac-appen innan du importerar webbläsarkakor.",
     "native.apple.289e286c20ded5d7": "%lld fler godkännanden",
     "native.apple.28c62043b750117e": "OpenClaw Pausad",
+    "native.apple.28e1f7d66851c866": "Översikten är inte tillgänglig i den här Cloudflare-sessionen. Appens chatt och inställningar fungerar fortfarande.",
     "native.apple.28f50747b4810aa3": "Röstaktivering lyssnar kontinuerligt efter aktiveringsfraser via den här enhetens mikrofon.",
     "native.apple.2963d57ca8f445cb": "Visa alla ägare",
     "native.apple.29779d9500ee1f36": "Tillåta åtkomst till platsinformation när som helst?",
@@ -3856,7 +3857,6 @@
     "native.apple.b5b7102ed84a411c": "Döljer statusetiketten för Gateway",
     "native.apple.b5b843b6a0a96cc5": "Mikrofonen för realtidsfunktionen blev otillgänglig: %@",
     "native.apple.b6047dc323d4d013": "Den beständiga Mac-nodtjänsten är inte tillgänglig i appens profil; körningsnoden är fortfarande tillgänglig.",
-    "native.apple.b63397a349b9705f": "Den här översikten kräver en webbläsarsession. Appens chatt och inställningarna för Gateway är fortfarande tillgängliga.",
     "native.apple.b63d92eab5836702": "Identifieringsloggar",
     "native.apple.b64b9c3d707d9f01": "Färdighetsverkstad",
     "native.apple.b64d7a5636bb97ef": "Exakta HTTPS-värdar, avgränsade med kommatecken eller mellanslag. Tomt tillåter endast SecretRefs från konfigurationen.",

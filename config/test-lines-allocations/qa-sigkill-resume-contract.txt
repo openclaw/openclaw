@@ -1,2 +1,0 @@
-39
-# Verify one fresh SIGKILL recovery input without user-input replay, and subsequent same-session delivery/settlement.
