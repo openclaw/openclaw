@@ -53,7 +53,7 @@ export function seedWarmReloadMcpApp(stateDir: string): OpenClawConfig["mcp"] {
       structuredContent:{metrics:[{value:3000,label:'sessions'},{value:9,label:'rows'},{value:11,label:'reloads'}],
         charts:['0,250 150,220 300,230 450,160 600,180 750,100 1000,40','0,240 150,190 300,210 450,130 600,150 750,70 1000,30']}
     }));
-    tool.update({_meta:{ui:{resourceUri:uri,entrypoints:[{type:'thread'}]}}});
+    tool.update({_meta:{ui:{resourceUri:uri},'openai/ui':{entrypoints:[{type:'thread'}]}}});
     server.registerResource('dashboard',uri,{mimeType:'text/html;profile=mcp-app'},async () => ({contents:[{
       uri,mimeType:'text/html;profile=mcp-app',text:${JSON.stringify(html)}
     }]}));
