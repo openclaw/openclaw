@@ -97,9 +97,6 @@ export function planReleaseChildRerun(input: {
 }):
   | { failed: string[]; jobName: string; mode: "single-job" }
   | { failed: string[]; mode: "receipt"; producer: string };
-export const INSTALL_SMOKE_JOB_NEEDS: Readonly<Record<string, readonly string[]>>;
-export const INSTALL_SMOKE_ATTEMPT_BOUND_CONSUMERS: ReadonlySet<string>;
-export const INSTALL_SMOKE_CALLER_DEPENDENTS: ReadonlySet<string>;
 export function validateReleaseChildRunProvenance(
   run: ReleaseRecord,
   expected?: ReleaseRecord,

@@ -181,9 +181,8 @@ async function runWithAdvisoryLimits(
     !args.some((arg) => /^(?:--output-file|--fix(?:-suggestions|-dangerously)?)(?:=|$)/u.test(arg));
   const githubAdvisory = limitsAreAdvisory(env);
   const release = Boolean(releaseBranchForChecks(process.cwd(), env));
-  let untouchedExclusions = githubAdvisory || release
-    ? undefined
-    : resolveUntouchedOxlintExclusions(configPath, env);
+  let untouchedExclusions =
+    githubAdvisory || release ? undefined : resolveUntouchedOxlintExclusions(configPath, env);
   if (
     (!githubAdvisory && !release && !untouchedExclusions && !evidenceEnabled) ||
     args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg.replace(/[=][\s\S]*$/u, ""))) ||

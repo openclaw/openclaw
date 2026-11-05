@@ -561,7 +561,19 @@ it("retries suspension preparation while database admission is starting", async 
         signal,
       ),
     )
-    .mockResolvedValueOnce({ status: 200, body: { ok: true, payload: { status: "ready", suspensionId: "lease-1", expiresAtMs: Date.now() + 10_000, activeCount: 0, blockers: [] } } });
+    .mockResolvedValueOnce({
+      status: 200,
+      body: {
+        ok: true,
+        payload: {
+          status: "ready",
+          suspensionId: "lease-1",
+          expiresAtMs: Date.now() + 10_000,
+          activeCount: 0,
+          blockers: [],
+        },
+      },
+    });
   const delayImpl = vi.fn(async () => undefined);
 
   await expect(

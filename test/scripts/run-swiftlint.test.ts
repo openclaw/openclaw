@@ -79,10 +79,14 @@ process.exitCode = Number(process.env.SWIFTLINT_TEST_EXIT);
   }
 
   it("disables release line limits but retains correctness and complexity errors", () => {
- const size = ["file_length", "line_length", "function_body_length", "type_body_length"].map((rule) => violation(rule));
- expect(run(size, { github: false, release: true })).toMatchObject({ status: 0, summary: "" });
- for (const rule of ["force_try", "cyclomatic_complexity"]) expect(run([...size, violation(rule)], { github: false, release: true }).status).toBe(2);
- });
+    const size = ["file_length", "line_length", "function_body_length", "type_body_length"].map(
+      (rule) => violation(rule),
+    );
+    expect(run(size, { github: false, release: true })).toMatchObject({ status: 0, summary: "" });
+    for (const rule of ["force_try", "cyclomatic_complexity"]) {
+      expect(run([...size, violation(rule)], { github: false, release: true }).status).toBe(2);
+    }
+  });
   it("keeps local strict lint failures unchanged, even when a local tool sets CI", () => {
     const result = run([violation("line_length")], { github: false });
     expect(result.status).toBe(2);

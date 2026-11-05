@@ -170,7 +170,10 @@ describe("line-cap growth ratchet", () => {
 });
 
 it("skips line-cap growth on release branches but not main", () => {
- const root = fixture(); fs.writeFileSync(path.join(root, "src/file.ts"), source(6));
- git(root, "branch", "-m", "release/2026.11.4"); expect(main(root, ["--base", "HEAD"])).toBe(0);
- git(root, "branch", "-m", "main"); expect(main(root, ["--base", "HEAD"])).toBe(1);
+  const root = fixture();
+  fs.writeFileSync(path.join(root, "src/file.ts"), source(6));
+  git(root, "branch", "-m", "release/2026.11.4");
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  git(root, "branch", "-m", "main");
+  expect(main(root, ["--base", "HEAD"])).toBe(1);
 });

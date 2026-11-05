@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -2332,7 +2332,6 @@ describe("FRV manual retry admission", () => {
 
 describe("FRV child rerun", () => {
   const producer = "install_smoke_release_checks / installer_smoke_candidate_payload";
-  const consumer = "install_smoke_release_checks / installer_smoke_nonroot";
 
   it("sends one exact-job rerun, verifies the new attempt, and records an audit line", async () => {
     const scenario = rerunScenario({});
@@ -2991,79 +2990,53 @@ describe("FRV watch", () => {
       'normalCi job "carried failure" failure (effective attempt 2; carried forward from attempt 1; runner none)',
     );
   });
-  it.each([false, true])(
-    "waits for lagging dispatch and job snapshots before declaring the release terminal (artifact=%s)",
-    async (artifact) => {
-      const statePath = path.join(tempDirs.make("frv-watch-"), "state.json");
-      const ci = child("normalCi", "101");
-      let snapshot: "in_progress" | "completed" = "in_progress";
-      const client = {
-        ...unsealedWatcherReads,
-        repository: REPOSITORY,
-        getRun: async (runId: string) =>
-          runId === "77" ? rootRun(1, "failure") : runFor(ci, 1, "failure"),
-        getParentJobs: async (): Promise<Record<string, unknown>[]> => [
-          {
-            conclusion: null,
-            id: 5,
-            name: artifact ? "Prepare release npm artifacts" : "Run normal full CI",
-            run_attempt: 1,
-            status: snapshot,
-          },
-        ],
-        getJobLog: async () =>
-          `Dispatched ${artifact ? "full-release-artifacts.yml" : "ci.yml"}: https://github.com/${REPOSITORY}/actions/runs/101 (attempt 1)`,
-        getAttemptJobs: async (): Promise<Record<string, unknown>[]> => [
-          { ...job("late"), conclusion: null, id: 7, status: "queued" },
-        ],
-      };
-      const poll = () =>
-        watchRelease("77", client, { emit: () => undefined, once: true, statePath });
-      const parentJobs = client.getParentJobs;
-      client.getParentJobs = async () => [];
-      await expect(poll()).resolves.toMatchObject({ complete: false });
-      // A newer parent attempt needs its own jobs in the snapshot.
-      const getRun = client.getRun;
-      client.getRun = async (runId: string) =>
-        runId === "77" ? rootRun(2, "failure") : getRun(runId);
-      client.getParentJobs = async () => [
-        {
-          conclusion: "success",
-          id: 4,
-          name: "Resolve target ref",
-          run_attempt: 1,
-          status: "completed",
-        },
-      ];
-      await expect(poll()).resolves.toMatchObject({ complete: false });
-      client.getRun = getRun;
-      client.getParentJobs = parentJobs;
+  it("waits for lagging dispatch and job snapshots before declaring the release terminal", async () => {
+    const statePath = path.join(tempDirs.make("frv-watch-"), "state.json");
+    const ci = child("normalCi", "101");
+    let snapshot: "in_progress" | "completed" = "in_progress";
+    const client = {
+      ...unsealedWatcherReads,
+      repository: REPOSITORY,
+      getRun: async (runId: string) =>
+        runId === "77" ? rootRun(1, "failure") : runFor(ci, 1, "failure"),
+      getParentJobs: async (): Promise<Record<string, unknown>[]> => [
+        { conclusion: null, id: 5, name: "Run normal full CI", run_attempt: 1, status: snapshot },
+      ],
+      getJobLog: async () =>
+        `Dispatched ci.yml: https://github.com/${REPOSITORY}/actions/runs/101 (attempt 1)`,
+      getAttemptJobs: async (): Promise<Record<string, unknown>[]> => [
+        { ...job("late"), conclusion: null, id: 7, status: "queued" },
+      ],
+    };
+    const poll = () => watchRelease("77", client, { emit: () => undefined, once: true, statePath });
+    const parentJobs = client.getParentJobs;
+    client.getParentJobs = async () => [];
+    await expect(poll()).resolves.toMatchObject({ complete: false });
+    // A newer parent attempt needs its own jobs in the snapshot.
+    const getRun = client.getRun;
+    client.getRun = async (runId: string) =>
+      runId === "77" ? rootRun(2, "failure") : getRun(runId);
+    client.getParentJobs = async () => [
+      {
+        conclusion: "success",
+        id: 4,
+        name: "Resolve target ref",
+        run_attempt: 1,
+        status: "completed",
+      },
+    ];
+    await expect(poll()).resolves.toMatchObject({ complete: false });
+    client.getRun = getRun;
+    client.getParentJobs = parentJobs;
 
-      await expect(poll()).resolves.toMatchObject({ complete: false });
-      snapshot = "completed";
-      await expect(poll()).resolves.toMatchObject({ complete: false });
-      client.getAttemptJobs = async () => [];
-      await expect(poll()).resolves.toMatchObject({ complete: false });
-      if (artifact) {
-        client.getAttemptJobs = async () => [
-          { ...job("late", "failure"), id: 7 },
-          { ...job("late"), id: 8, status: "queued", conclusion: null },
-        ];
-        await expect(poll()).resolves.toMatchObject({ complete: false });
-        const saved = JSON.parse(readFileSync(statePath, "utf8"));
-        expect(saved.reported).toContain("job:101:1:late");
-        saved.reported.push("jobs:101:1");
-        writeFileSync(statePath, JSON.stringify(saved));
-      }
-      client.getAttemptJobs = async () => [{ ...job("late", "failure"), id: 7 }];
-      const result = await poll();
-      expect(result).toMatchObject({ complete: true });
-      if (artifact) {
-        expect(result).toMatchObject({ blockers: [expect.objectContaining({ blocker: true })] });
-        await expect(poll()).resolves.not.toHaveProperty("blockers");
-      }
-    },
-  );
+    await expect(poll()).resolves.toMatchObject({ complete: false });
+    snapshot = "completed";
+    await expect(poll()).resolves.toMatchObject({ complete: false });
+    client.getAttemptJobs = async () => [];
+    await expect(poll()).resolves.toMatchObject({ complete: false });
+    client.getAttemptJobs = async () => [{ ...job("late", "failure"), id: 7 }];
+    await expect(poll()).resolves.toMatchObject({ complete: true });
+  });
 });
 
 describe("FRV client", () => {

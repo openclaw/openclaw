@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { scanWithPublisherTooling } from "../../scripts/check-plugin-npm-security-scan.mts";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
+import { scanWithPublisherTooling } from "../../scripts/check-plugin-npm-security-scan.mts";
 import { scanPluginNpmArtifactSecurity } from "../../scripts/plugin-npm-security-scan.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 function writeTarString(header: Buffer, offset: number, length: number, value: string): void {
   const bytes = Buffer.from(value, "utf8");

@@ -341,7 +341,7 @@ until their dependent enforcement changes land.
   `--no-follow` to return once the new attempt is observed, then run
   `continue --failed` to reseal.
 - `pnpm frv rerun --run <parent-run-id> --child <child-key|run-id>
-  [--max-attempts N]` records one bounded exact-job rerun. It waits for the
+[--max-attempts N]` records one bounded exact-job rerun. It waits for the
   child to finish, requires exactly one blocking failed job, sends one request
   for that accepted Actions job ID, and returns once the new attempt exists
   without duplicate jobs. Before the request it prints the failed job's runner

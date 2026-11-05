@@ -245,15 +245,20 @@ describe("check-max-lines-ratchet", () => {
 });
 
 it("ignores release size-baseline drift without allowing blanket lint disables", () => {
- const root = tempDirs.make("release-max-lines-");
- fs.mkdirSync(path.join(root, "config")); fs.mkdirSync(path.join(root, "src"));
- fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/stale.ts\n");
- fs.writeFileSync(path.join(root, "src/stale.ts"), "// eslint-disable-next-line max-lines\n");
- commitFixture(root); fs.rmSync(path.join(root, "src/stale.ts"));
- fs.writeFileSync(path.join(root, "src/new.ts"), "// eslint-disable-next-line max-lines\n");
- git(root, ["branch", "-m", "release/2026.11.4"]); expect(main(root, ["--base", "HEAD"])).toBe(0);
- fs.writeFileSync(path.join(root, "src/new.ts"), "/* oxlint-disable */\n");
- vi.spyOn(console, "error").mockImplementation(() => {});
- expect(main(root, ["--base", "HEAD"])).toBe(1);
- expect(console.error).toHaveBeenCalledWith(expect.stringContaining("All-rule lint disables are forbidden"));
+  const root = tempDirs.make("release-max-lines-");
+  fs.mkdirSync(path.join(root, "config"));
+  fs.mkdirSync(path.join(root, "src"));
+  fs.writeFileSync(path.join(root, "config/max-lines-baseline.txt"), "src/stale.ts\n");
+  fs.writeFileSync(path.join(root, "src/stale.ts"), "// eslint-disable-next-line max-lines\n");
+  commitFixture(root);
+  fs.rmSync(path.join(root, "src/stale.ts"));
+  fs.writeFileSync(path.join(root, "src/new.ts"), "// eslint-disable-next-line max-lines\n");
+  git(root, ["branch", "-m", "release/2026.11.4"]);
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  fs.writeFileSync(path.join(root, "src/new.ts"), "/* oxlint-disable */\n");
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  expect(main(root, ["--base", "HEAD"])).toBe(1);
+  expect(console.error).toHaveBeenCalledWith(
+    expect.stringContaining("All-rule lint disables are forbidden"),
+  );
 });

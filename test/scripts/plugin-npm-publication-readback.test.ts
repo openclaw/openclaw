@@ -1,6 +1,9 @@
-import { parseGithubResponse } from "../../scripts/pr-lib/gh-api-preflight.mjs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createPluginNpmPublicationReadback, retryPluginNpmRead } from "../../scripts/plugin-npm-publication-readback.mjs";
+import {
+  createPluginNpmPublicationReadback,
+  retryPluginNpmRead,
+} from "../../scripts/plugin-npm-publication-readback.mjs";
+import { parseGithubResponse } from "../../scripts/pr-lib/gh-api-preflight.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   createNpmPublicationReadbackFixture,
@@ -110,7 +113,8 @@ describe("parent plugin npm publication readback", () => {
 });
 
 afterEach(() => vi.useRealTimers());
-const transientGitHubError = (stdout?: string) => Object.assign(new Error("gh: HTTP 503"), { stderr: "HTTP 503 Server Error", stdout });
+const transientGitHubError = (stdout?: string) =>
+  Object.assign(new Error("gh: HTTP 503"), { stderr: "HTTP 503 Server Error", stdout });
 it("retries only transient GitHub reads and honors rate-limit guidance", async () => {
   const waits: number[] = [];
   const read = vi
@@ -234,4 +238,3 @@ it("revalidates artifact identity after a transient metadata retry", async () =>
   await pending;
   expect(reads).toBe(2);
 });
-

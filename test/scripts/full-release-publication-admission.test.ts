@@ -1363,64 +1363,65 @@ describe("FRV publication source metadata acquisition", () => {
   publicationIt(
     "fetches missing blob:none metadata in one batch instead of per-blob lazy fetches",
     { timeout: 30_000 },
-    async ({ command: processFixture, expect: check }) => processFixture.lifetime.run(async () => {
-      const root = processFixture.createTempDir("frv-publication-metadata-");
-      const source = join(root, "source");
-      const target = join(root, "target");
-      mkdirSync(source);
-      git(source, "init", "-q");
-      git(source, "config", "uploadpack.allowFilter", "true");
-      write(source, "package.json", JSON.stringify({ name: "openclaw" }));
-      for (const id of ["alpha", "beta"]) {
-        write(source, `extensions/${id}/package.json`, JSON.stringify({ name: id }));
-        write(source, `extensions/${id}/README.md`, `# ${id}\n`);
-      }
-      git(source, "add", "-A");
-      git(source, "commit", "-qm", "fixture");
-      const sha = git(source, "rev-parse", "HEAD");
-      git(
-        root,
-        "clone",
-        "-q",
-        "--filter=blob:none",
-        "--no-checkout",
-        pathToFileURL(source).href,
-        target,
-      );
-      const missing = () =>
-        git(target, "rev-list", "--objects", "--missing=print", sha)
-          .split("\n")
-          .filter((line) => line.startsWith("?"));
-      check(missing()).toHaveLength(5);
-      const step = expectDefined(
-        workflow.jobs.resolve_target?.steps.find(
-          (candidate) => candidate.name === "Acquire publication source metadata",
-        ),
-        "publication metadata step",
-      );
-      // Lazy fetches stay disabled, so success proves the batched prefetch supplied every blob.
-      const result = await processFixture.run(
-        "/bin/bash",
-        ["-c", expectDefined(step.run, "publication metadata command")],
-        {
-          cwd: root,
-          env: {
-            PATH: [dirname(nodeExecutable), process.env.PATH ?? ""].join(delimiter),
-            HOME: root,
-            GIT_CONFIG_GLOBAL: "/dev/null",
-            GIT_CONFIG_NOSYSTEM: "1",
-            GIT_NO_LAZY_FETCH: "1",
-            PUBLICATION_TARGET_ROOT: target,
-            PUBLICATION_TARGET_SHA: sha,
+    async ({ command: processFixture, expect: check }) =>
+      processFixture.lifetime.run(async () => {
+        const root = processFixture.createTempDir("frv-publication-metadata-");
+        const source = join(root, "source");
+        const target = join(root, "target");
+        mkdirSync(source);
+        git(source, "init", "-q");
+        git(source, "config", "uploadpack.allowFilter", "true");
+        write(source, "package.json", JSON.stringify({ name: "openclaw" }));
+        for (const id of ["alpha", "beta"]) {
+          write(source, `extensions/${id}/package.json`, JSON.stringify({ name: id }));
+          write(source, `extensions/${id}/README.md`, `# ${id}\n`);
+        }
+        git(source, "add", "-A");
+        git(source, "commit", "-qm", "fixture");
+        const sha = git(source, "rev-parse", "HEAD");
+        git(
+          root,
+          "clone",
+          "-q",
+          "--filter=blob:none",
+          "--no-checkout",
+          pathToFileURL(source).href,
+          target,
+        );
+        const missing = () =>
+          git(target, "rev-list", "--objects", "--missing=print", sha)
+            .split("\n")
+            .filter((line) => line.startsWith("?"));
+        check(missing()).toHaveLength(5);
+        const step = expectDefined(
+          workflow.jobs.resolve_target?.steps.find(
+            (candidate) => candidate.name === "Acquire publication source metadata",
+          ),
+          "publication metadata step",
+        );
+        // Lazy fetches stay disabled, so success proves the batched prefetch supplied every blob.
+        const result = await processFixture.run(
+          "/bin/bash",
+          ["-c", expectDefined(step.run, "publication metadata command")],
+          {
+            cwd: root,
+            env: {
+              PATH: [dirname(nodeExecutable), process.env.PATH ?? ""].join(delimiter),
+              HOME: root,
+              GIT_CONFIG_GLOBAL: "/dev/null",
+              GIT_CONFIG_NOSYSTEM: "1",
+              GIT_NO_LAZY_FETCH: "1",
+              PUBLICATION_TARGET_ROOT: target,
+              PUBLICATION_TARGET_SHA: sha,
+            },
+            encoding: "utf8",
+            timeout: 20_000,
           },
-          encoding: "utf8",
-          timeout: 20_000,
-        },
-      );
-      check(result.status, result.stderr).toBe(0);
-      check(result.stdout).not.toContain("::warning::");
-      check(missing()).toEqual([]);
-    }),
+        );
+        check(result.status, result.stderr).toBe(0);
+        check(result.stdout).not.toContain("::warning::");
+        check(missing()).toEqual([]);
+      }),
   );
 });
 

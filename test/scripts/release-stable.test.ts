@@ -38,8 +38,6 @@ const fixture = (state?: ReturnType<typeof phaseState>) => {
 };
 const fetchMain = () => step("git", ["fetch", "origin", "main:refs/remotes/origin/main"]);
 const mainSha = () => step("git", ["rev-parse", "origin/main"], CUT_SHA);
-const jsonStep = (bin: FakeStep["bin"], match: string[], value: unknown) =>
-  step(bin, match, JSON.stringify(value));
 
 function newCut(packageVersion = RELEASE, missing = ""): FakeStep[] {
   return [
@@ -76,7 +74,8 @@ const parentRuns = (runs: object[]) =>
 const children = (runs: object[]) =>
   step("gh", ["api", "*"], JSON.stringify({ workflow_runs: runs }));
 
-const jsonStep = (command: string, args: string[], value: unknown) => step(command, args, JSON.stringify(value));
+const jsonStep = (command: string, args: string[], value: unknown) =>
+  step(command, args, JSON.stringify(value));
 function publicationWatchFixture(approvalPending = false) {
   const state = publishState(true);
   state.publish.publishRunId = "301";

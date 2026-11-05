@@ -2,12 +2,15 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { LaneState } from "../../scripts/lib/cross-os-release-checks/config.ts";
 import {
   buildInstallerSmokeScript,
   runCommand,
 } from "../../scripts/lib/cross-os-release-checks/index.ts";
-import type { LaneState } from "../../scripts/lib/cross-os-release-checks/config.ts";
-import { runInstallerSmoke, verifyFreshShellCommand } from "../../scripts/lib/cross-os-release-checks/installed.ts";
+import {
+  runInstallerSmoke,
+  verifyFreshShellCommand,
+} from "../../scripts/lib/cross-os-release-checks/installed.ts";
 import { closeHttpServer, listenLoopback } from "../helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.ts";
 

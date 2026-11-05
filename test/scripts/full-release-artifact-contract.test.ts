@@ -1699,7 +1699,12 @@ describe("full release artifact contract", () => {
 it("keeps collection and post-upload admission in separate bounded windows", () => {
   const { source, observations, descriptor } = registryEvidence();
   observations.collectionCompletedAt = "2026-09-13T14:05:00.000Z";
-  const admission = createPublicationAdmission(source, observations, descriptor, "2026-09-13T14:10:00.000Z");
+  const admission = createPublicationAdmission(
+    source,
+    observations,
+    descriptor,
+    "2026-09-13T14:10:00.000Z",
+  );
   expect(admission.binding.admittedAt).toBe("2026-09-13T14:10:00.000Z");
   expect(() =>
     createPublicationAdmission(source, observations, descriptor, "2026-09-13T14:10:00.001Z"),
