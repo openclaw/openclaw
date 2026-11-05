@@ -13,6 +13,7 @@ import {
   resolveDaemonInstallRuntimeInputs,
   resolveDaemonServicePathDirs,
 } from "./daemon-install-plan.shared.js";
+import { buildExpectedGatewayServicePlan } from "./doctor-gateway-runtime-plan.js";
 
 let root: string;
 let originalArgv: string[];
@@ -76,18 +77,27 @@ describe("durable CLI for an npx copy", () => {
       devMode: false,
     });
   beforeEach(() => {
-    process.argv = [
-      "node",
-      entrypoint(path.join(".npm", "_npx", "abc", "node_modules", "openclaw")),
-    ];
+    const npx = entrypoint(path.join(".npm", "_npx", "abc", "node_modules", "openclaw"));
+    fs.writeFileSync(path.join(npx, "..", "package.json"), '{"name":"openclaw","version":"1.2.3"}');
+    fs.mkdirSync(path.join(npx, "..", "dist"));
+    fs.writeFileSync(path.join(npx, "..", "dist", "index.js"), "");
+    process.argv = ["node", npx];
   });
 
   it("names the explicit install instead of planning a missing durable copy", async () => {
-    const npxPackage = path.dirname(process.argv[1] ?? "");
-    fs.writeFileSync(
-      path.join(npxPackage, "package.json"),
-      '{"name":"openclaw","version":"1.2.3"}',
-    );
+    // Doctor keeps the service's CLI instead of planning the npx entry.
+    const retained = path.join(root, "global", "dist", "index.js");
+    fs.mkdirSync(path.dirname(retained), { recursive: true });
+    fs.writeFileSync(retained, "");
+    const doctorPlan = await buildExpectedGatewayServicePlan({
+      cfg: {},
+      command: { programArguments: [process.execPath, retained, "gateway"] },
+      serviceInstallEnv: { OPENCLAW_STATE_DIR: path.join(root, "state") },
+      port: 18789,
+      runtime: "node",
+      runtimePath: process.execPath,
+    });
+    expect(doctorPlan.programArguments).toContain(retained);
     await expect(plan()).rejects.toThrow(/missing.*npx openclaw@1\.2\.3 gateway install --force/u);
     expect(fs.existsSync(path.join(root, "state", "npm"))).toBe(false);
   });
@@ -98,13 +108,6 @@ describe("durable CLI for an npx copy", () => {
   ] as const)(
     "plans a first %s install with the real argument builder before the copy exists",
     async (service, entry) => {
-      const npxPackage = path.dirname(process.argv[1] ?? "");
-      fs.writeFileSync(
-        path.join(npxPackage, "package.json"),
-        '{"name":"openclaw","version":"1.2.3"}',
-      );
-      fs.mkdirSync(path.join(npxPackage, "dist"));
-      fs.writeFileSync(path.join(npxPackage, "dist", "index.js"), "");
       const inputs = await resolveDaemonInstallPlanInputs({
         service,
         env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
