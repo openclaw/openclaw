@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { Show, createMemo, onSettled } from "solid-js";
-import { DETAILS_SECTION_MOTION } from "../../../components/details-section-motion.ts";
+import { DETAILS_SECTION_MOTION } from "../../../components/details-section-motion-options.ts";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import "../../../styles/chat/details-desktop-body.css";
 
@@ -26,19 +26,15 @@ export function ChatDetailsDesktopBody(props: {
   let animation: Animation | undefined;
   const finish = () => {
     loadingHeight = 0;
-    if (!animation) {
-      return;
-    }
-    animation.cancel();
+    animation?.cancel();
     animation = undefined;
-    scroll.style.removeProperty("height");
   };
   const animate = (from: number, to: number, duration: number) => {
     destination = to;
-    scroll.style.height = to + "px";
     animation = scroll.animate([{ height: from + "px" }, { height: to + "px" }], {
       ...DETAILS_SECTION_MOTION,
       duration,
+      fill: "both",
     });
     animation.onfinish = finish;
   };

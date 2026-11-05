@@ -89,7 +89,9 @@ it("returns to natural height and the original scroll work after the cold handof
   view.update({ height: 90, presented: true });
   view.onLoading(false);
   view.onReady();
+  expect(view.body.getAnimations()).toHaveLength(1);
   view.body.parentElement!.remove();
   view.update({ height: 90, presented: false });
+  expect(view.body.getAnimations()).toHaveLength(0);
   expect(view.body.style.height).toBe("");
 });

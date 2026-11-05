@@ -39,30 +39,30 @@
   overscroll-behavior: contain;
   scrollbar-gutter: stable both-edges;
   scrollbar-color: var(--details-scrollbar-thumb) transparent;
-}
 
-.chat-details-desktop-body:hover {
-  --details-scrollbar-thumb: color-mix(in srgb, var(--muted) 32%, transparent);
-}
+  &:hover {
+    --details-scrollbar-thumb: color-mix(in srgb, var(--muted) 32%, transparent);
+  }
 
-.chat-details-desktop-body[data-fade-top] {
-  --details-fade-top: 24px;
-}
+  &[data-fade-top] {
+    --details-fade-top: 24px;
+  }
 
-.chat-details-desktop-body[data-fade-bottom] {
-  --details-fade-bottom: 24px;
-}
+  &[data-fade-bottom] {
+    --details-fade-bottom: 24px;
+  }
 
-.chat-details-desktop-body:is([data-fade-top], [data-fade-bottom]) {
-  mask:
-    linear-gradient(
-      to bottom,
-      transparent,
-      black var(--details-fade-top),
-      black calc(100% - var(--details-fade-bottom)),
-      transparent
-    ),
-    linear-gradient(black, black) right / var(--scrollbar-size) 100% no-repeat;
+  &:is([data-fade-top], [data-fade-bottom]) {
+    mask:
+      linear-gradient(
+        to bottom,
+        transparent,
+        black var(--details-fade-top),
+        black calc(100% - var(--details-fade-bottom)),
+        transparent
+      ),
+      linear-gradient(black, black) right / var(--scrollbar-size) 100% no-repeat;
+  }
 }
 
 .chat-details-desktop-body__content {
