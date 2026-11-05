@@ -174,11 +174,10 @@ describe("native plugin browser builds", () => {
   );
 
   it("requires author-installed compilers without replacing existing builds", async () => {
+    const missing = await fixture();
+    await fs.unlink(path.join(missing.rootDir, "node_modules/esbuild"));
+    await expect(buildPluginControlUi(missing)).rejects.toHaveProperty("humanOutput");
     const project = await fixture();
-    const compiler = path.join(project.rootDir, "node_modules/esbuild");
-    await fs.unlink(compiler);
-    await expect(buildPluginControlUi(project)).rejects.toHaveProperty("humanOutput");
-    await fs.symlink(path.resolve("node_modules/esbuild"), compiler, "dir");
     await writeFiles(project.rootDir, {
       "renderer.js":
         "export const createElement = (tag, props, ...children) => ({ tag, props, children });",
