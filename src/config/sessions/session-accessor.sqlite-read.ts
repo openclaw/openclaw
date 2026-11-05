@@ -569,16 +569,18 @@ export function readTranscriptSnapshot(
 export function readTranscriptEventRows(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
+  afterSeq?: number,
 ): SqliteTranscriptSnapshotRow[] {
   return readHotSessionTranscriptSnapshot(database, sessionId, "raw rows", () => {
-    const rows = executeSqliteQuerySync(
-      database.db,
-      getSessionKysely(database.db)
-        .selectFrom("transcript_events")
-        .select(["event_json", "event_zstd", "event_utf8_bytes", "seq"])
-        .where("session_id", "=", sessionId)
-        .orderBy("seq", "asc"),
-    ).rows;
+    let query = getSessionKysely(database.db)
+      .selectFrom("transcript_events")
+      .select(["event_json", "event_zstd", "event_utf8_bytes", "seq"])
+      .where("session_id", "=", sessionId)
+      .orderBy("seq", "asc");
+    if (afterSeq !== undefined) {
+      query = query.where("seq", ">", afterSeq);
+    }
+    const rows = executeSqliteQuerySync(database.db, query).rows;
     return rows.map((row) => ({
       eventJson: readTranscriptPayload(row),
       seq: sqliteNumber(row.seq),

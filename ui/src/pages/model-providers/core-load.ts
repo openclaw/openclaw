@@ -24,6 +24,8 @@ async function loadConnectedProviderData(
   return {
     ...target.data,
     providerOutcomes: refreshed.providerOutcomes,
+    pendingProviders: refreshed.pendingProviders,
+    catalogRequestFailed: refreshed.catalogRequestFailed,
     catalogError: refreshed.catalogError,
     error: authStatus ? refreshed.error : t("modelProviders.login.statusRefreshFailed"),
     authStatus:

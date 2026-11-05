@@ -9,7 +9,7 @@ import {
 } from "@openclaw/gateway-protocol/client-info";
 import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { t } from "../i18n/index.ts";
-import { formatUiError } from "../lib/format-error.ts";
+import { formatConnectionError, formatConnectionErrorSummary } from "../lib/connection-error.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { generateUUID } from "../lib/uuid.ts";
 
@@ -193,7 +193,7 @@ export function createNativeGatewayConnectAuth(
           // MessagePort has a fixed peer, not a Window target origin.
           port.postMessage(message);
         } catch (error) {
-          accept({ id, error: formatUiError(error) });
+          void formatConnectionError(error).then((detail) => accept({ id, error: detail }));
         }
       }
       waitingForPort.clear();
@@ -253,9 +253,17 @@ export function createNativeGatewayConnectAuth(
           resolve(authorization);
         }
       };
+      const failBridge = (error: unknown) =>
+        formatConnectionError(error).then((message) =>
+          finish(new NativeGatewayAuthUnavailableError(message, { cause: error })),
+        );
       const abort = () =>
         finish(
-          new Error(formatUiError(signal.reason ?? "Native Gateway authorization cancelled.")),
+          new Error(
+            formatConnectionErrorSummary(
+              signal.reason ?? "Native Gateway authorization cancelled.",
+            ),
+          ),
         );
       const timer = setTimeout(
         () => finish(new NativeGatewayAuthUnavailableError(t("runtimeErrors.nativeTimeout"))),
@@ -269,7 +277,7 @@ export function createNativeGatewayConnectAuth(
           }
           finish(undefined, readAuthorization(reply.result, request));
         } catch (error) {
-          finish(error instanceof Error ? error : new Error(formatUiError(error)));
+          finish(error instanceof Error ? error : new Error(formatConnectionErrorSummary(error)));
         }
       });
       const stopAbort = listen(signal, "abort", abort, { once: true });
@@ -288,12 +296,10 @@ export function createNativeGatewayConnectAuth(
           waitingForPort.set(request.id, JSON.stringify(request));
         }
         if (result) {
-          void result.then(accept, (error: unknown) =>
-            finish(new NativeGatewayAuthUnavailableError(formatUiError(error))),
-          );
+          void result.then(accept, failBridge);
         }
       } catch (error) {
-        finish(new NativeGatewayAuthUnavailableError(formatUiError(error)));
+        void failBridge(error);
       }
     });
   };

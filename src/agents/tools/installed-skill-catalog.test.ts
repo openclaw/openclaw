@@ -33,6 +33,33 @@ async function matchingNames(catalog: InstalledSkill[], query: string) {
 }
 
 describe("installed skill catalog", () => {
+  it("tokenizes large unchanged bodies once across fresh catalogs and visibility changes", async () => {
+    const catalog = Array.from({ length: 135 }, (_, index) =>
+      skill(
+        `large-${index}`,
+        "Guide",
+        `# Body ${index}\n${"Search records and read files. ".repeat(400)}`,
+      ),
+    );
+    const tokenize = vi.spyOn(ranking, "tokenizeDocument");
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const current = catalog
+        .slice(attempt % 2)
+        .map((entry) => skill(entry.name, entry.description, entry.source.readContent));
+      expect((await searchBodies(current, "records")).skills).toHaveLength(5);
+    }
+    const revised = catalog.map((entry, index) =>
+      skill(
+        entry.name,
+        entry.description,
+        index === 0 ? "# Revised body nebula" : entry.source.readContent,
+      ),
+    );
+    expect(await matchingNames(revised, "nebula")).toEqual(["large-0"]);
+    expect(await matchingNames([...catalog], "nebula")).toEqual([]);
+    expect(tokenize.mock.calls.filter(([text]) => text.startsWith("#"))).toHaveLength(136);
+  });
+
   it("reuses decoded file revisions across fresh catalogs without serializing their bodies", async () => {
     const directory = temps.make("skill-body-revision-");
     const filePath = path.join(directory, "SKILL.md");
@@ -198,7 +225,7 @@ describe("installed skill catalog", () => {
     // Metadata has no run-held reference; body postings do.
     const bodyBuilds = build.mock.calls
       .slice(before)
-      .filter(([documents]) => documents.some(({ terms }) => terms.includes("astrometric")));
+      .filter(([documents]) => documents.some(({ terms }) => terms.has("astrometric")));
     expect(bodyBuilds).toHaveLength(0);
     expect(await matchingNames(first, "astrometric")).toEqual(["retained"]);
   });

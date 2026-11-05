@@ -649,6 +649,37 @@ function captureGatewayOperatorRecoverySnapshot(params: {
   config: OpenClawConfig;
 }): OperatorRunRecoverySnapshot | undefined {
   const { client, authority, identity } = params;
+  const principal = client.internal?.remoteIngressPrincipal;
+  if (principal?.recoverySource) {
+    principal.assertCurrent();
+    authority.assertCurrent();
+    const modelPolicy = captureOperatorModelPolicySnapshot(params.modelPolicy);
+    if (params.modelPolicy && !modelPolicy) {
+      return undefined;
+    }
+    const profile = identity.readCurrentProfile();
+    return normalizeGatewayOperatorRecoverySnapshot({
+      profileId: authority.profileId,
+      scopes: [...authority.scopes],
+      assignedRole: profile.assignedRole,
+      githubLogin: profile.githubLogin ?? null,
+      rolePolicy: sourceRolePolicy(
+        resolveOperatorRolePolicyForAssignment(
+          profile.profileId,
+          profile.assignedRole,
+          params.config,
+          profile.githubLogin ?? null,
+        ),
+      ),
+      modelPolicy,
+      grant: authority.gatewayAccessGrant,
+      aliasBindingIds: identity.emailBindingIds,
+      sourceIngress: "principal",
+      ingress: principal.recoverySource,
+      controlUiAdmin: false,
+      localOperator: false,
+    });
+  }
   if (
     !client.internal?.authenticatedOperator ||
     client.internal.syntheticClient ||

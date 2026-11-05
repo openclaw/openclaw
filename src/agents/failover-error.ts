@@ -181,6 +181,7 @@ function normalizeFailoverStatus(status: number | undefined, code?: string): num
 const FAILOVER_STATUS = new Map<FailoverReason, number>([
   ["billing", 402],
   ["server_error", 500],
+  ["route_unavailable", 503],
   ["rate_limit", 429],
   ["overloaded", 503],
   ["auth", 401],

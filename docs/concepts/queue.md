@@ -99,9 +99,30 @@ Per-session `/queue` options apply to queued delivery. The `debounce` option als
 
 - `debounce`: quiet window before draining queued followups or collect batches; in Codex `steer` mode, quiet window before sending batched `turn/steer`. Bare numbers are milliseconds; units `ms`, `s`, `m`, `h`, and `d` are accepted.
 - `cap`: max queued messages per session. Values below `1` are ignored.
-- `drop: "summarize"` (default): drop the oldest queued entries as needed, keep compact summaries, and inject them as a synthetic followup prompt. Each summarized entry keeps its own sender and conversation context, and summarized room events keep their room-event instructions.
+- `drop: "summarize"` (default): drop the oldest queued entries as needed, keep compact summaries, and inject them as a synthetic followup prompt. Each summarized entry keeps its own sender and conversation context.
 - `drop: "old"`: drop the oldest queued entries as needed, without preserving summaries.
 - `drop: "new"`: reject the newest message when the queue is already full.
+
+At capacity, optional ambient room events yield to user requests before these drop
+policies apply; incoming room events cannot evict user requests. With `summarize`,
+OpenClaw preserves short previews as background context on an eligible pending
+turn in the same channel, account, room, thread, and Gateway. This creates no
+extra model turns. Each recipient keeps the newest `min(cap, 20)` previews in
+arrival order, with message text capped at 160 characters and sender/message ID
+fields capped at 80 characters each. Previews are untrusted context, not requests
+or sender authority. Input text awaiting its write hook is replaced by an omission
+notice; approved text is used without restoring redacted content.
+
+Context is attached once when the recipient executes, including across retries.
+It expires if that recipient is canceled or discarded; if no eligible pending
+recipient exists, the ambient event is discarded without a preview. `old` and
+`new` discard overflow ambient events without previews. Among ambient
+events, `drop: "new"` keeps the existing events, while the other policies keep the
+newest. Surviving messages retain FIFO order. Active turns, protected recovery
+work, and events requiring a reply are not eligible for ambient shedding. Each
+discard is logged without message content, and its channel receipt is settled so
+durable ingress does not retry it. Recent room history remains subject to the
+channel's configured history window.
 
 Gateway followup and collect debounce windows measure elapsed time, so wall-clock corrections do not shorten or extend them.
 
