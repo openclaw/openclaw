@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { XApiClient, XPage, XPost, XUser } from "./api.js";
 import { XBudgetExceededError } from "./spend.js";
 
@@ -123,7 +124,7 @@ export async function assembleXThread(options: {
       .join(
         "\n",
       )}${budgetTruncated ? "\n[thread context truncated by budget]" : ""}\n\nReply to the triggering mention.`,
-    label: `${handle(labelPost)}: ${labelPost.text.replace(/\s+/g, " ").slice(0, 80)}`,
+    label: `${handle(labelPost)}: ${truncateUtf16Safe(labelPost.text.replace(/\s+/g, " "), 80)}`,
     posts: selected,
     users: [...users.values()],
   };
