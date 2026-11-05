@@ -1,0 +1,2 @@
+88
+# Cover new image-entry routing and disk plugin identity through the existing standalone owner fixture.

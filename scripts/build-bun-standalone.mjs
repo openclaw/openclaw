@@ -487,7 +487,7 @@ globalThis.__openclawStandaloneImport = (parent, specifier, options) => {
     commonJsEntries.has(target) ? { ...loaded.default, ...loaded } : loaded);
 };
 ${requireAdapter.bootstrap}
-${createStandaloneExternalModuleBootstrap({ source: Boolean(sourceGraph) })}
+${createStandaloneExternalModuleBootstrap()}
 ${createStandaloneModuleResolverBootstrap()}
 if (process.env.OPENCLAW_STANDALONE_TRACE_PRELOAD) {
   await import(process.env.OPENCLAW_STANDALONE_TRACE_PRELOAD);
