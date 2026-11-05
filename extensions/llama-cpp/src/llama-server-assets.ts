@@ -2,9 +2,9 @@ import path from "node:path";
 import type { ArchiveExtractLimits } from "openclaw/plugin-sdk/archive";
 import { resolveLlamaCppDataDir } from "./defaults.js";
 
-export const LLAMA_SERVER_RELEASE = "b11972";
-export const LLAMA_SERVER_BUILD = 11_972;
-export const LLAMA_SERVER_COMMIT = "cf24317bea431b807dc93319d74c61bed6e20aff";
+export const LLAMA_SERVER_RELEASE = "b11977";
+export const LLAMA_SERVER_BUILD = 11_977;
+export const LLAMA_SERVER_COMMIT = "7ac5727d6037ec99c31a28c6520f45de154199d9";
 
 type RegularFileAliases = ReadonlyArray<readonly [source: string, aliases: readonly string[]]>;
 
@@ -120,8 +120,8 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archive: "tar.gz",
     archiveRoot: `llama-${LLAMA_SERVER_RELEASE}`,
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-macos-arm64.tar.gz`,
-    sha256: "0b39e2cd18407c7f7582c7a9aa7a3328875aefbdef0d13d5f6c3f20dd11401ad",
-    sizeBytes: 16_463_707,
+    sha256: "80aec269ac12a1db9665a99e5754a4365c65d4432631b916d15a85f55d735a74",
+    sizeBytes: 16_463_726,
     executable: "llama-server",
     regularFileAliases: MACOS_METAL_ALIASES,
   },
@@ -132,8 +132,8 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archive: "tar.gz",
     archiveRoot: `llama-${LLAMA_SERVER_RELEASE}`,
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-macos-x64.tar.gz`,
-    sha256: "2b17ea5239d5de82c6490795355e830ff9405343d869bf19f16785e6ad07dc8d",
-    sizeBytes: 12_208_305,
+    sha256: "51477b2d73146330d0e357107a031e2281d8e1b4e538298cab2f1eba8e0fc43b",
+    sizeBytes: 12_207_960,
     executable: "llama-server",
     regularFileAliases: MACOS_ALIASES,
   },
@@ -144,8 +144,8 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archive: "tar.gz",
     archiveRoot: `llama-${LLAMA_SERVER_RELEASE}`,
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-ubuntu-arm64.tar.gz`,
-    sha256: "0a381a5550374d5b48053778ad724a8810932ba238207a754c888bcbaba1417d",
-    sizeBytes: 18_427_765,
+    sha256: "33f5a93520a0de74714de01d7cf311cddc6354009f75af912ee6cf9b77eb3496",
+    sizeBytes: 18_428_812,
     executable: "llama-server",
     regularFileAliases: LINUX_ALIASES,
   },
@@ -156,8 +156,8 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archive: "tar.gz",
     archiveRoot: `llama-${LLAMA_SERVER_RELEASE}`,
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-ubuntu-x64.tar.gz`,
-    sha256: "24519b79152045d6b8b8844ee44ffd96e59a0e1d52a023aa28a1ddc55a3c30e6",
-    sizeBytes: 22_692_140,
+    sha256: "3b0c3d7d7f7c492f59bb5625bd077727f5322fff72b964dfa32ceca45bbe5053",
+    sizeBytes: 22_692_056,
     executable: "llama-server",
     regularFileAliases: LINUX_ALIASES,
   },
@@ -168,8 +168,8 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archive: "zip",
     archiveRoot: ".",
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-win-cuda-12.4-x64.zip`,
-    sha256: "2c8b6e789650f836291e7b1732dc6c11f6b3a1cf86440fc19d14caa2f55237bd",
-    sizeBytes: 279_764_740,
+    sha256: "01d4a7b300f9acf3ef9d81854f426aa12d88b157de1ea1f453d11210c5fe6d57",
+    sizeBytes: 279_764_883,
     executable: "llama-server.exe",
     regularFileAliases: [],
     limits: CUDA_ARCHIVE_LIMITS,
@@ -194,8 +194,8 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archive: "zip",
     archiveRoot: ".",
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-win-cpu-arm64.zip`,
-    sha256: "50c725adafb15a5198341b3c8a38bc21a95179cb65956015ceaa421e9c7b4a84",
-    sizeBytes: 13_021_174,
+    sha256: "efa3d02abab4952a6afe63ea273aa1771233dc62ceef766f23312c9165c17dde",
+    sizeBytes: 13_021_179,
     executable: "llama-server.exe",
     regularFileAliases: [],
     dependencies: [WINDOWS_ARM64_VC_RUNTIME],
@@ -207,8 +207,8 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     archive: "zip",
     archiveRoot: ".",
     name: `llama-${LLAMA_SERVER_RELEASE}-bin-win-cpu-x64.zip`,
-    sha256: "3ae2300ba3abbd7dc3ed1555a2688338451767737b1a66cd211becb4531244d2",
-    sizeBytes: 24_409_699,
+    sha256: "2438535001da11f38a050b31fea91765f637aef0efa46f465d9af849473f4d05",
+    sizeBytes: 24_408_628,
     executable: "llama-server.exe",
     regularFileAliases: [],
     dependencies: [WINDOWS_X64_VC_RUNTIME],
