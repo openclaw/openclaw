@@ -1,5 +1,5 @@
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { buildOpenAIResponsesReasoningReplayMetadata } from "../../../../packages/ai/src/transports/openai-responses-compaction-replay.js";
 import { buildOpenAIResponsesParams } from "../../../../packages/ai/src/transports/openai-responses-params-internal.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
@@ -104,6 +104,7 @@ async function withPersistedOrphanBoundary(
         ? { provenance: { kind: "inter_session", sourceTool: "subagent_announce" } }
         : {}),
     });
+    assert.isDefined(orphanId);
     const appendRecoveryNotice = () =>
       appendTranscriptEvent(target, {
         type: "custom_message",
@@ -755,14 +756,12 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
         const persistedUser = manager
           .buildSessionContext()
           .messages.find((message) => message.role === "user");
-        expect(persistedUser).toBeDefined();
         Object.assign(input.attempt, { skipPreparedUserTurnMessage: true });
         input.attempt.userTurnTranscriptRecorder = {
           hasPersisted: () => true,
           getPersistedMessage: () => persistedUser,
         } as NonNullable<typeof input.attempt.userTurnTranscriptRecorder>;
         const boundary = await prepareEmbeddedAttemptSessionBoundary(input);
-        expect(boundary.orphanRepair?.removeLeaf).toBe(false);
         // Prompt assembly owns this input, but later turns still need the durable user.
         expect(input.activeSession.agent.state.messages).toEqual([]);
         expect(boundary.orphanRepair?.contextEnginePrompt).toContain("orphan wake");

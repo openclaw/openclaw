@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { prepareModelPromptProjection } from "../sessions/user-turn-transcript.message.js";
 import { validateAnthropicTurns, validateGeminiTurns } from "./embedded-agent-helpers/turns.js";
 import { castAgentMessages as asMessages } from "./test-helpers/agent-message-fixtures.js";
 import { textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
@@ -56,10 +57,11 @@ it("preserves signed tool-result pairing across an injected assistant without me
   ).toEqual([user("Use tool"), source, injected, result]);
 });
 
-it("backfills merged array-user timestamps", () => {
+it("preserves each user projection and the timestamp when merging turns", () => {
+  const projected = prepareModelPromptProjection(user("after"), "projected");
   expect(
-    validateAnthropicTurns(asMessages([{ ...user("before"), timestamp: 1000 }, user("after")])),
-  ).toEqual([{ ...user([text("before"), text("after")]), timestamp: 1000 }]);
+    validateAnthropicTurns(asMessages([{ ...user("before"), timestamp: 1000 }, projected])),
+  ).toEqual([{ ...user([text("before"), text("projected")]), timestamp: 1000 }]);
 });
 
 const legacy = [call("functionCall"), text("Checking")];

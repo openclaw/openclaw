@@ -1,5 +1,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { projectRecordedModelPrompt } from "../../sessions/user-turn-transcript.message.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { isThinkingLikeBlock } from "../thinking-block.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
@@ -284,15 +285,19 @@ function mergeConsecutiveUserTurns(
   previous: Extract<AgentMessage, { role: "user" }>,
   current: Extract<AgentMessage, { role: "user" }>,
 ): Extract<AgentMessage, { role: "user" }> {
+  // Materialize each row before merging so the newest projection cannot replace
+  // the first text block of the combined turn on later replay.
+  const previousMessage = projectRecordedModelPrompt(previous);
+  const currentMessage = projectRecordedModelPrompt(current);
   const mergedContent = [
-    ...normalizeUserContentForMerge(previous.content),
-    ...normalizeUserContentForMerge(current.content),
+    ...normalizeUserContentForMerge(previousMessage.content),
+    ...normalizeUserContentForMerge(currentMessage.content),
   ];
 
   return {
-    ...current,
+    ...currentMessage,
     content: mergedContent,
-    timestamp: current.timestamp ?? previous.timestamp,
+    timestamp: currentMessage.timestamp ?? previousMessage.timestamp,
   };
 }
 
