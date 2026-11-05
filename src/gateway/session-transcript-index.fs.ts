@@ -407,6 +407,7 @@ async function acquireTranscriptIndex(filePath: string): Promise<CachedTranscrip
 export async function prepareSessionTranscriptIndex(
   filePath: string,
   sessionId: string,
+  deferPreparation = false,
 ): Promise<{ displaySource: string; index?: SessionTranscriptIndex } | null> {
   const cached = await acquireTranscriptIndex(filePath);
   if (!cached) {
@@ -414,7 +415,7 @@ export async function prepareSessionTranscriptIndex(
   }
   try {
     assertSourceLineBound(cached.largestLine);
-    if (cached.pending) {
+    if (cached.pending || deferPreparation) {
       return { displaySource: cached.identity };
     }
     if (cached.value) {

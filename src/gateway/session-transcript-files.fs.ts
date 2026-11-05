@@ -165,36 +165,13 @@ async function listResetArchiveCandidatesForTranscriptAsync(
   return boundedArchives;
 }
 
-async function resolveLatestResetArchiveForTranscriptAsync(
-  sessionId: string,
-  transcriptPath: string,
-  opts?: { requireSessionHeader?: boolean },
-): Promise<ResetArchiveCandidate | undefined> {
-  const archives = await listResetArchiveCandidatesForTranscriptAsync(transcriptPath);
-  if (!archives) {
-    return undefined;
-  }
-  if (opts?.requireSessionHeader !== true) {
-    return archives[0];
-  }
-  for (const archive of archives) {
-    if (await resetArchiveHeaderMatchesSessionId(sessionId, archive.archivePath)) {
-      return archive;
-    }
-  }
-  return undefined;
-}
-
 export async function resolveSessionTranscriptResetArchiveCandidatesAsync(
   sessionId: string,
   storePath: string | undefined,
   sessionFile?: string,
   agentId?: string,
 ): Promise<string[]> {
-  const candidatesByIdentity = new Map<
-    string,
-    Array<{ path: string; requireSessionHeader: boolean }>
-  >();
+  const candidatesByIdentity = new Map<string, string[]>();
   for (const candidate of resolveSessionTranscriptCandidates(
     sessionId,
     storePath,
@@ -202,34 +179,38 @@ export async function resolveSessionTranscriptResetArchiveCandidatesAsync(
     agentId,
   )) {
     const key = path.basename(candidate);
-    const generatedSessionId = extractGeneratedTranscriptSessionId(candidate);
     const candidates = candidatesByIdentity.get(key) ?? [];
-    candidates.push({
-      path: candidate,
-      requireSessionHeader: !generatedSessionId || generatedSessionId !== sessionId,
-    });
+    candidates.push(candidate);
     candidatesByIdentity.set(key, candidates);
   }
   const archives = (
     await Promise.all(
-      Array.from(candidatesByIdentity.values(), (candidates) =>
-        Promise.all(
-          candidates.map((candidate) =>
-            resolveLatestResetArchiveForTranscriptAsync(sessionId, candidate.path, {
-              requireSessionHeader: candidate.requireSessionHeader,
-            }),
-          ),
-        ),
-      ),
+      Array.from(candidatesByIdentity.values(), async (candidates) => {
+        const matching = await Promise.all(
+          candidates.map(async (candidate) => {
+            const generations =
+              (await listResetArchiveCandidatesForTranscriptAsync(candidate)) ?? [];
+            if (extractGeneratedTranscriptSessionId(candidate) === sessionId) {
+              return generations;
+            }
+            const matches: ResetArchiveCandidate[] = [];
+            for (const archive of generations) {
+              if (await resetArchiveHeaderMatchesSessionId(sessionId, archive.archivePath)) {
+                matches.push(archive);
+              }
+            }
+            return matches;
+          }),
+        );
+        return matching
+          .flat()
+          .toSorted(
+            (left, right) =>
+              right.timestamp - left.timestamp || right.name.localeCompare(left.name),
+          );
+      }),
     )
-  ).flatMap((identityArchives) =>
-    identityArchives
-      .flatMap((archive) => (archive ? [archive] : []))
-      .toSorted(
-        (left, right) => right.timestamp - left.timestamp || right.name.localeCompare(left.name),
-      )
-      .slice(0, 1),
-  );
+  ).flat();
   return uniqueStrings(archives.map((archive) => archive.archivePath));
 }
 
