@@ -383,10 +383,15 @@ it("refreshes image-alt ownership when a long reference destination closes", () 
   }
 });
 
-it("does not extend a list fence across an unindented continuation", () => {
-  const chunks = ["- ```text\n  [tool:read] {}\n  ~~~\n  example {}", "\n[tool:write] {}\nDone."];
+it.each([
+  ["- ```text\n  [tool:read] {}\n  ~~~\n  example {}", "\n[tool:write] {}\nDone."],
+  ["> ```text\n> [Historical context: example]", "\n\n[Historical context: hidden]\nDone."],
+  ["- ```text\n  [Historical context: example]", "\n\n[Historical context: hidden]\nDone."],
+])("does not extend a container fence across its exit: %j", (...chunks) => {
   const text = projectFinal(chunks);
-  expect(text).toContain("[tool:read] {}");
+  expect(text).toContain(chunks[0]);
+  expect(text).toContain("Done.");
+  expect(text).not.toContain("[Historical context: hidden]");
   expect(text).not.toContain("[tool:write] {}");
 });
 
@@ -395,6 +400,14 @@ const batch = (source: string) =>
   sanitizeAssistantVisibleStreamText(source, "final_answer").trimEnd();
 
 it.each([
+  'Use `[TOOL_CALL]` and `[Tool Call: read]` literally.\n\n```\nhello [TOOL_CALL] tool => "read", args => {}\n[/TOOL_CALL]\n```\n\nLater `see [Tool Call: read (ID: 2)] here` continues.',
+  "![alt `[Tool Call: read]`](url)",
+  "[x](<url `[Tool Call: read (ID: 1)]`xxxx>)\n[x]( <url `[Tool Call: read (ID: 1)]`xxxx>)\n\n> [x](\n> <url `[Tool Call: read (ID: 1)]`xxxx>)\n\nDone.",
+  "[Tool Call: read]```text\n\nordinary paragraph\n\n[Historical context: literal]\n",
+  "[Tool Call: read]> ```text\n> [Historical context: literal]\n\nDone.",
+  '[link](url "see `[Tool Call: read]` here")',
+  '[TOOL_CALL] tool => "read", args => {\n"x": 1}[/TOOL_CALL]\nDone.',
+  "[Tool Call: read]\nArguments: {\n}\n[Historical context: hidden]\nDone.",
   "$ build\n(no output)\n\nDone",
   "$ build\n   (no output)   \n\nDone",
   "Step\n[tool calls omitted]\n\nDone",
@@ -430,29 +443,43 @@ it.each([
   expectPrefixParity(source, create, batch);
 });
 
-it.each(["fenced", "indented", "lazy", "prefixed", "inline", "paragraph"])(
+it.each(["fenced", "indented", "lazy", "prefixed", "inline", "paragraph", "legacy", "downgraded"])(
   "bounds %s transcript work",
   (shape) => {
     const prefix = shape === "indented" ? "    " : shape === "prefixed" ? "> " : "";
     const opening = shape === "fenced" ? "```text\n" : shape === "lazy" ? "> $ build\n" : "";
-    const newline = shape === "paragraph" ? "" : "\n";
+    const newline =
+      shape === "paragraph" ? "" : ["legacy", "downgraded"].includes(shape) ? "\n\n" : "\n";
     const line =
       shape === "inline" || shape === "paragraph"
         ? `The command produced (no output).${newline}${newline}`
         : `${prefix}(no output)\n`;
-    const tail = `${prefix}Unique log record.${newline}`.repeat(256);
-    const source = (opening + line + tail).slice(0, 4096);
-    for (const size of [1, 4]) {
+    const transcript =
+      shape === "legacy"
+        ? '```text\n[TOOL_CALL] tool => "read", args => {}[/TOOL_CALL]\n```\n'
+        : shape === "downgraded"
+          ? "`[Tool Call: read]` and `[Historical context: example]`\n"
+          : "";
+    const tail = Array.from(
+      { length: 256 },
+      (_, index) => `${prefix}Log record ${index}${transcript && " `code`"}.${newline}`,
+    ).join("");
+    const source = (transcript + opening + line + tail).slice(0, 4096);
+    for (const size of transcript ? [4] : [1, 4]) {
       let previous = Infinity;
       for (const text of [source.slice(0, 2048), source]) {
         const stream = create();
         let delivered = "";
+        const before = markdownOwnershipWork.scannedCharacters;
         const scanned = regexWork(() => {
           delivered = streamChunks(text, size, stream).delivered;
         });
         expect([stream.text, delivered]).toEqual([batch(text), batch(text)]);
-        // This counts whole-path regexp work, not only placeholder-stage characters.
-        expect(scanned).toBeLessThan(text.length * 192);
+        // Tool transcripts exercise every canonical pass with inline code in the tail.
+        const budget = transcript ? 384 : 192;
+        expect(scanned).toBeLessThan(text.length * budget);
+        const parsed = markdownOwnershipWork.scannedCharacters - before;
+        expect(parsed).toBeLessThan(text.length * (transcript ? 64 : 32));
         expect(scanned).toBeLessThanOrEqual(previous * 2.25);
         previous = scanned;
       }
