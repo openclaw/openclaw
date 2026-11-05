@@ -199,6 +199,8 @@ type UserTurnInputResolver = () => UserTurnInput | undefined | Promise<UserTurnI
 export type CreateUserTurnTranscriptRecorderParams = {
   /** Authenticated input identity independent of prepared media paths. */
   pendingInputRequestFingerprint?: string;
+  /** Durable channel source turns may reopen their own cancelled, unconsumed attempt. */
+  reclaimCancelledSourceTurn?: boolean;
   trackInputCompletion?: boolean;
   /** Trusted settle replay candidates; storage must match the complete original request hash. */
   pendingInputReplaySourceSessionKeys?: readonly string[];
