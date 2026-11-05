@@ -26,9 +26,17 @@ of the state directory (`~/.openclaw/npm` by default) instead, because the
 temporary copy can be deleted. After the runtime and wrapper checks pass, npm
 stages that copy while any existing service keeps running; the copy is replaced
 only as the service definition is written. If the install fails after that, the
-previous copy is restored. `openclaw update` updates that copy in place. An
-existing service that still points into a temporary copy is refreshed by the next
-`openclaw gateway install`.
+previous copy is restored only once the service manager's recovery has stopped
+the new service, just before it puts the previous service back. On any other
+failure, for example when the new service does not exit, the new copy stays in
+place with a backup of the previous copy, and the command warns you to check the
+service and rerun the install. A first install has no previous copy and keeps
+the new one.
+`openclaw update` updates that copy in place. An existing service that still
+points into a temporary copy is refreshed by the next `openclaw gateway install`.
+`openclaw doctor` run from a temporary copy never installs one: when the copy in
+the state directory is missing or does not match, it keeps the service's current
+OpenClaw and prints the install command to run.
 
 Queued native service commands use elapsed-time deadlines, so system-clock
 corrections do not prematurely expire or extend their admission budgets.
