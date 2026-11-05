@@ -440,12 +440,13 @@ it.each(["old", "new", "summarize"] as const)(
           },
         ]);
         const duplicateDispatcher = createDispatcher();
+        const duplicateReplyOptions = bindIngressLifecycleToReplyOptions(lifecycle);
         const duplicate = await withDispatchProcessedOutcomeSink(() =>
           dispatchReplyFromConfig({
             ctx,
             cfg: automaticDirectReplyConfig,
             dispatcher: duplicateDispatcher,
-            replyOptions: bindIngressLifecycleToReplyOptions(lifecycle),
+            replyOptions: duplicateReplyOptions,
             replyResolver: resolver,
           }),
         );

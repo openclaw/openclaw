@@ -32,7 +32,6 @@ import {
 import {
   createQueueTestRun as createRun,
   createOffloadedImageQueueRun,
-  enqueueTestRun,
   rejectQueuePreparation,
   createQueueSettings,
   createDrainRecorder,
