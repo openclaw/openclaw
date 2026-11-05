@@ -801,6 +801,15 @@ synchronous owner-release cleanup after the callback settles. A
 caller can cancel before all of its queued work unwinds; `signalAborted`
 reports the signal without claiming that the holder has released.
 
+Subagent-kill mutations also report `subphaseDurationsMs` for awaited caller facts,
+caller Stop hooks, descendant discovery, durable kill intent, admission draining, runtime loading,
+registry settlement and obligation retirement, prefixed with `prepare.` or `run.`.
+These durations include rejected waits and accumulate repeated waits; they exclude
+each operation's synchronous work before returning its promise. Registry settlement
+includes its persistence and session cleanup bookkeeping. The joins for raw source
+settlement and child-command process cleanup occur after the mutation and are not included.
+The subphase totals therefore need not equal the enclosing phase durations.
+
 The tracker preserves outer ownership across reentrant work and retires a
 holder only when its actual callback exits and the owner releases custody. Its
 metadata follows existing controller mutations and effects; it does not create

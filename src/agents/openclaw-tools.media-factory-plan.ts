@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { resolveUsableCustomProviderApiKey } from "./model-auth-provider-config.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import { createToolPolicyMatcher, isToolAllowedByPolicyName } from "./tool-policy-match.js";
 import {
@@ -174,7 +175,11 @@ function hasConfiguredVisionModelAuthSignal(params: {
     ) {
       continue;
     }
-    if (profileIds.length > 0 || hasEnv) {
+    if (
+      profileIds.length > 0 ||
+      hasEnv ||
+      resolveUsableCustomProviderApiKey({ cfg: params.config, provider: providerId })
+    ) {
       return true;
     }
   }

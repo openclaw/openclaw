@@ -53,6 +53,14 @@ backup.
 
 ## Update implementation contract
 
+Plugin updates preserve authored environment references when a replacement
+plugin moves their settings, including single-file includes. The candidate
+plugin-update command must contain this repair; the installed updater needs no
+new marker or schema migration. Existing config and plugin-index records remain
+readable. Previously flattened literals are preserved, not guessed back into
+references. Config publication, backup, rollback, and deferred data-migration
+guidance keep their existing owners.
+
 Candidate Gateway rehearsal can prepare strictly valid config in its complete
 private update namespace even when a newer release wrote the config. It preserves
 the source writer stamp for installed-updater capture checks; the target's normal
@@ -258,6 +266,13 @@ its matching binary for rollback rather than lowering version markers.
 
 PostgreSQL original-state captures acquire offline custody before using the exact
 database backup provider. The installed updater must contain this repair.
+
+The pre-migration database backup for PostgreSQL families needs exclusive state
+ownership, and it runs after activation replaces the install. When ownership is
+unavailable after the service stop, for example because a Gateway the updater does
+not manage is still serving, the update now refuses before activation, leaving
+the install unchanged and the Gateway running. Stop the Gateway through its service
+owner, then rerun the update. The installed updater must contain this repair.
 Update-history writes participate in PostgreSQL's generation handoff to Doctor;
 all other generation checks remain in force. Update status reads history and
 recovery outcomes through the configured database engine.

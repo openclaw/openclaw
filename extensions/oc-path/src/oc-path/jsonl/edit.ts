@@ -7,6 +7,7 @@
 
 import { parseTree } from "jsonc-parser/lib/esm/main.js";
 import { OcPathEditError } from "../edit-error.js";
+import { emitJsoncObjectEntries } from "../emit.js";
 import type { JsoncValue } from "../jsonc/ast.js";
 import { findEffectiveJsoncNode } from "../jsonc/parse.js";
 import { resolveJsoncValueOcPath } from "../jsonc/resolve-value.js";
@@ -40,13 +41,12 @@ function renderJsoncValue(
     const parts = value.items.map((v, i) => renderJsoncValue(v, guardPath, [...walked, String(i)]));
     return `[${parts.join(",")}]`;
   }
-  const parts = value.entries.map((e) => {
-    // Guard the key against sentinel leakage.
-    if (e.key.includes(REDACTED_SENTINEL)) {
-      throw new OcEmitSentinelError(`${guardPath}/${walked.join("/")}`);
-    }
-    return `${JSON.stringify(e.key)}:${renderJsoncValue(e.value, guardPath, [...walked, e.key])}`;
-  });
+const parentPath = walked.length ? `${guardPath}/${walked.join("/")}` : guardPath;
+  const parts = emitJsoncObjectEntries(
+    value.entries,
+    parentPath,
+    (e) => `${JSON.stringify(e.key)}:${renderJsoncValue(e.value, guardPath, [...walked, e.key])}`,
+  );
   return `{${parts.join(",")}}`;
 }
 
