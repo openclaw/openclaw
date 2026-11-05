@@ -542,7 +542,8 @@ describe("Workboard lifecycle service", () => {
     const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     const list = store.list.bind(store);
-    using _read = vi.spyOn(store, "list").mockImplementationOnce(async () => {
+    using read = vi.spyOn(store, "list");
+    read.mockImplementationOnce(async () => {
       entered.resolve();
       await release.promise;
       return list();
