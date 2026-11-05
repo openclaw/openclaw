@@ -161,6 +161,7 @@ function buildFailureAlert(
   const accountId = form.failureAlertAccountId.trim();
   const to = form.failureAlertTo.trim();
   return {
+    ...sourceConfig,
     after: after > 0 ? Math.floor(after) : existingConfig?.after !== undefined ? null : undefined,
     channel: normalizePersistedDeliveryChannel(form.failureAlertChannel, {
       preserveLast: Boolean(sourceConfig?.channel),
@@ -173,7 +174,6 @@ function buildFailureAlert(
         : {}),
     mode: form.failureAlertDeliveryMode || (existingConfig?.mode !== undefined ? null : undefined),
     accountId: accountId || (existingConfig?.accountId ? null : undefined),
-    includeSkipped: sourceConfig?.includeSkipped,
   };
 }
 
