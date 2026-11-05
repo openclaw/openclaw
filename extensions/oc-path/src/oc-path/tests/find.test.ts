@@ -416,6 +416,16 @@ describe("findOcPaths — Markdown", () => {
   });
 
   it.each([
+    ["{absent,*}", true],
+    ["{absent,[name=value]}", true],
+    ["{absent,{name,other}}", true],
+    ["{absent,**}.name", true],
+    ["name.{absent,**}", true],
+    ['{absent,"*","**"}', false],
+    ["{absent,[name=other]}", false],
+    ["{name,*}.absent", false],
+    ["{name,*}.{name,*}", false],
+    [Array(32).fill("{**,{**}}").join(".") + ".name", true],
     ["name.absent", false],
     ["name.*", false],
     ["*.absent", false],
