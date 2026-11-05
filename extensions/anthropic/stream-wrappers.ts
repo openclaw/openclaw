@@ -1,5 +1,4 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import type { ModelRequestHeaders } from "openclaw/plugin-sdk/llm";
 import { getEnvApiKey, streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -9,8 +8,9 @@ import {
 import {
   applyAnthropicPayloadPolicyToParams,
   composeProviderStreamWrappers,
+  createAnthropicFastModePayloadWrapper,
   createAnthropicThinkingPrefillPayloadWrapper,
-  createPayloadPatchStreamWrapper,
+  mergeAnthropicBetaHeader,
   isAnthropicOAuthApiKey,
   resolveAnthropicPayloadPolicy,
   resolveAnthropicServerCompactionPlan,
@@ -19,7 +19,7 @@ import {
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeFastMode,
-  normalizeLowercaseStringOrEmpty,
+  normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   normalizeAnthropicServiceTier,
@@ -32,8 +32,6 @@ const log = createSubsystemLogger("anthropic-stream");
 
 const ANTHROPIC_CONTEXT_1M_BETA_LEGACY = "context-1m-2025-08-07";
 const ANTHROPIC_COMPACTION_BETA = "compact-2026-01-12";
-const ANTHROPIC_FAST_MODE_BETA = "fast-mode-2026-02-01";
-const ANTHROPIC_FAST_MODE_COST_MULTIPLIER = 2;
 const OPENCLAW_DEFAULT_ANTHROPIC_BETAS = [
   "fine-grained-tool-streaming-2025-05-14",
   "interleaved-thinking-2025-05-14",
@@ -73,54 +71,6 @@ export function createAnthropicClaudeCodeIdentityWrapper(
   };
 }
 
-function parseHeaderList(value: unknown): string[] {
-  if (typeof value !== "string") {
-    return [];
-  }
-  return value
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function mergeAnthropicBetaHeader(
-  headers: ModelRequestHeaders | undefined,
-  betas: string[],
-): ModelRequestHeaders {
-  const merged = { ...headers };
-  const existingKey = Object.keys(merged).find(
-    (key) => normalizeLowercaseStringOrEmpty(key) === "anthropic-beta",
-  );
-  const existing = existingKey ? parseHeaderList(merged[existingKey]) : [];
-  const values = Array.from(new Set([...existing, ...betas]));
-  const key = existingKey ?? "anthropic-beta";
-  merged[key] = values.join(",");
-  return merged;
-}
-
-function applyAnthropicFastModePricing(model: Parameters<StreamFn>[0]): Parameters<StreamFn>[0] {
-  const scaleRates = (rates: Parameters<StreamFn>[0]["cost"]) => ({
-    input: rates.input * ANTHROPIC_FAST_MODE_COST_MULTIPLIER,
-    output: rates.output * ANTHROPIC_FAST_MODE_COST_MULTIPLIER,
-    cacheRead: rates.cacheRead * ANTHROPIC_FAST_MODE_COST_MULTIPLIER,
-    cacheWrite: rates.cacheWrite * ANTHROPIC_FAST_MODE_COST_MULTIPLIER,
-  });
-  return {
-    ...model,
-    cost: {
-      ...scaleRates(model.cost),
-      ...(model.cost.tieredPricing
-        ? {
-            tieredPricing: model.cost.tieredPricing.map((tier) => ({
-              ...tier,
-              ...scaleRates(tier),
-            })),
-          }
-        : {}),
-    },
-  };
-}
-
 function hasConfiguredAnthropicBeta(extraParams: Record<string, unknown> | undefined): boolean {
   const configured = extraParams?.anthropicBeta;
   if (typeof configured === "string") {
@@ -139,7 +89,11 @@ export function resolveAnthropicBetas(
   const configured = extraParams?.anthropicBeta;
   const values =
     typeof configured === "string" ? [configured] : Array.isArray(configured) ? configured : [];
-  const betas = new Set(values.flatMap(parseHeaderList));
+  const betas = new Set(
+    normalizeTrimmedStringList(
+      values.flatMap((value) => (typeof value === "string" ? value.split(",") : [])),
+    ),
+  );
 
   // Newer Claude 4.x 1M context is GA. Keep context1m as a context-sizing
   // opt-in, but do not send the retired beta even if it remains in older config.
@@ -174,10 +128,7 @@ export function createAnthropicFastModeWrapper(
   extraParams?: Record<string, unknown>,
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  const fastPayloadWrapper = createPayloadPatchStreamWrapper(underlying, ({ payload }) => {
-    delete payload.service_tier;
-    payload.speed = "fast";
-  });
+  const fastPayloadWrapper = createAnthropicFastModePayloadWrapper(underlying);
   return (model, context, options) => {
     const resolved = typeof enabled === "function" ? enabled() : enabled;
     if (resolved === undefined) {
@@ -204,10 +155,7 @@ export function createAnthropicFastModeWrapper(
       if (!resolved) {
         return underlying(model, context, options);
       }
-      return fastPayloadWrapper(applyAnthropicFastModePricing(model), context, {
-        ...options,
-        headers: mergeAnthropicBetaHeader(options?.headers, [ANTHROPIC_FAST_MODE_BETA]),
-      });
+      return fastPayloadWrapper(model, context, options);
     }
     return plan === "service-tier"
       ? createAnthropicServiceTierWrapper(underlying, resolved ? "auto" : "standard_only")(

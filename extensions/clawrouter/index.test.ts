@@ -183,12 +183,13 @@ describe("ClawRouter plugin", () => {
   );
 
   it.each(["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const)(
-    "%s preserves the catalog model identity through an Anthropic response",
+    "%s preserves catalog identity and native fast mode through an Anthropic response",
     async (hook) => {
-      const selected = "anthropic/claude-sonnet-4-6";
-      const upstream = "claude-sonnet-4-6";
+      const selected = "anthropic/claude-opus-4-8:pool";
+      const upstream = "claude-opus-4-8";
+      const requests: Request[] = [];
       const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
-        expect(await new Request(input, init).json()).toMatchObject({ model: upstream });
+        requests.push(new Request(input, init));
         const events = [
           {
             type: "message_start",
@@ -221,12 +222,15 @@ describe("ClawRouter plugin", () => {
       vi.stubGlobal("fetch", fetch);
       const model = streamModel({
         api: "anthropic-messages",
+        baseUrl: "https://clawrouter.example/v1/native/anthropic",
         id: selected,
+        headers: { "Anthropic-Beta": "files-api-2025-04-14" },
         params: {
           clawrouterRoute: {
             api: "anthropic-messages",
             baseUrl: "https://clawrouter.example/v1/native/anthropic",
             upstreamModel: upstream,
+            fastModeCostMultiplier: 2,
           },
         },
       });
@@ -234,6 +238,7 @@ describe("ClawRouter plugin", () => {
         provider: "clawrouter",
         modelId: selected,
         streamFn: streamSimple,
+        extraParams: { fastMode: true },
       });
       if (!wrapped) {
         throw new Error(`missing ClawRouter ${hook}`);
@@ -264,6 +269,9 @@ describe("ClawRouter plugin", () => {
         stopReason: "stop",
       });
       expect(fetch).toHaveBeenCalledOnce();
+      expect(await requests[0]?.json()).toMatchObject({ model: upstream, speed: "fast" });
+      expect(requests[0]?.headers.get("anthropic-beta")).toContain("fast-mode-2026-02-01");
+      expect(requests[0]?.headers.get("anthropic-beta")).toContain("files-api-2025-04-14");
     },
   );
 
