@@ -140,7 +140,7 @@
     }
   },
   "recommendedPrompts": [
-    "Help me get Microsoft Teams meeting participation ready. Ask which browser host and guest identity I should use, choose observe-only captions or spoken participation, and explain the required Chrome/audio setup and participant consent. Do not join a meeting or change browser accounts automatically.",
-    "Help me prepare to take notes in a Microsoft Teams meeting. Ask for the supported meeting link, browser host, participant consent, and desired output, then check caption availability and ask before joining. Do not create a meeting, call a vendor API, record audio/video, or post notes automatically; report missing captions honestly."
+    "Help me prepare Microsoft Teams meeting participation and choose captions or spoken interaction.",
+    "Help me plan Microsoft Teams meeting notes with participant consent before joining."
   ]
 }

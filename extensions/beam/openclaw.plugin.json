@@ -62,7 +62,7 @@
     }
   },
   "recommendedPrompts": [
-    "Explain how Beam can let a team view a sanitized coding-session snapshot and create an independent continuation from it. Give me a concise setup and privacy checklist, including what the receiver can and cannot access. This is an explanation only: do not enable Beam, upload a transcript, or transfer anything.",
-    "Compare Beam snapshots with Session Share for a team that wants read-only visibility into work. Explain their source types, audience controls, redaction limits, and continuation behavior so I can choose deliberately. Do not read or share any sessions, configure either plugin, or perform a handoff."
+    "Explain how to share a sanitized coding-session snapshot with Beam.",
+    "Compare Beam snapshots with Session Share for read-only team visibility."
   ]
 }

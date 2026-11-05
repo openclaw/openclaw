@@ -330,13 +330,15 @@ prompts. Native plugins, including third-party plugins, declare it at the top le
 }
 ```
 
-- Declare at most **three** non-empty strings. Omit the field or use `[]` when
-  there are no useful recommendations.
+- Declare at most **three** non-empty strings, each at most **128 Unicode code
+  points** after whitespace normalization. Omit the field or use `[]` when there
+  are no useful recommendations.
 - Write the actual user request, not a button label. Do not include a plugin
   mention in the authored text; the host owns plugin selection and mention context.
-- OpenClaw trims outer whitespace only. It preserves internal whitespace, line
-  breaks, ordering, and the complete prompt text, with no per-prompt length cap.
-  Clients must display the same text they insert, without truncating or rewriting it.
+- OpenClaw trims outer whitespace and collapses internal whitespace, including
+  line breaks, to single spaces. Ordering and the complete normalized text are
+  preserved; overlong prompts are rejected, never truncated. Clients must display
+  the same normalized text they insert.
 - Invalid optional declarations are ignored as a whole, with a native manifest
   warning, rather than partially shown or used to block plugin loading.
 - These strings do not install, enable, execute, or grant trust to a plugin.

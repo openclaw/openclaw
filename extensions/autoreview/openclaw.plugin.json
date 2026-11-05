@@ -9,7 +9,7 @@
   "contracts": { "tools": ["autoreview"] },
   "toolMetadata": { "autoreview": { "optional": true } },
   "recommendedPrompts": [
-    "Help me get Auto Review ready for a code review. Ask which repository and sandbox to use, check whether the installed helper and required tool access are available there, and tell me what is missing. Do not install dependencies or alter the repository without my approval.",
-    "Review a set of code changes with Auto Review. First ask me to choose a repository and uncommitted changes, a branch comparison, or a commit. Check that the selected sandbox contains that target, then report actionable bugs with file references and severity. Do not edit files, submit a review, or publish anything."
+    "Check whether Auto Review is ready for my repository and sandbox.",
+    "Review my code changes for actionable bugs without editing or publishing."
   ]
 }

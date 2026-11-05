@@ -17,7 +17,7 @@
     "properties": {}
   },
   "recommendedPrompts": [
-    "Help me connect a Telegram bot to this agent. Check the current account setup, explain how to provide the bot token through a private supported flow, and ask who should be allowed in DMs and groups. Use numeric sender IDs, preserve existing accounts, and show the proposed changes before applying them. Do not send a test message.",
-    "Help me prepare a Telegram poll for a chat I choose. Ask for the chat or topic, question, answer options, and voting rules, then check what the connected bot supports and show me the final poll draft. Do not create the poll or send anything until I approve the exact destination and content."
+    "Help me plan a Telegram bot connection and choose who can access it.",
+    "Draft a Telegram poll for my chosen chat or topic without sending it."
   ]
 }

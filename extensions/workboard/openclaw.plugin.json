@@ -245,8 +245,8 @@
     ]
   },
   "recommendedPrompts": [
-    "Help me get started with Workboard. Ask whether I want to track planned work cards or organize existing sessions, explain the difference between Cards and Sessions boards, and check what is available. Propose a small board structure without creating a board, moving sessions, or launching agent work yet.",
-    "Help me organize a project in Workboard. Ask for the project goal and which Cards board to use, then propose a short prioritized set of agent-sized cards with dependencies and clear completion evidence. Show the plan before creating or assigning cards, and do not dispatch workers automatically.",
-    "Help me understand progress on a Workboard board. Ask me which board to inspect, then summarize active work, blockers, dependencies, and the next useful decisions using the recorded card and run evidence. Distinguish a claimed status from verified completion; do not move cards, reclaim work, or start new runs."
+    "Help me get started with Workboard and choose between Cards and Sessions boards.",
+    "Propose prioritized Workboard cards for my project without creating or assigning them.",
+    "Summarize a Workboard board’s progress, blockers, and evidence without changing it."
   ]
 }

@@ -47,7 +47,7 @@
     "append": { "label": "Append files", "help": "Relative files added after the system prompt. Reload after edits." }
   },
   "recommendedPrompts": [
-    "Help me set up one shared instruction file for a few of my agents using Agent Guidance. Ask which agents and rules it should cover, then propose the operator-controlled file location and configuration. Preserve each agent’s existing workspace instructions and show the plan before changing anything.",
-    "Help me write a short shared working guide for my agents. Ask what behavior I want to make consistent, turn it into clear instructions, and distinguish shared rules from each agent’s own personality and memory. Show me the draft and proposed agent scope without applying or reloading it."
+    "Help me plan one shared instruction file for my agents.",
+    "Draft a short shared working guide for my agents."
   ]
 }

@@ -15,7 +15,7 @@
     "properties": {}
   },
   "recommendedPrompts": [
-    "Help me preview a migration from Claude Code or Claude Desktop to OpenClaw. Ask which local source or project to inspect, use the supported dry-run flow, and summarize the instructions, MCP definitions, and skills that would be imported. Show conflicts and sensitive-item warnings without applying changes or revealing credentials.",
-    "Help me plan a Claude migration without overwriting my current OpenClaw setup. Ask which source and agent to target, separate supported imports from archive-only hooks, permissions, and opaque credentials, and explain backup and verification steps. Do not reset state, import secrets, or apply the migration until I explicitly approve."
+    "Preview a migration from Claude Code or Claude Desktop without applying changes.",
+    "Plan a Claude migration that preserves my current OpenClaw setup."
   ]
 }

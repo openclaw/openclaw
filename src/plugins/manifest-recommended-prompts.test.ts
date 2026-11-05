@@ -23,24 +23,19 @@ function fixture(recommendedPrompts?: unknown) {
 describe("manifest recommended prompts", () => {
   it("loads authored Knowledge starters through native manifest normalization", () => {
     const result = loadPluginManifest(path.resolve("extensions/knowledge"), false);
-    if (!result.ok) throw new Error(result.error);
-    expect(result.manifest.recommendedPrompts).toHaveLength(3);
+    expect(result.ok && result.manifest.recommendedPrompts?.length).toBe(3);
   });
-  it("carries up to three author-written prompts through third-party cold discovery unchanged", () => {
-    const prompts = [
-      "  Plan  my week\nwith priorities.  ",
-      "Compare my options.",
-      "x".repeat(4096),
-    ];
-    const candidate = fixture(prompts);
+  it("normalizes three short prompts through third-party cold discovery", () => {
+    const spacedPrompt = `${" ".repeat(128)}Plan  my week\nwith priorities.  `;
+    const candidate = fixture([spacedPrompt, "Compare my options.", "😀".repeat(128)]);
     const registry = loadPluginManifestRegistryCore({
       installRecords: {},
       candidates: [candidate],
     });
     expect(registry.plugins[0]?.recommendedPrompts).toEqual([
-      "Plan  my week\nwith priorities.",
+      "Plan my week with priorities.",
       "Compare my options.",
-      "x".repeat(4096),
+      "😀".repeat(128),
     ]);
     expect(registry.diagnostics).toEqual([]);
   });
@@ -56,6 +51,8 @@ describe("manifest recommended prompts", () => {
 
   it.each([
     { prompts: null },
+    { prompts: ["Valid", "x".repeat(129)] },
+    { prompts: ["Valid", "😀".repeat(129)] },
     { prompts: "Plan my week." },
     { prompts: [""] },
     { prompts: [" \n "] },

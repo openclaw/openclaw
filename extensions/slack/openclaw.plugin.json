@@ -29,8 +29,8 @@
     "properties": {}
   },
   "recommendedPrompts": [
-    "Help me get Slack ready for this agent. Ask which workspace and channels it should access, check the configured app, and explain the minimum scopes and DM/group policies. Preserve existing accounts and show proposed changes before applying them; do not post a test message or enable broad channel access.",
-    "Help me catch up on a Slack thread. Ask for the workspace and thread link, then read only the history the connected account may access and summarize decisions, commitments, and unresolved questions with message references. Flag any missing replies; do not post, react, or change the thread.",
-    "Help me prepare a Slack reply. Ask for the destination and the message or thread I should respond to, retrieve only authorized context when available, and draft a concise response with the requested tone. Show me the exact text and destination for approval; do not send it or mention people automatically."
+    "Help me plan Slack access for this agent and the channels I choose.",
+    "Summarize decisions and open questions in a Slack thread without replying.",
+    "Draft a reply to a Slack message or thread for my review without sending it."
   ]
 }

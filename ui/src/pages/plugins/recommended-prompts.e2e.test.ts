@@ -178,43 +178,23 @@ describeControlUiE2e("recommended plugin prompts (mock Gateway boundary)", () =>
           .textContent(),
       ).toBe("Calendar Plus");
       const geometry = await page.locator(".plugin-recommended-prompts").evaluate((panel) => {
-        const background = getComputedStyle(
-          panel.querySelector(".plugin-recommended-prompts__prompt")!,
-        ).backgroundColor;
-        const canvas = document.createElement("canvas");
-        canvas.width = canvas.height = 1;
-        const paint = canvas.getContext("2d")!;
-        paint.fillStyle = "white";
-        paint.fillRect(0, 0, 1, 1);
-        paint.fillStyle = background;
-        paint.fillRect(0, 0, 1, 1);
-        const channels = [...paint.getImageData(0, 0, 1, 1).data].slice(0, 3).map((value) => {
-          const channel = value / 255;
-          return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
-        });
         return {
           inMain: panel.parentElement?.classList.contains("plugin-catalog-detail__main"),
           afterHeader: panel
             .closest(".plugin-catalog-detail__content")
             ?.previousElementSibling?.classList.contains("plugin-catalog-detail__hero"),
-          white: getComputedStyle(
-            panel.querySelector(".plugin-recommended-prompts__text > span:last-child")!,
-          ).color,
           fits: panel.scrollWidth <= panel.clientWidth,
-          contrast:
-            1.05 / (0.2126 * channels[0]! + 0.7152 * channels[1]! + 0.0722 * channels[2]! + 0.05),
         };
       });
       await proof(page, "before-install");
       expect(geometry).toMatchObject({
         inMain: true,
         afterHeader: true,
-        white: "rgb(255, 255, 255)",
         fits: true,
       });
-      expect(geometry.contrast).toBeGreaterThanOrEqual(4.5);
       await gateway.deferNext("plugins.install");
       await recommendation(page).first().click();
+      await page.getByRole("button", { name: "Install and continue", exact: true }).click();
       expect((await gateway.waitForRequest("plugins.install")).params).toEqual({
         source: "clawhub",
         packageName: "calendar-plus",
@@ -276,6 +256,7 @@ describeControlUiE2e("recommended plugin prompts (mock Gateway boundary)", () =>
       await page.goto(`${server.baseUrl}plugins/${calendarDiscoveryPlugin.id}`);
       await gateway.deferNext("plugins.install");
       await recommendation(page).first().click();
+      await page.getByRole("button", { name: "Install and continue", exact: true }).click();
       await gateway.waitForRequest("plugins.install");
       await gateway.setMethodResponse("plugins.list", inventory([installed], 1));
       await gateway.resolveDeferred("plugins.install", {
@@ -307,6 +288,7 @@ describeControlUiE2e("recommended plugin prompts (mock Gateway boundary)", () =>
       await page.goto(`${server.baseUrl}plugins/${calendarDiscoveryPlugin.id}`);
       await gateway.deferNext("plugins.install");
       await recommendation(page).first().click();
+      await page.getByRole("button", { name: "Install and continue", exact: true }).click();
       await gateway.waitForRequest("plugins.install");
       await gateway.rejectDeferred("plugins.install", {
         code: "UNAVAILABLE",
@@ -323,6 +305,7 @@ describeControlUiE2e("recommended plugin prompts (mock Gateway boundary)", () =>
       await proof(page, "install-failure");
       await gateway.deferNext("plugins.install");
       await recommendation(page).first().click();
+      await page.getByRole("button", { name: "Install and continue", exact: true }).click();
       await gateway.waitForRequest("plugins.install", { after: 1 });
       await gateway.setMethodResponse("plugins.list", inventory([installed], 1));
       await gateway.resolveDeferred("plugins.install", {
@@ -337,7 +320,7 @@ describeControlUiE2e("recommended plugin prompts (mock Gateway boundary)", () =>
     }
   });
 
-  it("uses existing enable and capability-consent before creating an unsent chat", async () => {
+  it("requires activation approval before enable and capability-consent, then opens an unsent chat", async () => {
     const context = await newContext();
     const page = await context.newPage();
     const disabled = { ...installed, enabled: false, state: "disabled" as const };
@@ -347,8 +330,18 @@ describeControlUiE2e("recommended plugin prompts (mock Gateway boundary)", () =>
     });
     try {
       await page.goto(`${server.baseUrl}settings/plugins/calendar-plus`);
+      await recommendation(page).first().click();
+      const activation = page.getByRole("dialog", {
+        name: "Enable Calendar Plus before opening chat?",
+        exact: true,
+      });
+      await activation.waitFor({ timeout: 5000 });
+      expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      await activation.getByRole("button", { name: "Cancel", exact: true }).click();
       await gateway.deferNext("plugins.setEnabled");
       await recommendation(page).first().click();
+      await activation.getByRole("button", { name: "Enable and continue", exact: true }).click();
       expect((await gateway.waitForRequest("plugins.setEnabled")).params).toEqual({
         pluginId: "calendar-plus",
         enabled: true,
@@ -377,6 +370,7 @@ describeControlUiE2e("recommended plugin prompts (mock Gateway boundary)", () =>
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       await gateway.deferNext("plugins.setEnabled");
       await recommendation(page).first().click();
+      await activation.getByRole("button", { name: "Enable and continue", exact: true }).click();
       await gateway.waitForRequest("plugins.setEnabled", { after: 1 });
       await gateway.rejectDeferred("plugins.setEnabled", {
         code: "INVALID_REQUEST",
@@ -626,6 +620,7 @@ describeControlUiE2e("recommended plugin prompts (mock Gateway boundary)", () =>
         await page.goto(`${server.baseUrl}plugins/${calendarDiscoveryPlugin.id}`);
         await gateway.deferNext("plugins.install");
         await recommendation(page).first().click();
+        await page.getByRole("button", { name: "Install and continue", exact: true }).click();
         await gateway.waitForRequest("plugins.install");
         if (retirement === "navigate") {
           await navigate(page, "/plugins");

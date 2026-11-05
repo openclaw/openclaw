@@ -199,7 +199,7 @@
     }
   },
   "recommendedPrompts": [
-    "Help me get LanceDB memory ready for this agent. Check the selected memory provider, store status, and embedding configuration without exposing credentials, then explain the single memory-slot change and capture/recall options. Do not switch providers, alter the embedding identity, or re-embed stored data without my approval.",
-    "Help me find something in this agent’s LanceDB memory. Ask what fact or topic to search for, use the available memory_recall tool, and summarize the actual matching entries and uncertainty. Do not assume access to private conversation transcripts or the Control UI Memories tab, and do not create, forget, or rewrite memories."
+    "Check whether LanceDB memory is ready and explain its capture and recall options.",
+    "Find matching facts in this agent’s LanceDB memory without changing them."
   ]
 }

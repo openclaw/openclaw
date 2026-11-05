@@ -66,7 +66,7 @@
     ]
   },
   "recommendedPrompts": [
-    "Help me connect WhatsApp to this agent. Check the existing account state, explain the supported QR-linking flow and DM/group access policies, and ask which account and people should be allowed. Keep pairing material private and do not begin linking, widen access, or send a test message without approval.",
-    "Help me prepare a WhatsApp message for a contact or group I choose. Ask for the recipient, purpose, and any context I want included, check the destination against the connected account when available, and show the exact draft. Do not send it, add recipients, or start a call until I confirm."
+    "Help me plan a WhatsApp connection and choose who can access this agent.",
+    "Draft a WhatsApp message for my chosen contact or group without sending it."
   ]
 }

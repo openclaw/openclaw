@@ -232,7 +232,7 @@
     }
   },
   "recommendedPrompts": [
-    "Help me get standalone diff artifacts ready. Check whether the Diffs plugin and its tool are available, explain viewer links versus PNG/PDF output and their privacy limits, and propose a minimal setup. Do not install packages or change configuration without asking; built-in inline diffs do not need this plugin.",
-    "Help me turn a change into a readable diff artifact. Ask me to provide before-and-after text or a unified patch and choose a private viewer link, PNG, or PDF. Use the Diffs tool to render it without modifying the source, then report the actual artifact and any limits. Do not send or publish it anywhere."
+    "Help me get standalone diff artifacts ready.",
+    "Turn my before-and-after text or patch into a diff artifact without changing the source."
   ]
 }

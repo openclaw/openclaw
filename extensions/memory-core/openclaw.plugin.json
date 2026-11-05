@@ -287,8 +287,8 @@
     }
   },
   "recommendedPrompts": [
-    "Help me get this agent’s file-backed memory ready. Check the selected memory provider, available memory files, and search readiness, then explain what belongs in durable memory versus daily notes. Preserve existing files and show any proposed configuration change before applying it.",
-    "Help me save one useful decision or preference in this agent’s memory. Ask me for the exact fact and whether it is appropriate for this conversation’s privacy scope, check for an existing or conflicting entry, then save only the agreed information in the appropriate memory file. Read it back to confirm the result; do not retain secrets.",
-    "Help me recall a decision from this agent’s memory. Ask what subject and approximate time to search, then use memory search and source reads to summarize what is recorded with file and line citations. Distinguish a recorded fact from an inference and do not fill gaps with guesses or modify memory."
+    "Check whether this agent’s file-backed memory and search are ready.",
+    "Help me save a useful decision or preference in this agent’s memory.",
+    "Find a decision in this agent’s memory and cite the source without changing it."
   ]
 }

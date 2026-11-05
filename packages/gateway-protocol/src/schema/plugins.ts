@@ -1,5 +1,9 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import {
+  MAX_PLUGIN_RECOMMENDED_PROMPTS,
+  MAX_PLUGIN_RECOMMENDED_PROMPT_LENGTH,
+} from "../../../plugin-package-contract/src/recommended-prompts.js";
 import { PLUGIN_UI_CAPABILITIES } from "../plugin-ui-capabilities.js";
 import {
   ClawHubDownloadabilitySchema,
@@ -238,7 +242,10 @@ export const PluginRuntimeStatusSchema = closedObject({
   error: Type.Optional(Type.String()),
 });
 
-const PluginRecommendedPromptsSchema = Type.Array(NonEmptyString, { maxItems: 3 });
+const PluginRecommendedPromptsSchema = Type.Array(
+  Type.String({ minLength: 1, maxLength: MAX_PLUGIN_RECOMMENDED_PROMPT_LENGTH }),
+  { maxItems: MAX_PLUGIN_RECOMMENDED_PROMPTS },
+);
 
 /** Catalog metadata and desired enablement, with optional observed runtime state. */
 export const PluginCatalogEntrySchema = closedObject({

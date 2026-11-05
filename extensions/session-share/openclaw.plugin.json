@@ -77,7 +77,7 @@
     }
   },
   "recommendedPrompts": [
-    "Help me plan Session Share between a source Gateway and a team Gateway. Ask which exact session groups and people should be included, explain the receiver audience and two-command read-only node connection, and show the setup steps. Do not publish sessions, pair a device, or broaden its command allowlist without approval.",
-    "Help me review a Session Share configuration for unintended exposure. Ask which source and receiver I mean, inspect only their authorized sharing metadata, and explain how the exact group filter and optional source-local person filter combine. Flag unmasked transcript content and receiver access limits without opening or sharing transcripts or changing settings."
+    "Help me plan read-only Session Share access between my source and team Gateways.",
+    "Review Session Share settings for unintended exposure without opening transcripts."
   ]
 }

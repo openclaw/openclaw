@@ -46,8 +46,8 @@
     "properties": {}
   },
   "recommendedPrompts": [
-    "Help me get a Discord bot ready for this agent. Ask which server and channels to use, check the existing account, and explain the minimum bot permissions, intents, and access rules. Show the setup plan without inviting the bot, enabling wider access, or sending a test message automatically.",
-    "Help me catch up on a Discord thread. Ask which connected server and thread to read and what time range matters, then use only the history available under my permissions to summarize decisions, open questions, and action items with message references. Flag missing context and do not reply or change the thread.",
-    "Help me prepare a transcript workflow for a Discord voice channel. Ask which server and channel, who has consented, and what notes I need; check the configured transcript capability and explain retention and model processing. Do not join, capture audio, start transcription, or post notes until I approve."
+    "Help me plan a Discord bot setup with access to only the channels I choose.",
+    "Summarize decisions and action items in a Discord thread without replying.",
+    "Help me plan a Discord voice transcript workflow with participant consent."
   ]
 }

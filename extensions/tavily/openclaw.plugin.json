@@ -67,7 +67,7 @@
     }
   },
   "recommendedPrompts": [
-    "Help me get Tavily search and extraction ready. Check the installed plugin and credential configuration without displaying keys, explain the supported search and extraction limits, and identify any missing setup. Do not create an account, change settings, or authorize paid usage without asking.",
-    "Help me compare information across a small set of URLs with Tavily. Ask for the URLs and the question, extract relevant passages using supported relevance controls, and return a cited comparison that distinguishes source claims from your conclusions. Flag blocked pages or missing content and stay within the usage scope I approve."
+    "Check whether Tavily search and extraction are ready.",
+    "Compare information across a few URLs with Tavily and cite relevant passages."
   ]
 }

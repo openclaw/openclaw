@@ -464,8 +464,8 @@
     }
   },
   "recommendedPrompts": [
-    "Help me get Team Reports ready for a team I choose. Ask which GitHub organizations, repositories, people, and optional Discord channels to include, then review access, privacy, and summary-model processing. Show a narrow configuration plan; do not collect data, enable scheduled reports, or publish anything without approval.",
-    "Help me understand a stored Team Reports report. Ask which team and day, week, or month to inspect, then summarize recorded activity, source warnings, and notable changes with links to available evidence. Distinguish a partial period or unavailable source from inactivity; do not trigger a new collection or send the report.",
-    "Help me prepare an export of a stored team activity report. Ask for the team, period, format, and intended audience, check which export options are supported, and review the report for sensitive excerpts before producing the chosen local artifact. Do not refresh collection, share the file, or post it anywhere."
+    "Help me plan Team Reports setup for the repositories, people, and channels I choose.",
+    "Summarize a stored team activity report with evidence and source gaps.",
+    "Help me prepare a local export of a stored team report for my chosen audience."
   ]
 }

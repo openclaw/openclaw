@@ -22,7 +22,7 @@
     "properties": {}
   },
   "recommendedPrompts": [
-    "Help me understand a public GitHub issue, pull request, commit, or completed Actions job. Ask me for its URL, read it with the GitHub tools, and summarize the important changes, discussion, checks, and remaining concerns. Include source links and flag any truncated or unavailable content; do not modify GitHub.",
-    "Find relevant open issues or pull requests in a public GitHub repository. Ask me for the owner/repository, which item type to search, and a few keywords, then return a short linked list with why each result matters. Use the supported repository and state filters rather than inventing search qualifiers, and do not post anything."
+    "Summarize a public GitHub issue, pull request, commit, or completed Actions job without making changes.",
+    "Find relevant open issues or pull requests in a public GitHub repository."
   ]
 }
