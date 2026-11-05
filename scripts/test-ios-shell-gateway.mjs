@@ -466,13 +466,13 @@ wss.on("connection", (ws) => {
     notifyAttachmentReadyWaiters();
     const reply = (payload) =>
       ws.send(JSON.stringify({ type: "res", id: req.id, ok: true, payload }));
-    const fail = (message) =>
+    const fail = (message, details) =>
       ws.send(
         JSON.stringify({
           type: "res",
           id: req.id,
           ok: false,
-          error: { code: "INVALID_REQUEST", message },
+          error: { code: "INVALID_REQUEST", message, ...(details ? { details } : {}) },
         }),
       );
     console.log(JSON.stringify(requests.at(-1)));
