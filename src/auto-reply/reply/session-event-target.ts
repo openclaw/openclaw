@@ -265,6 +265,8 @@ export async function captureSessionEventTargetForHost(
               senderE164: requester.senderE164 ?? undefined,
               senderName: requester.senderName ?? undefined,
               senderUsername: requester.senderUsername ?? undefined,
+              groupSpace: requester.groupSpace ?? undefined,
+              groupChannel: requester.groupChannel ?? undefined,
               chatType: normalizeChatType(requester.chatType),
               conversationId: requester.conversationId ?? undefined,
             }),
@@ -476,13 +478,16 @@ export type CommandOwnerRequester = Readonly<{
 
 /**
  * The host-captured requester of a completion and the conversation they spoke in. Keep every
- * sender fact that sender and conversation policy match on, including the mutable name and
- * username keys, so a current restriction keyed on any of them still applies.
+ * fact that sender and conversation policy match on: the mutable name and username keys, and
+ * the group space and channel name a channel's group policy selects its entry by (a Discord
+ * guild and channel). The group id itself comes from the completion's own route.
  */
 export type RetainedSessionEventRequester = CommandOwnerRequester &
   Readonly<{
     senderName?: string;
     senderUsername?: string;
+    groupSpace?: string;
+    groupChannel?: string;
     chatType?: ChatType;
     conversationId?: string;
   }>;
@@ -509,6 +514,8 @@ function requesterKey(requester: RetainedSessionEventRequester | undefined): str
         requester.senderE164 ?? null,
         requester.senderName ?? null,
         requester.senderUsername ?? null,
+        requester.groupSpace ?? null,
+        requester.groupChannel ?? null,
         requester.chatType ?? null,
         requester.conversationId ?? null,
       ])

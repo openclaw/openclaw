@@ -537,7 +537,12 @@ describe("session event target custody", () => {
       channels: { telegram: {} },
       commands: { ownerAllowFrom: ["456", "457"] },
     });
-    const capture = (senderId: string, conversationId = senderId, senderUsername = "alice") =>
+    const capture = (
+      senderId: string,
+      conversationId = senderId,
+      senderUsername = "alice",
+      groupSpace = "200001",
+    ) =>
       withGatewayToolCallerIdentity(
         {
           ...eventScope,
@@ -547,21 +552,32 @@ describe("session event target custody", () => {
             conversationId,
             senderId,
             senderUsername,
+            groupSpace,
           },
         },
         () => captureTarget("main", sessionKey, { env, retainRequesterOwner: true }),
       );
-    const [owner, sameOwner, guest, otherOwner, ownerElsewhere, sameGuest, otherGuest, renamed] =
-      await Promise.all([
-        capture("456"),
-        capture("456"),
-        capture("789"),
-        capture("457"),
-        capture("456", "-100001"),
-        capture("789"),
-        capture("790"),
-        capture("789", "789", "bob"),
-      ]);
+    const [
+      owner,
+      sameOwner,
+      guest,
+      otherOwner,
+      ownerElsewhere,
+      sameGuest,
+      otherGuest,
+      renamed,
+      otherGuild,
+    ] = await Promise.all([
+      capture("456"),
+      capture("456"),
+      capture("789"),
+      capture("457"),
+      capture("456", "-100001"),
+      capture("789"),
+      capture("790"),
+      capture("789", "789", "bob"),
+      capture("789", "789", "alice", "200002"),
+    ]);
     const combines = (targets: Awaited<ReturnType<typeof capture>>[]) => {
       try {
         return Boolean(combineSessionEventTargetsForHost(targets));
@@ -580,6 +596,7 @@ describe("session event target custody", () => {
       sameGuest: combines([guest, sameGuest]),
       otherGuest: combines([guest, otherGuest]),
       renamed: combines([guest, renamed]),
+      otherGuild: combines([guest, otherGuild]),
     }).toEqual({
       sameOwner: true,
       guest: false,
@@ -588,6 +605,7 @@ describe("session event target custody", () => {
       sameGuest: true,
       otherGuest: false,
       renamed: false,
+      otherGuild: false,
     });
   });
 
