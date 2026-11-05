@@ -1,2 +1,2 @@
-# Catalog and runtime pin scoping, Doctor retention, and same-session Gateway recovery.
-232
+# Catalog/runtime pin scoping, reconnect guidance, and same-session Gateway recovery.
+272

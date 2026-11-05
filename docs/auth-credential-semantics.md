@@ -449,7 +449,7 @@ Accounts connected from **Settings → Profile → Connected accounts** have an 
 
 Personal pins keep the existing same-provider failover policy: ordered shared accounts can be tried after a pinned account fails. They do not make another person's personal account a fallback. Reconnecting can replace only the connecting person's own credential; shared credentials referenced by an administrator-created link are not personal property. See [Per-person model accounts](/concepts/multi-user#per-person-model-accounts).
 
-If a session's personal account is missing, its provider remains unavailable until you explicitly select another account or reconnect the intended account. Models backed by other providers' credentials remain selectable, including when the session inherits its default model. To select a configured account for the same session, use `/model <provider>/<model>@<profile>`. Doctor reports sessions with missing personal accounts and preserves their pins, including with `--fix`; it does not choose a replacement billing account.
+If a session's personal account is missing, its provider remains unavailable until you explicitly select a working account. Models backed by other providers' credentials remain selectable, including when the session inherits its default model. To select a configured account for the same session, use `/model <provider>/<model>@<profile>`. If you reconnect the intended account in Settings, explicitly select the newly connected account for this session afterward; reconnecting does not update the saved pin. Doctor reports sessions with missing personal accounts and preserves their pins, including with `--fix`; it does not choose a replacement billing account.
 
 ## Config-only auth routes
 

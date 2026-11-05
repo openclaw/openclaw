@@ -29,7 +29,7 @@ export function createDoctorSessionEntryInspector(params: {
       }
       if (!available) {
         params.warnings.push(
-          `- ${sessionKey}: selected personal model account is unavailable. Select another account for this session with /model <provider>/<model>@<profile>, or reconnect the intended account in Settings > Profile > Connected accounts. The saved pin was retained.`,
+          `- ${sessionKey}: selected personal model account is unavailable. Select another account for this session with /model <provider>/<model>@<profile>, or reconnect the intended account in Settings > Profile > Connected accounts and then explicitly select the newly connected account for this session. The saved pin was retained.`,
         );
       }
     },

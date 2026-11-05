@@ -380,11 +380,25 @@ describe("doctor retained session integrity", () => {
         const text = notes.mock.calls.map(([message]) => String(message)).join("\n");
         expect(text).toContain("agent:main:main: selected personal model account is unavailable");
         expect(text).toContain("/model <provider>/<model>@<profile>");
+        expect(text).toContain(
+          "then explicitly select the newly connected account for this session",
+        );
         expect(text).not.toContain(
           "agent:main:retained-account: selected personal model account is unavailable",
         );
         expect(loadSessionEntry(missing)).toEqual(before);
         expect(loadSessionEntry(retained)?.authProfileOverride).toBe(authProfileId);
+        if (attempt === 0) {
+          connectUserModelAccount({
+            ownerProfileId: owner.id,
+            credential: {
+              type: "api_key",
+              provider: "anthropic",
+              key: "synthetic-reconnected-key",
+            },
+            assertCurrent() {},
+          });
+        }
       }
     });
   });

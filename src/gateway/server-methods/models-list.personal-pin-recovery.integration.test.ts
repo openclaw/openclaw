@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import type { ChatMetadataResult } from "./chat-metadata-contract.js";
 import {
   catalogAgents,
   catalogReply,
@@ -79,6 +80,7 @@ it(
     await send("Reply before the account becomes unavailable.", "personal-pin-before");
     const originalSessionId = loadSessionEntry(scope)?.sessionId;
     expect(originalSessionId).toBeTruthy();
+    expect(loadSessionEntry(scope)?.modelProvider).toBe(primary);
     await patchSessionEntryCore(scope, () => ({
       authProfileOverride: missingPin,
       authProfileOverrideSource: "user-link",
@@ -88,22 +90,33 @@ it(
         sessionKey: scope.sessionKey,
         view: "configured",
       });
-    const before = await catalog();
-    expect(before.models).toContainEqual(
-      expect.objectContaining({
-        provider: alternative,
-        id: model.id,
-        available: true,
+    const expectRecoveryCatalog = async () => {
+      const results = await Promise.all([
+        catalog(),
+        gateway.client.request<ChatMetadataResult>("chat.metadata", {
+          agentId: "main",
+          sessionKey: scope.sessionKey,
+        }),
+      ]);
+      for (const result of results) {
+        expect(result.models).toContainEqual(
+          expect.objectContaining({ provider: alternative, id: model.id, available: true }),
+        );
+        expect(result.models).toContainEqual(
+          expect.objectContaining({ provider: primary, id: model.id, available: false }),
+        );
+      }
+      expect(loadSessionEntry(scope)?.authProfileOverride).toBe(missingPin);
+    };
+    await expectRecoveryCatalog();
+    const currentConfig = await gateway.client.request<{ hash: string }>("config.get", {});
+    await gateway.client.request("config.patch", {
+      baseHash: currentConfig.hash,
+      raw: JSON.stringify({
+        agents: { defaults: { model: { primary: `${alternative}/${model.id}` } } },
       }),
-    );
-    expect(before.models).toContainEqual(
-      expect.objectContaining({
-        provider: primary,
-        id: model.id,
-        available: false,
-      }),
-    );
-    expect(loadSessionEntry(scope)?.authProfileOverride).toBe(missingPin);
+    });
+    await expectRecoveryCatalog();
     await gateway.client.request("sessions.patch", {
       key: scope.sessionKey,
       model: `${primary}/${model.id}@${primary}:default`,
@@ -121,13 +134,26 @@ it(
       }),
     );
     await send("Continue the same session after account selection.", "personal-pin-after");
+    await patchSessionEntryCore(scope, () => ({
+      authProfileOverride: missingPin,
+      authProfileOverrideSource: "user-link",
+    }));
+    await expectRecoveryCatalog();
+    await gateway.client.request("sessions.patch", {
+      key: scope.sessionKey,
+      model: `${alternative}/${model.id}`,
+    });
+    expect(loadSessionEntry(scope)?.authProfileOverride).toBeUndefined();
+    await send("Continue after selecting another provider.", "personal-pin-provider");
     expect(authorizations).toEqual([
       "Bearer synthetic-primary-key",
       "Bearer synthetic-primary-key",
+      "Bearer synthetic-alternative-key",
     ]);
     const history = await sessions.history(scope.sessionKey);
     expectAssistantReply(history.messages, "Recovery reply 1");
     expectAssistantReply(history.messages, "Recovery reply 2");
+    expectAssistantReply(history.messages, "Recovery reply 3");
     expect(loadSessionEntry(scope)?.sessionId).toBe(originalSessionId);
   },
 );
