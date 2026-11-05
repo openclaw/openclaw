@@ -111,8 +111,10 @@ export function ChatDetailsProcesses(props: Props) {
   const visibleRows = createMemo(() =>
     snapshot()?.hasResult || snapshot()?.errorKind === "access"
       ? live().slice(0, 3)
-      : (cached()?.rows ?? []).map((row) => ({
-          ...row,
+      : (cached()?.rows ?? []).map(({ processId, instanceId, name }) => ({
+          processId,
+          instanceId,
+          name,
           canStop: false,
         })),
   );
