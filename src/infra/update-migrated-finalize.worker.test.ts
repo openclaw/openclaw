@@ -72,6 +72,8 @@ const fixture = vi.hoisted(() => ({
   terminal: vi.fn(),
   writeFile: vi.fn(),
   stopService: vi.fn(),
+  createCapture:
+    vi.fn<typeof import("./update-doctor-result.js").createUpdateDoctorDatabaseWriteCapture>(),
   recordStep: vi.fn(),
   recordLedgerStep: vi.fn(),
   adopt: vi.fn(),
@@ -145,7 +147,9 @@ vi.mock("./postgres-sync/pool.js", () => ({
 vi.mock("./update-finalization-budget.js", () => ({
   resolveUpdateFinalizationTimeoutMs: fixture.budget,
 }));
+// mock-isolation: Keep database capture and result-file writes outside the worker wiring fixture.
 vi.mock("./update-doctor-result.js", () => ({
+  createUpdateDoctorDatabaseWriteCapture: fixture.createCapture,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV: "OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH",
   recordUpdateDoctorConfigWriteRefusal: vi.fn(),
   writeUpdatePostInstallDoctorResult: vi.fn(),
@@ -745,6 +749,10 @@ it.each(["stopped", "port-bound", "uncertain", "not-stopped"] as const)(
       serviceInspectionDeadlineAtMs: 1_500,
     });
 
+    expect(fixture.createCapture).toHaveBeenCalledExactlyOnceWith(
+      { "/synthetic/agent.sqlite": null },
+      expect.objectContaining({ root: "/synthetic", pluginOwners: databasePluginOwners }),
+    );
     if (uncertain) {
       expect(doctor).not.toHaveBeenCalled();
     } else {
