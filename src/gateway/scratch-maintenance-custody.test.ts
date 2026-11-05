@@ -87,7 +87,7 @@ beforeEach(() => {
   );
 });
 afterEach(() => resetAgentRunRegistryForTest());
-const config = { agents: { list: [{ id: "main", workspace: "/fixture/project" }] } };
+const config = { agents: { entries: { main: { workspace: "/fixture/project" } } } };
 
 it.each(["running", "queued", "mailbox"] as const)(
   "protects only checkouts owned by %s work and releases protection",
