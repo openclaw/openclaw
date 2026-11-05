@@ -77,6 +77,8 @@ const RETAINED_STEP_NAMES = [
 ];
 export type UpdateRunLedgerOptions = OpenClawStateDatabaseOptions & {
   busyTimeoutMs?: number;
+  /** One-shot bookkeeping under the candidate Doctor capture, before native migration. */
+  attributeUpdateWrite?: true;
   redactPaths?: readonly string[];
 };
 

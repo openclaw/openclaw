@@ -638,6 +638,16 @@ restores and verifies the Gateway; Gateway bootstrap keeps its normal ownership
 checks. Doctor and competing CLI processes must contain this repair. Already-running
 older processes cannot observe the reservation.
 
+Candidate-side predecessor shutdown retains its durable recovery receipt inside
+Doctor's original database-write capture. The ledger writer includes its own
+native connection close before publishing that write; the following Doctor
+rechecks the database before reacquiring native custody. Unrelated writes before
+or after the receipt still refuse migration rather than becoming a new baseline.
+A completed stop keeps its recovery receipt even when that refusal prevents
+Doctor from continuing. A loaded supervised service between crashed processes
+still goes through native service-ownership inspection, even without a live lease.
+This is candidate-side behavior; it does not change an already-running older updater.
+
 After a Doctor child settles, the updater drains its retained handles for the
 affected shared-state database and revokes their schema admission, even when
 Doctor exits unsuccessfully. The next parent access admits the resulting schema
