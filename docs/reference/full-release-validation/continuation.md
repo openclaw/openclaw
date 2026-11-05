@@ -70,16 +70,14 @@ state suppresses repeated attempt, candidate-observation, and terminal events;
 a later rerun or newly observed tip is reported. Losing the local notification
 state can repeat notifications, but cannot authorize a retry or publication.
 
-`rerun --child` waits for one failed child, sends exactly one retry request,
-confirms the new attempt has no duplicate jobs, and
-records an audit line. It refuses children past `--max-attempts` (default 2,
-which allows one rerun). The install-smoke update and non-root installer jobs
-verify the candidate payload against the current run attempt. When a failed-jobs
-rerun would re-execute one of them (the job itself failed, or an upstream job
-such as its installer image build failed), it reruns the green producer and its
-dependents instead (`mode: producer`). If a failed job sits outside that dependent set, it reruns the whole
-child (`mode: all-jobs`), because a job rerun cannot also retry it. It returns
-after the new attempt starts; `continue --failed` still owns the final reseal.
+`rerun --child` waits for one failed child, sends exactly one retry request for
+its single blocking failed job (`mode: single-job`), confirms the new attempt has
+no duplicate jobs, and records an audit line. It refuses children past
+`--max-attempts` (default 2, which allows one rerun), passed children, and artifact
+producers (use `continue --failed`). Multiple blocking failed jobs require a fresh
+all-group FRV; the command does not rerun green producers, dependent job groups,
+or the whole child. It returns after the new attempt starts; `continue --failed`
+still owns the final reseal.
 
 When every workload passed and only **Seal child receipt** failed, the preview
 reports `mode: receipt`. The same bounded `rerun --child` command selects that
@@ -88,10 +86,11 @@ their accepted attempts, seals the new receipt against the exact child attempt,
 and still requires `continue --failed` plus strict verification before reporting
 qualification accepted. A metadata retry starting is not qualification success.
 
-`continue --failed` reruns each failed child's jobs as soon as that child is
-terminal (choosing the same producer or all-jobs mode for attempt-bound install-smoke
-payload consumers), while sibling children and the original parent may still run. It
-adopts active attempts without duplicating them and leaves green child
+`continue --failed` applies the same exact-job restriction to each failed child
+and failed artifact producer as soon as it is terminal, while sibling children
+and the original parent may still run. It refuses multi-job recovery and directs
+the operator to a fresh all-group FRV. It adopts active attempts without
+duplicating them and leaves green child
 workflows untouched. Each invocation reruns a child once; if that rerun fails
 again, it exits at once with the failed attempt and remaining rerun budget rather
 than waiting for siblings. A duplicate-job (ghost) attempt is unsealable: start
