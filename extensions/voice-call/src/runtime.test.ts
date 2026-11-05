@@ -11,6 +11,7 @@ import {
   createMockSessionRuntime,
   registerFastContextMemoryProvider,
 } from "./runtime.fast-context.test-support.js";
+import { registerLiveKitRuntimeTests } from "./runtime.livekit.test-support.js";
 import { createExternalProviderConfig, createVoiceCallBaseConfig } from "./test-fixtures.js";
 import type { CallRecord } from "./types.js";
 import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
@@ -20,6 +21,9 @@ const mocks = vi.hoisted(() => ({
   managerInitialize: vi.fn<(provider: VoiceCallProvider, webhookUrl: string) => Promise<void>>(),
   carrierRequest: vi.fn<typeof guardedJsonApiRequest>(),
   managerStop: vi.fn(),
+  providerStop: vi.fn(),
+  livekitBind: vi.fn(),
+  livekitRetire: vi.fn(),
   managerGetCall: vi.fn(),
   webhookStart: vi.fn(),
   webhookStop: vi.fn(),
@@ -39,6 +43,16 @@ const mocks = vi.hoisted(() => ({
   startTunnel: vi.fn(),
   setupTailscaleExposure: vi.fn(),
   cleanupTailscaleExposure: vi.fn(),
+}));
+
+// mock-isolation: Runtime construction uses a lifecycle-only carrier test double.
+vi.mock("./providers/livekit.js", () => ({
+  LiveKitProvider: class {
+    name = "livekit";
+    stop = mocks.providerStop;
+    bind = mocks.livekitBind;
+    retireRestoredCalls = mocks.livekitRetire;
+  },
 }));
 
 vi.mock("./providers/shared/guarded-json-api.js", async (importOriginal) => ({
@@ -195,6 +209,8 @@ async function startConsult(
 describe("createVoiceCallRuntime lifecycle", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    mocks.providerStop.mockResolvedValue(undefined);
+    mocks.livekitRetire.mockResolvedValue(undefined);
     mocks.webhookStart.mockResolvedValue("http://127.0.0.1:3334/voice/webhook");
     mocks.webhookGetRealtimeHandler.mockReturnValue({
       setPublicUrl: mocks.realtimeHandlerSetPublicUrl,
@@ -258,6 +274,8 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(mocks.cleanupTailscaleExposure).toHaveBeenCalledTimes(1);
     expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
   });
+
+  registerLiveKitRuntimeTests(mocks);
 
   it("returns an idempotent stop handler", async () => {
     const tunnelStop = vi.fn().mockResolvedValue(undefined);

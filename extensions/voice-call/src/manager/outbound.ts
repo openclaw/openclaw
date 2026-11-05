@@ -7,6 +7,7 @@ import {
   resolveVoiceCallSessionKey,
   type CallMode,
 } from "../config.js";
+import { ProviderSetupDurabilityError } from "../providers/base.js";
 import { resolvePreferredTtsVoice } from "../tts-provider-voice.js";
 import {
   type EndReason,
@@ -229,13 +230,17 @@ export async function initiateCall(
 
     return { callId, success: true };
   } catch (err) {
-    await ctx.mutationQueue.enqueue("state", () =>
-      finalizeCall({
-        ctx,
-        call: callRecord,
-        endReason: "failed",
-      }),
-    );
+    // A lost provider final must stay visible on the active record; terminalizing
+    // as failed would hide it. Hangup/shutdown retry through the manager owner.
+    if (!(err instanceof ProviderSetupDurabilityError)) {
+      await ctx.mutationQueue.enqueue("state", () =>
+        finalizeCall({
+          ctx,
+          call: callRecord,
+          endReason: "failed",
+        }),
+      );
+    }
 
     return {
       callId,
