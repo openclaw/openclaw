@@ -49,11 +49,10 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Long-session windowing measures 1,294,520/801,629 B for Chat/New against d0eb40dc015.
-  // The coordinator accepted this measured remainder for the readiness/memory win
-  // (#183800); request counts and the global variance allowance stay unchanged.
-  chatBootJsGzipBytes: 1_294_520,
-  newBootJsGzipBytes: 801_629,
+  // Long-session windowing plus lazy Settings/layout changes preserve boot request counts.
+  // Measured Chat/New are 1,294,100/801,486 B; retain 192 B headroom.
+  chatBootJsGzipBytes: 1_294_292,
+  newBootJsGzipBytes: 801_678,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -68,10 +67,10 @@ const controlUiPerformanceBudgets = {
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
-  // Profile's mobile reservation eliminates 0.114 CLS for 86 B gzip / 398 B raw.
-  // Exact head is 323,604 B gzip / 1,668,829 B raw; retain 64 B headroom.
-  totalCssGzipBytes: 323_668,
-  totalCssRawBytes: 1_668_893,
+  // Systems, Approvals and Advanced eliminate their first-visit layout shifts.
+  // Measured total CSS is 322,861 B gzip / 1,663,721 B raw; retain 64 B headroom.
+  totalCssGzipBytes: 322_925,
+  totalCssRawBytes: 1_663_785,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
