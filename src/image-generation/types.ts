@@ -5,7 +5,10 @@ export type ImageGenerationResolution = "1K" | "2K" | "4K";
 
 export type ImageGenerationQuality = "low" | "medium" | "high" | "xhigh" | "max" | "auto";
 
-export type ImageGenerationOutputFormat = "png" | "jpeg" | "webp";
+/** Output formats callers may request; providers declare their supported subset per model. */
+export const IMAGE_GENERATION_OUTPUT_FORMATS = ["png", "jpeg", "webp", "gif"] as const;
+
+export type ImageGenerationOutputFormat = (typeof IMAGE_GENERATION_OUTPUT_FORMATS)[number];
 
 export type ImageGenerationBackground = "transparent" | "opaque" | "auto";
 
@@ -15,6 +18,10 @@ export type ImageGenerationOpenAIOptions = {
   background?: ImageGenerationOpenAIBackground;
   moderation?: "low" | "auto";
   outputCompression?: number;
+  /** Animated GIF frame count; sent only with GIF output. */
+  frameCount?: number;
+  /** Animated GIF per-frame duration in milliseconds; sent only with GIF output. */
+  frameDurationMs?: number;
   user?: string;
 };
 

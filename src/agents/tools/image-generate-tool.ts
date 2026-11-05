@@ -5,10 +5,11 @@ import type { ImageGenerationSourceImage } from "../../image-generation/asset-ty
 import { sniffImageMimeType } from "../../image-generation/image-assets.js";
 import { normalizeImageGenerationResolution } from "../../image-generation/resolution.js";
 import { generateImage } from "../../image-generation/runtime.js";
-import type {
-  ImageGenerationOpenAIOptions,
-  ImageGenerationProviderOptions,
-  ImageGenerationResolution,
+import {
+  IMAGE_GENERATION_OUTPUT_FORMATS,
+  type ImageGenerationOpenAIOptions,
+  type ImageGenerationProviderOptions,
+  type ImageGenerationResolution,
 } from "../../image-generation/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseImageGenerationModelRef } from "../../media-generation/model-ref.js";
@@ -17,6 +18,7 @@ import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.
 import {
   encodeImageWithinBytes,
   getImageMetadata,
+  isAnimatedWebpBuffer,
   readImageMetadataFromHeader,
 } from "../../media/media-services.js";
 import { formatMediaSize } from "../../media/store.shared.js";
@@ -67,7 +69,8 @@ const MAX_REFERENCE_IMAGE_INPUTS = 16;
 const DEFAULT_RESOLUTION: ImageGenerationResolution = "1K";
 const GENERATED_IMAGE_MEDIA_SUBDIR = "tool-image-generation";
 const SUPPORTED_QUALITIES = ["low", "medium", "high", "xhigh", "max", "auto"] as const;
-const SUPPORTED_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
+const OPENAI_GIF_FRAME_COUNT_RANGE = { min: 2, max: 64 } as const;
+const OPENAI_GIF_FRAME_DURATION_MS_RANGE = { min: 20, max: 2000 } as const;
 const SUPPORTED_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
 const SUPPORTED_OPENAI_MODERATIONS = ["low", "auto"] as const;
 const SUPPORTED_FAL_CREATIVITY = ["raw", "low", "medium", "high"] as const;
@@ -136,8 +139,8 @@ const ImageGenerateToolSchema = Type.Object({
   quality: optionalStringEnum(SUPPORTED_QUALITIES, {
     description: "Quality: low, medium, high, xhigh, max, auto; model-specific.",
   }),
-  outputFormat: optionalStringEnum(SUPPORTED_OUTPUT_FORMATS, {
-    description: "Output format: png, jpeg, webp.",
+  outputFormat: optionalStringEnum(IMAGE_GENERATION_OUTPUT_FORMATS, {
+    description: "Output format: png, jpeg, webp, gif (animated; e.g. openai/gpt-image-2.6-*).",
   }),
   background: optionalStringEnum(SUPPORTED_BACKGROUNDS, {
     description: "Background: transparent, opaque, auto. Transparent needs png/webp output.",
@@ -156,6 +159,20 @@ const ImageGenerateToolSchema = Type.Object({
           description: "OpenAI jpeg/webp compression 0-100.",
           minimum: 0,
           maximum: 100,
+        }),
+      ),
+      frameCount: Type.Optional(
+        Type.Integer({
+          description: "OpenAI GIF frames 2-64; default 9.",
+          minimum: OPENAI_GIF_FRAME_COUNT_RANGE.min,
+          maximum: OPENAI_GIF_FRAME_COUNT_RANGE.max,
+        }),
+      ),
+      frameDurationMs: Type.Optional(
+        Type.Integer({
+          description: "OpenAI GIF ms per frame 20-2000; default 200.",
+          minimum: OPENAI_GIF_FRAME_DURATION_MS_RANGE.min,
+          maximum: OPENAI_GIF_FRAME_DURATION_MS_RANGE.max,
         }),
       ),
       user: Type.Optional(
@@ -205,6 +222,15 @@ async function fitGeneratedImagesToMaxBytes<
       continue;
     }
     const label = `Generated image ${index + 1} (${image.mimeType}, ${formatMediaSize(image.buffer.byteLength)})`;
+    // Still-image re-encoding keeps only the first frame, so animations fail instead.
+    if (
+      sniffImageMimeType(image.buffer, "").mimeType === "image/gif" ||
+      isAnimatedWebpBuffer(image.buffer)
+    ) {
+      throw new Error(
+        `${label} exceeds the ${limit} media limit; animated images are not re-encoded. Request fewer frames or a smaller size, or raise agents.defaults.mediaMaxMb.`,
+      );
+    }
     let encoded: Awaited<ReturnType<typeof encodeImageWithinBytes>>;
     try {
       encoded = await encodeImageWithinBytes(image.buffer, maxBytes);
@@ -255,6 +281,22 @@ async function inferImageGenerationResolution(
   return DEFAULT_RESOLUTION;
 }
 
+function readBoundedIntegerOption(
+  raw: Record<string, unknown>,
+  key: "frameCount" | "frameDurationMs",
+  range: { min: number; max: number },
+): number | undefined {
+  const message = `openai.${key} must be between ${range.min} and ${range.max}`;
+  if (readSnakeCaseParamRaw(raw, key) === null) {
+    throw new ToolInputError(message);
+  }
+  const value = readNonNegativeIntegerParam(raw, key, { message, max: range.max });
+  if (value !== undefined && value < range.min) {
+    throw new ToolInputError(message);
+  }
+  return value;
+}
+
 function normalizeOpenAIOptions(args: Record<string, unknown>): ImageGenerationOpenAIOptions {
   const raw = asToolParamsRecord(args.openai);
   const background = parseImageOption(
@@ -274,11 +316,19 @@ function normalizeOpenAIOptions(args: Record<string, unknown>): ImageGenerationO
     message: "openai.outputCompression must be between 0 and 100",
     max: 100,
   });
+  const frameCount = readBoundedIntegerOption(raw, "frameCount", OPENAI_GIF_FRAME_COUNT_RANGE);
+  const frameDurationMs = readBoundedIntegerOption(
+    raw,
+    "frameDurationMs",
+    OPENAI_GIF_FRAME_DURATION_MS_RANGE,
+  );
   const user = readToolStringParam(raw, "user");
   return {
     ...(background ? { background } : {}),
     ...(moderation ? { moderation } : {}),
     ...(outputCompression !== undefined ? { outputCompression } : {}),
+    ...(frameCount !== undefined ? { frameCount } : {}),
+    ...(frameDurationMs !== undefined ? { frameDurationMs } : {}),
     ...(user ? { user } : {}),
   };
 }
@@ -379,7 +429,7 @@ export function createImageGenerateTool(
             );
             const outputFormat = parseImageOption(
               readToolStringParam(params, "outputFormat"),
-              SUPPORTED_OUTPUT_FORMATS,
+              IMAGE_GENERATION_OUTPUT_FORMATS,
               "outputFormat",
             );
             const background = parseImageOption(

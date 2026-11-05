@@ -91,6 +91,12 @@ export function sniffImageMimeType(
   ) {
     return { mimeType: "image/webp", extension: "webp" };
   }
+  if (buffer.length >= 6) {
+    const signature = buffer.toString("ascii", 0, 6);
+    if (signature === "GIF87a" || signature === "GIF89a") {
+      return { mimeType: "image/gif", extension: "gif" };
+    }
+  }
   return {
     mimeType: fallbackMimeType,
     extension: imageFileExtensionForMimeType(fallbackMimeType),

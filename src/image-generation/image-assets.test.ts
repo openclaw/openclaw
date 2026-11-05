@@ -68,6 +68,13 @@ describe("image asset helpers", () => {
     expect(sniffImageMimeType(buffer)).toEqual({ mimeType: "image/png", extension: "png" });
   });
 
+  it.each(["GIF87a", "GIF89a"])("sniffs generated %s images", (signature) => {
+    expect(sniffImageMimeType(Buffer.from(`${signature}\x01\x00`, "latin1"))).toEqual({
+      mimeType: "image/gif",
+      extension: "gif",
+    });
+  });
+
   it("parses OpenAI-compatible base64 image responses", () => {
     const buffer = Buffer.from([0xff, 0xd8, 0xff, 0xdb]);
     const revisedPrompt = "revised";
