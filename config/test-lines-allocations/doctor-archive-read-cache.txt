@@ -1,0 +1,2 @@
+# Registered Doctor filesystem regression: lint, repair, repeat run, unrelated entries, symlinks, ownership, and refused unlink.
+93
