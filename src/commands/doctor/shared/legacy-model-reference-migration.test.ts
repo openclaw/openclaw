@@ -264,11 +264,128 @@ describe("canonical model-reference migration", () => {
 
       expect(normalizeRefs(config, changes, warnings)).toEqual(config);
       expect(changes).toEqual([]);
-      expect(warnings).toEqual([
-        expect.stringContaining("both canonical and legacy CLI references"),
-      ]);
+      expect(warnings).toEqual([expect.stringContaining("both directly and through claude-cli")]);
     },
   );
+
+  const opus = "claude-opus-4-7";
+  it.each<[string, OpenClawConfigWithLegacyRoster]>([
+    [
+      "a subagent CLI model beside the API primary",
+      defaults({ model: `anthropic/${opus}`, subagents: { model: `claude-cli/${opus}` } }),
+    ],
+    [
+      "a heartbeat CLI model beside the API primary",
+      defaults({ model: `anthropic/${opus}`, heartbeat: { model: `claude-cli/${opus}` } }),
+    ],
+    [
+      "an agent heartbeat CLI model beside its own API primary",
+      {
+        agents: {
+          entries: {
+            work: { model: `anthropic/${opus}`, heartbeat: { model: `claude-cli/${opus}` } },
+          },
+        },
+      },
+    ],
+    [
+      "an agent heartbeat CLI model beside an inherited API primary",
+      {
+        agents: {
+          defaults: { model: `anthropic/${opus}` },
+          entries: { work: { heartbeat: { model: `claude-cli/${opus}` } } },
+        },
+      },
+    ],
+    [
+      "a defaults CLI heartbeat beside an agent API primary",
+      {
+        agents: {
+          defaults: { heartbeat: { model: `claude-cli/${opus}` } },
+          list: [{ id: "work", model: selection(`anthropic/${opus}`, "openai/gpt-5.5") }],
+        },
+      },
+    ],
+    [
+      "model entries for both routes",
+      defaults({
+        model: `anthropic/${opus}`,
+        models: { [`anthropic/${opus}`]: { alias: "Opus API" }, [`claude-cli/${opus}`]: {} },
+      }),
+    ],
+    [
+      "an allowlist naming both routes",
+      defaults({
+        model: `anthropic/${opus}`,
+        modelPolicy: { allow: [`anthropic/${opus}`, `claude-cli/${opus}`] },
+      }),
+    ],
+  ])("keeps Claude CLI refs when %s", (_case, config) => {
+    const changes: string[] = [];
+    const warnings: string[] = [];
+
+    expect(normalizeRefs(config, changes, warnings)).toEqual(config);
+    expect(changes).toEqual([]);
+    expect(warnings).toEqual([expect.stringMatching(/^Kept legacy claude-cli\/\* model refs: /)]);
+  });
+
+  it("keeps Gemini CLI refs when a subagent selects the API model through the CLI", () => {
+    const config = defaults({
+      model: "google/gemini-3.1-pro-preview",
+      subagents: { model: "google-gemini-cli/gemini-3.1-pro-preview" },
+    });
+    const warnings: string[] = [];
+
+    expect(normalizeRefs(config, [], warnings)).toEqual(config);
+    expect(warnings).toEqual([
+      expect.stringMatching(/^Kept legacy google-gemini-cli\/\* model refs: /),
+    ]);
+  });
+
+  // [case, config, agent whose API route must stay unpinned, agent whose CLI route must resolve]
+  it.each<[string, OpenClawConfigWithLegacyRoster, string | undefined, string | undefined]>([
+    [
+      "the CLI selection names another model",
+      defaults({ model: `anthropic/${opus}`, heartbeat: { model: "claude-cli/claude-sonnet-5" } }),
+      "main",
+      undefined,
+    ],
+    [
+      "the canonical model already runs through Claude CLI",
+      defaults({
+        model: `anthropic/${opus}`,
+        models: { [`anthropic/${opus}`]: { agentRuntime: { id: "claude-cli" } } },
+        heartbeat: { model: `claude-cli/${opus}` },
+      }),
+      undefined,
+      "main",
+    ],
+    [
+      "separate agents select the two routes",
+      {
+        agents: {
+          entries: {
+            api: { model: `anthropic/${opus}` },
+            cli: { model: `claude-cli/${opus}` },
+          },
+        },
+      },
+      "api",
+      "cli",
+    ],
+  ])("migrates Claude CLI refs when %s", (_case, config, apiAgent, cliAgent) => {
+    const warnings: string[] = [];
+    const result = normalizeRefs(config, [], warnings);
+
+    expect(warnings).toEqual([]);
+    expect(JSON.stringify(result)).not.toContain("claude-cli/");
+    if (apiAgent) {
+      expect(runtime(result, "anthropic", opus, apiAgent)?.id).toBeUndefined();
+    }
+    if (cliAgent) {
+      expect(runtime(result, "anthropic", opus, cliAgent)?.id).toBe("claude-cli");
+    }
+  });
 
   it("preserves a CLI primary with the API route as its fallback", () => {
     const config = defaults({
