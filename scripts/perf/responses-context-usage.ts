@@ -113,6 +113,8 @@ for (let turn = 0; turn < items / 5; turn++) {
       {
         type: "message" as const,
         role: "assistant" as const,
+        id: `msg_${turn}`,
+        status: "completed" as const,
         content: [
           {
             type: "output_text" as const,
