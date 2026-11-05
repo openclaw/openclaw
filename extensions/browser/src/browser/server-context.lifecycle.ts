@@ -59,6 +59,8 @@ type ProfileLeaseContext = {
   signal: AbortSignal;
 };
 
+// Read only on operation and lifecycle await chains. Shared CDP, relay and process event
+// listeners inherit their creator's leases, so listener code must never enter a lease.
 const profileLeaseStorage = new AsyncLocalStorage<Map<ProfileRuntimeState, ProfileLeaseContext>>();
 const profileLifecycles = new WeakMap<ProfileRuntimeState, ProfileLifecycleActor>();
 const stoppingBrowserRuntimes = new WeakSet<BrowserServerState>();

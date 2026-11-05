@@ -345,7 +345,8 @@ The guard identifies the invoking call from its async context. Awaited work keep
 that context, but callbacks from an event source shared across calls, such as a
 cached connection's event listeners, can run in another call's context, such as
 the call that created the source. Capture `AsyncLocalStorage.snapshot()` when the call starts and run
-the guard through it in those callbacks.
+the guard through it in those callbacks. The same applies to runtime helpers that
+act as the current caller, such as `api.runtime.gateway.request`.
 Metadata-only catalog construction does not grant invocation authority. A retained
 versioned tool without an admitted invocation fails when its guard is called.
 

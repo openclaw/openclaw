@@ -1,2 +1,2 @@
-# Browser host guards must check the invoking call when shared CDP events arrive in another call's async context.
-207
+# Browser host callbacks and screencast policy must act as their owning call when shared CDP events arrive in another call's async context.
+296
