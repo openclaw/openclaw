@@ -108,19 +108,16 @@ export async function readUpdatePhysicalDatabaseGenerations(
   return Object.assign(result, await readUpdatePostgresDatabaseGenerations(postgres, pluginOwners));
 }
 
-/** Re-reads after capture; a matching receipt avoids a private image, a failed reuse reads afresh. */
+/** Re-reads after capture; a matching receipt avoids a private image. */
 export async function rereadUpdatePhysicalDatabaseGeneration(
   pathname: string,
   receipt?: SqliteDatabaseGenerationReceipt,
   pluginOwners?: DatabasePortPluginOwners,
 ): Promise<{ generation?: string; emptyReaderAlternate?: string }> {
-  try {
-    const unchanged = receipt && readUnchangedUpdateDatabaseGeneration(pathname, receipt);
-    if (unchanged) {
-      return { generation: unchanged };
-    }
-  } catch {
-    // Reuse is only an optimization; the fresh read decides whether the source changed.
+  // A failed reuse propagates: the caller keeps manual recovery instead of copying again.
+  const unchanged = receipt && readUnchangedUpdateDatabaseGeneration(pathname, receipt);
+  if (unchanged) {
+    return { generation: unchanged };
   }
   const alternates: Record<string, string> = {};
   const generations = await readUpdatePhysicalDatabaseGenerations(

@@ -280,42 +280,32 @@ it("reacquires a metadata-drifted family and retains unchanged committed authori
   expect(fs.readdirSync(f.stagingRoot)).toEqual([]);
 });
 
-it.each(["recovers", "fails again"] as const)(
-  "rereads once after a failed receipt reuse and %s",
-  async (outcome) => {
-    const f = await fixture();
-    const failure = new Error("fresh source-family observation unavailable");
-    const capture = sqliteSnapshot.createVerifiedSqliteSnapshot;
-    vi.spyOn(sqliteSnapshot, "createVerifiedSqliteSnapshot").mockImplementationOnce(
-      async (options) => {
-        const snapshot = await capture(options);
-        const read = vi.spyOn(fileGeneration, "readStableSqliteFileGeneration");
-        read[outcome === "recovers" ? "mockImplementationOnce" : "mockImplementation"](() => {
-          throw failure;
-        });
-        return snapshot;
-      },
-    );
-    const backup = await f.capture();
-    // A failed reuse costs one released private image instead of restoration authority.
-    expect(f.generationImages).toHaveBeenCalledTimes(2);
-    if (outcome === "recovers") {
-      expect(backup.warnings).toEqual([]);
-      expect(backup.sourceGenerations[f.shared]).toBe(
-        (await readUpdatePhysicalDatabaseGenerations([f.shared]))[f.shared],
-      );
-    } else {
-      expect(backup.sourceGenerations[f.shared]).toBeUndefined();
-      expect(backup.warnings).toEqual([
-        expect.stringContaining(failure.message),
-        expect.stringContaining("snapshot requires manual recovery"),
-      ]);
-    }
-    using snapshot = new DatabaseSync(backup.databases[0]!.snapshotPath, { readOnly: true });
-    expect(snapshot.prepare("SELECT value FROM payload").all()).toEqual([{ value: "retained" }]);
-    expect(fs.readdirSync(f.stagingRoot)).toEqual([]);
-  },
-);
+it("keeps manual recovery after fresh after-capture observation fails without reacquisition", async () => {
+  const f = await fixture();
+  const failure = new Error("fresh source-family observation unavailable");
+  const capture = sqliteSnapshot.createVerifiedSqliteSnapshot;
+  vi.spyOn(sqliteSnapshot, "createVerifiedSqliteSnapshot").mockImplementationOnce(
+    async (options) => {
+      const snapshot = await capture(options);
+      vi.spyOn(fileGeneration, "readStableSqliteFileGeneration").mockImplementationOnce(() => {
+        throw failure;
+      });
+      return snapshot;
+    },
+  );
+  const backup = await f.capture();
+  expect(f.generationImages).toHaveBeenCalledTimes(1);
+  expect(backup.sourceGenerations[f.shared]).toBeUndefined();
+  expect(backup.warnings).toEqual(
+    expect.arrayContaining([
+      expect.stringContaining(failure.message),
+      expect.stringContaining("snapshot requires manual recovery"),
+    ]),
+  );
+  using snapshot = new DatabaseSync(backup.databases[0]!.snapshotPath, { readOnly: true });
+  expect(snapshot.prepare("SELECT value FROM payload").all()).toEqual([{ value: "retained" }]);
+  expect(fs.readdirSync(f.stagingRoot)).toEqual([]);
+});
 
 it.each(["success", "false", "throw"] as const)(
   "joins every retained image after admission fails and preserves cleanup %s",
