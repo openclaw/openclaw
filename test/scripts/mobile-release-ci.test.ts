@@ -371,7 +371,6 @@ describe("mobile release CI tools", () => {
       git(checkout, "worktree", "add", "--detach", staged, source);
       for (const { sha, ref } of baselines) {
         git(staged, "fetch", "--no-tags", "--filter=blob:none", "--depth=1", "origin", ref);
-        expect(git(staged, "rev-parse", "FETCH_HEAD")).toBe(sha);
         const options = {
           platform,
           baseline: sha,

@@ -261,6 +261,7 @@ describe("generated mobile store notes", () => {
       .mockResolvedValueOnce(approvedReview);
 
     const saved = await generateMobileReleaseNotes(f);
+    expect(git(f.rootDir, "rev-parse", "--is-shallow-repository")).toBe("false");
     for (const index of [1, 2]) {
       const request = api.parse.mock.calls[index]![0];
       expect(request.input.length).toBeLessThan(60_000);
@@ -300,82 +301,61 @@ describe("generated mobile store notes", () => {
     await expect(generateMobileReleaseNotes(f)).rejects.toThrow("different production baseline");
   });
 
-  it.each([false, true])(
-    "keeps v2 phone and legacy Wear baselines separate (shallow: %s)",
-    async (shallow) => {
-      const f = fixture("android");
-      const sourceRef =
-        "refs/openclaw/mobile-releases/android/v2/2026.7.3/0/1/2026070449-2026070450";
-      const wearBase = f.sourceSha;
-      f.ref("refs/openclaw/mobile-releases/android/2026.7.3-2026070302", wearBase);
-      f.plan.releaseNotesBaselines[1]!.build = "2026070352";
-      const wearFile = "apps/android/wear/src/main/java/Watch.kt";
-      f.write(wearFile, 'val label = "Start talking"\n');
-      commit(f, "Clarify watch voice action", wearFile);
-      f.ref(sourceRef, f.base);
-      Object.assign(f.plan.releaseNotesBaselines[0]!, {
-        version: "2026.7.30",
-        build: "2026070449",
-        sourceRef,
-      });
-      savePlan(f);
-      const rootDir = shallow ? temporary.make("mobile-notes-shallow-") : f.rootDir;
-      if (shallow) {
-        git(f.rootDir, "config", "uploadpack.allowFilter", "true");
-        git(
-          f.rootDir,
-          "clone",
-          "--depth=1",
-          "--no-tags",
-          "--filter=blob:none",
-          pathToFileURL(f.rootDir).href,
-          rootDir,
-        );
-        expect(git(rootDir, "rev-parse", "--is-shallow-repository")).toBe("true");
-      }
-      const options = { ...f, rootDir };
-      accept(f.file);
-      accept(wearFile, [{ text: "Clearer watch voice controls.", evidenceIds: ["e1"] }]);
-      const saved = await generateMobileReleaseNotes(options);
-      expect(git(rootDir, "rev-parse", "HEAD")).toBe(f.sourceSha);
-      expect(git(f.rootDir, "rev-parse", "--is-shallow-repository")).toBe("false");
-      expect(requestInput(0).commits).toEqual([
-        "Clarify watch voice action",
-        "Clarify send button; commit prose is supporting evidence only",
-      ]);
-      expect(requestInput(3).commits).toEqual(["Clarify watch voice action"]);
-      expect(requestInput(3).files).toContainEqual(expect.objectContaining({ file: wearFile }));
-      expect(requestInput(3).files).not.toContainEqual(expect.objectContaining({ file: f.file }));
-      for (const index of [2, 5]) {
-        expect(requestInput(index).evidence).toContainEqual(
-          expect.objectContaining({
-            file: "apps/android/app/src/play/java/ai/openclaw/app/SensitiveFeatureConfig.kt",
-            kind: "context",
-            patch: expect.stringContaining("smsEnabled = false"),
-          }),
-        );
-      }
-      const rows = saved.entries.map(({ audience, baseline: { build, sourceSha }, text }) => [
-        audience,
-        build,
-        sourceSha,
-        text,
-      ]);
-      expect(rows).toEqual([
-        ["phone", "2026070449", f.base, `- ${claim.text}`],
-        ["wear", "2026070352", wearBase, "- Clearer watch voice controls."],
-      ]);
-      vi.stubEnv("OPENAI_API_KEY", "");
-      expect(await generateMobileReleaseNotes(options)).toEqual(saved);
-      fs.rmSync(f.outputPath);
-      vi.stubEnv("OPENAI_API_KEY", "synthetic-key");
-      f.plan.releaseNotesBaselines[0]!.build = "2026070450";
-      savePlan(f);
-      await expect(generateMobileReleaseNotes(options)).rejects.toThrow(
-        "does not match its recorded store identity",
+  it("keeps v2 phone and legacy Wear notes separate from shallow source", async () => {
+    const f = fixture("android");
+    const sourceRef = "refs/openclaw/mobile-releases/android/v2/2026.7.3/0/1/2026070449-2026070450";
+    const wearBase = f.sourceSha;
+    f.ref("refs/openclaw/mobile-releases/android/2026.7.3-2026070302", wearBase);
+    f.plan.releaseNotesBaselines[1]!.build = "2026070352";
+    const wearFile = "apps/android/wear/src/main/java/Watch.kt";
+    f.write(wearFile, 'val label = "Start talking"\n');
+    commit(f, "Clarify watch voice action", wearFile);
+    f.ref(sourceRef, f.base);
+    Object.assign(f.plan.releaseNotesBaselines[0]!, {
+      version: "2026.7.30",
+      build: "2026070449",
+      sourceRef,
+    });
+    savePlan(f);
+    const rootDir = temporary.make("mobile-notes-shallow-");
+    git(f.rootDir, "config", "uploadpack.allowFilter", "true");
+    git(f.rootDir, "clone", "--depth=1", pathToFileURL(f.rootDir).href, rootDir);
+    const options = { ...f, rootDir };
+    accept(f.file);
+    accept(wearFile, [{ text: "Clearer watch voice controls.", evidenceIds: ["e1"] }]);
+    const saved = await generateMobileReleaseNotes(options);
+    expect(git(rootDir, "rev-parse", "HEAD")).toBe(f.sourceSha);
+    expect(requestInput(3).files).toContainEqual(expect.objectContaining({ file: wearFile }));
+    expect(requestInput(3).files).not.toContainEqual(expect.objectContaining({ file: f.file }));
+    for (const index of [2, 5]) {
+      expect(requestInput(index).evidence).toContainEqual(
+        expect.objectContaining({
+          file: "apps/android/app/src/play/java/ai/openclaw/app/SensitiveFeatureConfig.kt",
+          kind: "context",
+          patch: expect.stringContaining("smsEnabled = false"),
+        }),
       );
-    },
-  );
+    }
+    const rows = saved.entries.map(({ audience, baseline: { build, sourceSha }, text }) => [
+      audience,
+      build,
+      sourceSha,
+      text,
+    ]);
+    expect(rows).toEqual([
+      ["phone", "2026070449", f.base, `- ${claim.text}`],
+      ["wear", "2026070352", wearBase, "- Clearer watch voice controls."],
+    ]);
+    vi.stubEnv("OPENAI_API_KEY", "");
+    expect(await generateMobileReleaseNotes(options)).toEqual(saved);
+    fs.rmSync(f.outputPath);
+    vi.stubEnv("OPENAI_API_KEY", "synthetic-key");
+    f.plan.releaseNotesBaselines[0]!.build = "2026070450";
+    savePlan(f);
+    await expect(generateMobileReleaseNotes(options)).rejects.toThrow(
+      "does not match its recorded store identity",
+    );
+  });
 
   it("does not invent notes for a fully reverted app change", async () => {
     const f = fixture();

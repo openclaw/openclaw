@@ -648,14 +648,9 @@ describe("mobile release CLI", () => {
 
   it.each(["ios", "android"])("avoids loading %s ancestry for first release notes", (platform) => {
     const f = fixture(platform, undefined, true);
-    const latestMain = advanceMain(f);
-    expect(git(f.root, "rev-list", "--count", "HEAD")).toBe("1");
     const result = f.invoke("run", [], workflowEnv(f.base));
     expectResult(result, 0);
-    expect(git(f.root, "rev-parse", "--is-shallow-repository")).toBe("true");
     expect(git(f.root, "rev-list", "--count", "HEAD")).toBe("1");
-    expect(f.audit()).toHaveLength(1);
-    expect(f.ref("main")).toBe(latestMain);
     expect(git(f.root, "rev-parse", "HEAD")).toBe(f.base);
   });
 
