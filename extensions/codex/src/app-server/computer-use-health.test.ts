@@ -8,31 +8,47 @@ describe("Codex Computer Use periodic health", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it("runs the live list_apps probe on the configured cadence and clears on client close", async () => {
-    const client = createClient();
+  it.each([false, true])(
+    "probes on cadence and clears on close (reconfigured=%s)",
+    async (reconfigured) => {
+      const tools = reconfigured ? ["js", "js_reset", "turn_ended"] : undefined;
+      const client = createClient(
+        reconfigured ? { mcpServerName: "cua_repl", mcpTools: tools } : {},
+      );
+      startMonitor(client);
+      if (reconfigured) {
+        startMonitor(
+          client,
+          {
+            pluginName: "unified-computer-use",
+            mcpServerName: "cua_repl",
+            toolCallTimeoutMs: 45_000,
+          },
+          tools,
+        );
+      }
+      expect(client.request).not.toHaveBeenCalled();
 
-    const result = startMonitor(client);
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
 
-    expect(result).toEqual({ started: true, intervalMs: 30 * 60_000 });
-    expect(client.request).not.toHaveBeenCalled();
+      expect(client.request).toHaveBeenCalledWith(
+        "thread/start",
+        {
+          input: [],
+          developerInstructions: "OpenClaw Computer Use readiness check",
+          ephemeral: true,
+        },
+        { timeoutMs: 60_000 },
+      );
+      expectProbe(client, reconfigured ? 45_000 : 60_000);
 
-    await vi.advanceTimersByTimeAsync(30 * 60_000);
-
-    expect(client.request).toHaveBeenCalledWith(
-      "thread/start",
-      {
-        input: [],
-        developerInstructions: "OpenClaw Computer Use readiness check",
-        ephemeral: true,
-      },
-      { timeoutMs: 60_000 },
-    );
-    expectProbe(client, "computer-use", "list_apps", {}, 60_000);
-
-    client.close();
-    await vi.advanceTimersByTimeAsync(30 * 60_000);
-    expectToolCalls(client, 1);
-  });
+      client.close();
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      expect(
+        client.request.mock.calls.filter(([method]) => method === "mcpServer/tool/call"),
+      ).toHaveLength(1);
+    },
+  );
 
   it("reloads the owner-managed MCP runtime and retries once after a failed probe", async () => {
     const client = createClient({ liveTestFailures: 1 });
@@ -41,7 +57,9 @@ describe("Codex Computer Use periodic health", () => {
 
     await vi.advanceTimersByTimeAsync(30 * 60_000);
 
-    expectToolCalls(client, 2);
+    expect(
+      client.request.mock.calls.filter(([method]) => method === "mcpServer/tool/call"),
+    ).toHaveLength(2);
     expect(client.request).toHaveBeenCalledWith("config/mcpServer/reload", undefined, {
       timeoutMs: 60_000,
     });
@@ -50,34 +68,12 @@ describe("Codex Computer Use periodic health", () => {
   it.each([
     { config: { healthCheckEnabled: false }, reason: "health_disabled" },
     { config: { enabled: false, healthCheckEnabled: true }, reason: "disabled" },
-  ])("stops an existing monitor when $reason", async ({ config, reason }) => {
+  ])("stops an existing monitor when $reason", async ({ config }) => {
     const client = createClient();
     startMonitor(client);
-    expect(startMonitor(client, config)).toEqual({ started: false, reason });
+    startMonitor(client, config);
     await vi.advanceTimersByTimeAsync(30 * 60_000);
     expect(client.request).not.toHaveBeenCalled();
-  });
-
-  it("replaces a same-interval monitor and probes the new unified tool configuration", async () => {
-    const tools = ["js", "js_reset", "turn_ended"];
-    const client = createClient({ mcpServerName: "cua_repl", mcpTools: tools });
-
-    startMonitor(client);
-    expect(
-      startMonitor(
-        client,
-        {
-          pluginName: "unified-computer-use",
-          mcpServerName: "cua_repl",
-          toolCallTimeoutMs: 45_000,
-        },
-        tools,
-      ),
-    ).toEqual({ started: true, intervalMs: 30 * 60_000 });
-
-    await vi.advanceTimersByTimeAsync(30 * 60_000);
-    expectProbe(client, "cua_repl", "js", { code: "await cua.listApps();" }, 45_000);
-    expectToolCalls(client, 1);
   });
 });
 
@@ -90,18 +86,14 @@ function createClient(
     probeThreadPrefix: "health-probe-thread",
     ...options,
   });
-  const request = vi.fn(async (method: string, params?: unknown) => {
-    if (
-      [
-        "thread/start",
-        "mcpServer/tool/call",
-        "config/mcpServer/reload",
-        "thread/unsubscribe",
-      ].includes(method)
-    ) {
-      return fixture(method, params);
-    }
-    throw new Error(`unexpected request ${method}`);
+  const request = vi.fn(async (...args: Parameters<typeof fixture>) => {
+    expect([
+      "thread/start",
+      "mcpServer/tool/call",
+      "config/mcpServer/reload",
+      "thread/unsubscribe",
+    ]).toContain(args[0]);
+    return fixture(...args);
   });
   const client = {
     request,
@@ -147,22 +139,9 @@ function startMonitor(
   });
 }
 
-function expectToolCalls(client: ReturnType<typeof createClient>, count: number) {
-  expect(
-    client.request.mock.calls.filter(([method]) => method === "mcpServer/tool/call"),
-  ).toHaveLength(count);
-}
-
-function expectProbe(
-  client: ReturnType<typeof createClient>,
-  server: string,
-  tool: string,
-  args: Record<string, string>,
-  timeoutMs: number,
-) {
-  expect(client.request).toHaveBeenCalledWith(
-    "mcpServer/tool/call",
-    { threadId: "health-probe-thread-1", server, tool, arguments: args },
-    { timeoutMs },
-  );
+// The strict request fixture already checks thread, server, tool, and arguments.
+function expectProbe(client: ReturnType<typeof createClient>, timeoutMs: number) {
+  expect(client.request).toHaveBeenCalledWith("mcpServer/tool/call", expect.anything(), {
+    timeoutMs,
+  });
 }

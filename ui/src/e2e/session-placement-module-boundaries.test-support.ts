@@ -157,7 +157,7 @@ export function defineSessionPlacementModuleBoundaryTests(
         },
         "sessions.delete": { ok: true, deleted: true },
         "sessions.reclaim": { ok: true },
-        "sessions.send": { runId: "run-cloud-e2e", status: "started" },
+        "chat.send": { runId: "run-cloud-e2e", status: "started" },
       },
     });
     const profileRequestCount = async () => (await gateway.getRequests("environments.list")).length;
@@ -177,7 +177,7 @@ export function defineSessionPlacementModuleBoundaryTests(
       await place.getByRole("button", { name: "aws", exact: true }).click();
       const trigger = page.locator("#new-session-where-trigger");
       await pollAttribute(trigger, "data-cloud-profile").toBe("aws");
-      await place.getByText("Machine", { exact: true }).waitFor();
+      await place.getByText("Device size", { exact: true }).waitFor();
       await place.locator('[data-value="machine:fast"]').click();
       await pollAttribute(trigger, "data-machine-class").toBe("fast");
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("aws");
@@ -195,7 +195,9 @@ export function defineSessionPlacementModuleBoundaryTests(
       const currentCheckout = checkout.locator('[data-value="checkout"]');
       expect(await currentCheckout.isDisabled()).toBe(true);
       expect(await currentCheckout.getAttribute("aria-pressed")).toBe("false");
-      expect(await tooltipTitleText(currentCheckout)).toBe("Devices and cloud run in a worktree");
+      expect(await tooltipTitleText(currentCheckout)).toBe(
+        "Paired and cloud devices use a worktree",
+      );
       expect(await checkout.locator('[data-value="worktree"]').getAttribute("aria-pressed")).toBe(
         "true",
       );
@@ -245,7 +247,7 @@ export function defineSessionPlacementModuleBoundaryTests(
       await pollValue(baseRef).toBe("release");
       await pollLocatorText(checkoutLabel).toBe("From release");
       await baseRef.fill("main");
-      await pollLocatorText(checkoutNote).toContain("Syncs target-repo to the selected runner");
+      await pollLocatorText(checkoutNote).toContain("Syncs target-repo to the selected device");
       await page.keyboard.press("Escape");
       await popoverOpen(checkout).toBe(false);
 
@@ -257,7 +259,7 @@ export function defineSessionPlacementModuleBoundaryTests(
       await checkoutTrigger.click();
       await popoverOpen(checkout).toBe(true);
       await checkout.getByLabel("Name", { exact: true }).fill("cloud-e2e");
-      await pollLocatorText(checkoutNote).toContain("Syncs OpenClaw to the selected runner");
+      await pollLocatorText(checkoutNote).toContain("Syncs OpenClaw to the selected device");
       await page.keyboard.press("Escape");
 
       const message = "fix the cloud-only failure";
@@ -403,7 +405,6 @@ export function defineSessionPlacementModuleBoundaryTests(
           ...buildGatewaySessionSnapshot({
             sessionRow: session,
             agentId: "cloud",
-            includeSession: true,
           }),
           placement,
           placementMove: null,
@@ -418,7 +419,7 @@ export function defineSessionPlacementModuleBoundaryTests(
       ] as const;
       for (const [state, generation, label] of transitions) {
         await publishPlacement(state, generation, label);
-        expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       }
       await gateway.resolveDeferred("sessions.describe", undefined, {
         match: { key: sessionKey },
@@ -451,19 +452,19 @@ export function defineSessionPlacementModuleBoundaryTests(
       });
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
       expect(await gateway.getRequests("sessions.delete")).toHaveLength(0);
-      const send = await gateway.waitForRequest("sessions.send");
+      const send = await gateway.waitForRequest("chat.send");
       expect(send.params).toMatchObject({
-        key: sessionKey,
+        sessionKey,
+        sessionId: "session-cloud-e2e",
+        expectedLeafEntryId: null,
         agentId: "cloud",
         message,
         attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
       });
       const orderedMethods = (await gateway.getRequests())
         .map((request) => request.method)
-        .filter((method) =>
-          ["sessions.create", "sessions.dispatch", "sessions.send"].includes(method),
-        );
-      expect(orderedMethods).toEqual(["sessions.create", "sessions.dispatch", "sessions.send"]);
+        .filter((method) => ["sessions.create", "sessions.dispatch", "chat.send"].includes(method));
+      expect(orderedMethods).toEqual(["sessions.create", "sessions.dispatch", "chat.send"]);
       const promptBubbles = page.locator(".chat-group.user .chat-bubble", { hasText: message });
       await pollCount(promptBubbles).toBe(1);
 
@@ -493,19 +494,26 @@ export function defineSessionPlacementModuleBoundaryTests(
       const localSessionRow = page.locator('[data-session-key="agent:cloud:local-e2e"]');
       await sessionRow.waitFor();
       await localSessionRow.waitFor();
-      const cloudPlacementBadge = sessionRow.locator('[data-placement-state="active"]');
-      await cloudPlacementBadge.waitFor();
+      await sessionRow.locator(".session-row-badge--cloud").waitFor();
+      expect(await localSessionRow.locator(".session-row-badge--cloud").count()).toBe(0);
+      await localSessionRow.click({ button: "right" });
+      const sessionMenu = page.getByRole("menu", {
+        name: "Actions for Local session",
+        exact: true,
+      });
+      await sessionMenu.waitFor();
+      expect(await sessionMenu.getByRole("menuitem", { name: "Stop cloud device…" }).count()).toBe(
+        0,
+      );
+      await page.keyboard.press("Escape");
       await sessionRow.hover();
       await sessionRow.click({ button: "right" });
       const stopWorker = page
         .locator("openclaw-session-menu")
-        .getByRole("menuitem", { name: "Stop cloud worker…" });
+        .getByRole("menuitem", { name: "Stop cloud device…" });
       await stopWorker.waitFor();
-      expect(await localSessionRow.locator(".session-row-badge--cloud").count()).toBe(0);
-      expect(await cloudPlacementBadge.locator("circle").count()).toBe(1);
-      expect(await cloudPlacementBadge.locator("rect").count()).toBe(0);
       await stopWorker.click();
-      await (await waitForConfirmModal(page)).getByRole("button", { name: "Stop worker" }).click();
+      await (await waitForConfirmModal(page)).getByRole("button", { name: "Stop" }).click();
       const reclaim = await gateway.waitForRequest("sessions.reclaim");
       expect(reclaim.params).toEqual({ key: managedSessionKey, agentId: "cloud" });
       expect(await gateway.getRequests("environments.destroy")).toHaveLength(0);

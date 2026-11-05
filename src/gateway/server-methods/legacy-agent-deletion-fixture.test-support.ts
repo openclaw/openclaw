@@ -54,7 +54,6 @@ export function seedLegacyAgentDeletionFixture(
         model: "openai/gpt-4.1",
         skipBootstrap: true,
         systemAgent: { agentId: "main" },
-        heartbeat: { every: "0m" },
       },
       entries: {
         main: { name: "Stable Main", workspace: workspace("main") },

@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { symlink } from "node:fs/promises";
 import path from "node:path";
-import { StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
@@ -92,8 +91,16 @@ const openDatabase = (prefix: string) =>
   openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: tempDirs.make(prefix) } });
 const openStore = (database: OpenClawStateDatabase) =>
   createWorkerEnvironmentStore({ database, now: () => 1_000 });
+type Transition = Parameters<WorkerEnvironmentStore["transition"]>[0];
+const move = (
+  store: WorkerEnvironmentStore,
+  environmentId: string,
+  from: Transition["from"],
+  to: Transition["to"],
+  options: Omit<Transition, "environmentId" | "from" | "to"> = {},
+) => store.transition({ environmentId, from, to, ...options });
 const provision = (store: WorkerEnvironmentStore, environmentId: string) =>
-  store.transition({ environmentId, from: "requested", to: "provisioning" });
+  move(store, environmentId, "requested", "provisioning");
 function attachmentIntent(environmentId: string, sessionId: string, provisionOperationId: string) {
   return {
     ...intentFor(environmentId),
@@ -258,13 +265,9 @@ it("preserves admitted inventory after a refused native open but fences terminal
           new Error("database disk image is malformed"),
         );
         expect(() => store.get(intent.environmentId)).toThrow("inventory has closed");
-        expect(() =>
-          store.transition({
-            environmentId: intent.environmentId,
-            from: "provisioning",
-            to: "failed",
-          }),
-        ).toThrow("inventory has closed");
+        expect(() => move(store, intent.environmentId, "provisioning", "failed")).toThrow(
+          "inventory has closed",
+        );
       } finally {
         await store.close();
       }
@@ -320,81 +323,71 @@ it("serves committed inventory and performs guarded mutations without host SQLit
   store.list();
   store.listForReconcile();
   store.get("worker-a");
-  const queries = vi.spyOn(sqlite, "executeSqliteQuerySync");
-  const firstRows = vi.spyOn(sqlite, "executeSqliteQueryTakeFirstSync");
-  const prepare = vi.spyOn(database.db, "prepare");
-  const workerReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-  try {
-    expect(await store.hasSessionAttachment("worker-a")).toBe(false);
-    expect(store.list().map((row) => row.environmentId)).toEqual(["worker-a"]);
-    expect(store.listForReconcile()).toEqual(store.list());
-    const record = store.get("worker-a")!;
-    expect(store.get("worker-a")).toBe(record);
-    expect(store.list()[0]).toBe(record);
-    expect(store.list()).toBe(store.list());
-    expect(store.listForReconcile()[0]).toBe(record);
-    const settings = record.profileSnapshot.settings;
-    if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
-      throw new Error("Expected fixture settings");
-    }
-    expect(() => {
-      settings.region = "caller mutation";
-    }).toThrow(TypeError);
-    expect(store.get("worker-a")!.profileSnapshot.settings).toEqual({ region: "fixture" });
-    expect(queries).not.toHaveBeenCalled();
-    expect(firstRows).not.toHaveBeenCalled();
-    const changed = await store.transition({
-      environmentId: "worker-a",
-      from: "requested",
-      to: "provisioning",
-      assertCurrent() {
-        expect(store.get("worker-a")!.state).toBe("requested");
-      },
-    });
-    expect(changed.state).toBe("provisioning");
-    expect(store.get("worker-a")).toEqual(changed);
-    expect(store.get("worker-a")).not.toBe(record);
-    expect(store.list()[0]).toBe(store.get("worker-a"));
-    expect(record.state).toBe("requested");
-    await expect(
-      store.transition({ environmentId: "worker-a", from: "requested", to: "provisioning" }),
-    ).rejects.toThrow("state conflict");
-    await expect(
-      store.requestDestroy({
-        environmentId: "worker-a",
-        state: "provisioning",
-        assertCurrent() {
-          throw new Error("requester revoked");
-        },
-      }),
-    ).rejects.toThrow("requester revoked");
-    expect(store.get("worker-a")!.destroyRequestedAtMs).toBeNull();
-    await store.requestDestroy({ environmentId: "worker-a", state: "provisioning" });
-    expect(store.get("worker-a")!.destroyRequestedAtMs).toBe(1_000);
-    await store.createSessionAttachmentIntent(
-      {
-        ...intent,
-        environmentId: "conversation-a",
-        provisionOperationId: "conversation-operation-a",
-        sessionId: "conversation-session-a",
-        sessionKey: "agent:main:conversation-a",
-        agentId: "main",
-      },
-      () => {},
-    );
-    expect(await store.hasSessionAttachment("conversation-a")).toBe(true);
-    await store.closeSessionAttachment("conversation-session-a");
-    expect(await store.hasSessionAttachment("conversation-a")).toBe(true);
-    expect(workerReads).not.toHaveBeenCalled();
-    expect(prepare).not.toHaveBeenCalled();
-    expect(queries).not.toHaveBeenCalled();
-    expect(firstRows).not.toHaveBeenCalled();
-  } finally {
-    workerReads.mockRestore();
-    prepare.mockRestore();
-    queries.mockRestore();
-    firstRows.mockRestore();
+  using queries = vi.spyOn(sqlite, "executeSqliteQuerySync");
+  using firstRows = vi.spyOn(sqlite, "executeSqliteQueryTakeFirstSync");
+  using prepare = vi.spyOn(database.db, "prepare");
+  using workerReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+  expect(await store.hasSessionAttachment("worker-a")).toBe(false);
+  expect(store.list().map((row) => row.environmentId)).toEqual(["worker-a"]);
+  expect(store.listForReconcile()).toEqual(store.list());
+  const record = store.get("worker-a")!;
+  expect(store.get("worker-a")).toBe(record);
+  expect(store.list()[0]).toBe(record);
+  expect(store.list()).toBe(store.list());
+  expect(store.listForReconcile()[0]).toBe(record);
+  const settings = record.profileSnapshot.settings;
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
+    throw new Error("Expected fixture settings");
   }
+  expect(() => {
+    settings.region = "caller mutation";
+  }).toThrow(TypeError);
+  expect(store.get("worker-a")!.profileSnapshot.settings).toEqual({ region: "fixture" });
+  expect(queries).not.toHaveBeenCalled();
+  expect(firstRows).not.toHaveBeenCalled();
+  const changed = await move(store, "worker-a", "requested", "provisioning", {
+    assertCurrent() {
+      expect(store.get("worker-a")!.state).toBe("requested");
+    },
+  });
+  expect(changed.state).toBe("provisioning");
+  expect(store.get("worker-a")).toEqual(changed);
+  expect(store.get("worker-a")).not.toBe(record);
+  expect(store.list()[0]).toBe(store.get("worker-a"));
+  expect(record.state).toBe("requested");
+  await expect(
+    store.transition({ environmentId: "worker-a", from: "requested", to: "provisioning" }),
+  ).rejects.toThrow("state conflict");
+  await expect(
+    store.requestDestroy({
+      environmentId: "worker-a",
+      state: "provisioning",
+      assertCurrent() {
+        throw new Error("requester revoked");
+      },
+    }),
+  ).rejects.toThrow("requester revoked");
+  expect(store.get("worker-a")!.destroyRequestedAtMs).toBeNull();
+  await store.requestDestroy({ environmentId: "worker-a", state: "provisioning" });
+  expect(store.get("worker-a")!.destroyRequestedAtMs).toBe(1_000);
+  await store.createSessionAttachmentIntent(
+    {
+      ...intent,
+      environmentId: "conversation-a",
+      provisionOperationId: "conversation-operation-a",
+      sessionId: "conversation-session-a",
+      sessionKey: "agent:main:conversation-a",
+      agentId: "main",
+    },
+    () => {},
+  );
+  expect(await store.hasSessionAttachment("conversation-a")).toBe(true);
+  await store.closeSessionAttachment("conversation-session-a");
+  expect(await store.hasSessionAttachment("conversation-a")).toBe(true);
+  expect(workerReads).not.toHaveBeenCalled();
+  expect(prepare).not.toHaveBeenCalled();
+  expect(queries).not.toHaveBeenCalled();
+  expect(firstRows).not.toHaveBeenCalled();
 });
 
 it.each(["create", "close"] as const)(
@@ -410,11 +403,7 @@ it.each(["create", "close"] as const)(
     };
     await store.createSessionAttachmentIntent(intent, () => {});
     const { committed, publish } = holdResult("afterTransition");
-    const prior = store.transition({
-      environmentId: intent.environmentId,
-      from: "requested",
-      to: "failed",
-    });
+    const prior = move(store, intent.environmentId, "requested", "failed");
     let queued: Promise<unknown> | undefined;
     let classification: Promise<boolean> | undefined;
     try {
@@ -473,26 +462,26 @@ it.each(["create", "close"] as const)(
 it("touches the current attachment with one guarded write and no preliminary row read", () => {
   const database = openDatabase("worker-attachment-touch-sql-");
   let nowMs = 1_000;
-  const kernel = createWorkerEnvironmentStoreKernel(database, () => nowMs);
   const write = <T>(operation: () => T) =>
     runOpenClawStateWriteTransaction(operation, { database });
+  const kernel = write(() => createWorkerEnvironmentStoreKernel(database, () => nowMs));
   const { attachment } = write(() =>
     kernel.createSessionAttachmentIntent(
       attachmentIntent("touch-environment", "touch-session", "touch-provision"),
     ),
   );
-  const sql = observeMainThreadSql();
+  const statements: string[] = [];
+  const sql = observeMainThreadSql({ onStatement: (query) => statements.push(query) });
   try {
     sql.calibrate();
     for (const at of [2_000, 2_000]) {
       nowMs = at;
       sql.clear();
+      statements.length = 0;
       write(() => kernel.touchSessionAttachment(attachment));
-      const attachmentStatements = sql.calls
-        .flatMap((call) => call.mock.contexts)
-        .filter((context): context is StatementSync => context instanceof StatementSync)
-        .map((statement) => statement.sourceSQL)
-        .filter((statement) => statement.includes('"worker_environment_session_attachments"'));
+      const attachmentStatements = statements.filter((statement) =>
+        statement.includes('"worker_environment_session_attachments"'),
+      );
       expect(attachmentStatements).toEqual([expect.stringMatching(/^update /i)]);
       expect(kernel.getSessionAttachmentRecord(attachment.sessionId)).toEqual({
         ...attachment,
@@ -533,7 +522,7 @@ it("rejects stale, replaced, missing, closed, and revoked attachment touches", a
     }),
   ).rejects.toThrow("caller revoked");
   expect(store.getSessionAttachmentRecord(attachment.sessionId)).toEqual(attachment);
-  await store.transition({ environmentId: intent.environmentId, from: "requested", to: "failed" });
+  await move(store, intent.environmentId, "requested", "failed");
   const { attachment: replacement } = await store.createSessionAttachmentIntent(
     { ...intent, environmentId: "replacement-environment", provisionOperationId: "replacement" },
     () => {},
@@ -593,18 +582,12 @@ it("rejects queued cleanup before it can revoke a successor owner's credential",
   const environmentId = "worker-revocation-owner";
   await createIntent(store, environmentId);
   await provision(store, environmentId);
-  const previous = await store.transition({
-    environmentId,
-    from: "provisioning",
-    to: "ready",
+  const previous = await move(store, environmentId, "provisioning", "ready", {
     patch: workerReadyPatch("lease-owner", "node-owner"),
   });
   const revoked: string[] = [];
   store.onCredentialRevoked((id) => revoked.push(id));
-  const replacement = store.transition({
-    environmentId,
-    from: "ready",
-    to: "attached",
+  const replacement = move(store, environmentId, "ready", "attached", {
     expectedOwnerEpoch: previous.ownerEpoch,
     patch: {
       attachedSessionIds: ["successor-session"],

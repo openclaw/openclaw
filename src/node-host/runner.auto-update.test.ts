@@ -1,15 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { GatewayClientOptions } from "../gateway/client.js";
 import { VERSION } from "../version.js";
 import type { PreparedNodeRuntimeUpdate } from "./auto-update-install.js";
 import "./auto-update.js";
 import {
-  lastCapturedOptions,
+  expectCalls,
   mocks,
+  receiveHello,
   resetRunnerTestState,
-  runNodeHost,
   withReadyNodeHost,
 } from "./runner.test-support.js";
 
@@ -44,9 +43,8 @@ vi.mock("../infra/update-check.js", async (importOriginal) => ({
   resolveNpmChannelTag: updateMocks.discover,
 }));
 
-vi.mock("./auto-update-install.js", () => ({
-  prepareNodeRuntimeUpdate: updateMocks.prepare,
-}));
+// mock-isolation: update tests supply prepared candidates without installing a real runtime.
+vi.mock("./auto-update-install.js", () => ({ prepareNodeRuntimeUpdate: updateMocks.prepare }));
 
 vi.mock("./auto-update-compatibility.js", () => ({
   assertNodeRuntimeUpdateCompatible: updateMocks.assertCompatible,
@@ -64,25 +62,9 @@ const candidate: PreparedNodeRuntimeUpdate = {
   integrity: "sha512-test",
 };
 
-function hello() {
-  const response: Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0] = {
-    type: "hello-ok",
-    protocol: 1,
-    server: { version: VERSION, connId: "node-update-test" },
-    features: { methods: [], events: [] },
-    snapshot: { presence: [], health: {}, stateVersion: { presence: 0, health: 0 }, uptimeMs: 0 },
-    auth: { role: "node", scopes: [] },
-    policy: { maxPayload: 1_000_000, maxBufferedBytes: 1_000_000, tickIntervalMs: 30_000 },
-  };
-  lastCapturedOptions()?.onHelloOk?.(response);
-}
-
 async function withRunningNodeHost(
-  options: Partial<Parameters<typeof runNodeHost>[0]>,
-  runTest: (host: {
-    running: Promise<void>;
-    stop: () => (() => void) | undefined;
-  }) => Promise<void>,
+  options: Parameters<typeof withReadyNodeHost>[1],
+  runTest: Parameters<typeof withReadyNodeHost>[0],
 ) {
   await withReadyNodeHost(
     async (host) => {
@@ -168,21 +150,10 @@ describe("node runner auto-update handoff", () => {
           }
         : { host: "127.0.0.1", port: 18789, tls: false };
       const optionArgs = companion
-        ? [
-            "--tls",
-            "--share-installed-apps",
-            "--context-path",
-            "/openclaw-gw",
-            "--tls-fingerprint",
-            "ab".repeat(32),
-            "--commands",
-            "fixture.list,fixture.read",
-            "--session-host",
-            "--desktop-sharing",
-            "--auth-from-env",
-            "--parent-stdin",
-          ]
-        : ["--no-tls", "--no-share-installed-apps", "--no-desktop-sharing"];
+        ? `--tls --share-installed-apps --context-path /openclaw-gw --tls-fingerprint ${"ab".repeat(32)} --commands fixture.list,fixture.read --session-host --desktop-sharing --auth-from-env --parent-stdin`.split(
+            " ",
+          )
+        : "--no-tls --no-share-installed-apps --no-desktop-sharing".split(" ");
       const effectiveConfig = {
         version: 1 as const,
         nodeId: "persisted-node-id",
@@ -205,10 +176,8 @@ describe("node runner auto-update handoff", () => {
           allCommands: commands === undefined,
         },
         async () => {
-          hello();
-          await vi.waitFor(() =>
-            expect(mocks.activeRuntime.tryPauseForUpdate).toHaveBeenCalledOnce(),
-          );
+          receiveHello(undefined, 1);
+          await expectCalls(mocks.activeRuntime.tryPauseForUpdate);
 
           expect(updateMocks.send.mock.calls.map(([message]) => message)).toEqual([
             {
@@ -217,9 +186,9 @@ describe("node runner auto-update handoff", () => {
                 "node",
                 "run",
                 "--host",
-                companion ? "2001:db8::10" : "127.0.0.1",
+                gateway.host,
                 "--port",
-                companion ? "8443" : "18789",
+                String(gateway.port),
                 "--node-id",
                 "persisted-node-id",
                 "--display-name",
@@ -236,7 +205,7 @@ describe("node runner auto-update handoff", () => {
 
   it("does not schedule updates for service enrollment", async () => {
     await withRunningNodeHost({ stopAfterFirstConnect: true }, async ({ running, stop }) => {
-      hello();
+      receiveHello(undefined, 1);
       stop();
       await running;
 
@@ -253,8 +222,8 @@ describe("node runner auto-update handoff", () => {
       updateMocks.prepare.mockReturnValueOnce(installing.promise);
       await withRunningNodeHost({}, async ({ running, stop }) => {
         try {
-          hello();
-          await vi.waitFor(() => expect(updateMocks.prepare).toHaveBeenCalledOnce());
+          receiveHello(undefined, 1);
+          await expectCalls(updateMocks.prepare);
           const updateSignal = updateMocks.prepare.mock.calls[0]?.[0].signal;
 
           let onSigterm: (() => void) | undefined;

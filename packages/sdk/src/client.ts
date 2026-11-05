@@ -56,16 +56,6 @@ type RunTerminalSource =
   | { kind: "canonical" }
   | { kind: "chat" | "recovery"; eventType: OpenClawEvent["type"] };
 
-function resolveGatewayUrl(options: OpenClawOptions): string | undefined {
-  if (options.url) {
-    return options.url;
-  }
-  if (options.gateway && options.gateway !== "auto") {
-    return options.gateway;
-  }
-  return undefined;
-}
-
 function normalizeTimeoutMs(timeoutMs: number | undefined): number | undefined {
   if (timeoutMs === undefined) {
     return undefined;
@@ -76,61 +66,6 @@ function normalizeTimeoutMs(timeoutMs: number | undefined): number | undefined {
   return Math.floor(timeoutMs);
 }
 
-function splitModelRef(model: string | undefined): { provider?: string; model?: string } {
-  if (!model) {
-    return {};
-  }
-  const index = model.indexOf("/");
-  if (index <= 0 || index === model.length - 1) {
-    return { model };
-  }
-  return {
-    provider: model.slice(0, index),
-    model: model.slice(index + 1),
-  };
-}
-
-function assertNoUnsupportedRunOptions(params: AgentRunParams): void {
-  const unsupported = [
-    params.workspace ? "workspace" : undefined,
-    params.runtime ? "runtime" : undefined,
-    params.environment ? "environment" : undefined,
-    params.approvals ? "approvals" : undefined,
-  ].filter((value): value is string => Boolean(value));
-  if (unsupported.length === 0) {
-    return;
-  }
-  throw new Error(
-    `OpenClaw Gateway does not support per-run SDK option${
-      unsupported.length === 1 ? "" : "s"
-    } yet: ${unsupported.join(", ")}`,
-  );
-}
-
-function buildAgentParams(
-  params: AgentRunParams,
-  timeoutMs: number | undefined,
-): Record<string, unknown> {
-  assertNoUnsupportedRunOptions(params);
-  const modelRef = splitModelRef(params.model);
-  return {
-    message: params.input,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    ...(modelRef.provider ? { provider: modelRef.provider } : {}),
-    ...(modelRef.model ? { model: modelRef.model } : {}),
-    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    ...(params.thinking ? { thinking: params.thinking } : {}),
-    ...(typeof params.deliver === "boolean" ? { deliver: params.deliver } : {}),
-    ...(params.attachments ? { attachments: params.attachments } : {}),
-    ...(timeoutMs !== undefined
-      ? { timeout: timeoutMs === 0 ? 0 : Math.ceil(timeoutMs / 1000) }
-      : {}),
-    ...(params.label ? { label: params.label } : {}),
-    idempotencyKey: params.idempotencyKey ?? randomUUID(),
-  };
-}
-
 function requireArtifactQueryScope(api: string, params: ArtifactQuery): ArtifactQuery {
   const record = asRecord(params);
   if (
@@ -139,14 +74,6 @@ function requireArtifactQueryScope(api: string, params: ArtifactQuery): Artifact
     )
   ) {
     throw new Error(`${api} requires sessionKey or runId`);
-  }
-  return params;
-}
-
-function requireToolsEffectiveSessionKey(params: ToolsEffectiveParams): ToolsEffectiveParams {
-  const record = asRecord(params);
-  if (typeof record.sessionKey !== "string" || record.sessionKey.trim().length === 0) {
-    throw new Error("oc.tools.effective requires sessionKey");
   }
   return params;
 }
@@ -174,7 +101,11 @@ export class OpenClaw {
     this.transport =
       options.transport ??
       new GatewayClientTransport({
-        url: resolveGatewayUrl(options),
+        url: options.url
+          ? options.url
+          : options.gateway && options.gateway !== "auto"
+            ? options.gateway
+            : undefined,
         token: options.token,
         password: options.password,
         requestTimeoutMs: options.requestTimeoutMs,
@@ -626,10 +557,47 @@ export class RunsNamespace {
 
   async create(params: RunCreateParams): Promise<Run> {
     const timeoutMs = normalizeTimeoutMs(params.timeoutMs);
-    const raw = await this.client.request("agent", buildAgentParams(params, timeoutMs), {
-      expectFinal: false,
-      ...(timeoutMs !== undefined ? { timeoutMs: timeoutMs === 0 ? null : timeoutMs } : {}),
-    });
+    const unsupported = [
+      params.workspace ? "workspace" : undefined,
+      params.runtime ? "runtime" : undefined,
+      params.environment ? "environment" : undefined,
+      params.approvals ? "approvals" : undefined,
+    ].filter((value): value is string => Boolean(value));
+    if (unsupported.length > 0) {
+      throw new Error(
+        `OpenClaw Gateway does not support per-run SDK option${
+          unsupported.length === 1 ? "" : "s"
+        } yet: ${unsupported.join(", ")}`,
+      );
+    }
+    const model = params.model;
+    const separator = model ? model.indexOf("/") : -1;
+    const raw = await this.client.request(
+      "agent",
+      {
+        message: params.input,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        ...(model
+          ? separator > 0 && separator < model.length - 1
+            ? { provider: model.slice(0, separator), model: model.slice(separator + 1) }
+            : { model }
+          : {}),
+        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        ...(params.thinking ? { thinking: params.thinking } : {}),
+        ...(typeof params.deliver === "boolean" ? { deliver: params.deliver } : {}),
+        ...(params.attachments ? { attachments: params.attachments } : {}),
+        ...(timeoutMs !== undefined
+          ? { timeout: timeoutMs === 0 ? 0 : Math.ceil(timeoutMs / 1000) }
+          : {}),
+        ...(params.label ? { label: params.label } : {}),
+        idempotencyKey: params.idempotencyKey ?? randomUUID(),
+      },
+      {
+        expectFinal: false,
+        ...(timeoutMs !== undefined ? { timeoutMs: timeoutMs === 0 ? null : timeoutMs } : {}),
+      },
+    );
     const record = asRecord(raw);
     const runId = readNonEmptyString(record.runId);
     if (!runId) {
@@ -694,7 +662,11 @@ export class ToolsNamespace extends RpcNamespace {
   }
 
   async effective(params: ToolsEffectiveParams): Promise<unknown> {
-    return await this.call("effective", requireToolsEffectiveSessionKey(params));
+    const record = asRecord(params);
+    if (typeof record.sessionKey !== "string" || record.sessionKey.trim().length === 0) {
+      throw new Error("oc.tools.effective requires sessionKey");
+    }
+    return await this.call("effective", params);
   }
 
   async invoke(name: string, params?: ToolInvokeParams): Promise<ToolInvokeResult> {

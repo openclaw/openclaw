@@ -490,6 +490,29 @@ describe("IMessageRpcClient child stream error handling", () => {
   });
 });
 
+describe("IMessageRpcClient Messages Automation diagnostics", () => {
+  it.each([
+    { remoteHost: undefined, code: -1712, guidance: ["one possible cause", process.execPath] },
+    { remoteHost: "messages-mac", code: -1743, guidance: ["was denied", "SSH/wrapper process"] },
+    { remoteHost: undefined, code: -1708, guidance: [] },
+  ])("explains AppleScript $code in its launch context", async ({ remoteHost, code, guidance }) => {
+    const client = await startClient({ remoteHost });
+    const data = {
+      disposition: "not_started",
+      retry_safe: true,
+      transport: "applescript",
+      detail: `Messages automation failed with AppleScript error ${code}.`,
+    };
+    const sending = client.request("send", {}, { timeoutMs: 0 }).catch((error: unknown) => error);
+    emitRpcError(child, { code: -32603, message: "Delivery failed", data });
+    const message = ((await sending) as Error).message;
+    expect(message.includes("Privacy & Security > Automation")).toBe(guidance.length > 0);
+    for (const text of guidance) {
+      expect(message).toContain(text);
+    }
+  });
+});
+
 describe("IMessageRpcClient bridge-stall cache invalidation", () => {
   const seeded: IMessagePrivateApiStatus = {
     available: true,
@@ -498,21 +521,31 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
     rpcMethods: [],
   };
 
+  // Payloads as imsg emits them: legacy waits for non-mutations, structured
+  // bridge_v2 delivery failures for sends.
   it.each([
     {
       name: "logs recovery failure while preserving the original structured error",
       cliPath: "/tmp/imsg-stall-recovery-failure",
       recoveryFails: true,
-      data: { disposition: "may_have_completed", retry_safe: false },
+      stallMessage: "Timed out waiting for response to 'typing'",
+      data: undefined,
     },
     {
       name: "invalidates the configured bridge cache and preserves structured errors",
       cliPath: "~/imsg-stall-tilde/imsg",
       recoveryFails: false,
-      data: { disposition: "not_started", retry_safe: true },
+      stallMessage: "Delivery failed before dispatch",
+      data: {
+        retry_safe: true,
+        disposition: "not_started",
+        transport: "bridge_v2",
+        operation: "send-message",
+        detail:
+          "The bridge response deadline expired. The client reclaimed and removed the unclaimed request.",
+      },
     },
-  ])("$name", async ({ cliPath, recoveryFails, data }) => {
-    const stallMessage = "Timed out waiting for response to 'send-message'";
+  ])("$name", async ({ cliPath, recoveryFails, stallMessage, data }) => {
     const runtimeError = vi.fn();
     if (recoveryFails) {
       runIMessageCliJsonCommandMock.mockRejectedValueOnce(new Error("launch stderr stream failed"));
@@ -544,6 +577,7 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
       });
       expect(error).toHaveProperty("message", expect.stringContaining("imsg launch"));
       expect(error).toHaveProperty("message", expect.stringContaining("channels status --probe"));
+      expect(error).toHaveProperty("message", expect.not.stringContaining("Automation"));
     }
   });
 

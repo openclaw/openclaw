@@ -29,11 +29,9 @@ export function resolvePairedAccessScopes(
   return normalizeSortedUniqueTrimmedStringList(scopes);
 }
 
-function isSetupCodeMobileBootstrapClient(client: {
-  id?: string;
-  platform?: string;
-  deviceFamily?: string;
-}): boolean {
+function isSetupCodeMobileBootstrapClient(
+  client: Parameters<typeof isSetupCodeHandoffBootstrapClient>[0]["client"],
+): boolean {
   const platform = normalizeDeviceMetadataForAuth(client.platform);
   const deviceFamily = normalizeDeviceMetadataForAuth(client.deviceFamily);
   if (client.id === GATEWAY_CLIENT_IDS.ANDROID_APP) {
@@ -45,11 +43,9 @@ function isSetupCodeMobileBootstrapClient(client: {
   return false;
 }
 
-function isSetupCodeVoiceNodeBootstrapClient(client: {
-  id?: string;
-  platform?: string;
-  deviceFamily?: string;
-}): boolean {
+function isSetupCodeVoiceNodeBootstrapClient(
+  client: Parameters<typeof isSetupCodeHandoffBootstrapClient>[0]["client"],
+): boolean {
   const platform = normalizeDeviceMetadataForAuth(client.platform);
   const deviceFamily = normalizeDeviceMetadataForAuth(client.deviceFamily);
   return (
@@ -222,9 +218,12 @@ export function resolvePinnedClientMetadata(params: {
       pairedRuntimeIdentity.platform !== pairedPlatform &&
       claimedPlatform === pairedRuntimeIdentity.platform &&
       claimedDeviceFamily === normalizeDeviceMetadataForAuth(pairedRuntimeIdentity.deviceFamily));
-  const isNodeHostUsingMacAppPlatformPin =
-    params.clientId === GATEWAY_CLIENT_IDS.NODE_HOST &&
-    params.clientMode === GATEWAY_CLIENT_MODES.NODE &&
+  const isRuntimeUsingMacAppPlatformPin =
+    ((params.clientId === GATEWAY_CLIENT_IDS.NODE_HOST &&
+      params.clientMode === GATEWAY_CLIENT_MODES.NODE) ||
+      (params.clientId === GATEWAY_CLIENT_IDS.CLI &&
+        (params.clientMode === GATEWAY_CLIENT_MODES.CLI ||
+          params.clientMode === GATEWAY_CLIENT_MODES.PROBE))) &&
     (claimedPlatform === "darwin" || claimedPlatform === "macos") &&
     /^macos \d+(?:\.\d+){0,2}$/.test(pairedPlatform);
   const claimedNativeAppPlatformFamily = resolveNativeAppPlatformFamily(
@@ -248,12 +247,12 @@ export function resolvePinnedClientMetadata(params: {
     hasPinnedPlatform &&
     claimedPlatform !== pairedPlatform &&
     !isRuntimePlatformPin &&
-    !isNodeHostUsingMacAppPlatformPin &&
+    !isRuntimeUsingMacAppPlatformPin &&
     !isNativeAppPlatformVersionRefresh;
   const deviceFamilyMismatch = hasPinnedDeviceFamily && claimedDeviceFamily !== pairedDeviceFamily;
   const pinnedPlatform = isRuntimePlatformPin
     ? pairedRuntimeIdentity.platform
-    : claimedPlatform === pairedPlatform || isNodeHostUsingMacAppPlatformPin
+    : claimedPlatform === pairedPlatform || isRuntimeUsingMacAppPlatformPin
       ? params.pairedPlatform
       : isNativeAppPlatformVersionRefresh
         ? params.claimedPlatform

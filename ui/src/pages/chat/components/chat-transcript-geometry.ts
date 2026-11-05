@@ -2,7 +2,7 @@ import { measureElement, type Virtualizer } from "@tanstack/virtual-core";
 import { captureChatSessionScrollPosition, type ChatSessionScrollPosition } from "../scroll.ts";
 import type { TranscriptViewportMeasurement } from "./chat-transcript-scroll-events.ts";
 
-export const POSITION_RAIL_MARKER_HEIGHT = 12;
+export const POSITION_RAIL_MARKER_HEIGHT = 10;
 const POSITION_RAIL_MARKER_OVERSCAN = 6;
 
 export function positionRailWindowIndexes(
@@ -183,9 +183,10 @@ export function measureTranscriptRow(
 ): number {
   if (entry || !virtualizer.targetWindow?.ResizeObserver) {
     // Rounded row heights accumulate when skipped overscan uses those measurements.
-    const size =
-      entry?.borderBoxSize?.[0]?.blockSize ?? measureElement(element, entry, virtualizer);
-    if (size !== 0 || virtualizer.scrollElement?.clientHeight !== 0) {
+    const box = entry?.borderBoxSize?.[0];
+    const size = box?.blockSize ?? measureElement(element, entry, virtualizer);
+    // Deferred observer delivery can outlive the hidden pane that produced a zero box.
+    if (size !== 0 || (box?.inlineSize !== 0 && virtualizer.scrollElement?.clientHeight !== 0)) {
       return size;
     }
   }
@@ -199,9 +200,11 @@ export function measureTranscriptRow(
 }
 
 export function maxTranscriptScrollOffset(element: HTMLElement | null): number | null {
-  return element && element.clientHeight > 0
-    ? Math.max(0, element.scrollHeight - element.clientHeight)
-    : null;
+  if (!element) {
+    return null;
+  }
+  const clientHeight = element.clientHeight;
+  return clientHeight > 0 ? Math.max(0, element.scrollHeight - clientHeight) : null;
 }
 
 export function createPositionRailGutter(

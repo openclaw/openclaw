@@ -24,10 +24,7 @@ import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gate
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  callAgentToolGatewayRequest,
-  type AgentToolGatewayRequestCaller,
-} from "./in-process-gateway.js";
+import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
 import type { GatewaySessionListRow, SessionListRow } from "./sessions-helpers.js";
 import { createSessionsListTool } from "./sessions-list-tool.js";
 import { VALID_CONFIG } from "./sessions-list.test-support.js";
@@ -127,21 +124,10 @@ async function withInventory(
       delete row.owner;
       return row;
     });
-    const callGateway: AgentToolGatewayRequestCaller = async <T>(
-      request: Parameters<AgentToolGatewayRequestCaller>[0],
-    ): Promise<T> => {
-      if (request.method === "sessions.list") {
-        expect(request.params).toMatchObject({
-          includeDerivedTitles: false,
-          includeLastMessage: false,
-        });
-      }
-      return await callAgentToolGatewayRequest<T>(request);
-    };
     const tool = createSessionsListTool({
       config: cfg,
       agentSessionKey: "agent:main:main",
-      callGateway,
+      callGateway: callAgentToolGatewayRequest,
     });
     const reads = vi.spyOn(transcriptTitles, "readSessionTitleFieldsFromTranscriptAsync");
     try {

@@ -1,145 +1,236 @@
-import type { ElementHandle, Locator, Page } from "playwright";
-import { expect } from "vitest";
+import type { Locator, Page } from "playwright";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 
-type DomChatLayoutScope = {
-  container: ParentNode;
-  click: (element: HTMLElement) => Promise<void>;
-};
+const button = (scope: Locator, name: string | RegExp) =>
+  scope.getByRole("button", { name, exact: true });
+const mobileHeader = (pane: Locator) => pane.locator(".agent-chat__header--mobile");
+const panelsToggle = (pane: Locator, mobile: boolean) =>
+  button(mobile ? mobileHeader(pane) : pane.locator(".sidebar-region__panels-toggle"), "Panels");
 
-function isChatLayoutMenuOpen(element: Element): boolean {
-  const surface = element.querySelector<HTMLElement>(".oc-menu");
-  return (
-    element.isConnected &&
-    (surface?.dataset.phase === "opening" || surface?.dataset.phase === "open")
-  );
+async function waitForPanelLayout(pane: Locator): Promise<void> {
+  const headers = ".agent-chat__header--mobile, .sidebar-region__header, [data-region-header]";
+  await pane.locator(headers).filter({ visible: true }).first().waitFor();
+  await waitForLayoutSettled(pane.page(), "openclaw-chat-pane :is(" + headers + ")");
 }
 
-function waitForMenuShow(menu: Element): Promise<void> {
-  const surface = menu.querySelector<HTMLElement>(".oc-menu");
-  if (!surface) {
-    throw new Error("Expected a native Layout menu surface");
+export async function openChatDashboardMenu(scope: Page | Locator): Promise<Locator> {
+  const menu = nativePane(scope).locator(".chat-dashboard-menu").filter({ visible: true });
+  const trigger = button(menu, "Dashboard options");
+  if ((await trigger.getAttribute("aria-expanded")) !== "true") {
+    await trigger.click();
   }
-  if (surface.dataset.phase === "open") {
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    surface.addEventListener("overlay-after-show", () => resolve(), { once: true });
-  });
-}
-
-function isChatLayoutMenuClosed(element: Element): boolean {
-  const surface = element.querySelector<HTMLElement>(".oc-menu");
-  return !element.isConnected || !surface || surface.dataset.phase === "hidden";
-}
-
-async function waitForMenuClose(menu: ElementHandle<Element> | HTMLElement): Promise<void> {
-  await expect
-    .poll(
-      () =>
-        "evaluate" in menu ? menu.evaluate(isChatLayoutMenuClosed) : isChatLayoutMenuClosed(menu),
-      { timeout: 10_000, message: "Layout menu did not finish closing" },
-    )
-    .toBe(true);
-}
-
-export function openChatLayoutMenu(scope: DomChatLayoutScope): Promise<HTMLElement>;
-export function openChatLayoutMenu(scope: Page | Locator): Promise<Locator>;
-export async function openChatLayoutMenu(
-  scope: Page | Locator | DomChatLayoutScope,
-): Promise<Locator | HTMLElement> {
-  if ("container" in scope) {
-    const menu = scope.container.querySelector<HTMLElement>(".chat-pane__layout-menu");
-    const trigger = menu?.querySelector<HTMLElement>("button.chat-pane__layout-trigger");
-    if (!menu || !trigger) {
-      throw new Error("Expected a chat Layout menu");
-    }
-    if (!isChatLayoutMenuOpen(menu)) {
-      const shown = waitForMenuShow(menu);
-      await scope.click(trigger);
-      await shown;
-    } else {
-      await waitForMenuShow(menu);
-    }
-    return menu;
-  }
-  const trigger = scope.locator("button.chat-pane__layout-trigger:not([inert] *)").first();
-  const menu = trigger.locator("..");
-  if (!(await menu.evaluate(isChatLayoutMenuOpen))) {
-    const element = await menu.elementHandle();
-    if (!element) {
-      throw new Error("Expected a chat Layout menu");
-    }
-    try {
-      await Promise.all([element.evaluate(waitForMenuShow), trigger.click()]);
-    } finally {
-      await element.dispose();
-    }
-  } else {
-    await menu.evaluate(waitForMenuShow);
-  }
+  await menu.getByRole("menu", { name: "Dashboard options", exact: true }).waitFor();
   return menu;
 }
 
-export async function closeChatLayoutMenu(
-  scope: Page | Locator | DomChatLayoutScope,
-): Promise<void> {
-  if ("container" in scope) {
-    const menu = scope.container.querySelector<HTMLElement>(".chat-pane__layout-menu");
-    const trigger = menu?.querySelector<HTMLElement>("button.chat-pane__layout-trigger");
-    if (!menu || !trigger) {
-      throw new Error("Expected a chat Layout menu");
-    }
-    if (isChatLayoutMenuOpen(menu)) {
-      await scope.click(trigger);
-    }
-    await waitForMenuClose(menu);
-    return;
-  }
-  const trigger = scope.locator("button.chat-pane__layout-trigger:not([inert] *)").first();
-  const menu = trigger.locator("..");
-  if (await menu.evaluate(isChatLayoutMenuOpen)) {
-    await trigger.click();
-  }
-  const element = await menu.elementHandle();
-  if (element) {
-    try {
-      await waitForMenuClose(element);
-    } finally {
-      await element.dispose();
-    }
-  }
-}
-
 export async function selectChatLayoutAction(
-  scope: Page | Locator | DomChatLayoutScope,
+  scope: Page | Locator,
   name: string | RegExp,
 ): Promise<void> {
-  if ("container" in scope) {
-    const menu = await openChatLayoutMenu(scope);
-    const action = [...menu.querySelectorAll<HTMLElement>("[role^=menuitem]")].find((item) => {
-      const label = item.getAttribute("aria-label") ?? item.textContent?.trim() ?? "";
-      return typeof name === "string" ? label === name : name.test(label);
-    });
-    if (!action) {
-      throw new Error(`Expected chat Layout action: ${String(name)}`);
+  await selectNativeLayoutAction(nativePane(scope), name);
+}
+
+export function nativePane(scope: Page | Locator): Locator {
+  if ("mainFrame" in scope) {
+    return scope
+      .locator(
+        ".chat-pane-cache__pane--active, .chat-split-view__cell--active openclaw-chat-pane.chat-split-view__pane",
+      )
+      .filter({ visible: true })
+      .first();
+  }
+  return scope
+    .locator("xpath=ancestor-or-self::openclaw-chat-pane[1]")
+    .or(scope.locator("openclaw-chat-pane").filter({ visible: true }))
+    .first();
+}
+
+async function openSessionActions(pane: Locator): Promise<Locator> {
+  const trigger = pane
+    .locator(".chat-header-session-menu__trigger")
+    .filter({ visible: true })
+    .first();
+  const menu = trigger.locator("xpath=ancestor::openclaw-chat-header-session-menu[1]");
+  if (!(await menu.locator(".oc-menu:visible").count())) {
+    await trigger.click();
+  }
+  await menu.locator(".oc-menu:visible").first().waitFor();
+  return menu;
+}
+
+export async function openChatPanels(
+  scope: Page | Locator,
+  presentation: "mobile" | "desktop",
+): Promise<Locator> {
+  const pane = nativePane(scope);
+  await waitForPanelLayout(pane);
+  // The scenario owns its target layout; old controls may remain visible during a viewport change.
+  if (presentation === "mobile") {
+    await mobileHeader(pane).waitFor({ state: "visible" });
+    const trigger = panelsToggle(pane, true);
+    if (await trigger.isVisible()) {
+      // A closing sheet is already hidden while it slides out; only an open one counts.
+      if (!(await pane.locator(".chat-mobile-host:not([hidden])").isVisible())) {
+        await trigger.click();
+      }
+      return trigger;
     }
-    await scope.click(action);
-    await waitForMenuClose(menu);
+    const menu = await openSessionActions(pane);
+    await menu.getByRole("menuitem", { name: "Panels", exact: true }).click();
+    return menu.locator(".chat-header-session-menu__trigger");
+  }
+  const trigger = panelsToggle(pane, false);
+  await trigger.waitFor({ state: "visible" });
+  if ((await trigger.getAttribute("aria-expanded")) !== "true") {
+    await trigger.click();
+  }
+  return trigger;
+}
+
+async function selectMenuItem(menu: Locator, name: string | RegExp): Promise<void> {
+  await menu
+    .getByRole("menuitem", { name, exact: true })
+    .or(menu.getByRole("menuitemcheckbox", { name, exact: true }))
+    .click();
+  await menu.locator(".oc-menu:visible").last().waitFor({ state: "hidden" });
+}
+
+async function selectNativeLayoutAction(pane: Locator, name: string | RegExp): Promise<void> {
+  await waitForPanelLayout(pane);
+  const matches = (label: string) => (typeof name === "string" ? name === label : name.test(label));
+  const mobile = await mobileHeader(pane).isVisible();
+  const host = pane.locator(".chat-mobile-host:not([hidden])");
+  const side = pane.locator('[data-region-header="side"]');
+  const toggle = panelsToggle(pane, mobile);
+
+  if (
+    matches("Side panel") ||
+    matches("Minimize side panel") ||
+    (typeof name === "string" && name.startsWith("Collapse "))
+  ) {
+    if (mobile && (await host.isVisible())) {
+      await button(host.locator(".chat-mobile-host__header"), "Close").click();
+    } else if (mobile) {
+      await openChatPanels(pane, "mobile");
+    } else {
+      await toggle.click();
+    }
     return;
   }
-  const menu = await openChatLayoutMenu(scope);
-  const action = menu
-    .getByRole("menuitem", { name, exact: true })
-    .or(menu.getByRole("menuitemcheckbox", { name, exact: true }));
-  const element = await menu.elementHandle();
-  if (!element) {
-    throw new Error("Expected a chat Layout menu");
+  const panels = [
+    ["Review", "Review", "detail"],
+    ["Review", "Show session changes", "detail"],
+    ["Files", "Show session files", "workspace"],
+    ["Files", "Collapse session workspace", "workspace"],
+    ["Side chat", "Show side chat", "companion"],
+    ["Side chat", "Collapse side chat", "companion"],
+    ["Browser", "Toggle browser panel", "browser"],
+    ["Desktop", "Toggle desktop panel", "desktop"],
+    ["Terminal", "Toggle terminal", "terminal"],
+    ["Subagents", "Subagents", "subagents"],
+    ["Processes", "Processes", "processes"],
+    ["Dashboard", "Dashboard", "dashboard"],
+    ["Desktop", "Desktop", "desktop"],
+  ] as const;
+  const panel = panels.find(([, action]) => matches(action));
+  if (panel) {
+    await openChatPanels(pane, mobile ? "mobile" : "desktop");
+    if (mobile) {
+      await button(host, "Panels").click();
+    }
+    const retained = pane.locator('[data-panel-slot="' + panel[2] + '"]');
+    const contentId = (await retained.count()) ? await retained.first().getAttribute("id") : null;
+    if (contentId) {
+      const tab = side
+        .locator('[role="tab"][aria-controls=' + JSON.stringify(contentId) + "]")
+        .first();
+      if (await tab.count()) {
+        await tab.click();
+        return;
+      }
+    }
+    const launcher = pane.locator(mobile ? ".chat-panel-launcher-mobile" : ".side-panel-launcher");
+    const newTab = button(side, "New tab");
+    await launcher.or(newTab).filter({ visible: true }).first().waitFor();
+    if (!(await launcher.isVisible())) {
+      await newTab.click();
+    }
+    const option = mobile
+      ? button(launcher, panel[0])
+      : launcher.getByRole("button").filter({
+          has: pane
+            .page()
+            .getByText(panel[0], { exact: true })
+            .and(pane.page().locator(".side-panel-type-option__label")),
+        });
+    await option.click();
+    return;
   }
-  try {
-    await action.click();
-    // The overlay closes before actions can change the retained header.
-    await waitForMenuClose(element);
-  } finally {
-    await element.dispose();
+  const dock = [
+    ["Move side panel left", "Left"],
+    ["Move side panel right", "Right"],
+    ["Move side panel below", "Below"],
+  ].find(([action]) => matches(action!));
+  if (dock) {
+    await button(side, "Panel position").click();
+    await pane.getByRole("menuitemradio", { name: dock[1], exact: true }).click();
+    await pane.locator(".side-panel-position-menu:visible").waitFor({ state: "hidden" });
+    return;
   }
+  if (matches("Restore split") || (typeof name === "string" && name.startsWith("Expand "))) {
+    if (mobile) {
+      await button(
+        host.locator(".chat-mobile-host__header"),
+        matches("Restore split") ? "Restore" : "Expand Side panel",
+      ).click();
+      return;
+    }
+    const action = button(side, matches("Restore split") ? "Restore split" : "Expand Side panel");
+    if (await action.isVisible()) {
+      await action.click();
+      return;
+    }
+    const dashboard = pane.locator(".chat-dashboard-menu").filter({ visible: true });
+    await button(dashboard, "Dashboard options").click();
+    await selectMenuItem(dashboard, name);
+    return;
+  }
+  if (matches("Focus")) {
+    const dashboard = pane.locator(".chat-dashboard-menu").filter({ visible: true });
+    if (!mobile && (await dashboard.isVisible())) {
+      await selectMenuItem(await openChatDashboardMenu(pane), "Expand Dashboard");
+    } else {
+      await button(
+        mobile ? host.locator(".chat-mobile-host__header") : side,
+        "Expand Side panel",
+      ).click();
+    }
+    return;
+  }
+  if (matches("Swap Chat and Dashboard") || (name instanceof RegExp && name.test("Swap "))) {
+    const dashboard = pane.locator(".chat-dashboard-menu").filter({ visible: true });
+    if (await dashboard.isVisible()) {
+      await selectMenuItem(await openChatDashboardMenu(pane), /^Swap /);
+    } else {
+      await button(side, "Panel position").click();
+      await pane.getByRole("menuitem", { name, exact: true }).click();
+      await pane.locator(".side-panel-position-menu:visible").waitFor({ state: "hidden" });
+    }
+    return;
+  }
+  if (matches("Use current view as default")) {
+    await selectMenuItem(await openChatDashboardMenu(pane), name);
+    return;
+  }
+  const menu = await openSessionActions(pane);
+  if (matches("Close pane")) {
+    if (mobile) {
+      await menu.getByRole("menuitem", { name: "Advanced", exact: true }).click();
+      await button(host, "Close pane").click();
+      await host.waitFor({ state: "hidden" });
+      return;
+    }
+    await menu.getByRole("menuitem", { name: "View", exact: true }).click();
+  }
+  await selectMenuItem(menu, name);
 }

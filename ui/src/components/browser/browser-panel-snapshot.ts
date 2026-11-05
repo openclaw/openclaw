@@ -6,7 +6,6 @@ import {
   listBrowserTabs,
   readBrowserPageMetrics,
   type BrowserPageMetrics,
-  type BrowserPanelTab,
   type BrowserRequestClient,
 } from "./browser-client.ts";
 import type { BrowserPanelNative } from "./browser-panel-native-owner.ts";
@@ -16,21 +15,15 @@ import type {
   BrowserPanelSnapshotOutcome,
 } from "./browser-panel-operation-ownership.ts";
 import type { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
+import type { BrowserPanelStateWriter } from "./browser-panel-state.ts";
 import type { BrowserPanelStream } from "./browser-panel-stream.ts";
 import { loadBrowserPanelImage, type BrowserPanelView } from "./browser-panel-surface.ts";
 
 const ACTION_REFRESH_DELAY_MS = 350;
 
-type BrowserPanelSnapshotState = {
-  running: boolean | null;
-  canAutoResizeViewport: boolean;
-  tabs: BrowserPanelTab[];
-  view: BrowserPanelView | null;
-  loading: boolean;
-  evaluateUnavailable: boolean;
-};
-
-interface BrowserPanelSnapshotHost extends BrowserPanelSnapshotState {
+interface BrowserPanelSnapshotHost extends BrowserPanelStateWriter<
+  "running" | "canAutoResizeViewport" | "tabs" | "view" | "loading" | "evaluateUnavailable"
+> {
   readonly host: Pick<BrowserPanelHost, "resourceBasePath" | "authToken" | "fixedTab">;
   readonly native: Pick<BrowserPanelNative, "activeTab" | "mergeRemoteTabs">;
   readonly stream: Pick<
@@ -54,10 +47,6 @@ interface BrowserPanelSnapshotHost extends BrowserPanelSnapshotState {
     | "acceptSnapshot"
     | "retainTabSnapshot"
   >;
-  setState<Key extends keyof BrowserPanelSnapshotState>(
-    key: Key,
-    value: BrowserPanelSnapshotState[Key],
-  ): void;
   clearUnavailableView(): boolean;
   syncUrlDraft(url: string): void;
   reportError(error: unknown): void;

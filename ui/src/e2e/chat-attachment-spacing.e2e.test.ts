@@ -1,12 +1,57 @@
 import type { Locator, Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e-diagnostics.ts";
+import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  navigateToControlUiSession,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
+const spacingPages = new Map<number, Page>();
 const suite = createControlUiE2eSuite({
   name: "Chat attachment block spacing",
   startServerBeforeBrowser: true,
+  resources: {
+    run: async () => {
+      for (const width of [1440, 390]) {
+        const context = await suite.newBrowserContext({ viewport: { width, height: 900 } });
+        const page = await context.newPage();
+        await installControlUiE2eRendererStallProbe(page);
+        try {
+          await installMockGateway(page, {
+            sessionKey: spacingCases[0]!.sessionKey,
+            sessions: spacingCases.map(({ name, sessionKey }) => ({
+              key: sessionKey,
+              label: name,
+              kind: "direct",
+              updatedAt: 1,
+            })),
+            sessionTranscripts: Object.fromEntries(
+              spacingCases.map(({ markdown, sessionKey }) => [
+                sessionKey,
+                {
+                  messages: [
+                    message("assistant", `${markdown}\n\n${referenceText}`, [attachment()]),
+                  ],
+                },
+              ]),
+            ),
+          });
+          spacingPages.set(width, page);
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, spacingCases[0]!.sessionKey));
+        } catch (error) {
+          await captureControlUiE2eFailureDiagnostics(page, {
+            error: error instanceof Error ? error : new Error(String(error)),
+            label: "Chat attachment block spacing setup",
+          });
+          throw error;
+        }
+      }
+    },
+  },
 });
 
 const neighbors = [
@@ -17,6 +62,11 @@ const neighbors = [
   { name: "table", markdown: "| Item | Status |\n| --- | --- |\n| Report | Ready |" },
   { name: "quote", markdown: "> A quotation after the file." },
 ];
+const spacingCases = neighbors.map((neighbor, index) => ({
+  name: neighbor.name,
+  markdown: neighbor.markdown,
+  sessionKey: `agent:main:${(index + 1).toString(16).padStart(32, "0")}`,
+}));
 const referenceText = "Reference one.\n\nReference two.";
 const textBlock = (value: string) => ({ type: "text", text: value });
 const message = (role: string, value: string, attachments: unknown[] = []) => ({
@@ -63,33 +113,62 @@ async function paragraphGap(paragraphs: Locator) {
 
 suite.define(() => {
   for (const width of [1440, 390]) {
-    it.each(neighbors)(
+    it.for(spacingCases)(
       `preserves attachment spacing around $name at ${width}px`,
-      async ({ name, markdown }) => {
-        await withChat(
-          width,
-          message("assistant", `${markdown}\n\n${referenceText}`, [attachment()]),
-        )(async (page) => {
-          const bubble = page.locator(".chat-bubble").filter({ hasText: "Reference one." });
-          const card = bubble.locator(".chat-assistant-attachment-card");
-          const blocks = bubble
-            .locator(".chat-text > *")
-            .filter({ hasNot: page.locator(".chat-assistant-attachments") });
-          await blocks.last().waitFor();
-          const reference = await gap(blocks.nth(1), blocks.nth(2));
-          expect(reference).toBeGreaterThan(0);
-          const expectedBefore = reference * (name === "heading" ? 1.5 : 1);
-          // Wide desktop tables reserve extra space after their compact toolbar/table block.
-          const expectedAfter = name === "table" && width === 1440 ? 24 : reference;
-          await expect
-            .poll(async () =>
-              Math.max(
-                Math.abs((await gap(card, blocks.first())) - expectedBefore),
-                Math.abs((await gap(blocks.first(), blocks.nth(1))) - expectedAfter),
-              ),
-            )
-            .toBeLessThanOrEqual(1);
-        });
+      async ({ name, sessionKey }, testContext) => {
+        const page = spacingPages.get(width)!;
+        let failedClose: Promise<void> | undefined;
+        const closeAfterFailure = (error: unknown) => {
+          failedClose ??= (async () => {
+            await captureControlUiE2eFailureDiagnostics(page, {
+              error: error instanceof Error ? error : new Error(String(error)),
+              label: "Chat attachment block spacing",
+            });
+            await suite.closeBrowserContext(page.context());
+          })();
+          return failedClose;
+        };
+        // The page belongs to the suite; native case cancellation must still close it.
+        const onAbort = () => void closeAfterFailure(testContext.signal.reason).catch(() => {});
+        testContext.signal.addEventListener("abort", onAbort, { once: true });
+        try {
+          await suite.runScenario(testContext, {
+            run: async () => {
+              try {
+                await navigateToControlUiSession(page, sessionKey);
+                const bubble = page
+                  .locator('openclaw-chat-pane[aria-hidden="false"] .chat-bubble')
+                  .filter({ hasText: "Reference one." });
+                const card = bubble.locator(".chat-assistant-attachment-card");
+                const blocks = bubble
+                  .locator(".chat-text > *")
+                  .filter({ hasNot: page.locator(".chat-assistant-attachments") });
+                await blocks.last().waitFor();
+                const reference = await gap(blocks.nth(1), blocks.nth(2));
+                expect(reference).toBeGreaterThan(0);
+                const expectedBefore = reference * (name === "heading" ? 1.5 : 1);
+                // Wide desktop tables reserve extra space after their compact toolbar/table block.
+                const expectedAfter = name === "table" && width === 1440 ? 24 : reference;
+                await expect
+                  .poll(async () =>
+                    Math.max(
+                      Math.abs((await gap(card, blocks.first())) - expectedBefore),
+                      Math.abs((await gap(blocks.first(), blocks.nth(1))) - expectedAfter),
+                    ),
+                  )
+                  .toBeLessThanOrEqual(1);
+              } catch (error) {
+                void closeAfterFailure(error).catch(() => {});
+                throw error;
+              }
+            },
+            close: async () => {
+              await failedClose;
+            },
+          });
+        } finally {
+          testContext.signal.removeEventListener("abort", onAbort);
+        }
       },
     );
   }

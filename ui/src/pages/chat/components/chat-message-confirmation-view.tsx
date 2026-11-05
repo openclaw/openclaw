@@ -141,9 +141,7 @@ export function openChatRewindConfirmation(btn: HTMLElement, action: () => void)
     () => (
       <Portal mount={owner.ownerDocument.body}>
         <div
-          ref={(element) => {
-            popover = element;
-          }}
+          ref={(element) => (popover = element)}
           class="chat-confirm-popover"
           role="dialog"
           aria-modal="true"
@@ -154,9 +152,7 @@ export function openChatRewindConfirmation(btn: HTMLElement, action: () => void)
           <p class="chat-confirm-popover__text">{confirmText}</p>
           <label class="chat-confirm-popover__remember">
             <input
-              ref={(element) => {
-                check = element;
-              }}
+              ref={(element) => (check = element)}
               type="checkbox"
               class="chat-confirm-popover__check"
             />
@@ -164,9 +160,7 @@ export function openChatRewindConfirmation(btn: HTMLElement, action: () => void)
           </label>
           <div class="chat-confirm-popover__actions">
             <button
-              ref={(element) => {
-                cancel = element;
-              }}
+              ref={(element) => (cancel = element)}
               class="chat-confirm-popover__cancel"
               type="button"
               onClick={(event) => {
@@ -177,9 +171,7 @@ export function openChatRewindConfirmation(btn: HTMLElement, action: () => void)
               {t("common.cancel")}
             </button>
             <button
-              ref={(element) => {
-                yes = element;
-              }}
+              ref={(element) => (yes = element)}
               class="chat-confirm-popover__yes"
               type="button"
               onClick={(event) => {

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { createChatSendLateFollowupDisposition } from "./chat-send-late-followup.js";
 
 function createFixture(originatingChannel = "webchat") {
@@ -11,7 +12,12 @@ function createFixture(originatingChannel = "webchat") {
     logGateway: { info } as never,
     deliver,
   });
-  return { info, deliver, disposition };
+  const expectDrop = (reason: string, outcome?: string) =>
+    expect(info).toHaveBeenCalledWith(
+      "webchat late reply disposition",
+      expect.objectContaining({ reason, ...(outcome ? { outcome } : {}) }),
+    );
+  return { expectDrop, deliver, disposition };
 }
 
 function batch(runId: string, originatingChannel = "webchat") {
@@ -25,16 +31,27 @@ function batch(runId: string, originatingChannel = "webchat") {
 }
 
 describe("chat.send late queued follow-up disposition", () => {
-  it("keeps progress open and includes its payloads in terminal delivery", async () => {
+  it("retains progress and drop warnings without replaying queue acceptance", async () => {
     const { deliver, disposition } = createFixture();
     expect(disposition.deliver.ownsCompletion("webchat")).toBe(false);
     disposition.recordQueued();
     expect(disposition.deliver.ownsCompletion("discord")).toBe(false);
+    const retained = [
+      { text: "working", mediaUrl: "https://example.test/progress.png" },
+      setReplyPayloadMetadata(
+        { text: "queue full", isStatusNotice: true },
+        { queueAdmissionNotice: true },
+      ),
+    ];
     const progress = {
-      kind: "queued-followup" as const,
-      runId: "followup-run",
-      originatingChannel: "webchat",
-      payloads: [{ text: "working", mediaUrl: "https://example.test/progress.png" }],
+      ...batch("followup-run"),
+      payloads: [
+        setReplyPayloadMetadata(
+          { text: "queued", isStatusNotice: true },
+          { queueAdmissionNotice: "queued" },
+        ),
+        ...retained,
+      ],
       completion: { kind: "progress" as const },
     };
     await disposition.deliver(progress);
@@ -51,7 +68,7 @@ describe("chat.send late queued follow-up disposition", () => {
         runId: "followup-run",
         clientRunId: "original-run",
         completion: { kind: "completed" },
-        payloads: [...progress.payloads, { text: "done" }],
+        payloads: [...retained, { text: "done" }],
       }),
     );
     expect(disposition.deliver.ownsCompletion("webchat")).toBe(false);
@@ -61,14 +78,11 @@ describe("chat.send late queued follow-up disposition", () => {
     ["discord", "discord", "non-webchat-origin"],
     ["webchat", "discord", "origin-mismatch"],
   ])("records an explicit drop for %s -> %s", async (originatingChannel, batchChannel, reason) => {
-    const { info, deliver, disposition } = createFixture(originatingChannel);
+    const { expectDrop, deliver, disposition } = createFixture(originatingChannel);
     disposition.recordQueued();
     await disposition.deliver(batch("must not leak", batchChannel));
     expect(deliver).not.toHaveBeenCalled();
-    expect(info).toHaveBeenCalledWith(
-      "webchat late reply disposition",
-      expect.objectContaining({ outcome: "late-and-dropped", reason }),
-    );
+    expectDrop(reason, "late-and-dropped");
   });
 
   it("gives a pending source's only delivery to the retry it hands off to", async () => {
@@ -85,35 +99,26 @@ describe("chat.send late queued follow-up disposition", () => {
   });
 
   it("claims delivery before awaiting and records a concurrent duplicate", async () => {
-    const { info, deliver, disposition } = createFixture();
+    const { expectDrop, deliver, disposition } = createFixture();
     const delivery = createDeferred<{ kind: "delivered" }>();
     deliver.mockImplementation(() => delivery.promise);
     disposition.recordQueued();
     const first = disposition.deliver(batch("first-followup"));
     await disposition.deliver(batch("duplicate-followup"));
     expect(deliver).toHaveBeenCalledOnce();
-    expect(info).toHaveBeenCalledWith(
-      "webchat late reply disposition",
-      expect.objectContaining({ reason: "delivery-in-flight" }),
-    );
+    expectDrop("delivery-in-flight");
     delivery.resolve({ kind: "delivered" });
     await first;
   });
 
   it("settles a failed delivery and rejects every subsequent attempt", async () => {
-    const { info, deliver, disposition } = createFixture();
+    const { expectDrop, deliver, disposition } = createFixture();
     deliver.mockRejectedValue(new Error("broadcast failed"));
     disposition.recordQueued();
     await expect(disposition.deliver(batch("failed-followup"))).rejects.toThrow("broadcast failed");
     await disposition.deliver(batch("retry"));
-    expect(info).toHaveBeenCalledWith(
-      "webchat late reply disposition",
-      expect.objectContaining({ reason: "delivery-failed" }),
-    );
-    expect(info).toHaveBeenCalledWith(
-      "webchat late reply disposition",
-      expect.objectContaining({ reason: "already-settled" }),
-    );
+    expectDrop("delivery-failed");
+    expectDrop("already-settled");
     expect(deliver).toHaveBeenCalledOnce();
   });
 });

@@ -199,7 +199,7 @@ export async function startMinimalRealGateway(options: {
           const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
           cancellation.signal.throwIfAborted();
           return loadOrCreateDeviceIdentity({
-            path: gateway.state.statePath(`device-${label}.sqlite`),
+            path: gateway.state.statePath(`device-${label}`, "client", "credentials.sqlite"),
           });
         }),
       connectBootstrap: (mismatched = false) =>
@@ -218,7 +218,9 @@ export async function startMinimalRealGateway(options: {
             scopes: [],
             client: { id: "node-host", version: "test", platform: "test", mode: "node" },
             deviceIdentityPath: gateway.state.statePath(
-              `device-${mismatched ? "bad" : "ok"}.sqlite`,
+              `device-${mismatched ? "bad" : "ok"}`,
+              "client",
+              "credentials.sqlite",
             ),
             timeoutMs: 2_000,
           });

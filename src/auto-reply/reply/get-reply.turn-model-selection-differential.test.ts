@@ -80,10 +80,9 @@ async function observeReplySelection(
   expect(isPathInside(state.root, resolveAgentWorkspaceDirMock(cfg, "main"))).toBe(true);
   await getReplyFromConfig(
     replyFixtures.buildGetReplyCtx({ SessionKey: sessionKey, ...fixture.ctx }),
-    fixture.heartbeat
+    fixture.turnModelOverride
       ? {
-          isHeartbeat: true,
-          heartbeatModelOverride: turn.turnModelRefLabel(turn.TURN_MODEL_OVERRIDE_REF),
+          modelOverride: turn.turnModelRefLabel(turn.TURN_MODEL_OVERRIDE_REF),
         }
       : undefined,
     cfg,
@@ -193,7 +192,7 @@ it("selects the live channel exact conversation", async () => {
 });
 const fixtures = turn.TURN_MODEL_DIFFERENTIAL_FIXTURES.filter(
   ({ name }) =>
-    name === "heartbeat or explicit turn override" ||
+    name === "explicit turn override" ||
     name === "explicit default rejects stale child and parent overrides",
 );
 it.each(fixtures)("pins observed $name behavior", async (fixture) => {

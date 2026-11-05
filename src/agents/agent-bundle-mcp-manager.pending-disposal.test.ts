@@ -35,7 +35,7 @@ it("forgets an empty successor binding after the original idle disposal settles"
     },
   };
   const sessionKey = expectDefined(params.sessionKey, "MCP session key");
-  let sweep: Promise<number> | undefined;
+  let sweep: Promise<void> | undefined;
   try {
     const original = await manager.acquire(params);
     try {
@@ -52,7 +52,7 @@ it("forgets an empty successor binding after the original idle disposal settles"
     const acquiring = manager.acquire({ ...params, cfg });
     expect(manager.resolveSessionId(sessionKey)).toBe(params.sessionId);
     terminate.resolve();
-    await expect(sweep).resolves.toBe(1);
+    await sweep;
     const successor = await acquiring;
     try {
       expect((await successor.runtime.getCatalog()).tools).toEqual([]);

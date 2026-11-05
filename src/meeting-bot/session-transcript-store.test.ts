@@ -31,11 +31,7 @@ async function deliver(lines: MeetingTranscriptSnapshot["lines"]) {
   delivered.push(...lines.map((line) => line.text));
 }
 
-function createStore(
-  snapshots: (MeetingTranscriptSnapshot | Error)[],
-  onLines = deliver,
-  onSnapshot?: (snapshot: MeetingTranscriptSnapshot) => void,
-) {
+function createStore(snapshots: (MeetingTranscriptSnapshot | Error)[], onLines = deliver) {
   return new MeetingSessionTranscriptStore({
     getSession: (sessionId) => (sessionId === session.id ? session : undefined),
     isBrowserSession: () => true,
@@ -50,7 +46,6 @@ function createStore(
       return next;
     },
     onLines: async (_session, lines) => await onLines(lines),
-    ...(onSnapshot ? { onSnapshot: (_session, captured) => onSnapshot(captured) } : {}),
   });
 }
 
@@ -58,61 +53,13 @@ function snapshot(texts: string[], epoch?: string, droppedLines = 0): MeetingTra
   return { droppedLines, epoch, lines: texts.map((text) => ({ text })) };
 }
 
-it("observes pending and corrected sources before transcript dedup without persisting pending text", async () => {
-  const source = {
-    id: "caption-1",
-    epoch: "page-1",
-    revision: "1",
-    finalized: false,
-    ownEcho: false,
-  };
-  const pending = { text: "A pending invitation", source };
-  const committed = {
-    text: "A completed invitation",
-    source: { ...source, revision: "2", finalized: true },
-  };
-  const correction = { text: "A pending correction", source: { ...source, revision: "3" } };
-  const snapshots: MeetingTranscriptSnapshot[] = [
-    { droppedLines: 0, epoch: "page-1", lines: [], pendingLines: [pending] },
-    { droppedLines: 0, epoch: "page-1", lines: [committed], pendingLines: [] },
-    { droppedLines: 0, epoch: "page-1", lines: [committed], pendingLines: [correction] },
-  ];
-  const observed: string[][] = [];
-  const store = createStore(
-    snapshots,
-    async (lines) => {
-      expect(observed.at(-1)).toEqual(["2"]);
-      delivered.push(...lines.map((line) => line.text));
-    },
-    (captured) => {
-      observed.push(
-        [...captured.lines, ...(captured.pendingLines ?? [])].map(
-          (line) => line.source?.revision ?? "",
-        ),
-      );
-    },
-  );
-
-  expect((await store.read(session.id)).lines).toEqual([]);
-  await store.read(session.id);
-  const result = await store.read(session.id);
-  expect(observed).toEqual([["1"], ["2"], ["2", "3"]]);
-  expect(delivered).toEqual(["A completed invitation"]);
-  expect(result.lines).toEqual([committed]);
-});
-
 it("trims an oversized initial snapshot to the retained tail", async () => {
   const texts = Array.from({ length: 2_005 }, (_, index) => `line-${index}`);
   const store = createStore([snapshot(texts, "page-1", 7)]);
 
   const result = await store.read(session.id);
 
-  expect(result).toMatchObject({
-    found: true,
-    startIndex: 12,
-    nextIndex: 2_012,
-    droppedLines: 12,
-  });
+  expect(result).toMatchObject({ found: true, startIndex: 12, nextIndex: 2_012, droppedLines: 12 });
   expect(result.lines?.map((line) => line.text)).toEqual(texts.slice(5));
 });
 

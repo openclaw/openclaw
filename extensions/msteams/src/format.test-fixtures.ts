@@ -17,6 +17,6 @@ export const teamsMarkdownDeliveryCases = [
   {
     name: "raw table after list-fence outdent",
     source: "- ```\n  code\n\n> >   | A | B |\n> >   |---|---|\n> >   | x | y |",
-    expected: "• ```\ncode\n\n```>   | A | B |\n> >   |---|---|\n> >   | x | y |",
+    expected: "• ```\ncode\n\n```\n>   | A | B |\n> >   |---|---|\n> >   | x | y |",
   },
 ];

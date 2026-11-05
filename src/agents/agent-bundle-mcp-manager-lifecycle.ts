@@ -130,7 +130,7 @@ export function createSessionMcpRuntimeManagerLifecycle(
     if (!hasServers || store.liveRuntimeSlots.has(slot)) {
       return slot;
     }
-    const cleanupDeadline = Date.now() + CAPACITY_CLEANUP_WAIT_MS;
+    const cleanupDeadline = performance.now() + CAPACITY_CLEANUP_WAIT_MS;
     while (store.liveRuntimeSlots.size >= SESSION_MCP_MAX_LIVE_RUNTIMES) {
       const idle = [...store.runtimesBySessionId]
         .filter(([key, runtime]) => {
@@ -142,7 +142,7 @@ export function createSessionMcpRuntimeManagerLifecycle(
           );
         })
         .toSorted(([, a], [, b]) => a.lastUsedAt - b.lastUsedAt)[0];
-      const remainingMs = cleanupDeadline - Date.now();
+      const remainingMs = Math.ceil(cleanupDeadline - performance.now());
       if (!idle || remainingMs <= 0) {
         throw capacityRefusal();
       }
@@ -375,7 +375,7 @@ export function createSessionMcpRuntimeManagerLifecycle(
     ensureIdleSweepTimer();
   };
 
-  const sweepIdleRuntimes = async (): Promise<number> => {
+  const sweepIdleRuntimes = async (): Promise<void> => {
     const nowMs = store.scheduler.now();
     const expired = [...store.runtimesBySessionId].flatMap(([runtimeKey, runtime]) => {
       const idleTtlMs = store.runtimeSlots.get(runtime)?.idleTtlMs ?? 0;
@@ -386,7 +386,6 @@ export function createSessionMcpRuntimeManagerLifecycle(
         : [];
     });
     await retireIdleRuntimes(expired);
-    return expired.length;
   };
 
   const ensureIdleSweepTimer = () => {

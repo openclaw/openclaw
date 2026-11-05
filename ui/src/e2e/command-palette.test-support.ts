@@ -5,7 +5,7 @@ import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fi
 import { controlUiSessionUrl } from "./new-session-page.test-support.ts";
 
 export const foregroundKey = "agent:main:dashboard:palette-foreground";
-export const appearanceKey = "agent:main:dashboard:palette-appearance";
+const appearanceKey = "agent:main:dashboard:palette-appearance";
 export const foregroundDraft = "Keep this unsent foreground draft exactly as it is.";
 const caret = 10;
 const workspace = "/workspace/palette-fixture";

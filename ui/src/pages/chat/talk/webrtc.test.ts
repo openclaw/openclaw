@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
+import { consultRunResult } from "./consult.test-support.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   type RealtimeTalkWebRtcSdpSessionResult,
@@ -66,12 +67,7 @@ function pendingAnswer() {
   return Object.assign(pending, { fetchMock });
 }
 
-const consultRun = {
-  runId: "run-1",
-  idempotencyKey: "run-1",
-  agentId: "main",
-  agentSessionKey: "agent:main:main",
-};
+const consultRun = consultRunResult();
 
 const spokenStatus = {
   ok: true,
@@ -357,8 +353,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
   it.each(["error", "conversation.item.input_audio_transcription.failed"])(
     "surfaces %s without closing the OpenAI data channel",
     async (type) => {
-      const { transport, peer, onStatus, onTalkEvent, onTranscript, dispatch } =
-        await startTransport();
+      const { transport, peer, onStatus, onTranscript, dispatch } = await startTransport();
       const itemId = type === "error" ? undefined : "failed-input";
       dispatch({
         type,
@@ -367,13 +362,6 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       });
 
       expect(onStatus).toHaveBeenCalledWith("error", "The audio could not be transcribed.");
-      expect(onTalkEvent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: "session.error",
-          itemId,
-          payload: { message: "The audio could not be transcribed." },
-        }),
-      );
       expect(onTranscript).not.toHaveBeenCalled();
       expect(peer.channel.readyState).toBe("open");
       dispatchTranscription(peer, "Please try again");
@@ -388,7 +376,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
   );
 
   it("surfaces speech and response lifecycle status from the OpenAI data channel", async () => {
-    const { transport, onStatus, dispatch, events } = await startTransport();
+    const { transport, onStatus, dispatch } = await startTransport();
     for (const event of [
       { type: "input_audio_buffer.speech_started" },
       { type: "input_audio_buffer.speech_stopped" },
@@ -402,52 +390,45 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     expect(onStatus).toHaveBeenCalledWith("thinking", "Processing speech");
     expect(onStatus).toHaveBeenCalledWith("thinking", "Generating response");
     expect(onStatus).toHaveBeenCalledWith("listening", undefined);
-    expect(events().map((event) => [event.type, event.turnId])).toEqual([
-      ["turn.started", "turn-1"],
-      ["input.audio.committed", "turn-1"],
-      ["turn.ended", "turn-1"],
-    ]);
     transport.stop();
   });
 
-  it.each([
-    ["cancelled", "turn.cancelled"],
-    ["failed", "turn.ended"],
-    ["incomplete", "turn.ended"],
-  ] as const)("keeps browser Talk reusable after a %s response", async (status, terminalType) => {
-    const { transport, onStatus, dispatch, events } = await startTransport();
-    const response = {
-      id: "response-1",
-      status,
-      ...(status === "failed"
-        ? { status_details: { error: { code: "provider_error" } } }
-        : status === "incomplete"
-          ? { status_details: { reason: "max_output_tokens" } }
-          : { status_details: { reason: "client_cancelled" } }),
-    };
-    dispatch({ type: "response.created", response: { id: "response-1" } });
-    dispatch({ type: "response.done", response });
-    dispatch({ type: "response.done", response });
-    dispatch({ type: "response.created", response: { id: "response-2" } });
-    dispatch({
-      type: "response.done",
-      response: { id: "response-2", status: "completed" },
-    });
+  it.each(["cancelled", "failed", "incomplete"] as const)(
+    "keeps browser Talk reusable after a %s response",
+    async (status) => {
+      const { transport, onStatus, dispatch } = await startTransport();
+      onStatus.mockClear();
+      const response = {
+        id: "response-1",
+        status,
+        ...(status === "failed"
+          ? { status_details: { error: { code: "provider_error" } } }
+          : status === "incomplete"
+            ? { status_details: { reason: "max_output_tokens" } }
+            : { status_details: { reason: "client_cancelled" } }),
+      };
+      dispatch({ type: "response.created", response: { id: "response-1" } });
+      dispatch({ type: "response.done", response });
+      dispatch({ type: "response.done", response });
+      dispatch({ type: "response.created", response: { id: "response-2" } });
+      dispatch({
+        type: "response.done",
+        response: { id: "response-2", status: "completed" },
+      });
 
-    const terminalEvents = events().filter(
-      (event) => event.type === "turn.ended" || event.type === "turn.cancelled",
-    );
-    expect(terminalEvents).toHaveLength(2);
-    expect(terminalEvents[0]?.type).toBe(terminalType);
-    expect(events().filter((event) => event.type === "session.error")).toHaveLength(
-      status === "cancelled" ? 0 : 1,
-    );
-    expect(onStatus).toHaveBeenLastCalledWith("listening", undefined);
-    transport.stop();
-  });
+      expect(onStatus.mock.calls.map(([value]) => value)).toEqual([
+        "thinking",
+        status === "cancelled" ? "listening" : "error",
+        "thinking",
+        "listening",
+      ]);
+      expect(onStatus).toHaveBeenLastCalledWith("listening", undefined);
+      transport.stop();
+    },
+  );
 
-  it("emits common Talk transcript events from the OpenAI data channel", async () => {
-    const { transport, peer, onTranscript, dispatch, events } = await startTransport();
+  it("publishes finalized transcripts from the OpenAI data channel", async () => {
+    const { transport, peer, onTranscript, dispatch } = await startTransport();
     dispatchTranscription(peer, "hello");
     dispatch({
       type: "response.audio_transcript.done",
@@ -458,24 +439,6 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     expect(onTranscript.mock.calls.map(([entry]) => entry)).toEqual([
       { role: "user", text: "hello", final: true, itemId: "input-1" },
       { role: "assistant", text: "hi there", final: true, itemId: "response-1" },
-    ]);
-    expect(events()).toEqual([
-      expect.objectContaining({
-        type: "transcript.done",
-        turnId: "turn-1",
-        itemId: "input-1",
-        payload: { role: "user", text: "hello" },
-        sessionId: "main:openai:webrtc",
-        transport: "webrtc",
-      }),
-      expect.objectContaining({
-        type: "output.text.done",
-        turnId: "turn-1",
-        itemId: "response-1",
-        payload: { text: "hi there" },
-        sessionId: "main:openai:webrtc",
-        transport: "webrtc",
-      }),
     ]);
     transport.stop();
   });
@@ -493,7 +456,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
   });
 
   it("maps frameless Codex transcript events by role and finality", async () => {
-    const { transport, dispatch, events } = await startTransport();
+    const { transport, dispatch, onTranscript } = await startTransport();
     for (const event of [
       { type: "input_transcript.added", item: { id: "user-live", text: "hel" } },
       { type: "output_transcript.added", item: { id: "assistant-live", text: "hi" } },
@@ -509,12 +472,11 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       dispatch(event);
     }
 
-    expect(events().map((event) => event.type)).toEqual([
-      "transcript.delta",
-      "output.text.delta",
-      "transcript.done",
-      "output.text.done",
-      "turn.ended",
+    expect(onTranscript.mock.calls.map(([entry]) => entry)).toEqual([
+      { role: "user", text: "hel", final: false, textMode: "verbatim" },
+      { role: "assistant", text: "hi", final: false, textMode: "verbatim" },
+      { role: "user", text: "hello", final: true, textMode: "snapshot" },
+      { role: "assistant", text: "hi there", final: true, textMode: "snapshot" },
     ]);
     transport.stop();
   });
@@ -523,17 +485,13 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     ["response.output_audio_transcript", "transcript"],
     ["response.output_text", "text"],
   ])("emits assistant transcripts from %s events", async (prefix, finalField) => {
-    const { transport, onTranscript, dispatch, events } = await startTransport();
+    const { transport, onTranscript, dispatch } = await startTransport();
     dispatch({ type: `${prefix}.delta`, item_id: "response-1", delta: "hi" });
     dispatch({ type: `${prefix}.done`, item_id: "response-1", [finalField]: "hi there" });
 
     expect(onTranscript.mock.calls.map(([entry]) => entry)).toEqual([
       { role: "assistant", text: "hi", final: false, itemId: "response-1" },
       { role: "assistant", text: "hi there", final: true, itemId: "response-1" },
-    ]);
-    expect(events().map((event) => [event.type, event.payload])).toEqual([
-      ["output.text.delta", { text: "hi" }],
-      ["output.text.done", { text: "hi there" }],
     ]);
     transport.stop();
   });

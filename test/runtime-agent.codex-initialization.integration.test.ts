@@ -1,4 +1,3 @@
-import { StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -11,7 +10,7 @@ import {
 } from "../src/config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../src/config/sessions/session-accessor.sqlite-entry-store.js";
 import { sessionRewindHandlers } from "../src/gateway/server-methods/sessions-rewind.js";
-import type { GatewayRequestContext } from "../src/gateway/server-methods/types.js";
+import { callGatewayHandler } from "../src/gateway/server-methods/skills.test-helpers.js";
 import * as sqliteAdmission from "../src/infra/sqlite-worker-operation-admission.js";
 import {
   createPluginStateKeyedStoreV2,
@@ -111,7 +110,8 @@ it.each([
       let readinessPublicationRefused = false;
       let readyAtPublication: ReturnType<typeof loadSessionEntry>;
       let stopReadinessPublication: (() => void) | undefined;
-      const reads = observeMainThreadReads();
+      const readSql: string[] = [];
+      observeMainThreadReads((sql) => readSql.push(sql));
       const upsertLink = upstreamLinks.upsertSessionUpstreamLinkWithCurrentSource;
       const deleteLink = upstreamLinks.deleteSessionUpstreamLinkAsync;
       const trackLink =
@@ -159,20 +159,14 @@ it.each([
               rollbackCommitRefused = true;
               throw new Error("injected rollback failure");
             }
-            const offsets = reads.calls.map((call) => call.mock.contexts.length);
+            const readOffset = readSql.length;
             try {
               admit(request, grant);
             } finally {
               if (operation && (request.stage === "transaction" || request.stage === "commit")) {
-                for (const [index, call] of reads.calls.entries()) {
-                  linkGrantReads += call.mock.contexts
-                    .slice(offsets[index])
-                    .filter(
-                      (statement) =>
-                        statement instanceof StatementSync &&
-                        statement.sourceSQL.includes("session_upstream_links"),
-                    ).length;
-                }
+                linkGrantReads += readSql
+                  .slice(readOffset)
+                  .filter((sql) => sql.includes("session_upstream_links")).length;
               }
             }
           }, attachment);
@@ -193,35 +187,24 @@ it.each([
           upstreamRef: params.upstream.ref,
           marker: null,
         });
-        let result: { status: string; message?: string } | undefined;
-        const request = { sessionKey: params.source.sessionKey, entryId: params.source.entryId };
-        await expectDefined(
-          sessionRewindHandlers["sessions.fork"],
-          "fork handler",
-        )({
-          req: {
-            type: "req",
-            id: "initialization-owner",
-            method: "sessions.fork",
-            params: request,
+        const result = await callGatewayHandler(
+          sessionRewindHandlers,
+          "sessions.fork",
+          { sessionKey: params.source.sessionKey, entryId: params.source.entryId },
+          {
+            context: {
+              getRuntimeConfig: () => ({}),
+              getSessionEventSubscriberConnIds: () => new Set(),
+              broadcastToConnIds: vi.fn(),
+            },
           },
-          params: request,
-          client: null,
-          isWebchatConnect: () => false,
-          context: {
-            getRuntimeConfig: () => ({}),
-            rpcSources: new Map(),
-            getSessionEventSubscriberConnIds: () => new Set(),
-            broadcastToConnIds: vi.fn(),
-          } as unknown as GatewayRequestContext,
-          respond: (ok, _payload, error) => {
-            result = {
-              status: ok ? "created" : "failed",
-              ...(error ? { message: error.message } : {}),
-            };
-          },
-        });
-        return expectDefined(result, "fork response");
+        );
+        expect(result.ok).not.toBeNull();
+        const message = isRecord(result.error) ? result.error.message : undefined;
+        return {
+          status: result.ok ? "created" : "failed",
+          ...(typeof message === "string" ? { message } : {}),
+        };
       };
       const deletion = vi.spyOn(harness, "withSessionDeletion");
       const mutate = bindingStore.mutate.bind(bindingStore);
@@ -379,9 +362,7 @@ it.each([
         expect(readyAtPublication?.initializationPending).toBeUndefined();
       }
       expect(linkGrantReads).toBe(0);
-      expect(result).toMatchObject({
-        status: failure === "readiness publication" ? "created" : "failed",
-      });
+      expect(result.status).toBe(failure === "readiness publication" ? "created" : "failed");
       const identity = {
         kind: "session" as const,
         agentId: "main",
@@ -408,9 +389,7 @@ it.each([
         );
         expect(link?.threadId).toBe(flow === "fork" ? forkedThread.id : undefined);
         expect(native.archiveThread).not.toHaveBeenCalled();
-        expect(result).toMatchObject({
-          message: expect.stringContaining("guarded rollback did not complete"),
-        });
+        expect(result.message).toContain("guarded rollback did not complete");
       } else {
         expect(deletion).toHaveBeenCalledOnce();
         expect(child).toBeUndefined();
@@ -429,9 +408,7 @@ it.each([
         }
         if (failure === "native cleanup") {
           expect(native.control.retireConnection).toHaveBeenCalledOnce();
-          expect(result).toMatchObject({
-            message: expect.stringContaining("guarded rollback did not complete"),
-          });
+          expect(result.message).toContain("guarded rollback did not complete");
         }
       }
       for (const method of ["assertCurrent", "assertRollbackCurrent"] as const) {

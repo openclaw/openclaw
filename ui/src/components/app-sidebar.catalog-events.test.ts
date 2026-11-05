@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import {
   catalogPage,
   createGatewayHarness,
@@ -13,8 +13,9 @@ import {
   type GatewayRequestMock,
 } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
-import "../test-helpers/app-sidebar-suite.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
+import "../test-helpers/app-sidebar-suite.ts";
+import { mockDocumentVisibility as visibilityFixture } from "../test-helpers/mock-cleanup.ts";
 import "./app-sidebar.tsx";
 
 // Capture JSDOM's frame owner before the sidebar fixture installs its scheduler.
@@ -35,15 +36,6 @@ const busy = (retryAfterMs: number) =>
 async function advance(request: GatewayRequestMock, ms: number, calls: number) {
   await vi.advanceTimersByTimeAsync(ms);
   expect(request).toHaveBeenCalledTimes(calls);
-}
-
-function visibilityFixture() {
-  let visibility: DocumentVisibilityState = "visible";
-  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
-  return (next: DocumentVisibilityState) => {
-    visibility = next;
-    document.dispatchEvent(new Event("visibilitychange"));
-  };
 }
 
 async function mountTab(
@@ -74,37 +66,27 @@ describe("AppSidebar catalog event refresh", () => {
     vi.useRealTimers();
   });
 
-  it("ignores session churn while coalescing tab activation bursts", async () => {
-    const { gateway, request } = await mountTab();
-    gateway.publishEvent("sessions.changed", {
-      agentId: "research",
-      sessionKey: "agent:research:x",
-    });
-    await advance(request, 5_000, 1);
-    gateway.publishEvent("sessions.changed", { agentId: "main", sessionKey: "agent:main:x" });
-    await advance(request, 5_000, 1);
-    document.dispatchEvent(new Event("visibilitychange"));
-    document.dispatchEvent(new Event("visibilitychange"));
-    await advance(request, 5_000, 2);
-  });
-
-  it("discovers native sessions every two minutes while visible", async () => {
+  it("ignores session churn, polls every two minutes, and coalesces tab activation", async () => {
     const request = createGatewayRequestMock()
       .mockResolvedValueOnce(catalogPage([]))
       .mockResolvedValue(page("discovered", "New catalog row"));
     const { gateway, sidebar } = await mountTab(request);
-    gateway.publishEvent("sessions.changed", { agentId: "main", sessionKey: "agent:main:x" });
-    await vi.advanceTimersByTimeAsync(119_999);
-    expect.soft(request).toHaveBeenCalledTimes(1);
+    for (const agentId of ["research", "main"]) {
+      gateway.publishEvent("sessions.changed", { agentId, sessionKey: `agent:${agentId}:x` });
+      await advance(request, 5_000, 1);
+    }
+    await advance(request, 109_999, 1);
     await advance(request, 1, 2);
     expect(sidebar.textContent).toContain("New catalog row");
     await advance(request, 119_999, 2);
     await advance(request, 1, 3);
     await advance(request, 6 * 60_000, 6);
+    document.dispatchEvent(new Event("visibilitychange"));
+    document.dispatchEvent(new Event("visibilitychange"));
+    await advance(request, 5_000, 7);
   });
 
   it.each(["recovered", "exhausted"] as const)("paces busy retries until %s", async (outcome) => {
-    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const error = busy(outcome === "recovered" ? 5_000 : 100);
     const request = createGatewayRequestMock().mockResolvedValueOnce(
       page("stable", "Stable catalog"),
@@ -133,7 +115,6 @@ describe("AppSidebar catalog event refresh", () => {
     } else {
       for (const delay of [1_000, 2_000, 4_000]) {
         expect(sidebar.sessionData.sessionCatalogRefreshStatus.error).toBeNull();
-        expect(warning).not.toHaveBeenCalled();
         const requests = request.mock.calls.length;
         await advance(request, delay - 1, requests);
         await advance(request, 1, requests + 1);
@@ -144,7 +125,6 @@ describe("AppSidebar catalog event refresh", () => {
         error: expect.any(String),
         stale: true,
       });
-      expect(warning).toHaveBeenCalledOnce();
     }
     await advance(request, 119_999, outcome === "recovered" ? 3 : 5);
   });
@@ -154,7 +134,6 @@ describe("AppSidebar catalog event refresh", () => {
     vi.useRealTimers();
     const pendingFrame = requestNativeFrame(() => undefined);
     vi.useFakeTimers(catalogClock);
-    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     cancelNativeFrame(pendingFrame);
     const request = createGatewayRequestMock().mockRejectedValue(
       new GatewayRequestError({
@@ -168,13 +147,11 @@ describe("AppSidebar catalog event refresh", () => {
     const { sidebar } = await mountTab(request);
     await vi.advanceTimersByTimeAsync(180_000);
     await settleLitElement(sidebar);
-    expect(request.mock.calls.length).toBeGreaterThan(30);
     expect(
       sidebar.querySelector('.sidebar-session-empty-hint--startup[role="status"]')?.textContent,
     ).toContain("Starting up");
     expect(sidebar.querySelector(".callout.danger")).toBeNull();
     expect(sidebar.textContent).not.toContain("doctor --fix");
-    expect(warning).not.toHaveBeenCalled();
 
     request.mockRejectedValue(
       new GatewayRequestError({

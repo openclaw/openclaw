@@ -79,6 +79,7 @@ export type NativeHookRelayRegistration = {
   allowedEvents: readonly NativeHookRelayEvent[];
   /** Keep host policy active for every native tool even without plugin hooks. */
   requirePreToolUse?: boolean;
+  /** Wall-clock epoch expiry shared through the cross-process bridge record. */
   expiresAtMs: number;
   signal?: AbortSignal;
   /** Exact host policy capability for authority-bearing native callbacks. */
@@ -201,6 +202,8 @@ export type ActiveNativeHookRelayRegistrationHandle = NativeHookRelayRegistratio
 };
 
 export type OwnedNativeHookRelayRegistrationHandle = ActiveNativeHookRelayRegistrationHandle & {
+  /** Bind native foreground callbacks to the accepted turn of this run. */
+  bindForegroundTurn: (threadId: string, turnId: string) => void;
   /** Explicitly expose only this registration through the token-scoped HTTP callback. */
   enableRemoteCallback: () => { token: string };
   /** Strict policy preparation and direct publication result. */
@@ -303,9 +306,17 @@ export type NativeHookRelayExecutionAdmission = Readonly<{
 }>;
 
 export type NativeHookRelayOwnerOptions = {
+  requireForegroundTurn?: boolean;
   retention?: NativeHookRelayRetention;
   approvalHost?: NativeHookRelayRegistration["approvalHost"];
   executionAdmission?: NativeHookRelayExecutionAdmission;
+  postToolUse?: Readonly<{
+    toolNames: readonly string[];
+    observe: (
+      invocation: Readonly<NativeHookRelayInvocation>,
+      assertCurrent: () => void,
+    ) => void | Promise<void>;
+  }>;
 };
 
 export type OwnedNativeHookRelayParams = RegisterNativeHookRelayParams &
@@ -313,11 +324,16 @@ export type OwnedNativeHookRelayParams = RegisterNativeHookRelayParams &
 
 export type RelayLifetime = {
   foregroundOpen: boolean;
-  foregroundToken: symbol;
+  /** Null requires turn acceptance; undefined preserves public registration semantics. */
+  foregroundTurn?: { threadId: string; turnId: string } | null;
   policyReady: Promise<void>;
+  /** Process-local monotonic expiry used only by the in-process rearm timer. */
+  expiresAtMonotonicMs?: number;
   retained?: ReturnType<typeof retainBeforeToolCallForNativeHookRelay>;
   retention?: NativeHookRelayRetention;
   executionAdmission?: NativeHookRelayExecutionAdmission;
+  postToolUse?: NativeHookRelayOwnerOptions["postToolUse"];
+  postToolUseWork: Set<Promise<void>>;
   removeAbortListener?: () => void;
   expiryTimer?: ReturnType<typeof setTimeout>;
 };

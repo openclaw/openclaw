@@ -1,5 +1,3 @@
-import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
-
 export const LMSTUDIO_OPENAI_COMPAT_ENABLED_REASONING_EFFORTS = [
   "minimal",
   "low",
@@ -26,31 +24,4 @@ export function buildLmstudioReasoningEffortMap(
     ...(max ? { adaptive: max, max } : {}),
   };
   return Object.keys(map).length > 0 ? map : undefined;
-}
-
-export function normalizeLmstudioTransportReasoningCompat(
-  compat: NonNullable<ModelDefinitionConfig["compat"]>,
-): NonNullable<ModelDefinitionConfig["compat"]> {
-  const supportedReasoningEfforts = compat.supportedReasoningEfforts;
-  const map = compat.reasoningEffortMap;
-  const hasBinarySupported =
-    Array.isArray(supportedReasoningEfforts) &&
-    supportedReasoningEfforts.some((option) => option === "on");
-  const hasBinaryMapValue =
-    map !== undefined && Object.values(map).some((value) => value === "on" || value === "off");
-  if (!hasBinarySupported && !hasBinaryMapValue) {
-    return compat;
-  }
-  const hasDisabled =
-    supportedReasoningEfforts?.includes("off") === true ||
-    supportedReasoningEfforts?.includes("none") === true ||
-    Object.values(map ?? {}).some((value) => value === "off" || value === "none");
-  const normalizedSupportedReasoningEfforts = hasDisabled
-    ? [...LMSTUDIO_OPENAI_COMPAT_REASONING_EFFORTS]
-    : [...LMSTUDIO_OPENAI_COMPAT_ENABLED_REASONING_EFFORTS];
-  return {
-    ...compat,
-    supportedReasoningEfforts: normalizedSupportedReasoningEfforts,
-    reasoningEffortMap: buildLmstudioReasoningEffortMap(normalizedSupportedReasoningEfforts),
-  };
 }

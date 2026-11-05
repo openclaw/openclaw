@@ -8,17 +8,12 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/exec-approvals.js";
 import type { DevicePairingList } from "../../../../src/gateway/device-pairing-list.types.js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
-import { removePathValue, setPathValue } from "../config-form-utils.ts";
+import { copyWithPathPatch } from "../config-form-utils.ts";
 import { formatUiError } from "../format-error.ts";
 import { clearDeviceAuthToken, loadOrCreateDeviceIdentity, storeDeviceAuthToken } from "./index.ts";
 
 type GatewayRequestClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
-};
-
-type NodesGatewaySnapshot = {
-  client: GatewayRequestClient | null;
-  connected: boolean;
 };
 
 type WireExecApprovalsFile = GatewayExecApprovalsSnapshot["file"];
@@ -32,13 +27,11 @@ export type ExecAsk = ExecApprovalsResolvedDefaults["ask"];
 // Editor choices stay closed even though the wire accepts policy strings for host normalization.
 type ExecApprovalsDefaults = Partial<ExecApprovalsResolvedDefaults>;
 
-type ExecApprovalsAgent = ExecApprovalsDefaults & Pick<WireExecApprovalsAgent, "allowlist">;
-
 export type ExecApprovalsFile = {
   version?: number;
   socket?: Pick<NonNullable<WireExecApprovalsFile["socket"]>, "path">;
   defaults?: ExecApprovalsDefaults;
-  agents?: Record<string, ExecApprovalsAgent>;
+  agents?: Record<string, ExecApprovalsDefaults & Pick<WireExecApprovalsAgent, "allowlist">>;
 };
 
 type FileExecApprovalsSnapshot = Omit<GatewayExecApprovalsSnapshot, "file"> & {
@@ -81,6 +74,8 @@ type InventoryState = NodesRequestState & {
   devicesQueuedRefresh: QueuedRefresh;
   devicesError: string | null;
   devicesList: DevicePairingList | null;
+  // Device and node pairing requestIds with an approve or reject in flight.
+  devicesDeciding: readonly { requestId: string }[];
 };
 
 type ExecApprovalsState = NodesRequestState & {
@@ -89,14 +84,15 @@ type ExecApprovalsState = NodesRequestState & {
   execApprovalsDirty: boolean;
   execApprovalsSnapshot: ExecApprovalsSnapshot | null;
   execApprovalsForm: ExecApprovalsFile | null;
-  execApprovalsSelectedAgent: string | null;
+  execApprovalsError: string | null;
+  execApprovalsSavedNotice: boolean;
   lastError: string | null;
 };
 
 export type DevicesPageDataState = InventoryState & ExecApprovalsState;
 
 export function createInitialDevicesState(
-  snapshot: Partial<NodesGatewaySnapshot> = {},
+  snapshot: Partial<{ client: GatewayRequestClient | null; connected: boolean }> = {},
 ): DevicesPageDataState {
   return {
     client: snapshot.client ?? null,
@@ -110,12 +106,14 @@ export function createInitialDevicesState(
     devicesQueuedRefresh: "none",
     devicesError: null,
     devicesList: null,
+    devicesDeciding: [],
     execApprovalsLoading: false,
     execApprovalsSaving: false,
     execApprovalsDirty: false,
     execApprovalsSnapshot: null,
     execApprovalsForm: null,
-    execApprovalsSelectedAgent: null,
+    execApprovalsError: null,
+    execApprovalsSavedNotice: false,
   };
 }
 
@@ -125,10 +123,6 @@ function isCurrentNodesRequest(
   generation: number,
 ): boolean {
   return state.connected && state.client === client && state.requestGeneration === generation;
-}
-
-function queueRefresh(current: QueuedRefresh, quiet: boolean | undefined): QueuedRefresh {
-  return current === "visible" || quiet !== true ? "visible" : "quiet";
 }
 
 export function loadNodes(state: InventoryState, opts?: { quiet?: boolean }) {
@@ -152,7 +146,8 @@ async function loadInventory(
   const queuedRefresh = `${kind}QueuedRefresh` as const;
   const error = kind === "nodes" ? "lastError" : "devicesError";
   if (state[loading]) {
-    state[queuedRefresh] = queueRefresh(state[queuedRefresh], opts?.quiet);
+    state[queuedRefresh] =
+      state[queuedRefresh] === "visible" || opts?.quiet !== true ? "visible" : "quiet";
     return;
   }
   state[loading] = true;
@@ -212,12 +207,36 @@ async function runDeviceMutation<T>(
   }
 }
 
+// One decision per request: the Gateway answers a repeat with "unknown requestId",
+// which would replace the accepted outcome with an error.
+async function decidePairing(
+  state: InventoryState,
+  requestId: string,
+  decide: () => Promise<unknown>,
+) {
+  if (state.devicesDeciding.some((decision) => decision.requestId === requestId)) {
+    return;
+  }
+  const decision = { requestId };
+  state.devicesDeciding = [...state.devicesDeciding, decision];
+  try {
+    await decide();
+  } finally {
+    // A retired decision must not release a replacement for the same request.
+    state.devicesDeciding = state.devicesDeciding.filter((pending) => pending !== decision);
+  }
+}
+
 export async function approveDevicePairing(state: InventoryState, requestId: string) {
-  await runDeviceMutation(state, (client) => client.request("device.pair.approve", { requestId }));
+  await decidePairing(state, requestId, () =>
+    runDeviceMutation(state, (client) => client.request("device.pair.approve", { requestId })),
+  );
 }
 
 export async function rejectDevicePairing(state: InventoryState, requestId: string) {
-  await runDeviceMutation(state, (client) => client.request("device.pair.reject", { requestId }));
+  await decidePairing(state, requestId, () =>
+    runDeviceMutation(state, (client) => client.request("device.pair.reject", { requestId })),
+  );
 }
 
 export type InventoryRemovalRequest = {
@@ -293,7 +312,7 @@ export async function removeStaleInventoryEntries(
     state,
     failures.length > 0
       ? {
-          error: `Failed to remove ${failures.length} entr${failures.length === 1 ? "y" : "ies"}: ${failures[0]}`,
+          error: `Couldn’t remove ${failures.length} entr${failures.length === 1 ? "y" : "ies"}. Review the remaining entries before trying again. Details: ${failures[0]}`,
         }
       : undefined,
   );
@@ -327,13 +346,15 @@ export async function renameDevice(
 }
 
 export function approveNodePairingRequest(state: InventoryState, requestId: string) {
-  return runInventoryMutation(state, (client) =>
-    client.request("node.pair.approve", { requestId }),
+  return decidePairing(state, requestId, () =>
+    runInventoryMutation(state, (client) => client.request("node.pair.approve", { requestId })),
   );
 }
 
 export function rejectNodePairingRequest(state: InventoryState, requestId: string) {
-  return runInventoryMutation(state, (client) => client.request("node.pair.reject", { requestId }));
+  return decidePairing(state, requestId, () =>
+    runInventoryMutation(state, (client) => client.request("node.pair.reject", { requestId })),
+  );
 }
 
 /**
@@ -341,7 +362,7 @@ export function rejectNodePairingRequest(state: InventoryState, requestId: strin
  * token only to a device rotating its own token, so a cross-device rotation is a real
  * outcome with no secret to show rather than a failure.
  */
-type RotatedDeviceTokenOutcome =
+export type RotatedDeviceTokenOutcome =
   | { delivery: "in-band"; token: string }
   | { delivery: "withheld-cross-device" };
 
@@ -465,12 +486,12 @@ export async function loadExecApprovals(
     return;
   }
   state.execApprovalsLoading = true;
-  state.lastError = null;
+  state.execApprovalsError = null;
   const generation = state.requestGeneration;
   try {
     const rpc = resolveExecApprovalsRpc(target);
     if (!rpc) {
-      state.lastError = "Select a node before loading exec approvals.";
+      state.execApprovalsError = "Select a device before loading exec approvals.";
       return;
     }
     const res = await client.request<ExecApprovalsSnapshot>(rpc.method, rpc.params);
@@ -479,7 +500,7 @@ export async function loadExecApprovals(
     }
   } catch (err) {
     if (isCurrentNodesRequest(state, client, generation)) {
-      state.lastError = formatUiError(err);
+      state.execApprovalsError = formatUiError(err);
     }
   } finally {
     if (isCurrentNodesRequest(state, client, generation)) {
@@ -499,7 +520,8 @@ function applyExecApprovalsSnapshot(state: ExecApprovalsState, snapshot: ExecApp
     state.execApprovalsDirty = false;
     return;
   }
-  state.execApprovalsForm = structuredClone(snapshot.file);
+  // Edits copy their path, so the saved receipt can stay shared until the first edit.
+  state.execApprovalsForm = snapshot.file;
 }
 
 export function isNativeExecApprovalsSnapshot(
@@ -517,34 +539,37 @@ export async function saveExecApprovals(
     return;
   }
   state.execApprovalsSaving = true;
-  state.lastError = null;
+  state.execApprovalsSavedNotice = false;
+  state.execApprovalsError = null;
   const generation = state.requestGeneration;
   try {
     if (isNativeExecApprovalsSnapshot(state.execApprovalsSnapshot)) {
-      state.lastError =
-        "Host-native node approvals are read-only here; use the companion app or approvals set --node.";
+      state.execApprovalsError =
+        "Device approvals are read-only here. Use the companion app or approvals set --node.";
       return;
     }
     const baseHash = state.execApprovalsSnapshot?.hash;
     if (!baseHash) {
-      state.lastError = "Exec approvals hash missing; reload and retry.";
+      state.execApprovalsError = "Exec approvals hash missing; reload and retry.";
       return;
     }
     const file = state.execApprovalsForm ?? state.execApprovalsSnapshot?.file ?? {};
     const rpc = resolveExecApprovalsRpc(target, { file, baseHash });
     if (!rpc) {
-      state.lastError = "Select a node before saving exec approvals.";
+      state.execApprovalsError = "Select a device before saving exec approvals.";
       return;
     }
     await client.request(rpc.method, rpc.params);
     if (!isCurrentNodesRequest(state, client, generation)) {
       return;
     }
+    // Set together, so the row holding the Save a person just pressed stays mounted.
     state.execApprovalsDirty = false;
+    state.execApprovalsSavedNotice = true;
     await loadExecApprovals(state, target);
   } catch (err) {
     if (isCurrentNodesRequest(state, client, generation)) {
-      state.lastError = formatUiError(err);
+      state.execApprovalsError = formatUiError(err);
     }
   } finally {
     if (isCurrentNodesRequest(state, client, generation)) {
@@ -555,16 +580,20 @@ export async function saveExecApprovals(
 
 function mutateExecApprovalsForm(
   state: ExecApprovalsState,
-  mutate: (form: ExecApprovalsFile) => void,
+  path: Array<string | number>,
+  value: unknown,
+  mode: "copy-set" | "copy-remove",
 ) {
   if (isNativeExecApprovalsSnapshot(state.execApprovalsSnapshot)) {
-    state.lastError = "Host-native node approvals are read-only here.";
+    state.execApprovalsError =
+      "Device approvals are read-only here. Use the companion app or approvals set --node.";
     return;
   }
-  const base = structuredClone(state.execApprovalsForm ?? state.execApprovalsSnapshot?.file ?? {});
-  mutate(base);
-  state.execApprovalsForm = base;
+  const base = state.execApprovalsForm ?? state.execApprovalsSnapshot?.file ?? {};
+  const next = copyWithPathPatch(base, path, value, mode);
+  state.execApprovalsForm = (next.ok ? asOptionalRecord(next.value) : undefined) ?? base;
   state.execApprovalsDirty = true;
+  state.execApprovalsSavedNotice = false;
 }
 
 export function updateExecApprovalsFormValue(
@@ -572,12 +601,12 @@ export function updateExecApprovalsFormValue(
   path: Array<string | number>,
   value: unknown,
 ) {
-  mutateExecApprovalsForm(state, (form) => setPathValue(form, path, value));
+  mutateExecApprovalsForm(state, path, value, "copy-set");
 }
 
 export function removeExecApprovalsFormValue(
   state: ExecApprovalsState,
   path: Array<string | number>,
 ) {
-  mutateExecApprovalsForm(state, (form) => removePathValue(form, path));
+  mutateExecApprovalsForm(state, path, undefined, "copy-remove");
 }

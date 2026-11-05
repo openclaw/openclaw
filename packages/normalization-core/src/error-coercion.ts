@@ -296,6 +296,24 @@ export function stringifyNonErrorCause(value: unknown): string {
   }
 }
 
+/** Renders an error and up to eight causes without choosing log formatting or redaction. */
+export function mapErrorCauseChain(error: Error, renderError: (error: Error) => string): string[] {
+  const segments = [renderError(error)];
+  let current: unknown = error.cause;
+  let depth = 0;
+  while (current !== undefined && current !== null && depth < 8) {
+    if (current instanceof Error) {
+      segments.push(renderError(current));
+      current = current.cause;
+    } else {
+      segments.push(stringifyNonErrorCause(current));
+      current = undefined;
+    }
+    depth += 1;
+  }
+  return segments;
+}
+
 export function extractErrorCode(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
     return undefined;

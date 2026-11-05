@@ -1,3 +1,4 @@
+import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { BUILTIN_THEME_IDS } from "../../../packages/gateway-protocol/src/theme-ids.ts";
@@ -6,17 +7,13 @@ import { resolveTheme, syncThemePaletteStylesheet, type ThemeName } from "../app
 import { TYPEFACES, resolveTypefaces, syncTypefaceStylesheets } from "../app/typography.ts";
 import { runningRow } from "../test-helpers/app-sidebar-session-narration.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { SessionOwnerChip } from "./solid/session-owner-chip.tsx";
 import { renderSessionLeadingState } from "./solid/session-presentation.tsx";
-import "./solid/session-owner-chip.tsx";
 
 const participants = [{ identity: { type: "profile" as const, id: "profile-bob" }, label: "Bob" }];
 const ada = { type: "human" as const, id: "profile-ada", label: "Ada" };
 const identity = { type: "profile" as const, id: ada.id };
 const modes = ["light", "dark"] as const;
-function appearance(face: Element) {
-  const { opacity, filter } = getComputedStyle(face);
-  return { opacity, filter };
-}
 function dimensions(face: Element) {
   const { width, height } = face.getBoundingClientRect();
   return [width, height];
@@ -54,16 +51,23 @@ async function captureFace(face: HTMLElement) {
   await image.decode();
   const context = canvasContext(image.width, image.height);
   context.drawImage(image, 0, 0);
-  return { image, context };
+  return { image, context, bounds: face.getBoundingClientRect() };
 }
 
-async function paintedCounterLuminance(face: HTMLElement): Promise<number> {
-  const { image, context } = await captureFace(face);
+function paintedCounterLuminance(
+  face: HTMLElement,
+  { image, context, bounds }: Awaited<ReturnType<typeof captureFace>>,
+): number {
   // Sample below the text, clear of the unread badge and circular border.
-  const scale = image.height / face.getBoundingClientRect().height;
+  const scale = image.width / bounds.width;
+  const rect = face.getBoundingClientRect();
   return pixelLuminance(
-    context.getImageData(Math.floor(image.width / 2), Math.floor(image.height - 3 * scale), 1, 1)
-      .data,
+    context.getImageData(
+      Math.floor((rect.left + rect.width / 2 - bounds.left) * scale),
+      Math.floor((rect.bottom - 3 - bounds.top) * scale),
+      1,
+      1,
+    ).data,
   );
 }
 
@@ -94,7 +98,6 @@ function sidebarFixture(pinned: boolean) {
   return {
     sidebar,
     row: sidebar.querySelector<HTMLElement>(".sidebar-recent-session")!,
-    indicator: sidebar.querySelector<HTMLElement>(".sidebar-session-indicator")!,
   };
 }
 async function applyTheme(theme: ThemeName, mode: "light" | "dark") {
@@ -170,10 +173,8 @@ afterEach(() => {
   }
 });
 
-async function readyAvatars(chip: HTMLElementTagNameMap["openclaw-session-owner-chip"]) {
-  await chip.updateComplete;
-  const avatars = [...chip.querySelectorAll("openclaw-viewer-avatar")];
-  await Promise.all(avatars.map((avatar) => avatar.updateComplete));
+async function readyAvatars(chip: HTMLElement) {
+  flush();
   await expect
     .poll(() =>
       [...chip.querySelectorAll<HTMLElement>(".viewer-avatar")].map((a) => a.dataset.avatarState),
@@ -186,7 +187,8 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
     BUILTIN_THEME_IDS.flatMap((theme) =>
       modes.flatMap((mode) =>
         (theme === "claw" ? [2, 3, 5, 12, 13] : [12]).flatMap((ownerCount) =>
-          (theme === "claw"
+          // Run/unread share fixed geometry; retain the avatar pair and widest overflow.
+          (theme === "claw" && (ownerCount === 2 || ownerCount === 13)
             ? ["present", "running", "away", "unread"]
             : ["present", "away"]
           ).flatMap((presence) =>
@@ -201,49 +203,58 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
     "lays out $ownerCount owners: $theme/$mode, $presence, pinned=$pinned",
     async ({ theme, mode, ownerCount, presence, pinned }) => {
       await applyTheme(theme, mode);
-      const { sidebar, row, indicator } = sidebarFixture(pinned);
-      mountSolid(
-        () =>
-          renderSessionLeadingState({
-            session: {
-              ...runningRow("agent:main:shared"),
-              label: "Shared session",
-              renameValue: "Shared session",
-              hasActiveRun: presence === "running",
-              unread: presence === "unread",
-              participants,
-              participantCount: ownerCount - 1,
-            },
-            ownerActor: { ...ada, identity },
-            attribution: "owned",
-            ownerViewing: presence === "away" ? false : undefined,
-          }).leadingIndicator,
-        { container: indicator },
-      );
-      // Contrast is measured at each interaction endpoint, outside its transition.
-      row.style.transition = "none";
-      const chip = sidebar.querySelector("openclaw-session-owner-chip")!;
-      await readyAvatars(chip);
-      const stack = chip.querySelector<HTMLElement>(".session-owner-stack")!;
-      const primary = chip.querySelector<HTMLElement>(".session-owner-stack__front")!;
-      const peer = chip.querySelector<HTMLElement>(
-        ownerCount === 2
-          ? ".session-owner-stack__back .viewer-avatar"
-          : ".session-owner-stack__overflow",
-      )!;
-      expect(primary.getAttribute("aria-label")).toBe("Owned by Ada");
-      expect(primary.textContent?.trim()).toBe("A");
-      expect(stack.getAttribute("aria-label")).toBe(
-        ownerCount === 2 ? "Owned by Ada · with Bob" : `Owned by Ada · +${ownerCount - 1} more`,
-      );
-      for (const state of ["idle", "hover", "active", "selected"]) {
-        if (state === "hover") {
-          await userEvent.hover(row, { force: true });
-        } else if (state === "idle" || state === "active") {
-          await userEvent.unhover(row, { force: true });
-        }
+      const { sidebar, row: rowTemplate } = sidebarFixture(pinned);
+      const rows = ["idle", "hover", "active", "selected"].map((state) => {
+        const row = rowTemplate.cloneNode(true) as HTMLElement;
+        rowTemplate.before(row);
+        // Measure each interaction endpoint outside its transition.
+        row.style.transition = "none";
         row.classList.toggle("sidebar-recent-session--active", state === "active");
         row.classList.toggle("sidebar-recent-session--selected", state === "selected");
+        const [ownerViewing, setOwnerViewing] = createSignal<boolean | undefined>(
+          presence === "away" ? false : undefined,
+        );
+        mountSolid(
+          () =>
+            renderSessionLeadingState({
+              session: {
+                ...runningRow("agent:main:shared"),
+                label: "Shared session",
+                renameValue: "Shared session",
+                hasActiveRun: presence === "running",
+                unread: presence === "unread",
+                participants,
+                participantCount: ownerCount - 1,
+              },
+              ownerActor: { ...ada, identity },
+              attribution: "owned",
+              get ownerViewing() {
+                return ownerViewing();
+              },
+            }).leadingIndicator,
+          { container: row.querySelector<HTMLElement>(".sidebar-session-indicator")! },
+        );
+        const chip = row.querySelector<HTMLElement>("openclaw-session-owner-chip")!;
+        const stack = chip.querySelector<HTMLElement>(".session-owner-stack")!;
+        const primary = chip.querySelector<HTMLElement>(".session-owner-stack__front")!;
+        const peer = chip.querySelector<HTMLElement>(
+          ownerCount === 2
+            ? ".session-owner-stack__back .viewer-avatar"
+            : ".session-owner-stack__overflow",
+        )!;
+        return { state, row, stack, primary, peer, setOwnerViewing };
+      });
+      rowTemplate.remove();
+      await readyAvatars(sidebar);
+      await userEvent.hover(rows[1]!.row, { force: true });
+      // One real browser capture contains all four states; sample each counter's pixels below.
+      const capture = ownerCount > 2 && presence !== "away" ? await captureFace(sidebar) : null;
+      for (const { state, row, stack, primary, peer } of rows) {
+        expect(primary.getAttribute("aria-label")).toBe("Owned by Ada");
+        expect(primary.textContent?.trim()).toBe("A");
+        expect(stack.getAttribute("aria-label")).toBe(
+          ownerCount === 2 ? "Owned by Ada · with Bob" : `Owned by Ada · +${ownerCount - 1} more`,
+        );
         expect(row.matches(":hover")).toBe(state === "hover");
         if (
           theme === "claw" &&
@@ -257,34 +268,31 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
         }
         const peerBounds = peer.getBoundingClientRect();
         const stackBounds = stack.getBoundingClientRect();
-        expect(stackBounds).toMatchObject({ width: 28, height: 20 });
+        expect(stackBounds.width).toBeGreaterThan(primary.getBoundingClientRect().width);
         const leftToRight = ownerCount === 2 ? [peer, primary] : [primary, peer];
         for (const [index, face] of leftToRight.entries()) {
           expect(face.getBoundingClientRect()).toMatchObject({
             width: 18,
             height: 18,
             top: stackBounds.top + 1,
-            left: stackBounds.left + index * 10,
+            left: stackBounds.left + index * (stackBounds.width - 18),
           });
         }
-        expect(getComputedStyle(primary).fontSize).toBe(getComputedStyle(peer).fontSize);
         expect(dimensions(primary.querySelector(".viewer-avatar > span")!)).toEqual([16, 16]);
-        const primaryStyle = appearance(primary),
-          peerStyle = appearance(peer);
+        const primaryStyle = getComputedStyle(primary),
+          peerStyle = getComputedStyle(peer);
         const opacity = presence === "away" ? "0.45" : "1";
-        expect([primaryStyle.opacity, peerStyle.opacity]).toEqual([
-          opacity,
-          ownerCount > 2 ? opacity : "1",
-        ]);
-        if (ownerCount > 2) {
-          expect(peerStyle.filter).toBe(primaryStyle.filter);
-        }
+        expect(primaryStyle.fontSize).toBe(peerStyle.fontSize);
+        expect(primaryStyle.opacity).toBe(opacity);
+        expect(peerStyle.opacity).toBe(ownerCount > 2 ? opacity : "1");
         if (presence === "running") {
           const traceBounds = row.querySelector(".session-glyph__trace")!.getBoundingClientRect();
-          expect(traceBounds).toMatchObject({
-            left: stackBounds.left - 2,
-            right: stackBounds.right + 2,
-          });
+          expect(traceBounds.left).toBeLessThan(stackBounds.left);
+          expect(traceBounds.right).toBeGreaterThan(stackBounds.right);
+          expect(traceBounds.left + traceBounds.width / 2).toBeCloseTo(
+            stackBounds.left + stackBounds.width / 2,
+            3,
+          );
         }
         if (presence === "unread") {
           const badge = row.querySelector(".session-glyph__badge--unread")!;
@@ -313,8 +321,7 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
             peer.contains(document.elementFromPoint(x, textBounds.top + textBounds.height / 2)),
           ).toBe(true);
         }
-        const style = getComputedStyle(peer);
-        expect(style.borderTopWidth).toBe("1px");
+        expect(peerStyle).toMatchObject({ borderTopWidth: "1px", filter: primaryStyle.filter });
         if (presence === "away") {
           continue;
         }
@@ -322,8 +329,8 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
           getComputedStyle(sidebar).backgroundColor,
           getComputedStyle(row, "::after").backgroundColor,
         );
-        const counterLuminance = await paintedCounterLuminance(peer);
-        const textLuminance = renderedLuminance(style.color);
+        const counterLuminance = paintedCounterLuminance(peer, capture!);
+        const textLuminance = renderedLuminance(peerStyle.color);
         expect(
           contrastRatio(counterLuminance, rowLuminance),
           `${theme} ${state} surface`,
@@ -333,15 +340,29 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
           `${theme} ${state} text`,
         ).toBeGreaterThanOrEqual(4.5);
       }
+      const { row, primary, peer, setOwnerViewing } = rows[0]!;
+      if (theme === "claw" && presence === "away" && ownerCount <= 3) {
+        await expect.poll(() => getComputedStyle(primary).opacity).toBe("0.45");
+        const foreground = ownerCount === 2 ? primary : peer;
+        const rear = ownerCount === 2 ? peer : primary;
+        const overlapPixels = async () => {
+          const { context, image, bounds } = await captureFace(foreground);
+          const scale = image.width / bounds.width;
+          return [...context.getImageData(3 * scale, 8 * scale, 3 * scale, 3 * scale).data];
+        };
+        const visible = await overlapPixels();
+        rear.style.visibility = "hidden";
+        expect(await overlapPixels()).toEqual(visible);
+        rear.style.visibility = "";
+      }
       if (theme === "claw" && presence === "away" && ownerCount === 3) {
-        chip.viewingNow = true;
-        await chip.updateComplete;
+        setOwnerViewing(true);
+        flush();
         await expect
-          .poll(() => [primary, peer].map(appearance))
-          .toEqual([0, 1].map(() => ({ opacity: "1", filter: "none" })));
+          .poll(() => [primary, peer].map((face) => getComputedStyle(face)))
+          .toMatchObject([0, 1].map(() => ({ opacity: "1", filter: "none" })));
       }
       if (presence === "present") {
-        row.classList.remove("sidebar-recent-session--selected");
         row.style.zoom = "4";
         await expectCenteredInk(ownerCount === 2 ? primary : peer);
       }
@@ -358,12 +379,15 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
     "centers a single $size initial in $mode with profile=$profile",
     async ({ mode, size, profile }) => {
       await applyTheme("claw", mode);
-      const chip = document.createElement("openclaw-session-owner-chip");
-      chip.owner = profile ? { ...ada, identity } : ada;
-      chip.participants = participants;
-      chip.participantCount = 0;
-      chip.size = size;
-      document.body.append(chip);
+      const view = mountSolid(() => (
+        <SessionOwnerChip
+          owner={profile ? { ...ada, identity } : ada}
+          participants={participants}
+          participantCount={0}
+          size={size}
+        />
+      ));
+      const chip = view.container.querySelector<HTMLElement>("openclaw-session-owner-chip")!;
       await readyAvatars(chip);
       const owner = chip.querySelector<HTMLElement>(".session-owner-chip")!;
       if (size === "row") {

@@ -79,8 +79,19 @@ function expectBundle(
   expect(decodedSkillLibraryFiles(read.files)).toEqual(decodedSkillLibraryFiles(bundle.files!));
 }
 
-const waitRun = (client: SkillLibraryWireClient, runId: string, timeoutMs = PROOF_TIMEOUT_MS) =>
-  client.request<{ status: string }>("agent.wait", { runId, timeoutMs }, timeoutMs + 5_000);
+const waitRun = (client: SkillLibraryWireClient, runId: string) => {
+  const deadline = Date.now() + PROOF_TIMEOUT_MS;
+  return waitFor(`skill library run ${runId}`, async () => {
+    const remainingMs = Math.max(0, deadline - Date.now());
+    const observation = await client.request<{ status: string }>(
+      "agent.wait",
+      { runId, timeoutMs: remainingMs },
+      remainingMs + 5_000,
+    );
+    // Queue admission is observable before the turn has a terminal result.
+    return observation.status === "pending" ? undefined : observation;
+  });
+};
 
 const expectAssistantText = (client: SkillLibraryWireClient, key: string, ...parts: string[]) =>
   vi.waitFor(
@@ -219,13 +230,7 @@ it("pins skill bundles through worker authoring and lifecycle changes", async (c
         marker: string,
         runId: string,
       ) => {
-        const deadline = Date.now() + PROOF_TIMEOUT_MS;
-        const waitResult = await waitFor(`skill library turn ${marker}`, async () => {
-          const remainingMs = Math.max(0, deadline - Date.now());
-          const observation = await waitRun(client, runId, remainingMs);
-          // Queue admission is observable before the turn has a terminal result.
-          return observation.status === "pending" ? undefined : observation;
-        });
+        const waitResult = await waitRun(client, runId);
         expect(waitResult, waitMessage(waitResult, key, marker)).toMatchObject({
           status: "ok",
         });
@@ -387,9 +392,9 @@ it("pins skill bundles through worker authoring and lifecycle changes", async (c
       });
       await settlement.wait(admin, remoteKey, signal);
       const authorOutput = provider.authorOutputs.get("bob-worker");
-      expect(authorOutput?.describedId).toEqual(expect.stringContaining("skill_workshop"));
+      expect(authorOutput?.describedId).toEqual(expect.stringContaining("skill_library"));
       if (!authorOutput?.created || !authorOutput.read || !authorOutput.updated) {
-        throw new Error("Worker did not return real Workshop create, read and update results");
+        throw new Error("Worker did not return real skill_library create, read and update results");
       }
       const created = JSON.parse(authorOutput.created) as SkillsLibraryReceipt;
       const authored = JSON.parse(authorOutput.updated) as SkillsLibraryReceipt;

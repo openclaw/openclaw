@@ -56,12 +56,17 @@ describe("resolveGeneratedMediaMaxBytes", () => {
     expect(resolveGeneratedMediaMaxBytes(undefined, kind)).toBe(expected);
   });
 
-  it.each([
-    { label: "zero", value: 0 },
-    { label: "NaN", value: Number.NaN },
-  ])("uses the per-kind default for $label mediaMaxMb", ({ value }) => {
-    expect(resolveGeneratedMediaMaxBytes(configWithMediaMaxMb(value), "image")).toBe(6 * MB);
-  });
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 0, -1])(
+    "keeps per-kind caps and the image download bound for invalid mediaMaxMb %s",
+    (mediaMaxMb) => {
+      const cfg = configWithMediaMaxMb(mediaMaxMb);
+
+      expect(resolveGeneratedMediaMaxBytes(cfg, "image")).toBe(6 * MB);
+      expect(resolveGeneratedMediaMaxBytes(cfg, "audio")).toBe(16 * MB);
+      expect(resolveGeneratedMediaMaxBytes(cfg, "video")).toBe(16 * MB);
+      expect(resolveGeneratedImageDownloadMaxBytes(cfg)).toBe(64 * MB);
+    },
+  );
 
   it("floors fractional configured megabytes to whole bytes", () => {
     const mediaMaxMb = 1.000_001;

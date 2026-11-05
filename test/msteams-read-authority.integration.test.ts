@@ -5,10 +5,8 @@ import { msteamsPlugin } from "../extensions/msteams/api.js";
 import { createOperationalRunInstanceRef } from "../src/agents/admitted-run-context.js";
 import { wrapToolWithGatewayCallerIdentity } from "../src/agents/tools/gateway-caller-context.js";
 import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
-import type {
-  ChannelMessageActionContext,
-  ChannelMessageActionName,
-} from "../src/channels/plugins/types.js";
+import type { ChannelMessageActionName } from "../src/channels/plugins/message-action-names.js";
+import type { ChannelMessageActionContext } from "../src/channels/plugins/types.core.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
 import type { OpenClawConfig } from "../src/config/types.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";

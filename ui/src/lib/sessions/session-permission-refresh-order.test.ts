@@ -1,24 +1,16 @@
 // @vitest-environment node
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import {
-  createSessionCapabilityHarness,
-  sessionsResult,
-} from "./session-capability.test-support.ts";
+import { sessionsResult } from "./session-capability.test-support.ts";
+import { sessionRpcHarness, patchReceipt } from "./session-rpc.test-support.ts";
 
 function row(key: string, sessionId: string): GatewaySessionRow {
   return { key, kind: "direct", sessionId, updatedAt: 1, permissionMode: "guarded" };
 }
 
 function acknowledgment(key: string, sessionId: string) {
-  return {
-    ok: true,
-    path: "(sessions)",
-    key,
-    entry: { sessionId, updatedAt: 2, permissionMode: "workspace" },
-  };
+  return patchReceipt(key, { sessionId, updatedAt: 2, permissionMode: "workspace" });
 }
 
 function harness(
@@ -27,20 +19,17 @@ function harness(
   list: (call: number) => Promise<SessionsListResult>,
 ) {
   let listCalls = 0;
-  const request = vi.fn(async (method: string) => {
-    if (method === "sessions.patch") {
+  const patchRequested = createDeferred();
+  const capability = sessionRpcHarness({
+    "sessions.patch": () => {
+      patchRequested.resolve();
       return patchReply;
-    }
-    if (method !== "sessions.list") {
-      throw new Error(`Unexpected request: ${method}`);
-    }
-    return ++listCalls === 1 ? initial : list(listCalls);
+    },
+    "sessions.list": () => (++listCalls === 1 ? initial : list(listCalls)),
   });
-  const capability = createSessionCapabilityHarness(
-    request as unknown as GatewayBrowserClient["request"],
-  );
   return {
     ...capability,
+    patchRequested: patchRequested.promise,
     calls: () => listCalls,
     mode: () => capability.sessions.state.result?.sessions[0]?.permissionMode,
     message: (
@@ -53,10 +42,8 @@ function harness(
         type: "event",
         event: "session.message",
         payload: {
-          key,
+          ...row(key, sessionId),
           sessionKey: key,
-          kind: "direct",
-          sessionId,
           updatedAt,
           permissionMode,
           archived: false,
@@ -75,11 +62,16 @@ it.each(["workspace", "full", "failure"] as const)(
     const initial = sessionsResult([row(key, sessionId)], 1);
     const read = createDeferred<SessionsListResult>();
     const reply = createDeferred<unknown>();
-    const { sessions, calls, message, mode } = harness(initial, reply.promise, () => read.promise);
+    const { sessions, calls, message, mode, patchRequested } = harness(
+      initial,
+      reply.promise,
+      () => read.promise,
+    );
     let patch: ReturnType<typeof sessions.patch> | undefined;
     try {
       await sessions.refresh({ force: true });
       patch = sessions.patch(key, { permissionMode: "workspace" });
+      await patchRequested;
       message(key, sessionId, 2);
       reply.resolve(acknowledgment(key, sessionId));
       await vi.waitFor(() => expect(calls()).toBe(2));

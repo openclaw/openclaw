@@ -1,21 +1,29 @@
-import { registerListener } from "../../../../src/shared/listeners.js";
-
 export type ChatErrorState = ReturnType<typeof createChatErrorState>;
 
 export function createChatErrorState() {
-  let lastError: { message: string | null } = { message: null };
-  let chatError: { message: string | null } = { message: null };
-  const listeners = new Set<() => void>();
+  let lastError: { message: string | null; detail?: unknown } = { message: null };
+  let chatError: { message: string | null; detail?: unknown } = { message: null };
+  let render: (() => void) | undefined;
   const publish = () => {
-    for (const listener of listeners) {
-      listener();
-    }
+    render?.();
   };
   return {
-    readErrors: () => ({ lastError: lastError.message, chatError: chatError.message }),
-    subscribeErrors: (listener: () => void) => registerListener(listeners, listener),
+    readErrors: () => ({
+      lastError: lastError.message,
+      lastErrorDetail: lastError.detail,
+      chatError: chatError.message,
+    }),
+    subscribeErrors(listener: () => void) {
+      render = listener;
+      return () => {
+        render = undefined;
+      };
+    },
     get lastError() {
       return lastError.message;
+    },
+    get lastErrorDetail() {
+      return lastError.detail;
     },
     set lastError(message: string | null) {
       lastError = { message };
@@ -28,8 +36,8 @@ export function createChatErrorState() {
       chatError = { message };
       publish();
     },
-    setRecoverableChatError(message: string): () => void {
-      const error = { message };
+    setRecoverableChatError(message: string, detail?: unknown): () => void {
+      const error = { message, detail };
       lastError = chatError = error;
       publish();
       return () => {

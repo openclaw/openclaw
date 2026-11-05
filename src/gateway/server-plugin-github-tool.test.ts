@@ -38,7 +38,7 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
 import { createControlUiRequestOptions } from "./server-methods/control-ui-request.test-support.js";
-import { createControlUiHandlers } from "./server-methods/control-ui.js";
+import { controlUiHandlers } from "./server-methods/control-ui.js";
 import type { RespondFn } from "./server-methods/types.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
 import {
@@ -589,7 +589,7 @@ describe("GitHub agent reader", () => {
     const respond = vi.fn<RespondFn>();
     const config = fixture.config;
     await expectDefined(
-      createControlUiHandlers()["controlUi.githubDetail"],
+      controlUiHandlers["controlUi.githubDetail"],
       "UI reader",
     )(
       createControlUiRequestOptions(() => config)(

@@ -1,4 +1,5 @@
 import {
+  createServer as createHttpServer,
   request as httpRequest,
   ServerResponse,
   type ClientRequest,
@@ -46,7 +47,7 @@ export function sendHttpRefusal(res: ServerResponse, status = 502, body = REFUSA
   res.end(body);
 }
 
-export function handleUpgradeRequest(
+function handleUpgradeRequest(
   handler: RequestHandler,
   request: IncomingMessage,
   head: Buffer,
@@ -108,6 +109,12 @@ export function handleUpgradeRequest(
   handler(request, response, { stream, stopBuffering });
 }
 
+export function createRequestServer(handleRequest: RequestHandler) {
+  return createHttpServer(handleRequest).on("upgrade", (request, _socket, head) =>
+    handleUpgradeRequest(handleRequest, request, head),
+  );
+}
+
 /** Forwards one authorized request, retaining ownership across a WebSocket upgrade. */
 type ForwardRequest = {
   request: IncomingMessage;
@@ -118,6 +125,7 @@ type ForwardRequest = {
   host: string;
   substituted: boolean;
   upstreamTlsAgent: HttpsAgent;
+  upstreamHttpAgent?: HttpsAgent;
   isActive: () => boolean;
   ownResource: <T extends Readable | Writable>(resource: T) => T;
   releaseResponse: () => void;
@@ -158,7 +166,7 @@ function sendSecretEgressRequest(
         path: `${target.pathname}${target.search}`,
         method: forward.request.method,
         headers,
-        agent: secure ? forward.upstreamTlsAgent : false,
+        agent: secure ? forward.upstreamTlsAgent : (forward.upstreamHttpAgent ?? false),
       },
       (upstreamResponse) => {
         forward.ownResource(upstreamResponse);

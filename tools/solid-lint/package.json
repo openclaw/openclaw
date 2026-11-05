@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "eslint": "10.12.0",
+    "eslint": "10.13.0",
     "eslint-plugin-solid": "0.18.1",
     "typescript": "6.0.3"
   }

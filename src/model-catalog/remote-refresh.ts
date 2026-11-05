@@ -159,9 +159,7 @@ export async function refreshRemoteModelCatalog(params: {
       if (!guarded.response.ok) {
         throw new Error(`remote catalog request failed: HTTP ${guarded.response.status}`);
       }
-      const body = await readResponseWithLimit(guarded.response, REMOTE_MODEL_CATALOG_MAX_BYTES, {
-        chunkTimeoutMs: REMOTE_MODEL_CATALOG_TIMEOUT_MS,
-      });
+      const body = await readResponseWithLimit(guarded.response, REMOTE_MODEL_CATALOG_MAX_BYTES);
       const bundle = parseRemoteModelCatalogWireBundle(
         JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body)),
       );

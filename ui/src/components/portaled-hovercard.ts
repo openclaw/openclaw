@@ -24,11 +24,7 @@ export function createPortaledHovercardOwner(
   let positionCard: (() => void) | null = null;
   let triggerElement: HTMLElement | null = null;
   let triggerAncestors: Node[] = [];
-  const presentationObserver = new MutationObserver(() => {
-    if (checkPresentation()) {
-      observePresentation();
-    }
-  });
+  let presentationObserver: MutationObserver | undefined;
   let unmountCardContents: (() => void) | null = null;
   const handleCardPointerEnter = (event: PointerEvent) => {
     if (event.currentTarget === portal.card) {
@@ -81,6 +77,11 @@ export function createPortaledHovercardOwner(
     ) {
       return;
     }
+    presentationObserver ??= new MutationObserver(() => {
+      if (checkPresentation()) {
+        observePresentation();
+      }
+    });
     presentationObserver.disconnect();
     triggerAncestors = ancestors;
     // Only the active trigger's ancestry: retained panes can retire without removal,
@@ -217,11 +218,11 @@ export function createPortaledHovercardOwner(
       );
     },
 
-    schedulePointerExit(bridgeMs = 220): void {
+    schedulePointerExit(): void {
       portal.pointerInside = false;
       // Portaled cards can be viewport-clamped diagonally from their trigger, so
       // exit coordinates cannot reliably tell whether the pointer is crossing the gap.
-      portal.scheduleClose(bridgeMs);
+      portal.scheduleClose(220);
     },
 
     focusables(): HTMLElement[] {
@@ -397,7 +398,7 @@ export function createPortaledHovercardOwner(
     },
 
     reset(exitDurationMs = 0): void {
-      presentationObserver.disconnect();
+      presentationObserver?.disconnect();
       triggerAncestors = [];
       if (openTimer !== null) {
         window.clearTimeout(openTimer);

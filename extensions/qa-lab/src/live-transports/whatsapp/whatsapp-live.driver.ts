@@ -5,7 +5,10 @@ import {
 } from "@openclaw/whatsapp/api.js";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
-import type { WhatsAppQaMessageScenarioContext } from "./whatsapp-live.contracts.js";
+import type {
+  WhatsAppQaMessageScenarioContext,
+  WhatsAppQaResolvedScenarioTarget,
+} from "./whatsapp-live.contracts.js";
 import {
   isWhatsAppScenarioSutMessage,
   waitForScenarioObservedMessage,
@@ -14,31 +17,6 @@ import {
 export const WHATSAPP_QA_TRANSIENT_DRIVER_ATTEMPTS = 5;
 const WHATSAPP_QA_DRIVER_RECONNECT_DELAY_MS = 10_000;
 
-type WhatsAppQaNoReplyTarget =
-  | {
-      target: "dm";
-    }
-  | {
-      groupJid: string;
-      target: "group";
-    };
-
-export function resolveWhatsAppQaNoReplyTarget(params: {
-  groupJid?: string;
-  target: "dm" | "group";
-}): WhatsAppQaNoReplyTarget {
-  if (params.target === "dm") {
-    return { target: "dm" };
-  }
-  if (!params.groupJid) {
-    throw new Error("WhatsApp group no-reply assertion requires groupJid.");
-  }
-  return {
-    groupJid: params.groupJid,
-    target: "group",
-  };
-}
-
 export async function waitForNoWhatsAppReply(
   params: {
     allowQuietWindowMessage?: (message: WhatsAppQaDriverObservedMessage) => boolean;
@@ -46,11 +24,9 @@ export async function waitForNoWhatsAppReply(
     observedAfter: Date;
     sutPhoneE164: string;
     windowMs: number;
-  } & WhatsAppQaNoReplyTarget,
+  } & WhatsAppQaResolvedScenarioTarget,
 ) {
-  await new Promise((resolve) => {
-    setTimeout(resolve, params.windowMs);
-  });
+  await sleep(params.windowMs);
   const observedAfterMs = params.observedAfter.getTime();
   const unexpectedReply = params.driver.getObservedMessages().find((message) => {
     if (new Date(message.observedAt).getTime() <= observedAfterMs) {
@@ -80,7 +56,6 @@ export async function waitForDistinctWhatsAppSutMessages(
     initialMessages?: WhatsAppQaDriverObservedMessage[];
     matchers: Array<(message: WhatsAppQaDriverObservedMessage) => boolean>;
     observedAfter: Date;
-    timeoutMs?: number;
   },
 ) {
   const matched = new Map<number, WhatsAppQaDriverObservedMessage>();
@@ -122,7 +97,7 @@ export async function waitForDistinctWhatsAppSutMessages(
   while (matched.size < params.matchers.length) {
     const next = await waitForScenarioObservedMessage(context, {
       observedAfter: params.observedAfter,
-      timeoutMs: params.timeoutMs,
+      timeoutMs: 60_000,
       match: (message) => {
         const key = messageKey(message);
         return (

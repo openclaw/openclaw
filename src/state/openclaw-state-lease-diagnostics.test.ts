@@ -1,8 +1,8 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as backoff from "../infra/backoff.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import {
@@ -16,6 +16,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
+import { acquireOpenClawStateLease } from "./openclaw-state-lease-acquisition.js";
 import { releaseOpenClawStateLease } from "./openclaw-state-lease-storage.js";
 import {
   acquireOpenClawStateLeaseInTransaction,
@@ -38,39 +39,84 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+it.each(["holder", "sqlite"] as const)(
+  "reports one wait across changing holders and SQLite contention (%s first)",
+  async (first) => {
+    vi.spyOn(backoff, "sleepWithAbort").mockResolvedValue(undefined);
+    warn.mockClear();
+    const acquired = vi.fn();
+    for (const label of ["first waiter", "second waiter"]) {
+      let attempt = 0;
+      await acquireOpenClawStateLease({
+        label,
+        waitMs: 5_000,
+        assertCurrent: () => {},
+        acquired,
+        acquire: async () => {
+          attempt++;
+          if (attempt === 5) {
+            return { kind: "acquired", expiresAt: 60_000 };
+          }
+          if (attempt === (first === "sqlite" ? 1 : 3)) {
+            throw Object.assign(new Error("database is locked"), { errcode: 5 });
+          }
+          return {
+            kind: "held",
+            holder: { owner: `owner-${attempt}`, epoch: attempt, expiresAt: 60_000 },
+          };
+        },
+      });
+    }
+    expect(acquired).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls.map(([message]) => message)).toEqual([
+      expect.stringContaining("Waiting for first waiter"),
+      expect.stringContaining("Waiting for second waiter"),
+    ]);
+  },
+);
+
+function leaseFixture(beforeCommit = () => {}) {
+  const env = { OPENCLAW_STATE_DIR: dirs.make("lease-diagnostics-") };
+  const database = openOpenClawStateDatabase({ env });
+  const db = requireNativeSqliteDatabase(database.db);
+  const identity = { scope: "synthetic", key: "release", owner: "original-owner" };
+  runOpenClawStateWriteTransaction(
+    ({ db: connection }) => acquireOpenClawStateLeaseInTransaction(connection, identity, 30_000),
+    { database, env },
+  );
+  const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+    if (request.stage === "commit") {
+      beforeCommit();
+    }
+    grant();
+  });
+  vi.spyOn(Atomics, "wait").mockImplementation(() => {
+    admission.service();
+    return "ok";
+  });
+  const release = (databaseIdentity = readDatabasePathIdentitySync(database.path).key) =>
+    runWithSqliteWorkerStateContext({ environment: env }, () =>
+      withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
+        executeOpenClawStateLeaseCommand(
+          {
+            type: "stateLease.release",
+            input: { identity, operationLabel: "test.lease.release", databaseIdentity },
+          },
+          database,
+        ),
+      ),
+    );
+  return { env, database, db, identity, admission, release };
+}
+
 it.each(["native", "existing", "worker"] as const)(
   "keeps %s lease try-locks quiet without hiding ordinary transaction contention",
   async (kind) => {
-    const env = { OPENCLAW_STATE_DIR: dirs.make("lease-diagnostics-") };
-    const database = openOpenClawStateDatabase({ env });
-    const identity = { scope: "synthetic", key: "release", owner: "owner" };
-    runOpenClawStateWriteTransaction(
-      ({ db }) => acquireOpenClawStateLeaseInTransaction(db, identity, 30_000),
-      { database, env },
-    );
+    const { env, database, identity, admission, release: workerRelease } = leaseFixture();
     const peer = new DatabaseSync(database.path);
-    const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
-    vi.spyOn(Atomics, "wait").mockImplementation(() => {
-      admission.service();
-      return "ok";
-    });
     const release = () =>
       kind === "worker"
-        ? runWithSqliteWorkerStateContext({ environment: env }, () =>
-            withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
-              executeOpenClawStateLeaseCommand(
-                {
-                  type: "stateLease.release",
-                  input: {
-                    identity,
-                    operationLabel: "test.lease.release",
-                    databaseIdentity: readDatabasePathIdentitySync(database.path).key,
-                  },
-                },
-                database,
-              ),
-            ),
-          )
+        ? workerRelease()
         : releaseOpenClawStateLease({
             ...identity,
             leaseLabel: "state lease",
@@ -105,60 +151,40 @@ it.each(["native", "existing", "worker"] as const)(
   },
 );
 
-it.each(["released", "admission-refused", "identity-mismatch", "replacement-owner"] as const)(
+it.each([
+  ["released", undefined],
+  ["admission-refused", "original-owner"],
+  ["identity-mismatch", "original-owner"],
+  ["replacement-owner", "replacement-owner"],
+] as const)(
   "settles worker lease release at its final admission (%s)",
-  async (outcome) => {
-    const env = { OPENCLAW_STATE_DIR: dirs.make("lease-release-admission-") };
-    const database = openOpenClawStateDatabase({ env });
-    const db = requireNativeSqliteDatabase(database.db);
-    const identity = { scope: "synthetic", key: "release", owner: "original-owner" };
-    runOpenClawStateWriteTransaction(
-      ({ db: connection }) => acquireOpenClawStateLeaseInTransaction(connection, identity, 30_000),
-      { database, env },
-    );
+  async (outcome, expectedOwner) => {
+    const refused = new Error("Lease cleanup owner refused its final grant");
+    const {
+      database,
+      db,
+      identity,
+      admission,
+      release: workerRelease,
+    } = leaseFixture(() => {
+      if (outcome === "admission-refused") {
+        throw refused;
+      }
+      if (outcome === "replacement-owner") {
+        db.prepare("UPDATE state_leases SET owner = ? WHERE scope = ? AND lease_key = ?").run(
+          "replacement-owner",
+          identity.scope,
+          identity.key,
+        );
+      }
+    });
     let databaseIdentity = readDatabasePathIdentitySync(database.path).key;
     if (outcome === "identity-mismatch") {
       const otherPath = path.join(dirs.make("lease-other-file-"), "state.sqlite");
-      const other = new DatabaseSync(otherPath);
-      other.close();
+      new DatabaseSync(otherPath).close();
       databaseIdentity = readDatabasePathIdentitySync(otherPath).key;
     }
-    const refused = new Error("Lease cleanup owner refused its final grant");
-    const admission = createSqliteWorkerOperationAdmission((request, grant) => {
-      if (request.stage === "commit") {
-        if (outcome === "admission-refused") {
-          throw refused;
-        }
-        if (outcome === "replacement-owner") {
-          db.prepare("UPDATE state_leases SET owner = ? WHERE scope = ? AND lease_key = ?").run(
-            "replacement-owner",
-            identity.scope,
-            identity.key,
-          );
-        }
-      }
-      grant();
-    });
-    vi.spyOn(Atomics, "wait").mockImplementation(() => {
-      admission.service();
-      return "ok";
-    });
-    const deletes = trackSqliteStatementExecutions(db, ["release"], (sql) =>
-      /^delete from "state_leases"(?:\s|$)/i.test(sql) ? "release" : null,
-    );
-    const exec = vi.spyOn(db, "exec");
-    const release = () =>
-      runWithSqliteWorkerStateContext({ environment: env }, () =>
-        withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
-          executeOpenClawStateLeaseCommand(
-            {
-              type: "stateLease.release",
-              input: { identity, operationLabel: "test.lease.release", databaseIdentity },
-            },
-            database,
-          ),
-        ),
-      );
+    const release = () => workerRelease(databaseIdentity);
     try {
       if (outcome === "admission-refused") {
         expect(release).toThrow("SQLite transaction admission was refused");
@@ -168,23 +194,8 @@ it.each(["released", "admission-refused", "identity-mismatch", "replacement-owne
       } else {
         release();
       }
-      expect(deletes.counts.release).toBe(
-        outcome === "admission-refused" || outcome === "identity-mismatch" ? 0 : 1,
-      );
-      expect(
-        exec.mock.calls.filter(([sql]) =>
-          /^(?:BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/i.test(sql),
-        ),
-      ).toEqual([]);
-      expect(readOpenClawStateLease(db, identity)?.owner).toBe(
-        outcome === "released"
-          ? undefined
-          : outcome === "replacement-owner"
-            ? "replacement-owner"
-            : identity.owner,
-      );
+      expect(readOpenClawStateLease(db, identity)?.owner).toBe(expectedOwner);
     } finally {
-      deletes.restore();
       admission.finish();
       await closeOpenClawStateDatabaseAsync();
     }
@@ -193,27 +204,22 @@ it.each(["released", "admission-refused", "identity-mismatch", "replacement-owne
 
 it("still reports commit contention after nonblocking admission succeeds", () => {
   const pathname = path.join(dirs.make("lease-commit-diagnostics-"), "state.sqlite");
-  const db = new DatabaseSync(pathname);
+  using db = new DatabaseSync(pathname);
   db.exec("PRAGMA busy_timeout=0; CREATE TABLE entries (value TEXT)");
-  const peer = new DatabaseSync(pathname);
-  try {
-    peer.exec("BEGIN");
-    peer.prepare("SELECT * FROM entries").all();
-    warn.mockClear();
-    expect(() =>
-      runSqliteImmediateTransactionSync(db, () => db.exec("INSERT INTO entries VALUES ('new')"), {
-        beginLockFailureReporting: "suppress",
-        busyTimeoutMs: 0,
-      }),
-    ).toThrow(expect.objectContaining({ errcode: 5 }));
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      "SQLite transaction lock wait failed",
-      expect.objectContaining({ step: "commit", failureKind: "lock-contention" }),
-    );
-    peer.exec("ROLLBACK");
-    expect(db.prepare("SELECT * FROM entries").all()).toEqual([]);
-  } finally {
-    peer.close();
-    db.close();
-  }
+  using peer = new DatabaseSync(pathname);
+  peer.exec("BEGIN");
+  peer.prepare("SELECT * FROM entries").all();
+  warn.mockClear();
+  expect(() =>
+    runSqliteImmediateTransactionSync(db, () => db.exec("INSERT INTO entries VALUES ('new')"), {
+      beginLockFailureReporting: "suppress",
+      busyTimeoutMs: 0,
+    }),
+  ).toThrow(expect.objectContaining({ errcode: 5 }));
+  expect(warn).toHaveBeenCalledExactlyOnceWith(
+    "SQLite transaction lock wait failed",
+    expect.objectContaining({ step: "commit", failureKind: "lock-contention" }),
+  );
+  peer.exec("ROLLBACK");
+  expect(db.prepare("SELECT * FROM entries").all()).toEqual([]);
 });

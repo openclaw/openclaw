@@ -1,14 +1,21 @@
-import { dynamic } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
-import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
+import {
+  createDeferred,
+  createMemo,
+  Errored,
+  For,
+  isPending,
+  latest,
+  Loading,
+  Show,
+} from "solid-js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { AgentRowChip } from "../../components/agent-row-chip.tsx";
+import { IpLocation } from "../../components/ip-location.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
-import "../../components/ip-location.tsx";
-import "../../components/viewer-facepile.ts";
-import { formatRelativeTimestamp, formatTimeAgo } from "../../lib/format.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import "../../components/solid/viewer-facepile.tsx";
+import { formatTimeAgo } from "../../lib/format.ts";
 import {
   groupPresenceConnections,
   presenceConnectionDescriptions,
@@ -19,36 +26,19 @@ import {
   presenceViewerLabel,
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
-import { useApplication } from "../../lib/reactive/context.ts";
-import { projectAgents, projectAgentIdentity } from "../../lib/reactive/domain-capabilities.ts";
-import { getLocale, t } from "../../lib/reactive/i18n.ts";
-import { resolveSessionDisplayName } from "../../lib/session-display.ts";
-import {
-  isSessionKeyAddressable,
-  resolveSessionNavigationAgentId,
-  resolveSessionPreferredFace,
-  sessionNavigationTarget,
-} from "../../lib/sessions/route-navigation.ts";
-import {
-  isUiGlobalScopeConfigured,
-  parseAgentSessionKey,
-  resolveUiConfiguredMainKey,
-  scopedSessionArtifactKey,
-} from "../../lib/sessions/session-key.ts";
-import { activityRunInspectorHref } from "./run-inspector-model.ts";
-import { ActivitySessionGit } from "./session-activity-git.tsx";
-import { ActivitySessionMedia } from "./session-activity-media.tsx";
+import { registerEnglishCatalog, getLocale, t } from "../../lib/reactive/i18n.ts";
 import { PeopleControl } from "./session-activity-people.tsx";
 import { renderSessionActivityPulse as SessionActivityPulse } from "./session-activity-pulse.tsx";
-import { renderSessionActivitySummary as SessionActivitySummary } from "./session-activity-summary.tsx";
+import { SessionLinkView } from "./session-activity-row.tsx";
 import {
   ACTIVITY_TIME_FILTERS,
   TIME_LABELS,
   projectSessionActivity,
   resolveViewingNow,
-  sessionActivityOwner,
   type SessionActivityFilters,
 } from "./session-activity.ts";
+
+registerEnglishCatalog(registerActivityEnglish);
 
 export type SessionActivityViewProps = {
   expandedAutomationDays: ReadonlySet<string>;
@@ -56,6 +46,7 @@ export type SessionActivityViewProps = {
   presenceViewers: readonly PresenceViewer[];
   presentationRevision?: number;
   result?: SessionsListResult;
+  read?: { promise: Promise<void> };
   loading: boolean;
   retrying: boolean;
   error?: string;
@@ -85,165 +76,6 @@ function dayLabel(timestamp: number | null, now = Date.now()): string {
     month: "long",
     year: "numeric",
   }).format(timestamp);
-}
-
-function SessionLinkView(props: {
-  row: GatewaySessionRow;
-  onSummaryRetry?: (row: GatewaySessionRow) => void;
-  presentationRevision?: number;
-}) {
-  const context = useApplication();
-  const agentId = createMemo(
-    () =>
-      parseAgentSessionKey(props.row.key)?.agentId ??
-      props.row.agentId ??
-      resolveSessionNavigationAgentId(context),
-  );
-  const sessionHost = createMemo(() => ({
-    agentsList: context.agents.state.agentsList,
-    hello: context.gateway.snapshot.hello,
-  }));
-  const face = createMemo(() => resolveSessionPreferredFace(props.row));
-  const addressable = createMemo(() =>
-    isSessionKeyAddressable(props.row.key, isUiGlobalScopeConfigured(sessionHost())),
-  );
-  const target = createMemo(() =>
-    addressable()
-      ? sessionNavigationTarget({
-          face: face(),
-          sessionKey: props.row.key,
-          fallbackAgentId:
-            props.row.key === "global" ? agentId() : resolveSessionNavigationAgentId(context),
-          basePath: context.basePath,
-          row: props.row,
-          mainKey: resolveUiConfiguredMainKey(sessionHost()),
-        })
-      : null,
-  );
-  const SessionLink = dynamic(() => (target() ? "a" : "div"));
-  const agents = projectAgents(context.agents);
-  const agentIdentity = projectAgentIdentity({
-    identities: context.agentIdentity,
-    get agentId() {
-      return props.row.agentId;
-    },
-  });
-  const owner = createMemo(() =>
-    sessionActivityOwner(props.row, agents.read().agentsList, agentIdentity.read()),
-  );
-  const ownerName = createMemo(() => {
-    getLocale();
-    return presenceViewerLabel(owner());
-  });
-  const activityAt = () => sessionActivityTimestamp(props.row);
-  const relativeTime = createMemo(() => {
-    void props.presentationRevision;
-    getLocale();
-    return formatRelativeTimestamp(activityAt(), { fallback: "" });
-  });
-  const activeObserverRunId = createMemo(() => {
-    const runId = props.row.observerDigest?.runId;
-    return props.row.hasActiveRun === true && runId && props.row.activeRunIds?.includes(runId)
-      ? runId
-      : undefined;
-  });
-  const headline = createMemo(() =>
-    activeObserverRunId() ? props.row.observerDigest?.headline.trim() : "",
-  );
-  const scope = createMemo(() =>
-    props.row.channel ? t("activityFeed.channelLabel", { value: props.row.channel }) : null,
-  );
-  const showAgent = () => props.row.kind !== "global" || Boolean(props.row.agentId);
-  const source = () => (props.row.createdVia === "cron" ? t("activityFeed.automation") : null);
-  return (
-    <div
-      class={[
-        "activity-feed__session-row",
-        { "activity-feed__session-row--link": Boolean(target()) },
-      ]}
-    >
-      <SessionLink
-        class="activity-feed__session"
-        data-activity-session={props.row.key}
-        href={target()?.href ?? undefined}
-        onClick={(event: MouseEvent) => {
-          const destination = target();
-          if (destination && shouldHandleNavigationClick(event)) {
-            event.preventDefault();
-            context.navigate(face(), destination.options);
-          }
-        }}
-      >
-        <span class="activity-feed__session-avatar">
-          {props.row.hasActiveRun === true ? (
-            <span class="activity-feed__presence-dot activity-feed__run-dot" aria-hidden="true" />
-          ) : undefined}
-          <openclaw-viewer-avatar
-            prop:identity={props.row.owner?.actor.identity ?? props.row.createdActor?.identity}
-            prop:user={owner()}
-            prop:markAsViewer={false}
-            variant="footer"
-          />
-        </span>
-        <span class="activity-feed__session-main">
-          <span class="activity-feed__session-title">
-            {resolveSessionDisplayName(props.row.key, props.row)}
-          </span>
-          <span class="activity-feed__session-meta">
-            {headline() ? (
-              <span
-                class="activity-feed__session-headline"
-                data-health={props.row.observerDigest?.health ?? undefined}
-              >
-                {headline()}
-              </span>
-            ) : (
-              <span>{ownerName()}</span>
-            )}
-            {source() ? (
-              <span class="activity-feed__session-source" data-activity-created-via="cron">
-                · {source()}
-                {scope() || showAgent() ? " ·" : ""}
-              </span>
-            ) : undefined}
-            {showAgent() ? (
-              <span class="activity-feed__session-scope">
-                <AgentRowChip agentId={agentId()} />
-              </span>
-            ) : undefined}
-            {scope() ? <span class="activity-feed__session-scope">{scope()}</span> : undefined}
-          </span>
-        </span>
-        <span class="activity-feed__session-time">
-          {headline() ? <span class="activity-feed__session-owner">{ownerName()}</span> : undefined}
-          {activityAt() > 0 ? <span>{relativeTime()}</span> : undefined}
-        </span>
-      </SessionLink>
-      <SessionActivitySummary row={props.row} onRetry={props.onSummaryRetry} />
-      <ActivitySessionGit
-        context={context}
-        sessionKey={scopedSessionArtifactKey(props.row.key, agentId())}
-        agentId={agentId()}
-      />
-      <ActivitySessionMedia
-        context={context}
-        sessionKey={scopedSessionArtifactKey(props.row.key, agentId())}
-        agentId={agentId()}
-        revision={props.row.updatedAt ?? 0}
-        session={props.row}
-      />
-      <Show when={activeObserverRunId()}>
-        {(runId) => (
-          <a
-            class="activity-feed__inspect-run"
-            href={activityRunInspectorHref(runId(), context.basePath)}
-          >
-            {t("activityFeed.inspectRun")}
-          </a>
-        )}
-      </Show>
-    </div>
-  );
 }
 
 function DaySessions(props: {
@@ -400,9 +232,7 @@ function IdentityHeader(props: {
                       .filter(Boolean)
                       .join(" · ")}
                   </span>
-                  {group().entry.ip ? (
-                    <openclaw-ip-location prop:ip={group().entry.ip} />
-                  ) : undefined}
+                  {group().entry.ip ? <IpLocation ip={group().entry.ip} /> : undefined}
                   {group().entry.lastInputSeconds !== undefined ? (
                     <span>
                       {t("activityFeed.lastInput", {
@@ -451,6 +281,9 @@ function renderActivityLoading() {
 }
 
 export function renderSessionActivityView(props: SessionActivityViewProps) {
+  const request = createMemo(() => props.read);
+  // Keep accepted rows and scope changes live while their next read settles.
+  const read = createDeferred(() => request()?.promise);
   const projection = createMemo(() => projectSessionActivity(props.result));
   const onlineById = createMemo(
     () =>
@@ -478,6 +311,20 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
       ? (people().find((person) => person.id === props.filters.personId) ?? identity())
       : null,
   );
+  function feedback(error: string | undefined, pending: boolean) {
+    return (
+      <>
+        <span role={error ? "alert" : "status"} title={error}>
+          {error ?? (props.retrying && pending ? t("common.refreshing") : undefined)}
+        </span>
+        <Show when={Boolean(error || props.retrying)}>
+          <button class="btn btn--sm" disabled={pending} onClick={() => props.onRetry()}>
+            {t("common.retry")}
+          </button>
+        </Show>
+      </>
+    );
+  }
   return (
     <div class="activity-feed">
       <div class="activity-feed__toolbar">
@@ -515,17 +362,28 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
         />
       </div>
       <div class="activity-feed__feedback">
-        <span role={props.error ? "alert" : "status"} title={props.error ?? undefined}>
-          {props.error ?? (props.retrying ? t("common.refreshing") : undefined)}
-        </span>
-        <Show when={Boolean(props.error || props.retrying)}>
-          <button class="btn btn--sm" disabled={props.loading} onClick={() => props.onRetry()}>
-            {t("common.retry")}
-          </button>
-        </Show>
+        <Loading on={request()} fallback={feedback(undefined, true)}>
+          <Errored
+            fallback={(error) => {
+              const failure = error();
+              return feedback(formatUiError(failure), false);
+            }}
+          >
+            {(latest(read), feedback(props.error, props.loading || isPending(read)))}
+          </Errored>
+        </Loading>
       </div>
       <div class="activity-feed__main">
-        {props.loading && !props.result ? renderActivityLoading() : undefined}
+        <Errored fallback={() => null}>
+          <Loading on={request()} fallback={!props.result ? renderActivityLoading() : undefined}>
+            {
+              (latest(read),
+              (props.loading || isPending(read)) && !props.result
+                ? renderActivityLoading()
+                : undefined)
+            }
+          </Loading>
+        </Errored>
         {props.result?.activityPulse ? (
           <SessionActivityPulse
             pulse={props.result.activityPulse}
@@ -557,7 +415,7 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
               <For each={projection().days} keyed={(day) => day.key}>
                 {(day) => (
                   <section class="activity-feed__day">
-                    <h3>{dayLabel(day().timestamp)}</h3>
+                    <h3 class="settings-section__heading">{dayLabel(day().timestamp)}</h3>
                     <div class="activity-feed__sessions">
                       <DaySessions view={props} day={day()} />
                     </div>

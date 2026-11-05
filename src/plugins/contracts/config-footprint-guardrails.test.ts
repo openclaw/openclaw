@@ -1,4 +1,3 @@
-// Config footprint guardrail tests cover forbidden direct plugin config access patterns.
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -70,44 +69,23 @@ describe("config footprint guardrails", () => {
   it("keeps retired legacy paths out of the generated base config schema", () => {
     const basePaths = new Set(collectSchemaPaths(BASE_CONFIG_SCHEMA.schema));
 
-    expect(
-      [
-        "talk.voiceId",
-        "talk.voiceAliases",
-        "talk.modelId",
-        "talk.outputFormat",
-        "talk.apiKey",
-        "talk.providers.*.voiceId",
-        "talk.providers.*.voiceAliases",
-        "talk.providers.*.modelId",
-        "talk.providers.*.outputFormat",
-        "agents.defaults.sandbox.perSession",
-        "hooks.internal.handlers",
-        "channels.telegram.groupMentionsOnly",
-        "channels.telegram.streamMode",
-        "channels.telegram.chunkMode",
-        "channels.telegram.blockStreaming",
-        "channels.telegram.draftChunk",
-        "channels.telegram.blockStreamingCoalesce",
-        "channels.slack.streamMode",
-        "channels.slack.chunkMode",
-        "channels.slack.blockStreaming",
-        "channels.slack.blockStreamingCoalesce",
-        "channels.slack.nativeStreaming",
-        "channels.discord.streamMode",
-        "channels.discord.chunkMode",
-        "channels.discord.blockStreaming",
-        "channels.discord.draftChunk",
-        "channels.discord.blockStreamingCoalesce",
-        "channels.googlechat.streamMode",
-        "channels.slack.channels.*.allow",
-        "channels.slack.accounts.*.channels.*.allow",
-        "channels.googlechat.groups.*.allow",
-        "channels.googlechat.accounts.*.groups.*.allow",
-        "channels.discord.channels.*.allow",
-        "channels.discord.accounts.*.channels.*.allow",
-      ].filter((path) => basePaths.has(path)),
-    ).toStrictEqual([]);
+    const retired = {
+      talk: "voiceId voiceAliases modelId outputFormat apiKey",
+      "talk.providers.*": "voiceId voiceAliases modelId outputFormat",
+      "agents.defaults.sandbox": "perSession",
+      "hooks.internal": "handlers",
+      "channels.telegram":
+        "groupMentionsOnly streamMode chunkMode blockStreaming draftChunk blockStreamingCoalesce",
+      "channels.slack":
+        "streamMode chunkMode blockStreaming blockStreamingCoalesce nativeStreaming channels.*.allow accounts.*.channels.*.allow",
+      "channels.discord":
+        "streamMode chunkMode blockStreaming draftChunk blockStreamingCoalesce channels.*.allow accounts.*.channels.*.allow",
+      "channels.googlechat": "streamMode groups.*.allow accounts.*.groups.*.allow",
+    };
+    const retiredPaths = Object.entries(retired).flatMap(([prefix, fields]) =>
+      fields.split(" ").map((field) => `${prefix}.${field}`),
+    );
+    expect(retiredPaths.filter((path) => basePaths.has(path))).toStrictEqual([]);
   });
 
   it("keeps bundled channel private-network config canonical in generated metadata", () => {
@@ -125,12 +103,8 @@ describe("config footprint guardrails", () => {
   });
 
   it("keeps retired flat streaming aliases out of channel-owned schemas", () => {
-    const telegramSource = readSource("extensions/telegram/src/config-schema.ts");
-    const discordSource = readSource("extensions/discord/src/config-schema.ts");
-    const msTeamsSource = readSource("extensions/msteams/src/config-schema.ts");
-    const slackSource = readSource("extensions/slack/src/config-schema.ts");
-
-    for (const schemaSource of [telegramSource, discordSource, msTeamsSource, slackSource]) {
+    for (const plugin of ["telegram", "discord", "msteams", "slack"]) {
+      const schemaSource = readSource(`extensions/${plugin}/src/config-schema.ts`);
       expect(schemaSource).not.toContain(
         'streamMode: z.enum(["replace", "status_final", "append"])',
       );
@@ -142,11 +116,9 @@ describe("config footprint guardrails", () => {
   it("keeps retired config aliases out of the shared setup input", () => {
     const source = readSource("src/channels/plugins/types.core.ts");
 
-    expect(source).not.toContain("streamMode?:");
-    expect(source).not.toContain("groupMentionsOnly?:");
-    expect(source).not.toContain("perSession?:");
-    expect(source).not.toContain("voiceId?:");
-    expect(source).not.toContain("apiKey?:");
+    for (const field of ["streamMode", "groupMentionsOnly", "perSession", "voiceId", "apiKey"]) {
+      expect(source).not.toContain(`${field}?:`);
+    }
     expect(source).not.toContain("allow?: boolean;");
   });
 

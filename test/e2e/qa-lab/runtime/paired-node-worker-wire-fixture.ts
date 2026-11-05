@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import path from "node:path";
@@ -26,6 +26,7 @@ import {
   NODE_WORKER_NATIVE_INFERENCE_VERSION,
   NODE_WORKER_PROMPT_CONTEXT_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+  NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION,
 } from "../../../../src/infra/node-runner-inventory.js";
 import {
   coerceNodeInvokeInputPayload,
@@ -61,11 +62,17 @@ export type WireGateway = QaGatewayChild;
 type WireGatewayEvent = { event: string; payload?: unknown };
 
 export function createWireWorkspaceSettlementWaiter() {
-  const waiting = new Map<string, { resolve: () => void; refresh: () => Promise<void> }>();
-  const settled = (placement: unknown) =>
+  const waiting = new Map<
+    string,
+    { accept: (placement: unknown) => void; refresh: () => Promise<void> }
+  >();
+  const settled = (placement: unknown, previousManifestRef?: string) =>
     isRecord(placement) &&
     placement.state === "active" &&
-    placement.workspaceResultReconciling !== true;
+    placement.workspaceResultReconciling !== true &&
+    (previousManifestRef === undefined ||
+      (typeof placement.workspaceBaseManifestRef === "string" &&
+        placement.workspaceBaseManifestRef !== previousManifestRef));
   return {
     onEvent: (event: WireGatewayEvent) => {
       if (event.event !== "sessions.changed" || !isRecord(event.payload)) {
@@ -74,8 +81,8 @@ export function createWireWorkspaceSettlementWaiter() {
       const session = event.payload.session;
       const key = event.payload.sessionKey ?? (isRecord(session) ? session.key : undefined);
       if (isRecord(session)) {
-        if (settled(session.placement) && typeof key === "string") {
-          waiting.get(key)?.resolve();
+        if (typeof key === "string") {
+          waiting.get(key)?.accept(session.placement);
         }
       } else {
         // Preparation failures publish a refresh notice instead of a session snapshot.
@@ -89,23 +96,27 @@ export function createWireWorkspaceSettlementWaiter() {
       client: { request<T>(method: string, params: unknown): Promise<T> },
       key: string,
       signal: AbortSignal,
+      previousManifestRef?: string,
     ) {
       const changed = createDeferred();
+      const accept = (placement: unknown) => {
+        if (settled(placement, previousManifestRef)) {
+          changed.resolve();
+        }
+      };
       const refresh = async () => {
         try {
           const current = await client.request<{ session: { placement?: unknown } }>(
             "sessions.describe",
             { key },
           );
-          if (settled(current.session.placement)) {
-            changed.resolve();
-          }
+          accept(current.session.placement);
         } catch (error) {
           changed.reject(error);
         }
       };
       // Register before the current read so fast reconciliation needs no later event.
-      waiting.set(key, { resolve: changed.resolve, refresh });
+      waiting.set(key, { accept, refresh });
       try {
         void refresh();
         await withinTest(changed.promise, signal);
@@ -145,7 +156,11 @@ export async function closeWireServer(server: Server): Promise<void> {
   });
 }
 
-export async function createPublishedWireWorkspace(root: string): Promise<PublishedWireWorkspace> {
+export async function createPublishedWireWorkspace(
+  root: string,
+  files: ReadonlyArray<{ path: string; content: string; executable?: boolean }> = [],
+  options: { smartHttp?: boolean } = {},
+): Promise<PublishedWireWorkspace> {
   const source = path.join(root, "source");
   const bare = path.join(root, "repo.git");
   await fs.mkdir(source, { recursive: true });
@@ -156,14 +171,82 @@ export async function createPublishedWireWorkspace(root: string): Promise<Publis
   await fs.mkdir(path.join(source, "nested"));
   await fs.writeFile(path.join(source, "launch-wire.txt"), "local-install launch wire\n");
   await fs.writeFile(path.join(source, "nested", "tracked.txt"), "nested tracked input\n");
+  // These are committed fixture inputs, never executed during repository construction.
+  for (const file of files) {
+    const target = path.join(source, file.path);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, file.content, { mode: file.executable ? 0o755 : 0o644 });
+  }
+  if (files.length > 0) {
+    await git(source, "add", "--force", "--", ...files.map((file) => file.path));
+  }
   await git(source, "add", ".");
   await git(source, "commit", "-m", "initialize node worker launch wire workspace");
   await git(source, "remote", "add", "publish", bare);
   await git(source, "push", "publish", "main");
   await git(source, "remote", "remove", "publish");
+  if (options.smartHttp) {
+    await git(bare, "symbolic-ref", "HEAD", "refs/heads/main");
+  }
   await git(bare, "update-server-info");
 
   const server = createServer((request, response) => {
+    if (options.smartHttp) {
+      const url = new URL(request.url ?? "/", "http://localhost");
+      const child = spawn("git", ["http-backend"], {
+        env: {
+          PATH: process.env.PATH,
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CONFIG_GLOBAL: "/dev/null",
+          GIT_PROJECT_ROOT: root,
+          GIT_HTTP_EXPORT_ALL: "1",
+          PATH_INFO: url.pathname,
+          QUERY_STRING: url.search.slice(1),
+          REQUEST_METHOD: request.method ?? "GET",
+          CONTENT_TYPE: request.headers["content-type"] ?? "",
+          CONTENT_LENGTH: request.headers["content-length"] ?? "",
+          REMOTE_ADDR: "127.0.0.1",
+          HTTP_GIT_PROTOCOL: String(request.headers["git-protocol"] ?? ""),
+        },
+        stdio: ["pipe", "pipe", "ignore"],
+      });
+      let headers: Buffer | undefined = Buffer.alloc(0);
+      child.stdout.on("data", (data: Buffer) => {
+        if (headers === undefined) {
+          response.write(data);
+          return;
+        }
+        headers = Buffer.concat([headers, data]);
+        const boundary = headers.indexOf("\r\n\r\n");
+        if (boundary < 0) {
+          return;
+        }
+        for (const line of headers.subarray(0, boundary).toString().split("\r\n")) {
+          const colon = line.indexOf(":");
+          const key = line.slice(0, colon);
+          const value = line.slice(colon + 1).trim();
+          if (key.toLowerCase() === "status") {
+            response.statusCode = Number(value.split(" ")[0]);
+          } else {
+            response.setHeader(key, value);
+          }
+        }
+        response.write(headers.subarray(boundary + 4));
+        headers = undefined;
+      });
+      child.on("error", () => {
+        response.writeHead(500).end();
+      });
+      child.on("close", () => {
+        response.end();
+      });
+      child.stdin.on("error", () => {});
+      response.on("close", () => {
+        child.kill();
+      });
+      request.pipe(child.stdin);
+      return;
+    }
     void (async () => {
       const pathname = decodeURIComponent(new URL(request.url ?? "/", "http://localhost").pathname);
       if (!pathname.startsWith("/repo.git/")) {
@@ -208,6 +291,7 @@ export async function connectWireClient(params: {
   gateway: Pick<WireGateway, "wsUrl" | "token" | "runtimeEnv">;
   role: "operator" | "node";
   identity: DeviceIdentity | null;
+  password?: string;
   includeApprovals?: boolean;
   onEvent?: (event: WireGatewayEvent) => void;
   onHelloOk?: () => void;
@@ -215,19 +299,16 @@ export async function connectWireClient(params: {
   timeoutMs?: number;
   nodeManifest?: { caps: string[]; commands: string[] };
 }): Promise<GatewayClient> {
-  const [{ prepareGatewayClientDeviceAuth }, { acquireGatewayTestClient }] = await Promise.all([
-    import("../../../../src/gateway/client.js"),
-    import("../../../helpers/gateway-client.js"),
-  ]);
+  const { acquireGatewayTestClient } = await import("../../../helpers/gateway-client.js");
   const node = params.role === "node";
   const connectionOptions = {
     url: params.gateway.wsUrl,
-    token: params.gateway.token,
+    ...(params.password !== undefined
+      ? { password: params.password }
+      : { token: params.gateway.token }),
     env: params.gateway.runtimeEnv,
     deviceIdentity: params.identity,
   };
-  // Source QA must prepare the auth worker before starting the handshake budget.
-  await prepareGatewayClientDeviceAuth(connectionOptions);
   return await acquireGatewayTestClient(
     {
       ...connectionOptions,
@@ -333,10 +414,10 @@ type WireWorkerHostOptions = {
   root: string;
   label?: string;
   capacity?: number;
-  capacityWaitMs?: number;
   containerEngine?: NodeWorkerContainerEngine;
   containerImage?: string;
   workerGatewayUrl?: string;
+  password?: string;
   workspaceGatewayUrl?: (frame: NodeInvokeRequestPayload) => string;
   workerEnv?: NodeJS.ProcessEnv;
   nodeConfig?: OpenClawConfig;
@@ -344,6 +425,7 @@ type WireWorkerHostOptions = {
     ReturnType<typeof import("../../../../src/node-host/runtime.js").prepareNodeHostRuntime>
   >;
   bundlePrewarm?: boolean;
+  workspaceQuiescence?: boolean;
   bundleRetention?: boolean;
   bundleStatus?: boolean;
   environmentSession?: boolean;
@@ -424,9 +506,7 @@ export async function createPairedNodeWorkerHost(
   const invokeErrors: unknown[] = [];
   const commands: string[] = [];
   const frames: NodeInvokeRequestPayload[] = [];
-  const identity = loadOrCreateDeviceIdentity({
-    path: path.join(options.root, `${label}-identity.sqlite`),
-  });
+  const identity = loadOrCreateDeviceIdentity({ env: nodeEnv });
 
   const inventory = () => ({
     protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
@@ -438,6 +518,9 @@ export async function createPairedNodeWorkerHost(
         ? { environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION }
         : {}),
       capacity,
+      ...(options.workspaceQuiescence
+        ? { workspaceQuiescence: NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION }
+        : {}),
       ...(options.bundlePrewarm ? { bundlePrewarm: WORKER_BUNDLE_PREWARM_VERSION } : {}),
       ...(options.bundleRetention ? { bundleRetention: NODE_WORKER_BUNDLE_RETENTION_VERSION } : {}),
       ...(options.bundleStatus ? { bundleStatus: NODE_WORKER_BUNDLE_STATUS_VERSION } : {}),
@@ -449,7 +532,6 @@ export async function createPairedNodeWorkerHost(
     env: nodeEnv,
     workspace,
     capacity: options.capacity,
-    capacityWaitMs: options.capacityWaitMs,
     nativeInferenceSnapshot,
     ...(options.containerEngine ? { containerEngine: options.containerEngine } : {}),
     ...(options.containerImage ? { containerImage: options.containerImage } : {}),
@@ -523,6 +605,7 @@ export async function createPairedNodeWorkerHost(
           runtimeEnv: nodeEnv,
         },
         role: "node",
+        password: options.password,
         identity,
         onEvent,
         onHelloOk: () => {
@@ -704,6 +787,11 @@ export async function startPairedNodeWorkerGateway(params: {
   nativeWorkerDeviceId?: string;
   requiredProfile?: string;
   mockAuthAgentIds?: readonly string[];
+  enabledPluginIds?: string[];
+  rpcPassword?: string;
+  runtimeEnvPatch?: Parameters<
+    ReturnType<typeof createQaGatewayChild>["start"]
+  >[0]["runtimeEnvPatch"];
   mutateConfig?: Parameters<ReturnType<typeof createQaGatewayChild>["start"]>[0]["mutateConfig"];
 }): Promise<WireGateway> {
   return await params.owner.start({
@@ -713,6 +801,9 @@ export async function startPairedNodeWorkerGateway(params: {
     providerBaseUrl: `${params.providerBaseUrl}/v1`,
     providerMode: "mock-openai",
     mockAuthAgentIds: params.mockAuthAgentIds,
+    enabledPluginIds: params.enabledPluginIds,
+    runtimeEnvPatch: params.runtimeEnvPatch,
+    rpcPassword: params.rpcPassword,
     primaryModel: MODEL_REF,
     alternateModel: MODEL_REF,
     transportBaseUrl: "http://127.0.0.1",

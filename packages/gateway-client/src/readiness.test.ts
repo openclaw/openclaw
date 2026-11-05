@@ -1,42 +1,37 @@
-// Gateway Client tests cover readiness behavior.
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  startGatewayClientWhenEventLoopReady,
-  startGatewayClientWithReadinessWait,
-} from "./readiness.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { startGatewayClientWhenEventLoopReady } from "./readiness.js";
 
-describe("startGatewayClientWithReadinessWait", () => {
-  it("uses the injected client env when resolving the readiness timeout", async () => {
-    const waitForReady = vi.fn(async () => ({
-      ready: true,
-      aborted: false,
-      elapsedMs: 0,
-      checks: 1,
-      maxDriftMs: 0,
-    }));
+describe("startGatewayClientWhenEventLoopReady", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("honors the client environment deadline when the event loop stalls", async () => {
     const client = { start: vi.fn() };
-
-    await startGatewayClientWithReadinessWait(waitForReady, client, {
+    const completed = vi.fn();
+    const readiness = startGatewayClientWhenEventLoopReady(client, {
       clientOptions: {
         env: { OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: "6000" },
       },
     });
+    void readiness.then(completed);
 
-    expect(waitForReady).toHaveBeenCalledWith({
-      maxWaitMs: 6_000,
-      signal: undefined,
+    // One tick detects the stall; the next reaches the configured deadline.
+    vi.setSystemTime(Date.now() + 5_998);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(completed).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(completed).toHaveBeenCalledExactlyOnceWith({
+      ready: false,
+      aborted: false,
+      elapsedMs: 6_000,
+      checks: 2,
+      maxDriftMs: 5_998,
     });
-    expect(client.start).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("startGatewayClientWhenEventLoopReady", () => {
-  afterEach(() => {
-    vi.useRealTimers();
+    expect(client.start).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("starts the client only after the event loop is responsive", async () => {
-    vi.useFakeTimers();
     const client = { start: vi.fn() };
 
     const promise = startGatewayClientWhenEventLoopReady(client, { timeoutMs: 100 });
@@ -52,7 +47,6 @@ describe("startGatewayClientWhenEventLoopReady", () => {
   });
 
   it("does not start the client after an aborted readiness wait", async () => {
-    vi.useFakeTimers();
     const client = { start: vi.fn() };
     const controller = new AbortController();
 

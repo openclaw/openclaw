@@ -106,10 +106,15 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         featureMethods: ["browser.request"],
         operatorScopes: ["operator.read", "operator.sessions.write"],
+        deferredMethods: ["connect"],
+        awaitInitialRoster: false,
       });
       await page.goto(
         `${suite.server.baseUrl}focus/browser?sessionKey=agent%3Amain%3Awork&target=host&profile=work&targetId=existing`,
       );
+      await page.locator("openclaw-browser-document .connect-splash").waitFor();
+      await gateway.waitForRequest("connect");
+      await gateway.resolveDeferred("connect");
       await page
         .getByText(
           "Browser control is unavailable for this connection. Reconnect with browser access.",
@@ -224,7 +229,7 @@ suite.define(() => {
           const send = await gateway.waitForRequest("chat.send");
           const runId = asNullableRecord(send.params)?.idempotencyKey;
           expect.assert(typeof runId === "string");
-          await page.getByRole("button", { name: "Stop generating" }).waitFor();
+          await page.getByRole("button", { name: "Stop", exact: true }).waitFor();
           let seq = 0;
           const emitResult = async (
             toolCallId: string,

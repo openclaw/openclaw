@@ -14,6 +14,7 @@ import {
 import type { AgentHarnessAuthBindingFingerprintParams } from "../agents/harness/types.js";
 import * as modelAuth from "../agents/model-auth.js";
 import * as configModule from "../config/config.js";
+import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as pluginArtifactIdentity from "../plugins/plugin-runtime-artifact-identity.js";
 import { createInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
@@ -239,11 +240,6 @@ function createBinding(
   });
 }
 
-function configSnapshot(baseConfig: OpenClawConfig) {
-  const snapshot = { exists: true, valid: true, config: baseConfig };
-  return { readConfigFileSnapshot: vi.fn(async () => snapshot) as never };
-}
-
 function codexHarnessConfig(
   profileId?: string,
   plugins?: OpenClawConfig["plugins"],
@@ -302,9 +298,25 @@ async function revalidate(
   binding: Awaited<ReturnType<typeof bindingFor>>,
   baseConfig: OpenClawConfig,
 ) {
-  return resolveSystemAgentVerifiedInferenceRoute(binding, {
-    ...configSnapshot(baseConfig),
-  });
+  const reader = vi.spyOn(configModule, "readConfigFileSnapshot").mockResolvedValue(
+    createConfigFileSnapshot({
+      path: "/tmp/openclaw.json",
+      exists: true,
+      valid: true,
+      raw: null,
+      parsed: baseConfig,
+      sourceConfig: baseConfig,
+      runtimeConfig: baseConfig,
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    }),
+  );
+  try {
+    return await resolveSystemAgentVerifiedInferenceRoute(binding);
+  } finally {
+    reader.mockRestore();
+  }
 }
 
 async function envAuthFixture() {
@@ -749,48 +761,106 @@ describe("verified OpenClaw inference binding", () => {
     );
   });
 
-  it("refuses to mint an AWS SDK owner without exact principal proof", async () => {
-    const bedrockConfig = {
-      agents: {
-        defaults: { model: "amazon-bedrock/us.anthropic.claude-sonnet-4-6" },
-      },
-      models: {
-        providers: {
-          "amazon-bedrock": {
-            baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-            api: "bedrock-converse-stream",
-            auth: "aws-sdk",
-            models: [],
+  it.each([undefined, "aws-sdk"] as const)(
+    "accepts the executed Bedrock SDK owner with auth %s and rejects credential drift",
+    async (providerAuth) => {
+      const modelId = "us.anthropic.claude-sonnet-4-6";
+      const modelApi = "bedrock-converse-stream";
+      const bedrockConfig = {
+        agents: { defaults: { model: `amazon-bedrock/${modelId}` } },
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+              api: modelApi,
+              ...(providerAuth ? { auth: providerAuth } : {}),
+              models: [],
+            },
           },
         },
-      },
-    } satisfies OpenClawConfig;
-    const route = await requireRoute(bedrockConfig, "embedded");
-    const auth = { source: "aws-sdk default chain", mode: "aws-sdk" as const };
-    const fingerprint = () =>
-      fingerprintAwsSdkRuntimeOwner({
-        provider: route.provider,
-        backendId: route.agentHarnessRuntimeOverride ?? "openclaw",
-        auth,
-      });
-    try {
-      vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", "");
-      vi.stubEnv("AWS_ACCESS_KEY_ID", "");
-      vi.stubEnv("AWS_SECRET_ACCESS_KEY", "");
-      vi.stubEnv("AWS_SESSION_TOKEN", "");
-      vi.stubEnv("AWS_PROFILE", "work");
-      expect(fingerprint()).toBeUndefined();
-
-      vi.stubEnv("AWS_PROFILE", "");
-      expect(fingerprint()).toBeUndefined();
-
-      await expect(createBinding(route, {})).rejects.toThrow(
-        "did not report one exact execution owner",
-      );
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
+      } satisfies OpenClawConfig;
+      vi.mocked(modelAuth.resolveApiKeyForProviderCore).mockRestore();
+      const route = await requireRoute(bedrockConfig, "embedded");
+      try {
+        vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", "synthetic-bedrock-owner");
+        for (const name of [
+          "AWS_ACCESS_KEY_ID",
+          "AWS_SECRET_ACCESS_KEY",
+          "AWS_SESSION_TOKEN",
+          "AWS_PROFILE",
+        ]) {
+          vi.stubEnv(name, "");
+        }
+        const auth = await modelAuth.resolveApiKeyForProviderCore({
+          provider: route.provider,
+          cfg: route.runConfig,
+          modelId,
+          modelApi,
+          allowAuthProfileFallback: false,
+        });
+        expect(auth.mode).toBe("aws-sdk");
+        const successfulAuth = {
+          agentHarnessId: "openclaw",
+          modelId,
+          modelApi,
+          runtimeOwnerKind: "aws-sdk" as const,
+          runtimeOwnerId: "openclaw",
+          runtimeOwnerFingerprint: requireFingerprint(
+            fingerprintAwsSdkRuntimeOwner({
+              provider: route.provider,
+              backendId: "openclaw",
+              auth,
+            }),
+          ),
+        };
+        await expect(createBinding(route, {})).rejects.toThrow(
+          "did not report one exact execution owner",
+        );
+        const binding = await createBinding(route, successfulAuth);
+        await expect(revalidate(binding, bedrockConfig)).resolves.toBe(binding.execution);
+        for (const missing of ["modelId", "modelApi"] as const) {
+          await expect(
+            createBinding(route, { ...successfulAuth, [missing]: undefined }),
+          ).rejects.toThrow("no longer the active route owner");
+        }
+        const explicitKeyConfig = {
+          ...bedrockConfig,
+          models: {
+            providers: {
+              "amazon-bedrock": {
+                ...bedrockConfig.models.providers["amazon-bedrock"],
+                auth: "api-key",
+                apiKey: "synthetic-explicit-key",
+              },
+            },
+          },
+        } satisfies OpenClawConfig;
+        const explicitKeyRoute = await requireRoute(explicitKeyConfig, "embedded");
+        await expect(createBinding(explicitKeyRoute, successfulAuth)).rejects.toThrow(
+          "no longer the active route owner",
+        );
+        vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", "synthetic-replacement-owner");
+        await expect(createBinding(route, successfulAuth)).rejects.toThrow(
+          "no longer the active route owner",
+        );
+        await expect(revalidate(binding, bedrockConfig)).resolves.toBeNull();
+        for (const awsProfile of ["", "work"]) {
+          vi.stubEnv("AWS_BEARER_TOKEN_BEDROCK", "");
+          vi.stubEnv("AWS_PROFILE", awsProfile);
+          expect(
+            fingerprintAwsSdkRuntimeOwner({
+              provider: route.provider,
+              backendId: "openclaw",
+              auth,
+            }),
+          ).toBeUndefined();
+          await expect(revalidate(binding, bedrockConfig)).resolves.toBeNull();
+        }
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
 
   it.each([{ name: "an owner is removed", ownerIds: [] as string[], records: [] }])(
     "invalidates a strict credential when $name",

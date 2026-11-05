@@ -39,7 +39,4 @@ const globalStore = globalThis as Record<PropertyKey, unknown>;
 // state object so overrides and caches remain coherent across those copies.
 export const loggingState =
   (globalStore[LOGGING_STATE_KEY] as LoggingState | undefined) ?? createLoggingState();
-if (!Object.hasOwn(loggingState, "appliedConfig")) {
-  loggingState.appliedConfig = APPLIED_LOGGING_CONFIG_UNOWNED;
-}
 globalStore[LOGGING_STATE_KEY] = loggingState;

@@ -5,11 +5,14 @@ import type {
   Context,
   Model,
   ProviderReplayState,
+  UserMessage,
 } from "@openclaw/llm-core";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import {
-  buildOpenAIResponsesReasoningReplayMetadata,
-  captureOpenAIResponsesCompaction,
+  buildOpenAIResponsesReasoningReplayMetadata as replayMetadata,
+  captureOpenAIResponsesCompaction as captureCompaction,
 } from "./openai-responses-compaction-replay.js";
 import { OPENAI_RESPONSES_REASONING_REPLAY_META_KEY } from "./openai-responses-contracts.js";
 
@@ -22,18 +25,17 @@ export function createReplayState(
   identity: { sessionId: string; authProfileId: string },
   state: Pick<ProviderReplayState, "type" | "data"> & Partial<ProviderReplayState>,
 ): ProviderReplayState {
-  const { source: _source, ...metadata } = buildOpenAIResponsesReasoningReplayMetadata(
-    model,
-    identity,
-  );
-  if (!metadata.baseUrlHash) {
-    throw new Error("test model must have a replayable base URL");
-  }
+  const { source: _source, ...metadata } = replayMetadata(model, identity);
   return { ...metadata, ...state };
 }
 
 export const responseUsage = { input_tokens: 5, output_tokens: 3, total_tokens: 8 };
-export const userMessage = (content: string, timestamp = 1) => ({
+export const userMessage = <T extends UserMessage["content"]>(
+  content: T,
+  timestamp = 1,
+  extra: Partial<UserMessage> = {},
+) => ({
+  ...extra,
   role: "user" as const,
   content,
   timestamp,
@@ -90,89 +92,67 @@ export function createAssistant(
   };
 }
 
-export function completedSdkResponse(responseId: string): {
-  data: AsyncIterable<unknown>;
-  response: Response;
-} {
+export function completedSdkResponse(responseId: string, extra: Record<string, unknown> = {}) {
   return {
-    data: responseEvents(completedResponse(responseId, [], { usage: responseUsage })),
+    data: responseEvents(completedResponse(responseId, [], { usage: responseUsage, ...extra })),
     response: new Response(null, { status: 200 }),
   };
 }
 
-export function createCompactionContext(
+type ReplayIdentity = { authProfileId: string; sessionId: string };
+export const createCompactionContext = (
   model: Model,
-  identity: { authProfileId: string; sessionId: string },
+  identity: ReplayIdentity,
+  reasoning = false,
+) => recoveryContext(model, identity, false, reasoning);
+export const createOrphanedToolOutputCompactionContext = (model: Model, identity: ReplayIdentity) =>
+  recoveryContext(model, identity, true);
+
+function recoveryContext(
+  model: Model,
+  identity: ReplayIdentity,
+  orphaned: boolean,
   includeReasoning = false,
 ): Context {
-  const prior = createAssistant(
-    model,
-    includeReasoning
-      ? [
-          {
-            type: "thinking",
-            thinking: "prior reasoning",
-            thinkingSignature: JSON.stringify({
-              type: "reasoning",
-              id: "rs_sdk_retry",
-              encrypted_content: SDK_REASONING_CIPHERTEXT,
-              summary: [],
-              [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]:
-                buildOpenAIResponsesReasoningReplayMetadata(model, identity),
-            }),
-          },
-        ]
-      : [],
-    { timestamp: 1 },
-  );
-  captureOpenAIResponsesCompaction(
+  const callId = "call_compacted";
+  const content: AssistantMessage["content"] = orphaned
+    ? [{ type: "toolCall", id: callId, name: "lookup", arguments: {} }]
+    : [];
+  if (includeReasoning) {
+    content.push({
+      type: "thinking",
+      thinking: "prior reasoning",
+      thinkingSignature: JSON.stringify({
+        type: "reasoning",
+        id: "rs_sdk_retry",
+        encrypted_content: SDK_REASONING_CIPHERTEXT,
+        summary: [],
+        [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]: replayMetadata(model, identity),
+      }),
+    });
+  }
+  const prior = createAssistant(model, content, { timestamp: 1 });
+  captureCompaction(
     prior,
     {
       type: "compaction",
-      id: "cmp_azure_rejected",
-      encrypted_content: "opaque-azure-compaction",
+      id: orphaned ? "cmp_orphaned_output" : "cmp_azure_rejected",
+      encrypted_content: orphaned ? "opaque-compaction" : "opaque-azure-compaction",
     },
-    0,
+    orphaned ? 1 : 0,
     model,
-    buildOpenAIResponsesReasoningReplayMetadata(model, identity),
+    replayMetadata(model, identity),
   );
+  const tail = orphaned ? [makeTextToolResult(callId, "lookup", "result", false, 2)] : [];
   return {
-    systemPrompt: "PRIVATE-AZURE-RECOVERY-PROMPT",
-    messages: [userMessage(SDK_FULL_HISTORY_PREFIX, 0), prior, userMessage("continue", 2)],
-  };
-}
-
-export function createOrphanedToolOutputCompactionContext(
-  model: Model,
-  identity: { authProfileId: string; sessionId: string },
-): Context {
-  const callId = "call_compacted";
-  const prior = createAssistant(
-    model,
-    [{ type: "toolCall", id: callId, name: "lookup", arguments: {} }],
-    { timestamp: 1 },
-  );
-  captureOpenAIResponsesCompaction(
-    prior,
-    { type: "compaction", id: "cmp_orphaned_output", encrypted_content: "opaque-compaction" },
-    1,
-    model,
-    buildOpenAIResponsesReasoningReplayMetadata(model, identity),
-  );
-  return {
-    systemPrompt: "PRIVATE-ORPHANED-OUTPUT-RECOVERY-PROMPT",
+    systemPrompt: orphaned
+      ? "PRIVATE-ORPHANED-OUTPUT-RECOVERY-PROMPT"
+      : "PRIVATE-AZURE-RECOVERY-PROMPT",
     messages: [
       userMessage(SDK_FULL_HISTORY_PREFIX, 0),
       prior,
-      {
-        role: "toolResult",
-        toolCallId: callId,
-        toolName: "lookup",
-        content: [{ type: "text", text: "result" }],
-        isError: false,
-        timestamp: 2,
-      },
-      userMessage("continue", 3),
+      ...tail,
+      userMessage("continue", 2 + tail.length),
     ],
   };
 }
@@ -181,16 +161,11 @@ export function createModel<TApi extends Api = "openai-responses">(
   overrides: Partial<Model<TApi>> = {},
 ): Model<TApi> {
   return {
-    id: "gpt-5.4",
-    name: "GPT-5.4",
-    api: "openai-responses",
-    provider: "openai",
-    baseUrl: "https://api.openai.com/v1",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200_000,
-    maxTokens: 8192,
+    ...makeProviderModel("openai-responses", "openai", "gpt-5.4", {
+      name: "GPT-5.4",
+      baseUrl: "https://api.openai.com/v1",
+      contextWindow: 200_000,
+    }),
     ...overrides,
   } as Model<TApi>;
 }
