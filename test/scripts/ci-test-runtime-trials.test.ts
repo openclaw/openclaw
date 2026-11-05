@@ -35,6 +35,16 @@ const sessionWeakRefFiles = [
   "src/gateway/session-row-projection.retention.test.ts",
   "src/gateway/session-database-retention.test.ts",
 ];
+const uiRetentionFiles = [
+  "ui/src/components/desktop/desktop-mobile-keyboard-retention.test.ts",
+  "ui/src/pages/chat/components/chat-transcript-layout-retention.test.ts",
+  "ui/src/pages/chat/session-snapshot-store-retention.test.ts",
+];
+const uiFunctionalFiles = [
+  "ui/src/components/desktop/desktop-mobile-keyboard.test.ts",
+  "ui/src/pages/chat/components/chat-transcript-layout-owner.test.ts",
+  "ui/src/pages/chat/session-snapshot-store.test.ts",
+];
 
 function group(name: string, config: string | readonly string[], includePatterns?: string[]) {
   const configs = typeof config === "string" ? [config] : [...config];
@@ -96,6 +106,7 @@ it.each([
   [nodeFile, false],
   [validatorFile, false],
   [websocketFile, false],
+  ...uiRetentionFiles.map((file) => [file, false] as const),
   ...codeModeFiles.map((file) => [file, true] as const),
 ] as const)("retains host coverage for exact target %s", async (file, bothHosts) => {
   for (const target of [file, `./${file}`, path.resolve(file)]) {
@@ -258,6 +269,7 @@ it("selects broad target remainders on Bun", async () => {
   for (const [target, runtime] of [
     [agentBunFile, "bun"],
     ...websocketBunFiles.map((file) => [file, "bun"] as const),
+    ...uiFunctionalFiles.map((file) => [file, "bun"] as const),
     ["src/config/sessions/session-accessor.pending-input-retention.test.ts", "node"],
     ["src/config/sessions/session-accessor.pending-inputs.test.ts", "bun"],
     ["src/gateway/session-row-projection.accepted-facts.test.ts", "bun"],
@@ -276,13 +288,12 @@ it("selects broad target remainders on Bun", async () => {
 it.each(["patterns", "include-file", "post-shard-file"])(
   "preserves UI discovery and native shard membership through %s",
   async (source) => {
-    const uiNode = "ui/src/pages/chat/chat-thread-retention.test.ts";
-    const uiBun = "ui/src/pages/chat/chat-pane-history.test.ts";
+    const uiFiles = [...uiRetentionFiles, ...uiFunctionalFiles];
     const scratch = tempDirs.make("all-ui-");
     const includeFile = path.join(scratch, "includes.json");
-    writeFileSync(includeFile, JSON.stringify([uiNode, uiBun]));
+    writeFileSync(includeFile, JSON.stringify(uiFiles));
     const { calls } = await recordRun(
-      group("ui", "ui/vitest.config.ts", source === "patterns" ? [uiNode, uiBun] : undefined),
+      group("ui", "ui/vitest.config.ts", source === "patterns" ? uiFiles : undefined),
       {
         OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(["--shard=1/2"]),
         ...(source !== "patterns" ? { OPENCLAW_VITEST_INCLUDE_FILE: includeFile } : {}),
@@ -291,9 +302,10 @@ it.each(["patterns", "include-file", "post-shard-file"])(
           : {}),
       },
     );
-    expectIncludes(calls, [uiNode, uiBun]);
-    expect(calls[0]!.members).toEqual([uiNode]);
-    expect(calls[1]!.members).toContain(uiBun);
-    expect(calls[1]!.members).not.toContain(uiNode);
+    expectIncludes(calls, uiFiles);
+    expect(calls[0]!.members?.toSorted()).toEqual(uiRetentionFiles.toSorted());
+    expect(
+      calls[1]!.includes!.filter((file) => calls[1]!.members?.includes(file)).toSorted(),
+    ).toEqual(uiFunctionalFiles.toSorted());
   },
 );

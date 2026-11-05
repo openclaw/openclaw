@@ -119,9 +119,9 @@ async function assertFeedback(page: Page) {
   await error.locator("summary").click();
   expect(await error.locator("details").getAttribute("open")).not.toBeNull();
   expect(await error.locator("code").textContent()).toContain("Synthetic module failure");
-  expect(
-    await page.locator('[data-example="Refresh stale"] [role="status"]').textContent(),
-  ).toContain("stale");
+  expect(await page.locator('[data-example="Refresh stale"] [role="status"]').textContent()).toBe(
+    "Showing last known data.",
+  );
   expect(
     await page.locator('[data-example="Refresh failed"] [role="alert"]').textContent(),
   ).toContain("Synthetic refresh failure");
@@ -131,7 +131,7 @@ async function assertFeedback(page: Page) {
   expect(
     await page.getByRole("button", { name: "Busy panel", exact: true }).getAttribute("aria-busy"),
   ).toBe("true");
-  expect(await page.locator("kbd").last().textContent()).toBe("Ctrl+K");
+  expect(await page.locator("kbd").last().textContent()).toBe("CtrlK");
   const copy = page.locator('[data-example="Actions and shortcuts"] .chat-copy-btn').nth(0);
   await copy.click();
   await expect.poll(() => copy.getAttribute("data-copy-state")).toBe("copied");
@@ -267,11 +267,20 @@ suite.define(() => {
                   ".empty-state__title",
                 );
               } else if (group === "skeleton-content") {
-                await assertShadowParentStyles(
-                  page,
-                  "openclaw-panel-loading-skeleton",
-                  ".skeleton.line",
-                );
+                const styles = await page
+                  .locator("openclaw-panel-loading-skeleton .skeleton.line")
+                  .first()
+                  .evaluate((element) => {
+                    const style = getComputedStyle(element);
+                    return {
+                      background: style.backgroundColor,
+                      overflow: style.overflow,
+                      radius: Number.parseFloat(style.borderRadius),
+                    };
+                  });
+                expect(styles.background).not.toBe("rgba(0, 0, 0, 0)");
+                expect(styles.overflow).toBe("hidden");
+                expect(styles.radius).toBeGreaterThan(0);
               }
             }
           },

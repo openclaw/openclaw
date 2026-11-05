@@ -304,7 +304,7 @@ describe("unavailable plugin migration owners", () => {
       }
       for (const pluginId of pluginIds) {
         expect(await readReceipt(home, pluginId)).toMatchObject({
-          status: "completed",
+          status: pluginId === "webhooks" ? "completed" : "deferred",
           report: { reason: expect.stringContaining("no protected config") },
         });
       }

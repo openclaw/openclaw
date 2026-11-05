@@ -19,6 +19,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
+import { AgentDatabaseStartupPublicationError } from "./agent-database-admission-error.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
@@ -133,6 +134,7 @@ export function createAgentDatabaseInspectionRefusal(params: {
     (error) => error instanceof Error && error.name === "DataCloneError",
   );
   const locked = !params.pending && isSqliteLockError(params.cause);
+  const publicationFailure = params.cause instanceof AgentDatabaseStartupPublicationError;
   const refusal: AgentDatabaseAdmissionRefusal = {
     agentId: params.agentId,
     paths: params.paths,
@@ -144,9 +146,11 @@ export function createAgentDatabaseInspectionRefusal(params: {
         ? "Free space in the reported snapshot cache, then retry the update. This candidate snapshot failure does not require repairing the serving database."
         : serializationFailure
           ? "A worker request could not be serialized. Update OpenClaw and restart the Gateway; repeating database migration will not repair this request."
-          : params.pending
-            ? 'Sessions remain unavailable until background inspection and preparation finish. If they cannot complete, stop the Gateway, run "openclaw doctor --fix", and restart.'
-            : `Sessions remain unavailable. ${formatAgentDatabaseCorruptionRepairHint(params.agentId, params.cause) ?? 'Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this agent database, and restart.'}`,
+          : publicationFailure
+            ? "Sessions remain unavailable because newer config or plugin changes kept replacing this agent's runtime preparation. Restart the Gateway to retry admission. This failure does not require database repair."
+            : params.pending
+              ? "Startup preparation is in progress or waiting for capacity. Retry the request after startup preparation finishes. Pending startup does not indicate a database failure."
+              : `Sessions remain unavailable. ${formatAgentDatabaseCorruptionRepairHint(params.agentId, params.cause) ?? 'Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this agent database, and restart.'}`,
   };
   refusalCauses.set(refusal, params.cause);
   return refusal;
@@ -405,13 +409,14 @@ function runWithInspectionReadAdmissionTurn<T>(
   operation: () => Promise<T>,
   families: readonly string[] = [],
   signal?: AbortSignal,
-  options: AdmissionOptions = {},
+  options: AdmissionOptions &
+    import("../infra/sqlite-database-admission-turn.js").PreparedSqliteReadAdmission = {},
 ): Promise<T> {
   // Unknown siblings and first creation retain their family ordering and native checks.
   const pendingPaths = refusalsByState.get(stateKey(options))?.refusals.size
     ? paths.filter((pathname) => !isAgentDatabaseStartupReadReady(pathname, options))
     : paths;
-  return runWithSqliteDatabaseAdmissionTurn(pendingPaths, operation, families, signal);
+  return runWithSqliteDatabaseAdmissionTurn(pendingPaths, operation, families, signal, options);
 }
 
 export function assertAgentDatabaseReadAdmitted(

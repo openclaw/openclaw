@@ -38,7 +38,7 @@ it("reuses host and continuation schemas across interleaved sessions", () => {
             host: { enum: sessionSandbox ? ["auto", "sandbox"] : ["auto", "gateway", "node"] },
           },
         });
-        for (const field of ["background", "yieldMs"]) {
+        for (const field of ["background", "yieldMs", "durable"]) {
           const assertion = expect(tool.parameters);
           (hasProcess ? assertion : assertion.not).toHaveProperty(`properties.${field}`);
         }

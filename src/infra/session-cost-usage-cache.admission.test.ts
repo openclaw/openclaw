@@ -21,6 +21,7 @@ import {
 import { closeAgentWorkAdmissions } from "../sessions/session-controller.lifecycle.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "../state/openclaw-agent-db-lease.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -53,7 +54,6 @@ import {
 import { readSessionCostUsageRollupRows as readRows } from "./session-cost-usage-cache.test-support.js";
 import { openUsageCostRefreshFailures } from "./session-cost-usage-refresh-health.js";
 import { withSessionCostUsageWorkerDatabases as withUsageDatabases } from "./session-cost-usage-worker-scope.js";
-import { revokeSqliteDatabaseAdmissionsForPath } from "./sqlite-database-admission.js";
 import * as integrityWorker from "./sqlite-integrity-worker.js";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 import type { WorkerTaskInput, WorkerTaskOptions } from "./worker-task-pool.types.js";
@@ -178,7 +178,7 @@ it.each([
       const agentId = "usage-test";
       const databasePath = openOpenClawAgentDatabase({ agentId }).path;
       closeOpenClawAgentDatabasesForTest();
-      revokeSqliteDatabaseAdmissionsForPath(databasePath);
+      invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(databasePath);
       const cwd = retarget
         ? vi.spyOn(process, "cwd").mockReturnValue(path.dirname(databasePath))
         : undefined;

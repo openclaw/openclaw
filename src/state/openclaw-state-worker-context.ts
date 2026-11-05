@@ -3,7 +3,10 @@ import path from "node:path";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "./openclaw-state-db-async-lifecycle.js";
-import { captureOpenClawStateDatabaseReadAdmission } from "./openclaw-state-db-cache.js";
+import {
+  captureOpenClawStateDatabaseReadAdmission,
+  openClawStateDatabaseCache,
+} from "./openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import {
   captureOpenClawStateReadContextWithAdmission,
@@ -23,6 +26,7 @@ export function captureOpenClawStateReadContext(
   return captureOpenClawStateReadContextWithAdmission(
     pathname,
     captureOpenClawStateDatabaseReadAdmission,
+    openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity,
   );
 }
 
@@ -33,6 +37,7 @@ export function captureOpenClawStateReadWorkerContext(
   return captureOpenClawStateReadWorkerContextWithAdmission(
     options,
     captureOpenClawStateDatabaseReadAdmission,
+    openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity,
   );
 }
 
@@ -101,5 +106,6 @@ export function captureOpenClawStateWorkerContext(
   return captureOpenClawStateWorkerContextWithAdmission(
     options,
     captureOpenClawStateDatabaseReadAdmission,
+    openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity,
   );
 }

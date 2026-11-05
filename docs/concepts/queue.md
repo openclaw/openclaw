@@ -37,7 +37,7 @@ When unset, all inbound channel surfaces use:
 - `cap: 20`
 - `drop: "summarize"`
 
-Same-conversation collaborative steering is enabled by default. A compatible prompt can be injected into the active runtime, so no second session run is started. The active execution keeps its original authority; steering does not give each message its own tool policy. If the active run cannot accept steering, OpenClaw waits for the active run to finish before starting the prompt.
+Same-conversation collaborative steering is enabled by default, including [Shared Owner WebUI/channel continuation](/concepts/queue-steering#scope) in the exact same active session. When collaboration is disabled, that continuation requires current administrative authority on the shared WebUI side and current channel-owner authority on the channel side. A compatible prompt can be injected into the active runtime, so no second session run is started. The active execution keeps its original authority; steering does not give each message its own tool policy. If the active run cannot accept steering, OpenClaw waits for the active run to finish before starting the prompt.
 
 ## Queue modes
 
@@ -63,7 +63,7 @@ See [Restart recovery](/gateway/restart-recovery#automatic-resume).
 
 Queued Gateway input retains its authenticated requester. Each new execution resolves current applicable policy. Collecting messages requires compatible operator sources and tool permissions.
 
-When `messages.queue.allowCollaborativeSteering: false` is explicitly set, another person’s input queues quietly for a new turn under that person’s identity and current policy. It does not interrupt the current turn, and no resend or status notice is needed. Set `messages.queue.collaborativeSteeringFallback: "reject"` to require an explicit `/followup <message>` instead. Set `messages.queue.allowCollaborativeSteering: true` to let admitted human input in the same conversation steer an active turn under that turn's unchanged identity and prepared permissions. This lets Bob influence actions using permissions Alice has that Bob does not. Ordinary guidance from the same authenticated requester in the same conversation retains the active execution’s prepared permissions without substituting incoming caller capabilities or tool bindings. Current access and the original execution’s live authority still apply. The option does not change queue modes or explicit cross-session `sessions_send(mode="steer")` authorization. See [Steering scope](/concepts/queue-steering#scope).
+When `messages.queue.allowCollaborativeSteering: false` is explicitly set, another person’s input queues quietly for a new turn under that person’s identity and current policy. It does not interrupt the current turn, and no resend or status notice is needed. Set `messages.queue.collaborativeSteeringFallback: "reject"` to require an explicit `/followup <message>` instead. Set `messages.queue.allowCollaborativeSteering: true` to let admitted human input in the same conversation steer an active turn under that turn's unchanged identity and prepared permissions. This lets Bob influence actions using permissions Alice has that Bob does not. Ordinary guidance from the same authenticated requester retains the active execution’s prepared permissions without substituting incoming caller capabilities or tool bindings. Verified personal profiles with administrator-attested channel identity links can continue the same active session across transports. Current access and the original execution’s live authority still apply. The option does not change queue modes or explicit cross-session `sessions_send(mode="steer")` authorization. See [Steering scope](/concepts/queue-steering#scope).
 
 An accepted turn can continue after its request returns or its client disconnects.
 That does not extend revoked device authority or permissions removed by a current
@@ -99,9 +99,30 @@ Per-session `/queue` options apply to queued delivery. The `debounce` option als
 
 - `debounce`: quiet window before draining queued followups or collect batches; in Codex `steer` mode, quiet window before sending batched `turn/steer`. Bare numbers are milliseconds; units `ms`, `s`, `m`, `h`, and `d` are accepted.
 - `cap`: max queued messages per session. Values below `1` are ignored.
-- `drop: "summarize"` (default): drop the oldest queued entries as needed, keep compact summaries, and inject them as a synthetic followup prompt.
+- `drop: "summarize"` (default): drop the oldest queued entries as needed, keep compact summaries, and inject them as a synthetic followup prompt. Each summarized entry keeps its own sender and conversation context.
 - `drop: "old"`: drop the oldest queued entries as needed, without preserving summaries.
 - `drop: "new"`: reject the newest message when the queue is already full.
+
+At capacity, optional ambient room events yield to user requests before these drop
+policies apply; incoming room events cannot evict user requests. With `summarize`,
+OpenClaw preserves short previews as background context on an eligible pending
+turn in the same channel, account, room, thread, and Gateway. This creates no
+extra model turns. Each recipient keeps the newest `min(cap, 20)` previews in
+arrival order, with message text capped at 160 characters and sender/message ID
+fields capped at 80 characters each. Previews are untrusted context, not requests
+or sender authority. Input text awaiting its write hook is replaced by an omission
+notice; approved text is used without restoring redacted content.
+
+Context is attached once when the recipient executes, including across retries.
+It expires if that recipient is canceled or discarded; if no eligible pending
+recipient exists, the ambient event is discarded without a preview. `old` and
+`new` discard overflow ambient events without previews. Among ambient
+events, `drop: "new"` keeps the existing events, while the other policies keep the
+newest. Surviving messages retain FIFO order. Active turns, protected recovery
+work, and events requiring a reply are not eligible for ambient shedding. Each
+discard is logged without message content, and its channel receipt is settled so
+durable ingress does not retry it. Recent room history remains subject to the
+channel's configured history window.
 
 Gateway followup and collect debounce windows measure elapsed time, so wall-clock corrections do not shorten or extend them.
 
@@ -165,6 +186,11 @@ steering the active run.
 - `/queue default` or `/queue reset` clears the session override.
 
 ## Queued-turn cancellation
+
+Accepted personal browser input keeps its initiating identity while queued. The
+same signed-in person can stop it from another device if they still have access
+to control the conversation. Another person's queued input keeps its own
+cancellation authority, even when the conversation's assigned owner changes.
 
 While a prompt sits in the followup/collect queue (for example a TUI or
 webchat `chat.send` arriving while another turn is active), Gateway keeps a

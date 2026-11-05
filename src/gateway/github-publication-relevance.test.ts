@@ -32,19 +32,61 @@ const comparison = {
   merge_base_commit: { sha: source },
 };
 
+let credentialScope = 0;
 beforeEach(() => {
   vi.spyOn(gitHubPublicApi, "resolveGitHubApiCredentialScope").mockReturnValue({
     token: "synthetic-test-token",
-    cacheScope: "fixture",
+    cacheScope: `fixture-${++credentialScope}`,
     apiBaseUrl: "https://api.github.com",
   });
 });
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   clearRuntimeConfigSnapshot();
   vi.unstubAllGlobals();
 });
+
+it.each(["head", "snapshot", "credential", "expiry", "authority"])(
+  "reuses immutable coverage while observing changed %s",
+  async (change) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const fetchImpl = responses(tree);
+    expect(await check(fetchImpl)).toBe(true);
+    expect(await check(fetchImpl)).toBe(true);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    fetchImpl.mockClear();
+    if (change === "authority") {
+      await expect(
+        check(fetchImpl, {}, [pr], () => {
+          throw new Error("Session retired");
+        }),
+      ).rejects.toThrow("Session retired");
+      expect(fetchImpl).not.toHaveBeenCalled();
+      return;
+    }
+    if (change === "credential") {
+      vi.mocked(gitHubPublicApi.resolveGitHubApiCredentialScope).mockReturnValue({
+        token: "synthetic-replacement-token",
+        cacheScope: `replacement-${credentialScope}`,
+        apiBaseUrl: "https://api.github.com",
+      });
+    } else if (change === "expiry") {
+      vi.setSystemTime(Date.now() + 90_001);
+    }
+    const nextHead = change === "head" ? "7".repeat(40) : head;
+    fetchImpl.mockImplementation(async (input) =>
+      json(requestUrl(input).includes("/compare/") ? comparison : published(nextHead)),
+    );
+    expect(
+      await check(fetchImpl, change === "snapshot" ? { workspace_tree: "8".repeat(40) } : {}, [
+        { ...pr, headSha: nextHead },
+      ]),
+    ).toBe(change !== "snapshot");
+    expect(fetchImpl).toHaveBeenCalled();
+  },
+);
 
 const requestUrl = (input: RequestInfo | URL) =>
   typeof input === "string" ? input : input instanceof URL ? input.href : input.url;

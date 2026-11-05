@@ -49,7 +49,7 @@ export function writePluginInspectFixture(
   writeFileSync(
     fixtureScript,
     `#!/usr/bin/env node
-const fs = require("node:fs");
+import fs from "node:fs";
 const args = process.argv.slice(2);
 if (process.env.OPENCLAW_TEST_OPENCLAW_ARGV_LOG) {
   fs.appendFileSync(process.env.OPENCLAW_TEST_OPENCLAW_ARGV_LOG, args.join(" ") + "\\n");

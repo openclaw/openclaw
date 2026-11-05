@@ -4,10 +4,14 @@ import { expect, it } from "vitest";
 import type { createQaGatewayChild } from "./gateway-child.js";
 import type { createTempDirHarness } from "./temp-dir.test-helper.js";
 
+// Auth bootstrap drains piped input; capture-only Gateways must not wait on their lifeline.
+const drainAuthStdin =
+  'if (process.env.OPENCLAW_CLI === "1" && process.argv.includes("paste-api-key")) process.stdin.resume();';
+
 export function buildGatewayEnvironmentCaptureScript(observedEnvPath: string): string {
   return [
     'const fs = require("node:fs");',
-    'if (process.env.OPENCLAW_CLI === "1") process.stdin.resume();',
+    drainAuthStdin,
     "const env = {",
     "SAFE_VALUE: process.env.SAFE_VALUE,",
     "OPENCLAW_LIVE_SETUP_TOKEN_VALUE: process.env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE,",
@@ -35,7 +39,7 @@ export async function writeRepoCliSourceRootCaptureFixture(
     runnerPath,
     [
       'import fs from "node:fs";',
-      'if (process.env.OPENCLAW_CLI === "1") process.stdin.resume();',
+      drainAuthStdin,
       `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, process.env.OPENCLAW_DEV_SOURCE_ROOT ?? "");`,
     ].join("\n"),
     "utf8",

@@ -730,17 +730,13 @@ suite.define(() => {
           session: finishedChild,
           ancestorSessions: [finishedParent],
         });
-        // One closing line for the request: 77s since it was asked, not the
-        // resumed run's own 2s, with both runs' tokens.
+        // One closing line for the request with both runs' tokens; run duration
+        // belongs to the Worked summary, never a separate "Done in" line.
         const recap = activePane.locator(".chat-turn-recap");
         await recap.waitFor();
         expect(
           await recap.locator(":scope > span:not(.chat-turn-recap__claw)").allTextContents(),
-        ).toEqual([
-          "4.4k output tokens",
-          "·",
-          expect.stringMatching(/^Done in 1 minute,? 17 seconds$/),
-        ]);
+        ).toEqual(["4.4k output tokens"]);
         expect(await block.locator(".chat-turn-recap").count()).toBe(1);
         expect(await activePane.locator(".chat-group.assistant").count()).toBe(1);
         // Completed duration and child navigation remain available in Subagents.

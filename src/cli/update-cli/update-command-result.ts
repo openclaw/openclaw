@@ -60,6 +60,7 @@ import {
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { printResult } from "./progress.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
+import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import { resolveUpdateOwnershipFailure } from "./update-command-config-failure.js";
 import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
@@ -266,7 +267,7 @@ function primaryUpdateFailure(error: unknown): unknown {
 }
 
 export function createUpdateCommandFailureResult(
-  params: Pick<UpdateRunResult, "mode" | "root" | "recovery" | "durationMs"> & {
+  params: Pick<UpdateRunResult, "mode" | "root" | "recovery" | "durationMs" | "runId"> & {
     failure: { cause: unknown; detail?: string };
     admission?: true;
     phase?: string;
@@ -336,7 +337,7 @@ export function createUpdateCommandFailureResult(
   return {
     ...result,
     status: "error",
-    reason,
+    reason: cause instanceof UpdateActivationTimeoutError ? cause.reason : reason,
     failedStep,
     steps: stepResult?.failedStep ? stepResult.steps : [...(stepResult?.steps ?? []), failedStep],
   };
@@ -520,7 +521,7 @@ export type UpdateAdmissionReportParams = {
 
 export function createPreMutationUpdateResult(
   params: UpdateAdmissionReportParams,
-  outcome: Pick<UpdateRunResult, "status" | "recovery">,
+  outcome: Pick<UpdateRunResult, "status" | "recovery" | "runId">,
   phase = "requested",
 ): UpdateRunResult {
   const run = params.opts.run;

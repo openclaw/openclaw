@@ -7,6 +7,7 @@ import { isBunRuntime } from "../../daemon/runtime-binary.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { compareSemverStrings } from "../../infra/npm-registry-spec.js";
 import { SqliteReadOnlyInspectionContentionError } from "../../infra/sqlite-readonly-worker-protocol.js";
 import { assessInitialUpdateSnapshotCapacity } from "../../infra/update-candidate-snapshot.js";
 import {
@@ -16,15 +17,12 @@ import {
   resolveEffectiveUpdateChannel,
 } from "../../infra/update-channels.js";
 import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
-import {
-  compareSemverStrings,
-  resolveExtendedStablePackage,
-  resolveNpmChannelTag,
-} from "../../infra/update-check.js";
+import { resolveExtendedStablePackage, resolveNpmChannelTag } from "../../infra/update-check.js";
 import { readDevUpdateTarget } from "../../infra/update-dev-target.js";
 import {
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
+  isMainPackageTarget,
   isPackageTargetAlreadyCurrent,
   resolveGlobalInstallSpec,
   resolveGlobalInstallTarget,
@@ -101,7 +99,7 @@ export async function resolveUpdateCommandTarget(
       // Initialization and confirmations can outlive the earlier admission snapshot.
       const pkgOwnership = createSystemPackageOwnershipInspection(updateStepTimeoutMs);
       await pkgOwnership.assertUnowned(discoveredRoot);
-      let { devTarget } = prepared;
+      let { devTarget, servicePlan: managedServicePlan } = prepared;
       let root = prepared.servicePlan?.rootRedirect?.root ?? discoveredRoot;
       let updateInstallKind = installKind;
       let managedServiceRoot = prepared.servicePlan?.serviceRoot;
@@ -301,13 +299,11 @@ export async function resolveUpdateCommandTarget(
         }
       }
 
-      const unsupportedMainTag = updateInstallKind === "package" && explicitTag === "main";
-      if ((channel === "extended-stable" && explicitTag) || unsupportedMainTag) {
+      const unsupportedMain = updateInstallKind === "package" && isMainPackageTarget(explicitTag);
+      if ((channel === "extended-stable" && explicitTag) || unsupportedMain) {
         await refuseUpdate(
-          unsupportedMainTag
-            ? "unsupported-package-target"
-            : EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
-          unsupportedMainTag
+          unsupportedMain ? "unsupported-package-target" : EXTENDED_STABLE_TAG_UNSUPPORTED_REASON,
+          unsupportedMain
             ? "`--tag main` cannot update a package install. Run `openclaw update --channel dev` to switch to the supported Git checkout and build flow."
             : undefined,
         );
@@ -325,27 +321,22 @@ export async function resolveUpdateCommandTarget(
       let packageTargetSchemaVersions: OpenClawSchemaVersions | undefined;
       let packageRuntimeTarget: Parameters<typeof resolvePackageRuntimePreflight>[0]["target"];
       let managedServiceRootRedirect: ManagedServiceRootRedirect | null = null;
-      // The service runtime can differ even when its package root matches the shell.
       let managedServiceNodeRunner: string | undefined;
       let packageUpdateNodeRunner: string | undefined;
-      let serviceUnitTarget: string | undefined;
 
       if (updateInstallKind === "package") {
-        const servicePlan =
-          prepared.servicePlan ??
-          (await resolveManagedServicePackageUpdatePlan({
-            root,
-            pkgOwnership,
-            rebind: prepared.shouldRestart,
-          }));
-        await pkgOwnership.assertUnowned(servicePlan.rootRedirect?.root ?? root);
-        managedServiceRootRedirect = servicePlan.rootRedirect;
-        serviceUnitTarget = servicePlan.serviceUnitTarget;
-        managedServiceRoot = servicePlan.serviceRoot;
-        managedServiceNodeRunner = servicePlan.nodeRunner;
+        managedServicePlan ??= await resolveManagedServicePackageUpdatePlan({
+          root,
+          pkgOwnership,
+          rebind: prepared.shouldRestart,
+        });
+        await pkgOwnership.assertUnowned(managedServicePlan.rootRedirect?.root ?? root);
+        managedServiceRootRedirect = managedServicePlan.rootRedirect;
+        managedServiceRoot = managedServicePlan.serviceRoot;
+        managedServiceNodeRunner = managedServicePlan.nodeRunner;
         root = managedServiceRootRedirect?.root ?? discoveredRoot;
         if (!opts.json) {
-          const { rootRedirect, nodeRunner } = servicePlan;
+          const { rootRedirect, nodeRunner } = managedServicePlan;
           if (rootRedirect) {
             defaultRuntime.log(
               theme.muted(`Targeting managed gateway service package root: ${rootRedirect.root}`),
@@ -363,10 +354,10 @@ export async function resolveUpdateCommandTarget(
             if (nodeRunner) {
               defaultRuntime.log(theme.muted(`Managed gateway service runtime: ${nodeRunner}`));
             }
-          } else if (servicePlan.serviceRoot) {
+          } else if (managedServicePlan.serviceRoot) {
             defaultRuntime.log(
               theme.muted(
-                `Updating this installation and rebinding the managed Gateway from ${servicePlan.serviceRoot} after ownership and runtime verification.`,
+                `Updating this installation and rebinding the managed Gateway from ${managedServicePlan.serviceRoot} after ownership and runtime verification.`,
               ),
             );
           } else if (nodeRunner) {
@@ -416,7 +407,7 @@ export async function resolveUpdateCommandTarget(
           installKind,
           timeoutMs: updateStepTimeoutMs,
           pkgOwnership,
-          serviceUnitTarget,
+          serviceUnitTarget: managedServicePlan?.serviceUnitTarget,
         }).catch(async (error: unknown) => {
           if (hasCommandProcessCleanupError(error) || !(error instanceof UpdatePreMutationError)) {
             throw error;
@@ -571,7 +562,9 @@ export async function resolveUpdateCommandTarget(
             });
             if (targetMetadata.error || targetMetadata.version !== targetVersion) {
               const failure = createUpdatePreflightFailure(
-                targetMetadata.error ? "target-registry-metadata" : "target-version-resolution",
+                targetMetadata.error && !targetMetadata.versionMissing
+                  ? "target-registry-metadata"
+                  : "target-version-resolution",
                 `Could not inspect exact package target openclaw@${targetVersion}: ${targetMetadata.error ?? `registry returned version ${targetMetadata.version ?? "unknown"}`}.`,
               );
               await refuseUpdate(
@@ -626,6 +619,9 @@ export async function resolveUpdateCommandTarget(
           target: packageRuntimeTarget,
           root,
           nodeRunner: managedServiceNodeRunner ?? packageUpdateNodeRunner,
+          service: managedServicePlan?.service,
+          shouldRestart: prepared.shouldRestart,
+          runtimeRecovery: opts.runtimeRecoveryEnv ? { env: opts.runtimeRecoveryEnv } : undefined,
           timeoutMs: updateStepTimeoutMs,
         });
         if (!runtime.ok) {
@@ -637,12 +633,14 @@ export async function resolveUpdateCommandTarget(
           );
           return undefined;
         }
-        if (
-          runtime.value.nodeSecurityWarning &&
-          runtime.value.nodeSecurityWarning !== prepared.nodeSecurityWarning
-        ) {
-          warn(`SECURITY WARNING: ${runtime.value.nodeSecurityWarning}`);
-          recordNodeSecurityWarning(runtime.value.nodeSecurityWarning);
+        packageUpdateNodeRunner = runtime.value.nodeRunner ?? packageUpdateNodeRunner;
+        if (packageInstallEnv && packageUpdateNodeRunner) {
+          packageInstallEnv = withNodeRuntimePath(packageInstallEnv, packageUpdateNodeRunner);
+        }
+        const warning = runtime.value.nodeSecurityWarning;
+        if (warning && warning !== prepared.nodeSecurityWarning) {
+          warn(`SECURITY WARNING: ${warning}`);
+          recordNodeSecurityWarning(warning);
         }
       }
 

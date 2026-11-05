@@ -2,7 +2,7 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type * as GatewayCallModule from "../gateway/call.js";
 import { handleGatewayRequest } from "../gateway/server-methods.js";
@@ -10,6 +10,12 @@ import type { GatewayRequestOptions } from "../gateway/server-methods/types.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { acquireGatewayLock, type GatewayLockHandle } from "../infra/gateway-lock.js";
 import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
+import { workshopPluginConfig } from "../skills/test-support/workshop-config.test-support.js";
+import {
+  activateWorkshopPluginForTest,
+  shareCoreWithWorkshopPluginForTest,
+} from "../skills/test-support/workshop-plugin.test-support.js";
+import { historicalWorkshopChangesSchema } from "../skills/test-support/workshop-schema.test-support.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import {
@@ -65,6 +71,25 @@ async function runProgram(args: string[]): Promise<string> {
     return stdout;
   } finally {
     capture.mockRestore();
+  }
+}
+
+function expectArchivedReleaseNotes(archived: string, format: "text" | "json") {
+  if (format === "json") {
+    expect(JSON.parse(archived)).toMatchObject({
+      change: {
+        agentId: "writer",
+        skillName: "release-notes",
+        action: "archive",
+        actor: "user",
+        summary: "archived: superseded",
+        versionId: expect.stringMatching(/^\d{8}T\d{9}Z-archive$/),
+      },
+    });
+  } else {
+    expect(archived).toBe(
+      "Archived release-notes. Undo with: openclaw skills workshop restore release-notes --agent writer\n",
+    );
   }
 }
 
@@ -135,7 +160,8 @@ async function fixture(run: (state: OpenClawTestState, config: OpenClawConfig) =
             writer: { workspace: state.workspaceDir },
           },
         },
-        skills: { load: { watch: false }, workshop: { autonomous: { mode: "off" } } },
+        skills: { load: { watch: false } },
+        ...workshopPluginConfig({ autonomous: { mode: "off" } }),
       };
       await state.writeConfig(config);
       for (const [agent, content] of [
@@ -163,23 +189,7 @@ async function fixture(run: (state: OpenClawTestState, config: OpenClawConfig) =
       try {
         seedLock.run(() =>
           runOpenClawStateWriteTransaction(({ db }) => {
-            db.exec(`CREATE TABLE IF NOT EXISTS skill_workshop_changes (
-            cursor_id INTEGER NOT NULL,
-            change_id TEXT NOT NULL PRIMARY KEY,
-            agent_id TEXT NOT NULL,
-            skill_name TEXT NOT NULL,
-            action TEXT NOT NULL CHECK (action IN ('create', 'patch', 'write_file', 'remove_file', 'archive', 'restore')),
-            actor TEXT NOT NULL CHECK (actor IN ('agent', 'review', 'curator', 'user')),
-            summary TEXT NOT NULL,
-            version_id TEXT,
-            session_key TEXT,
-            run_id TEXT,
-            created_at_ms INTEGER NOT NULL
-          ) STRICT;
-          CREATE UNIQUE INDEX IF NOT EXISTS skill_workshop_changes_cursor_id_idx
-            ON skill_workshop_changes(cursor_id);
-          CREATE INDEX IF NOT EXISTS idx_skill_workshop_changes_agent_time
-            ON skill_workshop_changes(agent_id, created_at_ms);`);
+            db.exec(historicalWorkshopChangesSchema);
             db.prepare(`INSERT INTO skill_workshop_changes
             (cursor_id, change_id, agent_id, skill_name, action, actor, summary, version_id, created_at_ms)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
@@ -198,9 +208,12 @@ async function fixture(run: (state: OpenClawTestState, config: OpenClawConfig) =
       } finally {
         await seedLock.release();
       }
+      // The Gateway serves skills.workshop.* from the plugin it loaded at startup.
+      const plugins = await activateWorkshopPluginForTest(config);
       try {
         await run(state, config);
       } finally {
+        plugins.reset();
         await closeSkillsWatchers(true);
         await closeStateDatabaseForTest();
       }
@@ -223,6 +236,9 @@ async function persistedChanges(state: OpenClawTestState) {
     database.close();
   }
 }
+
+// The skill-workshop plugin owns `openclaw skills workshop`; it must reach the mocked transport.
+beforeAll(shareCoreWithWorkshopPluginForTest);
 
 afterEach(() => {
   transport.call.mockReset();
@@ -381,22 +397,7 @@ describe("openclaw skills workshop persisted CLI contract", () => {
           "superseded",
           ...output,
         ]);
-        if (format === "json") {
-          expect(JSON.parse(archived)).toMatchObject({
-            change: {
-              agentId: "writer",
-              skillName: "release-notes",
-              action: "archive",
-              actor: "user",
-              summary: "archived: superseded",
-              versionId: expect.stringMatching(/^\d{8}T\d{9}Z-archive$/),
-            },
-          });
-        } else {
-          expect(archived).toBe(
-            "Archived release-notes. Undo with: openclaw skills workshop restore release-notes --agent writer\n",
-          );
-        }
+        expectArchivedReleaseNotes(archived, format);
         const live = path.join(state.agentDir("writer"), "workshop-skills", "release-notes");
         await expect(fs.stat(live)).rejects.toMatchObject({ code: "ENOENT" });
         const rows = await persistedChanges(state);
@@ -460,22 +461,7 @@ describe("openclaw skills workshop persisted CLI contract", () => {
             "superseded",
             ...output,
           ]);
-          if (format === "json") {
-            expect(JSON.parse(archived)).toMatchObject({
-              change: {
-                agentId: "writer",
-                skillName: "release-notes",
-                action: "archive",
-                actor: "user",
-                summary: "archived: superseded",
-                versionId: expect.stringMatching(/^\d{8}T\d{9}Z-archive$/),
-              },
-            });
-          } else {
-            expect(archived).toBe(
-              "Archived release-notes. Undo with: openclaw skills workshop restore release-notes --agent writer\n",
-            );
-          }
+          expectArchivedReleaseNotes(archived, format);
           await expect(fs.stat(live)).rejects.toMatchObject({ code: "ENOENT" });
           const restored = await runProgram([
             "restore",

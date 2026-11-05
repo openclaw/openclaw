@@ -4377,6 +4377,41 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(talkMode.canKeepContinuousTalkActiveInBackground)
     }
 
+    @Test @MainActor func `background expiry preserves continuous Talk until it stops`() async {
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: "talk.background.enabled")
+        defaults.set(true, forKey: "talk.background.enabled")
+        let (talkMode, appModel) = makeTalkModel()
+        talkMode.updateGatewayConnected(true)
+        talkMode.isEnabled = true
+        talkMode._test_setContinuousTranscriptProcessingActive(true)
+        appModel.gatewayConnected = true
+        defer {
+            talkMode.stop()
+            appModel.setScenePhase(.active)
+            if let previous {
+                defaults.set(previous, forKey: "talk.background.enabled")
+            } else {
+                defaults.removeObject(forKey: "talk.background.enabled")
+            }
+        }
+
+        appModel.setScenePhase(.background)
+        appModel.suppressBackgroundReconnect(reason: "background_grace_timer")
+
+        #expect(!appModel.backgroundReconnectSuppressed)
+        #expect(appModel.gatewayConnected)
+        #expect(talkMode.isGatewayConnected)
+        #expect(talkMode.canKeepContinuousTalkActiveInBackground)
+
+        talkMode.stop()
+        appModel.suppressBackgroundReconnect(reason: "node_loop:lease_expired")
+        #expect(appModel.backgroundReconnectSuppressed)
+        await waitForTalkCondition { !talkMode.isGatewayConnected }
+        #expect(!appModel.gatewayConnected)
+        #expect(appModel.gatewayStatusText == "Background idle")
+    }
+
     @Test @MainActor func `late finalizer release cannot restart Voice Wake in background`() async throws {
         let (talkMode, appModel) = makeTalkModel()
         let barrier = TalkPreparationBarrier()
@@ -8061,6 +8096,20 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
                 token: nil,
                 bootstrapToken: nil,
                 password: nil,
+                hasStoredOperatorToken: false,
+                hasVerifiedIngressPrincipal: true))
+        #expect(
+            !NodeAppModel.shouldStartOperatorGatewayLoop(
+                token: nil,
+                bootstrapToken: "fresh-bootstrap-token",
+                password: nil,
+                hasStoredOperatorToken: false,
+                hasVerifiedIngressPrincipal: true))
+        #expect(
+            NodeAppModel.shouldStartOperatorGatewayLoop(
+                token: nil,
+                bootstrapToken: nil,
+                password: nil,
                 hasStoredOperatorToken: true))
         #expect(
             NodeAppModel.shouldStartOperatorGatewayLoop(
@@ -9170,7 +9219,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(ShareGatewayRelaySettings.loadLastEvent()?.contains("Sent to gateway") == true)
     }
 
-    @Test @MainActor func `operator scopes use the active gateway token`() throws {
+    @Test @MainActor func `stored operator scopes request permissions without granting disconnected authority`() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -9216,8 +9265,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             token: "operator-token",
             scopes: ["operator.read", "operator.admin", "operator.approvals"],
             gatewayID: authenticationOwnerID)
-        appModel.refreshOperatorAdminScopeFromStore()
-        #expect(appModel.hasOperatorAdminScope == true)
+        #expect(appModel.hasOperatorAdminScope == false)
         #expect(appModel._test_shouldRequestStoredOperatorAdminScope(gatewayID: authenticationOwnerID))
         #expect(appModel._test_shouldRequestStoredOperatorApprovalScope(
             gatewayID: authenticationOwnerID,
@@ -9233,7 +9281,6 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             deviceId: identity.deviceId,
             role: "operator",
             gatewayID: authenticationOwnerID)
-        appModel.refreshOperatorAdminScopeFromStore()
         #expect(appModel.hasOperatorAdminScope == false)
     }
 

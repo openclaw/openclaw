@@ -71,4 +71,14 @@ describe("snooze wake-time presentation", () => {
       }
     }
   });
+
+  it("keeps compact wake labels to a day beyond today", async () => {
+    await i18n.setLocale("en");
+    const today = new Date(2026, 8, 29, 9);
+    const compact = (wake: Date) => formatSessionSnoozeWakeTime(wake.getTime(), today, true);
+    expect(compact(new Date(2026, 8, 29, 18))).toBe("6:00 PM");
+    expect(compact(new Date(2026, 8, 30, 9))).toBe("Tomorrow");
+    expect(compact(new Date(2026, 9, 5, 9))).toBe("Mon");
+    expect(compact(new Date(2026, 9, 10, 9))).toBe("Oct 10");
+  });
 });

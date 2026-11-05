@@ -6,18 +6,17 @@ import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
-import { warmWhenIdle } from "../../../lib/idle-warmup.ts";
 import type { ProviderQuotaGroup } from "../../../lib/provider-quota-summary.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type {
   ContextNoticeProps,
   getContextNoticeViewModel,
 } from "./chat-composer-context-model.ts";
+import { ContextCompactButton } from "./chat-context-compact.tsx";
 
 const ChatContextBreakdown = lazy(() => import("./chat-context-breakdown.tsx"), {
   export: "ChatContextBreakdown",
 });
-warmWhenIdle(ChatContextBreakdown.preload);
 
 function ContextPopoverSkeleton() {
   return (
@@ -195,15 +194,18 @@ function QuotaGroup(props: { group: ProviderQuotaGroup; usageHref: string }) {
       </div>
       <div class="context-usage__limits">
         <For each={props.group.windows} keyed={false}>
-          {(limit, index) => (
-            <QuotaRow
-              label={formatUsageWindowLabel(limit().label)}
-              usedPercent={limit().usedPercent}
-              value={`${limit().usedPercent}%`}
-              reset={quotaReset(limit().resetAt)}
-              index={index}
-            />
-          )}
+          {(limit, index) => {
+            const usedPercent = () => Math.max(0, Math.min(100, Math.round(limit().usedPercent)));
+            return (
+              <QuotaRow
+                label={formatUsageWindowLabel((limit().label || "").trim())}
+                usedPercent={usedPercent()}
+                value={`${usedPercent()}%`}
+                reset={quotaReset(limit().resetAt)}
+                index={index}
+              />
+            );
+          }}
         </For>
         <For each={props.group.budgets} keyed={false}>
           {(budget, index) => (
@@ -230,16 +232,15 @@ export function ChatComposerContextPanel(
   props: ContextNoticeProps & {
     model: ReturnType<typeof getContextNoticeViewModel>;
     currentGroup: ProviderQuotaGroup | undefined;
+    hasSubscription: boolean;
+    quotaUnknown: boolean;
     open: boolean;
   },
 ) {
   // Plan-billed sessions hide dollar estimates: subscription usage is bounded
   // by the plan windows below, and per-token math would misread as real spend.
-  // Billing mode is provider-level: session rows do not record which auth
-  // profile served the run, so a provider with both an API key and a
-  // subscription resolves to subscription display (per-run credential
-  // attribution is #102807).
-  const showCosts = () => !props.currentGroup;
+  // Billing classification is independent of account-specific quota availability.
+  const showCosts = () => !props.currentGroup && !props.hasSubscription;
   const usageHref = () => `${normalizeBasePath(props.providerUsage?.basePath ?? "")}/usage`;
   const formatStat = (value: number | null) =>
     value === null ? t("usage.common.emptyValue") : formatCompactTokenCount(value);
@@ -269,7 +270,8 @@ export function ChatComposerContextPanel(
                     : "chat.composer.contextUsage.contextWindow",
                 )}
               </span>
-              <strong class="context-usage__context-value">
+              {/* Translation replaces the text anchors used by live token updates. */}
+              <strong class="context-usage__context-value" translate="no">
                 {context().detail} · {context().approximate ? "~" : ""}
                 {context().pct}%
               </strong>
@@ -289,15 +291,25 @@ export function ChatComposerContextPanel(
                 />
               </Loading>
             </Show>
-            <button
-              type="button"
-              class="context-usage__open"
-              disabled={!props.onOpenContext}
-              onClick={() => props.onOpenContext?.()}
-            >
-              {t("chat.sessionDetails.contextOpen")}
-              <Icon name="chevronRight" />
-            </button>
+            <div class="context-usage__actions">
+              <button
+                type="button"
+                class="context-usage__open"
+                disabled={!props.onOpenContext}
+                onClick={() => props.onOpenContext?.()}
+              >
+                {t("chat.sessionDetails.contextOpen")}
+                <Icon name="chevronRight" />
+              </button>
+              {/* A secondary action beside View context: the ring already carries the warning.
+                  Compacting keeps the popover open so the budget above shows the result. */}
+              <ContextCompactButton
+                onCompact={props.onCompact}
+                compactionStatus={props.compactionStatus}
+                runActive={props.runActive}
+                connected={props.connected !== false}
+              />
+            </div>
             <div class="context-usage__separator" />
             <div class="context-usage__latest">
               <span>{t("chat.composer.contextUsage.latestRun")}</span>
@@ -323,6 +335,11 @@ export function ChatComposerContextPanel(
       </Show>
       <Show when={props.currentGroup}>
         {(group) => <QuotaGroup group={group()} usageHref={usageHref()} />}
+      </Show>
+      <Show when={props.quotaUnknown}>
+        <p class="context-usage__stats" role="status">
+          {t("chat.composer.contextUsage.quotaAccountUnknown")}
+        </p>
       </Show>
     </section>
   );

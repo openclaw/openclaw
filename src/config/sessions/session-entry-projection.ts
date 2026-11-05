@@ -14,10 +14,12 @@ type RetiredSessionMetadata = {
 };
 
 export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
+  localWorkspaceHandoff: undefined,
   activeWriterRunId: undefined,
   lastRunId: undefined,
   lifecycleRunId: undefined,
   resumeAfterRestart: undefined,
+  mainRestartRecovery: undefined,
   pendingProjectGitUrl: undefined,
   pendingWorktree: undefined,
   priorWorkspace: undefined,
@@ -26,6 +28,7 @@ export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
 } satisfies Partial<InternalSessionEntry>;
 
 const PRIVATE_SESSION_ENTRY_KEYS = [
+  "localWorkspaceHandoff",
   "inheritedGitContributorProfileIds",
   "profileInvolvement",
   "cliHistoryBoundary",
@@ -34,6 +37,8 @@ const PRIVATE_SESSION_ENTRY_KEYS = [
   "lastRunId",
   "lifecycleRunId",
   "resumeAfterRestart",
+  "operatorSources",
+  "mainRestartRecovery",
   "pendingProjectGitUrl",
   "pendingWorktree",
   "priorWorkspace",
@@ -60,7 +65,6 @@ function stripPrivateSessionEntryFields(
   // Existing databases may retain retired execution-recovery snapshots. Never expose them.
   for (const key of Object.keys(projected)) {
     if (
-      key === "mainRestartRecovery" ||
       key === "pendingExecNotifications" ||
       key === "subagentRecovery" ||
       key.startsWith("restartRecovery")

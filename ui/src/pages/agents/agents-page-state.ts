@@ -3,7 +3,6 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { pathForAgentPanel } from "../../app-route-paths.ts";
 import { togglePinnedAgent } from "../../app/bootstrap-navigation-preferences.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { buildToolsEffectiveRequestKey, type AgentsState } from "../../lib/agents/index.ts";
 import { setDefaultAgent } from "../../lib/agents/mutations.ts";
 import { DEFAULT_AGENT_PANEL, type AgentsPanel } from "../../lib/agents/panels.ts";
@@ -17,6 +16,7 @@ import {
 import type { CronState } from "../../lib/cron/types.ts";
 import {
   canCallGatewayMethod,
+  canPresentGatewayMethod,
   type GatewayMethodOperatorScope,
 } from "../../lib/gateway-methods.ts";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
@@ -159,7 +159,6 @@ export function createAgentsPageState(
   const identity = createAgentIdentityEditor(context, state, {
     snapshot: () => gateway.snapshot,
     saves: () => identitySaves,
-    retired: presentation.retired,
     canCall: (method) => canCall(method, "operator.admin"),
     isCurrent: isCurrentRequest,
     onSaved: syncAgentState,
@@ -210,6 +209,12 @@ export function createAgentsPageState(
       identitySaves = selectionDrafts.bindContext(context);
       selectionDrafts.observeGateway(gatewaySnapshot);
       syncGatewayState();
+      if (gatewaySnapshot.phase === "connected" && !canCall("tools.catalog", "operator.read")) {
+        toolsCatalog.reset();
+      }
+      if (gatewaySnapshot.phase === "connected" && !canCall("tools.effective", "operator.read")) {
+        effectiveTools.reset();
+      }
       if (becameConnected && Object.values(state.identityDraft).some((value) => value !== null)) {
         identity.schedule();
       }
@@ -225,10 +230,14 @@ export function createAgentsPageState(
     isCurrentRequest(client, generation, agentId, {});
   const toolsCatalog = createAgentToolsCatalog({
     scope: () => state,
+    canRead: () =>
+      canPresentGatewayMethod(context.gateway.snapshot, "tools.catalog", "operator.read"),
     isCurrent: isCurrentToolsRead,
   });
   const effectiveTools = createAgentEffectiveTools({
     scope: () => state,
+    canRead: () =>
+      canPresentGatewayMethod(context.gateway.snapshot, "tools.effective", "operator.read"),
     isCurrent: isCurrentToolsRead,
     isSessionAgent: (agentId) => agentId === chatAgentId(),
     isPresented: () => state.agentsPanel === "tools",
@@ -354,7 +363,7 @@ export function createAgentsPageState(
       void refreshAgents("ensure");
       return;
     }
-    ensureAgentIdentities();
+    ensureSelectedIdentity();
     loadActivePanelData();
   }
 
@@ -375,10 +384,8 @@ export function createAgentsPageState(
     );
   }
 
-  function ensureAgentIdentities() {
-    void context.agentIdentity.ensure(
-      listSelectableAgents(state.agentsList?.agents ?? []).map((entry) => entry.id),
-    );
+  function ensureSelectedIdentity() {
+    void context.agentIdentity.ensure([state.agentsSelectedId]);
   }
 
   function loadActivePanelData() {
@@ -476,26 +483,20 @@ export function createAgentsPageState(
     });
   }
 
-  async function refreshAgents(mode: "ensure" | "refresh" | "save" = "refresh") {
+  async function refreshAgents(mode: "ensure" | "refresh" = "refresh") {
     const client = state.client;
-    if (!client || (mode === "save" && !canCall("config.set", "operator.admin"))) {
+    if (!client) {
       return;
     }
     const generation = state.requestGeneration;
     const agents = context.agents;
-    if (mode === "save" && !(await context.runtimeConfig.save())) {
-      return;
-    }
     await (mode === "ensure" ? agents.ensureList() : agents.refreshList());
     if (!isCurrentRequest(client, generation, undefined, { agents })) {
       return;
     }
-    if (mode === "save") {
-      effectiveTools.reset();
-    }
     syncAgentState(agents);
-    if (mode !== "refresh") {
-      ensureAgentIdentities();
+    if (mode === "ensure") {
+      ensureSelectedIdentity();
     }
     loadActivePanelData();
   }
@@ -603,7 +604,11 @@ export function createAgentsPageState(
       },
       pinnedAgentIds: navigation.read().pinnedAgentIds,
       onTogglePinnedAgent: (agentId: string) => togglePinnedAgent(context.navigation, agentId),
-      onRefresh: () => void refreshAgents(),
+      // Refresh is this page's one way to pick up edits made outside it, config included.
+      onRefresh: () => {
+        void refreshAgents();
+        void context.runtimeConfig.refresh({ background: true });
+      },
       onCreateAgent: () => {
         if (canCall("openclaw.chat", "operator.admin")) {
           context.navigate("custodian", { search: "?intent=new-agent" });
@@ -611,8 +616,7 @@ export function createAgentsPageState(
       },
       onSelectPanel: (panel: AgentsPanel) =>
         navigateToAgentPanel(context, selectedAgentId, state.agentsPanel, panel),
-      onConfigReload: () => context.runtimeConfig.discardDraft({ reloadOnly: true }),
-      onConfigSave: () => refreshAgents("save"),
+      onConfigRetry: () => void context.runtimeConfig.refresh(),
       onOpenMemoryImport: () => context.navigate("memory-import"),
       onOpenMemorySettings: () => context.navigate("memory"),
       onOpenAgentDefaults: () => context.navigate("ai-agents"),
@@ -627,7 +631,7 @@ export function createAgentsPageState(
   onSettled(() => {
     gateway.connect();
     syncAgentState();
-    ensureAgentIdentities();
+    ensureSelectedIdentity();
     const selection = context.settingsAgentSelection;
     let intentRevision = selection.intentRevision;
     const stops = [
@@ -651,6 +655,7 @@ export function createAgentsPageState(
         intentRevision = selection.intentRevision;
         const previousId = state.agentsSelectedId;
         syncSettingsSelection();
+        ensureSelectedIdentity();
         const agentId = state.agentsSelectedId;
         const route = context.router.getState();
         if (
@@ -670,7 +675,7 @@ export function createAgentsPageState(
       // Roster and file publications adopt metadata before dependent file reads can settle.
       context.agents.subscribe(() => {
         syncAgentState();
-        ensureAgentIdentities();
+        ensureSelectedIdentity();
         loadActivePanelData();
         publish();
       }),
@@ -702,7 +707,6 @@ export function createAgentsPageState(
     };
   });
   return {
-    identitySavePending: () => identity.saving() || readData().identitySaving,
     read() {
       observation.read();
       return viewProps();

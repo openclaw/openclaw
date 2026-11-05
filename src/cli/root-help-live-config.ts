@@ -15,7 +15,7 @@ export async function loadRootHelpRenderOptionsForConfigSensitivePlugins(
   const configModule = await import("../config/config.js");
   const snapshot = await configModule.readConfigFileSnapshot({
     observe: false,
-    skipPluginValidation: true,
+    pluginValidation: "core-only",
   });
   if (!snapshot.valid) {
     return null;

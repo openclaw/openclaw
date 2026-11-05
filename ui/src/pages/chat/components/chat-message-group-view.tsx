@@ -61,6 +61,7 @@ function MessageActionsRow(props: {
   options: NativeMessageGroupOptions;
   class?: string;
   reactionGroup?: MessageGroupData;
+  timestamp?: number;
 }) {
   let owner: HTMLDivElement | undefined;
   return (
@@ -87,6 +88,9 @@ function MessageActionsRow(props: {
         actionOwner={() => owner}
         messageKey={props.messageKey}
       />
+      <Show when={props.timestamp !== undefined}>
+        <MessageMeta timestamp={props.timestamp!} meta={null} />
+      </Show>
     </div>
   );
 }
@@ -108,11 +112,7 @@ function PreparedMessage(props: {
     const actionDetails = prepared().actions;
     let assistantMessageDisclosure: AssistantMessageDisclosure | undefined;
     const fullMessage = actionDetails?.fullMessage;
-    if (
-      fullMessage &&
-      props.options.loadFullAssistantMessage &&
-      props.options.onToggleAssistantMessageExpanded
-    ) {
+    if (fullMessage) {
       const { messageId, state: expansion } = fullMessage;
       const retriesExhausted =
         expansion?.status === "error" && expansion.revision >= FULL_MESSAGE_RETRY_REVISION_LIMIT;
@@ -137,7 +137,6 @@ function PreparedMessage(props: {
           ? props.options.firstBubbleKey
           : (props.group.messages.find((message) => message.hasVisibleContent)?.key ?? null),
       isStreaming: isStreaming(),
-      ownsTerminalStatus: props.item.presentationOwnsTerminalStatus,
       entryId,
       // Tool-row file links carry their message like rendered markdown links, so earlier
       // messages keep reading their original source; sender-owned links stay session-scoped.
@@ -265,10 +264,15 @@ function GroupAvatar(props: {
 }) {
   const frame = () => props.frame;
   const options = () => frame().options;
+  // Agent-written openings show their agent like forwarded agent messages do.
+  const agentSenderId = () => {
+    const identity = frame().group.sender?.identity;
+    return identity?.type === "agent" ? identity.id : undefined;
+  };
   return (
     <Show when={frame().hasAvatar}>
       <Show
-        when={frame().isForwarded}
+        when={frame().isForwarded || agentSenderId()}
         fallback={
           <ChatAvatar
             elementRef={props.elementRef}
@@ -291,7 +295,7 @@ function GroupAvatar(props: {
         }
       >
         <ForwardedAvatar
-          agentId={frame().group.senderSession?.agentId}
+          agentId={frame().group.senderSession?.agentId ?? agentSenderId()}
           options={options()}
           elementRef={props.elementRef}
         />
@@ -447,6 +451,11 @@ function FramedMessage(props: {
               options={frame().options}
               class="chat-message-actions-row"
               reactionGroup={frame().group}
+              timestamp={
+                frame().normalizedRole === "user"
+                  ? prepared().source.normalizedMessage.timestamp
+                  : undefined
+              }
             />
           }
         >
@@ -585,7 +594,17 @@ function FramedMessageGroup(props: {
                 {/* Keep delivery status and timestamp in one slot to avoid wrapping them together. */}
                 <Show
                   when={frame().sendStatus}
-                  fallback={<MessageMeta timestamp={props.group.timestamp} meta={frame().meta} />}
+                  fallback={
+                    <MessageMeta
+                      timestamp={
+                        frame().normalizedRole === "user"
+                          ? frame().preparedMessages[frame().lastMessageIndex]!.source
+                              .normalizedMessage.timestamp
+                          : props.group.timestamp
+                      }
+                      meta={frame().meta}
+                    />
+                  }
                 >
                   <ChatSendStatus status={frame().sendStatus} actions={options()} />
                 </Show>

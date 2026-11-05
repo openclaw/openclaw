@@ -127,7 +127,7 @@ Key settings (see [/gateway/configuration](/gateway/configuration) for shared ch
 - `channels.msteams.certificateThumbprint`: certificate thumbprint; accepted, not required for auth.
 - `channels.msteams.useManagedIdentity`: enable managed identity auth (federated mode).
 - `channels.msteams.managedIdentityClientId`: client ID for user-assigned managed identity.
-- `channels.msteams.sharePointSiteId`: SharePoint site ID for file uploads in group chats/channels (see [Sending files in group chats](/channels/msteams/messaging#sending-files-in-group-chats)).
+- `channels.msteams.sharePointSiteId`: SharePoint site ID for file uploads. When omitted, standard channels resolve their team site automatically; group chats and private/shared channels require an explicit site (see [Sending files in group chats](/channels/msteams/messaging#sending-files-in-group-chats)).
 - `channels.msteams.welcomeCard`, `channels.msteams.groupWelcomeCard`, `channels.msteams.promptStarters`: welcome Adaptive Card shown on first DM/group contact, and its suggested prompt buttons.
 - `channels.msteams.responsePrefix`: text prefixed to outbound replies.
 - `channels.msteams.feedbackEnabled` (default `true`), `channels.msteams.feedbackReflection` (default `true`), `channels.msteams.feedbackReflectionCooldownMs`: thumbs-up/down feedback on replies and the negative-feedback reflection follow-up.

@@ -38,14 +38,16 @@ import {
   compactToolSearchCatalogEntry,
   isDirectVisibleCatalogTool,
 } from "./tool-search-catalog.js";
-import { formatToolSearchControlResult, type ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
-  type ToolSearchCatalogEntry,
-  type ToolSearchCatalogRef,
-  type ToolSearchToolContext,
+} from "./tool-search-protocol.js";
+import { formatToolSearchControlResult, type ToolSearchRuntime } from "./tool-search-runtime.js";
+import type {
+  ToolSearchCatalogEntry,
+  ToolSearchCatalogRef,
+  ToolSearchToolContext,
 } from "./tool-search-types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -182,7 +184,7 @@ export function buildCodeModeCatalogPrompt(
       ? " Installed skills: use `await skills.search(query, limit)` to find relevant skills. `await skills.list()` lists up to 20 entries; pass an offset for later pages."
       : "") +
     (hasSkillTool("skills_read")
-      ? " Use `await skills.read(name)` for complete installed skill instructions. A known exact name can be read directly."
+      ? " Use `await skills.read(name)` for complete installed skill instructions. A known exact name can be read directly. For local skill companions use `await skills.read(name, relativePath)`; restricted placements are instruction-only."
       : "");
   // The catalog already reserves built-in namespace globals without constructing their runtimes.
   const bindings = createCodeModeCatalogBindings(
