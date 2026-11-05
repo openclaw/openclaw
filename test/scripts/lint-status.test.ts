@@ -58,6 +58,8 @@ export function waitForFile(file) {
     "lib/arg-utils.runtime.mjs",
     "lib/local-check-runtime.mts",
     "lib/check-limits.mts",
+    "lib/release-context.mjs",
+    "lib/release-version.mjs",
     "lib/oxlint-changed-scope.mts",
     "lib/ci-static-check-evidence.mjs",
     "lib/direct-run.mjs",

@@ -3,12 +3,27 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveRepoToolBinPath } from "../../scripts/lib/local-check-runtime.mts";
 import { createChangedOxlintEnv } from "../../scripts/lib/oxlint-changed-scope.mts";
 import { copyOxlintConfigFixture, createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
+
+beforeEach(() => {
+  vi.stubEnv("GITHUB_ACTIONS", "");
+  // CI release targets must not override the branch owned by each fixture.
+  for (const key of [
+    "OPENCLAW_RELEASE_CONTEXT_REF",
+    "GITHUB_BASE_REF",
+    "GITHUB_REF",
+    "GITHUB_EVENT_NAME",
+    "GITHUB_EVENT_PATH",
+  ]) {
+    vi.stubEnv(key, "");
+  }
+});
+afterEach(() => vi.unstubAllEnvs());
 
 const sourceProjectOwners = [
   "agents",
@@ -494,7 +509,7 @@ describe("oxlint config", () => {
     expect(tsconfig.exclude ?? []).not.toContain("**/*.mts");
   });
 
-  it("disables release line limits while retaining correctness and other limits", () => {
+  it("keeps release line limits advisory while retaining correctness and other limits", () => {
     const root = fs.realpathSync(createTempDir("openclaw-oxlint-release-limits-"));
     fs.mkdirSync(path.join(root, ".git"));
     fs.writeFileSync(path.join(root, "package.json"), "{}");
@@ -550,11 +565,76 @@ describe("oxlint config", () => {
     );
     const report = lint(1);
     expect(report.diagnostics.map(({ code }) => code).toSorted()).toEqual([
+      "eslint(max-lines)",
+      "eslint(max-lines-per-function)",
       "eslint(max-params)",
       "eslint(no-var)",
     ]);
     write("fixture.ts", "export function f(a: number) {\n  const c = a;\n  return c;\n}\n");
-    expect(lint(0).diagnostics).toEqual([]);
+    expect(
+      lint(0)
+        .diagnostics.map(({ code }) => code)
+        .toSorted(),
+    ).toEqual(["eslint(max-lines)", "eslint(max-lines-per-function)"]);
+  });
+
+  it("keeps release cap suppressions valid without weakening unused-disable enforcement", () => {
+    const root = fs.realpathSync(createTempDir("openclaw-oxlint-release-caps-"));
+    fs.mkdirSync(path.join(root, ".git"));
+    copyOxlintConfigFixture(root);
+    fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+    fs.mkdirSync(path.join(root, "src"));
+    const oversized = "export const values = [\n" + "  0,\n".repeat(702) + "];\n";
+    fs.writeFileSync(
+      path.join(root, "src/suppressed.ts"),
+      "/* oxlint-disable max-lines -- Existing cap debt. */\n" + oversized,
+    );
+    fs.writeFileSync(path.join(root, "src/advisory.ts"), oversized);
+    fs.writeFileSync(
+      path.join(root, "src/unused.ts"),
+      "/* oxlint-disable no-var -- Deliberately unused. */\nexport const value = 1;\n",
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/run-oxlint.mts"),
+        "--openclaw-focused-config",
+        "--threads=1",
+        "--format",
+        "json",
+        "--report-unused-disable-directives-severity=error",
+        "src/suppressed.ts",
+        "src/advisory.ts",
+        "src/unused.ts",
+      ],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: { ...process.env, GITHUB_ACTIONS: "true", GITHUB_BASE_REF: "release/2026.11.2" },
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    const report = JSON.parse(result.stdout.split("\n::")[0]!) as {
+      diagnostics: Array<{ code: string; severity: string; filename: string; message: string }>;
+    };
+    expect(report.diagnostics.filter((item) => item.filename.endsWith("suppressed.ts"))).toEqual(
+      [],
+    );
+    expect(report.diagnostics).toContainEqual(
+      expect.objectContaining({
+        filename: "src/advisory.ts",
+        severity: "warning",
+        code: "eslint(max-lines)",
+      }),
+    );
+    expect(report.diagnostics).toContainEqual(
+      expect.objectContaining({
+        filename: "src/unused.ts",
+        severity: "error",
+        message: expect.stringContaining("Unused oxlint-disable directive"),
+      }),
+    );
   });
 
   it("keeps native cap scopes and correctness while warning on untouched local line debt", () => {

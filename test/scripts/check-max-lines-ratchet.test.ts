@@ -16,7 +16,19 @@ const parser = createNativeTypeScriptParser();
 afterAll(() => parser.close());
 
 const tempDirs = createTempDirTracker();
-beforeEach(() => vi.stubEnv("GITHUB_ACTIONS", ""));
+beforeEach(() => {
+  vi.stubEnv("GITHUB_ACTIONS", "");
+  // CI release targets must not override the branch owned by each fixture.
+  for (const key of [
+    "OPENCLAW_RELEASE_CONTEXT_REF",
+    "GITHUB_BASE_REF",
+    "GITHUB_REF",
+    "GITHUB_EVENT_NAME",
+    "GITHUB_EVENT_PATH",
+  ]) {
+    vi.stubEnv(key, "");
+  }
+});
 const nestedGitEnvKeys = [
   "GIT_ALTERNATE_OBJECT_DIRECTORIES",
   "GIT_COMMON_DIR",

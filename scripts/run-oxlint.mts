@@ -130,8 +130,8 @@ function advisoryLimitRules(
   let enabled = false;
   for (const [name, rule] of Object.entries(rules ?? {})) {
     const id = name.startsWith("eslint/") ? name.slice("eslint/".length) : name;
-    const disabled = release && (id === "max-lines" || id === "max-lines-per-function");
-    if (!LIMIT_RULES.has(id) || (onlyMaxLines && id !== "max-lines" && !disabled)) {
+    const releaseCap = release && (id === "max-lines" || id === "max-lines-per-function");
+    if (!LIMIT_RULES.has(id) || (onlyMaxLines && id !== "max-lines" && !releaseCap)) {
       continue;
     }
     originalRules[name] = rule;
@@ -149,11 +149,9 @@ function advisoryLimitRules(
     ) {
       continue;
     }
-    overrides[name] = Array.isArray(rule)
-      ? [disabled ? "off" : "warn", ...rule.slice(1)]
-      : disabled
-        ? "off"
-        : "warn";
+    // Keep cap rules enabled at warning severity so valid inline suppressions
+    // do not become unused-disable errors on release branches.
+    overrides[name] = Array.isArray(rule) ? ["warn", ...rule.slice(1)] : "warn";
     enabled = true;
   }
   return { rules: overrides, originalRules, enabled };

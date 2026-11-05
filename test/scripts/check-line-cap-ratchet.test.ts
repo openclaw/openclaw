@@ -6,7 +6,19 @@ import { main } from "../../scripts/check-line-cap-ratchet.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-beforeEach(() => vi.stubEnv("GITHUB_ACTIONS", ""));
+beforeEach(() => {
+  vi.stubEnv("GITHUB_ACTIONS", "");
+  // CI release targets must not override the branch owned by each fixture.
+  for (const key of [
+    "OPENCLAW_RELEASE_CONTEXT_REF",
+    "GITHUB_BASE_REF",
+    "GITHUB_REF",
+    "GITHUB_EVENT_NAME",
+    "GITHUB_EVENT_PATH",
+  ]) {
+    vi.stubEnv(key, "");
+  }
+});
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();

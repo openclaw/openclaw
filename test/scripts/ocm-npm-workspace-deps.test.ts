@@ -176,10 +176,12 @@ describe("OCM npm workspace dependency adapter", () => {
         readFileSync(packageChangelogPath, "utf8"),
       );
       mkdirSync(join(scriptsDir, "lib"), { recursive: true });
-      writeFileSync(
-        join(scriptsDir, "lib", "check-limits.mts"),
-        readFileSync(new URL("../../scripts/lib/check-limits.mts", import.meta.url)),
-      );
+      for (const file of ["check-limits.mts", "release-context.mjs", "release-version.mjs"]) {
+        writeFileSync(
+          join(scriptsDir, "lib", file),
+          readFileSync(new URL(`../../scripts/lib/${file}`, import.meta.url)),
+        );
+      }
       writeFileSync(
         join(scriptsDir, "lib", "release-changelog.mjs"),
         readFileSync(new URL("../../scripts/lib/release-changelog.mjs", import.meta.url)),
