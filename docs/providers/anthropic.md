@@ -107,6 +107,20 @@ OpenClaw release:
         ```bash
         openclaw onboard --anthropic-api-key "$ANTHROPIC_API_KEY"
         ```
+
+        API-key setup asks for an optional **Anthropic workspace ID**. If your key
+        is not scoped to a workspace, enter its `wrkspc_...` ID from the Claude
+        Console. Leave it blank for a workspace-scoped key. Existing workspace
+        headers are preserved.
+
+        This is a provider account setting, separate from an agent's local
+        workspace directory. It applies to all requests through the configured
+        Anthropic provider. Use workspace-scoped keys or separate provider
+        configurations when accounts need different workspaces.
+
+        For non-interactive setup, configure
+        `models.providers.anthropic.headers["anthropic-workspace-id"]` beforehand.
+        See [Anthropic authentication](https://platform.claude.com/docs/en/manage-claude/authentication#select-a-workspace).
       </Step>
       <Step title="Verify the model is available">
         ```bash
@@ -255,8 +269,11 @@ OpenClaw release:
     Claude Code client version, or the installed CLI version when newer.
     Anthropic uses that identity to gate newer models. A missing, older, or
     failed CLI check uses OpenClaw's maintained version floor. Discovery is
-    shared with the CLI backend and cached until process restart; API-key
-    requests do not run the check.
+    shared with the CLI backend and cached for the resolved executable file.
+    After an in-place update or symlink change, the next request checks the new
+    file without a Gateway restart. Failed checks keep the floor until the
+    executable changes. Native-install fallback locations outside `PATH` keep
+    their existing process-scoped lookup. API-key requests do not run the check.
 
     ### Config example
 

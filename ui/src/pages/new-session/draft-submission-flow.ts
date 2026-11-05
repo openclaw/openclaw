@@ -4,6 +4,7 @@ import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-sessio
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { createComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
@@ -11,7 +12,7 @@ import {
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import type { SessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
 import { assertUploadsEnabled, uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
-import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "../chat/composer-persistence-feedback.ts";
+import { chatComposerDraftStorageError } from "../chat/composer-persistence-feedback.ts";
 import type { buildLocalUserMessage } from "../chat/user-message-content.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import { BackgroundCreatePreview } from "./background-create-preview.ts";
@@ -130,7 +131,7 @@ export class DraftSubmissionFlow {
           ...state,
           visibility: resetVisibility ? "normal" : this.visibilityValue,
         }),
-      () => this.setError(CHAT_COMPOSER_DRAFT_STORAGE_ERROR),
+      () => this.setError(chatComposerDraftStorageError()),
     );
     this.attachmentDraft = new NewSessionAttachmentDraft(this.draftChanged, () => {
       this.startedSession.current = null;
@@ -667,7 +668,7 @@ export class DraftSubmissionFlow {
     } catch (error) {
       if (!requestSignal.aborted && this.gateway.client === input.client) {
         this.sessionStartup.clear();
-        this.error = error instanceof Error ? error.message : String(error);
+        this.error = formatUiError(error);
         if (instant) {
           await instant.rollback();
         }

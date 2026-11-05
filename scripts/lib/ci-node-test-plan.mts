@@ -2556,6 +2556,35 @@ export function isCanonicalNodeTestConfig(config: string): boolean {
   return resolveCanonicalTargetInventory(config).configs.has(config);
 }
 
+/** Resolve one exact execution plan only when its canonical owner is complete. */
+export function resolveCompleteCanonicalNodeTestConfig(
+  target: string,
+  plans: ReturnType<typeof buildVitestRunPlans>,
+): string | undefined {
+  const plan = plans[0];
+  if (!plan || plans.length !== 1 || plan.watchMode) {
+    return undefined;
+  }
+  const targets = plan.includePatterns ?? plan.forwardedArgs;
+  if (
+    targets.length !== 1 ||
+    targets[0] !== target ||
+    (plan.forwardedArgs.length > 0 &&
+      (plan.forwardedArgs.length !== 1 || plan.forwardedArgs[0] !== target))
+  ) {
+    return undefined;
+  }
+  const config = resolveCanonicalNodeTestConfig(target, plan.config);
+  if (!config) {
+    return undefined;
+  }
+  const inventory = resolveCanonicalTargetInventory(config);
+  return inventory.completeConfigs.has(config) &&
+    inventory.configsByFile.get(target)?.has(config) === true
+    ? config
+    : undefined;
+}
+
 /** Null excludes a file from a complete inventory; undefined leaves ownership unresolved. */
 export function resolveCanonicalNodeTestConfig(
   target: string,

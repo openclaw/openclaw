@@ -440,6 +440,12 @@ openclaw-pending-session-create {
   pointer-events: none;
 }
 
+/* Clear the floating connection indicator without extending the bounded gutter. */
+.sidebar-region:has(> .sidebar-region__header .chat-pane__connection)
+  :is(.chat-gutter-stack, .chat-main__conversation-column > .chat-topbar-notices) {
+  padding-top: 38px;
+}
+
 .chat-topbar-notices:empty {
   display: none;
 }
@@ -627,8 +633,8 @@ openclaw-pending-session-create {
 }
 
 .chat-virtual-block {
-  /* The outer extent owns scroll height. This positioned row window must not
-     contribute a second changing box when saved rows become live rows. */
+  /* Keep the row window in local coordinates, even near a long transcript's
+     tail. The outer extent owns scroll height; parked rows have no layout. */
   contain: size;
   position: absolute;
   top: 0;
@@ -661,7 +667,7 @@ openclaw-pending-session-create {
 }
 
 /* Message jumps need real mounted-row sizes before their target settles. */
-.chat-thread-inner[data-measuring-rows] .chat-virtual-row {
+.chat-thread-inner[data-measuring-rows] .chat-virtual-row:not([data-prepared-row]) {
   content-visibility: visible;
   contain: none;
 }
@@ -1351,6 +1357,10 @@ openclaw-chat-video-player {
 
 .chat-audio-player__toggle:hover {
   background: var(--primary-hover);
+}
+
+.chat-audio-player__toggle:active {
+  background: var(--primary-active);
 }
 
 .chat-audio-player__toggle:focus-visible,

@@ -286,7 +286,7 @@ it("never saves Apple inputs from PRs, dispatches, non-main refs, or frozen targ
   }
 });
 
-it("reuses trusted simulator libraries and caches only screenshot package downloads", () => {
+it("reuses trusted simulator libraries and shared package downloads without publishing caches", () => {
   const jobs = readCiWorkflow().jobs;
   const capture = jobs["ios-screenshot-capture"];
   expect(capture.env.HISTORICAL_TARGET).toBe(jobs["ios-build"].env.HISTORICAL_TARGET);
@@ -295,48 +295,33 @@ it("reuses trusted simulator libraries and caches only screenshot package downlo
     (step: WorkflowStep) => step.id === "watch-rtc-cache",
   );
   expect(restore?.with).toEqual(producer.with);
+  expect(producer.with["restore-keys"]).toBe(
+    "watch-rtc-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-\n",
+  );
+  for (const [file, job] of [
+    ["macos-periphery.yml", "ios-index"],
+    ["ios-store-release.yml", "screenshots"],
+  ] as const) {
+    const consumer = readWorkflow(`.github/workflows/${file}`).jobs[job].steps.find(
+      (step: WorkflowStep) => step.name === "Restore Watch RTC build inputs",
+    );
+    expect(consumer.with).toEqual(producer.with);
+  }
   const packages = capture.steps.find((step: WorkflowStep) => step.id === "ios-packages-cache");
+  const nativePackages = jobs["ios-build"].steps.find(
+    (step: WorkflowStep) => step.id === "ios-packages-cache",
+  );
   const saves = capture.steps.filter((step: WorkflowStep) =>
     step.uses?.startsWith("actions/cache/save@"),
   );
-  expect(saves).toHaveLength(1);
-  expect(packages.with.path).toBe("apps/ios/build/SnapshotDerivedData/SourcePackages");
-  expect(packages.with.key).toMatch(/^ios-screenshot-packages-v1-/);
+  expect(saves).toHaveLength(0);
+  expect(packages.with).toEqual(nativePackages.with);
+  expect(packages.with.path).toBe("apps/ios/build/SourcePackages");
+  expect(packages.with.key).toMatch(/^ios-source-packages-v2-/);
   expect(packages.with["restore-keys"]).toBeUndefined();
-  expect(saves[0].with.path).toBe(packages.with.path);
-  expect(saves[0].with.key).toBe("${{ steps.ios-packages-cache.outputs.cache-primary-key }}");
-  for (const owner of [restore, packages, saves[0]]) {
+  for (const owner of [restore, packages]) {
     expect(owner["continue-on-error"]).toBe(true);
     expect(owner["timeout-minutes"]).toBe(3);
-  }
-  for (const eventName of ["push", "schedule", "pull_request", "workflow_dispatch"] as const) {
-    for (const ref of ["refs/heads/main", "refs/heads/topic"]) {
-      for (const trust of ["main", "pull-request", "release", "workflow"]) {
-        for (const hit of ["false", "true"]) {
-          const context = {
-            eventName,
-            ref,
-            preflightOutputs: { candidate_trust: trust, cache_write_allowed: "true" },
-            steps: {
-              "ios-cache-inputs": { outputs: { xcode: "xcode" } },
-              "ios-packages-cache": { outputs: { "cache-hit": hit } },
-            },
-          };
-          expect(evaluateWorkflow(`\${{ ${saves[0].if} }}`, context)).toBe(
-            eventName !== "pull_request" &&
-              ref === "refs/heads/main" &&
-              trust === "main" &&
-              hit !== "true",
-          );
-          expect(
-            evaluateWorkflow(`\${{ ${saves[0].if} }}`, {
-              ...context,
-              preflightOutputs: { ...context.preflightOutputs, cache_write_allowed: "false" },
-            }),
-          ).toBe(false);
-        }
-      }
-    }
   }
   const identify = capture.steps.find((step: WorkflowStep) => step.id === "ios-cache-inputs");
   for (const historical of ["true", "false"]) {

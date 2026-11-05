@@ -4,6 +4,8 @@ export type DatabaseEngineInput =
       schemaPrefix: string;
       /** Host-owned credential source; child exec must not inherit its value. */
       connectionEnvKey?: string;
+      /** Existing sealed stores only; the connection never admits writes or migration. */
+      readOnly?: true;
     }>
   | undefined;
 export type DatabaseEngineId = "sqlite" | "postgres";

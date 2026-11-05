@@ -56,6 +56,9 @@
 // in turn-start-timeline.json. Observed clocks precede batched IPC; completed reservation
 // intervals can be reconstructed from elapsed/queue/execution times (rounded to ms).
 // blocking* labels describe the holder seen at enqueue, not every preceding queued job.
+// --resume-existing-turns reopens the same fixture/session keys after a process restart,
+// without resets or warmup. Seed once without it; reuse the same port and sandbox image.
+// Round zero measures the first concurrent turns; later rounds are the warm control.
 // Add --worktree-tool-churn to memory-soak --stress-tools --mixed-rpc to give each
 // foreground session its own managed worktree, read/grep its README, and cycle list searches.
 // This mode keeps a fixed viewer set instead of adding reconnect churn.
@@ -200,6 +203,7 @@ const { values } = parseArgs({
     "sandbox-turn-timeout-ms": { type: "string" },
     "cold-session-rounds": { type: "string", default: "0" },
     "turn-start-phases": { type: "boolean", default: false },
+    "resume-existing-turns": { type: "boolean", default: false },
     "turn-start-workspace-mutations": { type: "boolean", default: false },
     "turn-start-rich-context": { type: "boolean", default: false },
     "turn-start-advance-origin": { type: "boolean", default: false },
@@ -751,6 +755,14 @@ if (values["turn-start-phases"] && scenario !== "chat.send") {
 }
 if (values["turn-start-phases"] && (!values["stress-tools"] || exactClients < 2)) {
   throw new Error("--turn-start-phases requires --stress-tools and --exact-clients >= 2");
+}
+if (
+  values["resume-existing-turns"] &&
+  (!values["turn-start-phases"] || !values["sandbox-image"] || coldSessionRounds || historyTurns)
+) {
+  throw new Error(
+    "--resume-existing-turns requires warm sandbox turn-start phases without history seeding",
+  );
 }
 let measuredPhaseRound: number | undefined;
 const turnStartPhases: Array<Record<string, unknown>> = [];
@@ -5720,7 +5732,7 @@ try {
   await delay(10_000);
   for (let index = 0; index < clientCount; index++) {
     const client = await connectClient(index);
-    if (index === 0) {
+    if (index === 0 && !values["resume-existing-turns"]) {
       // Keep the full parent chain present, including the ordinary default main-session link.
       await rpc(client, "sessions.create", {
         key: "agent:main:main",
@@ -5794,6 +5806,14 @@ try {
           worktreeToolRoots.set(keyIndex + 1, worktree);
         }
         await rpc(client, "sessions.reset", { key });
+      }
+    }
+    if (index === 0 && values["resume-existing-turns"]) {
+      for (const key of keys) {
+        const existing = await rpc(client, "sessions.describe", { key });
+        if (!isRecord(existing) || !isRecord(existing.session) || !existing.session.worktree) {
+          throw new Error(`Resume measurement requires an existing managed worktree: ${key}`);
+        }
       }
     }
     await rpc(client, "sessions.subscribe", {});
@@ -6525,7 +6545,11 @@ try {
     }
   }
   // Equal warmup work keeps paired runs at the same retained-history boundary.
-  const warmupRoundCount = soakScenario ? Math.max(1, Math.ceil(warmupMs / roundIntervalMs)) : 1;
+  const warmupRoundCount = values["resume-existing-turns"]
+    ? 0
+    : soakScenario
+      ? Math.max(1, Math.ceil(warmupMs / roundIntervalMs))
+      : 1;
   for (let round = 0; round < warmupRoundCount; round++) {
     // Warm runtime imports on the parent, leaving all measured sessions untouched.
     if (idleScenario) {
@@ -8318,6 +8342,7 @@ try {
         }
       : {}),
     defaultStateDir: values["default-state-dir"],
+    resumeExistingTurns: values["resume-existing-turns"],
     verifyHistoryReplay,
     revision: values.revision ?? null,
     operationsPerRound: turnScenario ? sessionCount : operations,

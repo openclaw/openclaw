@@ -41,7 +41,7 @@ async function createScenario(onConnection: (ws: WebSocket) => void, endpointing
 }
 
 type Result = [text: string, final?: boolean, speechFinal?: boolean, fromFinalize?: boolean];
-type Frame = Result | "SpeechStarted" | "UtteranceEnd";
+type Frame = Result | "SpeechStarted" | "UtteranceEnd" | "StaleUtteranceEnd";
 function sendResult(ws: WebSocket, [text, final = false, end = false, flush = false]: Result) {
   ws.send(
     JSON.stringify({
@@ -82,7 +82,7 @@ it("normalizes nested config and connects through an explicit HTTP base URL", as
   const { url, headers } = requests[0]!;
   expect(url.pathname).toBe("/deepgram/v1/listen");
   expect(url.searchParams.toString()).toBe(
-    "model=nova-3&encoding=mulaw&sample_rate=8000&channels=1&interim_results=true&endpointing=500&language=en-US",
+    "model=nova-3&encoding=mulaw&sample_rate=8000&channels=1&interim_results=true&endpointing=500&utterance_end_ms=1000&language=en-US",
   );
   expect(headers.authorization).toBe("Token dg-key");
 });
@@ -99,15 +99,28 @@ it.each([
 
 const yes: Result = ["yes", true, true];
 const turns: [string, Frame[], string[], string[], number][] = [
-  ["rejects tails", [["partial"], ["", true, true], "SpeechStarted"], ["partial"], [], 2],
+  [
+    "rejects tails",
+    [["partial"], "UtteranceEnd", ["", true, true], "SpeechStarted"],
+    ["partial"],
+    [],
+    2,
+  ],
   ["repeats", [yes, yes], [], ["yes", "yes"], 2],
-  ["ignores gaps", [["a", true], "UtteranceEnd", ["b", true, true]], ["a"], ["a b"], 1],
+  ["ends a stalled turn without speech_final", [["a", true], "UtteranceEnd"], ["a"], ["a"], 1],
+  ["does not duplicate an ended turn", [yes, "UtteranceEnd", ["", true, true]], [], ["yes"], 1],
+  ["ignores stale gaps", [["a", true], "StaleUtteranceEnd", ["b", true, true]], ["a"], ["a b"], 1],
 ];
 it.each(turns)("%s", async (_name, frames, partials, transcripts, starts) => {
   using scenario = await createScenario((ws) => {
     for (const frame of frames) {
       if (typeof frame === "string") {
-        ws.send(JSON.stringify({ type: frame }));
+        ws.send(
+          JSON.stringify({
+            type: frame === "StaleUtteranceEnd" ? "UtteranceEnd" : frame,
+            last_word_end: frame === "StaleUtteranceEnd" ? -1 : 1,
+          }),
+        );
       } else {
         sendResult(ws, frame);
       }
@@ -120,6 +133,7 @@ it.each(turns)("%s", async (_name, frames, partials, transcripts, starts) => {
   expect(scenario.onTranscript.mock.calls.flat()).toEqual(transcripts);
   expect(scenario.onSpeechStart).toHaveBeenCalledTimes(starts);
   expect(scenario.requests[0]?.url.searchParams.get("endpointing")).toBe("800");
+  expect(scenario.requests[0]?.url.searchParams.get("utterance_end_ms")).toBe("1000");
   expect(scenario.requests[0]?.url.searchParams.get("model")).toBe("nova-3");
 });
 

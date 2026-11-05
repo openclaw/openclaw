@@ -65,8 +65,8 @@ type TerminalOptions = Pick<UpdateCommandOptions, "json" | "onResult"> & {
   onTerminalRecord?: PublishedRecord;
 };
 
-function unexpectedUpdateFailure(cause: unknown) {
-  return { mode: "unknown" as const, durationMs: 0, failure: { cause } };
+function unexpectedUpdateFailure(cause: unknown, runId: string) {
+  return { mode: "unknown" as const, durationMs: 0, failure: { cause }, runId };
 }
 
 /** Finalization prepares a report; the outer invocation owns its publication. */
@@ -169,7 +169,7 @@ export async function prepareUnexpectedUpdateCommandFailure(
     opts.run.executorFence?.assertCurrent();
   } catch (cause) {
     return new UpdateCommandPendingRecoveryFailure(
-      createUpdateCommandFailureResult(unexpectedUpdateFailure(error)),
+      createUpdateCommandFailureResult(unexpectedUpdateFailure(error, opts.run.runId)),
       formatErrorMessage(cause),
       { cause: error },
     );
@@ -178,12 +178,11 @@ export async function prepareUnexpectedUpdateCommandFailure(
     const runId = opts.run.runId;
     // Release failure may suppress the prepared report, but not the original
     // run identity or its refusal facts. Rebuild only captured data here.
-    const resultForFailure = (cause: unknown): UpdateRunResult => ({
-      ...createPreMutationUpdateResult(resolveUnreportedUpdateAdmissionReport(cause, error), {
+    const resultForFailure = (cause: unknown): UpdateRunResult =>
+      createPreMutationUpdateResult(resolveUnreportedUpdateAdmissionReport(cause, error), {
         status: cause === error && error.skipped ? "skipped" : "error",
-      }),
-      runId,
-    });
+        runId,
+      });
     const result = resultForFailure(error);
     const fence = opts.run.executorFence;
     const failure = new UpdateCommandFailure(
@@ -212,7 +211,7 @@ export async function prepareUnexpectedUpdateCommandFailure(
     }
     return failure;
   }
-  const failure = unexpectedUpdateFailure(error);
+  const failure = unexpectedUpdateFailure(error, opts.run.runId);
   let fact: UpdateFailureFact;
   try {
     const recorded = failUpdateCommandRun(error, opts.run);
@@ -277,7 +276,7 @@ export async function withUpdateCommandTerminalResult<T>(
         const input =
           error instanceof UpdateCommandFailure
             ? error.result
-            : createUpdateCommandFailureResult(unexpectedUpdateFailure(error));
+            : createUpdateCommandFailureResult(unexpectedUpdateFailure(error, run.runId));
         const result = recordMutableUpdateInterruption({ run }, input);
         if (result !== input || result.reason === "interrupted") {
           // Uncertain writers prohibit state reads and recovery, not a detached failure report.
@@ -369,7 +368,10 @@ async function settleUpdateCommandTerminalResult<T>(
           steps: [],
           durationMs: activationTimeout.timeoutMs,
         }
-      : createPreMutationUpdateResult(admissionOutcome!.report, { status: "error" });
+      : createPreMutationUpdateResult(admissionOutcome!.report, {
+          status: "error",
+          runId: run.runId,
+        });
     throw new UpdateCommandPendingRecoveryFailure(result, formatErrorMessage(outcome.error), {
       cause: outcome.error,
     });
@@ -384,6 +386,7 @@ async function settleUpdateCommandTerminalResult<T>(
           status: "error",
           mode: "unknown",
           root: activationTimeout.root,
+          runId: admittedRun.runId,
           steps: [],
           durationMs: activationTimeout.timeoutMs,
         },
@@ -504,18 +507,15 @@ async function settleUpdateCommandTerminalResult<T>(
           ? resolveUnreportedUpdateAdmissionReport(error, admission)
           : undefined;
       const admissionResult = admissionReport
-        ? {
-            ...createPreMutationUpdateResult(
-              { ...admissionReport, opts: { ...admissionReport.opts, run } },
-              { status: "error" },
-            ),
-            runId: run.runId,
-          }
+        ? createPreMutationUpdateResult(
+            { ...admissionReport, opts: { ...admissionReport.opts, run } },
+            { status: "error", runId: run.runId },
+          )
         : undefined;
       throw new UpdateCommandPendingRecoveryFailure(
         primaryFailure?.result ??
           admissionResult ??
-          createUpdateCommandFailureResult(unexpectedUpdateFailure(error)),
+          createUpdateCommandFailureResult(unexpectedUpdateFailure(error, run.runId)),
         admissionReport?.nextAction ?? admissionReport?.message ?? formatErrorMessage(cause),
         { cause: error },
       );

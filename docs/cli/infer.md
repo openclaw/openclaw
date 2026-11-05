@@ -165,6 +165,8 @@ Notes:
 - Use `model run --gateway` to test Gateway routing or agent-runtime setup while keeping the model input raw. Use [`openclaw agent`](/cli/agent) or a chat surface for full agent context, tools, memory, and session transcript.
 - `--thinking adaptive` maps to the completion-runtime level `medium`; `--thinking max` maps to `max` for OpenAI models that support the native max effort, otherwise `xhigh`.
 - `model auth login`, `model auth logout`, and `model auth status` manage saved provider auth state.
+- An interrupt accepted during generation cancels the in-flight local request or Gateway call and stops waiting for it instead of letting the run finish, and publishes no output for the interrupted run.
+- For `model run --gateway`, interruption cancels the caller's RPC and does not change the lifetime of Gateway-owned generation.
 
 ## Image
 
@@ -225,6 +227,10 @@ openclaw infer audio transcribe --file ./memo.m4a --model openai/whisper-1 --jso
 
 `--model` must be `<provider/model>`.
 
+For audio transcription and video description on POSIX systems, `--file` follows
+directory symlinks before resolving `..`, matching filesystem path resolution.
+Final-file symlinks remain subject to the existing media-directory checks.
+
 For CLI-backed transcription, the result's `provider` identifies the tool family
 and `model` reports the executed command. Auto-detected tools report their resolved
 executable path; explicit CLI entries retain their authored command value. This
@@ -248,6 +254,7 @@ Notes:
 
 - `tts status` only supports `--gateway` (it reflects gateway-managed TTS state).
 - Local and loopback-Gateway `tts convert --output` copies stage beside the destination and replace it only after success; a failed copy leaves an existing file unchanged.
+- If interruption is accepted before the output copy begins, `tts convert` leaves the requested destination unchanged. Completed synthesis audio remains in the media store for its normal lifetime.
 - Remote-Gateway `tts convert --output` is rejected before requesting speech synthesis.
 - Use `tts convert --provider <id>` when selecting a provider without overriding its model.
 - `--channel <id>` is an output-format hint, not a delivery request. Local conversion
@@ -288,6 +295,9 @@ openclaw infer web providers --agent <id> --json
 
 `web providers` lists available, configured, and selected providers for search and fetch.
 
+Interrupting web search or fetch forwards cancellation to the request and suppresses
+late provider results and failures.
+
 ## Embedding
 
 Vector creation and embedding-provider inspection.
@@ -305,6 +315,9 @@ that prefix; model ids that contain a slash keep the provider prefix, for exampl
 Without `--json`, `embedding create` shows the provider and model, followed by
 each input, its dimension count, and a preview of the first eight vector values.
 Longer vectors end with `...`; use `--json` to retrieve complete vectors.
+
+An accepted interrupt forwards cancellation to the embedding provider and suppresses
+output from the interrupted batch.
 
 ## JSON output
 

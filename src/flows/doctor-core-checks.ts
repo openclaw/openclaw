@@ -27,13 +27,13 @@ import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { acpAgentModelCheck } from "./doctor-acp-agent-model-check.js";
 import { finalConfigValidationCheck } from "./doctor-config-validation-check.js";
 import { bootstrapSizeCheck } from "./doctor-core-bootstrap-size-check.js";
+import { cronInferenceCheck, legacyCronStoreCheck } from "./doctor-cron-checks.js";
 import { detectGatewayAuthHealth } from "./doctor-gateway-auth.js";
 import { gatewayServicesExtraCheck } from "./doctor-gateway-services-check.js";
 import type { DoctorHealthCheckContext } from "./doctor-health-contribution-types.js";
 import { legacyOwnedRepair } from "./doctor-health-contribution.js";
 import { modelReferenceCheck } from "./doctor-model-reference-check.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
-import { skillWorkshopToolPolicyCheck } from "./doctor-skill-workshop-check.js";
 import { runtimeToolSchemaCheck } from "./doctor-tool-schema-check.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
 import { securityAuditFindingToHealthFinding } from "./health-check-adapter.js";
@@ -146,7 +146,7 @@ const legacyStateCheck: CoreHealthCheck = {
   async detect(ctx) {
     const { detectLegacyStateMigrations } = await import("../infra/state-migrations.doctor.js");
     const { prepareLegacySessionSurfaces } = await import("../plugins/legacy-session-surfaces.js");
-    const legacySessionSurfaces = prepareLegacySessionSurfaces({ config: ctx.cfg });
+    const legacySessionSurfaces = await prepareLegacySessionSurfaces({ config: ctx.cfg });
     const detected = await detectLegacyStateMigrations({
       cfg: ctx.cfg,
       doctorOnlyStateMigrations: true,
@@ -318,17 +318,6 @@ const legacyWhatsAppCrontabCheck: CoreHealthCheck = {
         text: warning,
       }),
     ];
-  },
-};
-
-const legacyCronStoreCheck: CoreHealthCheck = {
-  id: "core/doctor/legacy-cron-store",
-  description: "Legacy cron store, run-log, and payload state is normalized.",
-  defaultEnabled: false,
-  async detect(ctx) {
-    const { collectLegacyCronStoreHealthFindings } =
-      await import("../commands/doctor/cron/index.js");
-    return collectLegacyCronStoreHealthFindings({ cfg: ctx.cfg });
   },
 };
 
@@ -636,6 +625,7 @@ export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
     removedWorkspacesStateCheck,
     legacyWhatsAppCrontabCheck,
     legacyCronStoreCheck,
+    cronInferenceCheck,
     staleRuntimeBuildCheck,
     codexSessionRoutesCheck,
     telegramGeneralTopicConversationsCheck,
@@ -716,7 +706,6 @@ export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
     },
     runtimeToolSchemaCheck,
     workspaceSuggestionsCheck,
-    skillWorkshopToolPolicyCheck,
     commandOwnerCheck,
     skillsReadinessCheck,
     finalConfigValidationCheck,

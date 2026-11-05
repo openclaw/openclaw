@@ -329,20 +329,79 @@ export function createChatComposerScenarios(): readonly EngineScenario[] {
         }
         await input.press("Escape");
         await input.waitFor({ state: "hidden" });
-        await prepareChat(page);
+        await page.waitForFunction(
+          (selector) => document.querySelectorAll(selector).length > 1,
+          `${pane} .chat-text`,
+        );
+        const restoredMessages = await result.count();
         if (
           (await draft.inputValue()) !== "Retained draft." ||
           !(await draft.evaluate((element) => element === document.activeElement))
         ) {
           throw new Error("Closing transcript search did not restore the focused draft");
         }
-        return { queryCharacters: 11, matchingMessages: 1 };
+        return { queryCharacters: 11, matchingMessages: 1, restoredMessages };
       },
     },
-    ...(["paste-text", "paste-image", "drop-image"] as const).map((kind): EngineScenario =>
+    {
+      ...base,
+      id: "chat-actions-paste-text",
+      expected:
+        "Keep 256 KiB pasted text in the draft without attachments or sends; emulate DOM insertion and input events after an uncancelled synthetic paste, without measuring OS clipboard or native editing.",
+      prepare: async (page) => {
+        await prepareChat(page);
+        await page.locator(composer).fill("Review this text.\n");
+      },
+      run: async (page, gateway) => {
+        const input = page.locator(composer);
+        const draft = await input.inputValue();
+        const text = "Synthetic pasted text.\n".repeat(12_000).slice(0, 256 * 1024);
+        const sendsBefore = (await gateway.getRequests("chat.send")).length;
+        await input.click();
+        await input.evaluate((element: HTMLTextAreaElement) => {
+          element.setSelectionRange(element.value.length, element.value.length);
+        });
+        const uncancelled = await input.evaluate((element, value) => {
+          const transfer = new DataTransfer();
+          transfer.setData("text/plain", value);
+          return element.dispatchEvent(
+            new ClipboardEvent("paste", {
+              bubbles: true,
+              cancelable: true,
+              clipboardData: transfer,
+            }),
+          );
+        }, text);
+        if (!uncancelled) {
+          throw new Error("Plain-text paste was cancelled instead of remaining draft input");
+        }
+        // Synthetic paste has no default action. Emulate the DOM edit and events;
+        // beforeinput supplies the composer's edit intent before input commits it.
+        await input.evaluate((element: HTMLTextAreaElement, value) => {
+          const event = { bubbles: true, inputType: "insertFromPaste", data: value };
+          if (
+            !element.dispatchEvent(new InputEvent("beforeinput", { ...event, cancelable: true }))
+          ) {
+            throw new Error("Plain-text insertion was cancelled before updating the draft");
+          }
+          element.setRangeText(value, element.selectionStart, element.selectionEnd, "end");
+          element.dispatchEvent(new InputEvent("input", event));
+        }, text);
+        await frames(page);
+        const attachments = await page.locator(`${pane} .chat-attachment-remove`).count();
+        const chatSends = (await gateway.getRequests("chat.send")).length - sendsBefore;
+        if ((await input.inputValue()) !== draft + text || attachments !== 0 || chatSends !== 0) {
+          throw new Error(
+            "Plain-text paste did not preserve the exact unsent draft without attachments",
+          );
+        }
+        return { pastedTextBytes: text.length, attachments, chatSends, pasteDefaultEmulated: true };
+      },
+    },
+    ...(["paste-image", "drop-image"] as const).map((kind): EngineScenario =>
       Object.assign({}, base, {
         id: `chat-actions-${kind}`,
-        expected: `Attach ${kind === "paste-text" ? "256 KiB text" : "a 2048×2048 PNG"} through the native ${kind.startsWith("paste") ? "paste" : "drop"} handler.`,
+        expected: `Attach a 2048×2048 PNG through the native ${kind.startsWith("paste") ? "paste" : "drop"} handler.`,
         prepare: async (page: Page) => {
           await prepareChat(page);
           await page.locator(composer).fill("Review these attachments.");
@@ -367,14 +426,7 @@ export function createChatComposerScenarios(): readonly EngineScenario[] {
           await page.locator(composer).click();
           await page.locator(composer).evaluate((element, selected) => {
             const transfer = new DataTransfer();
-            if (selected === "paste-text") {
-              transfer.setData(
-                "text/plain",
-                "Synthetic pasted text.\n".repeat(12_000).slice(0, 256 * 1024),
-              );
-            } else {
-              transfer.items.add(Reflect.get(window, "__chatActionFile"));
-            }
+            transfer.items.add(Reflect.get(window, "__chatActionFile"));
             element.dispatchEvent(
               selected === "drop-image"
                 ? new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: transfer })
@@ -392,22 +444,18 @@ export function createChatComposerScenarios(): readonly EngineScenario[] {
           if (attachments !== 1) {
             throw new Error(`Expected one attachment, found ${attachments}`);
           }
-          if (kind === "paste-text") {
-            await preview.locator(".chat-attachment-thumb--pasted-text").waitFor();
-          } else {
-            const ready = preview.locator(
-              '.chat-attachment-thumb[aria-busy="false"]:not(.chat-attachment-thumb--error)',
-            );
-            await ready.waitFor();
-            const image = ready.locator("img");
-            await image.waitFor();
-            await image.evaluate(async (element: HTMLImageElement) => {
-              await element.decode();
-              if (element.naturalWidth === 0 || element.naturalHeight === 0) {
-                throw new Error("Attachment preview did not decode");
-              }
-            });
-          }
+          const ready = preview.locator(
+            '.chat-attachment-thumb[aria-busy="false"]:not(.chat-attachment-thumb--error)',
+          );
+          await ready.waitFor();
+          const image = ready.locator("img");
+          await image.waitFor();
+          await image.evaluate(async (element: HTMLImageElement) => {
+            await element.decode();
+            if (element.naturalWidth === 0 || element.naturalHeight === 0) {
+              throw new Error("Attachment preview did not decode");
+            }
+          });
           return { attachments };
         },
       }),

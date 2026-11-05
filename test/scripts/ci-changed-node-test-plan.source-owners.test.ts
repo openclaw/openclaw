@@ -106,6 +106,18 @@ function createErasedCoreSourceFixture() {
 
 describe("CI changed Node test plan", () => {
   it.each([
+    ["extensions/ollama/openclaw.plugin.json", "src/config/defaults.ollama-output-cap.test.ts"],
+    ["test/fixtures/hooks-install/tar-evil-id.tar", "src/hooks/install.test.ts"],
+  ])("keeps the declared file reader when %s changes", (input, reader) => {
+    const cwd = createSourceFixture("changed-declared-input-", {
+      [input]: "{}\n",
+      [reader]: "export {};\n",
+    });
+    expectFiles(createChangedNodeTestShards([input], { cwd }), [reader]);
+    expect(resolvePolicyTestTargets([`${input}.unrelated`], { cwd })).not.toContain(reader);
+  });
+
+  it.each([
     ["extensions/copilot/index.ts", ["extensions/copilot/index.test.ts"]],
     ["extensions/copilot/harness.ts", ["extensions/copilot/harness.test.ts"]],
     [

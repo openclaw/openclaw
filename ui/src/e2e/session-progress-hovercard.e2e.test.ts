@@ -855,7 +855,7 @@ suite.define(() => {
     );
   });
 
-  it("shows the latest turn and authenticates channel avatars", async () => {
+  it("omits the latest message and authenticates channel avatars", async () => {
     const now = Date.now();
     const sessionKey = "agent:main:no-progress-card";
     const avatarSessionKey = "agent:main:channel-avatar";
@@ -934,16 +934,9 @@ suite.define(() => {
           .toBe("AK");
         expect(await avatar.locator("img.channel-avatar").count()).toBe(0);
         expect(await card.locator("openclaw-viewer-avatar").count()).toBe(0);
-        await expect
-          .poll(() => card.locator(".session-hovercard__excerpt").textContent())
-          .toBe(lastMessagePreview);
-        expect(await card.locator(".session-hovercard__excerpt strong").count()).toBe(0);
+        expect(await card.textContent()).not.toContain(lastMessagePreview);
+        expect(await card.locator(".session-hovercard__task").count()).toBe(0);
         expect(await card.locator(".session-progress-card").count()).toBe(0);
-        expect(
-          await card
-            .locator(".session-hovercard__excerpt")
-            .evaluate((element) => getComputedStyle(element).maxHeight),
-        ).toBe("54px");
 
         const avatarRow = page.locator(
           `.sidebar-recent-session[data-session-key="${avatarSessionKey}"]`,

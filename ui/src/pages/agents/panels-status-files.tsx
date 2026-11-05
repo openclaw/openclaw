@@ -16,7 +16,6 @@ import {
   type ChannelRead,
 } from "../../lib/channels/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { AgentsPageView } from "./agents-page-state.ts";
 import { renderAgentContextSection } from "./panels-overview.tsx";
@@ -115,11 +114,6 @@ export function AgentChannels(
   },
 ) {
   const entries = createMemo(() => resolveChannelEntries(params.readState().channelsSnapshot));
-  const lastSuccessLabel = createMemo(() =>
-    params.readState().channelsLastSuccess
-      ? formatRelativeTimestamp(params.readState().channelsLastSuccess)
-      : t("common.never"),
-  );
   return (
     <>
       {renderAgentContextSection(
@@ -138,12 +132,7 @@ export function AgentChannels(
       ) : undefined}
       <SettingsSection
         title={t("agents.channels.title")}
-        description={
-          <>
-            {t("agents.channels.subtitle")}{" "}
-            {t("agents.channels.lastRefresh", { time: lastSuccessLabel() })}
-          </>
-        }
+        description={t("agents.channels.subtitle")}
         actions={
           <ChannelReadBoundary
             read={params.readState().channelsRead}

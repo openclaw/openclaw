@@ -3,6 +3,7 @@ import { dirname, join, resolve } from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse } from "acorn";
 import type { BuildOptions, BuildResult, PluginBuild } from "esbuild";
+import { ExpectedCliError } from "./expected-cli-error.js";
 import { createSolidControlUiBuildPlugin } from "./plugins-build-solid.js";
 
 const moduleLocationImport = "openclaw-plugin-bundle:module-location";
@@ -36,10 +37,9 @@ export async function buildPluginBundle(options: PluginBundleOptions) {
     // SAFETY: Resolve the compiler installed by the author in the plugin package.
     builder = require("esbuild") as typeof import("esbuild");
   } catch (cause) {
-    throw new Error(
-      "Install esbuild in this plugin's devDependencies, then run plugins build again.",
-      { cause },
-    );
+    const message =
+      "Install esbuild in this plugin's devDependencies, then run plugins build again.";
+    throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message, cause });
   }
   const backend = options.platform === "node";
   const recovery = backend

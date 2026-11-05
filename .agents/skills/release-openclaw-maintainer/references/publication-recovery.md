@@ -94,7 +94,11 @@ Repair a stale beta floor through the dist-tag owner and inspect the failed
 parent's exact children before rejecting stale gates or canceling them. Resume
 through the selected route with the same qualified bytes and inputs; direct
 publication uses the successful original core run, while prepared publication
-uses a new button run with the same readiness artifact. Keep the original run
+uses a new button run with the same readiness artifact. For a published core
+version, `pnpm release:candidate` and `pnpm release:publish-preflight` read the
+live registry, identify the original publisher from npm provenance, and print the
+direct command with `-f openclaw_npm_resume_run_id=<run>`; sealed FRV npm
+decisions predate publication and do not decide resume. Keep the original run
 attempts and required approvals. Do not substitute a manual child approval for
 the parent's authorization. See `$release-openclaw-ci` Publish children for
 stale-child cleanup.
@@ -171,6 +175,11 @@ Leave `plugins`, parent publication run IDs, and `release_candidate_branch`
 empty. The source must equal the canonical `extended-stable/YYYY.M.33` branch
 tip and retain its final `YYYY.M.PATCH` version with `PATCH >= 33`. The protected
 tooling tag must resolve to a workflow revision reachable from current `main`.
+The exchange revalidates the current source and protected tooling after acquiring
+the GitHub token and before requesting package-scoped npm credentials. A moved
+source or revoked tooling requires a fresh approved preflight, not a retry of
+the stale exchange.
+
 Require the `Trusted publisher OIDC exchange` job to succeed before following
 [trusted-main npm recovery](extended-stable-publish.md#trusted-main-npm-recovery).
 
@@ -260,6 +269,34 @@ parent's tooling, inputs, run ID, and attempt. Do not reuse an approval from ano
 child. Docker-only recovery does not recover canceled ClawHub publication;
 verify and recover that surface separately. Recover a failed Plugin ClawHub New
 bootstrap child through its [direct route](first-package.md), not a rerun.
+
+## Reviewed security-scan mismatch
+
+Plugin NPM Release repacks plugins with the publisher tooling P and scans each
+tarball against P's reviewed inventory in `scripts/plugin-npm-security-scan.mts`.
+An `unreviewed critical findings in exact npm artifact` failure is deterministic
+for that P; a redispatch from the same tooling fails again. Full Release
+Validation runs the same scan for packages with reviewed findings in `Prepare
+exact plugin npm artifacts`, so a publish-time mismatch usually means P advanced
+after validation or the package had no reviewed finding.
+
+Reproduce under P before any redispatch. In a clean checkout of the source SHA
+with frozen dependencies:
+
+```bash
+git worktree add .release-tooling <P-workflow-sha>
+(cd .release-tooling && CI=true pnpm install --frozen-lockfile --ignore-scripts)
+export TSX_TSCONFIG_PATH="$PWD/.release-tooling/tsconfig.json"
+OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR=/tmp/plugin-scan \
+  bash .release-tooling/scripts/plugin-npm-publish.sh --repo-root "$PWD" --pack extensions/<id>
+node --import tsx .release-tooling/scripts/plugin-npm-security-scan.mts \
+  --package-name <package-name> --package-version <version> --tarball /tmp/plugin-scan/<tarball>.tgz
+```
+
+If it fails the same way, review the flagged file. Record the new hash on `main`
+only after review confirms the flagged logic is unchanged (see #192489), then
+publish from protected tooling that contains the update. If it passes, diagnose
+the runner before you dispatch again.
 
 ## Docker mirror
 

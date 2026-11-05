@@ -10,6 +10,7 @@ import { getSpawnBroker } from "../process/spawn-broker/context.js";
 import type { SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
+import type { PreservedOrphanTaskDelivery } from "../state/openclaw-state-db-task-delivery-recovery-preservation.js";
 import {
   assertChildRuntimeAvailable,
   classifyChildRuntimeFailure,
@@ -291,6 +292,15 @@ function readOperationResult<Key extends keyof SqliteReadOnlyOperations>(
 
 export function runSqliteReadOnlyWorker(
   pathname: string,
+  options: {
+    mode: "task-delivery-recovery";
+    sourcePath: string;
+    recoveryDirectory: string;
+    signal?: AbortSignal;
+  },
+): Promise<PreservedOrphanTaskDelivery>;
+export function runSqliteReadOnlyWorker(
+  pathname: string,
   options: SqliteReadOnlyOperationOptions,
 ): Promise<SqliteReadOnlyWorkerValue>;
 export function runSqliteReadOnlyWorker(
@@ -360,6 +370,15 @@ export function closeSqliteReadOnlyWorkersForBroker(broker: SpawnBrokerHost): Pr
   return sqliteReadOnlyWorkerPool.closeBroker(broker);
 }
 
+export function runSqliteReadOnlyWorkerOnce(
+  pathname: string,
+  options: { mode: "staging-sweep"; signal?: AbortSignal },
+): Promise<import("./sqlite-snapshot-reclamation.js").SqliteSnapshotReclamation>;
+export function runSqliteReadOnlyWorkerOnce(
+  pathname: string,
+  options: SqliteReadOnlyWorkerOptions,
+  launch?: Pick<SqliteReadOnlyWorkerLaunch, "env" | "cwd"> & { deadlineOwnedByCaller?: boolean },
+): Promise<SqliteReadOnlyWorkerValue>;
 export function runSqliteReadOnlyWorkerOnce(
   pathname: string,
   options: SqliteReadOnlyWorkerOptions,

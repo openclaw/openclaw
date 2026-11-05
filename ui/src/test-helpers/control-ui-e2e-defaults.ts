@@ -109,6 +109,10 @@ export function createControlUiDefaultResponses(scenario: {
   const now = new Date();
   const date = now.toISOString().slice(0, 10);
   return {
+    // Unbound catalog fixtures retain native identity; bound/error scenarios
+    // supply explicit outcomes without materializing sessions during a read.
+    "sessions.catalog.resolve": null,
+    "beam.owned.resolve": null,
     "approval.history": { items: [] } satisfies ApprovalHistoryResult,
     "exec.approval.grants.list": { grants: [] } satisfies ExecApprovalGrantsListResult,
     "openclaw.chat.history": { turns: [] } satisfies SystemAgentChatHistoryResult,

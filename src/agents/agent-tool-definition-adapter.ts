@@ -37,15 +37,16 @@ import {
   getCodeModeExecBeforeHookMetadata,
   normalizeCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
-import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
+import type { ClientToolDefinition } from "./command/shared-types.js";
 import { readNodePermissionError } from "./node-permission-error.js";
 import { projectAgentToolDefinition } from "./prepared-tool-surface.js";
 import type { AgentTool as AnyAgentTool, AgentToolResult } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
+import { ToolInputError } from "./tool-input-error.js";
 import { readToolOperatorHint } from "./tool-operator-hint.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { copyAgentToolReplaySafety } from "./tool-replay-safety.js";
-import { jsonResult, payloadTextResult, ToolInputError } from "./tools/common.js";
+import { jsonResult, payloadTextResult } from "./tools/tool-results.js";
 
 function captureSourceInvocationGuard(tool: AnyAgentTool, signal?: AbortSignal): () => void {
   const assertCurrent = captureAgentToolSourceExecutionGuard(signal);

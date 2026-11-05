@@ -243,6 +243,30 @@ describe("launchd uninstall", () => {
     },
   );
 
+  it.each(["mkdir", "rename"] as const)(
+    "removes the booted-out plist when Trash %s is denied without Full Disk Access",
+    async (operation) => {
+      state.files.set(PLIST, "RunAtLoad=true");
+      vi.mocked(fs[operation]).mockRejectedValueOnce(
+        Object.assign(new Error(`EPERM: operation not permitted, ${operation}`), { code: "EPERM" }),
+      );
+
+      await expect(uninstallLaunchAgent(control())).resolves.toBeUndefined();
+      expect(state.files.has(PLIST)).toBe(false);
+    },
+  );
+
+  it("moves the plist into the Trash without replacing an earlier same-name item", async () => {
+    const earlier = "/Users/test/.Trash/ai.openclaw.gateway.plist";
+    state.files.set(PLIST, "RunAtLoad=true");
+    state.files.set(earlier, "earlier");
+
+    await expect(uninstallLaunchAgent(control())).resolves.toBeUndefined();
+    expect(state.files.has(PLIST)).toBe(false);
+    expect(state.files.get(earlier)).toBe("earlier");
+    expect([...state.files.keys()].filter((file) => file.includes("/.Trash/"))).toHaveLength(2);
+  });
+
   it("preserves the plist when launchctl cannot boot out the service", async () => {
     state.files.set(PLIST, "RunAtLoad=true");
     state.bootoutError = "launchctl bootout permission denied";

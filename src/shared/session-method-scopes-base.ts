@@ -97,7 +97,16 @@ export function resolveSessionMethodScope(
   if (method === "sessions.create" && isRecord(params) && params.deviceFolder !== undefined) {
     return undefined;
   }
-  if (SESSION_READ_METHODS.has(method)) {
+  // Session readers can invoke only stored named queries. The closed RPC schema
+  // rejects overrides; the Gateway checks the definition and live grant at delivery.
+  if (
+    SESSION_READ_METHODS.has(method) ||
+    (method === "board.data.read" &&
+      isRecord(params) &&
+      typeof params.queryName === "string" &&
+      typeof params.ticket === "string" &&
+      Object.keys(params).every((key) => key === "ticket" || key === "queryName"))
+  ) {
     return "operator.sessions.read";
   }
   if (

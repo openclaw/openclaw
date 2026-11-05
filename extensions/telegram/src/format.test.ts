@@ -37,20 +37,14 @@ describe("Telegram formatting", () => {
     expect(chunkHtml(promotedHtml)).toEqual([protectedHtml]);
   });
 
-  it("preserves supported Telegram HTML in stream markdown rendering", () => {
-    const input =
-      "<b>Rollup</b>\n\n<blockquote>No emails.</blockquote>\n\n<pre><code>error</code></pre>";
-
-    expect(markdownToTelegramHtml(input)).toBe(input);
-    expect(chunkHtml(input).join("")).toBe(input);
-  });
-
   it.each([
+    "<b>Rollup</b>\n\n<blockquote>No emails.</blockquote>\n\n<pre><code>error</code></pre>",
     "<blockquote expandable>hidden details</blockquote>",
     '<tg-time unix="1647531900" format="wDT">22:45 tomorrow</tg-time>',
   ])("preserves supported Telegram HTML: %s", (input) => {
     expect(markdownToTelegramHtml(input)).toBe(input);
     expect(htmlText(input)).toBe(input);
+    expect(chunkHtml(input).join("")).toBe(input);
   });
 
   it.each([
@@ -143,16 +137,22 @@ describe("Telegram formatting", () => {
     expect(res).toContain("Nova_Core.md");
   });
 
-  it.each([".", ")"])(
-    "preserves list boundary spacing before numbered sections using %s",
-    (marker) => {
-      const input = `2${marker} Checklist:\n\n  • Sample A.\n  • Sample B.\n3${marker} Next:`;
-      const expected = "2. Checklist:\n\n• Sample A.\n• Sample B.\n\n3. Next:";
-
+  it.each([".", ")"])("keeps section gaps and ordered children tight: %s", (marker) => {
+    for (const [input, expected] of [
+      [
+        `2${marker} Checklist:\n\n  • Sample A.\n  • Sample B.\n3${marker} Next:`,
+        "2. Checklist:\n\n• Sample A.\n• Sample B.\n\n3. Next:",
+      ],
+      [`1${marker} Parent\n   - Child\n2${marker} Next`, "1. Parent\n  • Child\n2. Next"],
+      [
+        `1${marker} Install\n   - run setup\n   - check version\n2${marker} Configure\n   • edit config\n3${marker} Start`,
+        "1. Install\n  • run setup\n  • check version\n2. Configure\n• edit config\n3. Start",
+      ],
+    ] as const) {
       expect(markdownToTelegramHtml(input)).toBe(expected);
       expect(chunkHtml(input)).toEqual([expected]);
-    },
-  );
+    }
+  });
 
   it("splits long multiline html text without breaking balanced tags", () => {
     const chunks = splitTelegramHtmlChunks(`<b>${"A\n".repeat(2500)}</b>`, 4000);

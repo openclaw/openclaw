@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { WorktreeGcProgress } from "../agents/worktrees/gc-progress.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
@@ -11,6 +11,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as hostIoPressure from "../infra/host-io-pressure.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   createGatewaySchedulerClock,
@@ -134,6 +135,10 @@ function warmPoolDemand() {
     },
   };
 }
+
+beforeEach(() => {
+  vi.spyOn(hostIoPressure, "createHostIoPressureProbe").mockReturnValue(async () => false);
+});
 
 afterEach(() => {
   resetConfigRuntimeState();
@@ -312,6 +317,74 @@ it.each([
     completed.gitMaintenance!.packsAfter = 0;
     expect(owner.request({ jobId: receipt.jobId }).gitMaintenance?.packsAfter).toBe(7777);
     expect(owner.request({ jobId: receipt.jobId }).removed).toEqual([]);
+  },
+);
+
+it("admits only one expired checkout per minute across a cohort and subsequent sweeps", async () => {
+  await using fixture = maintenanceFixture();
+  const removed: number[] = [];
+  vi.spyOn(managedWorktrees, "gc").mockImplementation(async (params = {}) => {
+    const progress = completedResult();
+    for (let index = 0; index < 3; index++) {
+      await params.beforeRemoval?.();
+      removed.push(fixture.clock.clock.now());
+      progress.removed.push(String(index));
+      await params.checkpoint?.(progress);
+    }
+    return progress;
+  });
+  const owner = fixture.start();
+  owner.request();
+  void fixture.run();
+  await vi.waitFor(() => expect(removed).toHaveLength(1));
+  await fixture.clock.advanceBy(59_999);
+  expect(removed).toEqual([0]);
+  await fixture.clock.advanceBy(1);
+  await vi.waitFor(() => expect(removed).toHaveLength(2));
+  await fixture.clock.advanceBy(60_000);
+  await vi.waitFor(() => expect(fixture.onComplete).toHaveBeenCalledOnce());
+  expect(removed).toEqual([0, 60_000, 120_000]);
+  owner.request();
+  void fixture.run();
+  await fixture.clock.advanceBy(59_999);
+  expect(removed).toHaveLength(3);
+  await fixture.clock.advanceBy(1);
+  await vi.waitFor(() => expect(removed).toHaveLength(4));
+});
+
+it.each(["recover", "stop", "configuration"])(
+  "pauses removals under host pressure and handles %s before acquiring custody",
+  async (outcome) => {
+    const probe = vi.fn().mockResolvedValue(true);
+    vi.spyOn(hostIoPressure, "createHostIoPressureProbe").mockReturnValue(probe);
+    const config: OpenClawConfig = {};
+    await using fixture = maintenanceFixture(config);
+    const removed = vi.fn();
+    vi.spyOn(managedWorktrees, "gc").mockImplementation(async (params = {}) => {
+      await params.beforeRemoval!();
+      removed();
+      return completedResult();
+    });
+    const owner = fixture.start();
+    owner.request();
+    void fixture.run();
+    await vi.waitFor(() => expect(probe).toHaveBeenCalledOnce());
+    await fixture.clock.advanceBy(299_999);
+    expect(removed).not.toHaveBeenCalled();
+    if (outcome === "stop") {
+      await owner.stop();
+    } else {
+      probe.mockResolvedValue(false);
+      if (outcome === "configuration") {
+        config.worktreeRoot = "/synthetic/replaced";
+        setRuntimeConfigSnapshot(config);
+      }
+      await fixture.clock.advanceBy(1);
+      await vi.waitFor(() =>
+        expect(outcome === "recover" ? fixture.onComplete : fixture.onError).toHaveBeenCalledOnce(),
+      );
+    }
+    expect(removed).toHaveBeenCalledTimes(outcome === "recover" ? 1 : 0);
   },
 );
 

@@ -727,6 +727,10 @@
   visibility: visible;
 }
 
+.chat-text :where(.markdown-link-favicon[data-link-favicon-state="failed"]) {
+  display: none;
+}
+
 .chat-text :where(a:has(> .markdown-link-favicon.is-loaded)) {
   text-decoration: none;
 }

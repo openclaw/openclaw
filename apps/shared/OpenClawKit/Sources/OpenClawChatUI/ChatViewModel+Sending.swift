@@ -433,7 +433,7 @@ extension OpenClawChatViewModel {
             }
             if input == draft.input { input = "" }
             switch command {
-            case "/new": await performStartNewSession(worktree: false)
+            case "/new": await performStartNewSession(inheritCurrentSession: true, worktree: false)
             case "/compact": await performCompact()
             default: await performReset()
             }

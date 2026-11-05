@@ -312,6 +312,11 @@ export async function loadChatRoute(
     (context.offlineSessionDefaults?.scope ?? context.agents.state.agentsList?.scope) !== "global";
   const catalogKey = catalogSessionKeyFromSearch(routeLocation.search);
   if (target.kind === "main" && catalogKey) {
+    const { resolveCatalogContinuation } = await import("./route-loader-catalog-share.runtime.ts");
+    const continued = await resolveCatalogContinuation(context, catalogKey, target.agentId, signal);
+    if (continued) {
+      return { kind: "session", ...continued, ...sessionRouteHints(routeLocation), face };
+    }
     const sessionKey = buildCatalogSessionKey(catalogKey);
     let canonicalLocation = preferenceDerived
       ? locationWithoutNavigationHints(routeLocation)

@@ -95,10 +95,13 @@ const publicationWriters = new Map<string, readonly string[]>([
     key(sharedPublication, "writeGitHubPublicationExecutionInDatabase"),
     [key(sharedPublication, "createGitHubPublicationExecutionStoreInDatabase")],
   ],
+  [
+    key(personalPublication, "requirePersonalGitHubPublicationConfirmationInDatabase"),
+    [key(personalPublication, "githubPublications.personalRestart")],
+  ],
   ...[
     "claimPersonalGitHubPublicationInDatabase",
     "writePersonalGitHubPublicationInDatabase",
-    "requirePersonalGitHubPublicationConfirmationInDatabase",
     "markPersonalGitHubPublicationReportedInDatabase",
   ].map((name): [string, string[]] => [
     key(personalPublication, name),

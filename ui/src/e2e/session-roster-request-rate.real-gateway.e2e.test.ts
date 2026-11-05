@@ -109,15 +109,12 @@ suite.define(() => {
         const selected = sidebar.locator(`[data-session-key="${key}"]`);
         await roster.getByText("Initial rate proof", { exact: true }).first().waitFor();
         await selected.waitFor();
-        // Profile counts join bootstrap after the separate navigation summary.
-        await expect
-          .poll(() =>
-            lists.some(
-              ({ params }) => params.includeOwnerSessionCounts && params.excludeSubagents === true,
-            ),
-          )
-          .toBe(true);
         await expect.poll(() => lists.every((request) => responses.has(request.id))).toBe(true);
+        expect(
+          lists.some(
+            ({ params }) => params.includeOwnerSessionCounts && params.excludeSubagents === true,
+          ),
+        ).toBe(false);
         await page.exposeFunction("recordRosterEvent", (label: string) => {
           labels.add(label);
         });
@@ -145,11 +142,8 @@ suite.define(() => {
             await expect.poll(() => selected.textContent()).toContain(label);
           }
         };
-        const rosterReads = () =>
-          lists.filter(({ params }) => params.includeOwnerSessionCounts !== true);
-        expect(rosterReads().length).toBeGreaterThan(0);
+        expect(lists.length).toBeGreaterThan(0);
         const before = [...lists];
-        const rosterBefore = rosterReads();
         await patch(key, "First rate update");
         await roster.getByText("First rate update", { exact: true }).waitFor();
         for (let index = 0; index < 3; index += 1) {
@@ -163,18 +157,31 @@ suite.define(() => {
         expect(lists).toEqual(before);
         await roster.getByText("Trailing rate update 2", { exact: true }).waitFor();
         await expect.poll(() => selected.textContent()).toContain("Trailing rate update 2");
+        // Counts belong to Online; opening it must still fetch them on demand.
+        await page.clock.resume();
+        await sidebar.locator('[data-navigation-view="online"]').click();
+        await expect
+          .poll(() =>
+            lists.some(
+              ({ params }) => params.includeOwnerSessionCounts && params.excludeSubagents === true,
+            ),
+          )
+          .toBe(true);
+        await expect.poll(() => lists.every((request) => responses.has(request.id))).toBe(true);
+        await sidebar.locator('[data-navigation-view="sessions"]').click();
+        await selected.waitFor();
+        await expect.poll(() => lists.every((request) => responses.has(request.id))).toBe(true);
+        await pauseVirtualClock(page);
         const beforeOther = lists.length;
         await patch(otherKey, "Unrelated rate update");
         await page.clock.runFor(15_000);
         // A changed row in another agent cannot invalidate this page's window.
         const afterOther = lists.slice(beforeOther);
-        expect(
-          afterOther.filter(({ params }) => params.includeOwnerSessionCounts !== true),
-        ).toEqual([]);
+        expect(afterOther).toEqual([]);
         // A relevant successor proves the quiet interval did not retire the subscription.
         await patch(key, "Relevant after unrelated");
         await page.clock.runFor(5_000);
-        expect(rosterReads()).toEqual(rosterBefore);
+        expect(lists.slice(beforeOther)).toEqual([]);
         await roster.getByText("Relevant after unrelated", { exact: true }).waitFor();
         await page.clock.resume();
       });

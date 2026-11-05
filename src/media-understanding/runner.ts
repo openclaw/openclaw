@@ -7,6 +7,7 @@ import {
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 import { isMediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
+import { formatDecisionSummary } from "../../packages/media-understanding-common/src/format.js";
 import {
   normalizeMediaExecutionProviderId,
   normalizeMediaProviderId,
@@ -71,7 +72,6 @@ import {
 } from "./resolve.js";
 import {
   buildModelDecision,
-  formatDecisionSummary,
   runCliEntry,
   runProviderEntry,
   type MediaRequestOverrides,
@@ -106,7 +106,7 @@ type RunCapabilityResult = {
 };
 
 const loadPreparedModelCatalogApi = createLazyRuntimeModule(async () => ({
-  ...(await import("../agents/model-catalog.js")),
+  ...(await import("../agents/model-catalog-lookup.js")),
   ...(await import("../agents/prepared-model-catalog.js")),
 }));
 

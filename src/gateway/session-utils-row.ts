@@ -6,10 +6,11 @@ import { omitUndefinedFields } from "@openclaw/normalization-core/record-coerce"
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { SESSION_PARTICIPANT_LIMIT } from "../../packages/gateway-protocol/src/schema/session-participant.js";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
+import { countRunningBackgroundProcesses } from "../agents/bash-process-observation.js";
 import { resolveModelContextTokenProjection } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
@@ -73,7 +74,7 @@ import type {
 } from "./session-utils-contracts.js";
 import {
   resolveEstimatedSessionCostUsd,
-  resolveGatewaySessionBackgroundProcessCount,
+  prepareGatewaySessionBackgroundProcessScope,
   readStoreChildSessionLinks,
   type SessionChildLink,
   resolveSessionChildController,
@@ -591,6 +592,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     row: freezeTrustedJsonSnapshot<Readonly<GatewaySessionRow>>(row),
     source: Object.freeze({
       parsedKey: parseAgentSessionKey(key),
+      backgroundProcessScope: prepareGatewaySessionBackgroundProcessScope(input),
       // Materialization already owns config and workspace-entry invalidation.
       unscopedHostRoot: Boolean(
         entry &&
@@ -643,6 +645,7 @@ export function presentSessionRow(
   options: Partial<ReturnType<typeof readSessionRowInputs>["presentation"]> & {
     now: number;
     childActivity?: SessionChildActivity;
+    backgroundProcessCount?: number;
   },
 ): GatewaySessionRow {
   const row = { ...materialized.row };
@@ -652,13 +655,10 @@ export function presentSessionRow(
   // Stamp the temporal projection, not the reusable materialized inputs.
   // Completed list caches retain this sample when they replay the finished row.
   row.snapshotAt = now;
-  const backgroundProcessCount = resolveGatewaySessionBackgroundProcessCount({
-    cfg: source.cfg,
-    key: row.key,
-    agentId: source.agentId,
-    sessionId: row.sessionId,
-  });
-  if (backgroundProcessCount !== undefined) {
+  const backgroundProcessCount =
+    options.backgroundProcessCount ??
+    countRunningBackgroundProcesses(source.backgroundProcessScope);
+  if (backgroundProcessCount > 0) {
     row.backgroundProcessCount = backgroundProcessCount;
   }
   const subagentRuns =

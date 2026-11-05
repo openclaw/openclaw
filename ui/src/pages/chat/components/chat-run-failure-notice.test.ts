@@ -79,7 +79,7 @@ it("replaces the canonical failed run row with one line-icon notice and explicit
   }
   const onRetry = vi.fn();
   drawNotice(item, { failureActionsRunId: "run-a", onRetryRun: onRetry });
-  expect(container.textContent).toContain("Unable to finish this reply");
+  expect(container.textContent).toContain("Couldn’t finish this reply");
   expect(container.textContent).not.toContain("⚠");
   expect(part("icon svg")).not.toBeNull();
   expect(query("details")).toBeNull();

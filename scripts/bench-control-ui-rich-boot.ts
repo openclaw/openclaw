@@ -27,6 +27,7 @@ const { values } = parseArgs({
     pairs: { type: "string", default: "20" },
     "network-latency-ms": { type: "string", default: "0" },
     "service-worker": { type: "boolean", default: false },
+    "warm-reload": { type: "boolean", default: false },
     http2: { type: "boolean", default: false },
     "compare-http2": { type: "boolean", default: false },
     "compare-delivery-hints": { type: "boolean", default: false },
@@ -35,6 +36,9 @@ const { values } = parseArgs({
 });
 if (!values["bundle-dir"] || !values["compare-bundle-dir"]) {
   throw new Error("bundle-dir and compare-bundle-dir are required");
+}
+if (values["warm-reload"] && values["service-worker"]) {
+  throw new Error("warm-reload cannot be combined with service-worker");
 }
 const output = path.resolve(values.output, new Date().toISOString().replaceAll(":", "-"));
 const base = path.resolve(values["bundle-dir"]);
@@ -257,6 +261,19 @@ try {
         await page.addInitScript({
           content: `;(() => { const __name = (fn) => fn; (${init.toString()})(${JSON.stringify(initOptions)}); })();`,
         });
+        const waitForReadiness = async () => {
+          if (!(await page.evaluate(() => Reflect.has(window, "__richRiskReadiness")))) {
+            throw new Error(`Readiness initializer failed: ${errors.join("; ")}`);
+          }
+          await page.waitForFunction(
+            () => {
+              const readiness = Reflect.get(window, "__richRiskReadiness");
+              return readiness?.composerMs && readiness?.finalMs && readiness?.activeMs;
+            },
+            undefined,
+            { timeout: 30000 },
+          );
+        };
         const cdp = await context.newCDPSession(page);
         const responses: Array<{
           url: string;
@@ -327,6 +344,13 @@ try {
           downloadThroughput: networkLatencyMs ? 1_250_000 : -1,
           uploadThroughput: -1,
         });
+        if (values["warm-reload"]) {
+          await page.goto(controlUiSessionUrl(baseUrl, sessionKey), {
+            waitUntil: "domcontentloaded",
+          });
+          await waitForReadiness();
+          await page.evaluate(() => document.fonts.ready.then(() => undefined));
+        }
         await cdp.send("Performance.enable", { timeDomain: "threadTicks" });
         const before = (await cdp.send("Performance.getMetrics")).metrics;
         const hostLoad = loadavg();
@@ -334,20 +358,14 @@ try {
         earlyHints.length = 0;
         server.requests.length = 0;
         const workerRequestStart = workerNetwork?.snapshot().requests.length ?? 0;
-        await page.goto(controlUiSessionUrl(baseUrl, sessionKey), {
-          waitUntil: "domcontentloaded",
-        });
-        if (!(await page.evaluate(() => Reflect.has(window, "__richRiskReadiness")))) {
-          throw new Error(`Readiness initializer failed: ${errors.join("; ")}`);
+        if (values["warm-reload"]) {
+          await page.reload({ waitUntil: "domcontentloaded" });
+        } else {
+          await page.goto(controlUiSessionUrl(baseUrl, sessionKey), {
+            waitUntil: "domcontentloaded",
+          });
         }
-        await page.waitForFunction(
-          () => {
-            const readiness = Reflect.get(window, "__richRiskReadiness");
-            return readiness?.composerMs && readiness?.finalMs && readiness?.activeMs;
-          },
-          undefined,
-          { timeout: 30000 },
-        );
+        await waitForReadiness();
         const after = (await cdp.send("Performance.getMetrics")).metrics;
         await page.evaluate(() => document.fonts.ready.then(() => undefined));
         workerNetwork?.assertHealthy();
@@ -404,12 +422,15 @@ try {
           path.join(output, "summary.json"),
           JSON.stringify(
             {
-              workload: "cold initial completed+active rich run",
+              workload: values["warm-reload"]
+                ? "warm reload completed+active rich run"
+                : "cold initial completed+active rich run",
               base,
               head,
               pairs,
               networkLatencyMs,
               serviceWorker: values["service-worker"],
+              warmReload: values["warm-reload"],
               http2: values.http2,
               compareHttp2: values["compare-http2"],
               compareDeliveryHints: values["compare-delivery-hints"],

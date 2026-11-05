@@ -14,7 +14,6 @@ import {
 } from "./android-app-i18n.ts";
 import type { translateNativeEntries } from "./control-ui-i18n.ts"; // Verification never initializes providers.
 import { compareAscii as compareCodePoints } from "./lib/canonical-json.mjs";
-import type { GlossaryEntry } from "./lib/control-ui-i18n-sync-plan.ts";
 import {
   type NativeI18nInventoryEntry,
   type NativeI18nSite,
@@ -48,12 +47,10 @@ type CandidateContext = {
 };
 type NativeTranslationArtifactV1 = {
   entries: Array<{ id: string; source: string; translated: string }>;
-  glossaryHash: string;
   locale: string;
   version: 1;
 };
 type NativeTranslationArtifact = {
-  glossaryHash: string;
   locale: string;
   translations: Record<string, string>;
   version: 2;
@@ -74,7 +71,6 @@ export type NativeI18nQualityFinding = {
 type NativeLocaleSyncOptions = {
   force?: boolean;
   refreshIds?: string[];
-  glossary?: GlossaryEntry[];
   translate?: typeof translateNativeEntries;
   translationsDir?: string;
 };
@@ -1131,23 +1127,6 @@ async function syncNativeI18n(options: {
   return entries;
 }
 
-async function loadGlossary(locale: string): Promise<GlossaryEntry[]> {
-  try {
-    return JSON.parse(
-      await readFile(
-        path.join(ROOT, "ui", "src", "i18n", ".i18n", `glossary.${locale}.json`),
-        "utf8",
-      ),
-    ) as GlossaryEntry[];
-  } catch {
-    return [];
-  }
-}
-
-function glossaryHash(glossary: readonly GlossaryEntry[]): string {
-  return createHash("sha256").update(JSON.stringify(glossary)).digest("hex");
-}
-
 function adjacentDuplicateWords(value: string, locale: string): string[] {
   const words = [...value.matchAll(/[\p{L}\p{M}\p{N}]+/gu)].map((match) => match[0]);
   const duplicates = new Set<string>();
@@ -1244,7 +1223,6 @@ export function validateNativeLocaleArtifact(
   locale: string,
   inventory: readonly NativeI18nEntry[],
   artifactValue: unknown,
-  glossary: readonly GlossaryEntry[] = [],
   reportObsolete?: (message: string) => void,
 ): NativeI18nQualityFinding[] {
   const errors: string[] = [];
@@ -1258,12 +1236,6 @@ export function validateNativeLocaleArtifact(
   }
   if (artifact.locale !== locale) {
     errors.push(`locale must be ${JSON.stringify(locale)}, got ${JSON.stringify(artifact.locale)}`);
-  }
-  const expectedGlossaryHash = glossaryHash(glossary);
-  if (artifact.glossaryHash !== expectedGlossaryHash) {
-    errors.push(
-      `glossaryHash must be ${expectedGlossaryHash}, got ${JSON.stringify(artifact.glossaryHash)}`,
-    );
   }
   if (!isRecord(artifact.translations)) {
     errors.push("translations must be a plain object");
@@ -1326,15 +1298,7 @@ export async function checkNativeLocaleArtifacts(
     const artifactPath = path.join(translationsDir, `${locale}.json`);
     try {
       const artifact: unknown = JSON.parse(await readFile(artifactPath, "utf8"));
-      findings.push(
-        ...validateNativeLocaleArtifact(
-          locale,
-          inventory,
-          artifact,
-          await loadGlossary(locale),
-          reportObsolete,
-        ),
-      );
+      findings.push(...validateNativeLocaleArtifact(locale, inventory, artifact, reportObsolete));
     } catch (error) {
       errors.push(error instanceof Error ? error.message : String(error));
     }
@@ -1376,8 +1340,6 @@ export async function syncNativeLocale(
   // Native runtime resources are owned by the Android and Apple slices; these
   // artifacts keep the shared translation-memory handoff current between them.
   const artifactPath = path.join(options.translationsDir ?? TRANSLATIONS_DIR, `${locale}.json`);
-  const glossary = options.glossary ?? (await loadGlossary(locale));
-  const currentGlossaryHash = glossaryHash(glossary);
   let previousRaw = "";
   let previous: NativeTranslationArtifact | NativeTranslationArtifactV1 | undefined;
   try {
@@ -1415,14 +1377,8 @@ export async function syncNativeLocale(
       }
     }
   }
-  const glossaryChanged =
-    (previous?.version === 2 || (migratingV1 && refreshIds.size > 0)) &&
-    previous?.glossaryHash !== currentGlossaryHash;
   const pending = entries
-    .filter(
-      (entry) =>
-        options.force || refreshIds.has(entry.id) || glossaryChanged || !reusableById.get(entry.id),
-    )
+    .filter((entry) => options.force || refreshIds.has(entry.id) || !reusableById.get(entry.id))
     .map((entry) => ({
       id: entry.id,
       source: entry.source,
@@ -1437,7 +1393,6 @@ export async function syncNativeLocale(
       ? await (options.translate ?? (await import("./control-ui-i18n.ts")).translateNativeEntries)(
           pending,
           locale,
-          glossary,
           validateNativeTranslationStructure,
         )
       : new Map<string, string>();
@@ -1455,10 +1410,9 @@ export async function syncNativeLocale(
   const artifact: NativeTranslationArtifact = {
     version: 2,
     locale,
-    glossaryHash: currentGlossaryHash,
     translations,
   };
-  validateNativeLocaleArtifact(locale, entries, artifact, glossary);
+  validateNativeLocaleArtifact(locale, entries, artifact);
   const rendered = `${JSON.stringify(artifact, null, 2)}\n`;
   const changed = previousRaw !== rendered;
   if (changed) {

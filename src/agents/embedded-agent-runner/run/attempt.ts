@@ -262,6 +262,10 @@ async function runEmbeddedAttemptOwned(
           yieldMessage = message;
           yieldAcknowledgment = acknowledgment;
           yieldMessageWaitRegistered = messageWaitRegistered;
+          if (options?.terminal) {
+            runAbortController.abort(options.terminal);
+            abortTerminalYield?.(options.terminal);
+          }
         },
         runAbortController,
         runTrace,
@@ -300,6 +304,7 @@ async function runEmbeddedAttemptOwned(
     let yieldAcknowledgment: string | undefined;
     let yieldMessageWaitRegistered: boolean | undefined;
     let yieldAbortSettled: Promise<void> | null = null;
+    let abortTerminalYield: ((reason: unknown) => void) | undefined;
     const preparedBundleTools = await prepare("attempt.bundle-tools", () =>
       prepStages.measure("bundle-tools", () =>
         prepareEmbeddedAttemptBundleTools({
@@ -378,6 +383,9 @@ async function runEmbeddedAttemptOwned(
           externalAbortController,
           resources: sessionResources.resources,
           onSessionYieldReady: ({ abortActiveSession, activeSession }) => {
+            abortTerminalYield = (reason) => {
+              yieldAbortSettled = abortActiveSession(reason);
+            };
             unsubscribeYieldTurnEnd = activeSession.agent.subscribe((event) => {
               if (
                 event.type !== "turn_end" ||

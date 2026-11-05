@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import {
   chmodSync,
   chownSync,
@@ -2663,7 +2663,7 @@ EOF
     }
     chmodSync(profile, readable ? 0o400 : 0o000);
     try {
-      const shellScript = `source "${SCRIPT_PATH}"; ${
+      const shellScript = `${readable ? "" : '[[ ! -r "$HOME/.bash_profile" ]] || { echo "Fixture profile remains readable" >&2; exit 90; }; '}source "${SCRIPT_PATH}"; ${
         readable
           ? 'persist_path_line_to_profile "$HOME/.profile" \'export PATH="$HOME/.local/bin:$PATH"\''
           : "ensure_user_local_bin_on_path"
@@ -2673,7 +2673,18 @@ EOF
         PATH: "/usr/bin:/bin",
         ...(!readable ? { SHELL: "/bin/bash" } : {}),
       };
-      let result: ReturnType<typeof spawnSync>;
+      const spawnOptions = {
+        encoding: "utf8" as const,
+        env: { ...process.env, ...env, BASH_ENV: "", ENV: "", OPENCLAW_INSTALL_SH_NO_RUN: "1" },
+      };
+      let dropReadCapabilities = false;
+      if (!readable && process.platform === "linux" && process.getuid?.() !== 0) {
+        const probe = runInstallShell('[[ -r "$HOME/.bash_profile" ]]', env);
+        expect(probe.error).toBeUndefined();
+        expect([0, 1], probe.stderr).toContain(probe.status);
+        dropReadCapabilities = probe.status === 0;
+      }
+      let result: SpawnSyncReturns<string>;
       if (process.getuid?.() === 0) {
         chmodSync(tmp, 0o755);
         chownSync(home, 65534, 65534);
@@ -2684,15 +2695,27 @@ EOF
         result = spawnSync(
           "setpriv",
           ["--reuid=65534", "--regid=65534", "--clear-groups", "bash", "-c", shellScript],
-          {
-            encoding: "utf8",
-            env: { ...process.env, ...env, BASH_ENV: "", ENV: "", OPENCLAW_INSTALL_SH_NO_RUN: "1" },
-          },
+          spawnOptions,
+        );
+      } else if (dropReadCapabilities) {
+        // Some VM images grant non-root processes capabilities that bypass chmod.
+        result = spawnSync(
+          "setpriv",
+          [
+            "--inh-caps=-dac_read_search,-dac_override",
+            "--ambient-caps=-dac_read_search,-dac_override",
+            "/bin/bash",
+            "--noprofile",
+            "--norc",
+            "-c",
+            shellScript,
+          ],
+          spawnOptions,
         );
       } else {
         result = runInstallShell(shellScript, env);
       }
-      expect(result.status).toBe(0);
+      expect(result.status, result.stderr).toBe(0);
       if (readable) {
         expect(readFileSync(profile, "utf8")).toBe(
           'export PATH="$HOME/.local/bin:$PATH"\n# readonly profile\n',
@@ -3365,6 +3388,36 @@ describe("install.sh macOS Homebrew Node behavior", () => {
     );
     expect(result.stdout).not.toContain("brew:link");
     expect(result.stdout).not.toContain("ensure-called");
+  });
+
+  it("reports a stale Homebrew node without PATH advice", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      OS=macos
+      stale_prefix="$(mktemp -d "$HOME/stale-node.XXXXXX")/node"
+      mkdir -p "$stale_prefix/bin"
+      printf '#!/bin/sh\\necho v26.10.0\\n' > "$stale_prefix/bin/node"
+      chmod +x "$stale_prefix/bin/node"
+      brew() {
+        if [[ "$1" == "--prefix" ]]; then
+          echo "$stale_prefix"
+          return 0
+        fi
+        return 0
+      }
+      node_binary_is_supported() { return 1; }
+      if ensure_macos_default_node_active; then
+        echo "ensure returned success"
+      else
+        echo "ensure returned failure"
+      fi
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("ensure returned failure");
+    expect(result.stdout).toContain("brew update && brew upgrade node");
+    expect(`${result.stdout}${result.stderr}`).toContain("v26.10.0 does not meet");
   });
 
   it("does not print PATH advice when Homebrew node is missing at runtime", () => {

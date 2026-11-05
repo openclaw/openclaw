@@ -47,6 +47,20 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+it("ignores release size-baseline drift without allowing blanket lint disables", () => {
+  const root = makeRepo(["src/stale.ts"]);
+  fs.rmSync(path.join(root, "src/stale.ts"));
+  fixtureFiles(root).write("src/new.ts", suppression);
+  git(root, ["branch", "-m", "release/2026.11.4"]);
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  fixtureFiles(root).write("src/new.ts", "/* oxlint-disable */\n");
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  expect(main(root, ["--base", "HEAD"])).toBe(1);
+  expect(console.error).toHaveBeenCalledWith(
+    expect.stringContaining("All-rule lint disables are forbidden"),
+  );
+});
+
 it("reports baseline growth as an advisory in GitHub Actions even when listed", () => {
   const root = makeRepo(["src/a.ts"]);
   fixtureFiles(root).write(baselinePath, "src/a.ts\nsrc/b.ts\n");

@@ -15,6 +15,10 @@ import {
 } from "./chat-message.test-support.ts";
 
 const harness = createChatMessageHarness();
+it("labels unnamed agent replies with the localized product noun", () => {
+  harness.renderAssistantMessage(createAssistantMessage("Ready"), { assistantName: undefined });
+  expect(harness.elementText(".chat-sender-name")).toBe("Agent");
+});
 const {
   render,
   renderStreamGroup,
@@ -368,12 +372,12 @@ describe("grouped chat rendering", () => {
 
     expectCount(".chat-group.assistant", 1);
     expectAbsent(".chat-working-indicator");
-    // Usage leads and the duration follows, matching the live indicator's order.
+    // Run duration belongs to the Worked summary, so the recap carries usage only.
     expect(
       Array.from(element(".chat-turn-recap--continuation")!.children, (child) =>
         child.textContent?.trim(),
       ),
-    ).toEqual(["1 output token", "·", "Done in 4 hours, 2 minutes"]);
+    ).toEqual(["1 output token"]);
     expectAbsent(".chat-turn-recap__claw");
     expectPresent(".chat-group-footer");
   });

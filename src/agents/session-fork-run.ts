@@ -54,7 +54,7 @@ import { SessionManager } from "./sessions/session-manager.js";
  * transcript, yields to foreground work, and stops when the source session is reset, replaced
  * or rewritten. Tools see the source through `inputProvenance` (`sourceTool: "session_fork"`).
  */
-export type SessionForkRunParams = {
+type SessionForkRunParams = {
   config: OpenClawConfig;
   /** The completed transcript entry the fork reads through. */
   source: TranscriptEntryAnchor;
@@ -95,7 +95,7 @@ const FORK_TURN_SEARCH_LIMITS = [
   undefined,
 ] as const;
 
-export type SessionForkTurn = {
+type SessionForkTurn = {
   /** Undefined for a turn stored before requester recording; callers use session facts. */
   requester?: SessionForkRequester;
   model?: { provider: string; model: string };
@@ -217,7 +217,7 @@ function sessionConversationFacts(entry: SessionEntry | undefined) {
  * `cancelled` marks an expected stop: the caller's signal, a Gateway restart drain, yielding to
  * foreground work, or the source session changing under the fork. Anything else is a failure.
  */
-export type SessionForkOutcome =
+type SessionForkOutcome =
   | { ok: true; result: EmbeddedAgentRunResult }
   | { ok: false; error: unknown; cancelled: boolean };
 

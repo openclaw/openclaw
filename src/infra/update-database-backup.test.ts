@@ -506,7 +506,7 @@ async function originalCaptureFixture(externalAgents = false) {
 
   // Only declaration producers are synthetic; acquisition, copying, revalidation,
   // manifest parsing, and publication all use their production owners.
-  const registry = await import("../plugins/doctor-contract-registry.js");
+  const registry = await import("../plugins/doctor-contract-preparation.js");
   vi.spyOn(registry, "preparePluginDoctorMigrationBackupResources").mockResolvedValue({
     resources: [
       { path: plugin, kind: "directory" },
@@ -897,31 +897,28 @@ it("seals the chosen manual image without discarding later live writes", async (
   ]);
 });
 
-it("seals a verified manual image with its unavailable-generation warnings", async () => {
+it("seals a live manual image without generation warnings while a writer commits", async () => {
   const f = await originalCaptureFixture();
-  const owner = await import("./update-database-backup.js");
-  const capture = owner.createUpdateDatabaseBackup;
-  const producerWarnings = [
-    `Database write generation unavailable for ${f.shared}: SQLITE_BUSY: database is locked`,
-    `Database changed during capture; its snapshot requires manual recovery: ${f.shared}`,
-  ];
-  vi.spyOn(owner, "createUpdateDatabaseBackup").mockImplementationOnce(async (params) => {
-    const captured = await capture(params);
-    const { [f.shared]: _unverified, ...sourceGenerations } = captured.sourceGenerations;
-    return {
-      ...captured,
-      sourceGenerations,
-      warnings: [
-        ...captured.warnings,
-        "Available disk space could not be measured near /elsewhere; database backup will be attempted.",
-        ...producerWarnings,
-      ],
-    };
-  });
-  const captured = await f.captureOriginal("unverified");
-  await expectOriginalDatabase(captured.ref, f.shared);
-  expect(captured.diagnostics.databaseWarnings).toEqual(expect.arrayContaining(producerWarnings));
-  expect(await readFiles(f.familyPaths)).toEqual(f.family);
+  using writer = new DatabaseSync(f.shared);
+  // Stands in for a running Gateway, whose owner lease alone commits every 30 s.
+  const commits = setInterval(() => {
+    try {
+      writer.exec("INSERT INTO payload VALUES ('later')");
+    } catch (error) {
+      if (!String(error).includes("locked")) {
+        throw error;
+      }
+    }
+  }, 1);
+  try {
+    const captured = await f.captureOriginal("live-writer");
+    expect(captured.diagnostics.databaseWarnings).toEqual([]);
+    expect((await readManifest(captured.ref)).entries).toContainEqual(
+      expect.objectContaining({ sourcePath: f.shared, kind: "file", sqlite: true }),
+    );
+  } finally {
+    clearInterval(commits);
+  }
 });
 
 it.each(["insufficient", "unknown"] as const)(

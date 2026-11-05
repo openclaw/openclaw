@@ -81,9 +81,9 @@ run `openclaw gateway install`. Run `openclaw` for the TUI or
 
   </Step>
   <Step title="Install the Gateway service">
-    Quick start keeps the Gateway in the foreground of this terminal. The next
-    steps need it running in the background. Press **Ctrl+C** to stop the
-    foreground Gateway, then install the service:
+    Quick start asks **Keep OpenClaw running in the background?** and installs
+    the service when you accept, so skip this step in that case. Otherwise, press
+    **Ctrl+C** to stop the foreground Gateway, then install the service:
 
     ```bash
     openclaw gateway install

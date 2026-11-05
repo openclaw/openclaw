@@ -183,7 +183,11 @@ it.each([false, true])(
       ...base,
       handler: {
         ...base.handler,
-        getClient: () => ({ presenceKey: "conn-setup-order", socket: { readyState: 1 } }),
+        getClient: () => ({
+          connect: base.connectParams,
+          presenceKey: "conn-setup-order",
+          socket: { readyState: 1 },
+        }),
         isClosed: () => false,
         buildRequestContext: () => ({ broadcast, publishPresence: presence.publish }),
       },

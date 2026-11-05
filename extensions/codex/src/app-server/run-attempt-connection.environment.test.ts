@@ -203,7 +203,7 @@ describe("Codex local tool environment placement", () => {
   );
 });
 
-it.each(["api-key", "subscription"] as const)(
+it.each(["api-key", "subscription", "native-command"] as const)(
   "keeps worker %s route constraints through actual client startup without local login",
   async (authRequirement) => {
     provisionWorker();
@@ -222,23 +222,30 @@ it.each(["api-key", "subscription"] as const)(
       placementOwnerEpoch: 1,
     };
     params.sandbox = sandbox;
+    // The ordinary Gateway route resolves availability auth before worker placement.
+    params.resolvedApiKey = "synthetic-gateway-availability-key";
     const runtimePlan = createCodexRuntimePlanFixture();
     params.runtimePlan = {
       ...runtimePlan,
       auth: {
         ...runtimePlan.auth,
         selectedAuthMode: authRequirement,
-        modelRoute: {
-          provider: "openai",
-          modelId: params.modelId,
-          api: authRequirement === "api-key" ? "openai-responses" : "openai-chatgpt-responses",
-          baseUrl:
-            authRequirement === "api-key"
-              ? "https://api.openai.com/v1"
-              : "https://chatgpt.com/backend-api/codex",
-          authRequirement,
-          requestTransportOverrides: "none",
-        },
+        // prepareNativeCommandAuth leaves routing to the worker's native configuration.
+        modelRoute:
+          authRequirement === "native-command"
+            ? undefined
+            : {
+                provider: "openai",
+                modelId: params.modelId,
+                api:
+                  authRequirement === "api-key" ? "openai-responses" : "openai-chatgpt-responses",
+                baseUrl:
+                  authRequirement === "api-key"
+                    ? "https://api.openai.com/v1"
+                    : "https://chatgpt.com/backend-api/codex",
+                authRequirement,
+                requestTransportOverrides: "none",
+              },
       },
     };
     const runtime = createPluginRuntimeMock();
@@ -291,7 +298,11 @@ it.each(["api-key", "subscription"] as const)(
           },
           (error: unknown) => error,
         );
-      expect(outcome).toMatchObject({ status: 401 });
+      if (authRequirement === "native-command") {
+        expect(outcome).toBeUndefined();
+      } else {
+        expect(outcome).toMatchObject({ status: 401 });
+      }
       expect(connection.effectiveWorkspace).toBe(sandbox.containerWorkdir);
       expect(open).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -302,7 +313,9 @@ it.each(["api-key", "subscription"] as const)(
       expect(connection.startupAuthRequirement).toBe(authRequirement);
       expect(connection.startupClientAuthProfileId).toBeNull();
       expect(connection.startupPreparedAuth).toBeUndefined();
-      expect(methods).toContain("account/read");
+      if (authRequirement !== "native-command") {
+        expect(methods).toContain("account/read");
+      }
       expect(methods).not.toContain("account/login/start");
       await closed.promise;
     } finally {
@@ -368,7 +381,7 @@ it.each(["explicit-profile", "forwarded-profile", "supervision"] as const)(
     );
     expect(outcome).toBeInstanceOf(Error);
     expect(outcome).toMatchObject({
-      message: expect.stringContaining("worker-owned authentication"),
+      message: expect.stringContaining("detach supervision and clear the Gateway auth profile"),
     });
   },
 );
@@ -405,7 +418,7 @@ it("keeps non-node remote placements confined when worker hosting is configured"
   ).rejects.toThrow("requires an enrolled node");
 });
 
-it.each(["ordinary", "ordinary-profile", "worker"] as const)(
+it.each(["ordinary", "ordinary-profile"] as const)(
   "keeps native-command auth within its admitted %s placement boundary",
   async (placement) => {
     const params = createParams(
@@ -438,15 +451,6 @@ it.each(["ordinary", "ordinary-profile", "worker"] as const)(
         return readHostProfiles();
       },
     };
-    if (placement === "worker") {
-      const sandbox = {
-        ...createSandboxContext({}),
-        backendId: "node",
-        placementExecutionMode: "remote-exec",
-        placementNodeId: "worker-node",
-      };
-      params.sandbox = sandbox;
-    }
     if (placement === "ordinary-profile") {
       params.authProfileId = "openai:chosen";
     }

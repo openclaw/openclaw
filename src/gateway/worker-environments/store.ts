@@ -103,7 +103,7 @@ export async function createWorkerEnvironmentStore(
   async function snapshot(ids?: readonly string[]) {
     const reply = await executeExistingOpenClawStateRead(
       { path: pathname },
-      { type: "workerEnvironments.snapshot", ids },
+      { type: "workerEnvironments.snapshot", input: { ids } },
     );
     assertActive();
     if (!reply) {

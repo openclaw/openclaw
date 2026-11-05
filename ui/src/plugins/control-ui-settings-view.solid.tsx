@@ -7,10 +7,14 @@ import type {
 import type { ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { hasOperatorReadAccess } from "../app/operator-access.ts";
+import { registerPluginManagementEnglish } from "../i18n/locales/en-plugin-management.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { createControlUiSettingsComponents } from "./control-ui-settings-components.solid.tsx";
+
+registerEnglishCatalog(registerPluginManagementEnglish);
 
 /**
  * Facts that end a mounted view. Connection state and the transport epoch reach the
@@ -69,7 +73,7 @@ export function ControlUiSettingsPresentation(props: {
   };
   const fail = (error: unknown) => {
     retire();
-    container?.append(formatUiError(error, "Settings presentation could not load."));
+    container?.append(formatUiError(error, t("pluginUi.settingsLoadFailed")));
   };
   const sync = () => {
     if (!active || !container) {

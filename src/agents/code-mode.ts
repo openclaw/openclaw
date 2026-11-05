@@ -38,14 +38,16 @@ import {
   compactToolSearchCatalogEntry,
   isDirectVisibleCatalogTool,
 } from "./tool-search-catalog.js";
-import { formatToolSearchControlResult, type ToolSearchRuntime } from "./tool-search-runtime.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
-  type ToolSearchCatalogEntry,
-  type ToolSearchCatalogRef,
-  type ToolSearchToolContext,
+} from "./tool-search-protocol.js";
+import { formatToolSearchControlResult, type ToolSearchRuntime } from "./tool-search-runtime.js";
+import type {
+  ToolSearchCatalogEntry,
+  ToolSearchCatalogRef,
+  ToolSearchToolContext,
 } from "./tool-search-types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 

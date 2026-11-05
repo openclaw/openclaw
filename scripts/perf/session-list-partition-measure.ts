@@ -72,7 +72,6 @@ for (const id of ["ada", "bob"]) {
     profileId: id,
     label: id,
     avatarUrl: "/synthetic/avatar",
-    hasUploadedAvatar: false,
   });
 }
 const cases: Array<[string, SessionsListParams]> = [
@@ -137,8 +136,8 @@ for (const [name, query] of cases) {
     includeUnknown: true,
     ...query,
   };
-  const retained = new WeakMap<object, SessionListFilteredEntries>();
-  const read = (cache: WeakMap<object, SessionListFilteredEntries> | null = retained) => {
+  const retained = new Map<object, SessionListFilteredEntries>();
+  const read = (cache: Map<object, SessionListFilteredEntries> | null = retained) => {
     const selected = owner.read(opts.sortBy ?? "updatedAt");
     return selectSessionEntries({
       cfg,
