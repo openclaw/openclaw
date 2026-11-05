@@ -612,3 +612,24 @@ Example truncate response (`--max-lines 200`):
 - [CLI reference](/cli)
 - [`openclaw resume`](/cli/resume) — attach the TUI to a recent Gateway session
 - [Cloud Workers](/gateway/cloud-workers) — sessions hosted on remote workers
+
+## Session workspace files
+
+List or read files in a session's workspace, the same inventory the Control UI file view uses.
+
+```bash
+openclaw sessions files "agent:main:main"
+openclaw sessions files "agent:main:main" --search package.json
+openclaw sessions files "agent:main:main" src/index.ts --get
+openclaw sessions files "agent:main:main" data.csv --get --output data.csv
+```
+
+| Flag               | Description                                                                  |
+| ------------------ | ---------------------------------------------------------------------------- |
+| `--search <query>` | Filter the file list by name.                                                |
+| `--get`            | Read one file's content instead of listing (the positional path selects it). |
+| `--output <path>`  | Write the fetched content to a file (requires `--get`).                      |
+| `--agent <id>`     | Agent id that owns the session.                                              |
+| `--json`           | Raw `sessions.files.list` / `sessions.files.get` response.                   |
+
+Backed by the `sessions.files` Gateway RPCs; reads are scoped to the session workspace. The Gateway resolves the workspace from the session key, so the parent `sessions` list selectors do not apply.
