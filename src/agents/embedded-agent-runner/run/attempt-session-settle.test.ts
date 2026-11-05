@@ -1,8 +1,17 @@
 import { queryObjects } from "node:v8";
 import { expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
+import { readGlobalSingleton } from "../../../shared/global-singleton.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
+import {
+  createAssistant,
+  createAssistantResultStream,
+  createTestSession,
+  registerAgentSessionLoopTestLifecycle,
+  streamMocks,
+} from "../../sessions/agent-session-loop-correctness.test-support.js";
 import {
   clearEmbeddedSessionPromptStates,
   retainEmbeddedSessionPromptState,
@@ -12,7 +21,92 @@ import {
   createEmbeddedAttemptSessionResources,
   createEmbeddedAttemptSessionSettleTracker,
 } from "./attempt-session-settle.js";
+import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
 import { createEmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
+
+registerAgentSessionLoopTestLifecycle();
+
+it.each([
+  { outcome: "stop", releaseFails: false },
+  { outcome: "error", releaseFails: false },
+  { outcome: "aborted", releaseFails: false },
+  { outcome: "stop", releaseFails: true },
+  { outcome: "aborted", releaseFails: true },
+] as const)(
+  "releases transcript listeners after $outcome (actor release fails=$releaseFails)",
+  async ({ outcome, releaseFails }) => {
+    const listeners = readGlobalSingleton(
+      Symbol.for("openclaw.internalSessionTranscriptListeners"),
+    );
+    expect(listeners).toBeInstanceOf(Set);
+    if (!(listeners instanceof Set)) {
+      throw new Error("Transcript listener registry is unavailable");
+    }
+    const baseline = listeners.size;
+    const releaseError = new Error("transcript actor release failed");
+    const lifecycle = createEmbeddedAttemptTranscriptLifecycle({
+      onDrained: () => {
+        if (releaseFails) {
+          throw releaseError;
+        }
+      },
+    });
+    const { session, sessionManager } = await createTestSession({
+      withSessionWriteSettlement: (operation) => lifecycle.withTranscriptWrite(operation),
+    });
+    expect(listeners.size).toBe(baseline + 1);
+    const entered = deferred();
+    streamMocks.streamSimple.mockImplementation((model, _context, options) => {
+      const message = createAssistant(model, outcome === "stop" ? "Done" : "", outcome);
+      if (outcome !== "aborted") {
+        return createAssistantResultStream(message);
+      }
+      const stream = createAssistantMessageEventStream();
+      options?.signal?.addEventListener(
+        "abort",
+        () => {
+          stream.push({ type: "error", reason: "aborted", error: message });
+          stream.end();
+        },
+        { once: true },
+      );
+      entered.resolve();
+      return stream;
+    });
+    const prompt = session.prompt("Synthetic lifecycle probe");
+    if (outcome === "aborted") {
+      await entered.promise;
+      await session.abort();
+    }
+    await prompt;
+    expect(session.isStreaming).toBe(false);
+    if (outcome !== "aborted") {
+      expect(session.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: outcome });
+    }
+    const terminal =
+      outcome === "aborted"
+        ? ({ kind: "aborted", source: "external" } as const)
+        : outcome === "error"
+          ? ({ kind: "failed", source: "prompt", error: new Error("provider failed") } as const)
+          : ({ kind: "ok" } as const);
+    const cleanup = cleanupEmbeddedAttemptSessionPhase({
+      attempt: { sessionId: sessionManager.getSessionId(), runId: "listener-lifecycle" },
+      session,
+      sessionManager,
+      trajectoryRecorder: null,
+      trajectoryEndRecorded: false,
+      buildAbortSettlePromise: () => null,
+      state: { terminal, beforeAgentRunBlockedBy: undefined },
+      transcriptLifecycle: lifecycle,
+    });
+    if (releaseFails) {
+      await expect(cleanup).rejects.toBe(releaseError);
+    } else {
+      await cleanup;
+    }
+    expect(listeners.size).toBe(baseline);
+  },
+);
 
 it("releases prompt payloads while completed attempts' resource owners remain reachable", () => {
   class PromptPayload extends Set<string> {}
