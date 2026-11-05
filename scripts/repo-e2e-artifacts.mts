@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { writeBuildStamp, writeRuntimePostBuildStamp } from "./lib/local-build-metadata.mts";
+import { refreshLocalBuildStampTimes } from "./lib/local-build-metadata.mts";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mts";
 
 const archiveName = "repo-e2e-build.tar.gz";
@@ -43,12 +43,19 @@ export function transferRepoE2eArtifacts(
     const outputs = [
       "dist",
       ...(fs.existsSync(path.join(root, "dist-runtime")) ? ["dist-runtime"] : []),
-      ...fs.readdirSync(path.join(root, "packages")).flatMap((name) => {
-        const output = `packages/${name}/dist`;
-        return fs.existsSync(path.join(root, output)) ? [output] : [];
-      }),
-      ...listGeneratedExtensionAssetSources({ rootDir: root }),
+      // Source-discovered plugins serve their generated browser assets in place.
+      ...["packages", "extensions"].flatMap((directory) =>
+        fs.readdirSync(path.join(root, directory)).flatMap((name) => {
+          const output = `${directory}/${name}/dist`;
+          return fs.existsSync(path.join(root, output)) ? [output] : [];
+        }),
+      ),
     ];
+    outputs.push(
+      ...listGeneratedExtensionAssetSources({ rootDir: root }).filter(
+        (source) => !outputs.some((output) => source === output || source.startsWith(`${output}/`)),
+      ),
+    );
     fs.mkdirSync(artifactRoot, { recursive: true });
     // Tar preserves hidden stamps, executable bits, and relative runtime-overlay links.
     execFileSync("tar", ["-czf", archive, "--null", "-T", "-"], {
@@ -68,8 +75,7 @@ export function transferRepoE2eArtifacts(
   execFileSync("tar", ["-xzf", archive], { cwd: root });
   // Checkout config mtimes are newer than the producer's stamps. Refresh only
   // local freshness metadata after exact identity verification, before readers start.
-  writeBuildStamp({ cwd: root });
-  writeRuntimePostBuildStamp({ cwd: root });
+  refreshLocalBuildStampTimes({ cwd: root });
 }
 
 function digest(file: string) {

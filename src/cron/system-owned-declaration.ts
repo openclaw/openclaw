@@ -1,10 +1,10 @@
-import { HEARTBEAT_TASK_DECLARATION_PREFIX } from "./heartbeat-task.js";
-import { SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX } from "./skill-collection-review-monitor.js";
+/** Retired weekly Workshop curator jobs; the store deletes these rows on load. */
+export const RETIRED_SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX = "skill-collection-review:";
 
-/** Declaration-key namespaces reserved for jobs the gateway converges itself. */
+/** Reserved creation namespaces for retired system declarations. */
 const SYSTEM_OWNED_DECLARATION_PREFIXES = [
-  HEARTBEAT_TASK_DECLARATION_PREFIX,
-  SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX,
+  // Stays reserved so an operator job cannot claim a key the store retires.
+  RETIRED_SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX,
 ];
 
 export function systemOwnedDeclarationKeyNamespace(

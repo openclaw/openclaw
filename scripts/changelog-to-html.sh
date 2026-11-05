@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 VERSION=${1:-}
@@ -31,14 +35,25 @@ fi
 extract_version_section() {
   local version=$1
   local file=$2
-  awk -v version="$version" '
-    BEGIN { found=0 }
-    /^## / {
-      if ($0 ~ "^##[[:space:]]+" version "([[:space:]].*|$)") { found=1; next }
-      if (found) { exit }
-    }
-    found { print }
-  ' "$file"
+  node --input-type=module - "$SCRIPT_DIR" "$version" "$file" <<'NODE'
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+const [scriptDir, version, file] = process.argv.slice(2);
+const { findChangelogSection, findReleaseChangelog } = await import(
+  pathToFileURL(path.join(scriptDir, "lib/release-changelog.mjs")).href
+);
+try {
+  const markdown = path.basename(file) === "CHANGELOG.md"
+    ? findReleaseChangelog({ rootDir: path.dirname(path.resolve(file)), version })?.section
+    : readFileSync(file, "utf8");
+  const section = markdown && findChangelogSection(markdown, version);
+  if (section) process.stdout.write(section.replace(/^[^\n]*(?:\n|$)/u, ""));
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+}
+NODE
 }
 
 markdown_to_html() {

@@ -1,15 +1,15 @@
 import Darwin
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClaw
 
 struct ExecHostCwdTests {
     @Test(.execApprovalsStateIsolated, arguments: ["/tmp", "/private/tmp"])
     func `native full execution uses the physical temporary directory`(cwd: String) async throws {
-        _ = try ExecApprovalsStore.updateDefaults { defaults in
-            defaults.security = .full
-            defaults.ask = .off
-        }.get()
+        try await ExecApprovalsSocketTestSupport.seedPolicy(
+            ExecApprovalsFile(version: 1, defaults: ExecApprovalsDefaults(security: .full, ask: .off)),
+            in: ExecApprovalsStore.stateDirURL())
         let response = await ExecHostExecutor.handle(ExecHostRequest(
             command: ["/bin/pwd", "-P"],
             cwd: cwd,
@@ -18,13 +18,13 @@ struct ExecHostCwdTests {
         #expect(response.payload?.success == true)
         #expect(response.payload?.stdout == "/private/tmp\n")
 
-        let snapshot = try #require(ExecCommandResolution.captureApprovalCwdSnapshot(cwd))
-        #expect(snapshot.path == "/private/tmp")
-        #expect(ExecCommandResolution.revalidateApprovalCwdSnapshot(snapshot))
+        let cwdSnapshot = try #require(ExecCommandResolution.captureApprovalCwdSnapshot(cwd))
+        #expect(cwdSnapshot.path == "/private/tmp")
+        #expect(ExecCommandResolution.revalidateApprovalCwdSnapshot(cwdSnapshot))
         let patterns = ExecCommandResolution.resolveAllowAlwaysPatterns(
             command: ["/bin/pwd", "-P"], cwd: cwd, env: nil)
         let resolution = try #require(ExecCommandResolution.resolve(
-            command: ["/bin/pwd", "-P"], cwd: snapshot.path, env: nil))
+            command: ["/bin/pwd", "-P"], cwd: cwdSnapshot.path, env: nil))
         let pattern = try #require(patterns.first)
         #expect(ExecAllowlistMatcher.match(
             entries: [ExecAllowlistEntry(pattern: pattern.pattern, argPattern: pattern.argPattern)],
@@ -42,7 +42,7 @@ struct ExecHostCwdTests {
     }
 
     @Test func `cwd snapshot refuses files symlink loops and inaccessible paths`() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("openclaw-cwd-\(UUID().uuidString)")
+        let root = temporaryDirectoryForTests().appendingPathComponent("openclaw-cwd-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("file")

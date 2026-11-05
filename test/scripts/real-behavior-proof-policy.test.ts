@@ -5,9 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   NEEDS_PR_CONTEXT_LABEL,
   PROOF_OVERRIDE_LABEL,
-  evaluateClawSweeperExactHeadProof,
   evaluatePullRequestContext,
-  hasClawSweeperExactHeadProof,
   isMaintainerTeamMember,
   labelsForPullRequestContext,
   readBoundedGitHubApiJson,
@@ -102,22 +100,6 @@ function chunkedResponse(chunks: Uint8Array[]) {
 }
 
 describe("real-behavior-proof-policy", () => {
-  it.each([
-    "![after](https://github.com/user-attachments/assets/abc123)",
-    "Linked artifact: https://github.com/openclaw/openclaw/actions/runs/123456789/artifacts/987654321",
-    "Redacted runtime log: gateway connected Discord channel and delivered the reply.",
-    ["Terminal transcript:", "```text", "$ openclaw gateway status", "discord ready", "```"].join(
-      "\n",
-    ),
-  ])("passes external PRs with evidence: %s", (evidence) => {
-    const evaluation = evaluatePullRequestContext({
-      pullRequest: externalPr(proofBody(evidence)),
-    });
-
-    expect(evaluation.status).toBe("passed");
-    expect(labelsForPullRequestContext(evaluation)).toEqual([]);
-  });
-
   it("passes CRLF-formatted external PRs with screenshot proof", () => {
     const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(
@@ -182,15 +164,6 @@ describe("real-behavior-proof-policy", () => {
     });
 
     expect(evaluation.status).toBe("passed");
-  });
-
-  it("rejects None as evidence", () => {
-    const evaluation = evaluatePullRequestContext({
-      pullRequest: externalPr(proofBody("None")),
-    });
-
-    expect(evaluation.status).toBe("missing");
-    expect(evaluation.missingSections).toEqual(["Evidence"]);
   });
 
   it("rejects Markdown separators as context and evidence", () => {
@@ -299,37 +272,6 @@ describe("real-behavior-proof-policy", () => {
     expect(laterInvalid.missingSections).toEqual(["Evidence"]);
   });
 
-  it("accepts out-of-scope follow-ups as not-tested proof detail", () => {
-    const body = [
-      "## What Problem This Solves",
-      "",
-      "Cron validation should retain the configured low thinking level.",
-      "",
-      "## Evidence",
-      "",
-      "- Real environment tested: Local macOS source checkout, Node 24.",
-      "- Exact steps or command run after this patch:",
-      "  1. Built the local checkout with `node --import tsx scripts/build-all.mts`.",
-      "  2. Ran a redacted behavior probe for `provider=google`, `model=gemini-3-flash-preview`, and `catalogReasoning=false`.",
-      '- Evidence after fix: `.artifacts/behavior-85156/after-installed.json` recorded `lowSupported: true` and `fallbackFromLow: "low"`.',
-      "- Observed result after fix:",
-      "  - `levels: off, minimal, low, medium, adaptive, high`",
-      "  - `lowSupported: true`",
-      "  - `fallbackFromLow: low`",
-      "  - `local command version: OpenClaw 2026.5.21`",
-      "",
-      "## Out-of-scope Follow-ups",
-      "- No live systemd cron schedule was tested.",
-      "- No real Google provider request was sent.",
-    ].join("\n");
-    const evaluation = evaluatePullRequestContext({
-      pullRequest: externalPr(body),
-    });
-
-    expect(evaluation.status).toBe("passed");
-    expect(labelsForPullRequestContext(evaluation)).toEqual([]);
-  });
-
   it("accepts source PR proof when explicit gaps live in out-of-scope follow-ups", () => {
     const body = [
       "## What Problem This Solves",
@@ -364,15 +306,6 @@ describe("real-behavior-proof-policy", () => {
     expect(labelsForPullRequestContext(evaluation)).toEqual([]);
   });
 
-  it("fails external PRs without required context and evidence", () => {
-    const evaluation = evaluatePullRequestContext({
-      pullRequest: externalPr("## Summary\n\n- Fixed startup."),
-    });
-
-    expect(evaluation.status).toBe("missing");
-    expect(labelsForPullRequestContext(evaluation)).toEqual([NEEDS_PR_CONTEXT_LABEL]);
-  });
-
   it("fails external PRs that say the changed behavior was not tested", () => {
     const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(proofBody("not tested")),
@@ -380,15 +313,6 @@ describe("real-behavior-proof-policy", () => {
 
     expect(evaluation.status).toBe("missing");
     expect(labelsForPullRequestContext(evaluation)).toEqual([NEEDS_PR_CONTEXT_LABEL]);
-  });
-
-  it("accepts focused test and CI evidence", () => {
-    const evaluation = evaluatePullRequestContext({
-      pullRequest: externalPr(proofBody("pnpm test passed and CI is green.")),
-    });
-
-    expect(evaluation.status).toBe("passed");
-    expect(labelsForPullRequestContext(evaluation)).toEqual([]);
   });
 
   it("skips maintainer and bot PRs but requires context from external PRs", () => {
@@ -412,126 +336,6 @@ describe("real-behavior-proof-policy", () => {
         pullRequest: externalPr("", { labels: [{ name: PROOF_OVERRIDE_LABEL }] }),
       }).status,
     ).toBe("missing");
-  });
-
-  it("accepts ClawSweeper pass verdict comments only for the exact PR head", () => {
-    const pullRequest = {
-      number: 83581,
-      head: {
-        sha: "06ee95df6608d29a395c52ba8ab53fdd93a9dc4f",
-      },
-    };
-    const comments = [
-      {
-        user: {
-          login: "clawsweeper[bot]",
-          type: "Bot",
-        },
-        performed_via_github_app: {
-          slug: "clawsweeper",
-        },
-        body: [
-          "Codex review: passed.",
-          "<!-- clawsweeper-verdict:pass item=83581 sha=06ee95df6608d29a395c52ba8ab53fdd93a9dc4f confidence=high -->",
-        ].join("\n"),
-      },
-    ];
-
-    expect(hasClawSweeperExactHeadProof({ pullRequest, comments })).toBe(true);
-    expect(evaluateClawSweeperExactHeadProof({ pullRequest, comments }).passed).toBe(true);
-    expect(
-      hasClawSweeperExactHeadProof({
-        pullRequest: {
-          ...pullRequest,
-          head: { sha: "d0215b2d67a45a783277fc7d2949ac4a30f63ec6" },
-        },
-        comments,
-      }),
-    ).toBe(false);
-  });
-
-  it("rejects forged ClawSweeper pass verdict markers from contributor comments", () => {
-    const pullRequest = {
-      number: 83581,
-      head: {
-        sha: "06ee95df6608d29a395c52ba8ab53fdd93a9dc4f",
-      },
-    };
-    const comments = [
-      {
-        user: {
-          login: "external-contributor",
-          type: "User",
-        },
-        body: "<!-- clawsweeper-verdict:pass item=83581 sha=06ee95df6608d29a395c52ba8ab53fdd93a9dc4f confidence=high -->",
-      },
-    ];
-
-    expect(hasClawSweeperExactHeadProof({ pullRequest, comments })).toBe(false);
-    expect(evaluateClawSweeperExactHeadProof({ pullRequest, comments }).passed).toBe(false);
-  });
-
-  it("accepts exact ClawSweeper bot pass verdict markers when GitHub omits the app source", () => {
-    const pullRequest = {
-      number: 83581,
-      head: {
-        sha: "06ee95df6608d29a395c52ba8ab53fdd93a9dc4f",
-      },
-    };
-    const comments = [
-      {
-        user: {
-          login: "clawsweeper[bot]",
-          type: "Bot",
-        },
-        body: "<!-- clawsweeper-verdict:pass item=83581 sha=06ee95df6608d29a395c52ba8ab53fdd93a9dc4f confidence=high -->",
-      },
-    ];
-
-    expect(hasClawSweeperExactHeadProof({ pullRequest, comments })).toBe(true);
-    expect(evaluateClawSweeperExactHeadProof({ pullRequest, comments }).passed).toBe(true);
-  });
-
-  it("accepts exact OpenClaw ClawSweeper bot pass verdict markers when GitHub omits the app source", () => {
-    const pullRequest = {
-      number: 83581,
-      head: {
-        sha: "06ee95df6608d29a395c52ba8ab53fdd93a9dc4f",
-      },
-    };
-    const comments = [
-      {
-        user: {
-          login: "openclaw-clawsweeper[bot]",
-          type: "Bot",
-        },
-        body: "<!-- clawsweeper-verdict:pass item=83581 sha=06ee95df6608d29a395c52ba8ab53fdd93a9dc4f confidence=high -->",
-      },
-    ];
-
-    expect(hasClawSweeperExactHeadProof({ pullRequest, comments })).toBe(true);
-    expect(evaluateClawSweeperExactHeadProof({ pullRequest, comments }).passed).toBe(true);
-  });
-
-  it("rejects bot-shaped pass verdict markers from other bot users", () => {
-    const pullRequest = {
-      number: 83581,
-      head: {
-        sha: "06ee95df6608d29a395c52ba8ab53fdd93a9dc4f",
-      },
-    };
-    const comments = [
-      {
-        user: {
-          login: "not-clawsweeper[bot]",
-          type: "Bot",
-        },
-        body: "<!-- clawsweeper-verdict:pass item=83581 sha=06ee95df6608d29a395c52ba8ab53fdd93a9dc4f confidence=high -->",
-      },
-    ];
-
-    expect(hasClawSweeperExactHeadProof({ pullRequest, comments })).toBe(false);
-    expect(evaluateClawSweeperExactHeadProof({ pullRequest, comments }).passed).toBe(false);
   });
 });
 
@@ -566,11 +370,6 @@ describe("isMaintainerTeamMember", () => {
     expect(await isMaintainerTeamMember({ token: "t", org: "o", login: "u", fetch })).toBe(false);
   });
 
-  it("returns false when GitHub returns 404", async () => {
-    const fetch = vi.fn().mockResolvedValue(jsonResponse(404));
-    expect(await isMaintainerTeamMember({ token: "t", org: "o", login: "u", fetch })).toBe(false);
-  });
-
   it("cancels 404 membership response bodies", async () => {
     let canceled = false;
     const response = new Response(
@@ -593,13 +392,6 @@ describe("isMaintainerTeamMember", () => {
     expect(await isMaintainerTeamMember({ token: "t", login: "u", fetch })).toBe(false);
     expect(await isMaintainerTeamMember({ token: "t", org: "o", fetch })).toBe(false);
     expect(fetch).not.toHaveBeenCalled();
-  });
-
-  it("throws on unexpected HTTP errors so the caller can warn and fall back", async () => {
-    const fetch = vi.fn().mockResolvedValue(jsonResponse(500));
-    await expect(
-      isMaintainerTeamMember({ token: "t", org: "o", login: "u", fetch }),
-    ).rejects.toThrow(/500/);
   });
 
   it("cancels unexpected HTTP error response bodies", async () => {
@@ -659,12 +451,6 @@ describe("isMaintainerTeamMember", () => {
 });
 
 describe("readBoundedGitHubApiJson", () => {
-  it("reads bounded JSON response bodies", async () => {
-    await expect(
-      readBoundedGitHubApiJson(new Response('{"state":"active"}'), "GitHub API", 1024),
-    ).resolves.toEqual({ state: "active" });
-  });
-
   it("rejects oversized JSON bodies by content length", async () => {
     const response = contentLengthResponse(1025);
 

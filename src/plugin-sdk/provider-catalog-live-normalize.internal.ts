@@ -1,5 +1,10 @@
 import { normalizeUpstreamModelPricing } from "@openclaw/model-catalog-core/model-catalog-pricing";
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { commonPrefixLength } from "@openclaw/normalization-core/string-normalization";
+import { asBoolean } from "../utils/boolean.js";
+import { readParsedField } from "../utils/string-readers.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "./provider-model-shared.js";
 
 export type UpstreamProviderCatalogModel = Record<string, unknown> & {
@@ -22,64 +27,46 @@ export type ProjectedUpstreamProviderCatalogModel = ModelDefinitionConfig & {
 };
 
 export function readLiveModelCatalogId(row: unknown): string | undefined {
-  const record = readLiveModelCatalogRecord(row);
+  const record = asOptionalRecord(row);
   if (record?.object !== undefined && record.object !== "model") {
     return undefined;
   }
   return readLiveModelCatalogStringField(record, "id");
 }
 
-export function readLiveModelCatalogRecord(body: unknown): Record<string, unknown> | undefined {
-  return asOptionalRecord(body);
+export function readOpenAICompatibleLiveModelId(row: unknown): string | undefined {
+  return readLiveModelCatalogStringField(row, ["id", "model", "model_name", "modelName"]);
 }
 
 export function readLiveModelCatalogStringField(
   row: unknown,
   keys: string | readonly string[],
 ): string | undefined {
-  const record = readLiveModelCatalogRecord(row);
-  for (const key of typeof keys === "string" ? [keys] : keys) {
-    const value = record?.[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return undefined;
+  const record = asOptionalRecord(row);
+  return record && readParsedField(record, keys, normalizeOptionalString);
 }
 
 export function readLiveModelCatalogBooleanField(
   row: unknown,
   keys: string | readonly string[],
 ): boolean | undefined {
-  const record = readLiveModelCatalogRecord(row);
-  for (const key of typeof keys === "string" ? [keys] : keys) {
-    const value = record?.[key];
-    if (typeof value === "boolean") {
-      return value;
-    }
-  }
-  return undefined;
+  const record = asOptionalRecord(row);
+  return record && readParsedField(record, keys, asBoolean);
 }
 
 export function readLiveModelCatalogPositiveSafeIntegerField(
   row: unknown,
   keys: string | readonly string[],
 ): number | undefined {
-  const record = readLiveModelCatalogRecord(row);
-  for (const key of typeof keys === "string" ? [keys] : keys) {
-    const value = record?.[key];
-    if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
-      return value;
-    }
-  }
-  return undefined;
+  const record = asOptionalRecord(row);
+  return record && readParsedField(record, keys, asPositiveSafeInteger);
 }
 
 export function isUpstreamProviderCatalogModel(
   value: unknown,
 ): value is UpstreamProviderCatalogModel {
-  const model = readLiveModelCatalogRecord(value);
-  const limits = readLiveModelCatalogRecord(model?.limit);
+  const model = asOptionalRecord(value);
+  const limits = asOptionalRecord(model?.limit);
   return Boolean(
     readLiveModelCatalogStringField(model, "id") &&
     readLiveModelCatalogPositiveSafeIntegerField(limits, "context") &&
@@ -134,8 +121,9 @@ function isSafeLiveModelId(value: string): boolean {
   return true;
 }
 
+// "<modality>-text-to-text" kinds (Hugging Face pipeline tags) are chat models with media input.
 const NON_TEXT_MODEL_ID_PATTERN =
-  /(?:^|[/_:.-])(?:embed(?:ding)?|rerank(?:er)?|whisper|transcri(?:be|ption)|tts|speech|moderation|guard|gpt-image|dall-e|flux|sdxl|stable-diffusion|imagen|image-gen(?:eration)?|text-to-image|veo|sora|video-gen(?:eration)?|text-to-video)(?:$|[/_:.-])/i;
+  /(?:^|[/_:.-])(?:embed(?:ding)?|rerank(?:er)?|whisper|transcri(?:be|ption)|tts|speech|realtime|moderation|guard|(?:audio|image|video)(?!-text-to-text)|dall-e|flux|sdxl|stable-diffusion|imagen|veo|sora|babbage|davinci|gpt-3[.]5-turbo-instruct)(?:$|[/_:.-])/i;
 
 function rowAdvertisesNonTextModel(
   record: Record<string, unknown>,
@@ -186,23 +174,10 @@ function rowAdvertisesChatModel(
   return undefined;
 }
 
-function commonPrefixLength(left: string, right: string): number {
-  const limit = Math.min(left.length, right.length);
-  let index = 0;
-  while (index < limit && left[index] === right[index]) {
-    index += 1;
-  }
-  return index;
-}
-
 function findLiveModelTemplate(
   modelId: string,
   models: readonly ModelDefinitionConfig[],
 ): ModelDefinitionConfig | undefined {
-  const exact = models.find((model) => model.id === modelId);
-  if (exact) {
-    return exact;
-  }
   const normalizedId = modelId.toLowerCase();
   let best: ModelDefinitionConfig | undefined;
   let bestScore = 0;
@@ -247,8 +222,8 @@ function buildOpenAICompatibleLiveModel(
   fallback: ModelProviderConfig,
   acceptUnknownModel?: (params: { id: string; record: Record<string, unknown> }) => boolean,
 ): ModelDefinitionConfig | undefined {
-  const record = readLiveModelCatalogRecord(row);
-  const id = readLiveModelCatalogStringField(record, ["id", "model", "model_name", "modelName"]);
+  const record = asOptionalRecord(row);
+  const id = readOpenAICompatibleLiveModelId(record);
   if (!record || !id || !isSafeLiveModelId(id)) {
     return undefined;
   }
@@ -258,11 +233,17 @@ function buildOpenAICompatibleLiveModel(
   if (readLiveModelCatalogBooleanField(record, ["archived", "deprecated"]) === true) {
     return undefined;
   }
-  const capabilities = readLiveModelCatalogRecord(record.capabilities);
-  const architecture = readLiveModelCatalogRecord(record.architecture);
-  const topProvider = readLiveModelCatalogRecord(record.top_provider);
-  const modelInfo = readLiveModelCatalogRecord(record.model_info);
+  // Retired rows can stay listed after shutdown, but every request to them fails.
+  const shutdownDate = readLiveModelCatalogStringField(record, ["shutdown_date", "shutdownDate"]);
+  if (shutdownDate && Date.parse(shutdownDate) <= Date.now()) {
+    return undefined;
+  }
+  const capabilities = asOptionalRecord(record.capabilities);
+  const architecture = asOptionalRecord(record.architecture);
+  const topProvider = asOptionalRecord(record.top_provider);
+  const modelInfo = asOptionalRecord(record.model_info);
   const nestedRecords = [capabilities, architecture, topProvider, modelInfo];
+  const parameterCount = readLiveModelCatalogPositiveSafeIntegerField(record, "parameterCount");
   const advertisedChatCapability = rowAdvertisesChatModel(record, nestedRecords);
   if (
     advertisedChatCapability === false ||
@@ -274,15 +255,20 @@ function buildOpenAICompatibleLiveModel(
 
   const exact = fallback.models.find((model) => model.id === id);
   if (exact) {
-    const liveContextWindow = readLiveModelContextWindow([record, ...nestedRecords]);
-    return exact.contextWindow === undefined && liveContextWindow !== undefined
-      ? { ...exact, contextWindow: liveContextWindow }
+    const contextWindow =
+      exact.contextWindow ?? readLiveModelContextWindow([record, ...nestedRecords]);
+    const resolvedParameterCount = exact.parameterCount ?? parameterCount;
+    return contextWindow !== exact.contextWindow || resolvedParameterCount !== exact.parameterCount
+      ? {
+          ...exact,
+          ...(contextWindow !== undefined ? { contextWindow } : {}),
+          ...(resolvedParameterCount !== undefined
+            ? { parameterCount: resolvedParameterCount }
+            : {}),
+        }
       : exact;
   }
-  // Manifest-published ids returned above are known-good. Everything past this
-  // point is a model the manifest has never described, so an opted-in provider
-  // gate decides whether its request shaping is understood well enough to
-  // surface it at all.
+  // Only unknown ids need the provider's request-shaping gate.
   if (acceptUnknownModel && !acceptUnknownModel({ id, record })) {
     return undefined;
   }
@@ -335,6 +321,7 @@ function buildOpenAICompatibleLiveModel(
   return {
     id,
     name: readLiveModelCatalogStringField(record, ["display_name", "displayName", "name"]) ?? id,
+    ...(parameterCount !== undefined ? { parameterCount } : {}),
     ...(template?.api ? { api: template.api } : {}),
     reasoning,
     input,
@@ -359,14 +346,6 @@ export function buildOpenAICompatibleLiveModels(
   );
 }
 
-function parseUpstreamProviderCatalogUrl(value: string): URL | undefined {
-  try {
-    return new URL(value);
-  } catch {
-    return undefined;
-  }
-}
-
 const UPSTREAM_PROVIDER_API_BY_PACKAGE = new Map<
   string,
   ProjectedUpstreamProviderCatalogModel["api"]
@@ -385,8 +364,8 @@ export function projectUpstreamProviderCatalogModel(params: {
   anthropicBaseUrl?: string;
   defaultBaseUrl?: string;
 }): ProjectedUpstreamProviderCatalogModel | undefined {
-  const model = readLiveModelCatalogRecord(params.model);
-  const limit = readLiveModelCatalogRecord(model?.limit);
+  const model = asOptionalRecord(params.model);
+  const limit = asOptionalRecord(model?.limit);
   const id = readLiveModelCatalogStringField(model, "id");
   const contextWindow = readLiveModelCatalogPositiveSafeIntegerField(limit, "context");
   const maxTokens = readLiveModelCatalogPositiveSafeIntegerField(limit, "output");
@@ -394,7 +373,7 @@ export function projectUpstreamProviderCatalogModel(params: {
     return undefined;
   }
 
-  const modelProvider = readLiveModelCatalogRecord(model.provider);
+  const modelProvider = asOptionalRecord(model.provider);
   const npm =
     readLiveModelCatalogStringField(modelProvider, "npm") ??
     params.provider.npm ??
@@ -404,16 +383,13 @@ export function projectUpstreamProviderCatalogModel(params: {
     return undefined;
   }
   const canonicalBaseUrl = params.defaultBaseUrl ?? params.provider.api;
-  const canonicalOrigin = canonicalBaseUrl
-    ? parseUpstreamProviderCatalogUrl(canonicalBaseUrl)?.origin
-    : undefined;
+  const canonicalOrigin = canonicalBaseUrl ? URL.parse(canonicalBaseUrl)?.origin : undefined;
   const providerBaseUrl = params.provider.api ?? params.defaultBaseUrl;
   const modelBaseUrl = readLiveModelCatalogStringField(modelProvider, "api");
   if (
     !canonicalOrigin ||
-    (providerBaseUrl &&
-      parseUpstreamProviderCatalogUrl(providerBaseUrl)?.origin !== canonicalOrigin) ||
-    (modelBaseUrl && parseUpstreamProviderCatalogUrl(modelBaseUrl)?.origin !== canonicalOrigin)
+    (providerBaseUrl && URL.parse(providerBaseUrl)?.origin !== canonicalOrigin) ||
+    (modelBaseUrl && URL.parse(modelBaseUrl)?.origin !== canonicalOrigin)
   ) {
     // Metadata chooses transport, but must never redirect authenticated inference
     // away from the provider endpoint trusted by its owner plugin.
@@ -424,32 +400,41 @@ export function projectUpstreamProviderCatalogModel(params: {
     api === "anthropic-messages"
       ? (params.anthropicBaseUrl ?? upstreamBaseUrl?.replace(/\/v1\/?$/, ""))
       : upstreamBaseUrl;
-  if (!baseUrl || parseUpstreamProviderCatalogUrl(baseUrl)?.origin !== canonicalOrigin) {
+  if (!baseUrl || URL.parse(baseUrl)?.origin !== canonicalOrigin) {
     return undefined;
   }
 
-  const modalities = readLiveModelCatalogRecord(model.modalities);
+  const modalities = asOptionalRecord(model.modalities);
   const input: ProjectedUpstreamProviderCatalogModel["input"] = ["text"];
   if (Array.isArray(modalities?.input) && modalities.input.includes("image")) {
     input.push("image");
   }
-  const reasoningOptions = Array.isArray(model.reasoning_options) ? model.reasoning_options : [];
-  const reasoningEfforts = [
-    ...new Set(
-      reasoningOptions.flatMap((option) => {
-        const record = readLiveModelCatalogRecord(option);
-        return record?.type === "effort" && Array.isArray(record.values)
-          ? record.values.filter(
-              (value): value is string => typeof value === "string" && Boolean(value),
-            )
-          : [];
-      }),
-    ),
-  ];
+  const reasoningOptions = Array.isArray(model.reasoning_options)
+    ? model.reasoning_options
+    : undefined;
+  const effortOptions = reasoningOptions?.flatMap((option) => {
+    const record = asOptionalRecord(option);
+    return record?.type === "effort" && Array.isArray(record.values) ? [record.values] : [];
+  });
+  // Upstream distinguishes absent controls from no controls and uses null for native "none".
+  const reasoningEfforts =
+    effortOptions?.length || reasoningOptions?.length === 0
+      ? [
+          ...new Set(
+            effortOptions
+              ?.flat()
+              .flatMap((value) =>
+                value === null ? ["none"] : typeof value === "string" && value ? [value] : [],
+              ),
+          ),
+        ]
+      : undefined;
   const contextTokens = readLiveModelCatalogPositiveSafeIntegerField(limit, "input");
+  const parameterCount = readLiveModelCatalogPositiveSafeIntegerField(model, "parameterCount");
   return {
     id,
     name: readLiveModelCatalogStringField(model, "name") ?? id,
+    ...(parameterCount !== undefined ? { parameterCount } : {}),
     provider: params.providerId,
     api,
     baseUrl,
@@ -465,6 +450,7 @@ export function projectUpstreamProviderCatalogModel(params: {
     ...(contextTokens && contextTokens <= contextWindow ? { contextTokens } : {}),
     maxTokens,
     ...(api === "openai-responses" &&
+    reasoningEfforts &&
     reasoningEfforts.length > 0 &&
     !reasoningEfforts.includes("none")
       ? { thinkingLevelMap: { off: null } }
@@ -473,8 +459,11 @@ export function projectUpstreamProviderCatalogModel(params: {
       supportsUsageInStreaming: true,
       maxTokensField: "max_tokens",
       ...(typeof model.tool_call === "boolean" ? { supportsTools: model.tool_call } : {}),
-      ...(reasoningEfforts.length > 0
-        ? { supportsReasoningEffort: true, supportedReasoningEfforts: reasoningEfforts }
+      ...(reasoningEfforts
+        ? {
+            supportsReasoningEffort: reasoningEfforts.length > 0,
+            supportedReasoningEfforts: reasoningEfforts,
+          }
         : {}),
       ...(api === "openai-completions"
         ? { supportsDeveloperRole: false, supportsStrictMode: false }

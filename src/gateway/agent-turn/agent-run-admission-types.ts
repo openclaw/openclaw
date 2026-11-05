@@ -1,0 +1,109 @@
+import type { ActiveMediaModel } from "../../../packages/media-understanding-common/src/active-model.js";
+import type {
+  AdmittedRunOperatorAuthority,
+  OperationalRunInstanceRef,
+} from "../../agents/admitted-run-context.js";
+import type {
+  PreparedModelRuntimeLease,
+  PreparedReplyDispatchRuntime,
+} from "../../agents/prepared-model-runtime.js";
+import type { TrustedSubagentCompletionHandoff } from "../../agents/subagents/announce/subagent-announce-handoff.js";
+import type { FollowupCompletionOwner } from "../../agents/subagents/completion/session-followup-completion.types.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import type { SessionEffectRef } from "../../sessions/session-controller.lifecycle.js";
+import type { registerChatAbortController } from "../chat-abort.js";
+import type { OffloadedRef } from "../chat-attachments.js";
+import type { GatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
+import type { AgentDeliveryPhaseResult } from "./agent-delivery-phase.js";
+import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
+import type { PreparedAgentRunUserTurn, prepareAgentRunUserTurn } from "./agent-run-user-turn.js";
+import type { AgentTurnIo } from "./types.js";
+
+export type PreparedAgentRunModelRuntime =
+  | {
+      preparedModelRuntimeLease: PreparedModelRuntimeLease;
+      acquireWorkspaceModelRuntime?: never;
+    }
+  | {
+      /** Retains the dispatch generation until deferred workspace preparation selects its lease. */
+      preparedModelRuntimeLease: PreparedModelRuntimeLease;
+      acquireWorkspaceModelRuntime: (
+        workspaceDir: string | undefined,
+      ) => Promise<PreparedModelRuntimeLease>;
+    };
+
+export type PreparedAgentRunDispatch = PreparedAgentRunModelRuntime & {
+  imageUnderstandingModel?: ActiveMediaModel;
+  activeGatewayWorkAdmission: SessionEffectRef | undefined;
+
+  activeRunAbort: ReturnType<typeof registerChatAbortController>;
+  cronCreatorAuthority?: GatewayCronCreatorAuthorityAdmission;
+  releaseCallerAuthority?: () => void;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+  operationalRunInstance: OperationalRunInstanceRef;
+  timeoutSeconds?: number;
+  effectiveProviderOverride?: string;
+  effectiveModelOverride?: string;
+  effectiveThinking?: string;
+  effectiveAllowModelOverride: boolean;
+  trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
+  restoredCronContinuationLifecycleRevision?: string;
+  lifecycleStorePath?: string;
+  resolvedThreadId?: string | number;
+  reactivateSubagent: boolean;
+  followupCompletion?: FollowupCompletionOwner;
+  replyDispatchRuntime: PreparedReplyDispatchRuntime;
+  unpersistedOffloadedRefs: OffloadedRef[];
+  userTurn: PreparedAgentRunUserTurn;
+  workspaceOverride?: string;
+};
+
+export type PrepareAgentRunDispatchParams = Omit<
+  Parameters<typeof prepareAgentRunUserTurn>[0],
+  | "assertCurrent"
+  | "assertCompletionCurrent"
+  | "abortSignal"
+  | "getAbortStopReason"
+  | "admittedSessionId"
+  | "resolvedThreadId"
+  | "freshChildStorePath"
+> & {
+  sourceWork: Promise<void>;
+  needsImageUnderstanding?: boolean;
+  /** Consumed host-bound child creation facts, never a wire-request option. */
+  freshChild?: boolean;
+  assertAdmissionCurrent?: () => void;
+  hasCurrentClientAuthority?: () => boolean;
+  promptedAt: number;
+  lifecycleStorePath: string;
+  requestedSessionKey?: string;
+  preAcceptedReservedSessionKey?: string;
+  delivery: AgentDeliveryPhaseResult;
+  restoredCronContinuationIdentity?: Pick<
+    RestoredCronContinuation,
+    "lifecycleRevision" | "sessionId"
+  >;
+  providerOverride?: string;
+  modelOverride?: string;
+  allowModelOverride: boolean;
+  lifecycleGeneration: string;
+  getAdmittedSessionId: () => string;
+  ownerConnId?: string;
+  ownerDeviceId?: string;
+  pendingChatRun?: { sessionKey: string; agentId?: string };
+  isOneShotModelRun: boolean;
+  onUserTurnMediaPersisted: () => void;
+  agentDedupeKeys: readonly string[];
+  getOwnedAgentDedupeKeys: () => readonly string[];
+  releaseUnacceptedReservation: () => boolean;
+  io: AgentTurnIo;
+  acquireGatewayWorkAdmission: (scope: string) => Promise<void>;
+  assertGatewayWorkAdmissionAllowed: () => SessionEntry | undefined;
+  hasGatewayAdmissionOutcome: () => boolean;
+  respondToGatewayAdmissionOutcome: () => boolean;
+  admissionAgentId: () => string | undefined;
+  getGatewayWorkAdmission: () => SessionEffectRef | undefined;
+  setAdmittedRunAbort: (value: ReturnType<typeof registerChatAbortController>) => void;
+  getAdmittedRunAbort: () => ReturnType<typeof registerChatAbortController> | undefined;
+  markAgentRunAccepted: (accepted: boolean) => void;
+};

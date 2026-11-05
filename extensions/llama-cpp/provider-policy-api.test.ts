@@ -9,7 +9,7 @@ describe("llama.cpp embedding setup policy", () => {
       inspectEmbeddingProviderSetup({ config: {}, env: {}, agentId: "main", provider: "local" }),
     ).toEqual({
       provider: "local",
-      reason: expect.stringContaining("Local embeddings need the managed llama.cpp server config"),
+      reason: expect.stringMatching(/llama-server.*node-llama-cpp.*degraded/),
       requirement: "managed-llama-cpp-setup",
       fixHint:
         "Run `openclaw models --agent main auth login --provider llama-cpp --method local` in an interactive terminal, then rerun this check.",

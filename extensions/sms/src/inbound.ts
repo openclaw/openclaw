@@ -1,8 +1,4 @@
-// Sms plugin module implements inbound behavior.
-import {
-  resolveStableChannelMessageIngress,
-  type ChannelIngressContextBinding,
-} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type { ChannelIngressContextBinding } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
@@ -22,84 +18,6 @@ export type SmsChannelRuntime = Pick<
   "commands" | "inbound" | "media" | "pairing" | "reply" | "routing" | "session"
 >;
 
-async function authorizeSmsSender(params: {
-  cfg: OpenClawConfig;
-  account: ResolvedSmsAccount;
-  channelRuntime: SmsChannelRuntime;
-  from: string;
-  rawBody: string;
-  contextBinding?: ChannelIngressContextBinding;
-}) {
-  const commandRequested = params.channelRuntime.commands.shouldComputeCommandAuthorized(
-    params.rawBody,
-    params.cfg,
-  );
-  return await resolveStableChannelMessageIngress({
-    channelId: CHANNEL_ID,
-    accountId: params.account.accountId,
-    cfg: params.cfg,
-    identity: {
-      key: "phone",
-      entryIdPrefix: "sms-entry",
-    },
-    readStoreAllowFrom: async () =>
-      await params.channelRuntime.pairing.readAllowFromStore({
-        channel: CHANNEL_ID,
-        accountId: params.account.accountId,
-      }),
-    subject: { stableId: params.from },
-    conversation: {
-      kind: "direct",
-      id: params.from,
-    },
-    contextBinding: params.contextBinding,
-    event: { mayPair: true },
-    dmPolicy: params.account.dmPolicy,
-    allowFrom: params.account.allowFrom,
-    command: commandRequested
-      ? {
-          cfg: params.cfg,
-          modeWhenAccessGroupsOff: "configured",
-        }
-      : undefined,
-  });
-}
-
-async function issueSmsPairingChallenge(params: {
-  account: ResolvedSmsAccount;
-  channelRuntime: SmsChannelRuntime;
-  from: string;
-  log?: SmsLog;
-}) {
-  const issueChallenge = createChannelPairingChallengeIssuer({
-    channel: CHANNEL_ID,
-    accountId: params.account.accountId,
-    upsertPairingRequest: async (input) =>
-      await params.channelRuntime.pairing.upsertPairingRequest({
-        channel: CHANNEL_ID,
-        accountId: params.account.accountId,
-        ...input,
-      }),
-  });
-  await issueChallenge({
-    senderId: params.from,
-    senderIdLine: `Your SMS phone number: ${params.from}`,
-    sendPairingReply: async (text) => {
-      await sendSmsTextChunks({
-        account: params.account,
-        to: params.from,
-        text,
-      });
-    },
-    onCreated: () => {
-      params.log?.info?.(`SMS pairing request created for ${params.from}`);
-    },
-    onReplyError: (err) => {
-      params.log?.warn?.(`SMS pairing reply failed for ${params.from}: ${String(err)}`);
-    },
-  });
-}
-
 export async function dispatchSmsInboundEvent(params: {
   cfg: OpenClawConfig;
   account: ResolvedSmsAccount;
@@ -112,20 +30,70 @@ export async function dispatchSmsInboundEvent(params: {
   log?: SmsLog;
 }): Promise<void> {
   const from = normalizeSmsPhoneNumber(params.msg.from);
-  let auth = await authorizeSmsSender({
-    cfg: params.cfg,
-    account: params.account,
-    channelRuntime: params.channelRuntime,
-    from,
-    rawBody: params.msg.body,
-  });
+  async function authorizeSmsSender(contextBinding?: ChannelIngressContextBinding) {
+    const { cfg, account, channelRuntime } = params;
+    const rawBody = params.msg.body;
+    const commandRequested = channelRuntime.commands.shouldComputeCommandAuthorized(rawBody, cfg);
+    return await channelRuntime.inbound.ingress.resolveStable({
+      channelId: CHANNEL_ID,
+      accountId: account.accountId,
+      cfg,
+      identity: {
+        key: "phone",
+        entryIdPrefix: "sms-entry",
+      },
+      readStoreAllowFrom: async () =>
+        await channelRuntime.pairing.readAllowFromStore({
+          channel: CHANNEL_ID,
+          accountId: account.accountId,
+        }),
+      subject: { stableId: from },
+      conversation: {
+        kind: "direct",
+        id: from,
+      },
+      contextBinding,
+      event: { mayPair: true },
+      dmPolicy: account.dmPolicy,
+      allowFrom: account.allowFrom,
+      command: commandRequested
+        ? {
+            cfg,
+            modeWhenAccessGroupsOff: "configured",
+          }
+        : undefined,
+    });
+  }
+  let auth = await authorizeSmsSender();
   if (!auth.senderAccess.allowed) {
     if (auth.senderAccess.decision === "pairing") {
-      await issueSmsPairingChallenge({
-        account: params.account,
-        channelRuntime: params.channelRuntime,
-        from,
-        log: params.log,
+      const { account, channelRuntime, log } = params;
+      const issueChallenge = createChannelPairingChallengeIssuer({
+        channel: CHANNEL_ID,
+        accountId: account.accountId,
+        upsertPairingRequest: async (input) =>
+          await channelRuntime.pairing.upsertPairingRequest({
+            channel: CHANNEL_ID,
+            accountId: account.accountId,
+            ...input,
+          }),
+      });
+      await issueChallenge({
+        senderId: from,
+        senderIdLine: `Your SMS phone number: ${from}`,
+        sendPairingReply: async (text) => {
+          await sendSmsTextChunks({
+            account,
+            to: from,
+            text,
+          });
+        },
+        onCreated: () => {
+          log?.info?.(`SMS pairing request created for ${from}`);
+        },
+        onReplyError: (err) => {
+          log?.warn?.(`SMS pairing reply failed for ${from}: ${String(err)}`);
+        },
       });
       return;
     }
@@ -193,17 +161,10 @@ export async function dispatchSmsInboundEvent(params: {
     });
     const sessionKey = route.sessionKey;
     auth = await authorizeSmsSender({
-      cfg: params.cfg,
-      account: params.account,
-      channelRuntime: params.channelRuntime,
-      from,
-      rawBody: params.msg.body,
-      contextBinding: {
-        agentId: route.agentId,
-        sessionKey,
-        messageId: params.msg.messageSid,
-        inboundEventKind: "user_request",
-      },
+      agentId: route.agentId,
+      sessionKey,
+      messageId: params.msg.messageSid,
+      inboundEventKind: "user_request",
     });
     if (!auth.senderAccess.allowed) {
       params.log?.warn?.(`SMS sender ${from} authorization changed before dispatch`);
@@ -314,13 +275,9 @@ export async function dispatchSmsInboundEvent(params: {
         },
       },
     });
+  } finally {
     if (adoptionState === "pending" || adoptionState === "abandoned") {
       await materialized.cleanup();
     }
-  } catch (error) {
-    if (adoptionState === "pending" || adoptionState === "abandoned") {
-      await materialized.cleanup();
-    }
-    throw error;
   }
 }

@@ -1,14 +1,8 @@
-/**
- * Shared sandbox naming and scope helpers.
- *
- * Produces stable session slugs, workspace directories, and registry scope keys.
- */
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { normalizeAgentId } from "../../routing/session-key.js";
-import { resolveUserPath } from "../../utils.js";
-import { resolveAgentIdFromSessionKey } from "../agent-scope.js";
-import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
+import { resolveUserPath } from "../../infra/home-dir.js";
+import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace-default.js";
 import { SANDBOX_STATE_DIR } from "./constants.js";
 import { hashTextSha256 } from "./hash.js";
 import type { SandboxConfig, SandboxIsolationSubject } from "./types.js";

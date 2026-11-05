@@ -1,10 +1,10 @@
 // @vitest-environment node
 import { createRouter } from "@openclaw/uirouter";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { AgentsListResult } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
-import type { ApplicationContext } from "../../app/context.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import {
   createGatewayStoreTestStore,
   GATEWAY_STORE_TEST_HELLO,
@@ -12,54 +12,54 @@ import {
 } from "../../app/gateway-store.test-support.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
+import { peekModelCatalog } from "../../lib/model-catalog-store.ts";
 import { page, type ModelProvidersRouteData } from "./route.ts";
 
-const modelMethods = ["models.authStatus", "models.list", "config.get"];
-const roster = {
-  defaultId: "main",
-  mainKey: "main",
-  scope: "per-sender",
+const modelMethods = ["models.authStatus", "models.list"];
+const modelsHello = {
+  ...GATEWAY_STORE_TEST_HELLO,
+  auth: { role: "operator", scopes: ["operator.read"] },
+  snapshot: {
+    presence: [{ ts: 1, instanceId: "models-route-client", user: { id: "models-route-user" } }],
+  },
+};
+const authStatus = { ts: 1, providers: [{ provider: "openai", status: "ok", profiles: [] }] };
+const catalog = { models: [{ id: "fixture", provider: "openai", name: "Fixture" }] };
+const roster = makeBootRoster({
   agents: [{ id: "main" }, { id: "research" }],
-} satisfies AgentsListResult;
+}) satisfies AgentsListResult;
 const cleanups: Array<() => void> = [];
+type RouteId = "model-providers" | "other";
 
-function responseFor(method: string): unknown {
-  switch (method) {
-    case "agents.list":
-      return roster;
-    case "models.authStatus":
-      return { ts: 1, providers: [{ provider: "openai", status: "ok", profiles: [] }] };
-    case "models.list":
-      return { models: [{ id: "fixture", provider: "openai", name: "Fixture" }] };
-    case "config.get":
-      return { config: {}, hash: "fixture" };
-    default:
-      return {};
-  }
-}
+const responses: Record<string, unknown> = {
+  "agents.list": roster,
+  "models.authStatus": authStatus,
+  "models.list": catalog,
+};
+const responseFor = async (method: string) => structuredClone(responses[method] ?? {});
 
 function createModelsRouter(selectedId: string | null = "main") {
-  const store = createGatewayStoreTestStore();
+  const store = createGatewayStoreTestStore({
+    clientOptions: { instanceId: "models-route-client" },
+  });
   store.gateway.start();
   const request = vi
     .spyOn(store.gateway.snapshot.client!, "request")
-    .mockImplementation(async (method) => responseFor(method));
-  store.current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+    .mockImplementation(responseFor);
+  store.current().testOptions.onHello?.({ ...modelsHello });
   // Match bootstrap's subscription order; the roster publishes before selection reconciles.
   const agents = createAgentCapability(store.gateway);
-  const selection = createAgentSelectionCapability(store.gateway, agents);
+  const chatSelection = createAgentSelectionCapability(store.gateway, agents);
+  const selection = createAgentSelectionCapability(store.gateway, agents, undefined, undefined, {
+    requireConfiguredAgent: true,
+  });
   selection.set(selectedId);
   const context = Object.freeze({
     gateway: store.gateway,
     agents,
-    agentSelection: selection,
-  }) as ApplicationContext;
-  const router = createRouter<
-    "model-providers" | "other",
-    ApplicationContext,
-    null,
-    ModelProvidersRouteData
-  >({
+    settingsAgentSelection: selection,
+  }) satisfies Parameters<NonNullable<typeof page.loader>>[0];
+  const router = createRouter<RouteId, typeof context, null, ModelProvidersRouteData>({
     routes: [
       { ...page, component: () => null },
       { id: "other", path: "/other", component: () => null },
@@ -67,6 +67,8 @@ function createModelsRouter(selectedId: string | null = "main") {
   });
   cleanups.push(() => {
     router.stop();
+    selection.dispose();
+    chatSelection.dispose();
     agents.dispose();
     store.gateway.stop();
   });
@@ -74,203 +76,210 @@ function createModelsRouter(selectedId: string | null = "main") {
     ...store,
     context,
     selection,
+    chatSelection,
     router,
     request,
-    modelCalls: () =>
+    modelCalls: (method?: string) =>
       store.clients.flatMap((client) =>
-        client.request.mock.calls.filter(([method]) => modelMethods.includes(method)),
+        client.request.mock.calls.filter(([name]) =>
+          method ? name === method : modelMethods.includes(name),
+        ),
       ),
+    navigate: (route: RouteId = "model-providers") => router.navigate(route, context),
+    data: () => router.getState().matches[0]?.data,
+    catalog: () =>
+      peekModelCatalog(store.gateway.snapshot.client!, { agentId: selection.state.selectedId! }),
+    hello: () => store.current().testOptions.onHello?.({ ...modelsHello }),
+    disconnect: () =>
+      store.current().testOptions.onClose?.({ code: 1012, reason: "restart", willRetry: true }),
   };
 }
 
 type ModelsHarness = ReturnType<typeof createModelsRouter>;
-type OwnerChange = "navigation" | "disconnect" | "hello" | "client" | "set";
+function expectLoaded(h: ModelsHarness, snapshot = h.gateway.snapshot) {
+  expect(h.data()).toMatchObject({
+    gateway: h.gateway,
+    gatewaySnapshot: snapshot,
+    client: snapshot.client,
+    agentId: h.selection.state.selectedId,
+    data: { authStatus, error: null, updatedAt: expect.any(Number) },
+  });
+  expect(h.catalog()).toEqual(catalog);
+}
 
-async function replaceOwner(harness: ModelsHarness, change: OwnerChange) {
+function holdRequests(h: ModelsHarness, methods = ["agents.list"]) {
+  const started = createDeferred();
+  const response = createDeferred();
+  const seen = new Set<string>();
+  h.request.mockImplementation(async (method) => {
+    if (methods.includes(method)) {
+      seen.add(method);
+      if (seen.size === methods.length) {
+        started.resolve();
+      }
+      await response.promise;
+    }
+    return responseFor(method);
+  });
+  return { started, response };
+}
+
+type OwnerChange = "navigation" | "disconnect" | "hello" | "client" | "set";
+type Boundary = "import" | "roster";
+
+async function atBoundary(boundary: Boundary, change: (h: ModelsHarness) => void | Promise<void>) {
+  const h = createModelsRouter(boundary === "roster" ? null : "main");
+  const admitted = h.gateway.snapshot;
+  const held = holdRequests(h);
+  const loading = h.navigate();
+  if (boundary === "roster") {
+    await held.started.promise;
+  }
+  // Invoke before awaiting: cached imports still have to observe the owner change.
+  await change(h);
+  held.response.resolve();
+  await loading;
+  return { h, admitted };
+}
+
+async function replaceOwner(h: ModelsHarness, change: OwnerChange) {
   if (change === "navigation") {
-    await harness.router.navigate("other", harness.context);
+    await h.navigate("other");
   } else if (change === "disconnect") {
-    harness.current().opts.onClose?.({ code: 1012, reason: "restart", willRetry: true });
+    h.disconnect();
   } else if (change === "hello") {
-    const admitted = harness.gateway.snapshot;
-    harness.current().opts.onClose?.({ code: 1012, reason: "restart", willRetry: true });
-    harness.current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
-    expect(harness.gateway.snapshot.client).toBe(admitted.client);
-    expect(harness.gateway.snapshot.hello).not.toBe(admitted.hello);
+    const admitted = h.gateway.snapshot;
+    h.disconnect();
+    h.hello();
+    expect(h.gateway.snapshot.client).toBe(admitted.client);
+    expect(h.gateway.snapshot.hello).not.toBe(admitted.hello);
   } else if (change === "client") {
-    harness.gateway.connect();
-    harness.current().request.mockImplementation(async (method) => responseFor(method));
-    harness.current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+    h.gateway.connect();
+    h.current().request.mockImplementation(responseFor);
+    h.hello();
   } else {
-    harness.selection.set("research");
+    h.selection.set("research");
   }
 }
 
-describe("Models route admission", () => {
-  beforeEach(stubGatewayStoreTestGlobals);
-  afterEach(() => {
-    for (const cleanup of cleanups.splice(0)) {
-      cleanup();
-    }
-    setAvatarGatewayOrigin(null);
-    vi.unstubAllGlobals();
-    vi.restoreAllMocks();
-  });
-
-  it.each(["navigation", "disconnect", "hello", "client", "set"] as const)(
-    "does not dispatch after %s during the deferred import; a new load succeeds",
-    async (change) => {
-      const harness = createModelsRouter();
-      const { router, context, gateway, selection, modelCalls } = harness;
-      const loading = router.navigate("model-providers", context);
-      // import() yields even for a cached module, so these real producers precede requests.
-      await replaceOwner(harness, change);
-      await loading;
-      expect(modelCalls()).toEqual([]);
-      if (gateway.snapshot.phase !== "connected") {
-        harness.current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
-      }
-      await router.revalidate(context, "model-providers");
-      expect(router.getState().matches[0]?.data).toMatchObject({
-        gateway,
-        gatewaySnapshot: gateway.snapshot,
-        client: gateway.snapshot.client,
-        agentId: selection.state.selectedId,
-        data: {
-          authStatus: responseFor("models.authStatus"),
-          models: [{ id: "fixture", provider: "openai", name: "Fixture" }],
-          error: null,
-          updatedAt: expect.any(Number),
-        },
-      });
-    },
-  );
-
-  it.each(["navigation", "disconnect", "hello", "client", "set"] as const)(
-    "does not dispatch after %s while agent initialization is pending",
-    async (change) => {
-      const harness = createModelsRouter(null);
-      const started = createDeferred();
-      const response = createDeferred<typeof roster>();
-      harness.request.mockImplementation(async (method) => {
-        if (method === "agents.list") {
-          started.resolve();
-          return response.promise;
-        }
-        return responseFor(method);
-      });
-      const loading = harness.router.navigate("model-providers", harness.context);
-      await started.promise;
-      await replaceOwner(harness, change);
-      // A new connection can select its agent before the old roster request settles.
-      if (change === "disconnect" || change === "hello" || change === "client") {
-        harness.selection.set("main");
-      }
-      response.resolve(roster);
-      await loading;
-      expect(harness.modelCalls()).toEqual([]);
-    },
-  );
-
-  it.each(["import", "roster"] as const)(
-    "accepts metadata and scope-only changes during %s",
-    async (boundary) => {
-      const harness = createModelsRouter(boundary === "roster" ? null : "main");
-      const admitted = harness.gateway.snapshot;
-      const started = createDeferred();
-      const response = createDeferred<typeof roster>();
-      harness.request.mockImplementation(async (method) => {
-        if (method === "agents.list") {
-          started.resolve();
-          return response.promise;
-        }
-        return responseFor(method);
-      });
-      const loading = harness.router.navigate("model-providers", harness.context);
-      if (boundary === "roster") {
-        await started.promise;
-      }
-      harness.current().opts.onRecoveryScopeChange?.();
-      harness.selection.setScope(boundary === "import" ? null : "research");
-      expect(harness.gateway.snapshot).not.toBe(admitted);
-      expect(harness.gateway.snapshot.hello).toBe(admitted.hello);
-      response.resolve(roster);
-      await loading;
-      expect(harness.router.getState().matches[0]?.data?.gatewaySnapshot).toBe(admitted);
-      expect(harness.router.getState().matches[0]?.data).toMatchObject({
-        gatewaySnapshot: admitted,
-        agentId: "main",
-        data: { error: null, updatedAt: expect.any(Number) },
-      });
-      expect(
-        harness
-          .modelCalls()
-          .map(([method]) => method)
-          .toSorted(),
-      ).toEqual(modelMethods.toSorted());
-      expect(harness.context.agentSelection.state.selectedId).toBe("main");
-    },
-  );
-
-  it("does not initialize agents after navigation cancels the deferred import", async () => {
-    const harness = createModelsRouter(null);
-    const loading = harness.router.navigate("model-providers", harness.context);
-    await harness.router.navigate("other", harness.context);
-    await loading;
-    expect(harness.request).not.toHaveBeenCalledWith("agents.list", {});
-    expect(harness.modelCalls()).toEqual([]);
-  });
-
-  it("leaves roster failure to the agent owner without starting Models requests", async () => {
-    const harness = createModelsRouter(null);
-    harness.request.mockRejectedValue(new Error("roster unavailable"));
-    await harness.router.navigate("model-providers", harness.context);
-    expect(harness.context.agents.state.agentsError).toBe("roster unavailable");
-    expect(harness.modelCalls()).toEqual([]);
-    expect(harness.router.getState().matches[0]?.data).toMatchObject({
-      client: null,
-      agentId: null,
-      data: { updatedAt: null },
-    });
-  });
-
-  it.each(["navigation", "preload"] as const)(
-    "keeps %s cancellation ownership through every Models request",
-    async (kind) => {
-      const harness = createModelsRouter();
-      const started = createDeferred();
-      const response = createDeferred();
-      let requests = 0;
-      harness.request.mockImplementation(async (method) => {
-        if (modelMethods.includes(method)) {
-          if (++requests === modelMethods.length) {
-            started.resolve();
-          }
-          await response.promise;
-        }
-        return responseFor(method);
-      });
-      const loading =
-        kind === "navigation"
-          ? harness.router.navigate("model-providers", harness.context)
-          : harness.router.preloadRoute("model-providers", harness.context);
-      await started.promise;
-      const calls = harness.request.mock.calls.filter(([method]) => modelMethods.includes(method));
-      await harness.router.navigate("other", harness.context);
-      response.resolve();
-      await loading;
-      for (const [method, , options] of calls) {
-        // Catalog coalescing has its own controller, but must retire with its last subscriber.
-        expect(options?.signal, method).toBeDefined();
-        expect(options?.signal?.aborted, method).toBe(kind === "navigation");
-      }
-      if (kind === "preload") {
-        await harness.router.navigate("model-providers", harness.context);
-        expect(harness.modelCalls()).toHaveLength(modelMethods.length);
-        expect(harness.router.getState().matches[0]?.data?.data.authStatus).toEqual(
-          responseFor("models.authStatus"),
-        );
-      }
-    },
-  );
+beforeEach(stubGatewayStoreTestGlobals);
+afterEach(() => {
+  cleanups.splice(0).forEach((cleanup) => cleanup());
+  setAvatarGatewayOrigin(null);
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
+
+it.each([true, false])("preserves provider deep links when connected=%s", async (connected) => {
+  const h = createModelsRouter();
+  if (!connected) {
+    await replaceOwner(h, "disconnect");
+  }
+  await h.router.navigateLocation(
+    {
+      pathname: "/settings/model-providers",
+      search: "?connect=1&provider=%20openai%20",
+      hash: "",
+    },
+    h.context,
+  );
+  expect(h.data()).toMatchObject({
+    connect: true,
+    provider: "openai",
+    client: connected ? h.gateway.snapshot.client : null,
+  });
+});
+
+it.each<[OwnerChange, Boundary]>([
+  ["navigation", "import"],
+  ["disconnect", "import"],
+  ["hello", "import"],
+  ["client", "import"],
+  ["set", "import"],
+  ["navigation", "roster"],
+  ["disconnect", "roster"],
+  ["hello", "roster"],
+  ["client", "roster"],
+  ["set", "roster"],
+])("retires %s during %s before dispatch", async (change, boundary) => {
+  const { h } = await atBoundary(boundary, async (current) => {
+    await replaceOwner(current, change);
+    if (boundary === "roster" && ["disconnect", "hello", "client"].includes(change)) {
+      current.selection.set("main");
+    }
+  });
+  expect(h.modelCalls()).toEqual([]);
+  if (boundary === "import") {
+    if (h.gateway.snapshot.phase !== "connected") {
+      h.hello();
+    }
+    await h.router.revalidate(h.context, "model-providers");
+    expectLoaded(h);
+  }
+});
+
+it.each(["import", "roster"] as const)(
+  "accepts metadata and independent chat scope changes during %s",
+  async (boundary) => {
+    const { h, admitted } = await atBoundary(boundary, (current) => {
+      const original = current.gateway.snapshot;
+      current.current().testOptions.onRecoveryScopeChange?.();
+      current.chatSelection.setScope(boundary === "import" ? null : "research");
+      expect(current.gateway.snapshot).not.toBe(original);
+      expect(current.gateway.snapshot.hello).toBe(original.hello);
+    });
+    expect(h.data()?.gatewaySnapshot).toBe(admitted);
+    expectLoaded(h, admitted);
+    const methods = h.modelCalls().map(([method]) => method);
+    expect(methods.toSorted()).toEqual(modelMethods.toSorted());
+    expect(h.context.settingsAgentSelection.state.selectedId).toBe("main");
+  },
+);
+
+it("does not initialize agents after navigation cancels the deferred import", async () => {
+  const h = createModelsRouter(null);
+  const loading = h.navigate();
+  await h.navigate("other");
+  await loading;
+  expect(h.request).not.toHaveBeenCalledWith("agents.list", expect.anything());
+  expect(h.modelCalls()).toEqual([]);
+});
+
+it("leaves roster failure to the agent owner without starting Models requests", async () => {
+  const h = createModelsRouter(null);
+  h.request.mockRejectedValue(new Error("roster unavailable"));
+  await h.navigate();
+  expect(h.context.agents.state.agentsError).toBe("roster unavailable");
+  expect(h.modelCalls()).toEqual([]);
+  expect(h.data()).toMatchObject({
+    client: null,
+    agentId: null,
+    data: { updatedAt: null },
+  });
+});
+
+it.each(["navigation", "preload"] as const)(
+  "keeps %s cancellation ownership through auth and catalog reads",
+  async (kind) => {
+    const h = createModelsRouter();
+    const { started, response } = holdRequests(h, modelMethods);
+    const loading =
+      kind === "navigation" ? h.navigate() : h.router.preloadRoute("model-providers", h.context);
+    await started.promise;
+    await h.navigate("other");
+    response.resolve();
+    await loading;
+    expect(h.router.getState().matches[0]?.routeId).toBe("other");
+    expect(h.catalog()).toEqual(kind === "preload" ? catalog : undefined);
+    await h.navigate();
+    if (kind === "preload") {
+      expect(h.modelCalls()).toHaveLength(modelMethods.length);
+    } else {
+      // The cancelled route releases its subscription; the connection-owned auth read survives.
+      expect(h.modelCalls("models.authStatus")).toHaveLength(1);
+      expect(h.modelCalls("models.list")).toHaveLength(2);
+      expect(h.catalog()).toEqual(catalog);
+    }
+    expect(h.data()?.data.authStatus).toEqual(authStatus);
+  },
+);

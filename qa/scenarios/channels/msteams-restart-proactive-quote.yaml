@@ -1,0 +1,30 @@
+title: Microsoft Teams restart proactive quote delivery
+
+scenario:
+  id: msteams-restart-proactive-quote
+  surface: channels
+  category: channels.outbound-delivery-and-reply-pipeline
+  coverage:
+    primary:
+      - channels.post-restart-final-reply
+    secondary:
+      - channels.native-threads
+      - channels.outbound-message
+  objective: Prove persisted Microsoft Teams group and channel ingress resumes after process replacement and delivers the recovered reply proactively with the original native quote and thread route.
+  successCriteria:
+    - Group-chat and channel activities are committed to the durable SQLite ingress queue before the first ingress owner stops.
+    - A replacement ingress owner claims each persisted activity without relying on the retired live turn context.
+    - The recovered proactive send targets the exact stored group conversation or channel thread root.
+    - The visible reply carries exactly one quotedReply entity for the original activity and the queue settles completed.
+  docsRefs:
+    - docs/channels/msteams.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - extensions/msteams/src/msteams-ingress.ts
+    - extensions/msteams/src/replay-context.ts
+    - extensions/msteams/src/sdk-proactive.ts
+    - extensions/msteams/src/msteams-ingress.test.ts
+  execution:
+    kind: vitest
+    path: extensions/msteams/src/msteams-ingress.test.ts
+    summary: Run the Microsoft Teams durable-ingress file, including persisted restart recovery, replay context, proactive group and channel-thread delivery, retries, deduplication, and queue lifecycle coverage.

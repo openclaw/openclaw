@@ -1,8 +1,3 @@
-/**
- * Rendered channel message batch planner.
- *
- * Summarizes reply payloads so delivery can pick adapter paths and recovery metadata.
- */
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type {
@@ -12,18 +7,16 @@ import type {
   RenderedMessageBatchPlanKind,
 } from "./types.js";
 
-function collectMediaUrls(payload: ReplyPayload): string[] {
-  const mediaUrls = normalizeTrimmedStringList(payload.mediaUrls);
-  const mediaUrl = payload.mediaUrl?.trim();
-  return mediaUrl && !mediaUrls.includes(mediaUrl) ? [mediaUrl, ...mediaUrls] : mediaUrls;
-}
-
 function createRenderedMessageBatchPlanItem(
   payload: ReplyPayload,
   index: number,
 ): RenderedMessageBatchPlanItem {
   const text = payload.text?.trim();
-  const mediaUrls = collectMediaUrls(payload);
+  const mediaUrls = normalizeTrimmedStringList(payload.mediaUrls);
+  const mediaUrl = payload.mediaUrl?.trim();
+  if (mediaUrl && !mediaUrls.includes(mediaUrl)) {
+    mediaUrls.unshift(mediaUrl);
+  }
   const presentationBlockCount = payload.presentation?.blocks?.length ?? 0;
   const kinds: RenderedMessageBatchPlanKind[] = [];
   if (text) {
@@ -53,22 +46,21 @@ function createRenderedMessageBatchPlanItem(
   };
 }
 
-/** Summarizes rendered reply payloads so delivery can choose adapter paths and recovery metadata. */
 export function createRenderedMessageBatchPlan(
   payloads: readonly ReplyPayload[],
 ): RenderedMessageBatchPlan {
   const items = payloads.map(createRenderedMessageBatchPlanItem);
   return items.reduce<RenderedMessageBatchPlan>(
-    (plan, item) => ({
-      payloadCount: plan.payloadCount + 1,
-      textCount: plan.textCount + (item.text ? 1 : 0),
-      mediaCount: plan.mediaCount + item.mediaUrls.length,
-      voiceCount: plan.voiceCount + (item.audioAsVoice ? 1 : 0),
-      presentationCount: plan.presentationCount + (item.kinds.includes("presentation") ? 1 : 0),
-      interactiveCount: plan.interactiveCount + (item.hasInteractive ? 1 : 0),
-      channelDataCount: plan.channelDataCount + (item.hasChannelData ? 1 : 0),
-      items: plan.items,
-    }),
+    (plan, item) => {
+      plan.payloadCount += 1;
+      plan.textCount += item.text ? 1 : 0;
+      plan.mediaCount += item.mediaUrls.length;
+      plan.voiceCount += item.audioAsVoice ? 1 : 0;
+      plan.presentationCount += item.kinds.includes("presentation") ? 1 : 0;
+      plan.interactiveCount += item.hasInteractive ? 1 : 0;
+      plan.channelDataCount += item.hasChannelData ? 1 : 0;
+      return plan;
+    },
     {
       payloadCount: 0,
       textCount: 0,
@@ -82,7 +74,6 @@ export function createRenderedMessageBatchPlan(
   );
 }
 
-/** Pairs reply payloads with their render plan for durable send and live-preview flows. */
 export function createRenderedMessageBatch(
   payloads: ReplyPayload[],
 ): RenderedMessageBatch<ReplyPayload> {

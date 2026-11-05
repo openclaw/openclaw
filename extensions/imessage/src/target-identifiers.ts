@@ -1,4 +1,3 @@
-// Imessage helper module normalizes database-backed target identifiers.
 const BARE_CHAT_IDENTIFIER_RE = /^[0-9a-f]{32}$/i;
 
 export function isIMessagePhoneLikeHandle(raw: string): boolean {

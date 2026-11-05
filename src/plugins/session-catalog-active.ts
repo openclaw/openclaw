@@ -1,5 +1,5 @@
 import { allowsProcessHomeSessionScan } from "../config/paths.js";
-import { getActivePluginSessionExtensionRegistry } from "./runtime.js";
+import { getPluginRegistryForContext } from "./runtime/gateway-request-scope.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 
 export type ActiveSessionCatalog = {
@@ -17,7 +17,7 @@ export type ActiveSessionCatalog = {
  * session control through this seam; mutation stays on the gateway RPCs.
  */
 export function listActiveSessionCatalogs(): ActiveSessionCatalog[] {
-  const registrations = getActivePluginSessionExtensionRegistry()?.sessionCatalogs ?? [];
+  const registrations = getPluginRegistryForContext()?.sessionCatalogs ?? [];
   const allowProcessHomeFallback = allowsProcessHomeSessionScan();
   return registrations
     .map(({ pluginId, provider }) => ({

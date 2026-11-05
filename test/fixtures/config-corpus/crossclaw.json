@@ -1,0 +1,143 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.9.3",
+    "migrations": {
+      "modelPolicyAllowlist": true
+    }
+  },
+  "models": {
+    "providers": {
+      "openai": {
+        "baseUrl": "",
+        "models": []
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openai/gpt-5.4",
+        "fallbacks": []
+      },
+      "models": {
+        "openai/gpt-5.4": {
+          "agentRuntime": {
+            "id": "codex"
+          }
+        }
+      },
+      "modelPolicy": {
+        "allow": [
+          "openai/gpt-5.4"
+        ]
+      },
+      "workspace": "/home/fixture/path0-0/path1-0/path2-0/path3-0/path4-0",
+      "maxConcurrent": 8,
+      "subagents": {
+        "maxConcurrent": 8,
+        "archiveAfterMinutes": 60
+      }
+    },
+    "entries": {
+      "main": {}
+    }
+  },
+  "tools": {
+    "web": {
+      "search": {
+        "enabled": true,
+        "openaiCodex": {
+          "enabled": true,
+          "mode": "cached"
+        }
+      }
+    }
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerAllowFrom": [
+      "slack:U0000000002"
+    ]
+  },
+  "gateway": {
+    "mode": "local",
+    "auth": {
+      "mode": "token",
+      "token": "FAKE_CONFIG_CORPUS_CREDENTIAL"
+    }
+  },
+  "mcp": {
+    "servers": {
+      "composio": {
+        "url": "https://fixture-3.invalid/",
+        "transport": "streamable-http"
+      }
+    }
+  },
+  "plugins": {
+    "load": {
+      "paths": [
+        "/home/fixture/external-plugin"
+      ]
+    },
+    "entries": {
+      "anthropic": {
+        "enabled": false
+      },
+      "memory-core": {
+        "config": {}
+      },
+      "openai": {
+        "enabled": true
+      },
+      "browser": {},
+      "slack": {
+        "enabled": true
+      },
+      "codex": {
+        "enabled": true
+      },
+      "fixture-extension": {
+        "enabled": true,
+        "config": {
+          "apiKey": "FAKE_CONFIG_CORPUS_CREDENTIAL"
+        }
+      }
+    }
+  },
+  "messages": {
+    "ackReactionScope": "group-mentions"
+  },
+  "update": {
+    "channel": "beta"
+  },
+  "memory": {
+    "search": {
+      "provider": "none"
+    }
+  },
+  "browser": {
+    "executablePath": "/home/fixture/path0-4/path1-4/path2-4/path3-4/path4-4/path5-4/path6-4/path7-4",
+    "noSandbox": true
+  },
+  "channels": {
+    "slack": {
+      "enabled": true,
+      "mode": "socket",
+      "dmPolicy": "pairing",
+      "groupPolicy": "open",
+      "replyToModeByChatType": {
+        "channel": "all"
+      },
+      "streaming": {
+        "progress": {
+          "commandText": "raw"
+        },
+        "chunkMode": "newline"
+      },
+      "textChunkLimit": 3500
+    }
+  }
+}

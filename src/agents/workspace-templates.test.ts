@@ -4,36 +4,18 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as packageRoot from "../infra/openclaw-root.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 
 async function loadWorkspaceTemplateResolvers() {
-  vi.resetModules();
   return import("./workspace-templates.js");
 }
 
 describe("resolveWorkspaceTemplateSearchDirs", () => {
-  it("resolves templates from package root when module url is dist-rooted", async () => {
-    const { resolveWorkspaceTemplateSearchDirs } = await loadWorkspaceTemplateResolvers();
-    const root = tempDirs.make("openclaw-templates-");
-    await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
-
-    const templatesDir = path.join(root, "docs", "reference", "templates");
-    await fs.mkdir(templatesDir, { recursive: true });
-    await fs.writeFile(path.join(templatesDir, "AGENTS.md"), "# ok\n");
-
-    const distDir = path.join(root, "dist");
-    await fs.mkdir(distDir, { recursive: true });
-    const moduleUrl = pathToFileURL(path.join(distDir, "model-selection.mjs")).toString();
-
-    // The primary template dir is the first search root of the public resolver.
-    const [resolved] = await resolveWorkspaceTemplateSearchDirs({ cwd: distDir, moduleUrl });
-    expect(resolved).toBe(templatesDir);
-  });
-
   it("falls back to checkout docs when package-root templates are missing", async () => {
     const { resolveWorkspaceTemplateSearchDirs } = await loadWorkspaceTemplateResolvers();
     const root = tempDirs.make("openclaw-templates-");
@@ -41,10 +23,12 @@ describe("resolveWorkspaceTemplateSearchDirs", () => {
 
     const distDir = path.join(root, "dist");
     await fs.mkdir(distDir, { recursive: true });
-    const moduleUrl = pathToFileURL(path.join(distDir, "model-selection.mjs")).toString();
+    const checkoutTemplates = path.resolve("docs", "reference", "templates");
+    vi.spyOn(process, "cwd").mockReturnValue(distDir);
+    vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
 
-    const [resolved = ""] = await resolveWorkspaceTemplateSearchDirs({ cwd: distDir, moduleUrl });
-    expect(path.normalize(resolved)).toBe(path.resolve("docs", "reference", "templates"));
+    const [resolved = ""] = await resolveWorkspaceTemplateSearchDirs();
+    expect(path.normalize(resolved)).toBe(checkoutTemplates);
   });
 
   it("returns only existing documentation template directories", async () => {
@@ -57,9 +41,10 @@ describe("resolveWorkspaceTemplateSearchDirs", () => {
 
     const distDir = path.join(root, "dist");
     await fs.mkdir(distDir, { recursive: true });
-    const moduleUrl = pathToFileURL(path.join(distDir, "model-selection.mjs")).toString();
+    vi.spyOn(process, "cwd").mockReturnValue(distDir);
+    vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
 
-    const resolved = await resolveWorkspaceTemplateSearchDirs({ cwd: distDir, moduleUrl });
+    const resolved = await resolveWorkspaceTemplateSearchDirs();
     expect(resolved[0]).toBe(docsTemplatesDir);
     expect(resolved).not.toContain(path.join(root, "src", "agents", "templates"));
     for (const templateDir of resolved) {

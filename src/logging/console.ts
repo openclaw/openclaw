@@ -1,12 +1,14 @@
-// Console logging helpers format and write messages to console streams.
 import util from "node:util";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { clearActiveProgressLine } from "../../packages/terminal-core/src/progress-line.js";
+import { exitAfterSignalExitBarriers } from "../cli/signal-exit-barrier.js";
 import { isVerbose } from "../global-state.js";
+import { readLoggingConfig } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { formatJsonConsoleLine } from "./json-console-line.js";
 import { type LogLevel, normalizeLogLevel } from "./levels.js";
-import { getLogger, readLoggerConfig } from "./logger.js";
+import { getLogger } from "./logger.js";
 import { redactSensitiveText } from "./redact.js";
 import { loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
@@ -54,7 +56,7 @@ function resolveConsoleSettings(): ConsoleSettings {
     return { level: "silent", style: normalizeConsoleStyle(undefined) };
   }
 
-  const cfg = (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggerConfig();
+  const cfg = (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
   const level = envLevel ?? normalizeConsoleLevel(cfg?.consoleLevel);
   const style = normalizeConsoleStyle(cfg?.consoleStyle);
   return { level, style };
@@ -67,11 +69,7 @@ export function getConsoleSettings(): ConsoleLoggerSettings {
   }
   const settings = resolveConsoleSettings();
   loggingState.cachedConsoleSettings = settings;
-  return loggingState.cachedConsoleSettings as ConsoleSettings;
-}
-
-export function getResolvedConsoleSettings(): ConsoleLoggerSettings {
-  return getConsoleSettings();
+  return settings;
 }
 
 // Route all console output (including tslog console writes) to stderr.
@@ -106,20 +104,12 @@ export function setConsoleTimestampPrefix(enabled: boolean): void {
   loggingState.consoleTimestampPrefix = enabled;
 }
 
-function normalizeConsoleSubsystem(subsystem?: string | null): string | null {
-  if (typeof subsystem !== "string") {
-    return null;
-  }
-  const normalized = subsystem.trim();
-  return normalized.length > 0 ? normalized : null;
-}
-
 export function shouldLogSubsystemToConsole(subsystem?: string | null): boolean {
   const filter = loggingState.consoleSubsystemFilter;
   if (!filter || filter.length === 0) {
     return true;
   }
-  const normalizedSubsystem = normalizeConsoleSubsystem(subsystem);
+  const normalizedSubsystem = normalizeOptionalString(subsystem);
   if (!normalizedSubsystem) {
     return false;
   }
@@ -144,9 +134,13 @@ function shouldSuppressConsoleMessage(message: string): boolean {
   return SUPPRESSED_CONSOLE_PREFIXES.some((prefix) => message.startsWith(prefix));
 }
 
-function isEpipeError(err: unknown): boolean {
+function brokenOutputReason(err: unknown): string | undefined {
   const code = (err as { code?: string })?.code;
-  return code === "EPIPE" || code === "EIO";
+  return code === "EPIPE"
+    ? "output pipe closed (EPIPE)"
+    : code === "EIO"
+      ? "output I/O failed (EIO)"
+      : undefined;
 }
 
 export function formatConsoleTimestamp(style: ConsoleStyle): string {
@@ -203,6 +197,7 @@ function writeFormattedConsoleOutput(params: {
           })
         : redactSensitiveText(stack ?? params.formatted);
     const line = timestamp ? `${timestamp} ${rendered}` : rendered;
+    clearActiveProgressLine();
     if (loggingState.forceConsoleToStderr) {
       process.stderr.write(`${line}\n`);
     } else if (
@@ -216,7 +211,7 @@ function writeFormattedConsoleOutput(params: {
       params.write.call(console, line);
     }
   } catch (err) {
-    if (isEpipeError(err)) {
+    if (brokenOutputReason(err)) {
       return;
     }
     throw err;
@@ -229,7 +224,6 @@ export function writeRootConsoleLine(method: "log" | "error", line: string): boo
   if (!rawConsole) {
     return false;
   }
-  clearActiveProgressLine();
   if (shouldSuppressConsoleMessage(line)) {
     return true;
   }
@@ -263,12 +257,12 @@ export function enableConsoleCapture(): void {
     loggingState.streamErrorHandlersInstalled = true;
     for (const stream of [process.stdout, process.stderr]) {
       stream.on("error", (err) => {
-        if (isEpipeError(err)) {
+        const reason = brokenOutputReason(err);
+        if (reason) {
           // stdout/stderr broken means the process is orphaned (e.g. the parent
           // service restarted and closed the journal pipe). Exit cleanly instead
           // of spinning in a tight loop where every log attempt re-triggers EPIPE.
-          const exitCode = process.exitCode;
-          process.exit(exitCode !== undefined && exitCode !== 0 && exitCode !== "0" ? exitCode : 0);
+          exitAfterSignalExitBarriers(process.exitCode ?? 0, reason);
           return;
         }
         throw err;
@@ -297,11 +291,7 @@ export function enableConsoleCapture(): void {
     const forwardedConsoleCall = (...args: unknown[]) => {
       const formatted = util.format(...args);
       let routedLevel = level;
-      if (
-        level === "error" &&
-        formatted.startsWith(NODE_PROCESS_WARNING_PREFIX) &&
-        typeof util.getCallSites === "function"
-      ) {
+      if (level === "error" && formatted.startsWith(NODE_PROCESS_WARNING_PREFIX)) {
         const caller = util.getCallSites(2, { sourceMap: false })[1];
         if (
           caller?.functionName === "writeOut" &&

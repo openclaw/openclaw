@@ -13,6 +13,7 @@ export {
   buildJsonChannelConfigSchema,
   buildMultiAccountChannelSchema,
   buildNestedDmConfigSchema,
+  refineChannelDmPolicy,
 } from "../channels/plugins/config-schema.js";
 export {
   BlockStreamingChunkSchema,
@@ -46,6 +47,7 @@ export {
   ChannelSendReadReceiptsSchema,
   ChannelStreamingProgressSchema,
   ChannelStreamingPreviewSchema,
+  ChannelThreadBindingsSchema,
   UnifiedStreamingModeSchema,
 } from "../config/zod-schema.channel-messaging-common.js";
 export { ChannelImplicitMentionsSchema } from "../config/zod-schema.implicit-mentions.js";

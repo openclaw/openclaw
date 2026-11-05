@@ -9,7 +9,6 @@ import type { PluginAgentToolResultMiddlewareRegistration } from "./registry-typ
 import { getActivePluginRegistry } from "./runtime.js";
 import {
   createPluginToolMatcherScope,
-  normalizePluginToolMatcher,
   pluginToolMatcherCoversTool,
   type PluginToolMatcherScope,
 } from "./tool-hook-matcher.js";
@@ -17,6 +16,7 @@ import {
 const AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES = [
   "openclaw",
   "codex",
+  "agentsapi",
 ] as const satisfies AgentToolResultMiddlewareRuntime[];
 
 const AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIME_SET = new Set<string>(
@@ -34,22 +34,9 @@ function normalizeAgentToolResultMiddlewareRuntime(
 
 export function normalizeAgentToolResultMiddlewareRuntimes(
   options?: AgentToolResultMiddlewareOptions,
+  declaredRuntimes?: readonly string[],
 ): AgentToolResultMiddlewareRuntime[] {
-  const requested = options?.runtimes;
-  if (!requested) {
-    return [...AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES];
-  }
-  const normalized: AgentToolResultMiddlewareRuntime[] = [];
-  for (const runtime of requested) {
-    const value = normalizeAgentToolResultMiddlewareRuntime(runtime);
-    if (!value) {
-      continue;
-    }
-    if (!normalized.includes(value)) {
-      normalized.push(value);
-    }
-  }
-  return normalized;
+  return normalizeAgentToolResultMiddlewareRuntimeIds(options?.runtimes ?? declaredRuntimes);
 }
 export function normalizeAgentToolResultMiddlewareRuntimeIds(
   runtimes: readonly string[] | undefined,
@@ -86,20 +73,17 @@ export function appendAgentToolResultMiddlewareScope(
   registration: PluginAgentToolResultMiddlewareRegistration,
   scope: AgentToolResultMiddlewareScope,
 ): void {
-  const normalizedMatcher = normalizePluginToolMatcher(scope.matcher);
-  const normalizedScope: AgentToolResultMiddlewareScope = {
-    runtimes: [...scope.runtimes],
-    ...(normalizedMatcher ? { matcher: normalizedMatcher } : {}),
-  };
   const scopes = readAgentToolResultMiddlewareScopes(registration);
-  if (!scopes.some((existing) => sameMiddlewareScope(existing, normalizedScope))) {
-    registration.scopes = [...scopes, normalizedScope];
+  if (!scopes.some((existing) => sameMiddlewareScope(existing, scope))) {
+    registration.scopes = [...scopes, scope];
   } else if (!registration.scopes) {
     registration.scopes = scopes;
   }
-  registration.runtimes = normalizeAgentToolResultMiddlewareRuntimeIds(
-    readAgentToolResultMiddlewareScopes(registration).flatMap((entry) => entry.runtimes),
-  );
+  registration.runtimes = [
+    ...new Set(
+      readAgentToolResultMiddlewareScopes(registration).flatMap((entry) => entry.runtimes),
+    ),
+  ];
 }
 
 export function agentToolResultMiddlewareRegistrationCoversTool(

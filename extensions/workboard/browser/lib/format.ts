@@ -1,16 +1,40 @@
-import { asDateTimestampMs, truncateUtf16Safe } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asDateTimestampMs } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { workboardLocale } from "../host.ts";
 import { t } from "../i18n/index.ts";
-function formatUnit(
+type DurationUnit = "millisecond" | "second" | "minute" | "hour" | "day";
+let durationLocale: string | undefined;
+const durationFormats = new Map<DurationUnit, Intl.NumberFormat>();
+
+function formatUnit(value: number, unit: DurationUnit): string {
+  const locale = workboardLocale();
+  if (durationLocale !== locale) {
+    durationLocale = locale;
+    durationFormats.clear();
+  }
+  let formatter = durationFormats.get(unit);
+  if (!formatter) {
+    formatter = new Intl.NumberFormat(locale, {
+      style: "unit",
+      unit,
+      unitDisplay: "narrow",
+      maximumFractionDigits: 0,
+    });
+    durationFormats.set(unit, formatter);
+  }
+  return formatter.format(value);
+}
+
+function formatUnitPair(
   value: number,
-  unit: "millisecond" | "second" | "minute" | "hour" | "day",
+  unit: DurationUnit,
+  remainder: number,
+  remainderUnit: DurationUnit,
 ): string {
-  return new Intl.NumberFormat(workboardLocale(), {
-    style: "unit",
-    unit,
-    unitDisplay: "narrow",
-    maximumFractionDigits: 0,
-  }).format(value);
+  const parts = [formatUnit(value, unit)];
+  if (remainder > 0) {
+    parts.push(formatUnit(remainder, remainderUnit));
+  }
+  return parts.join(" ");
 }
 
 export function formatDurationCompact(ms?: number | null): string | undefined {
@@ -27,40 +51,12 @@ export function formatDurationCompact(ms?: number | null): string | undefined {
   }
   const totalMinutes = Math.floor(totalSeconds / 60);
   if (totalMinutes < 60) {
-    const seconds = totalSeconds % 60;
-    const parts = [formatUnit(totalMinutes, "minute")];
-    if (seconds > 0) {
-      parts.push(formatUnit(seconds, "second"));
-    }
-    return parts.join(" ");
+    return formatUnitPair(totalMinutes, "minute", totalSeconds % 60, "second");
   }
   const hours = Math.floor(totalMinutes / 60);
-  if (hours >= 24) {
-    const days = Math.floor(hours / 24);
-    const remainingHours = hours % 24;
-    const parts = [formatUnit(days, "day")];
-    if (remainingHours > 0) {
-      parts.push(formatUnit(remainingHours, "hour"));
-    }
-    return parts.join(" ");
-  }
-  const minutes = totalMinutes % 60;
-  const parts = [formatUnit(hours, "hour")];
-  if (minutes > 0) {
-    parts.push(formatUnit(minutes, "minute"));
-  }
-  return parts.join(" ");
-}
-
-export function formatDateMs(
-  ms?: number | null,
-  options?: Intl.DateTimeFormatOptions,
-  fallback = t("common.na"),
-): string {
-  const timestampMs = asDateTimestampMs(ms);
-  return timestampMs === undefined
-    ? fallback
-    : new Date(timestampMs).toLocaleDateString(workboardLocale(), options);
+  return hours >= 24
+    ? formatUnitPair(Math.floor(hours / 24), "day", hours % 24, "hour")
+    : formatUnitPair(hours, "hour", totalMinutes % 60, "minute");
 }
 
 export function formatDateTimeMs(
@@ -72,11 +68,4 @@ export function formatDateTimeMs(
   return timestampMs === undefined
     ? fallback
     : new Date(timestampMs).toLocaleString(workboardLocale(), options);
-}
-
-export function clampText(value: string, max = 120): string {
-  if (value.length <= max) {
-    return value;
-  }
-  return `${truncateUtf16Safe(value, Math.max(0, max - 1))}…`;
 }

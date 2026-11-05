@@ -1,8 +1,10 @@
-/** Classifies service PATH entries that should not be frozen into daemons. */
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import { matchesVersionManagerPath } from "../shared/version-manager-path.js";
 
-// Service PATH policy keeps managed services away from user shell package-manager paths.
 export function normalizeServicePathEntry(entry: string, platform: NodeJS.Platform): string {
   const pathModule = platform === "win32" ? path.win32 : path.posix;
   const normalized = pathModule.normalize(entry).replaceAll("\\", "/");
@@ -20,17 +22,112 @@ export function isNonMinimalServicePathEntry(entry: string, platform: NodeJS.Pla
   // User shell package-manager paths are fragile in non-interactive services and
   // should be replaced by stable system/runtime paths.
   return (
-    normalized.includes("/.nvm/") ||
-    normalized.includes("/.fnm/") ||
-    normalized.includes("/.local/share/fnm/") ||
-    normalized.includes("/.volta/") ||
-    normalized.includes("/.asdf/") ||
-    normalized.includes("/.n/") ||
-    normalized.includes("/.nodenv/") ||
-    normalized.includes("/.nodebrew/") ||
-    normalized.includes("/nvs/") ||
-    normalized.includes("/.local/share/pnpm/") ||
+    matchesVersionManagerPath(normalized, "service-path") ||
     normalized.includes("/pnpm/") ||
     normalized.endsWith("/pnpm")
   );
+}
+
+export function mergeServicePath(
+  nextPath: string | undefined,
+  existingPath: string | undefined,
+  tmpDir: string | undefined,
+  platform: NodeJS.Platform,
+): string | undefined {
+  const segments: string[] = [];
+  const seen = new Set<string>();
+  const normalizedTmpDirs = [tmpDir, os.tmpdir()]
+    .map((value) => value?.trim())
+    .filter((value): value is string => Boolean(value))
+    .map((value) => path.resolve(value));
+  const realTmpDirs = normalizedTmpDirs.map((tmpRoot) => {
+    try {
+      return path.normalize(fs.realpathSync.native(tmpRoot));
+    } catch {
+      return tmpRoot;
+    }
+  });
+  const isSameOrChildPath = (candidate: string, parent: string) =>
+    candidate === parent || candidate.startsWith(`${parent}${path.sep}`);
+  const isUnsafeProcPath = (candidate: string) =>
+    candidate === `${path.sep}proc` || candidate.startsWith(`${path.sep}proc${path.sep}`);
+  const normalizePreservedPathSegment = (segment: string): string | undefined => {
+    if (!path.isAbsolute(segment)) {
+      return undefined;
+    }
+    const normalized = path.normalize(segment);
+    if (isUnsafeProcPath(normalized)) {
+      return undefined;
+    }
+    const cwd = path.resolve(process.cwd());
+    if (isSameOrChildPath(normalized, cwd)) {
+      return undefined;
+    }
+    const realSegment = resolveIdentityPathViaExistingAncestorSync(normalized);
+    try {
+      const realCwd = path.normalize(fs.realpathSync.native(cwd));
+      if (isSameOrChildPath(realSegment, realCwd)) {
+        return undefined;
+      }
+    } catch {
+      // Unavailable cwd identity leaves the lexical check in force.
+    }
+    if (isNonMinimalServicePathEntry(normalized, platform)) {
+      return undefined;
+    }
+    return [...normalizedTmpDirs, ...realTmpDirs].some(
+      (tmpRoot) =>
+        isSameOrChildPath(normalized, tmpRoot) || isSameOrChildPath(realSegment, tmpRoot),
+    )
+      ? undefined
+      : normalized;
+  };
+  const addPath = (value: string | undefined, options?: { preserve?: boolean }) => {
+    if (typeof value !== "string" || value.trim().length === 0) {
+      return;
+    }
+    for (const segment of value.split(path.delimiter)) {
+      const trimmed = segment.trim();
+      const candidate = options?.preserve ? normalizePreservedPathSegment(trimmed) : trimmed;
+      if (!candidate || seen.has(candidate)) {
+        continue;
+      }
+      seen.add(candidate);
+      segments.push(candidate);
+    }
+  };
+  addPath(nextPath);
+  if (platform !== "darwin") {
+    addPath(existingPath, { preserve: true });
+    // Regenerated entries are already admitted even when existing-only filters reject them.
+    const platformPath = platform === "win32" ? path.win32 : path.posix;
+    const normalizeOrderEntry = (entry: string) => {
+      const normalized =
+        platform === "win32"
+          ? normalizeServicePathEntry(entry, platform)
+          : platformPath.normalize(entry);
+      return normalized.endsWith("/") && normalized !== platformPath.parse(normalized).root
+        ? normalized.slice(0, -1)
+        : normalized;
+    };
+    const admitted = new Map(segments.map((segment) => [normalizeOrderEntry(segment), segment]));
+    const preserved = (existingPath?.split(path.delimiter) ?? []).flatMap((segment) => {
+      const trimmed = segment.trim();
+      const normalized = platformPath.normalize(trimmed);
+      // Keep admitted spellings because the audit distinguishes trailing separators.
+      const entry = seen.has(trimmed)
+        ? trimmed
+        : seen.has(normalized)
+          ? normalized
+          : admitted.get(normalizeOrderEntry(trimmed));
+      return entry === undefined ? [] : [entry];
+    });
+    const existing = new Set(preserved.map(normalizeOrderEntry));
+    const ordered = [
+      ...segments.filter((segment) => !existing.has(normalizeOrderEntry(segment))),
+      ...preserved,
+    ];
+    return ordered.length > 0 ? ordered.join(path.delimiter) : undefined;
+  }
+  return segments.length > 0 ? segments.join(path.delimiter) : undefined;
 }

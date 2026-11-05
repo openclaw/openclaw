@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 # Rootless OpenClaw in Podman: run after one-time setup.
 #
 # One-time setup (from repo root): ./scripts/podman/setup.sh
@@ -91,7 +95,6 @@ if [[ "$(id -u)" -eq 0 ]]; then
   fail "Run run-openclaw-podman.sh as your normal user so Podman stays rootless."
 fi
 
-# Legacy: setup-host -> run the Podman setup script
 if [[ "${1:-}" == "setup-host" ]]; then
   shift
   REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -121,8 +124,6 @@ if [[ -f "$ENV_FILE" ]]; then
   load_podman_env_file "$ENV_FILE"
 fi
 
-CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$EFFECTIVE_HOME/.openclaw}"
-ENV_FILE="${OPENCLAW_PODMAN_ENV:-$CONFIG_DIR/.env}"
 WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$CONFIG_DIR/workspace}"
 CONTAINER_NAME="${OPENCLAW_PODMAN_CONTAINER:-openclaw}"
 OPENCLAW_IMAGE="${OPENCLAW_PODMAN_IMAGE:-${OPENCLAW_IMAGE:-openclaw:local}}"
@@ -188,10 +189,24 @@ sync_local_control_ui_origins_via_cli() {
   local config_dir=""
   local allowed_json=""
   local merged_json=""
+  local public_origin=""
   config_dir="$(dirname "$file")"
   if ! command -v openclaw >/dev/null 2>&1; then
     echo "Warning: openclaw not found; unable to sync gateway.controlUi.allowedOrigins in $file." >&2
     return 0
+  fi
+  allowed_json="$(
+    OPENCLAW_CONTAINER="" OPENCLAW_CONFIG_DIR="$config_dir" \
+      openclaw config get gateway.controlUi.allowedOrigins 2>/dev/null || true
+  )"
+  if [[ -z "$allowed_json" ]]; then
+    public_origin="$(
+      OPENCLAW_CONTAINER="" OPENCLAW_CONFIG_DIR="$config_dir" \
+        openclaw config get gateway.publicOrigin 2>/dev/null || true
+    )"
+    if [[ -n "${public_origin//[[:space:]]/}" ]]; then
+      return 0
+    fi
   fi
   if ! command -v python3 >/dev/null 2>&1; then
     OPENCLAW_CONTAINER="" OPENCLAW_CONFIG_DIR="$config_dir" \
@@ -200,10 +215,6 @@ sync_local_control_ui_origins_via_cli() {
       --strict-json >/dev/null
     return 0
   fi
-  allowed_json="$(
-    OPENCLAW_CONTAINER="" OPENCLAW_CONFIG_DIR="$config_dir" \
-      openclaw config get gateway.controlUi.allowedOrigins --json 2>/dev/null || true
-  )"
   merged_json="$(python3 - "$port" "$allowed_json" <<'PY'
 import json
 import sys
@@ -252,58 +263,7 @@ sync_local_control_ui_origins() {
   dir="$(dirname "$file")"
   ensure_private_existing_dir_owned_by_user "config file directory" "$dir"
   tmp="$(mktemp "$dir/.config.tmp.XXXXXX")"
-  if ! python3 - "$file" "$port" "$tmp" <<'PY'
-import json
-import sys
-
-path = sys.argv[1]
-port = sys.argv[2]
-tmp = sys.argv[3]
-try:
-    with open(path, "r", encoding="utf-8") as fh:
-        data = json.load(fh)
-except json.JSONDecodeError as exc:
-    print(
-        f"Warning: unable to sync gateway.controlUi.allowedOrigins in {path}: existing config is not strict JSON ({exc}). Leaving file unchanged.",
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
-if not isinstance(data, dict):
-    raise SystemExit(f"{path}: expected top-level object")
-gateway = data.setdefault("gateway", {})
-if not isinstance(gateway, dict):
-    raise SystemExit(f"{path}: expected gateway object")
-gateway.setdefault("mode", "local")
-control_ui = gateway.setdefault("controlUi", {})
-if not isinstance(control_ui, dict):
-    raise SystemExit(f"{path}: expected gateway.controlUi object")
-allowed = control_ui.get("allowedOrigins")
-desired = [
-    f"http://127.0.0.1:{port}",
-    f"http://localhost:{port}",
-]
-if not isinstance(allowed, list):
-    allowed = []
-cleaned = []
-seen = set()
-for origin in allowed:
-    if not isinstance(origin, str):
-        continue
-    normalized = origin.strip()
-    if not normalized or normalized in seen:
-        continue
-    cleaned.append(normalized)
-    seen.add(normalized)
-for origin in desired:
-    if origin not in seen:
-        cleaned.append(origin)
-        seen.add(origin)
-control_ui["allowedOrigins"] = cleaned
-with open(tmp, "w", encoding="utf-8") as fh:
-    json.dump(data, fh, indent=2)
-    fh.write("\n")
-PY
-  then
+  if ! write_local_control_ui_origins "$file" "$port" "$tmp" sync; then
     rm -f "$tmp"
     sync_local_control_ui_origins_via_cli "$file" "$port"
     return 0
@@ -325,7 +285,8 @@ cleanup_token_env_file() {
 trap cleanup_token_env_file EXIT
 
 if [[ -z "${OPENCLAW_GATEWAY_TOKEN:-}" ]]; then
-  export OPENCLAW_GATEWAY_TOKEN="$(generate_token_hex_32)"
+  OPENCLAW_GATEWAY_TOKEN="$(generate_token_hex_32)"
+  export OPENCLAW_GATEWAY_TOKEN
   mkdir -p "$(dirname "$ENV_FILE")"
   ensure_safe_existing_dir "env file directory" "$(dirname "$ENV_FILE")"
   upsert_env_var "$ENV_FILE" "OPENCLAW_GATEWAY_TOKEN" "$OPENCLAW_GATEWAY_TOKEN"
@@ -378,11 +339,11 @@ else
   [[ -n "$SELINUX_MOUNT_OPTS" ]] && SELINUX_MOUNT_OPTS=",$SELINUX_MOUNT_OPTS"
 fi
 
+TOKEN_ENV_FILE="$(create_token_env_file "$ENV_FILE" "$OPENCLAW_GATEWAY_TOKEN")"
 if [[ "$RUN_SETUP" == true ]]; then
-  TOKEN_ENV_FILE="$(create_token_env_file "$ENV_FILE" "$OPENCLAW_GATEWAY_TOKEN")"
   podman run --pull="$PODMAN_PULL" --rm -it \
     --init \
-    "${USERNS_ARGS[@]}" "${RUN_USER_ARGS[@]}" \
+    ${USERNS_ARGS[@]+"${USERNS_ARGS[@]}"} ${RUN_USER_ARGS[@]+"${RUN_USER_ARGS[@]}"} \
     -e HOME=/home/node -e TERM=xterm-256color -e BROWSER=echo \
     -e NPM_CONFIG_CACHE=/home/node/.openclaw/.npm \
     -e OPENCLAW_NO_RESPAWN=1 \
@@ -394,11 +355,10 @@ if [[ "$RUN_SETUP" == true ]]; then
   exit 0
 fi
 
-TOKEN_ENV_FILE="$(create_token_env_file "$ENV_FILE" "$OPENCLAW_GATEWAY_TOKEN")"
 run_podman_detached --pull="$PODMAN_PULL" -d --replace \
   --name "$CONTAINER_NAME" \
   --init \
-  "${USERNS_ARGS[@]}" "${RUN_USER_ARGS[@]}" \
+  ${USERNS_ARGS[@]+"${USERNS_ARGS[@]}"} ${RUN_USER_ARGS[@]+"${RUN_USER_ARGS[@]}"} \
   -e HOME=/home/node -e TERM=xterm-256color \
   -e NPM_CONFIG_CACHE=/home/node/.openclaw/.npm \
   -e OPENCLAW_NO_RESPAWN=1 \

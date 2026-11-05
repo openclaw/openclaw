@@ -3,14 +3,28 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { SessionEntry } from "openclaw/plugin-sdk/agent-sessions";
 import {
   readCodexSessionContext,
+  SessionTranscriptReadFenceError,
   type SessionTranscriptContextVersion,
+  type SessionTranscriptContextProjectionSource,
 } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   SessionTranscriptTargetParams,
   TranscriptTurnAdmission,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  CodexHistoryRejection,
+  codexHistoryRejectionReason,
+  type CodexHistoryReadResult,
+} from "./history-rejection.js";
 import { sanitizeCodexHistoryImagePayloads } from "./image-payload-sanitizer.js";
+
+const loadAgentSessions = createLazyRuntimeModule(async () => {
+  const { buildSessionContext, migrateSessionEntries, parseSessionEntries } =
+    await import("openclaw/plugin-sdk/agent-sessions");
+  return { buildSessionContext, migrateSessionEntries, parseSessionEntries };
+});
 
 export type ResolvedCodexHistoryTarget =
   | { kind: "empty" }
@@ -28,13 +42,13 @@ export function consumeCodexHistory<T>(
   sessionId: string,
   read: (messages: Iterable<AgentMessage>) => T,
   imageLabel = "codex mirrored history",
-): T | undefined {
+): T {
   // Foreign or absent headers are empty history; malformed session headers are read failures.
   if (!isRecord(header) || header.type !== "session") {
     return read([]);
   }
   if (typeof header.id !== "string") {
-    return undefined;
+    throw new CodexHistoryRejection("malformed_header");
   }
   if (header.id !== sessionId) {
     return read([]);
@@ -55,25 +69,31 @@ export async function readCodexNativeHistory<T>(
   read: (messages: Iterable<AgentMessage>) => T,
   admission?: TranscriptTurnAdmission,
   onSnapshot?: (version: SessionTranscriptContextVersion | undefined) => void,
-): Promise<T | undefined> {
+  physicalSource?: SessionTranscriptContextProjectionSource["physicalSource"],
+): Promise<CodexHistoryReadResult<T>> {
   const consume = (
     messages: Iterable<AgentMessage>,
     header: unknown,
     version?: SessionTranscriptContextVersion,
-  ) => {
-    onSnapshot?.(version);
-    return consumeCodexHistory(messages, header, sessionId, read);
+  ): CodexHistoryReadResult<T> => {
+    try {
+      onSnapshot?.(version);
+      return { status: "ok", value: consumeCodexHistory(messages, header, sessionId, read) };
+    } catch (error) {
+      // Consumer errors cannot impersonate a missing file or cross the worker as raw text.
+      return { status: "rejected", reason: codexHistoryRejectionReason(error) };
+    }
   };
   try {
     if (target.kind === "empty") {
-      return read([]);
+      return consume([], undefined);
     }
     if (target.kind === "sqlite") {
-      return readCodexSessionContext(target.target, consume, admission);
+      return readCodexSessionContext(target.target, consume, admission, physicalSource);
     }
     // The legacy file codec is needed only for explicit file imports, never native SQLite reads.
     const { buildSessionContext, migrateSessionEntries, parseSessionEntries } =
-      await import("openclaw/plugin-sdk/agent-sessions");
+      await loadAgentSessions();
     const entries = parseSessionEntries(await fs.readFile(target.sessionFile, "utf-8"));
     return consume(
       (function* () {
@@ -87,8 +107,14 @@ export async function readCodexNativeHistory<T>(
     );
   } catch (error) {
     if (isRecord(error) && error.code === "ENOENT") {
-      return read([]);
+      return consume([], undefined);
     }
-    return undefined;
+    const accessRejected =
+      error instanceof SessionTranscriptReadFenceError ||
+      (isRecord(error) && (error.code === "EACCES" || error.code === "EPERM"));
+    return {
+      status: "rejected",
+      reason: accessRejected ? "access_rejected" : codexHistoryRejectionReason(error),
+    };
   }
 }

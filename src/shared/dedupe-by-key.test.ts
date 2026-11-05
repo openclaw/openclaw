@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { dedupeByKey } from "./dedupe-by-key.js";
+import { dedupeByKey, indexFirstByKey } from "./dedupe-by-key.js";
 
 describe("dedupeByKey", () => {
   it("keeps the first item for each key in stable input order", () => {
@@ -9,6 +9,12 @@ describe("dedupeByKey", () => {
     const items = Object.freeze([first, duplicate, last]);
     const keyOf = vi.fn((item: (typeof items)[number]) => item.key);
 
+    expect([...indexFirstByKey(items, keyOf)]).toEqual([
+      ["duplicate", first],
+      ["unique", last],
+    ]);
+    expect(keyOf).toHaveBeenCalledTimes(items.length);
+    keyOf.mockClear();
     const result = dedupeByKey(items, keyOf);
 
     expect(result).toEqual([first, last]);

@@ -1,30 +1,15 @@
 import type { DatabaseSync } from "node:sqlite";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import {
+  LEGACY_PARTICIPANTS_SCHEMA,
+  LEGACY_PARTICIPANT_OPTIONAL_COLUMNS,
+} from "./openclaw-agent-schema-history.js";
 import { sessionParticipantsSchemaSql } from "./openclaw-agent-session-participants-schema.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 
-const LEGACY_PARTICIPANTS_SCHEMA = `CREATE TABLE IF NOT EXISTS session_participants (
-  session_key TEXT NOT NULL,
-  actor_type TEXT NOT NULL,
-  actor_id TEXT NOT NULL,
-  actor_source TEXT,
-  contribution_count INTEGER,
-  first_prompted_at INTEGER NOT NULL,
-  last_prompted_at INTEGER NOT NULL,
-  PRIMARY KEY (session_key, actor_type, actor_id),
-  FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
-) STRICT;`;
+export { LEGACY_PARTICIPANT_OPTIONAL_COLUMNS } from "./openclaw-agent-schema-history.js";
+
 const MIGRATION_TABLE = "session_participants_identity_migration";
-export const LEGACY_PARTICIPANT_OPTIONAL_COLUMNS = [
-  "session_participants.actor_source",
-  "session_participants.contribution_count",
-];
-
-/** Historical structural/media validation must not require a future identity key. */
-export function withLegacySessionParticipantsSchema(sql: string): string {
-  return sql.replace(sessionParticipantsSchemaSql().trim(), LEGACY_PARTICIPANTS_SCHEMA);
-}
-
 export function migrateSessionParticipantsSchema(database: DatabaseSync, pathname: string): void {
   if (!tableExists(database, "session_participants")) {
     return;

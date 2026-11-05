@@ -22,7 +22,20 @@ export function parseMockOpenAiPort(value, label = "mock OpenAI port") {
 export function applyMockOpenAiModelConfig(cfg, params) {
   const mockPort = parseMockOpenAiPort(params.mockPort);
   const modelRef = params.modelRef ?? "openai/gpt-5.6-luna";
-  const modelId = modelRef.split("/").at(-1) ?? "gpt-5.6-luna";
+  const modelRefs = [...new Set([modelRef, params.utilityModelRef].filter(Boolean))];
+  const configureModels = (models) => ({
+    ...models,
+    ...Object.fromEntries(
+      modelRefs.map((ref) => [
+        ref,
+        {
+          ...models?.[ref],
+          agentRuntime: { id: "openclaw" },
+          params: { ...models?.[ref]?.params, transport: "sse", openaiWsWarmup: false },
+        },
+      ]),
+    ),
+  });
   const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   cfg.models = {
     ...cfg.models,
@@ -36,20 +49,18 @@ export function applyMockOpenAiModelConfig(cfg, params) {
         api: "openai-responses",
         agentRuntime: { id: "openclaw" },
         request: { ...cfg.models?.providers?.openai?.request, allowPrivateNetwork: true },
-        models: [
-          {
-            id: modelId,
-            name: modelId,
-            api: "openai-responses",
-            agentRuntime: { id: "openclaw" },
-            reasoning: false,
-            input: ["text", "image"],
-            cost,
-            contextWindow: 128000,
-            contextTokens: 96000,
-            maxTokens: 4096,
-          },
-        ],
+        models: modelRefs.map((ref) => ({
+          id: ref.split("/").at(-1),
+          name: ref.split("/").at(-1),
+          api: "openai-responses",
+          agentRuntime: { id: "openclaw" },
+          reasoning: false,
+          input: ["text", "image"],
+          cost,
+          contextWindow: 128000,
+          contextTokens: 96000,
+          maxTokens: 4096,
+        })),
       },
     },
   };
@@ -58,6 +69,7 @@ export function applyMockOpenAiModelConfig(cfg, params) {
     defaults: {
       ...cfg.agents?.defaults,
       model: { primary: modelRef },
+      ...(params.utilityModelRef ? { utilityModel: params.utilityModelRef } : {}),
       ...(params.includeImageDefaults
         ? {
             imageModel: { primary: modelRef, timeoutMs: 30_000 },
@@ -67,13 +79,7 @@ export function applyMockOpenAiModelConfig(cfg, params) {
             },
           }
         : {}),
-      models: {
-        ...cfg.agents?.defaults?.models,
-        [modelRef]: {
-          agentRuntime: { id: "openclaw" },
-          params: { transport: "sse", openaiWsWarmup: false },
-        },
-      },
+      models: configureModels(cfg.agents?.defaults?.models),
     },
     ...(cfg.agents?.entries
       ? {
@@ -86,18 +92,8 @@ export function applyMockOpenAiModelConfig(cfg, params) {
                   ...(typeof agent.model === "object" && agent.model !== null ? agent.model : {}),
                   primary: modelRef,
                 },
-                models: {
-                  ...agent.models,
-                  [modelRef]: {
-                    ...agent.models?.[modelRef],
-                    agentRuntime: { id: "openclaw" },
-                    params: {
-                      ...agent.models?.[modelRef]?.params,
-                      transport: "sse",
-                      openaiWsWarmup: false,
-                    },
-                  },
-                },
+                ...(params.utilityModelRef ? { utilityModel: params.utilityModelRef } : {}),
+                models: configureModels(agent.models),
               },
             ]),
           ),

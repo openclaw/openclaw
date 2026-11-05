@@ -1,7 +1,9 @@
-// Persisted device pairing and bootstrap-token record shapes.
 // Leaf contract shared by the domain modules (device-pairing.ts,
 // device-bootstrap.ts) and the SQLite row mapper (device-pairing-store.ts);
 // keeping it import-free of both sides prevents module cycles.
+import type { Static } from "typebox";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type { DevicePairRequestedEventSchema } from "../../packages/gateway-protocol/src/schema/devices.js";
 import type {
   DeviceBootstrapProfile,
   PairingSetupAccess,
@@ -9,24 +11,9 @@ import type {
 import type { NodeHostStats } from "../shared/node-host-stats.js";
 
 /** Pending device pairing request awaiting owner approval. */
-export type DevicePairingPendingRequest = {
-  requestId: string;
-  deviceId: string;
-  publicKey: string;
-  displayName?: string;
-  platform?: string;
-  deviceFamily?: string;
-  clientId?: string;
-  clientMode?: string;
-  browserOrigin?: string;
-  role?: string;
-  roles?: string[];
-  scopes?: string[];
-  remoteIp?: string;
-  silent?: boolean;
-  isRepair?: boolean;
-  ts: number;
-};
+export type DevicePairingPendingRequest = SchemaContract<
+  Static<typeof DevicePairRequestedEventSchema>
+>;
 
 // Internal pending record. refreshedAtMs is a TTL keepalive stamped on refresh so an
 // actively retrying device keeps one pending request (and requestId) alive instead of
@@ -34,6 +21,11 @@ export type DevicePairingPendingRequest = {
 // crosses the protocol boundary, and ordering/--latest still use ts.
 export type DevicePairingPendingRecord = DevicePairingPendingRequest & {
   refreshedAtMs?: number;
+};
+
+export type DevicePairingStoreState = {
+  pendingById: Record<string, DevicePairingPendingRecord>;
+  pairedByDeviceId: Record<string, PairedDevice>;
 };
 
 /** Bearer token issued to one paired device role. */
@@ -58,6 +50,7 @@ export type DeviceAuthToken = {
  * and "ssh-verified" are also non-interactive but cross hosts, so they are
  * never pruned automatically (display metadata is not a machine identity).
  * "trusted-proxy" records were approved from an authenticated proxy identity.
+ * "remote-ingress" records were approved through a live plugin grant.
  * "owner" and "bootstrap" approvals required a user action. None of these
  * cross-host or interactive approval kinds are pruned automatically.
  */
@@ -66,6 +59,7 @@ export type PairedDeviceApprovalKind =
   | "silent"
   | "trusted-cidr"
   | "trusted-proxy"
+  | "remote-ingress"
   | "ssh-verified"
   | "bootstrap";
 
@@ -123,21 +117,12 @@ export type PairedDevicePendingNodeSurface = {
 };
 
 /** Persisted approved device record, including durable approval and active role tokens. */
-export type PairedDevice = {
-  deviceId: string;
-  publicKey: string;
-  displayName?: string;
+export type PairedDevice = Omit<
+  DevicePairingPendingRequest,
+  "requestId" | "silent" | "isRepair" | "ts"
+> & {
   operatorLabel?: string;
-  platform?: string;
-  deviceFamily?: string;
-  clientId?: string;
-  clientMode?: string;
-  browserOrigin?: string;
-  role?: string;
-  roles?: string[];
-  scopes?: string[];
   approvedScopes?: string[];
-  remoteIp?: string;
   tokens?: Record<string, DeviceAuthToken>;
   approvedVia?: PairedDeviceApprovalKind;
   nodeSurface?: PairedDeviceNodeSurface;

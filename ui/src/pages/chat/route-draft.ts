@@ -1,16 +1,20 @@
 import type { RouteLocation } from "@openclaw/uirouter";
-import { SESSION_COMPOSER_FOCUS_PARAM } from "../../lib/sessions/route-navigation.ts";
+import {
+  SESSION_COMPOSER_FOCUS_PARAM,
+  SESSION_DASHBOARD_EXPANDED_PARAM,
+} from "../../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 
 type RouteDraftHint = { draft?: string; focusComposer?: boolean };
 type RouteDraftData = { sessionKey: string; draft?: string };
 
-function draftFromLocation(location: RouteLocation): string | undefined {
-  return new URLSearchParams(location.search).get("draft") || undefined;
-}
-
-function focusComposerFromLocation(location: RouteLocation): boolean {
-  return new URLSearchParams(location.search).get(SESSION_COMPOSER_FOCUS_PARAM) === "1";
+export function sessionRouteHints(location: RouteLocation) {
+  return {
+    ...draftRouteDataFromLocation(location),
+    ...(new URLSearchParams(location.search).get(SESSION_DASHBOARD_EXPANDED_PARAM) === "expanded"
+      ? { dashboardExpanded: true as const }
+      : {}),
+  };
 }
 
 export function locationWithoutDraft(
@@ -27,22 +31,22 @@ export function locationWithoutDraft(
   return { ...location, ...destination, search: search ? `?${search}` : "" };
 }
 
-export function draftRouteDataFromLocation(location: RouteLocation): RouteDraftHint {
-  const draft = draftFromLocation(location);
-  const focusComposer = focusComposerFromLocation(location);
+function draftRouteDataFromLocation(location: RouteLocation): RouteDraftHint {
+  const search = new URLSearchParams(location.search);
+  const focusComposer = search.get(SESSION_COMPOSER_FOCUS_PARAM) === "1";
   return {
-    draft,
+    draft: search.get("draft") || undefined,
     ...(focusComposer ? { focusComposer: true } : {}),
   };
 }
 
 export function draftSearchFromLocation(location: RouteLocation): string {
   const search = new URLSearchParams();
-  const draft = draftFromLocation(location);
+  const { draft, focusComposer } = draftRouteDataFromLocation(location);
   if (draft) {
     search.set("draft", draft);
   }
-  if (focusComposerFromLocation(location)) {
+  if (focusComposer) {
     search.set(SESSION_COMPOSER_FOCUS_PARAM, "1");
   }
   return search.size > 0 ? "?" + search.toString() : "";

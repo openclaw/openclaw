@@ -1,23 +1,22 @@
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import type { NpmIntegrityDrift, NpmSpecResolution } from "../infra/install-source-utils.js";
+import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
 import type { PluginInstallArtifactInspection } from "./install-artifact-inspection.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import type { InstallPolicyWarningDetails } from "./install-security-scan.types.js";
 import type { PackageManifest as PluginPackageManifest, PluginManifestSetup } from "./manifest.js";
 
-export type PluginInstallLogger = {
+export type PluginInstallLogger = import("../infra/install-progress.js").InstallActivityObserver & {
   info?: (message: string) => void;
   warn?: (message: string) => void;
 };
 
 export type PackageManifest = PluginPackageManifest & {
-  dependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
 };
 
 export const PLUGIN_INSTALL_ERROR_CODE = {
+  CONFIG_MUTATION_BLOCKED: "config_mutation_blocked",
   INVALID_NPM_SPEC: "invalid_npm_spec",
   INVALID_MIN_HOST_VERSION: "invalid_min_host_version",
   UNKNOWN_HOST_VERSION: "unknown_host_version",
@@ -51,7 +50,6 @@ export type InstallPluginResult =
       setup?: PluginManifestSetup;
       artifactInspection?: PluginInstallArtifactInspection;
       npmResolution?: NpmSpecResolution;
-      integrityDrift?: NpmIntegrityDrift;
     }
   | {
       ok: false;
@@ -62,12 +60,7 @@ export type InstallPluginResult =
 
 export type PluginInstallFailureResult = Extract<InstallPluginResult, { ok: false }>;
 
-export type PluginNpmIntegrityDriftParams = {
-  spec: string;
-  expectedIntegrity: string;
-  actualIntegrity: string;
-  resolution: NpmSpecResolution;
-};
+export type { NpmIntegrityDriftPayload as PluginNpmIntegrityDriftParams } from "../infra/npm-integrity.js";
 
 export type PluginInstallPolicyRequest = {
   kind: "plugin-dir" | "plugin-archive" | "plugin-npm" | "plugin-git";
@@ -88,20 +81,26 @@ export type PluginInstallArtifactConsentHandler = (
   request: PluginInstallArtifactConsentRequest,
 ) => Promise<void>;
 
-export type PackageInstallCommonParams = InstallSafetyOverrides & {
-  extensionsDir?: string;
-  npmDir?: string;
-  timeoutMs?: number;
-  logger?: PluginInstallLogger;
-  mode?: "install" | "update";
-  dryRun?: boolean;
-  expectedPluginId?: string;
-  requirePluginManifest?: boolean;
-  allowSourceTypeScriptEntries?: boolean;
-  installPolicyRequest?: PluginInstallPolicyRequest;
+export type PluginInstallArtifactCallbacks = {
+  onPluginArtifactInspect?: PluginInstallArtifactConsentHandler;
   onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   beforePersistentApply?: () => void;
 };
+
+export type PackageInstallCommonParams = InstallSafetyOverrides &
+  PluginInstallArtifactCallbacks & {
+    extensionsDir?: string;
+    npmDir?: string;
+    timeoutMs?: number;
+    workTimeoutMs?: number | null;
+    logger?: PluginInstallLogger;
+    mode?: "install" | "update";
+    dryRun?: boolean;
+    expectedPluginId?: string;
+    requirePluginManifest?: boolean;
+    allowSourceTypeScriptEntries?: boolean;
+    installPolicyRequest?: PluginInstallPolicyRequest;
+  };
 
 export type InternalPackageInstallCommonParams = PackageInstallCommonParams & {
   onEffectiveMode?: (mode: "install" | "update") => void;

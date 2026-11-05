@@ -6,7 +6,9 @@ import {
 import type { SessionPermissionMode } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { prepareEmbeddedRunPermissionChange } from "../../agents/embedded-agent-runner/run-permissions.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import { beginSessionPermissionChange } from "../session-permission-change.js";
+import { invalidSessionRequest } from "../session-request-error.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -21,20 +23,26 @@ export function prepareSessionPatchPermissionChange(params: {
   sessionId: string;
   sessionKey: string;
   agentId: string;
+  storePath: string;
+  lifecycleIdentities: readonly (string | undefined)[];
   assertCurrent: () => ErrorShape | undefined;
 }): { ok: false; error: ErrorShape } | { ok: true; change?: ActiveSessionPermissionChange } {
-  const change = prepareEmbeddedRunPermissionChange(params.sessionId);
+  const change = prepareEmbeddedRunPermissionChange(
+    captureSessionTarget({
+      storeScope: params.storePath,
+      sessionKey: params.sessionKey,
+      aliases: params.lifecycleIdentities,
+      agentId: params.agentId,
+      incarnation: params.sessionId,
+    }),
+  );
   if (change.kind === "idle") {
     return { ok: true };
   }
   if (change.kind === "unsupported") {
-    return {
-      ok: false,
-      error: errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "This run cannot apply permissions while active. Stop the run, then change permissions.",
-      ),
-    };
+    return invalidSessionRequest(
+      "This run cannot apply permissions while active. Stop the run, then change permissions.",
+    );
   }
   const finish = beginSessionPermissionChange(params.sessionId);
   const publish = () =>
@@ -53,9 +61,15 @@ export function prepareSessionPatchPermissionChange(params: {
           if (authorizationFailure) {
             throw new Error(authorizationFailure.message);
           }
-          const applied = await change.apply(mode, (authority) =>
-            params.context.cancelRunBoundApprovals?.(authority),
-          );
+          const cancellations: Promise<number>[] = [];
+          const applied = await change.apply(mode, (authority) => {
+            const cancellation = params.context.cancelRunBoundApprovals?.(authority);
+            if (cancellation) {
+              void cancellation.catch(() => undefined);
+              cancellations.push(cancellation);
+            }
+          });
+          await Promise.all(cancellations);
           if (!applied) {
             throw new Error("The active run ended or was replaced before applying permissions.");
           }

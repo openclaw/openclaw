@@ -8,8 +8,8 @@ publish = false
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
-getrandom = "=0.3.4"
-str0m = { version = "=0.23.1", default-features = false, features = ["rust-crypto"] }
+getrandom = "=0.4.3"
+str0m = { version = "=0.24.1", default-features = false, features = ["rust-crypto"] }
 
 [dev-dependencies]
 fastrand = "=2.5.0"

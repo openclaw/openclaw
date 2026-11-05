@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-import { WebSocket } from "ws";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
+import { parseStrictJsonObject } from "../../../chrome-extension/modules/strict-json.js";
 import {
   createRelayProof,
   isCanonicalBase64UrlBytes,
@@ -9,11 +10,7 @@ import {
   verifyRelayProof,
   type BrowserRelayProofFields,
 } from "./auth-v2-crypto.js";
-import {
-  BROWSER_RELAY_CHALLENGE_TTL_MS,
-  BROWSER_RELAY_EXTENSION_SUBPROTOCOL,
-  parseStrictJsonObject,
-} from "./auth-v2.js";
+import { BROWSER_RELAY_CHALLENGE_TTL_MS, BROWSER_RELAY_EXTENSION_SUBPROTOCOL } from "./auth-v2.js";
 import { relayOwnerResource } from "./owner-protocol.js";
 
 /** Never send a key or client proof until the configured listener proves its resource. */

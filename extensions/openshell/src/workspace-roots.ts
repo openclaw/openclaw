@@ -1,4 +1,3 @@
-// OpenShell plugin module owns remote workspace-root precedence.
 import path from "node:path";
 
 export type OpenShellWorkspaceRoot<T = unknown> = {

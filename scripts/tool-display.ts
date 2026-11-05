@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { TOOL_DISPLAY_CONFIG } from "../src/agents/tool-display-config.js";
+import { isTestOnlyPath } from "./lib/changed-path-facts.mjs";
 
 type ToolDisplayConfig = typeof TOOL_DISPLAY_CONFIG;
 
@@ -68,7 +69,7 @@ function ensureCoreToolCoverage() {
     collectToolNamesFromFile(sourcePath, toolNames);
   }
   for (const entry of fs.readdirSync(path.join(repoRoot, "src/agents/tools"))) {
-    if (!entry.endsWith(".ts") || entry.endsWith(".test.ts")) {
+    if (!entry.endsWith(".ts") || isTestOnlyPath(entry)) {
       continue;
     }
     collectToolNamesFromFile(path.join(repoRoot, "src/agents/tools", entry), toolNames);

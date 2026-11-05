@@ -1,5 +1,6 @@
-// Imessage tests cover catchup plugin behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getIMessageRuntime } from "../runtime.js";
 import {
   capFailureRetriesMap,
@@ -18,534 +19,317 @@ import {
   type IMessageCatchupRow,
 } from "./catchup.js";
 
-function openCatchupCursorStore() {
-  return getIMessageRuntime().state.openSyncKeyedStore<IMessageCatchupCursor>({
-    namespace: IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
-    maxEntries: IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES,
-  });
-}
-
-async function loadIMessageCatchupCursor(accountId: string): Promise<IMessageCatchupCursor | null> {
-  return openCatchupCursorStore().lookup(resolveIMessageCatchupCursorKey(accountId)) ?? null;
-}
-
-async function saveIMessageCatchupCursor(
-  accountId: string,
-  cursor: Omit<IMessageCatchupCursor, "updatedAt">,
-): Promise<void> {
-  openCatchupCursorStore().register(resolveIMessageCatchupCursorKey(accountId), {
-    ...cursor,
-    updatedAt: Date.now(),
-  });
-}
-
-describe("resolveCatchupConfig", () => {
-  beforeEach(() => {
+describe("catchup", () => {
+  const liveConfig = resolveCatchupConfig({ enabled: true, maxFailureRetries: 3 });
+  beforeEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     installIMessageStateRuntimeForTest();
   });
 
-  it("falls back to defaults when raw is undefined", () => {
-    const cfg = resolveCatchupConfig(undefined);
-    expect(cfg.enabled).toBe(false);
-    expect(cfg.maxAgeMinutes).toBe(120);
-    expect(cfg.perRunLimit).toBe(50);
-    expect(cfg.firstRunLookbackMinutes).toBe(30);
-    expect(cfg.maxFailureRetries).toBe(10);
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await closeOpenClawStateDatabaseAsync();
   });
 
-  it("clamps over-limit input to the documented ceiling", () => {
-    const cfg = resolveCatchupConfig({
-      enabled: true,
-      maxAgeMinutes: 99_999,
-      perRunLimit: 10_000,
-      maxFailureRetries: 50_000,
+  function advance(lastSeenRowid: number, lastSeenMs: number, config = liveConfig) {
+    return advanceIMessageCatchupCursor("primary", { lastSeenMs, lastSeenRowid }, config);
+  }
+
+  function openCatchupCursorStore() {
+    return getIMessageRuntime().state.openKeyedStoreV2<IMessageCatchupCursor>({
+      namespace: IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
+      maxEntries: IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES,
     });
-    expect(cfg.enabled).toBe(true);
-    expect(cfg.maxAgeMinutes).toBe(720);
-    expect(cfg.perRunLimit).toBe(500);
-    expect(cfg.maxFailureRetries).toBe(1000);
-  });
+  }
 
-  it("clamps zero / negative input to 1", () => {
-    const cfg = resolveCatchupConfig({
-      maxAgeMinutes: 0,
-      perRunLimit: -10,
-      firstRunLookbackMinutes: -1,
-      maxFailureRetries: 0,
-    });
-    expect(cfg.maxAgeMinutes).toBe(1);
-    expect(cfg.perRunLimit).toBe(1);
-    expect(cfg.firstRunLookbackMinutes).toBe(1);
-    expect(cfg.maxFailureRetries).toBe(1);
-  });
-});
-
-describe("advanceIMessageCatchupCursor", () => {
-  beforeEach(() => {
-    installIMessageStateRuntimeForTest();
-  });
-
-  it("advances monotonically from a live-handled row and preserves given-up retry state", async () => {
-    const config = resolveCatchupConfig({ enabled: true, maxFailureRetries: 3 });
-    await saveIMessageCatchupCursor("primary", {
-      lastSeenMs: 1_700_000_000_000,
-      lastSeenRowid: 42,
-      failureRetries: { "GIVEN-UP": 3 },
-    });
-
-    await expect(
-      advanceIMessageCatchupCursor(
-        "primary",
-        { lastSeenMs: 1_700_000_001_000, lastSeenRowid: 41 },
-        config,
-      ),
-    ).resolves.toBe(false);
-    await expect(
-      advanceIMessageCatchupCursor(
-        "primary",
-        { lastSeenMs: 1_700_000_002_000, lastSeenRowid: 50 },
-        config,
-      ),
-    ).resolves.toBe(true);
-
-    const cursor = await loadIMessageCatchupCursor("primary");
-    expect(cursor?.lastSeenRowid).toBe(50);
-    expect(cursor?.lastSeenMs).toBe(1_700_000_002_000);
-    expect(cursor?.failureRetries).toEqual({ "GIVEN-UP": 3 });
-  });
-
-  it("serializes concurrent live cursor advances so a lower row cannot overwrite a higher row", async () => {
-    const config = resolveCatchupConfig({ enabled: true, maxFailureRetries: 3 });
-    await saveIMessageCatchupCursor("primary", {
-      lastSeenMs: 1_700_000_000_000,
-      lastSeenRowid: 10,
-    });
-
-    const results = await Promise.all([
-      advanceIMessageCatchupCursor(
-        "primary",
-        { lastSeenMs: 1_700_000_050_000, lastSeenRowid: 50 },
-        config,
-      ),
-      ...Array.from({ length: 24 }, (_, index) =>
-        advanceIMessageCatchupCursor(
-          "primary",
-          { lastSeenMs: 1_700_000_011_000 + index, lastSeenRowid: 11 + index },
-          config,
-        ),
-      ),
-    ]);
-
-    expect(results[0]).toBe(true);
-    expect(results.slice(1).every((advanced) => !advanced)).toBe(true);
-    const cursor = await loadIMessageCatchupCursor("primary");
-    expect(cursor?.lastSeenRowid).toBe(50);
-    expect(cursor?.lastSeenMs).toBe(1_700_000_050_000);
-  });
-
-  it("does not advance from live rows while a catchup failure is still retrying", async () => {
-    const config = resolveCatchupConfig({ enabled: true, maxFailureRetries: 3 });
-    await saveIMessageCatchupCursor("primary", {
-      lastSeenMs: 1_700_000_000_000,
-      lastSeenRowid: 42,
-      failureRetries: { RETRYING: 1 },
-    });
-
-    await expect(
-      advanceIMessageCatchupCursor(
-        "primary",
-        { lastSeenMs: 1_700_000_002_000, lastSeenRowid: 50 },
-        config,
-      ),
-    ).resolves.toBe(false);
-
-    const cursor = await loadIMessageCatchupCursor("primary");
-    expect(cursor?.lastSeenRowid).toBe(42);
-    expect(cursor?.failureRetries).toEqual({ RETRYING: 1 });
-  });
-});
-
-describe("capFailureRetriesMap", () => {
-  beforeEach(() => {
-    installIMessageStateRuntimeForTest();
-  });
-
-  it("is identity below the cap", () => {
-    const map = { a: 1, b: 2 };
-    expect(capFailureRetriesMap(map, 10)).toEqual({ a: 1, b: 2 });
-  });
-
-  it("keeps the highest counts when over the cap", () => {
-    const map = { a: 1, b: 9, c: 5, d: 9 };
-    const capped = capFailureRetriesMap(map, 2);
-    // Both b and d at 9; tiebreak by guid string (alphabetical) → b, d
-    expect(Object.keys(capped).toSorted()).toEqual(["b", "d"]);
-  });
-
-  it("keeps the persisted retry map under the plugin-state value budget", () => {
-    const map = Object.fromEntries(
-      Array.from({ length: 800 }, (_, index) => [`GUID-${index}-${"x".repeat(120)}`, index + 1]),
+  async function loadCursor(): Promise<IMessageCatchupCursor | null> {
+    return (
+      (await openCatchupCursorStore().lookup(resolveIMessageCatchupCursorKey("primary"))) ?? null
     );
-
-    const capped = capFailureRetriesMap(map);
-
-    expect(Object.keys(capped).length).toBeLessThanOrEqual(512);
-    expect(new TextEncoder().encode(JSON.stringify(capped)).byteLength).toBeLessThanOrEqual(48_000);
-  });
-});
-
-describe("performIMessageCatchup", () => {
-  beforeEach(() => {
-    installIMessageStateRuntimeForTest();
-  });
-
-  const config = resolveCatchupConfig({ enabled: true });
-  const now = 1_700_001_000_000; // arbitrary fixed clock
-
-  function row(overrides: Partial<IMessageCatchupRow>): IMessageCatchupRow {
-    return {
-      guid: "GUID-X",
-      rowid: 1,
-      date: now - 60_000,
-      isFromMe: false,
-      ...overrides,
-    };
   }
 
-  function fetchOf(rows: IMessageCatchupRow[]): CatchupFetchFn {
-    return vi.fn(async () => ({ resolved: true, rows }));
+  async function expectCursor(expected: Partial<IMessageCatchupCursor>) {
+    const cursor = await loadCursor();
+    expect(cursor).toMatchObject(expected);
+    if (expected.failureRetries) {
+      expect(cursor?.failureRetries).toEqual(expected.failureRetries);
+    }
   }
 
-  function alwaysOk(): CatchupDispatchFn {
-    return vi.fn(async () => ({ ok: true }));
+  async function seedCursor(
+    lastSeenRowid: number,
+    lastSeenMs: number,
+    failureRetries?: Record<string, number>,
+  ): Promise<void> {
+    await openCatchupCursorStore().register(resolveIMessageCatchupCursorKey("primary"), {
+      lastSeenRowid,
+      lastSeenMs,
+      ...(failureRetries ? { failureRetries } : {}),
+      updatedAt: Date.now(),
+    });
   }
 
-  it("replays every fresh inbound row through dispatch and advances the cursor", async () => {
-    const dispatch = alwaysOk();
-    const fetch = fetchOf([
-      row({ guid: "A", rowid: 10, date: now - 30_000 }),
-      row({ guid: "B", rowid: 11, date: now - 20_000 }),
-    ]);
-
-    const summary = await performIMessageCatchup({
-      accountId: "primary",
-      config,
-      now,
-      fetch,
-      dispatch,
+  describe("resolveCatchupConfig", () => {
+    it("falls back to defaults when raw is undefined", () => {
+      expect(resolveCatchupConfig(undefined)).toEqual({
+        enabled: false,
+        maxAgeMinutes: 120,
+        perRunLimit: 50,
+        firstRunLookbackMinutes: 30,
+        maxFailureRetries: 10,
+      });
     });
 
-    expect(summary.querySucceeded).toBe(true);
-    expect(summary.replayed).toBe(2);
-    expect(summary.failed).toBe(0);
-    expect(summary.cursorAfter.lastSeenRowid).toBe(11);
-    expect(dispatch).toHaveBeenCalledTimes(2);
-
-    const cursor = await loadIMessageCatchupCursor("primary");
-    expect(cursor?.lastSeenRowid).toBe(11);
+    it.each([
+      [
+        "ceiling",
+        { enabled: true, maxAgeMinutes: 99_999, perRunLimit: 10_000, maxFailureRetries: 50_000 },
+        { enabled: true, maxAgeMinutes: 720, perRunLimit: 500, maxFailureRetries: 1000 },
+      ],
+      [
+        "floor",
+        { maxAgeMinutes: 0, perRunLimit: -10, firstRunLookbackMinutes: -1, maxFailureRetries: 0 },
+        { maxAgeMinutes: 1, perRunLimit: 1, firstRunLookbackMinutes: 1, maxFailureRetries: 1 },
+      ],
+    ] as const)("clamps input to the documented %s", (_, input, expected) => {
+      expect(resolveCatchupConfig(input)).toMatchObject(expected);
+    });
   });
 
-  it("skips is_from_me rows but still advances the cursor past them", async () => {
-    const dispatch = alwaysOk();
-    const observeSkippedFromMe = vi.fn();
-    const fetch = fetchOf([
-      row({ guid: "A", rowid: 10, isFromMe: true }),
-      row({ guid: "B", rowid: 11, isFromMe: false }),
-    ]);
+  describe("advanceIMessageCatchupCursor", () => {
+    it("advances monotonically from a live-handled row and preserves given-up retry state", async () => {
+      await seedCursor(42, 1_700_000_000_000, { "GIVEN-UP": 3 });
 
-    const summary = await performIMessageCatchup({
-      accountId: "primary",
-      config,
-      now,
-      fetch,
-      dispatch,
-      observeSkippedFromMe,
+      await expect(advance(41, 1_700_000_001_000)).resolves.toBe(false);
+      await expect(advance(50, 1_700_000_002_000)).resolves.toBe(true);
+
+      await expectCursor({
+        lastSeenRowid: 50,
+        lastSeenMs: 1_700_000_002_000,
+        failureRetries: { "GIVEN-UP": 3 },
+      });
     });
 
-    expect(summary.skippedFromMe).toBe(1);
-    expect(summary.replayed).toBe(1);
-    expect(summary.cursorAfter.lastSeenRowid).toBe(11);
-    expect(dispatch).toHaveBeenCalledTimes(1);
-    expect(observeSkippedFromMe).toHaveBeenCalledWith(
-      expect.objectContaining({ guid: "A", rowid: 10, isFromMe: true }),
-    );
+    it("does not advance from live rows while a catchup failure is still retrying", async () => {
+      await seedCursor(42, 1_700_000_000_000, { RETRYING: 1 });
+
+      await expect(advance(50, 1_700_000_002_000)).resolves.toBe(false);
+
+      await expectCursor({ lastSeenRowid: 42, failureRetries: { RETRYING: 1 } });
+    });
   });
 
-  it("drops rows older than the maxAgeMinutes ceiling and advances past them", async () => {
-    const tightConfig = resolveCatchupConfig({ enabled: true, maxAgeMinutes: 1 });
-    const dispatch = alwaysOk();
-    const fetch = fetchOf([
-      row({ guid: "OLD", rowid: 10, date: now - 10 * 60_000 }), // 10 min old, > 1 min ceiling
-      row({ guid: "NEW", rowid: 11, date: now - 30_000 }),
-    ]);
-
-    const summary = await performIMessageCatchup({
-      accountId: "primary",
-      config: tightConfig,
-      now,
-      fetch,
-      dispatch,
+  describe("capFailureRetriesMap", () => {
+    it.each([
+      [{ a: 1, b: 2 }, 10, { a: 1, b: 2 }],
+      [{ a: 1, b: 9, c: 5, d: 9 }, 2, { b: 9, d: 9 }],
+    ] as const)("retains the highest retry counts within cap: %j / %i", (map, cap, expected) => {
+      expect(capFailureRetriesMap(map, cap)).toEqual(expected);
     });
 
-    expect(summary.skippedPreCursor).toBe(1);
-    expect(summary.replayed).toBe(1);
-    expect(summary.cursorAfter.lastSeenRowid).toBe(11);
-  });
-
-  it("holds the cursor on the failing row while count < maxFailureRetries", async () => {
-    const dispatch = vi.fn<CatchupDispatchFn>(async () => ({ ok: false }));
-    const fetch = fetchOf([row({ guid: "A", rowid: 10 })]);
-
-    const summary = await performIMessageCatchup({
-      accountId: "primary",
-      config,
-      now,
-      fetch,
-      dispatch,
-    });
-
-    expect(summary.failed).toBe(1);
-    expect(summary.givenUp).toBe(0);
-    // Cursor clamps to `failed.rowid - 1` (== 9), strictly below the held
-    // failure, so the next pass refetches row 10 — and never leapfrogs it.
-    expect(summary.cursorAfter.lastSeenRowid).toBe(9);
-
-    const cursor = await loadIMessageCatchupCursor("primary");
-    expect(cursor?.failureRetries?.A).toBe(1);
-    expect(cursor?.lastSeenRowid).toBe(9);
-  });
-
-  it("crosses the maxFailureRetries ceiling, gives up, and advances past the wedged row", async () => {
-    const tightConfig = resolveCatchupConfig({ enabled: true, maxFailureRetries: 2 });
-    const dispatch = vi.fn<CatchupDispatchFn>(async () => ({ ok: false }));
-    const fetch = fetchOf([row({ guid: "A", rowid: 10 })]);
-
-    // First pass: count goes 0 → 1, cursor held below the failed row.
-    // The clamp is `failed.rowid - 1` (== 9), not the prior cursor (0), so
-    // the next pass refetches row 10 without re-walking older history.
-    await performIMessageCatchup({
-      accountId: "primary",
-      config: tightConfig,
-      now,
-      fetch,
-      dispatch,
-    });
-    expect((await loadIMessageCatchupCursor("primary"))?.lastSeenRowid).toBe(9);
-
-    // Second pass: count goes 1 → 2 (== ceiling), give up, cursor advances.
-    const fetch2 = fetchOf([row({ guid: "A", rowid: 10 })]);
-    const summary = await performIMessageCatchup({
-      accountId: "primary",
-      config: tightConfig,
-      now,
-      fetch: fetch2,
-      dispatch,
-    });
-
-    expect(summary.givenUp).toBe(1);
-    expect(summary.cursorAfter.lastSeenRowid).toBe(10);
-
-    const cursor = await loadIMessageCatchupCursor("primary");
-    expect(cursor?.failureRetries?.A).toBe(2);
-  });
-
-  it("treats already-given-up rows as skippedGivenUp without dispatching", async () => {
-    await saveIMessageCatchupCursor("primary", {
-      lastSeenMs: now - 60_000,
-      lastSeenRowid: 0,
-      failureRetries: { "WEDGED-1": 99 },
-    });
-
-    const dispatch = alwaysOk();
-    const fetch = fetchOf([row({ guid: "WEDGED-1", rowid: 5 }), row({ guid: "FRESH", rowid: 6 })]);
-
-    const summary = await performIMessageCatchup({
-      accountId: "primary",
-      config,
-      now,
-      fetch,
-      dispatch,
-    });
-
-    expect(summary.skippedGivenUp).toBe(1);
-    expect(summary.replayed).toBe(1);
-    expect(dispatch).toHaveBeenCalledTimes(1);
-  });
-
-  it("removes a guid from the retry map after a successful dispatch", async () => {
-    await saveIMessageCatchupCursor("primary", {
-      lastSeenMs: now - 60_000,
-      lastSeenRowid: 0,
-      failureRetries: { RETRYING: 1 },
-    });
-
-    const dispatch = alwaysOk();
-    const fetch = fetchOf([row({ guid: "RETRYING", rowid: 5 })]);
-
-    await performIMessageCatchup({
-      accountId: "primary",
-      config,
-      now,
-      fetch,
-      dispatch,
-    });
-
-    const cursor = await loadIMessageCatchupCursor("primary");
-    expect(cursor?.failureRetries).toBeUndefined();
-  });
-
-  it("does NOT leapfrog a held failure when a later row in the same batch succeeds", async () => {
-    // Regression for #78649 cursor-leapfrog bug. Prior to the fix the loop
-    // advanced lastSeenRowid on every successful row, so a held failure at
-    // rowid 10 followed by a success at rowid 11 would persist the cursor
-    // at 11 — and the next pass would filter row 10 out via `row.rowid <=
-    // sinceRowid` and never retry it. With the fix in place the cursor is
-    // clamped to `earliestHeldFailureRow.rowid - 1` (== 9) so the next pass
-    // refetches row 10.
-    let dispatchCount = 0;
-    const dispatch = vi.fn<CatchupDispatchFn>(async (rowLocal) => {
-      dispatchCount += 1;
-      if (rowLocal.guid === "A") {
-        return { ok: false };
-      }
-      return { ok: true };
-    });
-    const fetch = fetchOf([
-      row({ guid: "A", rowid: 10, date: now - 40_000 }),
-      row({ guid: "B", rowid: 11, date: now - 30_000 }),
-    ]);
-
-    const summary = await performIMessageCatchup({
-      accountId: "primary",
-      config,
-      now,
-      fetch,
-      dispatch,
-    });
-
-    expect(summary.failed).toBe(1);
-    expect(summary.replayed).toBe(1);
-    expect(summary.givenUp).toBe(0);
-    // Cursor must not leapfrog the held failure at rowid 10. The persisted
-    // cursor lands at rowid 9 so the next pass refetches row 10.
-    expect(summary.cursorAfter.lastSeenRowid).toBe(9);
-    expect(dispatchCount).toBe(2);
-
-    const cursor = await loadIMessageCatchupCursor("primary");
-    expect(cursor?.lastSeenRowid).toBe(9);
-    expect(cursor?.failureRetries?.A).toBe(1);
-  });
-
-  it("keeps held failure state when a live monitor advances the same cursor mid-pass", async () => {
-    const dispatch = vi.fn<CatchupDispatchFn>(async () => {
-      await advanceIMessageCatchupCursor(
-        "primary",
-        { lastSeenMs: now - 10_000, lastSeenRowid: 50 },
-        config,
+    it("keeps the persisted retry map under the plugin-state value budget", () => {
+      const map = Object.fromEntries(
+        Array.from({ length: 800 }, (_, index) => [`GUID-${index}-${"x".repeat(120)}`, index + 1]),
       );
-      return { ok: false };
+
+      const capped = capFailureRetriesMap(map);
+
+      expect(Object.keys(capped).length).toBeLessThanOrEqual(512);
+      expect(new TextEncoder().encode(JSON.stringify(capped)).byteLength).toBeLessThanOrEqual(
+        48_000,
+      );
     });
-    const fetch = fetchOf([row({ guid: "A", rowid: 10, date: now - 40_000 })]);
-
-    const summary = await performIMessageCatchup({
-      accountId: "primary",
-      config,
-      now,
-      fetch,
-      dispatch,
-    });
-
-    expect(summary.failed).toBe(1);
-    expect(summary.cursorAfter.lastSeenRowid).toBe(9);
-
-    const cursor = await loadIMessageCatchupCursor("primary");
-    expect(cursor?.lastSeenRowid).toBe(9);
-    expect(cursor?.failureRetries?.A).toBe(1);
   });
 
-  it("advances the cursor past parser-rejected rows via the fetch high-watermark", async () => {
-    // Regression: without a high-watermark from the fetcher, an unparseable
-    // row never reaches the loop, so the cursor never advances past it and
-    // the next pass re-fetches and re-drops the same broken row forever.
-    // The bridge probes raw `id` / `created_at` per row and emits a
-    // `highWatermarkRowid` / `highWatermarkMs` floor so the loop can advance
-    // the cursor even when every fetched row fails the payload parser.
-    const dispatch = vi.fn<CatchupDispatchFn>(async () => ({ ok: true }));
-    const fetch: CatchupFetchFn = vi.fn(async () => ({
-      resolved: true,
-      rows: [],
-      highWatermarkRowid: 42,
-      highWatermarkMs: now - 5_000,
-    }));
+  describe("performIMessageCatchup", () => {
+    const config = resolveCatchupConfig({ enabled: true });
+    const now = 1_700_001_000_000;
+    const row = (
+      guid: string,
+      rowid: number,
+      overrides: Partial<IMessageCatchupRow> = {},
+    ): IMessageCatchupRow => ({ guid, rowid, date: now - 60_000, isFromMe: false, ...overrides });
+    type RunOptions = Partial<Omit<Parameters<typeof performIMessageCatchup>[0], "accountId">> &
+      Partial<Pick<Awaited<ReturnType<CatchupFetchFn>>, "highWatermarkRowid" | "highWatermarkMs">>;
+    function run(rows: IMessageCatchupRow[], options: RunOptions = {}) {
+      const { highWatermarkRowid, highWatermarkMs, ...params } = options;
+      const fetch =
+        options.fetch ??
+        vi.fn<CatchupFetchFn>(async () => ({
+          resolved: true,
+          rows,
+          highWatermarkRowid,
+          highWatermarkMs,
+        }));
+      const dispatch = options.dispatch ?? vi.fn<CatchupDispatchFn>(async () => ({ ok: true }));
+      return {
+        dispatch,
+        result: performIMessageCatchup({
+          accountId: "primary",
+          config,
+          ...params,
+          fetch,
+          dispatch,
+        }),
+      };
+    }
 
-    const summary = await performIMessageCatchup({
-      accountId: "primary",
-      config,
-      now,
-      fetch,
-      dispatch,
+    beforeEach(() => {
+      vi.spyOn(Date, "now").mockReturnValue(now);
     });
 
-    expect(summary.querySucceeded).toBe(true);
-    expect(summary.replayed).toBe(0);
-    expect(summary.fetchedCount).toBe(0);
-    expect(summary.cursorAfter.lastSeenRowid).toBe(42);
-    expect(dispatch).not.toHaveBeenCalled();
+    it("skips is_from_me rows but still advances the cursor past them", async () => {
+      const observeSkippedFromMe = vi.fn();
+      const { result, dispatch } = run([row("A", 10, { isFromMe: true }), row("B", 11)], {
+        observeSkippedFromMe,
+      });
+      expect(await result).toMatchObject({ skippedFromMe: 1, replayed: 1 });
+      await expectCursor({ lastSeenRowid: 11 });
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(observeSkippedFromMe).toHaveBeenCalledWith(
+        expect.objectContaining({ guid: "A", rowid: 10, isFromMe: true }),
+      );
+    });
 
-    const cursor = await loadIMessageCatchupCursor("primary");
-    expect(cursor?.lastSeenRowid).toBe(42);
-    expect(cursor?.lastSeenMs).toBe(now - 5_000);
+    it("drops rows older than the maxAgeMinutes ceiling and advances past them", async () => {
+      const { result, dispatch } = run(
+        [row("OLD", 10, { date: now - 10 * 60_000 }), row("NEW", 11, { date: now - 30_000 })],
+        { config: resolveCatchupConfig({ enabled: true, maxAgeMinutes: 1 }) },
+      );
+      expect((await result).replayed).toBe(1);
+      expect(dispatch).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ guid: "NEW" }));
+      await expectCursor({ lastSeenRowid: 11 });
+    });
+
+    it("crosses the retry ceiling, holds the first failure, then gives up", async () => {
+      const options = {
+        config: resolveCatchupConfig({ enabled: true, maxFailureRetries: 2 }),
+        dispatch: vi.fn<CatchupDispatchFn>(async () => ({ ok: false })),
+      };
+      expect(await run([row("A", 10)], options).result).toMatchObject({ failed: 1, givenUp: 0 });
+      await expectCursor({ lastSeenRowid: 9, failureRetries: { A: 1 } });
+      expect((await run([row("A", 10)], options).result).givenUp).toBe(1);
+      await expectCursor({ lastSeenRowid: 10, failureRetries: { A: 2 } });
+    });
+
+    it("treats already-given-up rows as skippedGivenUp without dispatching", async () => {
+      await seedCursor(0, now - 60_000, { "WEDGED-1": 99 });
+      const { result, dispatch } = run([row("WEDGED-1", 5), row("FRESH", 6)]);
+      expect(await result).toMatchObject({ skippedGivenUp: 1, replayed: 1 });
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+
+    it("removes a guid from the retry map after a successful dispatch", async () => {
+      await seedCursor(0, now - 60_000, { RETRYING: 1 });
+      await run([row("RETRYING", 5)]).result;
+      expect((await loadCursor())?.failureRetries).toBeUndefined();
+    });
+
+    it("does NOT leapfrog a held failure when a later row in the same batch succeeds", async () => {
+      // #78649: a later success must not move the cursor past a retryable failure.
+      const { result } = run(
+        [row("A", 10, { date: now - 40_000 }), row("B", 11, { date: now - 30_000 })],
+        {
+          highWatermarkRowid: 99,
+          highWatermarkMs: now - 100,
+          dispatch: vi.fn<CatchupDispatchFn>(async (entry) => ({ ok: entry.guid !== "A" })),
+        },
+      );
+      expect(await result).toMatchObject({ failed: 1, replayed: 1, givenUp: 0 });
+      await expectCursor({ lastSeenRowid: 9, failureRetries: { A: 1 } });
+    });
+
+    it("keeps held failure state when a live monitor advances the same cursor mid-pass", async () => {
+      const { result } = run([row("A", 10, { date: now - 40_000 })], {
+        dispatch: vi.fn<CatchupDispatchFn>(async () => {
+          await advance(50, now - 10_000, config);
+          return { ok: false };
+        }),
+      });
+      expect((await result).failed).toBe(1);
+      await expectCursor({ lastSeenRowid: 9, failureRetries: { A: 1 } });
+    });
+
+    it("returns querySucceeded=false and preserves the cursor on fetch failure", async () => {
+      await seedCursor(7, now - 60_000);
+      const warn = vi.fn();
+      const { result, dispatch } = run([], {
+        warn,
+        fetch: vi.fn<CatchupFetchFn>(async () => {
+          throw new Error("imsg rpc closed");
+        }),
+      });
+      expect(await result).toMatchObject({ querySucceeded: false, replayed: 0 });
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith("imessage catchup: fetch failed: Error: imsg rpc closed");
+      await expectCursor({ lastSeenRowid: 7 });
+    });
   });
 
-  it("does not let the high-watermark leapfrog a held failure", async () => {
-    // The fetcher's watermark is a floor for cursor advance, but a held
-    // failure must still clamp the cursor below the failed row even when
-    // the fetcher reports a higher watermark.
-    const dispatch = vi.fn<CatchupDispatchFn>(async () => ({ ok: false }));
-    const fetch: CatchupFetchFn = vi.fn(async () => ({
-      resolved: true,
-      rows: [row({ guid: "A", rowid: 10, date: now - 40_000 })],
-      highWatermarkRowid: 99,
-      highWatermarkMs: now - 100,
-    }));
-
-    const summary = await performIMessageCatchup({
-      accountId: "primary",
-      config,
-      now,
-      fetch,
-      dispatch,
+  describe("iMessage catchup cursor writes", () => {
+    const now = 1_700_001_000_000;
+    beforeEach(() => {
+      vi.spyOn(Date, "now").mockReturnValue(now);
     });
 
-    expect(summary.failed).toBe(1);
-    // Even though the fetcher reports watermark=99, the held failure at
-    // rowid 10 clamps the cursor at 9.
-    expect(summary.cursorAfter.lastSeenRowid).toBe(9);
-  });
+    function interceptCursorStore() {
+      const state = getIMessageRuntime().state;
+      const store = state.openKeyedStoreV2<unknown>({
+        namespace: IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
+        maxEntries: IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES,
+      });
+      vi.spyOn(state, "openKeyedStoreV2").mockReturnValue(store);
+      return { store, register: store.register.bind(store) };
+    }
 
-  it("returns querySucceeded=false and preserves the cursor on fetch failure", async () => {
-    await saveIMessageCatchupCursor("primary", { lastSeenMs: now - 60_000, lastSeenRowid: 7 });
-    const dispatch = alwaysOk();
-    const fetch = vi.fn<CatchupFetchFn>(async () => {
-      throw new Error("imsg rpc closed");
+    it("holds the live cursor queue until its write settles", async () => {
+      const { store, register } = interceptCursorStore();
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      vi.spyOn(store, "register").mockImplementationOnce(async (...args) => {
+        entered.resolve();
+        await release.promise;
+        return await register(...args);
+      });
+      let settled = false;
+      const first = advance(50, now).then((advanced) => {
+        settled = true;
+        return advanced;
+      });
+      await Promise.race([
+        entered.promise,
+        first.then(() => {
+          throw new Error("Cursor advancement settled before the pending write.");
+        }),
+      ]);
+      const second = advance(40, now);
+      try {
+        expect(settled).toBe(false);
+        expect(await loadCursor()).toBeNull();
+      } finally {
+        release.resolve();
+        await Promise.allSettled([first, second]);
+      }
+      await expect(Promise.all([first, second])).resolves.toEqual([true, false]);
+      await expectCursor({ lastSeenRowid: 50, lastSeenMs: now });
     });
-    const warn = vi.fn();
 
-    const summary = await performIMessageCatchup({
-      accountId: "primary",
-      config,
-      now,
-      fetch,
-      dispatch,
-      warn,
+    it("propagates uncertain persistence without retrying a dispatched catchup pass", async () => {
+      const { store } = interceptCursorStore();
+      const failure = new Error("SQLite worker outcome unknown");
+      const write = vi.spyOn(store, "register").mockRejectedValue(failure);
+      const fetch = vi.fn<CatchupFetchFn>(async () => ({
+        resolved: true,
+        rows: [{ guid: "A", rowid: 10, date: now - 1000 }],
+      }));
+      const dispatch = vi.fn<CatchupDispatchFn>(async () => ({ ok: true }));
+
+      await expect(
+        performIMessageCatchup({ accountId: "primary", config: liveConfig, fetch, dispatch }),
+      ).rejects.toBe(failure);
+      expect(write).toHaveBeenCalledTimes(1);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(dispatch).toHaveBeenCalledTimes(1);
     });
-
-    expect(summary.querySucceeded).toBe(false);
-    expect(summary.replayed).toBe(0);
-    expect(dispatch).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith("imessage catchup: fetch failed: Error: imsg rpc closed");
-
-    const cursor = await loadIMessageCatchupCursor("primary");
-    expect(cursor?.lastSeenRowid).toBe(7);
   });
 });

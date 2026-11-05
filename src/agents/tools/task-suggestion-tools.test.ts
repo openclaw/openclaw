@@ -1,16 +1,19 @@
 import { Value } from "typebox/value";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
+import * as gateway from "./gateway.js";
 import { createTaskSuggestionTools } from "./task-suggestion-tools.js";
 
+afterEach(() => vi.restoreAllMocks());
+
 function createTools(gatewayCall = vi.fn()) {
+  vi.spyOn(gateway, "callGatewayTool").mockImplementation(gatewayCall);
   return {
     gatewayCall,
     tools: createTaskSuggestionTools({
       sessionKey: "agent:main:main",
       agentId: "main",
       cwd: "/repo",
-      callGateway: gatewayCall as never,
     }),
   };
 }
@@ -46,11 +49,13 @@ describe("task suggestion tools", () => {
     expect(suggestTask?.description).toContain(
       "Nothing is spawned or started: this only records a card.",
     );
-    expect(suggestTask?.description).toContain("absolute path inside a git checkout");
+    expect(suggestTask?.description).toContain("without requiring Git or creating a worktree");
+    expect(suggestTask?.description).toContain("ask the user first");
     expect(suggestTask?.parameters).toMatchObject({
       properties: {
         cwd: {
-          description: "Absolute path inside a git checkout; defaults to the current project.",
+          description:
+            "Absolute working directory for the follow-up; defaults to the current folder. Git is not required.",
         },
       },
     });

@@ -4,6 +4,7 @@ import OpenClawKit
 import Testing
 @testable import OpenClaw
 
+@Suite(.testWaitLimit)
 @MainActor
 struct SkillBinsGatewayOwnershipTests {
     @Test(
@@ -19,6 +20,190 @@ struct SkillBinsGatewayOwnershipTests {
         let marker = root.appendingPathComponent("executed")
         let selectedURL = try LockIsolated(#require(URL(string: "ws://127.0.0.1:49345/")))
         let statusReads = LockIsolated<[URL]>([])
+        let gateway = Self.makeGateway(selectedURL: selectedURL, statusReads: statusReads)
+        let cache = SkillBinsCache(gateway: gateway)
+        do {
+            let command = ["touch", marker.path]
+            let trust = try #require(await cache.current())
+            let evaluation = try Self.fixtureEvaluation(
+                command: command, cwd: root.path, authorizationKind: authorizationKind, skillTrust: trust)
+            try #require(evaluation.skillAllow)
+            #expect(statusReads.value.count == 1)
+            let approvalSource: ExecApprovalRequestSource? = authorizationKind == "fallback" ? .askFallback : nil
+            let approvalDecision: ExecApprovalDecision? = authorizationKind == "explicit" ? .allowOnce : nil
+            let capturedCommit = ExecApprovalExecutionCommit.build(
+                context: evaluation,
+                effectiveSecurity: evaluation.security,
+                approvalSource: approvalSource,
+                explicitlyApproved: approvalDecision != nil,
+                persistAllowlist: false)
+            if case .allow = ExecHostRequestEvaluator.evaluate(
+                context: evaluation, approvalDecision: approvalDecision, approvalSource: approvalSource)
+            {} else {
+                Issue.record("current Gateway trust must authorize the command")
+            }
+
+            if replaceGateway {
+                selectedURL.withValue { $0 = URL(string: "ws://127.0.0.1:49346/")! }
+                _ = try await gateway.acquireServerLease()
+            } else if transition == "disconnected" {
+                await gateway._test_handleDisconnect(socketGeneration: trust.source.socketGeneration)
+                try #require(trust.isCurrent)
+            }
+            // Local-policy persistence is covered below; this matrix owns the
+            // Gateway trust check at the actual, final pre-spawn boundary.
+            let execution = try await ExecHostExecutor.runApprovedCommand(
+                authorization: capturedCommit.authorization,
+                command: #require(evaluation.boundCommand),
+                cwd: #require(ExecCommandResolution.captureApprovalCwdSnapshot(root.path)),
+                env: evaluation.env,
+                timeout: 2)
+            let executionAllowed = !replaceGateway || !requiresSkillTrust
+            #expect(execution.success == executionAllowed)
+            #expect(FileManager.default.fileExists(atPath: marker.path) == executionAllowed)
+            if !executionAllowed {
+                #expect(execution.preflightError != nil)
+            }
+            let policyAllows = switch ExecHostRequestEvaluator.evaluate(
+                context: evaluation, approvalDecision: approvalDecision, approvalSource: approvalSource)
+            {
+            case .allow: true
+            case .deny, .requiresPrompt: false
+            }
+            #expect(policyAllows == executionAllowed)
+            #expect(evaluation.skillAllow == !replaceGateway)
+            let current = await cache.current()?.trustByName ?? [:]
+            #expect(ExecApprovalEvaluator
+                .isSkillAutoAllowed(evaluation.allowlistResolutions, trustedBinsByName: current) == !replaceGateway)
+            #expect(statusReads.value.count == (replaceGateway ? 2 : 1))
+            if replaceGateway {
+                let refreshed = await cache.current(force: true)?.trustByName ?? [:]
+                #expect(!ExecApprovalEvaluator.isSkillAutoAllowed(
+                    evaluation.allowlistResolutions, trustedBinsByName: refreshed))
+            }
+        } catch {
+            await gateway.shutdown()
+            throw error
+        }
+        await gateway.shutdown()
+    }
+
+    @Test(.execApprovalsStateIsolated, arguments: ["replacement", "revoked"])
+    func `native policy commit rejects retired skill trust and revoked auto allow`(transition: String) async throws {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let selectedURL = try LockIsolated(#require(URL(string: "ws://127.0.0.1:49345/")))
+        let statusReads = LockIsolated<[URL]>([])
+        let gateway = Self.makeGateway(selectedURL: selectedURL, statusReads: statusReads)
+        let cache = SkillBinsCache(gateway: gateway)
+        do {
+            try await Self.updateAgentFixture(agentId: "skill-trust-proof") { entry in
+                entry.security = .allowlist
+                entry.ask = .off
+                entry.askFallback = .allowlist
+                entry.autoAllowSkills = true
+                entry.allowlist = []
+            }
+            let evaluation = await ExecApprovalEvaluator.evaluate(
+                command: ["touch", root.appendingPathComponent("executed").path],
+                rawCommand: nil,
+                cwd: root.path,
+                envOverrides: nil,
+                agentId: "skill-trust-proof",
+                skillBinsCache: cache)
+            try #require(evaluation.skillAllow)
+            let sources: [ExecApprovalRequestSource?] = [nil, .askFallback]
+            let commit = { (source: ExecApprovalRequestSource?) in
+                ExecApprovalExecutionCommit.build(
+                    context: evaluation,
+                    effectiveSecurity: evaluation.security,
+                    approvalSource: source,
+                    explicitlyApproved: false,
+                    persistAllowlist: false)
+            }
+            let capturedCommits = sources.map(commit)
+            for capturedCommit in capturedCommits {
+                try await ExecApprovalsStore.commitExecution(capturedCommit).get()
+            }
+            if transition == "replacement" {
+                selectedURL.withValue { $0 = URL(string: "ws://127.0.0.1:49346/")! }
+                _ = try await gateway.acquireServerLease()
+                #expect(!evaluation.skillAllow)
+            } else {
+                try await Self.updateAgentFixture(agentId: "skill-trust-proof") { entry in
+                    entry.autoAllowSkills = nil
+                }
+                // The Gateway snapshot remains valid; only the local policy owner
+                // can reject this now-revoked authorization.
+                try #require(evaluation.skillAllow)
+            }
+            for capturedCommit in capturedCommits {
+                let rejected = switch await ExecApprovalsStore.commitExecution(capturedCommit) {
+                case .failure(.unavailable): true
+                case .success: false
+                }
+                #expect(rejected)
+            }
+            for source in sources {
+                let rejected = switch await ExecApprovalsStore.commitExecution(commit(source)) {
+                case .failure(.unavailable): true
+                case .success: false
+                }
+                #expect(rejected)
+            }
+        } catch {
+            await gateway.shutdown()
+            throw error
+        }
+        await gateway.shutdown()
+    }
+
+    private static func fixtureEvaluation(
+        command: [String],
+        cwd: String,
+        authorizationKind: String,
+        skillTrust: SkillBinsCache.Snapshot) throws -> ExecApprovalEvaluation
+    {
+        let env = HostEnvSanitizer.sanitize(
+            searchPaths: CommandResolver.preferredPaths(), overrides: nil, shellWrapper: false)
+        let resolutions = ExecCommandResolution.resolveForAllowlist(
+            command: command, rawCommand: nil, cwd: cwd, env: env)
+        let boundCommand = try #require(ExecCommandResolution.bindForAllowlistExecution(
+            command: command, rawCommand: nil, resolutions: resolutions))
+        let resolvedPath = try #require(resolutions.first?.resolvedRealPath ?? resolutions.first?.resolvedPath)
+        let file = ExecApprovalsFile(version: 1, agents: [
+            "skill-trust-proof": ExecApprovalsAgent(
+                security: authorizationKind == "full" ? .full : .allowlist,
+                ask: .off,
+                askFallback: authorizationKind == "fallback" ? .allowlist : .deny,
+                autoAllowSkills: true,
+                allowlist: authorizationKind == "manual" ? [ExecAllowlistEntry(pattern: resolvedPath)] : []),
+        ])
+        let policy = ExecApprovalsStore.resolveFromFile(
+            file, agentId: "skill-trust-proof", socket: ("/unused-exec-approvals.sock", ""))
+        let matches = ExecAllowlistMatcher.matchAll(entries: policy.allowlist, resolutions: resolutions)
+        let allowlistSatisfied = !resolutions.isEmpty && matches.count == resolutions.count
+        return ExecApprovalEvaluation(
+            displayCommand: ExecCommandFormatter.displayString(for: command),
+            agentId: "skill-trust-proof",
+            security: policy.agent.security,
+            ask: policy.agent.ask,
+            askFallback: policy.agent.askFallback,
+            env: env,
+            resolution: resolutions.first,
+            allowlistResolutions: resolutions,
+            boundCommand: boundCommand,
+            allowAlwaysPatterns: [],
+            allowlistMatches: matches,
+            allowlistAuthorizationSatisfied: allowlistSatisfied,
+            allowlistMatch: allowlistSatisfied ? matches.first : nil,
+            skillTrust: skillTrust,
+            policySnapshot: ExecApprovalPolicySnapshot(resolved: policy))
+    }
+
+    private static func makeGateway(
+        selectedURL: LockIsolated<URL>, statusReads: LockIsolated<[URL]>) -> GatewayConnection
+    {
         let session = GatewayTestWebSocketSession(taskFactory: {
             let url = selectedURL.value
             return GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
@@ -42,105 +227,25 @@ struct SkillBinsGatewayOwnershipTests {
                     #"{"type":"res","id":"\#(id)","ok":true,"payload":\#(payload)}"#.utf8)))
             })
         })
-        let gateway = GatewayConnection(
+        return GatewayConnection(
             configProvider: { (selectedURL.value, nil, nil) },
             sessionBox: WebSocketSessionBox(session: session))
-        let cache = SkillBinsCache(gateway: gateway)
-        do {
-            let command = ["touch", marker.path]
-            let resolutions = ExecCommandResolution.resolveForAllowlist(
-                command: command, rawCommand: nil, cwd: root.path, env: nil)
-            try #require(ExecCommandResolution.bindForAllowlistExecution(
-                command: command, rawCommand: nil, resolutions: resolutions) != nil)
-            let first = await cache.current()?.trustByName ?? [:]
-            try #require(ExecApprovalEvaluator.isSkillAutoAllowed(resolutions, trustedBinsByName: first))
-            #expect(statusReads.value.count == 1)
-            let settings = ExecApprovalsSettingsModel(skillBinsCache: cache)
-            settings.autoAllowSkills = true
-            await settings.refreshSkillBins()
-            try #require(settings.skillBins == ["touch"])
-            let resolvedPath = try #require(resolutions.first?.resolvedRealPath ?? resolutions.first?.resolvedPath)
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "skill-trust-proof") { entry in
-                entry.security = authorizationKind == "full" ? .full : .allowlist
-                entry.ask = .off
-                entry.askFallback = authorizationKind == "fallback" ? .allowlist : .deny
-                entry.autoAllowSkills = true
-                entry.allowlist = authorizationKind == "manual" ? [ExecAllowlistEntry(pattern: resolvedPath)] : []
-            }.get()
-            let evaluation = await ExecApprovalEvaluator.evaluate(
-                command: command,
-                rawCommand: nil,
-                cwd: root.path,
-                envOverrides: nil,
-                agentId: "skill-trust-proof",
-                skillBinsCache: cache)
-            try #require(evaluation.skillAllow)
-            let commit = {
-                ExecApprovalExecutionCommit.build(
-                    context: evaluation,
-                    effectiveSecurity: evaluation.security,
-                    approvalSource: authorizationKind == "fallback" ? .askFallback : nil,
-                    explicitlyApproved: authorizationKind == "explicit",
-                    persistAllowlist: false)
-            }
-            let capturedCommit = commit()
-            _ = try ExecApprovalsStore.commitExecution(capturedCommit).get()
+    }
 
-            if replaceGateway {
-                selectedURL.withValue { $0 = URL(string: "ws://127.0.0.1:49346/")! }
-                _ = try await gateway.acquireServerLease()
-            } else if transition == "disconnected" {
-                let trust = try #require(evaluation.skillTrust)
-                await gateway._test_handleDisconnect(socketGeneration: trust.source.socketGeneration)
-                try #require(trust.isCurrent)
-            }
-            let execution = try await ExecHostExecutor.runApprovedCommand(
-                authorization: capturedCommit.authorization,
-                command: #require(evaluation.boundCommand),
-                cwd: #require(ExecCommandResolution.captureApprovalCwdSnapshot(root.path)),
-                env: evaluation.env,
-                timeout: 2)
-            let executionAllowed = !replaceGateway || !requiresSkillTrust
-            #expect(execution.success == executionAllowed)
-            #expect(FileManager.default.fileExists(atPath: marker.path) == executionAllowed)
-            if !executionAllowed {
-                #expect(execution.preflightError != nil)
-            }
-            #expect(settings.skillBins == (replaceGateway ? [] : ["touch"]))
-            #expect(evaluation.skillAllow == !replaceGateway)
-            let committed = switch ExecApprovalsStore.commitExecution(commit()) {
-            case .success: true
-            case .failure: false
-            }
-            #expect(committed == executionAllowed)
-            let capturedCommitAccepted = switch ExecApprovalsStore.commitExecution(capturedCommit) {
-            case .success: true
-            case .failure: false
-            }
-            #expect(capturedCommitAccepted == executionAllowed)
-            let current = await cache.current()?.trustByName ?? [:]
-            #expect(ExecApprovalEvaluator
-                .isSkillAutoAllowed(resolutions, trustedBinsByName: current) == !replaceGateway)
-            #expect(statusReads.value.count == (replaceGateway ? 2 : 1))
-            if replaceGateway {
-                let refreshed = await cache.current(force: true)?.trustByName ?? [:]
-                #expect(!ExecApprovalEvaluator.isSkillAutoAllowed(resolutions, trustedBinsByName: refreshed))
-            } else if authorizationKind == "skill" {
-                _ = try ExecApprovalsStore.updateAgentSettings(agentId: "skill-trust-proof") { entry in
-                    entry.autoAllowSkills = nil
-                }.get()
-                try #require(evaluation.skillAllow)
-                let revoked = switch ExecApprovalsStore.commitExecution(capturedCommit) {
-                case .failure(.unavailable): true
-                case .success, .failure: false
-                }
-                #expect(revoked)
-            }
-        } catch {
-            await gateway.shutdown()
-            throw error
-        }
-        await gateway.shutdown()
+    private static func updateAgentFixture(
+        agentId: String,
+        mutate: (inout ExecApprovalsAgent) -> Void) async throws
+    {
+        let root = ExecApprovalsStore.stateDirURL()
+        let current = try await NativeExecPolicyOwner.snapshot(stateDirectory: root)
+        var file = current.file
+        var agents = file.agents ?? [:]
+        var agent = agents[agentId] ?? ExecApprovalsAgent()
+        mutate(&agent)
+        agents[agentId] = agent
+        file.agents = agents
+        _ = try await NativeExecPolicyOwner.replace(file: file, baseHash: current.hash, stateDirectory: root)
+        try ExecApprovalsSocketTestSupport.seedLocalCredentials(in: root)
     }
 
     private nonisolated static func report(bins: [String]) -> SkillsStatusReport {
@@ -209,6 +314,7 @@ extension SkillBinsGatewayOwnershipTests {
         let cache = SkillBinsCache(gateway: gateway)
         let executor = SkillCachePublicationExecutor()
         let entered = LockIsolated(false)
+        let enteredSignal = AsyncTestSignal()
         let release = DispatchSemaphore(value: 0)
         var blocked: Task<Bool, Never>?
         var refresh: Task<SkillBinsCache.Snapshot?, Never>?
@@ -216,11 +322,12 @@ extension SkillBinsGatewayOwnershipTests {
             let first = try #require(await cache.current())
             try #require(first.bins == ["true"])
             refresh = Task.detached(executorPreference: executor) { await cache.current(force: true) }
-            try await Self.waitForRetentionStage { pending.value != nil && executor.isIdle }
+            try await TestWait
+                .state("held skill refresh on idle executor") { pending.value != nil && executor.isIdle }
             blocked = Task.detached(executorPreference: SkillCachePublicationExecutor()) {
-                await holdSkillCacheActor(cache, entered: entered, release: release)
+                await holdSkillCacheActor(cache, entered: entered, enteredSignal: enteredSignal, release: release)
             }
-            try await Self.waitForRetentionStage { entered.value }
+            try await enteredSignal.wait("occupied skill cache actor") { entered.value }
             executor.pause()
             let (socket, id) = try #require(pending.value)
             let receiveCount = socket.snapshotCallbackReceiveCount()
@@ -228,7 +335,7 @@ extension SkillBinsGatewayOwnershipTests {
             let report = try #require(String(data: payload, encoding: .utf8))
             socket.emitReceiveSuccess(.data(Data(
                 #"{"type":"res","id":"\#(id)","ok":true,"payload":\#(report)}"#.utf8)))
-            try await Self.waitForRetentionStage {
+            try await TestWait.state("queued skill publication after response") {
                 executor.hasQueuedJobs && socket.snapshotCallbackReceiveCount() > receiveCount
             }
             // Finish the validated response while the receiving cache actor is occupied.
@@ -269,24 +376,19 @@ extension SkillBinsGatewayOwnershipTests {
         }
         await gateway.shutdown()
     }
-
-    private static func waitForRetentionStage(_ predicate: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(2)
-        while !predicate(), ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(1))
-        }
-        try #require(predicate())
-    }
 }
 
 private func holdSkillCacheActor(
     _ cache: isolated SkillBinsCache,
     entered: LockIsolated<Bool>,
+    enteredSignal: AsyncTestSignal,
     release: DispatchSemaphore) -> Bool
 {
     cache.assertIsolated()
     entered.withValue { $0 = true }
-    return release.wait(timeout: .now() + 5) == .success
+    enteredSignal.notify()
+    release.wait()
+    return true
 }
 
 private final class SkillCachePublicationExecutor: TaskExecutor {
@@ -349,129 +451,5 @@ private final class SkillCachePublicationExecutor: TaskExecutor {
     private func run(_ job: UnownedJob) {
         defer { self.state.withValue { $0.outstanding -= 1 } }
         job.runSynchronously(on: self.asUnownedTaskExecutor())
-    }
-}
-
-extension SkillBinsGatewayOwnershipTests {
-    @Test(.execApprovalsStateIsolated, arguments: ["replacement", "unavailable-recovery", "same-route"])
-    func `mounted trust list follows the selected gateway without another UI action`(
-        transition: String) async throws
-    {
-        let configPath = TestIsolation.tempConfigPath()
-        try Data("{}".utf8).write(to: URL(fileURLWithPath: configPath))
-        defer { try? FileManager().removeItem(atPath: configPath) }
-        try await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": configPath]) {
-            let selection = LockIsolated((revision: UInt64(1), available: true))
-            let statusReads = LockIsolated<[UInt64]>([])
-            let session = GatewayTestWebSocketSession(taskFactory: {
-                let revision = selection.value.revision
-                return GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
-                    guard sendIndex > 0 else { return }
-                    let data: Data = switch message {
-                    case let .data(data): data
-                    case let .string(text): Data(text.utf8)
-                    @unknown default: throw URLError(.cannotParseResponse)
-                    }
-                    let frame = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-                    let id = try #require(frame["id"] as? String)
-                    if frame["method"] as? String == "health" {
-                        socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
-                        return
-                    }
-                    if frame["method"] as? String == "config.get" {
-                        let agent = revision == 1 ? "alice" : "bob"
-                        let config = #"""
-                        {"hash":"fixture-\#(revision)","valid":true,
-                         "config":{"agents":{"list":[{"id":"\#(agent)","default":true}]}}}
-                        """#
-                        socket.emitReceiveSuccess(.data(Data(
-                            #"{"type":"res","id":"\#(id)","ok":true,"payload":\#(config)}"#.utf8)))
-                        return
-                    }
-                    try #require(frame["method"] as? String == "skills.status")
-                    statusReads.withValue { $0.append(revision) }
-                    let payload = try JSONEncoder().encode(Self.report(bins: revision == 1 ? ["true"] : ["printf"]))
-                    let report = try #require(String(data: payload, encoding: .utf8))
-                    socket.emitReceiveSuccess(.data(Data(
-                        #"{"type":"res","id":"\#(id)","ok":true,"payload":\#(report)}"#.utf8)))
-                })
-            })
-            let gateway = GatewayConnection(
-                testEndpointProvider: {
-                    let selected = selection.value
-                    guard selected.available else { throw URLError(.notConnectedToInternet) }
-                    let url = try #require(URL(string: "ws://127.0.0.1:\(49348 + selected.revision)/"))
-                    return GatewayConnection.EndpointSnapshot(
-                        config: (url, nil, nil),
-                        routeAuthority: selected.revision,
-                        revision: selected.revision)
-                },
-                currentEndpointRevision: { selection.value.revision },
-                sessionBox: WebSocketSessionBox(session: session))
-            let cache = SkillBinsCache(gateway: gateway)
-            _ = try ExecApprovalsStore.updateAgentSettings(agentId: "alice") { entry in
-                entry.security = .allowlist
-                entry.ask = .off
-                entry.autoAllowSkills = true
-                entry.allowlist = [ExecAllowlistEntry(id: "local-rule", pattern: "/usr/bin/false")]
-            }.get()
-            let model = ExecApprovalsSettingsModel(skillBinsCache: cache)
-            let lifetime = Task { await model.run() }
-            do {
-                try await Self.waitForRetentionStage { model.policyAvailable && model.skillBins == ["true"] }
-                try #require(model.agentIds == ["alice"])
-                try #require(model.selectedAgentId == "alice")
-                let first = try await gateway.acquireServerLease()
-                if transition == "same-route" {
-                    let socket = try #require(session.latestTask())
-                    socket.emitReceiveFailure(URLError(.networkConnectionLost))
-                    try await Self.waitForRetentionStage { !gateway.serverLeaseMatchesCurrentState(first) }
-                    try #require(model.skillBins == ["true"])
-                    _ = try await gateway.acquireServerLease()
-                    try #require(gateway.serverLeaseMatchesCurrentRoute(first))
-                } else {
-                    selection.withValue { $0 = (revision: 2, available: transition != "unavailable-recovery") }
-                    if transition == "unavailable-recovery" {
-                        try await gateway.adoptSelectedEndpoint()
-                        try #require(model.skillBins.isEmpty)
-                        do {
-                            try await gateway.refresh()
-                            Issue.record("Unavailable replacement unexpectedly prepared an endpoint")
-                        } catch {
-                            #expect((error as? URLError)?.code == .notConnectedToInternet)
-                        }
-                        selection.withValue { $0.available = true }
-                    }
-                    _ = try await gateway.acquireServerLease()
-                }
-                let expected = transition == "same-route" ? ["true"] : ["printf"]
-                let expectedAgents = transition == "same-route" ? ["alice"] : ["bob"]
-                let deadline = ContinuousClock.now + .seconds(2)
-                while model.skillBins != expected || model.agentIds != expectedAgents,
-                      ContinuousClock.now < deadline
-                {
-                    try await Task.sleep(for: .milliseconds(1))
-                }
-                #expect(model.skillBins == expected)
-                #expect(model.agentIds == expectedAgents)
-                #expect(model.defaultAgentId == expectedAgents[0])
-                #expect(model.agentPickerIds.contains("alice"))
-                #expect(expectedAgents.allSatisfy { model.agentPickerIds.contains($0) })
-                #expect(statusReads.value == (transition == "same-route" ? [1] : [1, 2]))
-                #expect(model.autoAllowSkills)
-                #expect(model.selectedAgentId == "alice")
-                #expect(model.security == .allowlist)
-                #expect(model.ask == .off)
-                #expect(model.entries.map(\.id) == ["local-rule"])
-            } catch {
-                lifetime.cancel()
-                await lifetime.value
-                await gateway.shutdown()
-                throw error
-            }
-            lifetime.cancel()
-            await lifetime.value
-            await gateway.shutdown()
-        }
     }
 }

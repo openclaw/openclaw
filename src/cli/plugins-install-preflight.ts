@@ -1,15 +1,14 @@
 // Resolve and validate plugin install requests without opening mutable runtime state.
+import fs from "node:fs";
+import { resolvePluginInstallRequestContext } from "../plugins/install-config.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
+import { resolvePluginInstallSourcePlan } from "../plugins/install-source-plan.js";
 import { resolveMarketplaceInstallShortcut } from "../plugins/marketplace.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { resolveUserPath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { NON_CLAWHUB_INSTALL_FORCE_FLAG } from "./non-clawhub-install-acknowledgement.js";
-import {
-  resolvePluginInstallRequestContext,
-  type PluginInstallRequestContext,
-} from "./plugin-install-config-policy.js";
-import { resolvePluginInstallSourcePlan } from "./plugin-install-plan.js";
 
 export type RunPluginInstallCommandParams = {
   raw: string;
@@ -17,44 +16,24 @@ export type RunPluginInstallCommandParams = {
   opts: InstallSafetyOverrides & {
     acceptCapabilities?: boolean;
     acknowledgeInstallPolicyWarning?: boolean;
-    expectedIntegrity?: string;
-    expectedPluginId?: string;
+    dangerouslyForceUnsafeInstall?: boolean;
     force?: boolean;
+    enable?: boolean;
     link?: boolean;
     pin?: boolean;
     marketplace?: string;
   };
   invalidateRuntimeCache?: boolean;
-  clawManaged?: boolean;
   runtime?: RuntimeEnv;
   /** Synchronous authority guard at the final plugin/config mutation. */
   beforePersistentApply?: () => void;
+  applyRuntime?: import("../plugins/lifecycle.js").PluginLifecycleRuntimeApply;
 };
 
 type ResolvedPluginInstallSourcePlan = Extract<
   ReturnType<typeof resolvePluginInstallSourcePlan>,
   { ok: true }
 >;
-
-type ResolvedPluginInstallRequest = {
-  raw: string;
-  opts: RunPluginInstallCommandParams["opts"];
-  installMode: "install" | "update";
-  request: PluginInstallRequestContext;
-};
-
-export type PluginInstallPreflight =
-  | { ok: false; error: string }
-  | (ResolvedPluginInstallRequest & {
-      ok: true;
-      sourcePlan: ResolvedPluginInstallSourcePlan;
-      marketplace?: never;
-    })
-  | (ResolvedPluginInstallRequest & {
-      ok: true;
-      sourcePlan: null;
-      marketplace: string;
-    });
 
 function resolveMarketplaceOptionError(opts: RunPluginInstallCommandParams["opts"]): string | null {
   if (opts.link) {
@@ -91,18 +70,17 @@ function resolveSourceOptionError(
 }
 
 /** Complete source and option validation before acquiring the persistent lifecycle lease. */
-export async function resolvePluginInstallPreflight(
-  params: RunPluginInstallCommandParams,
-): Promise<PluginInstallPreflight> {
+export async function resolvePluginInstallPreflight(params: RunPluginInstallCommandParams) {
   if (!params.raw.trim()) {
-    return { ok: false, error: "Plugin install source must not be empty." };
+    return { ok: false as const, error: "Plugin install source must not be empty." };
   }
   if (params.opts.marketplace !== undefined && !params.opts.marketplace.trim()) {
-    return { ok: false, error: "--marketplace requires a non-empty source." };
+    return { ok: false as const, error: "--marketplace requires a non-empty source." };
   }
 
   // Linked paths confirm provenance with --force without changing their copy/update mode.
-  const installMode = params.opts.force && !params.opts.link ? "update" : "install";
+  const installMode: "install" | "update" =
+    params.opts.force && !params.opts.link ? "update" : "install";
   let raw = params.raw;
   let marketplace = params.opts.marketplace;
   let sourcePlan: ResolvedPluginInstallSourcePlan | null = null;
@@ -115,7 +93,7 @@ export async function resolvePluginInstallPreflight(
       { command: "install" },
     );
     if (shorthand?.ok === false) {
-      return { ok: false, error: shorthand.error };
+      return { ok: false as const, error: shorthand.error };
     }
     if (shorthand?.ok) {
       raw = shorthand.plugin;
@@ -134,6 +112,9 @@ export async function resolvePluginInstallPreflight(
     }
   }
 
+  if (marketplace && fs.existsSync(resolveUserPath(marketplace))) {
+    marketplace = resolveUserPath(marketplace);
+  }
   const opts = { ...params.opts, marketplace };
   const optionError = marketplace
     ? resolveMarketplaceOptionError(opts)
@@ -141,10 +122,15 @@ export async function resolvePluginInstallPreflight(
       ? resolveSourceOptionError(opts, sourcePlan)
       : "Plugin install source could not be resolved.";
   if (optionError) {
-    return { ok: false, error: optionError };
+    return { ok: false as const, error: optionError };
   }
 
-  const requestResolution = resolvePluginInstallRequestContext({ rawSpec: raw, marketplace });
+  const requestResolution = resolvePluginInstallRequestContext({
+    rawSpec: raw,
+    marketplace,
+    source: sourcePlan?.request.source,
+    localPath: sourcePlan?.localPath,
+  });
   if (!requestResolution.ok) {
     return requestResolution;
   }
@@ -155,10 +141,10 @@ export async function resolvePluginInstallPreflight(
       : requestResolution.request;
 
   if (marketplace) {
-    return { ok: true, raw, opts, installMode, request, marketplace, sourcePlan: null };
+    return { ok: true as const, raw, opts, installMode, request, marketplace, sourcePlan: null };
   }
   if (!sourcePlan) {
-    return { ok: false, error: "Plugin install source could not be resolved." };
+    return { ok: false as const, error: "Plugin install source could not be resolved." };
   }
-  return { ok: true, raw, opts, installMode, request, sourcePlan };
+  return { ok: true as const, raw, opts, installMode, request, sourcePlan };
 }

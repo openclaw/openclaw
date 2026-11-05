@@ -3,6 +3,7 @@ import type {
   QuestionGetResult,
   QuestionResolveResult,
 } from "../../packages/gateway-protocol/src/schema/questions.js";
+import { bindAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 
@@ -12,6 +13,15 @@ export type ResolveQuestionOverGatewayResult =
   | { status: "answered"; questionId: string; optionValue: string }
   | { status: "custom-input"; questionId: string }
   | { status: "already-terminal"; reason: "already-terminal" | "not-found" };
+
+/**
+ * Re-checked after the awaited question read and immediately before the resolve
+ * write, so access lost during that window cannot answer.
+ */
+export type QuestionResolutionAuthorizer = () => boolean | Promise<boolean>;
+
+/** Only a caller that supplies an authorizer can receive this. */
+export type ResolveQuestionOverGatewayDenial = { status: "denied" };
 
 export type ResolveQuestionOverGatewayParams = {
   cfg: OpenClawConfig;
@@ -40,25 +50,43 @@ export type ResolveQuestionOverGatewayParams = {
     }
 );
 
-function readTerminalReason(error: unknown): "already-terminal" | "not-found" | undefined {
+function terminalResolution(
+  error: unknown,
+): Extract<ResolveQuestionOverGatewayResult, { status: "already-terminal" }> {
   if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
-    return undefined;
+    throw error;
   }
   const details = (error as Error & { details?: unknown }).details;
   if (!details || typeof details !== "object" || Array.isArray(details)) {
-    return undefined;
+    throw error;
   }
   const reason = (details as { reason?: unknown }).reason;
   if (reason === "QUESTION_ALREADY_TERMINAL") {
-    return "already-terminal";
+    return { status: "already-terminal", reason: "already-terminal" };
   }
-  return reason === "QUESTION_NOT_FOUND" ? "not-found" : undefined;
+  if (reason === "QUESTION_NOT_FOUND") {
+    return { status: "already-terminal", reason: "not-found" };
+  }
+  throw error;
 }
 
+/** Params for the overload that re-checks access before the resolve write. */
+export type AuthorizedResolveQuestionOverGatewayParams = ResolveQuestionOverGatewayParams & {
+  authorize: QuestionResolutionAuthorizer;
+};
+
 /** Resolves one rendered choice or validates a custom-input transition. */
+// Only the authorized overload widens the result, so callers that never opt in
+// keep the result union they already exhaust.
+export async function resolveQuestionOverGateway(
+  params: AuthorizedResolveQuestionOverGatewayParams,
+): Promise<ResolveQuestionOverGatewayResult | ResolveQuestionOverGatewayDenial>;
 export async function resolveQuestionOverGateway(
   params: ResolveQuestionOverGatewayParams,
-): Promise<ResolveQuestionOverGatewayResult> {
+): Promise<ResolveQuestionOverGatewayResult>;
+export async function resolveQuestionOverGateway(
+  params: ResolveQuestionOverGatewayParams & { authorize?: QuestionResolutionAuthorizer },
+): Promise<ResolveQuestionOverGatewayResult | ResolveQuestionOverGatewayDenial> {
   if (!QUESTION_RECORD_ID_PATTERN.test(params.questionId)) {
     throw new Error("question resolution requires a valid question record id");
   }
@@ -79,19 +107,18 @@ export async function resolveQuestionOverGateway(
     clientDisplayName:
       params.clientDisplayName ?? `Question (${params.senderId?.trim() || "unknown"})`,
   };
+  const request = params.gatewayUrl?.trim()
+    ? callGateway
+    : bindAgentToolGatewayRequest({ hostedOnly: true });
   let getResult: QuestionGetResult;
   try {
-    getResult = await callGateway<QuestionGetResult>({
+    getResult = await request<QuestionGetResult>({
       ...gatewayOptions,
       method: "question.get",
       params: { id: params.questionId },
     });
   } catch (error) {
-    const reason = readTerminalReason(error);
-    if (reason) {
-      return { status: "already-terminal", reason };
-    }
-    throw error;
+    return terminalResolution(error);
   }
 
   const record = getResult.question;
@@ -108,12 +135,16 @@ export async function resolveQuestionOverGateway(
     }
     return { status: "custom-input", questionId: question.questionId };
   }
-  const optionValue = params.optionValue ?? question.options[params.optionIndex as number]?.label;
+  const option = question.options[params.optionIndex as number];
+  const optionValue = params.optionValue ?? option?.value ?? option?.label;
   if (!optionValue) {
     throw new Error("question resolution index does not match a declared option");
   }
+  if (params.authorize && !(await params.authorize())) {
+    return { status: "denied" };
+  }
   try {
-    await callGateway<QuestionResolveResult>({
+    await request<QuestionResolveResult>({
       ...gatewayOptions,
       method: "question.resolve",
       params: {
@@ -123,11 +154,7 @@ export async function resolveQuestionOverGateway(
       },
     });
   } catch (error) {
-    const reason = readTerminalReason(error);
-    if (reason) {
-      return { status: "already-terminal", reason };
-    }
-    throw error;
+    return terminalResolution(error);
   }
   return { status: "answered", questionId: question.questionId, optionValue };
 }

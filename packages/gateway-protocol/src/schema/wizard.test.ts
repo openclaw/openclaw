@@ -9,6 +9,13 @@ describe("WizardNextResultSchema", () => {
     { preparedModelRef: "ollama/qwen3:0.6b" },
     { modelActivation: { modelRef: "openai/gpt-5.6-luna" } },
     { modelActivation: { modelRef: "openai/gpt-5.6-luna", gatewayRestartRequired: true } },
+    {
+      modelActivation: {
+        modelRef: "local/setup",
+        modelTarget: "utility",
+        gatewayRestartRequired: true,
+      },
+    },
   ])("accepts an exact model outcome on a terminal result (%j)", (outcome) => {
     expect(
       validate.Check({
@@ -47,6 +54,7 @@ describe("WizardNextResultSchema", () => {
   it.each([
     { preparedModelRef: "" },
     { modelActivation: { modelRef: "" } },
+    { modelActivation: { modelRef: "local/setup", modelTarget: "primary" } },
     { modelActivation: { modelRef: "openai/gpt-5.6-luna", gatewayRestartRequired: false } },
     { modelActivation: { modelRef: "openai/gpt-5.6-luna", gatewayRestartRequired: "true" } },
     { modelActivation: { modelRef: "openai/gpt-5.6-luna", apiKey: "not-a-wire-field" } },

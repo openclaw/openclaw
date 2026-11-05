@@ -1,68 +1,81 @@
 // Proves the production crash boundary this change exists for: a process
 // commits a durable row, dies before dispatch, and a fresh process still
 // delivers the media. Uses a real child process, real SQLite, and no network.
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { withinTest } from "../../../test/helpers/promise.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../runtime-worker-url.js";
 import {
   collectEntrySpoolPaths,
   pruneOrphanedDeliveryQueueMedia,
 } from "./delivery-queue-media-spool.js";
+import { deliveryQueueProcessEntrypoints } from "./delivery-queue-process-runtime.test-support.js";
 import { ackDelivery } from "./delivery-queue-storage.js";
 import { loadPendingDeliveries } from "./delivery-queue.test-helpers.js";
 import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
 
-const CHILD_SCRIPT = fileURLToPath(
-  new URL("./delivery-queue-media-spool.crash-child.test-support.ts", import.meta.url),
-);
+const childUrl = resolveRuntimeWorkerUrl(deliveryQueueProcessEntrypoints.mediaSpoolCrash);
 
 type ChildResult = { id: string; pid: number; artifacts: string[] };
 
 let stateDir: string;
 let sourceDir: string;
-let child: ChildProcess | null = null;
+let stopChild: (() => Promise<void>) | undefined;
 
 /** Runs the enqueueing child until it reports a committed row, then kills it. */
-async function enqueueThenKillChild(source: string): Promise<ChildResult> {
+async function enqueueThenKillChild(source: string, signal: AbortSignal): Promise<ChildResult> {
   const spawned = spawn(
     process.execPath,
-    ["--import", "tsx", CHILD_SCRIPT, stateDir, sourceDir, source],
+    [...resolveRuntimeWorkerArgv(childUrl), stateDir, sourceDir, source],
     {
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     },
   );
-  child = spawned;
-  const result = await new Promise<ChildResult>((resolve, reject) => {
-    let stdout = "";
-    let stderr = "";
-    const timer = setTimeout(() => reject(new Error(`child timed out: ${stderr}`)), 60_000);
-    spawned.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString();
-      const line = stdout.split("\n").find((entry) => entry.trim().startsWith("{"));
-      if (line) {
-        clearTimeout(timer);
-        resolve(JSON.parse(line) as ChildResult);
-      }
-    });
-    spawned.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-    spawned.on("exit", (code) => {
-      clearTimeout(timer);
-      reject(new Error(`child exited early (${code}): ${stderr}`));
-    });
+  const closed = new Promise<void>((resolve) => {
+    spawned.once("close", () => resolve());
   });
+  const stop = async () => {
+    spawned.kill("SIGKILL");
+    await closed;
+  };
+  stopChild = stop;
+  const result = await withinTest(
+    new Promise<ChildResult>((resolve, reject) => {
+      let stdout = "";
+      let stderr = "";
+      spawned.stdout?.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+        const line = stdout
+          .split("\n")
+          .slice(0, -1)
+          .find((entry) => entry.trim().startsWith("{"));
+        if (line) {
+          resolve(JSON.parse(line) as ChildResult);
+        }
+      });
+      spawned.stderr?.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+      spawned.on("exit", (code) => {
+        reject(new Error(`child exited early (${code}): ${stderr}`));
+      });
+      spawned.once("error", (error) => {
+        reject(error);
+      });
+    }),
+    signal,
+  );
   // Kill at the boundary: row committed, nothing dispatched.
-  const exited = new Promise<void>((resolve) => {
-    spawned.once("exit", () => resolve());
-  });
-  spawned.kill("SIGKILL");
-  await exited;
-  child = null;
+  await stop();
+  stopChild = undefined;
   return result;
 }
 
@@ -72,18 +85,20 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  child?.kill("SIGKILL");
-  child = null;
+  await stopChild?.();
+  stopChild = undefined;
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
   await fs.rm(stateDir, { recursive: true, force: true });
   await fs.rm(sourceDir, { recursive: true, force: true });
 });
 
 describe("delivery queue media crash boundary", () => {
-  it("delivers media enqueued by a process that died before dispatch", async () => {
+  it("delivers media enqueued by a process that died before dispatch", async ({ signal }) => {
     const source = path.join(sourceDir, "voice.ogg");
     await fs.writeFile(source, "opus-bytes");
 
-    const { id, pid, artifacts } = await enqueueThenKillChild(source);
+    const { id, pid, artifacts } = await enqueueThenKillChild(source, signal);
     expect(artifacts).toHaveLength(1);
     const artifact = artifacts[0] as string;
     // The producing process is gone; this test process is the fresh one.

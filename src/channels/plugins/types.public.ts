@@ -1,10 +1,3 @@
-/**
- * Public channel plugin type barrel.
- *
- * Re-exports stable plugin-facing channel types and message action names.
- */
-import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
-
 export { CHANNEL_MESSAGE_ACTION_NAMES } from "./message-action-names.js";
 export type {
   BaseProbeResult,
@@ -12,10 +5,11 @@ export type {
   ChannelAccountSnapshot,
   ChannelAgentTool,
   ChannelCapabilities,
+  ChannelDisplayMention,
+  ChannelMentionAdapter,
   ChannelDirectoryEntry,
   ChannelDirectoryEntryKind,
   ChannelGroupContext,
-  ChannelHeartbeatDeps,
   ChannelId,
   ChannelLogSink,
   ChannelMessageActionAdapter,
@@ -49,4 +43,4 @@ export type { ChannelMessageCapability } from "./message-capabilities.js";
 export type { ChannelPlugin } from "./types.plugin.js";
 
 /** Stable message action name union derived from the registered action list. */
-export type ChannelMessageActionName = ChannelMessageActionNameFromList;
+export type { ChannelMessageActionName } from "./message-action-names.js";

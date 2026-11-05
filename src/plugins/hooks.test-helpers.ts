@@ -16,6 +16,7 @@ export function createMockPluginRegistry(
     timeoutMs?: number;
     eligibleTriggers?: readonly PluginHookAgentTrigger[];
     requiresToolAuthority?: true;
+    conversationAccessAllowed?: true;
   }>,
 ): PluginRegistry {
   const pluginIds =
@@ -43,6 +44,7 @@ export function createMockPluginRegistry(
       ...(h.timeoutMs !== undefined ? { timeoutMs: h.timeoutMs } : {}),
       ...(h.eligibleTriggers !== undefined ? { eligibleTriggers: h.eligibleTriggers } : {}),
       ...(h.requiresToolAuthority ? { requiresToolAuthority: true } : {}),
+      ...(h.conversationAccessAllowed ? { conversationAccessAllowed: true } : {}),
       source: "test",
     })) as PluginRegistry["typedHooks"],
   };
@@ -58,6 +60,7 @@ export function addTestHook(params: {
   timeoutMs?: number;
   eligibleTriggers?: readonly PluginHookAgentTrigger[];
   requiresToolAuthority?: true;
+  conversationAccessAllowed?: true;
 }) {
   params.registry.typedHooks.push({
     pluginId: params.pluginId,
@@ -69,6 +72,7 @@ export function addTestHook(params: {
     ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
     ...(params.eligibleTriggers !== undefined ? { eligibleTriggers: params.eligibleTriggers } : {}),
     ...(params.requiresToolAuthority ? { requiresToolAuthority: true } : {}),
+    ...(params.conversationAccessAllowed ? { conversationAccessAllowed: true } : {}),
     source: "test",
   } as PluginHookRegistration);
 }

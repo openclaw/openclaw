@@ -1,4 +1,3 @@
-// Openai plugin module implements replay policy behavior.
 import type {
   ProviderReplayPolicy,
   ProviderReplayPolicyContext,
@@ -10,9 +9,6 @@ const RESPONSES_FAMILY_APIS = new Set([
   "azure-openai-responses",
 ]);
 
-/**
- * Returns the provider-owned replay policy for OpenAI-family transports.
- */
 export function buildOpenAIReplayPolicy(ctx: ProviderReplayPolicyContext): ProviderReplayPolicy {
   const isResponsesFamily = RESPONSES_FAMILY_APIS.has(ctx.modelApi ?? "");
   return {
@@ -20,11 +16,18 @@ export function buildOpenAIReplayPolicy(ctx: ProviderReplayPolicyContext): Provi
     applyAssistantFirstOrderingFix: false,
     validateGeminiTurns: false,
     validateAnthropicTurns: false,
-    ...(isResponsesFamily ? { allowSyntheticToolResults: true } : {}),
+    ...(isResponsesFamily
+      ? {
+          allowSyntheticToolResults: true,
+          appendOnlyRuntimeContext: true,
+          ...(ctx.inHistorySystemUpdates ? { inHistorySystemUpdates: true } : {}),
+        }
+      : {}),
     ...(ctx.modelApi === "openai-completions"
       ? {
           sanitizeToolCallIds: true,
           toolCallIdMode: "strict" as const,
+          duplicateToolCallIdStyle: "openai" as const,
         }
       : {
           sanitizeToolCallIds: false,

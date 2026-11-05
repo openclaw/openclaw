@@ -1,148 +1,108 @@
+import { expect as browserExpect } from "playwright/test";
 import { expect, it } from "vitest";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
+  expectDefined,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
+import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const reducedMotionOptions = {
+  ...createControlUiE2eContextOptions(),
+  reducedMotion: "reduce",
+} as const;
 
 suite.define(() => {
-  it("shows the selected permission and disables dropdown motion when requested", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      reducedMotion: "reduce",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const session = {
-      key: "agent:main:session-a",
-      kind: "direct",
-      label: "Session A",
-      permissionMode: "guarded",
-      updatedAt: 2,
-    };
-    await installMockGateway(page, {
-      methodResponses: { "sessions.list": chatSessionListResponse([session]) },
-      sessionKey: session.key,
-    });
-
-    try {
+  it("distinguishes the selected permission and honors reduced motion", () =>
+    suite.withPage(reducedMotionOptions, async ({ page }) => {
+      const session = {
+        key: "agent:main:session-a",
+        kind: "direct",
+        label: "Session A",
+        permissionMode: "guarded",
+        updatedAt: 2,
+      };
+      await installMockGateway(page, {
+        methodResponses: { "sessions.list": chatSessionListResponse([session]) },
+        sessionKey: session.key,
+      });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
       const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-      const picker = pane.locator(".chat-controls__permission-picker");
-      await pane.locator('[data-chat-permission-select="true"]').click();
+      const menu = pane.locator(".chat-controls__permission-menu");
+      const trigger = pane.locator('[data-chat-permission-select="true"]');
+      await trigger.click();
       await pane.locator('[data-chat-permission-option="default"]').waitFor({ state: "visible" });
+      const backgrounds = await pane
+        .locator(
+          '[data-chat-permission-option="guarded"], [data-chat-permission-option="workspace"]',
+        )
+        .evaluateAll((options) =>
+          options.map((element) => getComputedStyle(element).backgroundColor),
+        );
+      expect(backgrounds).toHaveLength(2);
+      expect(backgrounds[0]).not.toBe(backgrounds[1]);
+      await browserExpect(menu).toHaveCSS("transition-duration", "0s");
+    }));
 
-      const [selectedBackground, unselectedBackground, showDuration, hideDuration] =
-        await Promise.all([
-          pane
-            .locator('[data-chat-permission-option="guarded"]')
-            .evaluate((element) => getComputedStyle(element).backgroundColor),
-          pane
-            .locator('[data-chat-permission-option="workspace"]')
-            .evaluate((element) => getComputedStyle(element).backgroundColor),
-          picker.evaluate((element) =>
-            Number.parseFloat(getComputedStyle(element).getPropertyValue("--show-duration")),
-          ),
-          picker.evaluate((element) =>
-            Number.parseFloat(getComputedStyle(element).getPropertyValue("--hide-duration")),
-          ),
-        ]);
-      expect(selectedBackground).not.toBe(unselectedBackground);
-      expect(showDuration).toBe(0);
-      expect(hideDuration).toBe(0);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
-  it("animates inline pickers from their placed edge and honors reduced motion", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      models: Array.from({ length: 12 }, (_, index) => ({
-        id: `model-${index + 1}`,
-        name: `Model ${index + 1}`,
-        provider: "openai",
-      })),
-    });
-
-    try {
+  it("animates inline pickers, honors reduced motion, and keeps flipped panels visible", () =>
+    suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        models: Array.from({ length: 12 }, (_, index) => ({
+          id: `model-${index + 1}`,
+          name: `Model ${index + 1}`,
+          provider: "openai",
+        })),
+      });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const control = page.locator(".chat-composer-model-control");
-
-      for (const picker of [
-        {
-          popup: ".chat-controls__model-picker > wa-popup",
-          trigger: '[data-chat-model-select="true"]',
-        },
-        {
-          popup: ".chat-controls__effort-picker > wa-popup",
-          trigger: '[data-chat-thinking-select="true"]',
-        },
-      ]) {
-        await page.emulateMedia({ reducedMotion: "no-preference" });
-        await page.setViewportSize({ height: 900, width: 1280 });
-        await control.evaluate((element) => {
+      const placeControl = (top: string) =>
+        control.evaluate((element, y) => {
           Object.assign((element as HTMLElement).style, {
             position: "fixed",
             right: "80px",
-            top: "640px",
+            top: y,
           });
-        });
-        const trigger = control.locator(picker.trigger);
-        const popup = control.locator(picker.popup);
+        }, top);
+      for (const [picker, select] of [
+        ["model", "model"],
+        ["effort", "thinking"],
+      ]) {
+        await page.emulateMedia({ reducedMotion: "no-preference" });
+        await page.setViewportSize({ height: 900, width: 1280 });
+        await placeControl("640px");
+        const trigger = control.locator(`[data-chat-${select}-select="true"]`);
+        const popup = control.locator(`.chat-controls__${picker}-picker > [data-anchored-overlay]`);
+        const panelFits = async (above: boolean) => {
+          const panel = expectDefined(await popup.boundingBox(), "picker bounds");
+          const button = expectDefined(await trigger.boundingBox(), "trigger bounds");
+          return above
+            ? panel.y + panel.height <= button.y
+            : panel.y >= button.y + button.height && panel.y + panel.height <= 320;
+        };
         await trigger.click();
-        await expect.poll(() => popup.getAttribute("data-current-placement")).toMatch(/^top/u);
-
+        await expect.poll(() => panelFits(true)).toBe(true);
         const topMotion = await popup.evaluate((element) => {
-          const surface = element.shadowRoot?.querySelector<HTMLElement>('[part~="popup"]');
-          if (!surface) {
-            return null;
-          }
-          const style = getComputedStyle(surface);
+          const { animationName, height, transformOrigin } = getComputedStyle(element);
           return {
-            animationName: style.animationName,
-            height: surface.offsetHeight,
-            originY: Number.parseFloat(style.transformOrigin.split(" ")[1] ?? ""),
+            animationName,
+            originDelta:
+              Number.parseFloat(transformOrigin.split(" ")[1] ?? "") - Number.parseFloat(height),
           };
         });
-        expect(topMotion?.animationName).toBe("chat-composer-picker-in");
-        expect(topMotion?.originY).toBeCloseTo(topMotion?.height ?? -1, 0);
-
-        await page.emulateMedia({ reducedMotion: "reduce" });
-        expect(
-          await popup.evaluate((element) => {
-            const surface = element.shadowRoot?.querySelector<HTMLElement>('[part~="popup"]');
-            return surface ? getComputedStyle(surface).animationName : null;
-          }),
-        ).toBe("none");
-
-        await page.setViewportSize({ height: 320, width: 1280 });
-        await control.evaluate((element) => {
-          (element as HTMLElement).style.top = "24px";
+        expect(topMotion).toEqual({
+          animationName: "chat-composer-picker-in",
+          originDelta: expect.closeTo(0, 0),
         });
-        await expect.poll(() => popup.getAttribute("data-current-placement")).toMatch(/^bottom/u);
-        expect(
-          await popup.evaluate((element) => {
-            const surface = element.shadowRoot?.querySelector<HTMLElement>('[part~="popup"]');
-            return surface
-              ? Number.parseFloat(getComputedStyle(surface).transformOrigin.split(" ")[1] ?? "")
-              : null;
-          }),
-        ).toBeCloseTo(0, 0);
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await browserExpect(popup).toHaveCSS("animation-name", "none");
+        await page.setViewportSize({ height: 320, width: 1280 });
+        await placeControl("48px"); // Keep the fixture below the pane header.
+        await expect.poll(() => panelFits(false)).toBe(true);
         await trigger.click();
       }
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
+    }));
 });

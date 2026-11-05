@@ -1,19 +1,19 @@
 import os from "node:os";
 import type { ChatType } from "../channels/chat-type.js";
+import type { InternalSessionEntry, SessionDeliveryState } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { prepareActiveNodeContext } from "../infra/active-node-context.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../infra/os-summary.js";
-import { normalizeMessageChannel } from "../utils/message-channel.js";
-import type { ActiveProcessSessionReference } from "./bash-process-references.js";
-import {
-  listChannelSupportedActions,
-  resolveChannelMessageToolHints,
-  resolveChannelReactionGuidance,
-} from "./channel-tools.js";
+import { settleCurrentReadPreparations } from "../shared/current-read-authority.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
+import { normalizeMessageChannel } from "../utils/message-channel-normalize.js";
+import { resolveSessionGitCoauthorPrompt } from "./git-coauthor-prompt.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
-import { collectRuntimeChannelCapabilities } from "./runtime-capabilities.js";
+import { resolveRuntimeChannelPromptContext } from "./runtime-capabilities.js";
 import { detectRuntimeShell } from "./shell-utils.js";
-import { buildSystemPromptParams } from "./system-prompt-params.js";
+import type { SpawnRequesterConversationSource } from "./spawn-requester-origin.js";
+import { buildSystemPromptParams, resolveSystemPromptRepoRoot } from "./system-prompt-params.js";
 
 export async function resolveAgentRuntimePrompt(params: {
   config?: OpenClawConfig;
@@ -21,85 +21,90 @@ export async function resolveAgentRuntimePrompt(params: {
   workspaceDir?: string;
   cwd?: string;
   preparedRepoRoot?: string | null;
+  preparedGitCoauthorPrompt?: string | null;
+  preparedSessionEntry?: InternalSessionEntry;
+  sessionPromptDelivery?: SessionDeliveryState;
   sessionKey?: string;
   sessionId?: string;
   model: string;
   channel?: string;
   accountId?: string | null;
+  requester?: SpawnRequesterConversationSource;
   chatType?: ChatType;
-  currentChannelId?: string | null;
-  currentThreadTs?: string | null;
-  currentMessageId?: string | number | null;
-  senderId?: string | null;
-  senderIsOwner?: boolean | null;
-  activeProcessSessions?: ActiveProcessSessionReference[];
+  requesterProfileId?: string;
+  remoteWorkspace?: boolean;
+  /** Blind spawned child: the rendered prompt omits its model, identity and workspace path. */
+  blind?: boolean;
 }) {
-  const runtimeChannel = normalizeMessageChannel(params.channel);
-  const channelPromptContext = {
+  const delivery = params.sessionPromptDelivery ?? params.preparedSessionEntry?.delivery;
+  const external = delivery?.kind === "external" ? delivery : undefined;
+  // Presentation follows the session; current-turn routing and authority stay separate.
+  const promptChannel = external
+    ? external.context.channel
+    : delivery?.kind === "internal"
+      ? INTERNAL_MESSAGE_CHANNEL
+      : delivery
+        ? undefined
+        : params.channel;
+  const channelPromptContext = resolveRuntimeChannelPromptContext({
     cfg: params.config,
-    channel: runtimeChannel,
-    accountId: params.accountId,
-  };
-  const runtimeCapabilities = collectRuntimeChannelCapabilities(channelPromptContext);
-  const reactionGuidance =
-    runtimeChannel && params.config
-      ? resolveChannelReactionGuidance(channelPromptContext)
-      : undefined;
-  const messageToolHints = runtimeChannel
-    ? resolveChannelMessageToolHints(channelPromptContext)
-    : undefined;
-  const channelActions = runtimeChannel
-    ? listChannelSupportedActions({
-        cfg: params.config,
-        channel: runtimeChannel,
-        chatType: params.chatType,
-        currentChannelId: params.currentChannelId ?? undefined,
-        currentThreadTs: params.currentThreadTs ?? undefined,
-        currentMessageId: params.currentMessageId ?? undefined,
-        accountId: params.accountId ?? undefined,
-        sessionKey: params.sessionKey ?? undefined,
-        sessionId: params.sessionId ?? undefined,
-        agentId: params.agentId ?? undefined,
-        requesterSenderId: params.senderId ?? undefined,
-        senderIsOwner: params.senderIsOwner ?? undefined,
-      })
-    : undefined;
+    channel: promptChannel,
+    accountId: external ? external.context.accountId : params.accountId,
+    requester: external
+      ? { agentTo: external.context.to, agentThreadId: external.context.threadId }
+      : params.requester,
+  });
+  const { runtimeChannel, runtimeCapabilities } = channelPromptContext;
   const defaultModel = resolveDefaultModelForAgent({
     cfg: params.config ?? {},
     agentId: params.agentId,
   });
-  const machineName = await getMachineDisplayName();
+  const [, preparedGitCoauthorPrompt, host] = await settleCurrentReadPreparations([
+    prepareActiveNodeContext(params.requesterProfileId),
+    Object.hasOwn(params, "preparedGitCoauthorPrompt")
+      ? params.preparedGitCoauthorPrompt
+      : resolveSessionGitCoauthorPrompt({
+          config: params.config,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+        }),
+    params.remoteWorkspace ? "" : getMachineDisplayName(),
+  ] as const);
   const systemPromptParams = buildSystemPromptParams({
     config: params.config,
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     cwd: params.cwd,
-    ...(Object.hasOwn(params, "preparedRepoRoot")
-      ? { preparedRepoRoot: params.preparedRepoRoot }
-      : {}),
+    ...(params.remoteWorkspace
+      ? { preparedRepoRoot: null }
+      : Object.hasOwn(params, "preparedRepoRoot")
+        ? { preparedRepoRoot: params.preparedRepoRoot }
+        : { preparedRepoRoot: await resolveSystemPromptRepoRoot(params) }),
+    preparedGitCoauthorPrompt,
+    preparedSessionEntry: params.preparedSessionEntry,
+    requesterProfileId: params.requesterProfileId,
     runtime: {
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
-      host: machineName,
-      os: resolveRuntimeOsLabel(),
-      arch: os.arch(),
-      node: process.version,
+      host,
+      os: params.remoteWorkspace ? "" : resolveRuntimeOsLabel(),
+      arch: params.remoteWorkspace ? "" : os.arch(),
+      node: params.remoteWorkspace ? "" : process.version,
       model: params.model,
       defaultModel: `${defaultModel.provider}/${defaultModel.model}`,
-      shell: detectRuntimeShell(),
+      shell: params.remoteWorkspace ? undefined : detectRuntimeShell(),
       channel: runtimeChannel,
-      chatType: params.chatType,
+      chatType: external ? external.origin.chatType : params.chatType,
       capabilities: runtimeCapabilities,
-      channelActions,
-      activeProcessSessions: params.activeProcessSessions,
+      customInlineButtonHint: channelPromptContext.customInlineButtonHint,
+      blind: params.blind,
     },
   });
 
   return {
     ...systemPromptParams,
-    runtimeChannel,
-    runtimeCapabilities,
-    reactionGuidance,
-    messageToolHints,
+    ...channelPromptContext,
+    runtimeChannel: normalizeMessageChannel(params.channel),
   };
 }

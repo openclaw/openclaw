@@ -1,33 +1,12 @@
-/**
- * Publishes ClickClack's native ephemeral agent.progress signal for one
- * OpenClaw turn. ClickClack renders this as its compact "Agent is
- * responding" status and the detailed progress lines above the composer.
- */
-import { buildChannelProgressDraftLine } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  buildChannelProgressDraftLine,
+  isCompleteAgentPreamble,
+} from "openclaw/plugin-sdk/channel-outbound";
+import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
+import type { ClickClackClient } from "./http-client.js";
 
-export type ClickClackItemEventPayload = {
-  itemId?: string;
-  toolCallId?: string;
-  kind?: string;
-  title?: string;
-  name?: string;
-  phase?: string;
-  status?: string;
-  summary?: string;
-  progressText?: string;
-  meta?: string;
-  commandBearing?: boolean;
-};
-
-type ClickClackProgressClient = {
-  publishEphemeral(params: {
-    workspaceId: string;
-    channelId?: string;
-    conversationId?: string;
-    type: "agent.progress";
-    payload?: Record<string, unknown>;
-  }): Promise<void>;
-};
+export type ClickClackItemEventPayload = Parameters<NonNullable<GetReplyOptions["onItemEvent"]>>[0];
 
 type ClickClackProgressTarget = {
   workspaceId: string;
@@ -51,20 +30,14 @@ function normalizedKind(payload: ClickClackItemEventPayload): string {
 }
 
 function progressText(payload: ClickClackItemEventPayload): string {
+  if (payload.kind !== "preamble" && payload.title) {
+    return payload.title;
+  }
   const line = buildChannelProgressDraftLine({
+    ...payload,
     event: "item",
-    itemId: payload.itemId,
-    toolCallId: payload.toolCallId,
     itemKind: payload.kind,
-    title: payload.title,
-    name: payload.name,
-    phase: payload.phase,
-    status: payload.status,
-    summary: payload.summary,
-    progressText: payload.progressText,
-    meta: payload.meta,
-    commandBearing: payload.commandBearing,
-  })?.text?.trim();
+  })?.text;
   if (line) {
     return line;
   }
@@ -88,27 +61,13 @@ function isFinal(payload: ClickClackItemEventPayload): boolean {
 type AnonymousLine = { id: string; active: boolean };
 
 function createLineIdResolver(): (payload: ClickClackItemEventPayload) => string {
-  const lineIdsByIdentity = new Map<string, string>();
   const anonymousLinesByKind = new Map<string, AnonymousLine[]>();
   let anonymousSequence = 0;
 
   return (payload) => {
-    const identities = [payload.itemId?.replace(/^(tool|command):/, ""), payload.toolCallId]
-      .map((value) => value?.trim())
-      .filter((value): value is string => Boolean(value));
-    const existingId = identities.map((identity) => lineIdsByIdentity.get(identity)).find(Boolean);
-    if (existingId) {
-      for (const identity of identities) {
-        lineIdsByIdentity.set(identity, existingId);
-      }
-      return existingId;
-    }
-    if (identities.length > 0) {
-      const id = `item:${identities[0]}`;
-      for (const identity of identities) {
-        lineIdsByIdentity.set(identity, id);
-      }
-      return id;
+    const identity = payload.itemId?.trim() || payload.toolCallId?.trim();
+    if (identity) {
+      return `item:${identity}`;
     }
 
     const kind = normalizedKind(payload);
@@ -116,26 +75,17 @@ function createLineIdResolver(): (payload: ClickClackItemEventPayload) => string
     const phase = payload.phase?.trim().toLowerCase();
     const existingAnonymous =
       phase === "start" ? undefined : anonymousLines.toReversed().find((line) => line.active);
-    const line =
-      existingAnonymous ??
-      (() => {
-        const created = { id: `item:${kind}:${++anonymousSequence}`, active: true };
-        anonymousLines.push(created);
-        anonymousLinesByKind.set(kind, anonymousLines);
-        return created;
-      })();
+    const line = existingAnonymous ?? { id: `item:${kind}:${++anonymousSequence}`, active: true };
+    if (!existingAnonymous) {
+      anonymousLines.push(line);
+      anonymousLinesByKind.set(kind, anonymousLines);
+    }
     if (isFinal(payload)) {
       line.active = false;
     }
     return line.id;
   };
 }
-
-type ClickClackAgentProgressPublisher = {
-  start(): void;
-  onItemEvent(payload: ClickClackItemEventPayload): false;
-  finalize(): Promise<void>;
-};
 
 type QueuedProgressFrame = {
   lineId?: string;
@@ -146,12 +96,12 @@ const CLICKCLACK_PROGRESS_UPDATE_INTERVAL_MS = 100;
 const CLICKCLACK_PROGRESS_FINALIZE_GRACE_MS = 1_000;
 
 export function createClickClackAgentProgressPublisher(params: {
-  client: ClickClackProgressClient;
+  client: Pick<ClickClackClient, "publishEphemeral">;
   target: ClickClackProgressTarget;
   turnId: string;
   agentLabel?: string;
   onError?: (error: unknown) => void;
-}): ClickClackAgentProgressPublisher {
+}) {
   let sequence = 0;
   const queue: QueuedProgressFrame[] = [];
   const queuedLines = new Map<string, QueuedProgressFrame>();
@@ -167,14 +117,7 @@ export function createClickClackAgentProgressPublisher(params: {
       return drainPromise;
     }
     drainPromise = (async () => {
-      while (queue.length > 0) {
-        const frame = queue.shift();
-        if (!frame) {
-          continue;
-        }
-        if (frame.lineId) {
-          queuedLines.delete(frame.lineId);
-        }
+      for (let frame = queue.shift(); frame; frame = queue.shift()) {
         try {
           await params.client.publishEphemeral({
             ...params.target,
@@ -186,11 +129,7 @@ export function createClickClackAgentProgressPublisher(params: {
             },
           });
         } catch (error) {
-          try {
-            params.onError?.(error);
-          } catch {
-            // Progress reporting must never affect the agent turn.
-          }
+          params.onError?.(error);
         }
       }
     })().finally(() => {
@@ -219,26 +158,6 @@ export function createClickClackAgentProgressPublisher(params: {
     queuedLines.clear();
     const controlFrames = queue.filter((frame) => !frame.lineId);
     queue.splice(0, queue.length, ...controlFrames);
-  };
-
-  const waitForDrainWithinFinalizeGrace = async (pending: Promise<void>): Promise<boolean> => {
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    let drained = false;
-    try {
-      await Promise.race([
-        pending.then(() => {
-          drained = true;
-        }),
-        new Promise<void>((resolve) => {
-          timeout = setTimeout(resolve, CLICKCLACK_PROGRESS_FINALIZE_GRACE_MS);
-        }),
-      ]);
-      return drained;
-    } finally {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-    }
   };
 
   const scheduleLineDrain = (): void => {
@@ -287,28 +206,46 @@ export function createClickClackAgentProgressPublisher(params: {
         },
       });
     },
-    onItemEvent(payload) {
+    onItemEvent(payload: ClickClackItemEventPayload): false {
       if (!started || cleared) {
         return false;
       }
+      if (
+        payload.suppressChannelProgress ||
+        (payload.kind === "preamble" && !isCompleteAgentPreamble(payload))
+      ) {
+        return false;
+      }
       const id = resolveLineId(payload);
-      const final = isFinal(payload);
       const kind = normalizedKind(payload);
+      const hidesLine =
+        payload.hideFromChannelProgress ||
+        (payload.kind === "model-wait" && payload.phase === "end");
       const retractsExistingCommentary =
         kind === "commentary" &&
         seenLines.has(id) &&
         payload.progressText !== undefined &&
         payload.progressText.trim() === "";
-      if (retractsExistingCommentary && queuedLines.get(id)?.payload.op === "append") {
+      if (
+        (hidesLine || retractsExistingCommentary) &&
+        queuedLines.get(id)?.payload.op === "append"
+      ) {
         queuedLines.delete(id);
         seenLines.delete(id);
         return false;
       }
+      if (hidesLine) {
+        if (seenLines.delete(id)) {
+          enqueueLine(id, { op: "update", line: { id, kind, text: "" } });
+        }
+        return false;
+      }
+      const final = isFinal(payload);
       const line: Record<string, unknown> = {
         id,
         kind,
         text: retractsExistingCommentary ? "" : progressText(payload),
-        status: payload.status?.trim() || (final ? "completed" : "running"),
+        status: payload.status?.trim() || (final ? "blocked" : "running"),
       };
       if (payload.name?.trim()) {
         line.tool_name = payload.name.trim();
@@ -331,7 +268,11 @@ export function createClickClackAgentProgressPublisher(params: {
       }
       flushQueuedLines();
       enqueue({ op: "clear" });
-      const drained = await waitForDrainWithinFinalizeGrace(drain());
+      const drained = await raceWithTimeout(
+        drain().then(() => true),
+        CLICKCLACK_PROGRESS_FINALIZE_GRACE_MS,
+        () => false,
+      );
       if (!drained) {
         // Once the durable reply has been sent and the grace period expires,
         // stale detail frames no longer help the user. Keep only control frames

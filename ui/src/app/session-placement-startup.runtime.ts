@@ -1,5 +1,8 @@
+import { sleepWithAbort } from "@openclaw/retry";
 import type { GatewaySessionRow } from "../api/types.ts";
-import type { ChatAttachment, ChatQueueItem } from "../lib/chat/chat-types.ts";
+import { t } from "../i18n/index.ts";
+import { registerNewSessionRuntimeEnglish } from "../i18n/locales/en-new-session-runtime.ts";
+import type { ChatAttachment } from "../lib/chat/chat-types.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import {
   createGatewayConnectionLifecycle,
@@ -11,28 +14,33 @@ import {
   listSessionPlacementRecoveries,
   readSessionPlacementRecovery,
   type SessionPlacementRecovery,
+  type SessionPlacementStartMode,
   type SessionPlacementPendingRecovery,
   type SessionPlacementPausedRecovery,
   pauseSessionPlacementRecovery,
   writeSessionPlacementRecoveryIfAvailable,
 } from "../lib/sessions/session-placement-recovery.ts";
-import {
-  advanceSessionPlacementDraft,
-  type SessionPlacementDraftAdvanceResult,
-} from "../lib/sessions/session-placement-submit.ts";
+import { advanceSessionPlacementDraft } from "../lib/sessions/session-placement-submit.ts";
 import { generateUUID } from "../lib/uuid.ts";
-import { restoreChatApiAttachments } from "../pages/chat/attachment-api.ts";
+import { restoreChatApiAttachments } from "../pages/chat/attachment-restoration.ts";
 import { buildInitialChatSubmission } from "../pages/chat/user-message-content.ts";
+import { buildPlacementStartupInitialTurn } from "./session-placement-initial-turn.ts";
 import {
   capturePlacementStartupConnection,
   type ApplicationPlacementStartupRuntime,
   type ApplicationPlacementStartupDependencies,
+  type ApplicationPlacementStartupStatus,
 } from "./session-placement-startup.ts";
+
+registerNewSessionRuntimeEnglish();
 
 type PlacementStartupPhase = NonNullable<
   ReturnType<ApplicationPlacementStartupRuntime["get"]>
 >["phase"];
-type StartupPlacementPhase = Exclude<PlacementStartupPhase, "pending" | "sending" | "failed">;
+type StartupPlacementPhase = Exclude<
+  PlacementStartupPhase,
+  "pending" | "sending" | "reconnecting" | "cancelled" | "failed"
+>;
 
 const STARTUP_PLACEMENT_STATES: ReadonlySet<string> = new Set<StartupPlacementPhase>([
   "requested",
@@ -56,7 +64,8 @@ type PlacementStartupOwner = Pick<
 type PlacementStartupEntry = {
   work:
     | { kind: "running"; recovery: SessionPlacementPendingRecovery }
-    | { kind: "checking"; recovery: SessionPlacementRecovery }
+    | { kind: "waiting"; recovery: SessionPlacementPendingRecovery }
+    | { kind: "cancelled"; recovery: SessionPlacementRecovery }
     | { kind: "paused"; recovery: SessionPlacementPausedRecovery };
   readonly owner: PlacementStartupOwner;
   readonly attachments: ChatAttachment[];
@@ -64,44 +73,15 @@ type PlacementStartupEntry = {
   readonly createdAt: number;
   readonly scope: GatewayConnectionScope;
   readonly retainsConnection: () => boolean;
+  readonly abort: AbortController;
 };
-
-function initialTurn(entry: PlacementStartupEntry): ChatQueueItem {
-  const recovery = entry.work.recovery;
-  return {
-    id: recovery.messageId,
-    text: recovery.message,
-    ...(recovery.mentions?.length ? { mentions: recovery.mentions } : {}),
-    attachments: entry.attachments,
-    createdAt: entry.createdAt,
-    sessionKey: recovery.sessionKey,
-    agentId: recovery.agentId,
-    sendRunId: recovery.messageId,
-    sendAttempts: 1,
-    sendState:
-      entry.work.kind === "checking"
-        ? "unconfirmed"
-        : recovery.phase === "paused"
-          ? recovery.reason === "unconfirmed"
-            ? "unconfirmed"
-            : "failed"
-          : "sending",
-    ...(recovery.phase === "paused" ? { sendError: recovery.error } : {}),
-  };
-}
 
 export default function createApplicationPlacementStartupRuntime(
   params: ApplicationPlacementStartupDependencies,
+  publish: () => void,
 ): ApplicationPlacementStartupRuntime {
-  const listeners = new Set<() => void>();
   const entries = new Map<string, PlacementStartupEntry>();
   const connection = createGatewayConnectionLifecycle(params.gateway.snapshot);
-
-  const publish = () => {
-    for (const listener of listeners) {
-      listener();
-    }
-  };
 
   const findEntry = (sessionKey: string) => {
     for (const [key, entry] of entries) {
@@ -119,6 +99,7 @@ export default function createApplicationPlacementStartupRuntime(
     const snapshot = params.gateway.snapshot;
     return Boolean(
       entry.retainsConnection() &&
+      !entry.abort.signal.aborted &&
       connection.isCurrent(entry.scope) &&
       snapshot.client?.recoveryScopeReady,
     );
@@ -143,36 +124,10 @@ export default function createApplicationPlacementStartupRuntime(
       return;
     }
     entries.delete(found.key);
+    entry.abort.abort();
     if (notify) {
       publish();
     }
-  };
-
-  const prepareAcceptedMessage = (
-    entry: PlacementStartupEntry,
-    recovery: SessionPlacementRecovery,
-    result: Extract<SessionPlacementDraftAdvanceResult, { status: "started" }>,
-  ) => {
-    params.chatSubmissions.retain(
-      buildInitialChatSubmission(
-        entry.owner.sessionKey,
-        {
-          text: recovery.message,
-          mentions: recovery.mentions,
-          attachments: entry.attachments,
-          createdAt: entry.createdAt,
-        },
-        entry.scope.client,
-        result.messageId,
-      ),
-    );
-  };
-
-  const refreshAfterFailure = (entry: PlacementStartupEntry) => {
-    if (!isCurrent(entry)) {
-      return;
-    }
-    void params.sessions.refresh({ force: true, backgroundHydrate: true }).catch(() => undefined);
   };
 
   const pauseEntry = (
@@ -192,15 +147,20 @@ export default function createApplicationPlacementStartupRuntime(
   const run = (
     entry: PlacementStartupEntry,
     recovery: SessionPlacementRecovery,
-    recovering: boolean,
+    mode: SessionPlacementStartMode,
   ) => {
     let currentRecovery = recovery;
     void advanceSessionPlacementDraft({
       client: entry.scope.client,
+      describe: params.sessions.describe,
       recovery: currentRecovery,
       persistRecovery: entry.persistRecovery,
-      cleanupOnCancellation: () => !entry.persistRecovery && entry.work.kind !== "paused",
-      recovering,
+      cleanupOnCancellation: () =>
+        !entry.persistRecovery &&
+        currentRecovery.phase !== "sending" &&
+        entry.work.kind !== "paused",
+      mode,
+      signal: entry.abort.signal,
       isLifecycleCurrent: () => lifecycleCurrent(entry),
       ownsRecovery: () => ownsRecovery(entry),
       clearRecovery: () =>
@@ -210,13 +170,13 @@ export default function createApplicationPlacementStartupRuntime(
           entry.owner.sessionKey,
           entry.owner.messageId,
         ),
-      setRecoveryPhase: (phase) => {
-        currentRecovery = { ...currentRecovery, phase };
+      setRecoveryPhase: (phase, _durable, sessionId) => {
+        currentRecovery = { ...currentRecovery, phase, sessionId };
         entry.work = { kind: "running", recovery: currentRecovery };
         publish();
       },
     })
-      .then((result) => {
+      .then(async (result) => {
         if (!ownsRecovery(entry) || !entry.retainsConnection()) {
           retireEntry(entry);
           return;
@@ -227,21 +187,48 @@ export default function createApplicationPlacementStartupRuntime(
           handleGatewaySnapshot(params.gateway.snapshot);
           return;
         }
+        if (result.status === "pending") {
+          entry.work = { kind: "waiting", recovery: result.recovery };
+          publish();
+          await sleepWithAbort(result.retryAfterMs, entry.abort.signal);
+          if (isCurrent(entry) && entry.work.kind === "waiting") {
+            entry.work = { kind: "running", recovery: result.recovery };
+            run(entry, result.recovery, "recover");
+          }
+          return;
+        }
         if (result.status === "cancelled" && result.cleanupError) {
           pauseEntry(entry, currentRecovery, result.cleanupError);
           handleGatewaySnapshot(params.gateway.snapshot);
           return;
         }
-        if (!lifecycleCurrent(entry)) {
-          // Interruption retains intent; only confirmed retirement releases admission.
-          if (result.status !== "interrupted") {
-            retireEntry(entry);
+        if (result.status === "cancelled" && !entry.persistRecovery) {
+          entry.work = { kind: "cancelled", recovery: currentRecovery };
+          const cancelled = [...entries.values()].filter((item) => item.work.kind === "cancelled");
+          for (const retired of cancelled.slice(0, -32)) {
+            retireEntry(retired, false);
           }
+          publish();
           return;
         }
-        // Retained custody already owns the visible input; a local handoff would duplicate it.
         if (result.status === "started") {
-          prepareAcceptedMessage(entry, currentRecovery, result);
+          // An ACK owns delivery even if a new hello arrives before this continuation.
+          const submission = buildInitialChatSubmission(
+            entry.owner.sessionKey,
+            {
+              text: currentRecovery.message,
+              mentions: currentRecovery.mentions,
+              attachments: entry.attachments,
+              createdAt: entry.createdAt,
+            },
+            params.gateway.snapshot.client ?? entry.scope.client,
+            result.messageId,
+          );
+          params.chatSubmissions.retain(
+            submission ? { ...submission, sessionId: currentRecovery.sessionId } : null,
+          );
+        } else if (!lifecycleCurrent(entry) && result.status === "interrupted") {
+          return;
         }
         retireEntry(entry);
       })
@@ -250,7 +237,11 @@ export default function createApplicationPlacementStartupRuntime(
           pauseEntry(entry, currentRecovery, formatUiError(error));
         }
       })
-      .finally(() => refreshAfterFailure(entry));
+      .finally(() => {
+        if (isCurrent(entry) && entry.work.kind !== "cancelled") {
+          params.sessions.invalidate();
+        }
+      });
   };
 
   const start = (input: PlacementStartupInput) => {
@@ -261,9 +252,11 @@ export default function createApplicationPlacementStartupRuntime(
     const existing = findEntry(input.recovery.sessionKey)?.entry;
     if (
       existing &&
-      isCurrent(existing) &&
       existing.owner.messageId === input.recovery.messageId &&
-      (existing.work.kind !== "paused" || input.recovery.phase === "paused")
+      existing.retainsConnection() &&
+      (existing.work.kind === "cancelled" ||
+        (isCurrent(existing) &&
+          (existing.work.kind !== "paused" || input.recovery.phase === "paused")))
     ) {
       return;
     }
@@ -285,56 +278,70 @@ export default function createApplicationPlacementStartupRuntime(
         input.recovery.phase === "paused"
           ? { kind: "paused", recovery: input.recovery }
           : {
-              kind: input.recovery.phase === "sending" ? "checking" : "running",
+              kind: "running",
               recovery: input.recovery,
             },
       owner,
       // Status reads must not rescan payloads or mint new attachment identities.
-      attachments: restoreChatApiAttachments(input.recovery.attachments),
+      attachments:
+        input.displayAttachments ?? restoreChatApiAttachments(input.recovery.attachments),
       persistRecovery: input.persistRecovery,
-      createdAt: input.createdAt,
+      createdAt:
+        existing?.owner.messageId === owner.messageId ? existing.createdAt : input.createdAt,
       scope,
       retainsConnection: capturePlacementStartupConnection(params.gateway, owner),
+      abort: new AbortController(),
     };
     entries.set(owner.sessionKey, entry);
     publish();
     if (input.recovery.phase !== "paused") {
-      run(entry, input.recovery, input.recovering);
+      run(entry, input.recovery, input.mode);
     }
   };
+
+  const restartEntry = (
+    entry: PlacementStartupEntry,
+    recovery: SessionPlacementRecovery,
+    mode: SessionPlacementStartMode,
+  ) =>
+    start({ recovery, persistRecovery: entry.persistRecovery, mode, createdAt: entry.createdAt });
 
   const handleGatewaySnapshot = (
     snapshot: ApplicationPlacementStartupDependencies["gateway"]["snapshot"],
   ) => {
     connection.transition(snapshot);
+    for (const entry of entries.values()) {
+      if (!lifecycleCurrent(entry)) {
+        entry.abort.abort();
+      }
+    }
     if (snapshot.phase !== "connected") {
       return;
     }
     if (!snapshot.client?.recoveryScopeReady || !snapshot.client.recoveryScope) {
       return;
     }
-    // Paused memory-only submissions have no storage row to rehydrate. Replace
-    // their lifecycle binding only after the same credential scope is validated.
+    // Replace lifecycle bindings only after the same credential scope is validated.
+    // Attempted input reuses its key; the Gateway owns duplicate admission.
+    // Unsent incognito starts still belong to their interrupted dispatch's cleanup.
     for (const entry of entries.values()) {
       if (
-        entry.work.kind !== "running" &&
+        entry.work.kind !== "cancelled" &&
+        (entry.persistRecovery ||
+          entry.work.recovery.phase === "sending" ||
+          entry.work.kind === "paused") &&
         !lifecycleCurrent(entry) &&
         entry.retainsConnection() &&
         ownsRecovery(entry)
       ) {
-        start({
-          recovery: entry.work.recovery,
-          persistRecovery: entry.persistRecovery,
-          recovering: true,
-          createdAt: entry.createdAt,
-        });
+        restartEntry(entry, entry.work.recovery, "recover");
       }
     }
     for (const recovery of listSessionPlacementRecoveries(
       params.gateway.connection.gatewayUrl,
       snapshot.client.recoveryScope,
     )) {
-      start({ recovery, persistRecovery: true, recovering: true, createdAt: Date.now() });
+      start({ recovery, persistRecovery: true, mode: "recover", createdAt: Date.now() });
     }
   };
 
@@ -342,24 +349,44 @@ export default function createApplicationPlacementStartupRuntime(
     resumeRecovery: () => handleGatewaySnapshot(params.gateway.snapshot),
     hasPendingTurn(sessionKey) {
       const entry = findEntry(sessionKey)?.entry;
-      return Boolean(entry && entry.retainsConnection() && ownsRecovery(entry));
+      return Boolean(
+        entry &&
+        entry.work.kind !== "cancelled" &&
+        entry.retainsConnection() &&
+        ownsRecovery(entry),
+      );
     },
     get(sessionKey) {
       const entry = findEntry(sessionKey)?.entry;
-      if (!entry || !isCurrent(entry)) {
+      if (!entry || !entry.retainsConnection() || !ownsRecovery(entry)) {
         return null;
       }
-      let phase: PlacementStartupPhase =
-        entry.work.kind !== "running"
-          ? "failed"
-          : entry.work.recovery.phase === "sending"
-            ? "sending"
-            : "pending";
+      const cancelled = entry.work.kind === "cancelled";
+      const reconnecting = !cancelled && !lifecycleCurrent(entry);
+      const error = cancelled
+        ? t("newSession.placementCancelled")
+        : entry.work.recovery.phase === "paused"
+          ? entry.work.recovery.error
+          : undefined;
+      let phase: PlacementStartupPhase = reconnecting
+        ? "reconnecting"
+        : cancelled
+          ? "cancelled"
+          : entry.work.kind === "paused"
+            ? "failed"
+            : entry.work.kind === "waiting"
+              ? "reconnecting"
+              : entry.work.recovery.phase === "sending"
+                ? "sending"
+                : "pending";
+      let startStatus: ApplicationPlacementStartupStatus["startStatus"];
       if (phase === "pending") {
         const row = params.sessions.state.result?.sessions.find((candidate: GatewaySessionRow) =>
           areUiSessionKeysEquivalent(candidate.key, entry.owner.sessionKey),
         );
         const placementState = row?.placement?.state;
+        startStatus =
+          row?.placement?.state === "provisioning" ? row.placement.startStatus : undefined;
         if (placementState && isStartupPlacementPhase(placementState)) {
           phase = placementState;
         }
@@ -368,28 +395,41 @@ export default function createApplicationPlacementStartupRuntime(
         sessionKey: entry.owner.sessionKey,
         targetKind: entry.work.recovery.target.kind,
         phase,
+        ...(startStatus ? { startStatus } : {}),
         startedAt: entry.createdAt,
-        initialTurn: initialTurn(entry),
-        ...(entry.work.kind !== "running"
+        initialTurn: buildPlacementStartupInitialTurn({
+          recovery: entry.work.recovery,
+          attachments: entry.attachments,
+          createdAt: entry.createdAt,
+          reconnecting: reconnecting || entry.work.kind === "waiting",
+          error: cancelled ? error : undefined,
+        }),
+        ...(entry.work.kind === "paused" || cancelled
           ? {
-              ...(entry.work.recovery.phase === "paused"
-                ? { error: entry.work.recovery.error }
-                : {}),
-              retryable: true,
-              action:
-                entry.work.kind === "checking" ||
-                (entry.work.recovery.phase === "paused" &&
-                  entry.work.recovery.reason === "unconfirmed")
-                  ? ("check-delivery" as const)
-                  : ("retry" as const),
+              ...(error ? { error } : {}),
+              retryable: !reconnecting && !cancelled,
+              ...(!cancelled ? { action: "retry" as const } : {}),
             }
           : {}),
       };
     },
     start,
+    discard(sessionKey) {
+      const entry = findEntry(sessionKey)?.entry;
+      if (!entry || !entry.retainsConnection() || !ownsRecovery(entry)) {
+        return;
+      }
+      clearSessionPlacementRecovery(
+        entry.owner.gatewayUrl,
+        entry.owner.recoveryScope,
+        entry.owner.sessionKey,
+        entry.owner.messageId,
+      );
+      retireEntry(entry);
+    },
     pause(sessionKey, error) {
       const entry = findEntry(sessionKey)?.entry;
-      if (!entry || !isCurrent(entry)) {
+      if (!entry || entry.work.kind === "cancelled" || !isCurrent(entry)) {
         return;
       }
       const { recovery } = pauseSessionPlacementRecovery(
@@ -400,22 +440,11 @@ export default function createApplicationPlacementStartupRuntime(
       // Replace the owner before Stop leaves the browser; late active dispatch replies lose send authority.
       entry.work = { kind: "paused", recovery };
       retireEntry(entry, false);
-      start({
-        recovery,
-        persistRecovery: entry.persistRecovery,
-        recovering: true,
-        createdAt: entry.createdAt,
-      });
+      restartEntry(entry, recovery, "recover");
     },
     retry(sessionKey) {
       const entry = findEntry(sessionKey)?.entry;
       if (!entry || entry.work.kind !== "paused" || !isCurrent(entry)) {
-        return;
-      }
-      if (entry.work.recovery.reason === "unconfirmed") {
-        entry.work = { kind: "checking", recovery: entry.work.recovery };
-        publish();
-        run(entry, entry.work.recovery, true);
         return;
       }
       const { reason, error: _error, ...submission } = entry.work.recovery;
@@ -433,21 +462,14 @@ export default function createApplicationPlacementStartupRuntime(
         pauseEntry(entry, entry.work.recovery, "placement recovery storage is unavailable");
         return;
       }
-      start({
-        recovery,
-        persistRecovery: entry.persistRecovery,
-        recovering: false,
-        createdAt: entry.createdAt,
-      });
-    },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+      restartEntry(entry, recovery, "retry");
     },
     dispose() {
       connection.dispose();
+      for (const entry of entries.values()) {
+        entry.abort.abort();
+      }
       entries.clear();
-      listeners.clear();
     },
   };
 }

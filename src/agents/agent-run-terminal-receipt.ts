@@ -1,7 +1,6 @@
+import type { ProviderModelRef as AgentRunTerminalModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { redactSensitiveText } from "../logging/redact.js";
-
-type AgentRunTerminalModelRef = { provider: string; model: string };
 
 const AGENT_RUN_ROUTE_CHANGE_MAX_CHARS = 320;
 
@@ -12,6 +11,8 @@ export type AgentRunTerminalReceipt = {
   requested: AgentRunTerminalModelRef;
   effective: AgentRunTerminalModelRef & { responseModel: string };
   successfulToolNames: string[];
+  /** Exact saved assistant occurrence, independent of attempt terminal ownership. */
+  assistantTranscriptIdempotencyKey?: string;
   /** A final reply was delivered to the external source conversation. */
   sourceReplyDelivered?: true;
   rerouted: boolean;

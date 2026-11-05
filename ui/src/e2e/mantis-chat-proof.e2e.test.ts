@@ -1,74 +1,54 @@
 // Control UI Mantis proof covers the focused web chat browser path.
-import { copyFile, mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { BrowserContext, Page } from "playwright";
+import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  pauseVirtualClock,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeMantisWebUiChat =
-  chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+const suite = createControlUiE2eSuite({
+  name: "Mantis Control UI web chat proof",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH to a compatible browser, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
+});
 
-let server: ControlUiE2eServer;
-const contextBrowsers = new WeakMap<BrowserContext, Browser>();
+async function recordingContext(artifactDir: string) {
+  const dir = path.join(artifactDir, "raw-video");
+  await mkdir(dir, { recursive: true });
+  const size = { height: 900, width: 1280 };
+  return suite.newBrowserContext({
+    locale: "en-US",
+    recordVideo: { dir, size },
+    serviceWorkers: "block",
+    viewport: size,
+  });
+}
 
-async function newBrowserContext(options: Parameters<Browser["newContext"]>[0]) {
-  const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  try {
-    const context = await browser.newContext(options);
-    contextBrowsers.set(context, browser);
-    return context;
-  } catch (error) {
-    await browser.close().catch(() => {});
-    throw error;
+async function saveResult(dir: string, details: Record<string, unknown>) {
+  await writeFile(
+    path.join(dir, "web-ui-chat-proof.json"),
+    `${JSON.stringify({ ...details, status: "pass" }, null, 2)}\n`,
+  );
+}
+
+async function saveVideo(page: Page, context: BrowserContext, dir: string) {
+  const video = page.video();
+  await suite.closeBrowserContext(context);
+  if (video) {
+    await video.saveAs(path.join(dir, "web-ui-chat.webm"));
   }
 }
 
-async function closeBrowserContext(context: BrowserContext): Promise<void> {
-  const browser = contextBrowsers.get(context);
-  contextBrowsers.delete(context);
-  await context.close().catch(() => {});
-  await browser?.close().catch(() => {});
-}
-
-describeMantisWebUiChat("Mantis Control UI web chat proof", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(
-        `Playwright Chromium is not installed or cannot start at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH to a compatible browser, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
-      );
-    }
-    server = await startControlUiE2eServer();
-  });
-
-  afterAll(async () => {
-    await server?.close();
-  });
-
+suite.define(() => {
   it("sends a chat message and captures visible browser proof", async () => {
     const artifactDir = createControlUiE2eArtifactDir(
       "mantis-chat-proof",
       process.env.OPENCLAW_MANTIS_WEB_UI_CHAT_OUTPUT_DIR?.trim() || undefined,
     );
-    const rawVideoDir = path.join(artifactDir, "raw-video");
-    await mkdir(rawVideoDir, { recursive: true });
-    const context = await newBrowserContext({
-      locale: "en-US",
-      recordVideo: { dir: rawVideoDir, size: { height: 900, width: 1280 } },
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
+    const context = await recordingContext(artifactDir);
     const page = await context.newPage();
     await page.clock.install();
     const gateway = await installMockGateway(page, {
@@ -95,11 +75,11 @@ describeMantisWebUiChat("Mantis Control UI web chat proof", () => {
     const startedAt = new Date().toISOString();
 
     try {
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}chat`);
       await page.getByText("Mantis web UI proof is ready.").waitFor({ timeout: 10_000 });
       await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
       // The working timer starts at the send click; pause first so the elapsed
-      // reading is exactly the fastForward below, not inflated by real time.
+      // reading is exactly the virtual duration below, not inflated by real time.
       await pauseVirtualClock(page);
       await page.getByRole("button", { name: "Send message" }).click();
 
@@ -108,21 +88,31 @@ describeMantisWebUiChat("Mantis Control UI web chat proof", () => {
         deliver: false,
         message: prompt,
         sessionKey: "agent:main:main",
+        idempotencyKey: expect.any(String),
       });
       const params = sendRequest.params as { idempotencyKey?: string };
-      expect(params.idempotencyKey).toEqual(expect.any(String));
 
       await page.getByText("saved 875.3k tokens", { exact: true }).waitFor();
       await page.locator(".chat-working-indicator").waitFor();
-      const workingLabel = page.locator(".chat-working-indicator__status > .sr-only");
+      const workingLabel = page.locator(".chat-working-indicator__status > span:first-child");
       expect(await workingLabel.textContent()).toBe("Working…");
+      expect(await workingLabel.getAttribute("class")).toContain("sr-only");
       expect(
-        await page.locator(".chat-working-indicator__status > span:not(.sr-only)").count(),
-      ).toBe(0);
-      await page.clock.fastForward(177_000);
+        await page
+          .locator(".chat-working-indicator__status > span:not(.sr-only)")
+          .allTextContents(),
+      ).toEqual([]);
+      await expect.poll(() => gateway.getRequests("connect")).toHaveLength(1);
+      // Keep each elapsed-time/heartbeat tick, without rendering every frame
+      // between the one-second clock readings or suspending pending RPC replies.
+      for (let elapsedMs = 0; elapsedMs < 177_000; elapsedMs += 1_000) {
+        await page.clock.fastForward(1_000);
+      }
       await expect
         .poll(() => page.locator(".chat-working-indicator__elapsed").textContent())
         .toBe("2m 57s");
+      expect(await gateway.getRequests("connect")).toHaveLength(1);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       await writeFile(
         path.join(artifactDir, "web-ui-chat.png"),
         await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
@@ -132,27 +122,14 @@ describeMantisWebUiChat("Mantis Control UI web chat proof", () => {
 
       await gateway.emitChatFinal({ runId: params.idempotencyKey ?? "", text: reply });
       await page.locator(".chat-thread-inner").getByText(reply).waitFor({ timeout: 10_000 });
-      await writeFile(
-        path.join(artifactDir, "web-ui-chat-proof.json"),
-        `${JSON.stringify(
-          {
-            finishedAt: new Date().toISOString(),
-            prompt,
-            reply,
-            startedAt,
-            status: "pass",
-          },
-          null,
-          2,
-        )}\n`,
-      );
+      await saveResult(artifactDir, {
+        finishedAt: new Date().toISOString(),
+        prompt,
+        reply,
+        startedAt,
+      });
     } finally {
-      const video = page.video();
-      await closeBrowserContext(context);
-      const videoPath = await video?.path().catch(() => undefined);
-      if (videoPath) {
-        await copyFile(videoPath, path.join(artifactDir, "web-ui-chat.webm"));
-      }
+      await saveVideo(page, context, artifactDir);
     }
   });
 });

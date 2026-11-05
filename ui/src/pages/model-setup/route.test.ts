@@ -1,8 +1,9 @@
-import { createRouter, type RouteLocation } from "@openclaw/uirouter";
+import { createRouter, type RouteLoaderOptions, type RouteLocation } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { page } from "./route.ts";
 
 const location: RouteLocation = {
@@ -12,6 +13,24 @@ const location: RouteLocation = {
 };
 
 describe("model setup route", () => {
+  it.each([
+    ["?firstRun=1", true],
+    ["?firstRun=explicit", true],
+    ["?firstRun=0&firstRun=explicit", false],
+    ["", false],
+  ])("preserves onboarding but redirects settings link %s to Models", async (search, firstRun) => {
+    const context = { basePath: "/ui" } as ApplicationContext;
+    const target = { ...location, pathname: "/ui/settings/model-setup", search };
+    const options: RouteLoaderOptions = createRouteLoaderOptions(target, search);
+    expect(await page.loader?.(context, options)).toEqual(
+      firstRun
+        ? { firstRun: true }
+        : {
+            type: "redirect",
+            location: { pathname: "/ui/settings/model-providers", search: "?connect=1", hash: "" },
+          },
+    );
+  });
   it("keys loader data by the first-run query", () => {
     const context = {
       agentSelection: { state: { selectedId: "main" } },
@@ -38,7 +57,12 @@ describe("model setup route", () => {
       agentSelection: { state: { selectedId: "main" } },
     } as unknown as ApplicationContext;
     const router = createRouter({ routes: [{ ...page, component: () => null }] });
-    const navigation = router.navigate("model-setup", context);
+    const navigation = router.navigate(
+      "model-setup",
+      context,
+      {},
+      { ...location, search: "?firstRun=1" },
+    );
     try {
       await vi.waitFor(() => expect(router.getState().matches[0]?.status).toBe("success"));
     } finally {

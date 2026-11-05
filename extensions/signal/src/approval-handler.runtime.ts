@@ -1,10 +1,8 @@
-// Signal plugin module implements approval handler behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   buildChannelApprovalExpiredText,
   buildChannelApprovalResolvedText,
-  createChannelApprovalNativeRuntimeAdapter,
-  type PendingApprovalView,
+  createChannelApprovalNativeRuntimeAdapterAsync,
   resolvePreparedApprovalAccountId,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
@@ -12,11 +10,6 @@ import {
   buildApprovalReactionPendingContent,
   type ApprovalReactionPendingContent,
 } from "openclaw/plugin-sdk/approval-reaction-runtime";
-import type {
-  ExecApprovalRequest,
-  PluginApprovalRequest,
-  SystemAgentApprovalRequest,
-} from "openclaw/plugin-sdk/approval-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultSignalAccountId } from "./accounts.js";
@@ -33,14 +26,11 @@ import { sendMessageSignal, sendTypingSignal } from "./send.js";
 
 const log = createSubsystemLogger("signal/approvals");
 
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
-type SignalPendingDelivery = ApprovalReactionPendingContent;
 type PreparedSignalApprovalTarget = {
   to: string;
   accountId: string;
   baseUrl?: string;
   account?: string;
-  accountUuid?: string;
   targetAuthorKeys: readonly string[];
 };
 type PendingSignalApprovalEntry = {
@@ -57,39 +47,20 @@ type SignalFinalPayload = {
   text: string;
 };
 
-type SignalApprovalRuntimeContext = {
-  baseUrl?: string;
-  account?: string;
-  accountUuid?: string;
-};
-
-function readSignalApprovalRuntimeContext(context: unknown): SignalApprovalRuntimeContext {
+function readSignalApprovalRuntimeContext(context: unknown) {
   const value = context as
     | { baseUrl?: unknown; account?: unknown; accountUuid?: unknown }
     | null
     | undefined;
   return {
-    baseUrl:
-      typeof value?.baseUrl === "string" && value.baseUrl.trim() ? value.baseUrl.trim() : undefined,
-    account:
-      typeof value?.account === "string" && value.account.trim() ? value.account.trim() : undefined,
-    accountUuid:
-      typeof value?.accountUuid === "string" && value.accountUuid.trim()
-        ? value.accountUuid.trim()
-        : undefined,
+    baseUrl: normalizeOptionalString(value?.baseUrl),
+    account: normalizeOptionalString(value?.account),
+    accountUuid: normalizeOptionalString(value?.accountUuid),
   };
 }
 
-function buildPendingPayload(params: {
-  request: ApprovalRequest;
-  nowMs: number;
-  view: PendingApprovalView;
-}): SignalPendingDelivery {
-  return buildApprovalReactionPendingContent(params);
-}
-
-export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
-  SignalPendingDelivery,
+export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapterAsync<
+  ApprovalReactionPendingContent,
   PreparedSignalApprovalTarget,
   PendingSignalApprovalEntry,
   true,
@@ -101,8 +72,7 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
     shouldHandle: ({ context }) => Boolean(context),
   },
   presentation: {
-    buildPendingPayload: ({ request, nowMs, view }) =>
-      buildPendingPayload({ request, nowMs, view }),
+    buildPendingPayload: buildApprovalReactionPendingContent,
     buildResolvedResult: ({ request, resolved, view }) => ({
       kind: "update",
       payload: { text: buildChannelApprovalResolvedText({ request, resolved, view }) },
@@ -151,7 +121,6 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         accountId: preparedAccountId,
         ...(runtimeContext.baseUrl ? { baseUrl: runtimeContext.baseUrl } : {}),
         ...(runtimeContext.account ? { account: runtimeContext.account } : {}),
-        ...(runtimeContext.accountUuid ? { accountUuid: runtimeContext.accountUuid } : {}),
         targetAuthorKeys,
       };
       return {
@@ -213,11 +182,11 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
     },
   },
   interactions: {
-    bindPending: ({ entry, request, view, pendingPayload }) => {
+    bindPending: async ({ entry, request, view, pendingPayload }) => {
       if (!entry.reactionsActive) {
         return null;
       }
-      return registerSignalApprovalReactionTarget({
+      return (await registerSignalApprovalReactionTarget({
         accountId: entry.accountId,
         conversationKey: entry.conversationKey,
         messageId: entry.messageId,
@@ -227,33 +196,16 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         targetAuthorKeys: entry.targetAuthorKeys,
         route: {
           deliveryMode: "session",
-          ...(normalizeOptionalString(request.request.agentId)
-            ? { agentId: normalizeOptionalString(request.request.agentId) }
-            : {}),
-          ...(normalizeOptionalString(request.request.sessionKey)
-            ? { sessionKey: normalizeOptionalString(request.request.sessionKey) }
-            : {}),
+          agentId: request.request.agentId ?? undefined,
+          sessionKey: request.request.sessionKey ?? undefined,
         },
-        routeAllowed: true,
         ttlMs: Math.max(1, view.expiresAtMs - Date.now()),
-      })
+      }))
         ? true
         : null;
     },
-    unbindPending: ({ entry }) => {
-      unregisterSignalApprovalReactionTarget({
-        accountId: entry.accountId,
-        conversationKey: entry.conversationKey,
-        messageId: entry.messageId,
-      });
-    },
-    cancelDelivered: ({ entry }) => {
-      unregisterSignalApprovalReactionTarget({
-        accountId: entry.accountId,
-        conversationKey: entry.conversationKey,
-        messageId: entry.messageId,
-      });
-    },
+    unbindPending: ({ entry }) => unregisterSignalApprovalReactionTarget(entry),
+    cancelDelivered: ({ entry }) => unregisterSignalApprovalReactionTarget(entry),
   },
   observe: {
     onDeliveryError: ({ error, request }) => {

@@ -1,4 +1,3 @@
-// Npm Update Scripts script supports OpenClaw repository automation.
 import { posixAgentWorkspaceScript, windowsAgentWorkspaceScript } from "./agent-workspace.ts";
 import { shellQuote } from "./host-command.ts";
 import {
@@ -9,6 +8,7 @@ import {
 import {
   psSingleQuote,
   windowsAgentTurnConfigPatchScript,
+  windowsAgentTurnScript,
   windowsOpenClawResolver,
   windowsScopedEnvFunction,
 } from "./powershell.ts";
@@ -16,7 +16,7 @@ import {
   modelProviderConfigBatchJson,
   resolveParallelsModelTimeoutSeconds,
 } from "./provider-auth.ts";
-import { posixStopGatewayScript } from "./smoke-common.ts";
+import { posixAgentTurnScript, posixStopGatewayScript } from "./smoke-common.ts";
 import type { Platform, ProviderAuth } from "./types.ts";
 
 interface NpmUpdateScriptInput {
@@ -26,7 +26,7 @@ interface NpmUpdateScriptInput {
   updateTarget: string;
 }
 
-const windowsStalePostSwapImportRegex = String.raw`node_modules\\openclaw\\dist\\[^\\]+-[A-Za-z0-9_-]+\.js`;
+const windowsStalePostSwapImportRegex = String.raw`node_modules\\openclaw\\dist\\[^\\]+-[A-Za-z0-9_-]+\.m?js`;
 const startupMigrationRestartPrefix =
   "OpenClaw plugin migration inputs changed during startup convergence;";
 const macosGuestPath =
@@ -98,6 +98,36 @@ function posixPrintLogTailFunction(): string {
 }`;
 }
 
+function posixWaitForGatewayScript(command: string): string {
+  return String.raw`wait_for_gateway() {
+  deadline=$((SECONDS + 240))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if ${command} gateway status --deep --require-rpc --timeout 15000; then
+      return
+    fi
+    if ! kill -0 "$gateway_pid" 2>/dev/null; then
+      if wait "$gateway_pid"; then gateway_exit_status=0; else gateway_exit_status=$?; fi
+      if [ "$gateway_exit_status" -le 128 ] && [ "$gateway_restart_count" -eq 0 ]; then
+        if tail -c +"$((gateway_launch_log_offset + 1))" "$gateway_log" 2>/dev/null | grep -F -- ${shellQuote(startupMigrationRestartPrefix)} >/dev/null; then
+          gateway_restart_count=1
+          echo "gateway exited after startup migration convergence refusal; restarting once"
+          start_openclaw_gateway
+          continue
+        fi
+      fi
+      print_log_tail "$gateway_log" >&2
+      echo "gateway exited before becoming ready after update (exit $gateway_exit_status)" >&2
+      if [ "$gateway_exit_status" -eq 0 ]; then exit 1; fi
+      exit "$gateway_exit_status"
+    fi
+    sleep 2
+  done
+  print_log_tail "$gateway_log" >&2
+  echo "gateway did not become ready after update" >&2
+  exit 1
+}`;
+}
+
 function posixAssertAgentOkScript(
   command: string,
   input: NpmUpdateScriptInput,
@@ -109,41 +139,12 @@ function posixAssertAgentOkScript(
     modelId: input.auth.modelId,
   })}
 ${posixCodexPlatformPackageRepairFunction()}
-agent_ok=false
-for attempt in 1 2; do
-  session_id=${shellQuote(sessionId)}
-  if [ "$attempt" -gt 1 ]; then session_id=${shellQuote(`${sessionId}-retry`)}"-$attempt"; fi
-  rm -f "$HOME/.openclaw/agents/main/sessions/$session_id.jsonl"
-  output_file="$(mktemp)"
-  set +e
-  OPENCLAW_ALLOW_ROOT="\${OPENCLAW_ALLOW_ROOT:-}" with_provider_api_key ${command} agent --local --agent main --session-id "$session_id" --message 'Reply with exact ASCII text OK only.' --thinking off --timeout ${resolveParallelsModelTimeoutSeconds(platform)} --json >"$output_file" 2>&1
-  rc=$?
-  set -e
-  print_log_tail "$output_file"
-  if [ "$rc" -ne 0 ]; then
-    if [ "$attempt" -lt 2 ] && repair_missing_codex_platform_package "$output_file"; then
-      rm -f "$output_file"
-      echo "agent turn attempt $attempt hit a missing Codex platform package; retrying"
-      continue
-    fi
-    rm -f "$output_file"
-    exit "$rc"
-  fi
-  if grep -Eq '"finalAssistant(Raw|Visible)Text"[[:space:]]*:[[:space:]]*"OK"' "$output_file"; then
-    agent_ok=true
-    rm -f "$output_file"
-    break
-  fi
-  rm -f "$output_file"
-  if [ "$attempt" -lt 2 ]; then
-    echo "agent turn attempt $attempt finished without OK response; retrying"
-    sleep 3
-  fi
-done
-if [ "$agent_ok" != true ]; then
-  echo "openclaw agent finished without OK response" >&2
-  exit 1
-fi`;
+${posixAgentTurnScript({
+  command: `OPENCLAW_ALLOW_ROOT="\${OPENCLAW_ALLOW_ROOT:-}" with_provider_api_key ${command} agent --local --agent main --session-id "$session_id" --message 'Reply with exact ASCII text OK only.' --thinking off --timeout ${resolveParallelsModelTimeoutSeconds(platform)} --json`,
+  sessionIdExpression: shellQuote(sessionId),
+  retrySessionIdExpression: `${shellQuote(`${sessionId}-retry`)}"-$attempt"`,
+  printOutput: "print_log_tail",
+})}`;
 }
 
 function windowsUpdateWithScopedEnv(input: NpmUpdateScriptInput): string {
@@ -228,30 +229,42 @@ $sessionPath = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions\\pa
 Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
 ${windowsAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
 Set-Item -Path ('Env:' + ${psSingleQuote(input.auth.apiKeyEnv)}) -Value ${psSingleQuote(input.auth.apiKeyValue)}
-$agentOk = $false
-for ($attempt = 1; $attempt -le 2; $attempt++) {
-  $sessionId = if ($attempt -eq 1) { 'parallels-npm-update-windows' } else { "parallels-npm-update-windows-retry-$attempt" }
-  $sessionsDir = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions'
-  $sessionPath = Join-Path $sessionsDir "$sessionId.jsonl"
-  Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
-  $output = Invoke-OpenClaw agent --local --agent main --session-id $sessionId --model ${psSingleQuote(input.auth.modelId)} --message 'Reply with exact ASCII text OK only.' --thinking off --timeout ${resolveParallelsModelTimeoutSeconds("windows")} --json 2>&1
-  $agentExitCode = $LASTEXITCODE
-  if ($null -ne $output) { $output | ForEach-Object { $_ } }
-  if ($agentExitCode -eq 0 -and ($output | Out-String) -match '"finalAssistant(Raw|Visible)Text":\\s*"OK"') {
-    $agentOk = $true
-    break
-  }
-  if ($agentExitCode -ne 0 -and $attempt -lt 2 -and (Repair-MissingCodexPlatformPackage -Output $output)) {
-    Write-Host "agent turn attempt $attempt hit a missing Codex platform package; retrying"
-    continue
-  }
-  if ($attempt -lt 2) {
-    Write-Host "agent turn attempt $attempt finished without OK response; retrying"
-    Start-Sleep -Seconds 3
-  }
-  if ($agentExitCode -ne 0) { throw "agent failed with exit code $agentExitCode" }
+${windowsAgentTurnScript({
+  command: `  $output = Invoke-OpenClaw agent --local --agent main --session-id $sessionId --model ${psSingleQuote(input.auth.modelId)} --message 'Reply with exact ASCII text OK only.' --thinking off --timeout ${resolveParallelsModelTimeoutSeconds("windows")} --json 2>&1`,
+  sessionId: "parallels-npm-update-windows",
+  retryOnCommandFailure: false,
+})}`;
 }
-if (-not $agentOk) { throw 'openclaw agent finished without OK response' }`;
+
+function posixUpdateAndVerifyScript(
+  input: NpmUpdateScriptInput,
+  platform: "macos" | "linux",
+  command: string,
+  startGateway: string,
+): string {
+  return String.raw`gateway_log=/tmp/openclaw-parallels-${platform}-gateway.log
+rm -f "$gateway_log"
+touch "$gateway_log"
+gateway_pid=
+gateway_launch_log_offset=0
+gateway_restart_count=0
+start_openclaw_gateway() {
+${startGateway}
+}
+${posixWaitForGatewayScript(command)}
+scrub_future_plugin_entries
+stop_openclaw_gateway_processes
+${posixNpmRegistryEnv(input.npmRegistry)}OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 ${command} update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
+${posixVersionCheck(command, input.expectedNeedle)}
+start_openclaw_gateway
+wait_for_gateway
+${posixStopGatewayScript()}
+${command} models set ${shellQuote(input.auth.modelId)}
+${posixModelProviderConfigCommands(command, input.auth.modelId, platform)}
+${command} config set agents.defaults.skipBootstrap true --strict-json
+${command} config set tools.profile minimal
+${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
+${posixAssertAgentOkScript(command, input, platform, `parallels-npm-update-${platform}`)}`;
 }
 
 export function macosUpdateScript(input: NpmUpdateScriptInput): string {
@@ -303,60 +316,17 @@ stop_openclaw_gateway_processes() {
     fi
   fi
 }
-gateway_log=/tmp/openclaw-parallels-macos-gateway.log
-rm -f "$gateway_log"
-touch "$gateway_log"
-gateway_pid=
-gateway_launch_log_offset=0
-gateway_restart_count=0
-start_openclaw_gateway() {
-  stop_openclaw_gateway_processes
+${posixUpdateAndVerifyScript(
+  input,
+  "macos",
+  macosOpenClawCommand,
+  String.raw`  stop_openclaw_gateway_processes
   gateway_launch_log_offset="$(wc -c <"$gateway_log" 2>/dev/null | tr -d '[:space:]' || echo 0)"
   trap '' HUP
   with_provider_api_key /usr/bin/env OPENCLAW_HOME="$HOME" OPENCLAW_STATE_DIR="$HOME/.openclaw" OPENCLAW_CONFIG_PATH="$HOME/.openclaw/openclaw.json" "$OPENCLAW_BIN" gateway run --bind loopback --port 18789 --force >>"$gateway_log" 2>&1 </dev/null &
   gateway_pid=$!
-  sleep 1
-}
-wait_for_gateway() {
-  deadline=$((SECONDS + 240))
-  while [ "$SECONDS" -lt "$deadline" ]; do
-    if "$OPENCLAW_BIN" gateway status --deep --require-rpc --timeout 15000; then
-      return
-    fi
-    if ! kill -0 "$gateway_pid" 2>/dev/null; then
-      if wait "$gateway_pid"; then gateway_exit_status=0; else gateway_exit_status=$?; fi
-      if [ "$gateway_exit_status" -le 128 ] && [ "$gateway_restart_count" -eq 0 ]; then
-        if tail -c +"$((gateway_launch_log_offset + 1))" "$gateway_log" 2>/dev/null | grep -F -- ${shellQuote(startupMigrationRestartPrefix)} >/dev/null; then
-          gateway_restart_count=1
-          echo "gateway exited after startup migration convergence refusal; restarting once"
-          start_openclaw_gateway
-          continue
-        fi
-      fi
-      print_log_tail "$gateway_log" >&2
-      echo "gateway exited before becoming ready after update (exit $gateway_exit_status)" >&2
-      if [ "$gateway_exit_status" -eq 0 ]; then exit 1; fi
-      exit "$gateway_exit_status"
-    fi
-    sleep 2
-  done
-  print_log_tail "$gateway_log" >&2
-  echo "gateway did not become ready after update" >&2
-  exit 1
-}
-scrub_future_plugin_entries
-stop_openclaw_gateway_processes
-${posixNpmRegistryEnv(input.npmRegistry)}OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 "$OPENCLAW_BIN" update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
-${posixVersionCheck(macosOpenClawCommand, input.expectedNeedle)}
-start_openclaw_gateway
-wait_for_gateway
-${posixStopGatewayScript()}
-"$OPENCLAW_BIN" models set ${shellQuote(input.auth.modelId)}
-${posixModelProviderConfigCommands(macosOpenClawCommand, input.auth.modelId, "macos")}
-"$OPENCLAW_BIN" config set agents.defaults.skipBootstrap true --strict-json
-"$OPENCLAW_BIN" config set tools.profile minimal
-${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
-${posixAssertAgentOkScript(macosOpenClawCommand, input, "macos", "parallels-npm-update-macos")}`;
+  sleep 1`,
+)}`;
 }
 
 export function windowsUpdateScript(input: NpmUpdateScriptInput): string {
@@ -466,126 +436,63 @@ stop_openclaw_gateway_processes() {
   OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 OPENCLAW_ALLOW_ROOT=1 openclaw gateway stop || true
   pkill -f 'openclaw.*gateway' >/dev/null 2>&1 || true
 }
-gateway_log=/tmp/openclaw-parallels-linux-gateway.log
-rm -f "$gateway_log"
-touch "$gateway_log"
-gateway_pid=
-gateway_launch_log_offset=0
-gateway_restart_count=0
-start_openclaw_gateway() {
-  pkill -f "openclaw gateway run" >/dev/null 2>&1 || true
+${posixUpdateAndVerifyScript(
+  input,
+  "linux",
+  "openclaw",
+  String.raw`  pkill -f "openclaw gateway run" >/dev/null 2>&1 || true
   gateway_launch_log_offset="$(wc -c <"$gateway_log" 2>/dev/null | tr -d '[:space:]' || echo 0)"
   with_provider_api_key setsid sh -lc ${shellQuote(
     "exec env OPENCLAW_HOME=/root OPENCLAW_STATE_DIR=/root/.openclaw OPENCLAW_CONFIG_PATH=/root/.openclaw/openclaw.json OPENCLAW_DISABLE_BONJOUR=1 OPENCLAW_ALLOW_ROOT=1 openclaw gateway run --bind loopback --port 18789 --force >>/tmp/openclaw-parallels-linux-gateway.log 2>&1",
   )} >/dev/null 2>&1 < /dev/null &
-  gateway_pid=$!
-}
-wait_for_gateway() {
-  deadline=$((SECONDS + 240))
-  while [ "$SECONDS" -lt "$deadline" ]; do
-    if openclaw gateway status --deep --require-rpc --timeout 15000; then
-      return
-    fi
-    if ! kill -0 "$gateway_pid" 2>/dev/null; then
-      if wait "$gateway_pid"; then gateway_exit_status=0; else gateway_exit_status=$?; fi
-      if [ "$gateway_exit_status" -le 128 ] && [ "$gateway_restart_count" -eq 0 ]; then
-        if tail -c +"$((gateway_launch_log_offset + 1))" "$gateway_log" 2>/dev/null | grep -F -- ${shellQuote(startupMigrationRestartPrefix)} >/dev/null; then
-          gateway_restart_count=1
-          echo "gateway exited after startup migration convergence refusal; restarting once"
-          start_openclaw_gateway
-          continue
-        fi
-      fi
-      print_log_tail "$gateway_log" >&2
-      echo "gateway exited before becoming ready after update (exit $gateway_exit_status)" >&2
-      if [ "$gateway_exit_status" -eq 0 ]; then exit 1; fi
-      exit "$gateway_exit_status"
-    fi
-    sleep 2
-  done
-  print_log_tail "$gateway_log" >&2
-  echo "gateway did not become ready after update" >&2
-  exit 1
-}
-scrub_future_plugin_entries
-stop_openclaw_gateway_processes
-${posixNpmRegistryEnv(input.npmRegistry)}OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 openclaw update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
-${posixVersionCheck("openclaw", input.expectedNeedle)}
-start_openclaw_gateway
-wait_for_gateway
-${posixStopGatewayScript()}
-openclaw models set ${shellQuote(input.auth.modelId)}
-${posixModelProviderConfigCommands("openclaw", input.auth.modelId, "linux")}
-openclaw config set agents.defaults.skipBootstrap true --strict-json
-openclaw config set tools.profile minimal
-${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
-${posixAssertAgentOkScript("openclaw", input, "linux", "parallels-npm-update-linux")}`;
+  gateway_pid=$!`,
+)}`;
 }
 
 function posixVersionCheck(command: string, expectedNeedle: string): string {
   const quotedNeedle = shellQuote(expectedNeedle);
-  if (!expectedNeedle) {
-    return `hash -r || true
-version_deadline=$((SECONDS + 60))
-while true; do
-  if version="$(${command} --version 2>&1)"; then
-    version_status=0
-    printf '%s\\n' "$version"
-    break
-  else
-    version_status=$?
-    printf '%s\\n' "$version"
-  fi
-  if [ "$SECONDS" -ge "$version_deadline" ]; then
-    exit "$version_status"
-  fi
-  sleep 2
-done`;
-  }
+  const success = expectedNeedle ? `case "$version" in *${quotedNeedle}*) break ;; esac` : "break";
+  const failure = expectedNeedle
+    ? `if [ "$version_status" -ne 0 ]; then
+      exit "$version_status"
+    fi
+    echo "version mismatch: expected ${expectedNeedle}" >&2
+    exit 1`
+    : 'exit "$version_status"';
   return `hash -r || true
 version_deadline=$((SECONDS + 60))
 while true; do
   if version="$(${command} --version 2>&1)"; then
     version_status=0
     printf '%s\\n' "$version"
-    case "$version" in *${quotedNeedle}*) break ;; esac
+    ${success}
   else
     version_status=$?
     printf '%s\\n' "$version"
   fi
   if [ "$SECONDS" -ge "$version_deadline" ]; then
-    if [ "$version_status" -ne 0 ]; then
-      exit "$version_status"
-    fi
-    echo "version mismatch: expected ${expectedNeedle}" >&2
-    exit 1
+    ${failure}
   fi
   sleep 2
 done`;
 }
 
 function windowsVersionCheck(expectedNeedle: string): string {
-  if (!expectedNeedle) {
-    return `$versionDeadline = (Get-Date).AddSeconds(60)
-while ($true) {
-  $version = Invoke-OpenClaw --version
-  $version
-  if ($LASTEXITCODE -eq 0) { break }
-  if ((Get-Date) -ge $versionDeadline) { throw "openclaw --version failed with exit code $LASTEXITCODE" }
-  Start-Sleep -Seconds 2
-}`;
-  }
-  const expectedPattern = psSingleQuote(`*${expectedNeedle}*`);
-  const mismatch = psSingleQuote(`version mismatch: expected ${expectedNeedle}`);
+  const expectedCondition = expectedNeedle
+    ? ` -and (($version | Out-String) -like ${psSingleQuote(`*${expectedNeedle}*`)})`
+    : "";
+  const failure = expectedNeedle
+    ? `{
+    if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with exit code $LASTEXITCODE" }
+    throw ${psSingleQuote(`version mismatch: expected ${expectedNeedle}`)}
+  }`
+    : '{ throw "openclaw --version failed with exit code $LASTEXITCODE" }';
   return `$versionDeadline = (Get-Date).AddSeconds(60)
 while ($true) {
   $version = Invoke-OpenClaw --version
   $version
-  if ($LASTEXITCODE -eq 0 -and (($version | Out-String) -like ${expectedPattern})) { break }
-  if ((Get-Date) -ge $versionDeadline) {
-    if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with exit code $LASTEXITCODE" }
-    throw ${mismatch}
-  }
+  if ($LASTEXITCODE -eq 0${expectedCondition}) { break }
+  if ((Get-Date) -ge $versionDeadline) ${failure}
   Start-Sleep -Seconds 2
 }`;
 }

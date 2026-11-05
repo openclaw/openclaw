@@ -1,18 +1,82 @@
-/** Tracks plugin API lifecycle callbacks registered during runtime activation. */
-import type { OpenClawPluginApi } from "./types.js";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { proxyPluginApiMethods, type OpenClawPluginApiWithoutFacades } from "./api-facades.js";
+import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
+import { getPluginValueInstance } from "./plugin-instance-scope.js";
+import type { OpenClawPluginApi, OpenClawPluginDefinition } from "./types.js";
 
-const LATE_CALLABLE_PLUGIN_API_METHODS: ReadonlySet<string> = new Set<keyof OpenClawPluginApi>([
+const LATE_CALLABLE_PLUGIN_API_METHODS: ReadonlySet<string> = new Set<
+  keyof OpenClawPluginApiWithoutFacades
+>([
   "clearRunContext",
   "emitAgentEvent",
   "enqueueNextTurnInjection",
+  "steerActiveRun",
   "getRunContext",
+  // Registered callbacks still need these pure utilities after register() returns.
+  "inlineView",
+  "resolvePath",
   "sendSessionAttachment",
   "scheduleSessionTurn",
   "setRunContext",
   "unscheduleSessionTurnsByTag",
 ]);
 
-/** True when a plugin API method remains callable after registration. */
-export function isLateCallablePluginApiMethod(methodName: string): boolean {
-  return LATE_CALLABLE_PLUGIN_API_METHODS.has(methodName);
+function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
+  api: OpenClawPluginApi;
+  close: () => void;
+} {
+  let closed = false;
+  const owner = getPluginValueInstance(api);
+  const guardedApi = proxyPluginApiMethods(api, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+      if (typeof value !== "function") {
+        return value;
+      }
+      if (typeof prop === "string" && LATE_CALLABLE_PLUGIN_API_METHODS.has(prop)) {
+        return (...args: unknown[]) => Reflect.apply(value, target, args);
+      }
+      return (...args: unknown[]) => {
+        // A retained module may now hold another generation's API.
+        const caller = pluginInstanceInvocation.getStore()?.instance;
+        if (caller && owner && caller !== owner) {
+          throw new Error(
+            `Plugin ${owner.pluginId} API registration does not belong to the calling workspace generation`,
+          );
+        }
+        if (closed) {
+          return undefined;
+        }
+        return Reflect.apply(value, target, args);
+      };
+    },
+  });
+  return {
+    api: guardedApi,
+    close: () => {
+      closed = true;
+    },
+  };
+}
+
+export function runPluginRegistration(
+  register: NonNullable<OpenClawPluginDefinition["register"]>,
+  api: Parameters<NonNullable<OpenClawPluginDefinition["register"]>>[0],
+  asyncResult: "reject" | "ignore" = "reject",
+  trackPending?: (pending: Promise<unknown>) => void,
+): void {
+  const guarded = createGuardedPluginRegistrationApi(api);
+  try {
+    const result = register(guarded.api);
+    if (isPromiseLike(result)) {
+      const pending = Promise.resolve(result);
+      trackPending?.(pending);
+      void pending.catch(() => {});
+      if (asyncResult === "reject") {
+        throw new Error("plugin register must be synchronous");
+      }
+    }
+  } finally {
+    guarded.close();
+  }
 }

@@ -1,4 +1,3 @@
-// Discord plugin module implements retry after behavior.
 import { asFiniteNumberInRange, parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 
 const RETRY_AFTER_BODY_SECONDS_RE = /^(?:\d+\.?\d*|\.\d+)$/;

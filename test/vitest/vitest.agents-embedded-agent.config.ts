@@ -8,7 +8,6 @@ export function createAgentsEmbeddedVitestConfig(env?: Record<string, string | u
     dir: owner.dir,
     env,
     exclude: owner.exclude,
-    fileParallelism: false,
     // Cold shared harness imports exceed the generic limit on 2-vCPU hosted release runners.
     hookTimeout: 600_000,
     name: owner.name,

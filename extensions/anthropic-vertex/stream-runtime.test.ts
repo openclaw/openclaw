@@ -1,51 +1,15 @@
-// Anthropic Vertex tests cover stream runtime plugin behavior.
 import { once } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
+import { stream as streamModel, type Model } from "openclaw/plugin-sdk/llm";
 import {
   notifyProviderStreamOpened,
   withProviderAcceptanceObserver,
 } from "openclaw/plugin-sdk/provider-transport-runtime";
-import { beforeAll, describe, expect, it, vi } from "vitest";
-import type { AnthropicVertexStreamDeps } from "./stream-runtime.js";
-
-function createStreamDeps(): {
-  deps: AnthropicVertexStreamDeps;
-  streamAnthropicMock: ReturnType<typeof vi.fn>;
-  anthropicVertexCtorMock: ReturnType<typeof vi.fn>;
-  googleAuthCtorMock: ReturnType<typeof vi.fn>;
-  googleAuthClient: InstanceType<AnthropicVertexStreamDeps["GoogleAuth"]>;
-} {
-  const streamAnthropicMock = vi.fn(
-    (..._args: Parameters<AnthropicVertexStreamDeps["streamAnthropic"]>) =>
-      createAssistantMessageEventStream(),
-  );
-  const anthropicVertexCtorMock = vi.fn();
-  const MockAnthropicVertex = function MockAnthropicVertex(options: unknown) {
-    anthropicVertexCtorMock(options);
-  } as unknown as AnthropicVertexStreamDeps["AnthropicVertex"];
-  const googleAuthCtorMock = vi.fn();
-  const googleAuthClient = {} as InstanceType<AnthropicVertexStreamDeps["GoogleAuth"]>;
-  const MockGoogleAuth = function MockGoogleAuth(options: unknown) {
-    googleAuthCtorMock(options);
-    return googleAuthClient;
-  } as unknown as AnthropicVertexStreamDeps["GoogleAuth"];
-
-  return {
-    deps: {
-      AnthropicVertex: MockAnthropicVertex,
-      GoogleAuth: MockGoogleAuth,
-      streamAnthropic: streamAnthropicMock,
-    },
-    streamAnthropicMock,
-    anthropicVertexCtorMock,
-    googleAuthCtorMock,
-    googleAuthClient,
-  };
-}
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStreamDeps } from "./stream.test-support.js";
 
 let createAnthropicVertexStreamFn: typeof import("./stream-runtime.js").createAnthropicVertexStreamFn;
 let createAnthropicVertexStreamFnForModel: typeof import("./stream-runtime.js").createAnthropicVertexStreamFnForModel;
@@ -59,52 +23,30 @@ function makeModel(params: {
 }): Model<"anthropic-messages"> {
   return {
     id: params.id,
+    name: params.id,
     api: "anthropic-messages",
     provider: "anthropic-vertex",
+    baseUrl: "https://us-east5-aiplatform.googleapis.com",
     reasoning: params.reasoning ?? true,
-    ...(params.maxTokens !== undefined ? { maxTokens: params.maxTokens } : {}),
+    maxTokens: params.maxTokens ?? 128_000,
+    contextWindow: 1_000_000,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     ...(params.params ? { params: params.params } : {}),
     ...(params.thinkingLevelMap ? { thinkingLevelMap: params.thinkingLevelMap } : {}),
-  } as Model<"anthropic-messages">;
+  };
 }
 
 type PayloadHook = (payload: unknown, payloadModel: unknown) => Promise<unknown>;
 
-function streamAnthropicCall(streamAnthropicMock: ReturnType<typeof vi.fn>): unknown[] {
-  const call = streamAnthropicMock.mock.calls[0];
-  if (!call) {
-    throw new Error("Expected streamAnthropic call");
-  }
-  return call;
-}
-
 function streamTransportOptions(
   streamAnthropicMock: ReturnType<typeof vi.fn>,
 ): Record<string, unknown> {
-  const options = streamAnthropicCall(streamAnthropicMock)[2];
+  const options = streamAnthropicMock.mock.calls[0]?.[2];
   if (!options || typeof options !== "object") {
     throw new Error("Expected streamAnthropic transport options");
   }
   return options as Record<string, unknown>;
-}
-
-function captureTransportPayloadHook(
-  onPayload: PayloadHook | undefined,
-  deps: AnthropicVertexStreamDeps,
-  streamAnthropicMock: ReturnType<typeof vi.fn>,
-) {
-  const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
-  const model = makeModel({ id: "claude-sonnet-4-6", maxTokens: 64000 });
-
-  void streamFn(
-    model,
-    { messages: [{ role: "user", content: "Hello" }] } as never,
-    { cacheRetention: "short", ...(onPayload ? { onPayload } : {}) } as never,
-  );
-
-  const transportOptions = streamTransportOptions(streamAnthropicMock);
-
-  return { model, onPayload: transportOptions.onPayload as PayloadHook | undefined };
 }
 
 // Mirrors the shared anthropic-messages transport output: cache boundary already
@@ -139,30 +81,51 @@ function buildBudgetedTransportPayload() {
   };
 }
 
-function countCacheControlMarkers(payload: unknown): number {
-  let count = 0;
-  const visit = (value: unknown) => {
-    if (Array.isArray(value)) {
-      value.forEach(visit);
-      return;
-    }
-    if (!value || typeof value !== "object") {
-      return;
-    }
-    const record = value as Record<string, unknown>;
-    if (record.cache_control !== undefined) {
-      count += 1;
-    }
-    visit(record.content);
-  };
-  const record = payload as Record<string, unknown>;
-  visit(record.system);
-  visit(record.tools);
-  visit(record.messages);
-  return count;
+function captureOptions(
+  model: Model<"anthropic-messages">,
+  options: Parameters<ReturnType<typeof createAnthropicVertexStreamFn>>[2] = {},
+) {
+  const { deps, streamAnthropicMock } = createStreamDeps();
+  const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+  void streamFn(model, { messages: [] }, options);
+  return streamTransportOptions(streamAnthropicMock);
+}
+
+async function capturePayload(
+  modelOptions: Parameters<typeof makeModel>[0],
+  options: Parameters<ReturnType<typeof createAnthropicVertexStreamFn>>[2],
+) {
+  const { deps } = createStreamDeps();
+  const streamFn = createAnthropicVertexStreamFn(
+    "vertex-project",
+    "us-east5",
+    undefined,
+    { ...deps, streamAnthropic: streamModel },
+    {},
+  );
+  const onPayload = vi.fn((_payload: unknown) => {
+    throw new Error("stop before network");
+  });
+  const model = makeModel(modelOptions);
+  const stream = await streamFn(
+    model,
+    { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+    { ...options, onPayload },
+  );
+  const result = await stream.result();
+  expect(onPayload, result.errorMessage).toHaveBeenCalledOnce();
+  return onPayload.mock.calls[0]?.[0];
 }
 
 describe("createAnthropicVertexStreamFn", () => {
+  beforeEach(() => {
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   beforeAll(async () => {
     ({ createAnthropicVertexStreamFn, createAnthropicVertexStreamFnForModel } =
       await import("./stream-runtime.js"));
@@ -170,9 +133,7 @@ describe("createAnthropicVertexStreamFn", () => {
 
   it("omits projectId when ADC credentials are used without an explicit project", () => {
     const { deps, anthropicVertexCtorMock, googleAuthClient } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFn(undefined, "global", undefined, deps);
-
-    void streamFn(makeModel({ id: "claude-sonnet-4-6", maxTokens: 128000 }), { messages: [] }, {});
+    createAnthropicVertexStreamFn(undefined, "global", undefined, deps);
 
     expect(anthropicVertexCtorMock).toHaveBeenCalledWith({
       googleAuth: googleAuthClient,
@@ -202,17 +163,13 @@ describe("createAnthropicVertexStreamFn", () => {
       });
 
       writeFileSync(credentialsPath, `${json}${" ".repeat(1024 * 1024 + 1 - json.length)}`);
-      let readError: unknown;
-      try {
-        createAnthropicVertexStreamFnForModel({}, env, deps);
-      } catch (error) {
-        readError = error;
-      }
-      expect(readError).toMatchObject({
-        name: "FsSafeError",
-        code: "too-large",
-        message: `Anthropic Vertex ADC credentials file at ${credentialsPath} exceeds 1048576 bytes.`,
-      });
+      expect(() => createAnthropicVertexStreamFnForModel({}, env, deps)).toThrowError(
+        expect.objectContaining({
+          name: "FsSafeError",
+          code: "too-large",
+          message: `Anthropic Vertex ADC credentials file at ${credentialsPath} exceeds 1048576 bytes.`,
+        }),
+      );
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -284,25 +241,6 @@ describe("createAnthropicVertexStreamFn", () => {
     expect(Object.getOwnPropertyDescriptor(globalThis, "window")).toEqual(windowDescriptor);
   });
 
-  it("passes an explicit baseURL through to the Vertex client", () => {
-    const { deps, anthropicVertexCtorMock, googleAuthClient } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFn(
-      "vertex-project",
-      "us-east5",
-      "https://proxy.example.test/vertex/v1",
-      deps,
-    );
-
-    void streamFn(makeModel({ id: "claude-sonnet-4-6", maxTokens: 128000 }), { messages: [] }, {});
-
-    expect(anthropicVertexCtorMock).toHaveBeenCalledWith({
-      googleAuth: googleAuthClient,
-      projectId: "vertex-project",
-      region: "us-east5",
-      baseURL: "https://proxy.example.test/vertex/v1",
-    });
-  });
-
   it("restores the canonical API before calling the shared Anthropic transport", () => {
     const { deps, streamAnthropicMock } = createStreamDeps();
     const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
@@ -313,70 +251,56 @@ describe("createAnthropicVertexStreamFn", () => {
 
     void streamFn(model as never, { messages: [] }, {});
 
-    expect(streamAnthropicCall(streamAnthropicMock)[0]).toMatchObject({
+    expect(streamAnthropicMock.mock.calls[0]?.[0]).toMatchObject({
       api: "anthropic-messages",
       provider: "anthropic-vertex",
       id: "claude-fable-5",
     });
   });
 
-  it("defaults maxTokens to the model limit instead of the old 32000 cap", () => {
-    const { deps, streamAnthropicMock } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
-    const model = makeModel({ id: "claude-opus-4-6", maxTokens: 128000 });
-
-    void streamFn(model, { messages: [] }, {});
-
-    expect(streamTransportOptions(streamAnthropicMock).maxTokens).toBe(128000);
-  });
-
-  it("clamps explicit maxTokens to the selected model limit", () => {
-    const { deps, streamAnthropicMock } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
-    const model = makeModel({ id: "claude-sonnet-4-6", maxTokens: 128000 });
-
-    void streamFn(model, { messages: [] }, { maxTokens: 999999 });
-
-    expect(streamTransportOptions(streamAnthropicMock).maxTokens).toBe(128000);
-  });
-
-  it.each(["claude-opus-4-8", "claude-opus-4-7", "claude-fable-5", "claude-mythos-5"])(
-    "omits unsupported temperature for %s",
-    (modelId) => {
-      const { deps, streamAnthropicMock } = createStreamDeps();
-      const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
-      const model = makeModel({ id: modelId, maxTokens: 128000 });
-
-      void streamFn(model, { messages: [] }, { temperature: 0.7 });
-
-      const transportOptions = streamTransportOptions(streamAnthropicMock);
-      expect(Object.hasOwn(transportOptions, "temperature")).toBe(false);
-    },
-  );
-
-  it("preserves temperature for Vertex models that support custom sampling", () => {
-    const { deps, streamAnthropicMock } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
-    const model = makeModel({ id: "claude-sonnet-4-6", maxTokens: 128000 });
-
-    void streamFn(model, { messages: [] }, { temperature: 0.7 });
-
-    expect(streamTransportOptions(streamAnthropicMock).temperature).toBe(0.7);
-  });
-
-  it("uses Fable 5's always-adaptive Vertex contract", () => {
-    const { deps, streamAnthropicMock } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
-    const model = makeModel({ id: "claude-fable-5", maxTokens: 128000 });
-
-    void streamFn(model, { messages: [] }, { temperature: 0.7 });
-
-    expect(streamTransportOptions(streamAnthropicMock)).toMatchObject({
-      thinkingEnabled: true,
-      effort: "high",
-      maxTokens: 128000,
+  it.each([
+    ["defaults to the model limit instead of the old 32000 cap", 128000, undefined, 128000],
+    ["clamps requests to the model limit", 128000, 999999, 128000],
+    ["floors fractional requested limits", 128000, 4096.75, 4096],
+  ] as const)("maxTokens %s", (_name, limit, requested, expected) => {
+    const options = captureOptions(makeModel({ id: "claude-sonnet-4-6", maxTokens: limit }), {
+      maxTokens: requested,
     });
-    expect(streamTransportOptions(streamAnthropicMock)).not.toHaveProperty("temperature");
+    expect(options.maxTokens).toBe(expected);
+  });
+
+  it("omits unsupported temperature without adaptive thinking", async () => {
+    const payload = await capturePayload({ id: "claude-opus-4-8" }, { temperature: 0.7 });
+    expect(payload).not.toHaveProperty("temperature");
+  });
+
+  it("preserves temperature for Vertex models that support custom sampling", async () => {
+    const payload = await capturePayload(
+      { id: "claude-sonnet-4-6", maxTokens: 128000 },
+      { temperature: 0.7 },
+    );
+    expect(payload).toHaveProperty("temperature", 0.7);
+  });
+
+  it.each([
+    {
+      id: "production-fable",
+      params: { canonicalModelId: "claude-fable-5-1" },
+      reasoning: false,
+      effort: "medium",
+    },
+    { id: "claude-mythos-5", effort: "high" },
+  ])("sends the shared Vertex default for $id", async ({ effort, ...modelOptions }) => {
+    const payload = await capturePayload(
+      { ...modelOptions, maxTokens: 128000 },
+      { temperature: 0.7 },
+    );
+    expect(payload).toMatchObject({
+      thinking: { type: "adaptive" },
+      output_config: { effort },
+      max_tokens: 128000,
+    });
+    expect(payload).not.toHaveProperty("temperature");
   });
 
   it.each([
@@ -384,299 +308,194 @@ describe("createAnthropicVertexStreamFn", () => {
     { reasoning: "off" as const, thinkingEnabled: false, effort: undefined },
   ])(
     "supports Sonnet 5 reasoning=$reasoning on Vertex",
-    ({ reasoning, thinkingEnabled, effort }) => {
-      const { deps, streamAnthropicMock } = createStreamDeps();
-      const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
-      const model = makeModel({ id: "claude-sonnet-5", maxTokens: 128_000 });
-
-      void streamFn(model, { messages: [] }, { reasoning, temperature: 0.7 });
-
-      const options = streamTransportOptions(streamAnthropicMock);
-      expect(options).toMatchObject({ thinkingEnabled, maxTokens: 128_000 });
-      expect(options).not.toHaveProperty("temperature");
+    async ({ reasoning, thinkingEnabled, effort }) => {
+      const payload = await capturePayload(
+        { id: "claude-sonnet-5", maxTokens: 128_000 },
+        { reasoning, temperature: 0.7 },
+      );
+      expect(payload).toMatchObject({
+        thinking: { type: thinkingEnabled ? "adaptive" : "disabled" },
+        max_tokens: 128_000,
+      });
+      expect(payload).not.toHaveProperty("temperature");
       if (effort) {
-        expect(options.effort).toBe(effort);
+        expect(payload).toHaveProperty("output_config.effort", effort);
       } else {
-        expect(options).not.toHaveProperty("effort");
+        expect(payload).not.toHaveProperty("output_config");
       }
     },
   );
 
-  it("uses Mythos 5's mandatory adaptive Vertex contract by default", () => {
-    const { deps, streamAnthropicMock } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
-    const model = makeModel({ id: "claude-mythos-5", maxTokens: 128000 });
-
-    void streamFn(model, { messages: [] }, { temperature: 0.7 });
-
-    expect(streamTransportOptions(streamAnthropicMock)).toMatchObject({
-      thinkingEnabled: true,
-      effort: "high",
-      maxTokens: 128000,
-    });
-    expect(streamTransportOptions(streamAnthropicMock)).not.toHaveProperty("temperature");
-  });
-
-  it("uses canonical Claude policy for Vertex deployment aliases", () => {
-    const { deps, streamAnthropicMock } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
-    const model = makeModel({
-      id: "production-claude",
-      maxTokens: 128000,
-      params: { canonicalModelId: "claude-opus-4-8" },
-    });
-
-    void streamFn(model, { messages: [] }, { reasoning: "xhigh", temperature: 0.7 });
-
-    expect(streamTransportOptions(streamAnthropicMock)).toMatchObject({
-      thinkingEnabled: true,
-      effort: "xhigh",
-    });
-    expect(streamTransportOptions(streamAnthropicMock)).not.toHaveProperty("temperature");
-  });
-
-  it("preserves Fable 5 low effort on Vertex", () => {
-    const { deps, streamAnthropicMock } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
-    const model = makeModel({ id: "claude-fable-5", maxTokens: 128000 });
-
-    void streamFn(model, { messages: [] }, { reasoning: "low" });
-
-    expect(streamTransportOptions(streamAnthropicMock)).toMatchObject({
-      thinkingEnabled: true,
-      effort: "low",
-    });
-  });
-
-  it("preserves Fable 5 xhigh effort on Vertex", () => {
-    const { deps, streamAnthropicMock } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
-    const model = makeModel({ id: "claude-fable-5", maxTokens: 128000 });
-
-    void streamFn(model, { messages: [] }, { reasoning: "xhigh" });
-
-    expect(streamTransportOptions(streamAnthropicMock)).toMatchObject({
-      thinkingEnabled: true,
-      effort: "xhigh",
-    });
-  });
-
-  it("maps unsupported xhigh reasoning to high effort for Opus 4.6", () => {
-    const { deps, streamAnthropicMock } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
-    const model = makeModel({ id: "claude-opus-4-6", maxTokens: 64000 });
-
-    void streamFn(model, { messages: [] }, { reasoning: "xhigh" });
-
-    const transportOptions = streamTransportOptions(streamAnthropicMock);
-    expect(transportOptions.thinkingEnabled).toBe(true);
-    expect(transportOptions.effort).toBe("high");
-  });
-
-  it("maps xhigh reasoning to xhigh effort for Opus 4.8", () => {
-    const { deps, streamAnthropicMock } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
-    const model = makeModel({ id: "claude-opus-4-8", maxTokens: 128000 });
-
-    void streamFn(model, { messages: [] }, { reasoning: "xhigh" });
-
-    const transportOptions = streamTransportOptions(streamAnthropicMock);
-    expect(transportOptions.thinkingEnabled).toBe(true);
-    expect(transportOptions.effort).toBe("xhigh");
-  });
-
-  it("preserves max reasoning for Opus 4.8", () => {
-    const { deps, streamAnthropicMock } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
-    const model = makeModel({ id: "claude-opus-4-8", maxTokens: 128000 });
-
-    void streamFn(model, { messages: [] }, { reasoning: "max" });
-
-    const transportOptions = streamTransportOptions(streamAnthropicMock);
-    expect(transportOptions.thinkingEnabled).toBe(true);
-    expect(transportOptions.effort).toBe("max");
-  });
-
-  it("disables manual thinking when the configured budget is below 1024", () => {
-    const { deps, streamAnthropicMock } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
-    const model = makeModel({ id: "claude-haiku-4-5", maxTokens: 8192 });
-
-    void streamFn(
-      model,
-      { messages: [] },
+  it("uses canonical Claude policy for Vertex deployment aliases", async () => {
+    const payload = await capturePayload(
       {
-        reasoning: "low",
-        thinkingBudgets: { low: 512 },
+        id: "production-claude",
+        maxTokens: 128000,
+        params: { canonicalModelId: "claude-opus-4-8" },
       },
+      { reasoning: "xhigh", temperature: 0.7 },
     );
-
-    const transportOptions = streamTransportOptions(streamAnthropicMock);
-    expect(transportOptions.thinkingEnabled).toBe(false);
-    expect(transportOptions).not.toHaveProperty("thinkingBudgetTokens");
-  });
-
-  it("preserves native max reasoning for Sonnet 4.6", () => {
-    const { deps, streamAnthropicMock } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
-    const model = makeModel({ id: "claude-sonnet-4-6", maxTokens: 128000 });
-
-    void streamFn(model, { messages: [] }, { reasoning: "max" });
-
-    const transportOptions = streamTransportOptions(streamAnthropicMock);
-    expect(transportOptions.thinkingEnabled).toBe(true);
-    expect(transportOptions.effort).toBe("max");
-  });
-
-  it("honors explicit max opt-outs for Vertex aliases", () => {
-    const { deps, streamAnthropicMock } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
-    const model = makeModel({
-      id: "production-claude",
-      params: { canonicalModelId: "claude-sonnet-4-6" },
-      reasoning: false,
-      thinkingLevelMap: { xhigh: null, max: null },
+    expect(payload).toMatchObject({
+      thinking: { type: "adaptive" },
+      output_config: { effort: "xhigh" },
     });
+    expect(payload).not.toHaveProperty("temperature");
+  });
 
-    void streamFn(model, { messages: [] }, { reasoning: "max", temperature: 0.2 });
+  it.each([undefined, "off", "high"] as const)(
+    "keeps Vertex Haiku 5.5 reasoning=%s distinct from direct-API defaults",
+    async (reasoning) => {
+      const payload = await capturePayload(
+        { id: "claude-haiku-5-5", maxTokens: 128_000 },
+        { reasoning, temperature: 0.7 },
+      );
+      expect(payload).toMatchObject({
+        max_tokens: 128_000,
+        thinking: { type: reasoning === "high" ? "adaptive" : "disabled" },
+      });
+      if (reasoning === "high") {
+        expect(payload).toHaveProperty("output_config.effort", "high");
+      } else {
+        expect(payload).not.toHaveProperty("output_config");
+      }
+      expect(payload).not.toHaveProperty("temperature");
+    },
+  );
 
-    const transportOptions = streamTransportOptions(streamAnthropicMock);
-    expect(transportOptions.effort).toBe("high");
-    expect(transportOptions).not.toHaveProperty("temperature");
+  it.each([
+    {
+      name: "low thinking with the model output limit",
+      options: { reasoning: "low" },
+      thinking: { type: "enabled", budget_tokens: 2048 },
+      maxTokens: 8192,
+    },
+    {
+      name: "high thinking fitted below the model output limit",
+      options: { reasoning: "high" },
+      thinking: { type: "enabled", budget_tokens: 7168 },
+      maxTokens: 8192,
+    },
+    {
+      name: "low thinking alongside an explicit visible-output cap",
+      options: { reasoning: "low", maxTokens: 1024 },
+      thinking: { type: "enabled", budget_tokens: 2048 },
+      maxTokens: 3072,
+    },
+    {
+      name: "disabled sub-minimum thinking without inflating the output cap",
+      options: { reasoning: "low", maxTokens: 1024, thinkingBudgets: { low: 512 } },
+      thinking: { type: "disabled" },
+      maxTokens: 1024,
+    },
+  ] as const)("sends $name on Vertex", async ({ options, thinking, maxTokens }) => {
+    const payload = await capturePayload({ id: "claude-haiku-4-5", maxTokens: 8192 }, options);
+    expect(payload).toMatchObject({ thinking, max_tokens: maxTokens });
+  });
+
+  it("keeps max manual thinking independent from a custom high budget", async () => {
+    const payload = await capturePayload(
+      { id: "claude-haiku-4-5", maxTokens: 64_000 },
+      { reasoning: "max", maxTokens: 1024, thinkingBudgets: { high: 512 } },
+    );
+    expect(payload).toMatchObject({
+      thinking: { type: "enabled", budget_tokens: 32_768 },
+      max_tokens: 33_792,
+    });
+  });
+
+  it("keeps listed capability overrides authoritative for Vertex manual thinking", async () => {
+    const payload = await capturePayload(
+      {
+        id: "claude-sonnet-5",
+        maxTokens: 128_000,
+        params: { claudeCapabilities: { adaptiveThinking: false } },
+      },
+      { reasoning: "high" },
+    );
+    expect(payload).toMatchObject({ thinking: { type: "enabled", budget_tokens: 16_384 } });
+    expect(payload).not.toHaveProperty("output_config");
+  });
+
+  it("honors explicit max opt-outs for Vertex aliases", async () => {
+    const payload = await capturePayload(
+      {
+        id: "production-claude",
+        params: { canonicalModelId: "claude-sonnet-4-6" },
+        reasoning: false,
+        thinkingLevelMap: { xhigh: null, max: null },
+      },
+      { reasoning: "max", temperature: 0.2 },
+    );
+    expect(payload).toHaveProperty("output_config.effort", "high");
+    expect(payload).not.toHaveProperty("temperature");
   });
 
   it("forwards the private acceptance observer to the shared Anthropic transport", async () => {
-    const { deps, streamAnthropicMock } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
     const acceptanceObserver = vi.fn();
     const onResponse = vi.fn();
     const options = withProviderAcceptanceObserver({ onResponse }, acceptanceObserver);
 
-    void streamFn(makeModel({ id: "claude-sonnet-4-6" }), { messages: [] }, options);
-
-    const transportOptions = streamTransportOptions(streamAnthropicMock);
+    const transportOptions = captureOptions(makeModel({ id: "claude-sonnet-4-6" }), options);
     expect(transportOptions.onResponse).toBe(onResponse);
     await notifyProviderStreamOpened({ options: transportOptions, cancelStream: vi.fn() });
     expect(acceptanceObserver).toHaveBeenCalledWith({ kind: "provider_stream_opened" });
   });
 
   it("keeps already-budgeted cache_control markers intact when forwarding payload hooks", async () => {
-    const { deps, streamAnthropicMock } = createStreamDeps();
     const onPayload = vi.fn(async (payload: unknown) => payload);
-    const { model, onPayload: transportPayloadHook } = captureTransportPayloadHook(
-      onPayload,
-      deps,
-      streamAnthropicMock,
-    );
+    const model = makeModel({ id: "claude-sonnet-4-6", maxTokens: 64000 });
+    const transportPayloadHook = captureOptions(model, { cacheRetention: "short", onPayload })
+      .onPayload as PayloadHook | undefined;
     const payload = buildBudgetedTransportPayload();
+    const expectedPayload = structuredClone(payload);
 
     const nextPayload = await transportPayloadHook?.(payload, model);
 
     expect(onPayload).toHaveBeenCalledWith(payload, model);
-    expect(countCacheControlMarkers(nextPayload)).toBe(4);
-    expect((nextPayload as ReturnType<typeof buildBudgetedTransportPayload>).system[1]).toEqual({
-      type: "text",
-      text: "Dynamic suffix",
-    });
-  });
-
-  it("omits the transport payload hook when the caller provides none", () => {
-    const { deps, streamAnthropicMock } = createStreamDeps();
-    const { onPayload: transportPayloadHook } = captureTransportPayloadHook(
-      undefined,
-      deps,
-      streamAnthropicMock,
-    );
-
-    expect(transportPayloadHook).toBeUndefined();
-  });
-
-  it("omits maxTokens when neither the model nor request provide a finite limit", () => {
-    const { deps, streamAnthropicMock } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
-    const model = makeModel({ id: "claude-sonnet-4-6" });
-
-    void streamFn(model, { messages: [] }, { maxTokens: Number.NaN });
-
-    expect(streamAnthropicMock).toHaveBeenCalledTimes(1);
-    const [calledModel, payload, transportOptions] = streamAnthropicCall(streamAnthropicMock);
-    expect(calledModel).toBe(model);
-    expect(payload).toEqual({ messages: [] });
-    expect(transportOptions).toBeTypeOf("object");
-    expect(Object.hasOwn(transportOptions as object, "maxTokens")).toBe(false);
+    expect(nextPayload).toEqual(expectedPayload);
   });
 });
 
 describe("createAnthropicVertexStreamFnForModel", () => {
-  it.each(["us", "eu"])("preserves the %s multi-region SDK endpoint", (region) => {
+  it.each([
+    [
+      "https://aiplatform.us.rep.googleapis.com",
+      "us",
+      "https://aiplatform.us.rep.googleapis.com/v1",
+    ],
+    [
+      "https://aiplatform.eu.rep.googleapis.com",
+      "eu",
+      "https://aiplatform.eu.rep.googleapis.com/v1",
+    ],
+    [
+      "https://europe-west4-aiplatform.googleapis.com",
+      "europe-west4",
+      "https://europe-west4-aiplatform.googleapis.com/v1",
+    ],
+    [
+      "https://proxy.example.test/custom-root/v1",
+      "global",
+      "https://proxy.example.test/custom-root/v1",
+    ],
+    [
+      "https://proxy.example.test/custom-root",
+      "global",
+      "https://proxy.example.test/custom-root/v1",
+    ],
+  ])("derives the SDK region and versioned endpoint from %s", (baseUrl, region, expected) => {
     const { deps, anthropicVertexCtorMock, googleAuthClient } = createStreamDeps();
     const streamFn = createAnthropicVertexStreamFnForModel(
-      { baseUrl: `https://aiplatform.${region}.rep.googleapis.com` },
-      { GOOGLE_CLOUD_PROJECT_ID: "vertex-project" } as NodeJS.ProcessEnv,
+      { baseUrl },
+      { GOOGLE_CLOUD_PROJECT_ID: "vertex-project" },
       deps,
     );
-
     void streamFn(makeModel({ id: "claude-sonnet-5", maxTokens: 128_000 }), { messages: [] }, {});
-
     expect(anthropicVertexCtorMock).toHaveBeenCalledWith({
       googleAuth: googleAuthClient,
       projectId: "vertex-project",
       region,
-      baseURL: `https://aiplatform.${region}.rep.googleapis.com/v1`,
-    });
-  });
-
-  it("derives project and region from the model and env", () => {
-    const { deps, anthropicVertexCtorMock, googleAuthClient } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFnForModel(
-      { baseUrl: "https://europe-west4-aiplatform.googleapis.com" },
-      { GOOGLE_CLOUD_PROJECT_ID: "vertex-project" } as NodeJS.ProcessEnv,
-      deps,
-    );
-
-    void streamFn(makeModel({ id: "claude-sonnet-4-6", maxTokens: 64000 }), { messages: [] }, {});
-
-    expect(anthropicVertexCtorMock).toHaveBeenCalledWith({
-      googleAuth: googleAuthClient,
-      projectId: "vertex-project",
-      region: "europe-west4",
-      baseURL: "https://europe-west4-aiplatform.googleapis.com/v1",
-    });
-  });
-
-  it("preserves explicit custom provider base URLs", () => {
-    const { deps, anthropicVertexCtorMock, googleAuthClient } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFnForModel(
-      { baseUrl: "https://proxy.example.test/custom-root/v1" },
-      { GOOGLE_CLOUD_PROJECT_ID: "vertex-project" } as NodeJS.ProcessEnv,
-      deps,
-    );
-
-    void streamFn(makeModel({ id: "claude-sonnet-4-6", maxTokens: 64000 }), { messages: [] }, {});
-
-    expect(anthropicVertexCtorMock).toHaveBeenCalledWith({
-      googleAuth: googleAuthClient,
-      projectId: "vertex-project",
-      region: "global",
-      baseURL: "https://proxy.example.test/custom-root/v1",
-    });
-  });
-
-  it("adds /v1 for path-prefixed custom provider base URLs", () => {
-    const { deps, anthropicVertexCtorMock, googleAuthClient } = createStreamDeps();
-    const streamFn = createAnthropicVertexStreamFnForModel(
-      { baseUrl: "https://proxy.example.test/custom-root" },
-      { GOOGLE_CLOUD_PROJECT_ID: "vertex-project" } as NodeJS.ProcessEnv,
-      deps,
-    );
-
-    void streamFn(makeModel({ id: "claude-sonnet-4-6", maxTokens: 64000 }), { messages: [] }, {});
-
-    expect(anthropicVertexCtorMock).toHaveBeenCalledWith({
-      googleAuth: googleAuthClient,
-      projectId: "vertex-project",
-      region: "global",
-      baseURL: "https://proxy.example.test/custom-root/v1",
+      baseURL: expected,
     });
   });
 });

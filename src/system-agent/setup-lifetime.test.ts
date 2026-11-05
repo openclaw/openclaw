@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withTestTimeout,
+} from "../../test/helpers/promise.js";
 import {
   prepareSystemAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
@@ -16,8 +20,14 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { executeSystemAgentOperation } from "./operations-execute.js";
 import type { SystemAgentOverview } from "./overview.js";
+import { verifySetupInferenceConfig } from "./setup-inference.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
-import { installSystemAgentPluginMetadataTestSnapshot } from "./system-agent.test-helpers.js";
+import { createSystemAgentPluginMetadataTestSnapshot } from "./system-agent.test-helpers.js";
+
+vi.mock("./setup-inference.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./setup-inference.js")>()),
+  verifySetupInferenceConfig: vi.fn(),
+}));
 
 const preparation = vi.hoisted(() => ({
   gateway: undefined as (() => Promise<void>) | undefined,
@@ -53,8 +63,7 @@ afterEach(() => {
   resetAgentRunRegistryForTest();
 });
 
-// The approval queue has its own tests; exercise its synchronous admission contract through
-// the real setup dispatcher and disk owners, substituting only inference and paused reads.
+// Keep the dispatcher and disk owners real; only inference and preparation reads are substituted.
 it.each([
   { phase: "config", loss: "close" },
   { phase: "config", loss: "replace" },
@@ -77,7 +86,6 @@ it.each([
   const entered = createDeferred();
   const resume = createDeferred();
   let paused = false;
-  let metadata: ReturnType<typeof installSystemAgentPluginMetadataTestSnapshot> | undefined;
   let completion: Promise<unknown> | undefined;
   const { runtime, lines } = createSystemAgentTestRuntime();
   const workspace = state.workspaceDir;
@@ -92,12 +100,7 @@ it.each([
       },
       ...(phase === "first-agent" ? {} : { entries: { main: { workspace } } }),
     },
-    gateway: {
-      mode: "local",
-      bind: "loopback",
-      tailscale: { mode: "off" },
-      auth: { mode: "token", token: "synthetic-setup-token" },
-    },
+    gateway: { mode: "local", auth: { token: "synthetic-setup-token" } },
   };
   const pause = async () => {
     if (paused) {
@@ -110,7 +113,7 @@ it.each([
   };
   try {
     await state.writeConfig(config);
-    metadata = installSystemAgentPluginMetadataTestSnapshot(
+    const metadata = createSystemAgentPluginMetadataTestSnapshot(
       (await readConfigFileSnapshot()).config,
     );
     const beforeRaw = await fs.readFile(state.configPath, "utf8");
@@ -137,8 +140,7 @@ it.each([
       });
     }
     if (phase === "exec-approval") {
-      // Resolve the real mutation export after the awaited import, revoking its caller
-      // before invocation. The real synchronous SQLite updater must never be entered.
+      // Revoke after import but before invoking the real synchronous SQLite updater.
       preparation.execImport = () => {
         beforePersistentApply();
         admission.close();
@@ -146,27 +148,28 @@ it.each([
         entered.resolve();
       };
     }
-    completion = executeSystemAgentOperation({ kind: "setup", workspace }, runtime, {
-      approved: true,
-      ...(loss === "direct" ? {} : { beforePersistentApply }),
-      deps: {
-        setupSurface: "gateway",
-        loadOverview: async () => ({ defaultModel: model }) as SystemAgentOverview,
-        verifyInferenceConfig: async () => ({ ok: true, modelRef: model, latencyMs: 1 }),
-      },
-    }).then(
-      (result) => ({ result }),
-      (error: unknown) => ({ error }),
-    );
-    await withTestTimeout(
-      Promise.race([
-        entered.promise,
-        completion.then((result) => {
-          if (!paused) {
-            throw new Error(`setup ended before pause: ${JSON.stringify(result)}`);
-          }
+    vi.mocked(verifySetupInferenceConfig).mockResolvedValue({
+      ok: true,
+      modelRef: model,
+      latencyMs: 1,
+    });
+    completion = metadata
+      .run(() =>
+        executeSystemAgentOperation({ kind: "setup", workspace }, runtime, {
+          approved: true,
+          ...(loss === "direct" ? {} : { beforePersistentApply }),
+          deps: {
+            setupSurface: "gateway",
+            loadOverview: async () => ({ defaultModel: model }) as SystemAgentOverview,
+          },
         }),
-      ]),
+      )
+      .then(
+        (result) => ({ result }),
+        (error: unknown) => ({ error }),
+      );
+    await withTestTimeout(
+      awaitGateBeforeSettlement(entered.promise, completion, "setup ended before pause"),
       10_000,
       "setup did not reach preparation pause",
     );
@@ -228,7 +231,6 @@ it.each([
     await completion;
     admission.close();
     replacement?.close();
-    metadata?.restore();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     await state.cleanup();

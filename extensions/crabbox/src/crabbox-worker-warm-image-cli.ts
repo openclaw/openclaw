@@ -1,7 +1,11 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   crabboxWarmImageRecoveryHint,
-  isCrabboxWarmImageCapturePaused,
+  CRABBOX_WARM_IMAGE_WAIT_HINT,
+} from "./crabbox-worker-warm-image-records.js";
+import {
+  type CrabboxState,
+  crabboxCaptureUnsupportedSentence,
   listCrabboxLegacyWarmLeases,
   listCrabboxWarmImages,
   recoverCrabboxWarmImageCapture,
@@ -9,7 +13,7 @@ import {
 
 type CliProgram = Parameters<Parameters<OpenClawPluginApi["registerCli"]>[0]>[0]["program"];
 
-export function registerCrabboxWarmImageCommands(program: CliProgram): void {
+export function registerCrabboxWarmImageCommands(program: CliProgram, state: CrabboxState): void {
   program
     .command("crabbox")
     .description("Manage Crabbox warm images")
@@ -25,20 +29,25 @@ export function registerCrabboxWarmImageCommands(program: CliProgram): void {
       "Confirm owning processes and recovered workers are stopped and provider artifacts are reconciled",
     )
     .action(
-      (options: { json?: boolean; recover?: string; acknowledgeProviderCleanup?: boolean }) => {
+      async (options: {
+        json?: boolean;
+        recover?: string;
+        acknowledgeProviderCleanup?: boolean;
+      }) => {
         if (options.acknowledgeProviderCleanup && !options.recover) {
           throw new Error(
             "--acknowledge-provider-cleanup requires --recover <selector> from warm-images inspection.",
           );
         }
         if (options.recover) {
-          recoverCrabboxWarmImageCapture(
+          await recoverCrabboxWarmImageCapture(
+            state,
             options.recover,
             options.acknowledgeProviderCleanup === true,
           );
         }
-        const images = listCrabboxWarmImages();
-        const legacyLeases = listCrabboxLegacyWarmLeases();
+        const images = await listCrabboxWarmImages(state);
+        const legacyLeases = await listCrabboxLegacyWarmLeases(state);
         const nextSteps =
           "Restart the Gateway after manual reconciliation; the next eligible worker can capture again.";
         if (options.json) {
@@ -49,7 +58,7 @@ export function registerCrabboxWarmImageCommands(program: CliProgram): void {
         }
         const lines = options.recover
           ? [
-              "Selected recovery record cleared; retained images and other allocation choices are preserved. No provider commands were run.",
+              "Selected recovery record and capture-source allocation cleared; retained images and other allocation choices are preserved. No provider commands were run.",
               nextSteps,
             ]
           : [];
@@ -66,16 +75,30 @@ export function registerCrabboxWarmImageCommands(program: CliProgram): void {
           lines.push(
             `${image.profileKey}: ${image.checkpointId ?? "no checkpoint"} (${image.state})`,
           );
+          if (image.captureUnsupported) {
+            lines.push(
+              `  Capture unsupported: ${crabboxCaptureUnsupportedSentence(image.captureUnsupported.message)} Workers use an existing compatible snapshot when one is available and otherwise provision cold; capture attempts are skipped until warmImages.refreshAfter has elapsed since the refusal. Set settings.warmImage: false on the profile to stop capture attempts.`,
+            );
+          }
           if (image.capture) {
-            const paused = isCrabboxWarmImageCapturePaused(image.capture);
-            lines.push(`  Capture ${paused ? "paused" : "in progress"}: ${image.capture.selector}`);
-            if (paused) {
-              lines.push(`  ${crabboxWarmImageRecoveryHint(image.capture.selector)}`);
+            const uncertain = image.capture.phase === "uncertain";
+            const label = uncertain
+              ? "paused"
+              : image.capture.stale
+                ? "still pending"
+                : "in progress";
+            lines.push(`  Capture ${label}: ${image.capture.selector}`);
+            if (uncertain) {
+              lines.push(
+                `  ${crabboxWarmImageRecoveryHint(image.capture.selector, image.capture.checkpointIds)}`,
+              );
+            } else if (image.capture.stale) {
+              lines.push(`  ${CRABBOX_WARM_IMAGE_WAIT_HINT}`);
             }
           }
           if (image.retirement) {
             lines.push(
-              `  Checkpoint deletion pending: ${image.retirement.checkpointId}; retried during the next warm-image capture or worker teardown.`,
+              `  Checkpoint deletion pending: ${image.retirement.checkpointId}; retried during periodic maintenance or the next warm-image capture or worker teardown.`,
             );
           }
         }

@@ -1,5 +1,4 @@
 // Channel config example tests validate channel configuration snippets in docs.
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
@@ -8,67 +7,23 @@ import { OpenClawSchema } from "../config/zod-schema.js";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles } from "../test-utils/repo-files.js";
 
-const CHANNEL_DOCS_DIR = path.join(process.cwd(), "docs", "channels");
-
 function lineNumberAt(source: string, index: number): number {
   return source.slice(0, index).split("\n").length;
 }
 
 function listChannelDocFiles(): string[] {
-  const externalFiles = listExternalChannelDocFiles();
-  if (externalFiles) {
-    return externalFiles;
-  }
-  return fs
-    .readdirSync(CHANNEL_DOCS_DIR)
-    .filter((entry) => entry.endsWith(".md"))
-    .map((fileName) => path.join(CHANNEL_DOCS_DIR, fileName))
-    .toSorted();
-}
-
-function listExternalChannelDocFiles(): string[] | null {
-  return listGitChannelDocFiles() ?? listFindChannelDocFiles();
-}
-
-function listGitChannelDocFiles(): string[] | null {
-  const files = listGitTrackedFiles({ pathspecs: "docs/channels/*.md" });
-  if (!files) {
-    return null;
-  }
-  return files.map((filePath) => path.join(process.cwd(), filePath)).toSorted();
-}
-
-function listFindChannelDocFiles(): string[] | null {
-  const result = spawnSync(
-    "find",
-    [CHANNEL_DOCS_DIR, "-maxdepth", "1", "-type", "f", "-name", "*.md"],
-    {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-      stdio: ["ignore", "pipe", "ignore"],
-    },
+  const files = expectNoReaddirSyncDuring(() =>
+    listGitTrackedFiles({ pathspecs: "docs/channels/*.md" }),
   );
-  if (result.status !== 0) {
-    return null;
+  if (!files) {
+    throw new Error("Could not list tracked channel docs");
   }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .toSorted();
+  expect(files.length).toBeGreaterThan(0);
+  expect(files.every((filePath) => filePath.endsWith(".md"))).toBe(true);
+  return files.map((filePath) => path.join(process.cwd(), filePath));
 }
 
 describe("channel docs config examples", () => {
-  it("lists channel docs without scanning the docs directory in-process", () => {
-    expectNoReaddirSyncDuring(() => {
-      const files = listChannelDocFiles();
-
-      expect(files.length).toBeGreaterThan(0);
-      expect(files.every((filePath) => filePath.endsWith(".md"))).toBe(true);
-    });
-  });
-
   it("keeps channel docs JSON fences parseable", () => {
     const failures: string[] = [];
     for (const docPath of listChannelDocFiles()) {

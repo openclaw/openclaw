@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { TranscriptDisplayPosition } from "../chat/transcript-display-position.js";
-import { readNestedToolActivity, type NestedToolActivity } from "./nested-tool-activity.js";
+import type { NestedToolActivity } from "./nested-tool-activity.js";
 
 export type TranscriptDisplayActivity = Pick<
   NestedToolActivity["details"],
@@ -10,20 +10,6 @@ export type TranscriptDisplayActivity = Pick<
 /** Keep source namespaces and rewrite generations separate without exposing storage paths. */
 export function createTranscriptDisplaySource(parts: readonly string[]): string {
   return createHash("sha256").update(JSON.stringify(parts)).digest("base64url");
-}
-
-export function createTranscriptDisplayPosition(
-  source: string,
-  rawSeq: number,
-  message: unknown,
-  entrySeq: (id: string) => number | undefined,
-): TranscriptDisplayPosition {
-  return createTranscriptDisplayPositionFromActivity(
-    source,
-    rawSeq,
-    readNestedToolActivity(message)?.details,
-    entrySeq,
-  );
 }
 
 /** Archive indexes retain validated placement facts without retaining tool input/output. */

@@ -1,4 +1,3 @@
-// Raft channel configuration schema.
 import {
   buildChannelConfigSchema,
   buildMultiAccountChannelSchema,

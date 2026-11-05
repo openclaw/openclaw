@@ -1,14 +1,10 @@
-// Matrix plugin module implements recent invite behavior.
 import type { MatrixRoomConfig } from "../../types.js";
 import type { MatrixRoomInfo } from "./room-info.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
 
 export function shouldPromoteRecentInviteRoom(params: {
   roomId: string;
-  roomInfo: Pick<
-    MatrixRoomInfo,
-    "name" | "canonicalAlias" | "altAliases" | "nameResolved" | "aliasesResolved"
-  >;
+  roomInfo: MatrixRoomInfo;
   rooms?: Record<string, MatrixRoomConfig>;
 }): boolean {
   if (!params.roomInfo.nameResolved || !params.roomInfo.aliasesResolved) {

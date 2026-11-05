@@ -2,18 +2,12 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import { vi } from "vitest";
 
-export function createFeishuClientMockModule(): {
-  createFeishuWSClient: () => { start: () => void; close: () => void };
-  createEventDispatcher: () => { register: () => void };
-} {
-  return {
-    createFeishuWSClient: vi.fn(() => ({ start: vi.fn(), close: vi.fn() })),
-    createEventDispatcher: vi.fn(() => ({ register: vi.fn() })),
-  };
-}
+export const createFeishuTestIngressQueue: PluginRuntime["state"]["openChannelIngressQueue"] = (
+  options,
+) => createChannelIngressQueueForTests({ ...options, channelId: "feishu" });
 
 export function createFeishuRuntimeMockModule(): {
   getFeishuRuntime: () => PluginRuntime;
@@ -28,13 +22,13 @@ export function createFeishuRuntimeMockModule(): {
       openChannelIngressQueue: (
         options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
       ) =>
-        createChannelIngressQueueForTests({
+        createFeishuTestIngressQueue({
           ...options,
-          channelId: "feishu",
           stateDir: options?.stateDir ?? stateDir,
         }),
     },
     channel: {
+      inbound: createPluginRuntimeMock().channel.inbound,
       debounce: {
         resolveInboundDebounceMs: () => 0,
         createInboundDebouncer: () => ({

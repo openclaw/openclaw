@@ -9,7 +9,7 @@ import { x as extractTar } from "tar";
 import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
-} from "../../../../extensions/qa-lab/api.js";
+} from "../../../../extensions/qa-lab/test-api.js";
 import { ProtocolSchemas } from "../../../../packages/gateway-protocol/src/schema/protocol-schemas.js";
 import { coerceErrorMessage as formatErrorMessage } from "../../../../scripts/lib/error-format.mts";
 import {
@@ -18,7 +18,7 @@ import {
   type ProtocolSchemaDocument,
   REQUIRED_PROTOCOL_DEFINITIONS,
 } from "../../../../scripts/lib/protocol-schema-document.mts";
-import { listCoreGatewayMethodMetadata } from "../../../../src/gateway/methods/core-descriptors.js";
+import { listCoreGatewayMethodMetadata } from "../../../../src/gateway/methods/core-method-policy.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/gateway-protocol-artifacts.ts";
@@ -104,7 +104,7 @@ await fs.writeFile(
 `;
 }
 
-export function buildSwiftProtocolCompatibilityHarness() {
+function buildSwiftProtocolCompatibilityHarness() {
   return `import Foundation
 
 enum GatewayProtocolArtifactError: Error {
@@ -426,6 +426,12 @@ async function compileAndRunSwiftProtocolModels(params: {
   const executablePath = path.join(swiftArtifactDir, "gateway-protocol-artifact-harness");
   await fs.rm(swiftArtifactDir, { force: true, recursive: true });
   await fs.mkdir(swiftArtifactDir, { recursive: true });
+  await runCommand({
+    args: ["scripts/prepare-native-protocol.mjs", "--language", "swift", "--out", swiftArtifactDir],
+    appendLog: params.appendLog,
+    command: "node",
+    cwd: params.repoRoot,
+  });
   const anyCodableSource = await fs.readFile(
     path.join(params.repoRoot, "apps/shared/OpenClawKit/Sources/OpenClawProtocol/AnyCodable.swift"),
     "utf8",
@@ -436,10 +442,7 @@ async function compileAndRunSwiftProtocolModels(params: {
   await runCommand({
     args: [
       anyCodablePath,
-      path.join(
-        params.repoRoot,
-        "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
-      ),
+      path.join(swiftArtifactDir, "GatewayModels.swift"),
       harnessPath,
       "-o",
       executablePath,
@@ -474,7 +477,9 @@ async function runGatewayProtocolArtifactsProducer(
         "scripts/protocol-gen-swift.ts",
         "apps/shared/OpenClawKit/Tests/OpenClawKitTests/GatewayProtocolGeneratedModelsTests.swift",
       ],
-      docsRefs: ["docs/gateway/protocol.md", "docs/reference/test.md"],
+      // The testing reference is an index over docs/reference/test/*; point at
+      // the page that owns the commands this proof runs, not the index.
+      docsRefs: ["docs/gateway/protocol.md", "docs/reference/test/local.md"],
       id: "gateway-protocol-artifacts",
       sourcePath: SOURCE_PATH,
       title: "Gateway published protocol artifacts",

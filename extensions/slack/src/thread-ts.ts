@@ -1,4 +1,3 @@
-// Slack plugin module implements thread ts behavior.
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -22,9 +21,6 @@ export function resolveSlackReplyThreadTs(params: {
 export function normalizeSlackThreadTsCandidate(
   value?: string | number | null,
 ): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
   const normalized = normalizeOptionalString(value);
   return normalized && SLACK_THREAD_TS_PATTERN.test(normalized) ? normalized : undefined;
 }

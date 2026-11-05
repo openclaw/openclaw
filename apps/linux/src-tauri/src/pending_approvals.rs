@@ -1,7 +1,6 @@
 use crate::cli::OpenClawCli;
 use serde::Deserialize;
 use std::collections::HashSet;
-use std::process::Output;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum ApprovalKind {
@@ -40,8 +39,16 @@ pub struct PendingApprovalDiff {
 }
 
 impl PendingApprovalState {
-    pub fn update(&mut self, current: &[PendingApproval]) -> PendingApprovalDiff {
-        let (new, visible) = diff_pending(&self.visible, current);
+    // Only successful snapshots replace `visible`; failed polls retain dedupe state.
+    pub fn update(&mut self, current: Vec<PendingApproval>) -> PendingApprovalDiff {
+        let mut visible = HashSet::with_capacity(current.len());
+        let new = current
+            .into_iter()
+            .filter(|request| {
+                visible.insert(request.request_id.clone())
+                    && !self.visible.contains(&request.request_id)
+            })
+            .collect();
         let count = visible.len();
         self.visible = visible;
         PendingApprovalDiff { new, count }
@@ -72,23 +79,19 @@ struct DevicePairingList {
 }
 
 pub fn fetch(cli: &OpenClawCli) -> Result<Vec<PendingApproval>, String> {
-    let (nodes, node_output) = cli
+    let nodes = cli
         .json::<Vec<NodePendingRequest>, _, _>(["nodes", "pending", "--json"])
         .map_err(|error| error.to_string())?;
-    require_success("nodes pending", &node_output)?;
-
-    let (devices, device_output) = cli
+    let devices = cli
         .json::<DevicePairingList, _, _>(["devices", "list", "--json"])
         .map_err(|error| error.to_string())?;
-    require_success("devices list", &device_output)?;
 
-    let mut pending = Vec::with_capacity(nodes.len() + devices.pending.len());
-    pending.extend(nodes.into_iter().map(|request| PendingApproval {
+    let nodes = nodes.into_iter().map(|request| PendingApproval {
         kind: ApprovalKind::Node,
         request_id: request.request_id,
         label: preferred_label([request.display_name.as_deref(), Some(&request.node_id)]),
-    }));
-    pending.extend(devices.pending.into_iter().map(|request| PendingApproval {
+    });
+    let devices = devices.pending.into_iter().map(|request| PendingApproval {
         kind: ApprovalKind::Device,
         request_id: request.request_id,
         label: preferred_label([
@@ -96,16 +99,8 @@ pub fn fetch(cli: &OpenClawCli) -> Result<Vec<PendingApproval>, String> {
             request.client_id.as_deref(),
             Some(&request.device_id),
         ]),
-    }));
-    Ok(pending)
-}
-
-fn require_success(command: &str, output: &Output) -> Result<(), String> {
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(format!("openclaw {command} exited with {}", output.status))
-    }
+    });
+    Ok(nodes.chain(devices).collect())
 }
 
 fn preferred_label<'a>(candidates: impl IntoIterator<Item = Option<&'a str>>) -> String {
@@ -118,25 +113,9 @@ fn preferred_label<'a>(candidates: impl IntoIterator<Item = Option<&'a str>>) ->
         .to_string()
 }
 
-// Only successful snapshots replace `visible`; failed polls must leave dedupe state intact.
-fn diff_pending(
-    previous: &HashSet<String>,
-    current: &[PendingApproval],
-) -> (Vec<PendingApproval>, HashSet<String>) {
-    let mut visible = HashSet::with_capacity(current.len());
-    let mut new = Vec::new();
-    for request in current {
-        if visible.insert(request.request_id.clone()) && !previous.contains(&request.request_id) {
-            new.push(request.clone());
-        }
-    }
-    (new, visible)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{diff_pending, ApprovalKind, PendingApproval, PendingApprovalState};
-    use std::collections::HashSet;
+    use super::{ApprovalKind, PendingApproval, PendingApprovalState};
 
     fn request(kind: ApprovalKind, id: &str, label: &str) -> PendingApproval {
         PendingApproval {
@@ -147,47 +126,27 @@ mod tests {
     }
 
     #[test]
-    fn diff_reports_new_ids_once_and_deduplicates_a_snapshot() {
-        let current = vec![
-            request(ApprovalKind::Node, "node-1", "Kitchen Mac"),
-            request(ApprovalKind::Node, "node-1", "Kitchen Mac"),
-            request(ApprovalKind::Device, "device-1", "Browser"),
-        ];
-
-        let (new, visible) = diff_pending(&HashSet::new(), &current);
-
-        assert_eq!(new, vec![current[0].clone(), current[2].clone()]);
-        assert_eq!(visible.len(), 2);
-    }
-
-    #[test]
-    fn state_deduplicates_retained_ids_and_forgets_removed_ids() {
+    fn state_deduplicates_snapshot_and_retained_ids_and_forgets_removed_ids() {
         let node = request(ApprovalKind::Node, "request-1", "Kitchen Mac");
         let device = request(ApprovalKind::Device, "request-2", "Browser");
         let mut state = PendingApprovalState::default();
 
-        let first = state.update(&[node.clone(), device.clone()]);
+        let first = state.update(vec![
+            node.clone(),
+            node.clone(),
+            request(ApprovalKind::Device, "request-1", "Browser"),
+            device.clone(),
+        ]);
         assert_eq!(first.new, vec![node.clone(), device.clone()]);
         assert_eq!(first.count, 2);
 
-        let retained = state.update(std::slice::from_ref(&device));
+        let retained = state.update(vec![device.clone()]);
         assert!(retained.new.is_empty());
         assert_eq!(retained.count, 1);
 
-        let returned = state.update(&[node.clone(), device]);
+        let returned = state.update(vec![node.clone(), device]);
         assert_eq!(returned.new, vec![node]);
         assert_eq!(returned.count, 2);
-    }
-
-    #[test]
-    fn same_id_is_deduplicated_across_request_kinds() {
-        let node = request(ApprovalKind::Node, "same-id", "Node");
-        let device = request(ApprovalKind::Device, "same-id", "Browser");
-
-        let (new, visible) = diff_pending(&HashSet::new(), &[node.clone(), device]);
-
-        assert_eq!(new, vec![node]);
-        assert_eq!(visible.len(), 1);
     }
 
     #[test]

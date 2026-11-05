@@ -1,4 +1,3 @@
-// Wizard prompt types abstract selectable, confirm, and text prompts.
 export type WizardSelectOption<T = string> = {
   value: T;
   label: string;
@@ -79,7 +78,7 @@ export type WizardPrompter = {
   text: (params: WizardTextParams) => Promise<string>;
   confirm: (params: WizardConfirmParams) => Promise<boolean>;
   progress: (label: string) => WizardProgress;
-  /** Queue an explicit browser destination for the next interactive client step. */
+  /** Queue an explicit browser destination for the next client step or browser-wait progress. */
   openUrl?: (url: string) => Promise<void>;
   disableBackNavigation?: () => void;
 };

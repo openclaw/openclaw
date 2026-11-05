@@ -1,41 +1,14 @@
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-// Shared image-generation implementation helpers for bundled and third-party plugins.
 
-export type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-export type { FallbackAttempt } from "../agents/model-fallback.types.js";
-export type { ImageGenerationProviderPlugin } from "../plugins/types.js";
-export type {
-  GeneratedImageAsset,
-  ImageGenerationProvider,
-  ImageGenerationProviderConfiguredContext,
-  ImageGenerationProviderOptions,
-  ImageGenerationResolution,
-  ImageGenerationRequest,
-  ImageGenerationResult,
-  ImageGenerationSourceImage,
-} from "../image-generation/types.js";
-export type { OpenClawConfig } from "../config/types.openclaw.js";
-
-export { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 export {
   buildNoCapabilityModelConfiguredMessage,
   resolveCapabilityModelCandidates,
+  resolveCapabilityModelCandidatesAsync,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
-export {
-  resolveAgentModelFallbackValues,
-  resolveAgentModelPrimaryValue,
-} from "../config/model-input.js";
-export {
-  getImageGenerationProvider,
-  listImageGenerationProviders,
-} from "../media-generation/registry.js";
-export { parseImageGenerationModelRef } from "../media-generation/model-ref.js";
-export { createSubsystemLogger } from "../logging/subsystem.js";
-export { normalizeGooglePreviewModelId as normalizeGoogleModelId } from "./provider-model-shared.js";
-export { getProviderEnvVars } from "../secrets/provider-env-vars.js";
-/** Default OpenAI image model used when image-generation provider config omits one. */
-export const OPENAI_DEFAULT_IMAGE_MODEL = "gpt-image-2";
+export { getProviderEnvVars } from "./provider-env-vars.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 
 type ImageGenerationCoreAuthRuntimeModule =
   typeof import("./image-generation-core.auth.runtime.js");
@@ -44,7 +17,12 @@ const loadImageGenerationCoreAuthRuntime = createLazyRuntimeModule(
   () => import("./image-generation-core.auth.runtime.js"),
 );
 
-/** Resolve image-generation provider API keys through the lazy auth runtime helper. */
+/**
+ * Resolve image-generation provider API keys through the lazy auth runtime helper.
+ *
+ * @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by
+ * `plugin-sdk-private-runtime-shipped-exports`.
+ */
 export async function resolveApiKeyForProvider(
   ...args: Parameters<ImageGenerationCoreAuthRuntimeModule["resolveApiKeyForProvider"]>
 ): Promise<Awaited<ReturnType<ImageGenerationCoreAuthRuntimeModule["resolveApiKeyForProvider"]>>> {

@@ -1,13 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { assert, readJson } from "../fixtures/common.mjs";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
-import { isExplicitPluginDisableMarker } from "../plugin-uninstall-assertions.mjs";
-
-function assert(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
-}
+import { hasExpectedPluginUninstallConfigState } from "../plugin-uninstall-assertions.mjs";
 
 function stateDir() {
   return process.env.OPENCLAW_STATE_DIR || path.join(process.env.HOME ?? "", ".openclaw");
@@ -15,10 +10,6 @@ function stateDir() {
 
 function configPath() {
   return process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir(), "openclaw.json");
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
 function resolveRecordedPath(value) {
@@ -179,7 +170,7 @@ function assertMarketplaceUninstalled() {
     `installed plugin index still includes ${pluginId}`,
   );
   assert(
-    isExplicitPluginDisableMarker(config, pluginId),
+    hasExpectedPluginUninstallConfigState(config, pluginId),
     `exact disabled uninstall marker missing for ${pluginId}`,
   );
   assert(!config.plugins?.allow?.includes(pluginId), `allowlist still includes ${pluginId}`);

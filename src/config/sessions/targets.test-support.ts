@@ -6,7 +6,7 @@ import { replaceSessionEntry } from "./session-accessor.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
 
 export const EXPLICIT_MAIN_CONFIG: OpenClawConfig = {
-  agents: { list: [{ id: "main", default: true }] },
+  agents: { entries: { main: {} } },
 };
 
 export async function resolveRealStorePath(sessionsDir: string): Promise<string> {
@@ -34,7 +34,7 @@ export async function createAgentSessionStores(
 export function createCustomRootCfg(customRoot: string, defaultAgentId = "ops"): OpenClawConfig {
   return {
     session: { store: path.join(customRoot, "agents", "{agentId}", "sessions", "sessions.json") },
-    agents: { list: [{ id: defaultAgentId, default: true }] },
+    agents: { entries: { [defaultAgentId]: {} } },
   };
 }
 

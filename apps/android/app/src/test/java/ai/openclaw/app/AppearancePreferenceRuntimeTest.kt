@@ -62,6 +62,23 @@ private const val APPEARANCE_CONNECTION_TIMEOUT_MS = 8_000L
 @Config(sdk = [34])
 class AppearancePreferenceRuntimeTest {
   @Test
+  fun textSizeNeverSyncsToProfilesAndSurvivesRuntimeReconstruction() =
+    runBlocking {
+      withAppearanceGateway {
+        connect()
+        viewModel().setAppearanceTextScale(AppearanceTextScale.ExtraLarge)
+        refresh()
+        connect(profileId = "profile-b")
+        assertEquals(125, prefs.appearanceTextScale.value.percent)
+        recreateOffline()
+        assertEquals(125, viewModel().appearanceTextScale.value.percent)
+        connect()
+        assertTrue(writes.isEmpty())
+        assertEquals(125, prefs.appearanceTextScale.value.percent)
+      }
+    }
+
+  @Test
   fun concurrentWritesForOneKeyFinishWithTheLatestValue() =
     runBlocking {
       withAppearanceGateway {
@@ -257,7 +274,7 @@ class AppearancePreferenceRuntimeTest {
           prefs.setAppearanceThemeFamily(AppearanceThemeFamily.Tide)
           prefs.setAppearanceThemeMode(AppearanceThemeMode.Dark)
           config = """{"ui":{"prefs":{"theme":"dash","themeMode":"light","accent":"#14B8A6"}}}"""
-          val unsupportedMethods = if (catalogOmitsMethod) setOf("config.get") else null
+          val unsupportedMethods = if (catalogOmitsMethod) setOf("agents.list", "config.get") else null
           val unsupportedPreferences: suspend (AppearanceRpcRequest) -> String? = { request ->
             if (request.method == "users.prefs.get") {
               throw GatewayRequestRejected(GatewaySession.ErrorShape("INVALID_REQUEST", "unknown method: users.prefs.get"))
@@ -1066,6 +1083,10 @@ private class AppearanceGatewayFixture(
         """{"config":$config}"""
       }
 
+      "agents.list" -> {
+        """{"defaultId":"main","mainKey":"main","agents":[{"id":"main"}]}"""
+      }
+
       "users.prefs.get" -> {
         if (request.profileId == null) {
           """{"status":"no_durable_identity"}"""
@@ -1117,6 +1138,6 @@ private class AppearanceGatewayFixture(
   }
 
   companion object {
-    private val appearanceMethods = setOf("config.get", "users.self", "users.prefs.get", "users.prefs.set")
+    private val appearanceMethods = setOf("agents.list", "config.get", "users.self", "users.prefs.get", "users.prefs.set")
   }
 }

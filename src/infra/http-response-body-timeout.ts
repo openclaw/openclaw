@@ -1,6 +1,7 @@
 // Applies idle and overall deadlines to fetch response-body reads.
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { racePromiseWithAbortSignal } from "./abort-signal.js";
 
 type TimeoutErrorFactory = (params: { timeoutMs: number }) => Error;
 
@@ -13,62 +14,51 @@ function createResponseBodyTimeoutError(message: string): Error {
 export async function withResponseBodyTimeout<T>(params: {
   timeoutMs: number | undefined;
   onTimeout: TimeoutErrorFactory | undefined;
+  signal?: AbortSignal;
   cancel: (error: Error) => Promise<unknown>;
   read: (refreshTimeout?: () => void) => Promise<T>;
 }): Promise<T> {
-  if (params.timeoutMs === undefined) {
+  if (params.timeoutMs === undefined && !params.signal) {
     return await params.read();
   }
-  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  let timeoutError: Error | undefined;
-
-  return await new Promise<T>((resolve, reject) => {
-    const clear = () => {
-      if (timeoutId !== undefined) {
-        clearTimeout(timeoutId);
-        timeoutId = undefined;
-      }
-    };
-
-    timeoutId = setTimeout(() => {
-      const error =
-        params.onTimeout?.({ timeoutMs }) ??
-        createResponseBodyTimeoutError(`Response body timed out after ${timeoutMs}ms`);
-      timeoutError = error;
-      clear();
-      void params.cancel(error).catch(() => undefined);
-      reject(error);
-    }, timeoutMs);
-    if (typeof timeoutId === "object" && "unref" in timeoutId) {
-      timeoutId.unref();
+  let signal = params.signal;
+  try {
+    if (params.timeoutMs !== undefined) {
+      const deadline = new AbortController();
+      signal = signal ? AbortSignal.any([signal, deadline.signal]) : deadline.signal;
+      const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
+      timeoutId = setTimeout(() => {
+        deadline.abort(
+          params.onTimeout?.({ timeoutMs }) ??
+            createResponseBodyTimeoutError(`Response body timed out after ${timeoutMs}ms`),
+        );
+      }, timeoutMs).unref();
     }
 
-    void Promise.resolve()
-      .then(() =>
-        params.read(() => {
-          // A late read must not restart an expired deadline or consume another chunk.
-          if (timeoutError) {
-            throw timeoutError;
-          }
-          timeoutId?.refresh();
+    return await racePromiseWithAbortSignal(
+      () =>
+        Promise.resolve().then(() => {
+          signal?.throwIfAborted();
+          return params.read(() => {
+            // A late read must not restart a stopped deadline or consume another chunk.
+            signal?.throwIfAborted();
+            timeoutId?.refresh();
+          });
         }),
-      )
-      .then(
-        (value) => {
-          clear();
-          if (!timeoutError) {
-            resolve(value);
-          }
-        },
-        (error: unknown) => {
-          clear();
-          if (!timeoutError) {
-            reject(toErrorObject(error, "Non-Error rejection"));
-          }
-        },
-      );
-  });
+      signal,
+      (aborted) => toErrorObject(aborted.reason, "Response body read aborted"),
+    );
+  } catch (error) {
+    const failure = toErrorObject(error, "Non-Error rejection");
+    if (signal?.aborted) {
+      // Reject the observation before cancellation can synchronously finish a pending read.
+      void params.cancel(failure).catch(() => undefined);
+    }
+    throw failure;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 /** Owns one refreshable idle deadline for a bounded response-body operation. */

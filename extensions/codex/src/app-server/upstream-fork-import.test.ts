@@ -3,56 +3,51 @@ import os from "node:os";
 import path from "node:path";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { toGenericTranscriptItem } from "../session-catalog-transcript-item.js";
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
-import type { CodexThread, CodexThreadItem, CodexTurn } from "./protocol.js";
+import type { CodexThread, CodexTurn } from "./protocol.js";
 import { sessionBindingIdentity } from "./session-binding.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import { importCodexThreadHistoryToTranscript } from "./transcript-mirror.js";
 import { resolveCodexUpstreamForkBoundary } from "./upstream-fork-boundary.js";
 import { forkCodexUpstreamSession } from "./upstream-session-fork.js";
-import { createForkTestRuntime, forkResponse } from "./upstream-session-fork.test-support.js";
+import {
+  codexForkTurn,
+  createForkTestRuntime,
+  forkControl,
+  forkParams,
+  forkResponse,
+} from "./upstream-session-fork.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/session-catalog", async (importOriginal) => ({
   ...(await importOriginal()),
-  deleteSessionUpstreamLink: vi.fn(),
-  upsertSessionUpstreamLink: vi.fn(() => true),
+  deleteSessionUpstreamLinkAsync: vi.fn(),
+  upsertSessionUpstreamLinkAsync: vi.fn(() => true),
 }));
 
 const roots: string[] = [];
 
 afterEach(async () => {
   for (const root of roots.splice(0)) {
+    await closeOpenClawAgentDatabasesAsync(root);
     await fs.rm(root, { recursive: true, force: true });
   }
 });
 
 function turn(id: string, texts: string[]): CodexTurn {
-  const user: CodexThreadItem = {
-    id: `${id}-user`,
-    type: "userMessage",
-    content: texts.map((text) => ({ type: "text", text, text_elements: [] })),
-    title: null,
-    status: null,
-    name: null,
-    tool: null,
-    server: null,
-    command: null,
-    cwd: null,
-    query: null,
-    aggregatedOutput: null,
-    text: "",
-    changes: [],
-  };
-  return {
-    id,
-    status: "completed",
-    items: [
-      user,
-      { ...user, id: `${id}-assistant`, type: "agentMessage", content: [], text: "Answer" },
-    ],
-  };
+  const value = codexForkTurn(id, "");
+  const user = value.items[0]!;
+  user.content = texts.map((text) => ({ type: "text", text, text_elements: [] }));
+  value.items.push({
+    ...user,
+    id: `${id}-assistant`,
+    type: "agentMessage",
+    content: [],
+    text: "Answer",
+  });
+  return value;
 }
 
 async function importHistory(turns: CodexTurn[], name?: string) {
@@ -74,7 +69,7 @@ async function importHistory(turns: CodexTurn[], name?: string) {
     },
   });
   const thread: CodexThread = { id: "thread-source", projectId: null, name, turns };
-  const imported = await importCodexThreadHistoryToTranscript({
+  await importCodexThreadHistoryToTranscript({
     ...target,
     thread,
     throughTurnId: turns.at(-1)!.id,
@@ -99,7 +94,6 @@ async function importHistory(turns: CodexTurn[], name?: string) {
     target,
     thread,
     control,
-    imported,
     users,
     resolve: () =>
       resolveCodexUpstreamForkBoundary({
@@ -122,35 +116,30 @@ describe("fork boundaries from imported Codex history", () => {
       const sourceEntries = await readVisibleSessionTranscriptMessageEntries(history.target);
       const bindingStore = createCodexTestBindingStore();
       const identity = sessionBindingIdentity(history.target);
-      const pending = {
-        sourceThreadId: history.thread.id,
-        connectionFingerprint: "fingerprint",
-        lastTurnId: "turn-2",
-      };
       await bindingStore.mutate(identity, {
         kind: "set",
         binding: {
-          threadId: history.thread.id,
+          threadId: materialized ? "thread-canonical" : history.thread.id,
           cwd: "/tmp",
           connectionScope: "supervision",
           supervisionSourceThreadId: history.thread.id,
           preserveNativeModel: true,
           conversationSourceTransferComplete: true,
-          pendingSupervisionBranch: pending,
+          ...(materialized
+            ? {
+                appServerRuntimeFingerprint: "fingerprint",
+                model: "gpt-5.6-luna",
+                modelProvider: "openai",
+              }
+            : {
+                pendingSupervisionBranch: {
+                  sourceThreadId: history.thread.id,
+                  connectionFingerprint: "fingerprint",
+                  lastTurnId: "turn-2",
+                },
+              }),
         },
       });
-      if (materialized) {
-        await bindingStore.mutate(identity, {
-          kind: "commit-pending-supervision-branch",
-          expected: pending,
-          threadId: "thread-canonical",
-          patch: {
-            appServerRuntimeFingerprint: "fingerprint",
-            model: "gpt-5.6-luna",
-            modelProvider: "openai",
-          },
-        });
-      }
       const sourceBinding = bindingStore.read(identity);
       const response = forkResponse();
       const namedResponse = { ...response, thread: { ...response.thread, name } };
@@ -161,42 +150,28 @@ describe("fork boundaries from imported Codex history", () => {
         [response.thread.id, { ...namedResponse.thread, turns: turns.slice(0, 1) }],
       ]);
       const sourceBefore = structuredClone(nativeThreads);
-      const forkThread = vi.fn<CodexSessionCatalogControl["forkThread"]>(async () => namedResponse);
-      const archiveThread = vi.fn<CodexSessionCatalogControl["archiveThread"]>(
-        async () => undefined,
+      const { control, controlFactory, forkThread, archiveThread } = forkControl(
+        vi.fn(async () => namedResponse),
       );
-      const control: CodexSessionCatalogControl = {
-        ...history.control,
-        connectionFingerprint: "fingerprint",
-        withPinnedConnection: async (run) => await run(control),
-        forkThread,
-        archiveThread,
+      Object.assign(control, history.control, {
         readThread: async (threadId) => nativeThreads.get(threadId)!,
-        listTurnPage: async ({ threadId }) => ({ data: nativeThreads.get(threadId)!.turns ?? [] }),
-      };
+        listTurnPage: async ({ threadId }: { threadId: string }) => ({
+          data: nativeThreads.get(threadId)!.turns ?? [],
+        }),
+      } satisfies Partial<CodexSessionCatalogControl>);
       const runtime = createForkTestRuntime(history.target.storePath);
       const createSession = vi.mocked(runtime.agent.session.createSessionEntry);
       const targetKey = "agent:main:dashboard:forked";
 
       const result = await forkCodexUpstreamSession(
         {
+          ...forkParams(),
           targetKey,
           source: { ...history.target, entryId: history.users.at(-1)!.entryId },
-          upstream: {
-            catalogId: "codex",
-            hostId: "gateway:local",
-            kind: "codex-app-server",
-            threadId: history.thread.id,
-            ref: { connectionFingerprint: "fingerprint" },
-          },
         },
         {
           bindingStore,
-          controlFactory: {
-            forRequest: () => control,
-            forUpstream: () => control,
-            homesForAgent: () => [],
-          },
+          controlFactory,
           harnessRuntimeId: "codex",
           resolveConfig: () => ({ session: { store: history.target.storePath } }),
           runtime,
@@ -205,11 +180,14 @@ describe("fork boundaries from imported Codex history", () => {
       const child = await createSession.mock.results[0]!.value;
       expect(result).toEqual({ status: "created", key: targetKey, editorText: "edit me" });
 
-      expect(forkThread).toHaveBeenCalledExactlyOnceWith({
-        threadId: history.thread.id,
-        beforeTurnId: "turn-2",
-        excludeTurns: true,
-      });
+      expect(forkThread).toHaveBeenCalledExactlyOnceWith(
+        {
+          threadId: history.thread.id,
+          beforeTurnId: "turn-2",
+          excludeTurns: true,
+        },
+        expect.any(Function),
+      );
       expect(child.entry.label).toBeUndefined();
       expect(createSession.mock.calls[0]?.[0]).not.toHaveProperty("label");
       expect(createSession.mock.calls[0]?.[0]).not.toHaveProperty("displayName");
@@ -218,10 +196,10 @@ describe("fork boundaries from imported Codex history", () => {
         sessionId: child.sessionId,
         sessionKey: child.key,
       });
-      expect(childEntries.map((entry) => entry.role)).toEqual(["user", "assistant"]);
-      expect(
-        childEntries.filter((entry) => entry.role === "user").map((entry) => entry.message),
-      ).toEqual([expect.objectContaining({ content: "one" })]);
+      expect(childEntries).toMatchObject([
+        { role: "user", message: { content: "one" } },
+        { role: "assistant" },
+      ]);
       expect(bindingStore.read(identity)).toEqual(sourceBinding);
       expect(getSessionEntry(history.target)).toEqual(sourceEntry);
       expect(getSessionEntry(history.target)?.label).toBe(name);
@@ -244,25 +222,25 @@ describe("fork boundaries from imported Codex history", () => {
     await expect(history.resolve()).resolves.toEqual({
       ok: true,
       editorText: "edit me",
-      boundary: {
-        beforeTurnId: "turn-2",
-
-        lastRetainedTurnId: "turn-1",
-      },
+      boundary: { beforeTurnId: "turn-2", lastRetainedTurnId: "turn-1" },
     });
   });
 
   it.each([
-    { label: "message count", count: 105, text: "same question" },
-    { label: "total UTF-8 bytes", count: 12, text: "🦞".repeat(16_000) },
-  ])(
-    "selects the original turn after the $label cap drops an identical-text prefix",
-    async ({ count, text }) => {
+    ["message count", 105, "same question", false],
+    ["message count with an earlier image", 105, "same question", true],
+    ["total UTF-8 bytes", 12, "🦞".repeat(16_000), false],
+  ] as const)(
+    "selects the original turn after the %s cap drops an identical-text prefix",
+    async (_label, count, text, omittedImage) => {
       // Repeated text makes ordinal misalignment select the wrong valid turn rather than reject.
-      const history = await importHistory(
-        Array.from({ length: count }, (_, index) => turn(`turn-${index}`, [text])),
-      );
-      expect(history.imported.omittedMessages).toBeGreaterThan(0);
+      const turns = Array.from({ length: count }, (_, index) => turn(`turn-${index}`, [text]));
+      if (omittedImage) {
+        turns[0]!.items[0]!.content = [
+          { type: "localImage", path: "/synthetic/omitted-image.png" },
+        ];
+      }
+      const history = await importHistory(turns);
       expect(history.users.length).toBeLessThan(count);
 
       await expect(history.resolve()).resolves.toEqual({
@@ -270,7 +248,6 @@ describe("fork boundaries from imported Codex history", () => {
         editorText: text,
         boundary: {
           beforeTurnId: `turn-${count - 1}`,
-
           lastRetainedTurnId: `turn-${count - 2}`,
         },
       });

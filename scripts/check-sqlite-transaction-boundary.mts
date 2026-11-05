@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import ts from "typescript";
+import * as ts from "typescript/ast";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   collectFileViolations,
@@ -14,10 +14,21 @@ const removedAsyncTransactionNames = new Set([
   "runOpenClawAgentWriteTransactionAsync",
   "runSqliteImmediateTransactionAsync",
 ]);
-const synchronousTransactionCallbackIndexes = new Map([
-  ["runOpenClawAgentWriteTransaction", 0],
-  ["runOpenClawStateWriteTransaction", 0],
-  ["runSqliteImmediateTransactionSync", 1],
+const transactionBoundaries = new Map<string, { callback?: number; options?: number }>([
+  ["runOpenClawAgentWriteTransaction", { callback: 0 }],
+  ["runOpenClawAgentWriteWithYieldingAdmission", { callback: 0 }],
+  ["runOpenClawStateWriteTransaction", { callback: 0 }],
+  ["runPostgresTransactionSync", { callback: 1, options: 2 }],
+  ["runSqliteReservedTransactionSync", { callback: 1, options: 2 }],
+  ["runSqliteDeferredTransactionSync", { callback: 1, options: 2 }],
+  ["runSqliteReadSnapshotSync", { callback: 1, options: 2 }],
+  ["runSqliteImmediateTransactionSync", { callback: 1, options: 2 }],
+  ["runSqliteSingleStatementSync", { callback: 1 }],
+  ["runSqliteWorkerTransactionSync", { callback: 1, options: 2 }],
+  // Preparation may await, but the physical commit hook must remain synchronous.
+  ["runSqliteImmediateTransaction", { options: 2 }],
+  ["withSessionActorTransactionState", { callback: 2 }],
+  ["withSqliteDatabaseWriteScope", { callback: 2 }],
 ]);
 
 function expressionName(expression: ts.Expression) {
@@ -53,7 +64,7 @@ function collectLocalAsyncFunctionNames(sourceFile: ts.SourceFile) {
         names.add(node.name.text);
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(sourceFile);
   return names;
@@ -71,7 +82,7 @@ function collectSynchronousTransactionAliases(sourceFile: ts.SourceFile) {
     }
     for (const specifier of bindings.elements) {
       const importedName = specifier.propertyName?.text ?? specifier.name.text;
-      if (synchronousTransactionCallbackIndexes.has(importedName)) {
+      if (transactionBoundaries.has(importedName)) {
         aliases.set(specifier.name.text, importedName);
       }
     }
@@ -87,8 +98,11 @@ function isAsyncCallback(expression: ts.Expression, localAsyncFunctionNames: Set
   return ts.isIdentifier(unwrapped) && localAsyncFunctionNames.has(unwrapped.text);
 }
 
-export function findSqliteTransactionBoundaryViolations(content: string, fileName = "source.ts") {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+export function findSqliteTransactionBoundaryViolations(
+  _content: string,
+  _fileName: string,
+  sourceFile: ts.SourceFile,
+) {
   const localAsyncFunctionNames = collectLocalAsyncFunctionNames(sourceFile);
   const transactionAliases = collectSynchronousTransactionAliases(sourceFile);
   const violations: Array<{ line: number; reason: string }> = [];
@@ -133,9 +147,8 @@ export function findSqliteTransactionBoundaryViolations(content: string, fileNam
       const canonicalName = calledName
         ? (transactionAliases.get(calledName) ?? calledName)
         : undefined;
-      const callbackIndex = canonicalName
-        ? synchronousTransactionCallbackIndexes.get(canonicalName)
-        : undefined;
+      const boundary = canonicalName ? transactionBoundaries.get(canonicalName) : undefined;
+      const callbackIndex = boundary?.callback;
       const callback = callbackIndex === undefined ? undefined : node.arguments[callbackIndex];
       if (canonicalName && callback && isAsyncCallback(callback, localAsyncFunctionNames)) {
         violations.push({
@@ -143,9 +156,36 @@ export function findSqliteTransactionBoundaryViolations(content: string, fileNam
           reason: `passes an async callback to synchronous SQLite transaction helper "${canonicalName}"`,
         });
       }
+      const options =
+        boundary?.options === undefined ? undefined : node.arguments[boundary.options];
+      const literal = options && unwrapExpression(options);
+      if (literal && ts.isObjectLiteralExpression(literal)) {
+        for (const property of literal.properties) {
+          const name = "name" in property ? property.name : undefined;
+          if (
+            !name ||
+            !(ts.isIdentifier(name) || ts.isStringLiteral(name)) ||
+            name.text !== "withCommit"
+          ) {
+            continue;
+          }
+          const async = ts.isMethodDeclaration(property)
+            ? hasAsyncModifier(property)
+            : ts.isPropertyAssignment(property)
+              ? isAsyncCallback(property.initializer, localAsyncFunctionNames)
+              : ts.isShorthandPropertyAssignment(property) &&
+                localAsyncFunctionNames.has(name.text);
+          if (async) {
+            violations.push({
+              line: toLine(sourceFile, property),
+              reason: "passes an async commit hook to synchronous SQLite transaction helper",
+            });
+          }
+        }
+      }
     }
 
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(sourceFile);
   return violations;
@@ -170,7 +210,7 @@ async function main() {
   console.error(
     "Complete asynchronous preparation before the transaction, then validate and apply inside a synchronous transaction callback.",
   );
-  process.exit(1);
+  process.exitCode = 1;
 }
 
 runAsScript(import.meta.url, main);

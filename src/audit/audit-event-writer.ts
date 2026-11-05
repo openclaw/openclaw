@@ -1,53 +1,45 @@
 /** Non-blocking process-owned queue for audit metadata persistence. */
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { randomUUID } from "node:crypto";
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveStateDir } from "../config/paths.js";
-import { redactSensitiveText } from "../logging/redact.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type {
+  AgentRunFinishedAuditEventInput,
+  AgentRunStartedAuditEventInput,
+  AuditEventInput,
+} from "./audit-event-types.js";
 import {
-  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-  runWithOpenClawStateBusyTimeout,
-} from "../state/openclaw-state-db.js";
-import { isOpenClawStateWriteContentionError } from "../state/openclaw-state-ownership.js";
-import { pruneExpiredAuditEvents, recordAuditEvent } from "./audit-event-store.js";
-import { isOutboundMessageProgressInput, type AuditEventInput } from "./audit-event-types.js";
-import {
-  pruneExpiredExecutionDecisionFacts,
-  recordExecutionDecisionFact,
-} from "./execution-decision-facts.js";
-import {
-  parseExecutionDecisionWork,
-  processExecutionDecisionWork,
-  type ExecutionDecisionWork,
-} from "./execution-decision-work.js";
+  formatAuditWriterError,
+  formatAuditWriterRequestError,
+} from "./audit-event-writer.errors.js";
+import type { AuditWriterRequest, AuditWriterResult } from "./audit-event-writer.types.js";
+import type { AuditWriterOperations } from "./audit-event-writer.worker.js";
+import { parseExecutionDecisionWork } from "./execution-decision-work.js";
+import type { ExecutionDecisionWork } from "./execution-decision-work.types.js";
 import type { ExecutionIdentityAdmissionWork } from "./execution-identity-admission.js";
-import {
-  processExecutionIdentityAdmissionWork,
-  pruneExpiredExecutionIdentityContexts,
-} from "./execution-identity-context.js";
-import {
-  pruneExpiredOutboundMessageProgress,
-  recordOutboundMessageProgress,
-} from "./message-delivery-progress-store.js";
 
 const MAX_PENDING_AUDIT_EVENTS = 4_096;
+const MAX_AUDIT_BATCH_SIZE = 32;
+const AUDIT_BATCH_DELAY_MS = 5;
+const MAX_CONSECUTIVE_UNKNOWN_OUTCOMES = 3;
 const AUDIT_MAINTENANCE_INTERVAL_MS = 60 * 60_000;
-const AUDIT_LOCK_RETRY_DELAY_MS = 25;
-const AUDIT_LOCK_RETRY_MAX_DELAY_MS = 1_000;
-const AUDIT_LOCK_CONTENTION_REPORT_MS = 1_000;
+const AUDIT_RETRY_DELAY_MS = 25;
+const AUDIT_RETRY_MAX_DELAY_MS = 1_000;
+const AUDIT_RETRY_REPORT_MS = 1_000;
 const AUDIT_WRITER_SHUTDOWN_TIMEOUT_MS = OPENCLAW_SQLITE_BUSY_TIMEOUT_MS + 5_000;
 
-type AuditWriterAttempt = "settled" | "retry";
 type AuditMaintenanceAttempt = "settled" | "more" | "retry";
-
-type AuditWriterRequest =
-  | { type: "record-event"; input: AuditEventInput }
-  | { type: "record-execution-identity"; work: ExecutionIdentityAdmissionWork }
-  | { type: "record-execution-decision"; receipt: DecisionReceiptV1 }
-  | { type: "record-execution-decision-work"; work: ExecutionDecisionWork };
 
 export type AuditEventWriter = {
   ready: Promise<void>;
   record: (input: AuditEventInput) => boolean;
+  recordRun: (
+    start: AgentRunStartedAuditEventInput,
+    finish: AgentRunFinishedAuditEventInput,
+  ) => boolean;
   /** Reports only queue acceptance; persistence succeeds or fails asynchronously. */
   recordExecutionIdentity: (work: ExecutionIdentityAdmissionWork) => boolean;
   /** For decision owners without a native durable record; approvals must not use this path. */
@@ -57,60 +49,32 @@ export type AuditEventWriter = {
   stop: () => Promise<void>;
 };
 
-function formatAuditWriterError(error: unknown): string {
-  return truncateUtf16Safe(
-    redactSensitiveText(error instanceof Error ? error.message : String(error), { mode: "tools" }),
-    512,
-  );
-}
-
-function executionIdentityFailureMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  if (
-    message.includes("audit identity key is missing") ||
-    message.includes("audit identity key is corrupt")
-  ) {
-    return "audit execution identity key unavailable";
-  }
-  if (message.includes("execution identity context conflict")) {
-    return "audit execution identity context conflict";
-  }
-  if (message.includes("execution identity recovery evidence unavailable")) {
-    return "audit execution identity recovery evidence unavailable";
-  }
-  if (
-    message.includes("admission envelope") ||
-    message.includes("admission work") ||
-    message.includes("admission token")
-  ) {
-    return "audit execution identity envelope rejected";
-  }
-  return "audit execution identity persistence failed";
-}
-
 /** Start one bounded queue; retain the owner environment or claimed state rejects its writes. */
-export function createAuditEventWriter(
-  options: {
-    stateDir?: string;
-    maxPending?: number;
-    onContention?: (message: string) => void;
-    onError?: (error: string) => void;
-  } = {},
-): AuditEventWriter {
+export function createAuditEventWriter(options: {
+  scheduler: GatewayScheduler;
+  stateDir?: string;
+  maxPending?: number;
+  onContention?: (message: string) => void;
+  onError?: (error: string) => void;
+}): AuditEventWriter {
+  const { scheduler } = options;
   const database = {
     env: { ...process.env, OPENCLAW_STATE_DIR: options.stateDir ?? resolveStateDir(process.env) },
   };
   const maxPending = Math.max(1, Math.floor(options.maxPending ?? MAX_PENDING_AUDIT_EVENTS));
   const queue: AuditWriterRequest[] = [];
+  let pendingRows = 0;
   let stopped = false;
-  let unavailable = false;
+  let draining = false;
+  let shutdownExpired = false;
   let maintenancePending = true;
-  let readyPending = true;
   let scheduled: ReturnType<typeof setImmediate> | undefined;
+  let batchTimer: ReturnType<typeof setTimeout> | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
-  let lockRetryAttempt = 0;
-  let lockContentionDelayMs = 0;
-  let lockContentionReported = false;
+  let retryAttempt = 0;
+  let retryDelayMs = 0;
+  let retryReported = false;
+  let unknownBatch: { size: number; attempts: number } | undefined;
   let resolveReady!: () => void;
   const ready = new Promise<void>((resolve) => {
     resolveReady = resolve;
@@ -125,75 +89,79 @@ export function createAuditEventWriter(
   const reportContention = (message: string) => {
     options.onContention?.(formatAuditWriterError(message));
   };
-  const runWithoutBusyWait = <T>(operation: () => T): T =>
-    runWithOpenClawStateBusyTimeout(() => operation(), database, 0);
-  const observeLockContention = () => {
-    lockRetryAttempt += 1;
+  const execute = async <Key extends keyof AuditWriterOperations>(command: {
+    type: Key;
+    input: AuditWriterOperations[Key]["input"];
+  }): Promise<AuditWriterOperations[Key]["output"] | undefined> => {
+    const context = captureOpenClawStateWorkerContext(database);
+    const { runOpenClawStateWorkerOperation } =
+      await import("../state/openclaw-state-worker-store.js");
+    if (shutdownExpired) {
+      return undefined;
+    }
+    // Existing state opens lazily inside the audit command.
+    const result = await runOpenClawStateWorkerOperation<
+      AuditWriterOperations[Key]["output"] | undefined
+    >(context, (scope) => (shutdownExpired ? Promise.resolve(undefined) : scope.execute(command)), {
+      existingOnly: true,
+    });
+    if (result !== undefined || shutdownExpired) {
+      return result;
+    }
+    return runOpenClawStateWorkerOperation<AuditWriterOperations[Key]["output"] | undefined>(
+      context,
+      (scope) => (shutdownExpired ? Promise.resolve(undefined) : scope.execute(command)),
+    );
   };
-  const resetLockContention = () => {
-    lockRetryAttempt = 0;
-    lockContentionDelayMs = 0;
-    lockContentionReported = false;
+  const resetRetry = () => {
+    retryAttempt = 0;
+    retryDelayMs = 0;
+    retryReported = false;
   };
-  const reportMaintenance = (): AuditMaintenanceAttempt => {
+  const reportMaintenance = async (): Promise<AuditMaintenanceAttempt> => {
     let more = false;
-    for (const maintenance of [
-      () => pruneExpiredAuditEvents({ database }),
-      () => pruneExpiredExecutionIdentityContexts({ database }),
-      () => pruneExpiredExecutionDecisionFacts({ database }),
-      () => pruneExpiredOutboundMessageProgress({ database }),
-    ]) {
-      try {
-        more = runWithoutBusyWait(maintenance) > 0 || more;
-      } catch (error) {
-        if (isOpenClawStateWriteContentionError(error)) {
-          observeLockContention();
+    try {
+      // A submitted pass settles all remaining bounded families even after the shutdown deadline.
+      const results = await execute({ type: "audit.writer.prune", input: undefined });
+      for (const result of results ?? []) {
+        if (result.status === "retry") {
+          retryAttempt += 1;
           return "retry";
         }
-        fail(error);
+        if (result.error !== undefined) {
+          fail(result.error);
+        }
+        more = (result.deleted ?? 0) > 0 || more;
       }
+    } catch (error) {
+      // A rejected transport can follow committed families; never replay an unknown pass.
+      fail(error);
     }
     return more ? "more" : "settled";
   };
-  const processRequest = (request: AuditWriterRequest): AuditWriterAttempt => {
+  const processRequests = async (requests: AuditWriterRequest[]): Promise<AuditWriterResult[]> => {
     try {
-      runWithoutBusyWait(() => {
-        if (request.type === "record-event") {
-          if (isOutboundMessageProgressInput(request.input)) {
-            recordOutboundMessageProgress(request.input, database);
-          } else {
-            recordAuditEvent(request.input, database);
-          }
-          return;
-        }
-        if (request.type === "record-execution-identity") {
-          processExecutionIdentityAdmissionWork(request.work, database);
-          return;
-        }
-        if (request.type === "record-execution-decision-work") {
-          processExecutionDecisionWork(request.work, database);
-          return;
-        }
-        recordExecutionDecisionFact(request.receipt, database);
-      });
-      return "settled";
+      const results = await execute({ type: "audit.writer.process", input: requests });
+      unknownBatch = undefined;
+      return results ?? requests.map(() => ({ status: "settled" as const }));
     } catch (error) {
-      if (isOpenClawStateWriteContentionError(error)) {
-        observeLockContention();
-        return "retry";
-      }
-      resetLockContention();
-      if (request.type === "record-execution-identity") {
-        fail(executionIdentityFailureMessage(error));
-      } else if (
-        request.type === "record-execution-decision" ||
-        request.type === "record-execution-decision-work"
-      ) {
-        fail("audit execution decision rejected");
-      } else {
+      if (hasSqliteWorkerOutcomeUnknown(error)) {
+        unknownBatch ??= { size: requests.length, attempts: 0 };
+        unknownBatch.attempts += 1;
         fail(error);
+        if (unknownBatch.attempts < MAX_CONSECUTIVE_UNKNOWN_OUTCOMES) {
+          // Replay original IDs; committed items are no-ops.
+          return [{ status: "retry" }];
+        }
+        // Drop a repeatedly crashing batch so later queued work can proceed.
+        unknownBatch = undefined;
+        return requests.map(() => ({ status: "settled" }));
       }
-      return "settled";
+      unknownBatch = undefined;
+      return requests.map((request) => ({
+        status: "settled",
+        error: formatAuditWriterRequestError(request, error),
+      }));
     }
   };
   const finishStop = () => {
@@ -205,7 +173,10 @@ export function createAuditEventWriter(
     resolveStop = undefined;
     finish?.();
   };
-  const schedule = () => {
+  const schedule = (delayMs = 0) => {
+    if (draining || shutdownExpired) {
+      return;
+    }
     if (retryTimer) {
       if (stopped) {
         retryTimer.ref?.();
@@ -218,76 +189,124 @@ export function createAuditEventWriter(
       }
       return;
     }
-    scheduled = setImmediate(drainOne);
-    if (!stopped) {
-      scheduled.unref?.();
+    if (batchTimer) {
+      if (delayMs > 0) {
+        return;
+      }
+      clearTimeout(batchTimer);
+      batchTimer = undefined;
+    }
+    if (delayMs > 0) {
+      batchTimer = setTimeout(() => {
+        batchTimer = undefined;
+        void drainOne();
+      }, delayMs);
+      batchTimer.unref?.();
+    } else {
+      scheduled = setImmediate(() => {
+        void drainOne();
+      });
+      if (!stopped) {
+        scheduled.unref?.();
+      }
     }
   };
   const scheduleRetry = () => {
     const delayMs = Math.min(
-      AUDIT_LOCK_RETRY_MAX_DELAY_MS,
-      AUDIT_LOCK_RETRY_DELAY_MS * 2 ** Math.min(6, Math.max(0, lockRetryAttempt - 1)),
+      AUDIT_RETRY_MAX_DELAY_MS,
+      AUDIT_RETRY_DELAY_MS * 2 ** Math.min(6, retryAttempt - 1),
     );
-    lockContentionDelayMs += delayMs;
-    if (!lockContentionReported && lockContentionDelayMs >= AUDIT_LOCK_CONTENTION_REPORT_MS) {
-      lockContentionReported = true;
-      reportContention("audit event persistence delayed by SQLite lock contention");
+    retryDelayMs += delayMs;
+    if (!retryReported && retryDelayMs >= AUDIT_RETRY_REPORT_MS) {
+      retryReported = true;
+      reportContention("audit event persistence delayed by worker retries");
     }
     retryTimer = setTimeout(() => {
       retryTimer = undefined;
-      drainOne();
+      void drainOne();
     }, delayMs);
     if (!stopped) {
       retryTimer.unref?.();
     }
   };
-  function drainOne() {
+  async function drainOne() {
     scheduled = undefined;
-    if (maintenancePending) {
-      const maintenance = reportMaintenance();
-      if (readyPending) {
-        readyPending = false;
+    if (draining || shutdownExpired) {
+      return;
+    }
+    draining = true;
+    let retry = false;
+    try {
+      if (maintenancePending) {
+        maintenancePending = false;
+        const maintenance = await reportMaintenance();
         resolveReady();
+        maintenancePending ||= maintenance !== "settled";
+        if (maintenance === "retry") {
+          retry = true;
+          return;
+        }
+        resetRetry();
       }
-      if (maintenance === "retry") {
-        scheduleRetry();
+      if (shutdownExpired) {
         return;
       }
-      maintenancePending = maintenance === "more";
-      resetLockContention();
-    }
-    const request = queue.shift();
-    if (request && processRequest(request) === "retry") {
-      queue.unshift(request);
-      scheduleRetry();
-      return;
-    }
-    if (request) {
-      resetLockContention();
-    }
-    if (queue.length > 0 || maintenancePending) {
-      schedule();
-      return;
-    }
-    if (stopped) {
-      finishStop();
+      // Keep submitted items in the bounded queue until their native attempts settle.
+      const requests = queue.slice(0, unknownBatch?.size ?? MAX_AUDIT_BATCH_SIZE);
+      if (requests.length > 0) {
+        const results = await processRequests(requests);
+        retry = results.at(-1)?.status === "retry";
+        const settled = results.length - (retry ? 1 : 0);
+        // Release the whole settled prefix before an error observer can enqueue or throw.
+        for (const request of queue.splice(0, settled)) {
+          pendingRows -= request.type === "record-run" ? 2 : 1;
+        }
+        if (settled > 0) {
+          resetRetry();
+        }
+        if (retry) {
+          retryAttempt += 1;
+        }
+        for (const result of results) {
+          if (result.status === "settled" && result.error !== undefined) {
+            fail(result.error);
+          }
+        }
+      }
+    } finally {
+      draining = false;
+      if (shutdownExpired) {
+        finishStop();
+      } else if (retry) {
+        scheduleRetry();
+      } else if (queue.length > 0 || maintenancePending) {
+        const coalesce =
+          !stopped &&
+          !maintenancePending &&
+          queue.length > 1 &&
+          queue.length < MAX_AUDIT_BATCH_SIZE;
+        schedule(coalesce ? AUDIT_BATCH_DELAY_MS : 0);
+      } else if (stopped) {
+        finishStop();
+      }
     }
   }
-  const maintenanceTimer = setInterval(() => {
-    maintenancePending = true;
-    schedule();
-  }, AUDIT_MAINTENANCE_INTERVAL_MS);
-  maintenanceTimer.unref?.();
+  const maintenanceJob = scheduler.schedule({
+    id: "audit:maintenance",
+    atMs: scheduler.now() + AUDIT_MAINTENANCE_INTERVAL_MS,
+    everyMs: AUDIT_MAINTENANCE_INTERVAL_MS,
+    run: () => {
+      maintenancePending = true;
+      schedule();
+    },
+  });
   schedule();
 
   const enqueue = (message: AuditWriterRequest): boolean => {
-    if (stopped || unavailable || queue.length >= maxPending) {
+    const rows = message.type === "record-run" ? 2 : 1;
+    if (stopped || pendingRows + rows > maxPending) {
       if (!stopped) {
-        fail(
-          unavailable
-            ? "audit event writer is unavailable; dropping metadata"
-            : `audit event queue is full (${maxPending}); dropping metadata`,
-        );
+        fail(`audit event queue is full (${maxPending}); dropping metadata`);
       }
       return false;
     }
@@ -298,17 +317,19 @@ export function createAuditEventWriter(
           : message;
       // Preserve the former Worker boundary's clone and prototype-stripping contract.
       queue.push(structuredClone(boundedMessage));
-      schedule();
+      pendingRows += rows;
+      if (!batchTimer || queue.length >= MAX_AUDIT_BATCH_SIZE) {
+        schedule();
+      }
       return true;
     } catch (error) {
-      if (message.type !== "record-event") {
+      if (message.type !== "record-event" && message.type !== "record-run") {
         fail(
           message.type === "record-execution-identity"
             ? "audit execution identity envelope could not be queued"
             : "audit execution decision receipt could not be queued",
         );
       } else {
-        unavailable = true;
         fail(error);
       }
       return false;
@@ -317,7 +338,9 @@ export function createAuditEventWriter(
 
   return {
     ready,
-    record: (input) => enqueue({ type: "record-event", input }),
+    record: (input) => enqueue({ type: "record-event", eventId: randomUUID(), input }),
+    recordRun: (start, finish) =>
+      enqueue({ type: "record-run", start, finish, eventIds: [randomUUID(), randomUUID()] }),
     recordExecutionIdentity: (work) => enqueue({ type: "record-execution-identity", work }),
     recordExecutionDecision: (receipt) => enqueue({ type: "record-execution-decision", receipt }),
     recordExecutionDecisionWork: (work) =>
@@ -327,22 +350,33 @@ export function createAuditEventWriter(
         return stopPromise;
       }
       stopped = true;
-      clearInterval(maintenanceTimer);
+      maintenanceJob.cancel();
       maintenancePending = true;
       stopPromise = new Promise<void>((resolve) => {
         resolveStop = resolve;
         stopTimer = setTimeout(() => {
+          shutdownExpired = true;
+          maintenancePending = false;
           queue.length = 0;
+          pendingRows = 0;
           if (scheduled) {
             clearImmediate(scheduled);
             scheduled = undefined;
+          }
+          if (batchTimer) {
+            clearTimeout(batchTimer);
+            batchTimer = undefined;
           }
           if (retryTimer) {
             clearTimeout(retryTimer);
             retryTimer = undefined;
           }
           fail("audit event writer shutdown timed out; pending metadata may be lost");
-          finishStop();
+          // The deadline drops waiting metadata, but a submitted mutation must settle.
+          if (!draining) {
+            resolveReady();
+            finishStop();
+          }
         }, AUDIT_WRITER_SHUTDOWN_TIMEOUT_MS);
         stopTimer.unref?.();
         schedule();

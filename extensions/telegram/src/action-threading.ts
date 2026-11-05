@@ -1,4 +1,3 @@
-// Telegram plugin module implements action threading behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseTelegramTarget } from "./targets.js";
 
@@ -15,11 +14,8 @@ export function resolveTelegramAutoThreadId(params: {
     return undefined;
   }
   const parsedChannel = parseTelegramTarget(context.currentChannelId);
-  if (
-    normalizeLowercaseStringOrEmpty(parsedTo.chatId) !==
+  return normalizeLowercaseStringOrEmpty(parsedTo.chatId) ===
     normalizeLowercaseStringOrEmpty(parsedChannel.chatId)
-  ) {
-    return undefined;
-  }
-  return context.currentThreadTs;
+    ? context.currentThreadTs
+    : undefined;
 }

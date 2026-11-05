@@ -1,72 +1,92 @@
-import { AsyncLocalStorage } from "node:async_hooks";
+import { performance } from "node:perf_hooks";
+import { createPermitPool } from "../../shared/permit-pool.js";
 
-type QueuedProviderList = {
-  start: () => void;
+export type SessionCatalogListTiming = {
+  admittedAt?: number;
+  settledAt?: number;
+  admittedStepMs?: number;
+  stepCount?: number;
 };
+
+type ProviderListStep<T> = { done: false } | { done: true; value: T };
 
 class SessionCatalogListBusyError extends Error {
   readonly code = "catalog_busy";
 
-  constructor(maxConcurrent: number, maxQueued: number) {
-    super(`session catalog is busy (${maxConcurrent} active, ${maxQueued} queued); retry shortly`);
+  constructor(active: number, queued: number) {
+    super(`session catalog is busy (${active} active, ${queued} queued); retry shortly`);
     this.name = "SessionCatalogListBusyError";
   }
 }
 
 export class SessionCatalogListAdmission {
-  private active = 0;
-  private readonly queue: QueuedProviderList[] = [];
+  private readonly permits: ReturnType<typeof createPermitPool>;
 
   constructor(
     private readonly maxConcurrent: number,
     private readonly maxQueued: number,
   ) {
-    if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1) {
-      throw new Error("maxConcurrent must be a positive integer");
-    }
-    if (!Number.isInteger(maxQueued) || maxQueued < 0) {
-      throw new Error("maxQueued must be a non-negative integer");
-    }
+    this.permits = createPermitPool(maxConcurrent);
   }
 
-  run<T>(task: () => Promise<T>): Promise<T> {
-    if (this.active < this.maxConcurrent) {
-      return this.start(task);
+  async run<T>(
+    task: () => Promise<T>,
+    signal?: AbortSignal,
+    timing?: SessionCatalogListTiming,
+  ): Promise<T> {
+    signal?.throwIfAborted();
+    let release = this.permits.tryAcquire();
+    if (!release) {
+      const queued = this.permits.pendingCount;
+      if (queued >= this.maxQueued) {
+        throw new SessionCatalogListBusyError(this.maxConcurrent, queued);
+      }
+      release = await this.permits.acquire({ signal });
+      if (!release) {
+        // No deadline is supplied, so null means caller cancellation.
+        throw signal?.reason;
+      }
     }
-    if (this.queue.length >= this.maxQueued) {
-      return Promise.reject(new SessionCatalogListBusyError(this.maxConcurrent, this.maxQueued));
+    const startedAt = performance.now();
+    if (timing) {
+      timing.admittedAt = startedAt;
     }
-    // A released slot runs the next caller's plugin and root scope, never the
-    // preceding provider's context inherited by the queue drain.
-    const runInAsyncContext = AsyncLocalStorage.snapshot();
-    return new Promise<T>((resolve, reject) => {
-      this.queue.push({
-        start: () => {
-          void runInAsyncContext(() => this.start(task)).then(resolve, reject);
-        },
-      });
-    });
-  }
-
-  private async start<T>(task: () => Promise<T>): Promise<T> {
-    this.active += 1;
     try {
+      signal?.throwIfAborted();
       return await task();
     } finally {
-      // Release before draining so every settlement, including rejection, hands
-      // exactly one slot to the oldest waiter instead of leaking capacity.
-      this.active -= 1;
-      this.drain();
+      if (timing) {
+        timing.settledAt = performance.now();
+        timing.stepCount ??= 1;
+        timing.admittedStepMs ??= timing.settledAt - startedAt;
+      }
+      release();
     }
   }
 
-  private drain(): void {
-    while (this.active < this.maxConcurrent) {
-      const next = this.queue.shift();
-      if (!next) {
-        return;
-      }
-      next.start();
-    }
+  async runSteps<T>(
+    step: () => Promise<ProviderListStep<T>>,
+    signal?: AbortSignal,
+    timing?: SessionCatalogListTiming,
+  ): Promise<T> {
+    // A list holds its slot until complete; sparse scans may delay the same provider.
+    return this.run(
+      async () => {
+        for (;;) {
+          signal?.throwIfAborted();
+          const startedAt = performance.now();
+          const result = await step();
+          if (timing) {
+            timing.stepCount = (timing.stepCount ?? 0) + 1;
+            timing.admittedStepMs = (timing.admittedStepMs ?? 0) + performance.now() - startedAt;
+          }
+          if (result.done) {
+            return result.value;
+          }
+        }
+      },
+      signal,
+      timing,
+    );
   }
 }

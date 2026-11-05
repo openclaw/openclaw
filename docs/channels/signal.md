@@ -20,7 +20,7 @@ Signal is a downloadable channel plugin (`@openclaw/signal`). The gateway talks 
 openclaw plugins install @openclaw/signal
 ```
 
-`@openclaw/signal` installs from npm first, then falls back to its declared ClawHub package only when the npm target is unavailable. Use `npm:` or `clawhub:` to force a source. `plugins install` registers and enables the plugin; no separate `enable` step is needed. See [Plugins](/tools/plugin) for general install rules.
+`@openclaw/signal` installs from ClawHub by default. Use `npm:@openclaw/signal` to install directly from npm. `plugins install` registers and enables the plugin; no separate `enable` step is needed. See [Plugins](/tools/plugin) for general install rules.
 
 ## Quick setup
 
@@ -49,7 +49,7 @@ openclaw plugins install @openclaw/signal
   </Step>
   <Step title="Verify and pair">
     ```bash
-    openclaw gateway call channels.status --params '{"probe":true}'
+    openclaw channels status --probe
     ```
     Send a first DM and approve pairing: `openclaw pairing approve signal <CODE>`.
   </Step>
@@ -83,11 +83,13 @@ Minimal config:
 
 Multi-account support: use `channels.signal.accounts` with per-account config and optional `name`. Each named account owns its `transport`; it does not inherit the top-level transport. The top-level transport belongs only to the implicit `default` account. See [Multi-account channels](/gateway/config-channels#multi-account-all-channels) for the shared pattern.
 
+Account keys use the normalized IDs shown by status. For example, `Work Phone` with its own `account` number runs as `work-phone` and uses its authored settings without running Doctor. If multiple keys normalize to the same ID, the exact key wins and Doctor reports the collision. Deletion refuses to remove that account if another stored key would then select a different identity; the error names both keys so you can resolve the collision first. Legacy aliases without their own number keep their existing inherited behavior. Doctor can clean up unambiguous keys, but refuses to rename an alias when that would activate previously ignored settings.
+
 Omitted account `dmPolicy` and `groupPolicy` inherit the channel root; explicit account policies win. If neither scope sets them, DMs use `pairing` and groups use `allowlist`.
 
 ## What it is
 
-- Deterministic routing: replies always go back to Signal.
+- Replies always go back to Signal.
 - DMs share the agent's main session; with default `session.groupScope: "per-group"`, groups are isolated (`agent:<agentId>:signal:group:<groupId>`).
 - By default, Signal may write config updates triggered by `/config set|unset` (requires `commands.config: true`). Disable with `channels.signal.configWrites: false`.
 
@@ -114,31 +116,30 @@ signal-cli --version
 
 If you use the JVM build (`signal-cli-${VERSION}.tar.gz`), install a JRE first. Keep `signal-cli` updated; upstream notes old releases can break as Signal server APIs change.
 
+A managed `signal-cli` daemon gets only an allowlisted environment; see [Managed daemon environment](#managed-daemon-environment).
+
 3. Register and verify the number:
 
 ```bash
 signal-cli -a +<BOT_PHONE_NUMBER> register
 ```
 
-If captcha is required (browser access is needed to complete this step):
+Still inside step 3, if captcha is required (browser access is needed to complete
+this step):
 
-1. Open `https://signalcaptchas.org/registration/generate.html`.
-2. Complete the captcha, copy the `signalcaptcha://...` link target from "Open Signal".
-3. Run from the same external IP as the browser session when possible (captcha tokens expire quickly).
-4. Register and verify immediately:
+- Open `https://signalcaptchas.org/registration/generate.html`.
+- Complete the captcha, copy the `signalcaptcha://...` link target from "Open Signal".
+- Run from the same external IP as the browser session when possible (captcha tokens expire quickly).
+- Register and verify immediately:
 
 ```bash
 signal-cli -a +<BOT_PHONE_NUMBER> register --captcha '<SIGNALCAPTCHA_URL>'
 signal-cli -a +<BOT_PHONE_NUMBER> verify <VERIFICATION_CODE>
 ```
 
-4. Configure OpenClaw, restart the gateway, verify the channel:
+4. Configure OpenClaw and verify the channel. Config changes follow [hot reload](/gateway/configuration/hot-reload); start the Gateway if it is offline. Restart it if you changed the service's `PATH` to find `signal-cli`.
 
 ```bash
-# If you run the gateway as a user systemd service:
-systemctl --user restart openclaw-gateway.service
-
-# Then verify:
 openclaw doctor
 openclaw channels status --probe
 ```
@@ -183,6 +184,25 @@ openclaw channels add --channel signal --signal-number +15551234567 \
 ```
 
 This skips auto-spawn and OpenClaw's startup wait. For a managed daemon with a slow start, set `channels.signal.transport.startupTimeoutMs`.
+
+## Managed daemon environment
+
+A managed `signal-cli` daemon gets only process essentials from the Gateway environment: `PATH`, `HOME`, user, locale (`LANG`, `LC_*`), `TZ`, temp directories, `XDG_*`, the Java launcher inputs (`JAVA_HOME`, `JAVA_OPTS`, `JAVA_TOOL_OPTIONS`, `JDK_JAVA_OPTIONS`, `_JAVA_OPTIONS`, `SIGNAL_CLI_OPTS`), signal-cli's own `SIGNAL_CLI_CONFIG` and `SIGNAL_CLI_USER_AGENT`, the native library path (`LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, `DYLD_FALLBACK_LIBRARY_PATH`), and common Windows system variables. Provider keys, Gateway tokens and other secrets in the Gateway environment do not reach it.
+
+Proxy and trust-store variables (`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `ALL_PROXY` in either case, `SSL_CERT_FILE`, `SSL_CERT_DIR`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`) are not inherited. When any of them is set, the Gateway logs a one-time warning naming them (names only, never values) when it starts the daemon, and `openclaw doctor` reports the same.
+
+`signal-cli` runs on the JVM, which takes proxy and trust-store settings from Java system properties. Pick one:
+
+- Pass Java properties through `JAVA_TOOL_OPTIONS`, which the daemon inherits:
+
+  ```bash
+  JAVA_TOOL_OPTIONS="-Dhttps.proxyHost=proxy.example -Dhttps.proxyPort=3128 -Dhttp.nonProxyHosts=localhost|127.0.0.1"
+  ```
+
+  For a private CA, add `-Djavax.net.ssl.trustStore=/path/to/truststore.p12 -Djavax.net.ssl.trustStoreType=PKCS12`.
+
+- Point `channels.signal.transport.cliPath` at a wrapper script that sets what it needs (for example, turns your proxy variables into Java properties), then runs `signal-cli "$@"`.
+- Run the daemon yourself and use [external native daemon mode](#external-native-daemon-mode).
 
 ## Container mode (bbernhard/signal-cli-rest-api)
 
@@ -236,15 +256,63 @@ OpenClaw config:
 | `"external-native"` | Connect to an already-running native signal-cli daemon                                                                                                       |
 | `"container"`       | Connect to bbernhard REST at `/v2/send` and WebSocket at `/v1/receive/{account}`                                                                             |
 
-Setup and `openclaw doctor --fix` may probe an existing endpoint once to identify its concrete kind. Runtime operations do not auto-detect or switch protocols.
+Setup and `openclaw doctor --fix` may check an existing endpoint once to identify its concrete kind. Runtime operations do not auto-detect or switch protocols.
 
 Container mode supports the same Signal operations as native mode where the container exposes matching APIs: sends, receives, attachments, typing indicators, read/viewed receipts, reactions, groups, and styled text. OpenClaw translates native Signal RPC calls into the container's REST payloads, including `group.{base64(internal_id)}` group IDs and `text_mode: "styled"` for formatted text.
 
 Operational notes:
 
-- Use `MODE=json-rpc` for receiving. `MODE=normal` can make `/v1/about` look healthy, but `/v1/receive/{account}` will not WebSocket-upgrade, so container receive streaming will fail its probe.
+- Use `MODE=json-rpc` for receiving. `MODE=normal` can make `/v1/about` look healthy, but `/v1/receive/{account}` will not WebSocket-upgrade, so container receive streaming will fail its check.
 - Set `kind: "container"` for the bbernhard REST API and `kind: "external-native"` for native `signal-cli` JSON-RPC/SSE.
+- The receive WebSocket sends standard ping frames. When the container stops answering them (for example after a network drop that never closed the connection), OpenClaw drops the socket and reconnects. A quiet account alone never triggers a reconnect.
 - Container attachment downloads honor the same media byte limits as native mode. Oversized responses are rejected before being fully buffered when the server sends `Content-Length`, and while streaming otherwise.
+- Health and missing-attachment results do not wait for an unused response body's cancellation to finish.
+
+## Opt-in private UNIX socket
+
+On POSIX systems, a managed native daemon can use a UNIX socket instead of an
+HTTP listener. This is useful on shared hosts where other OS users must not
+control the Signal daemon. Configure `transport.socketPath` with an absolute
+path (at most 103 UTF-8 bytes, without `.` or `..` path segments):
+
+```json5
+{
+  channels: {
+    signal: {
+      enabled: true,
+      account: "+15555550123",
+      transport: {
+        kind: "managed-native",
+        socketPath: "/home/user/.local/state/signal-private/daemon.sock",
+      },
+    },
+  },
+}
+```
+
+The socket's immediate directory must belong to the Gateway OS user and have
+mode `0700` (no group or other access). OpenClaw creates that directory if it
+is missing and its parent already exists; it does not repair permissions on
+existing directories. Symlink paths are rejected. On macOS, OpenClaw also
+inspects ACLs beyond the BSD mode bits and rejects access-granting ACL entries
+for non-owners, including inheritable entries. On Linux, POSIX ACLs are not
+inspected; operators should select a parent hierarchy with no access-granting
+ACLs. Use a distinct socket path for each account. Windows is not supported for
+this opt-in.
+
+`socketPath` is only valid with `kind: "managed-native"` and cannot be combined
+with `url`, `httpHost`, or `httpPort`. Omit `receiveMode` or set it to `"manual"`;
+OpenClaw manages receive subscriptions over the socket. Socket connection or
+permission failures stop this transport; there is no HTTP fallback.
+
+Existing managed HTTP defaults, external native daemons, and container setups
+are unchanged. **Opting out leaves the existing HTTP exposure unchanged:** a
+loopback bind does not prevent another local OS user from reaching an
+unauthenticated daemon. The private directory separates OS users, not processes
+running as the same user or administrators. `signal-cli` does not authorize a
+connecting peer's UID, so this isolation guarantee depends on filesystem
+authorization. Signal sender pairing and allowlists remain separate
+message-access controls.
 
 ## Access control (DMs + groups)
 
@@ -299,6 +367,7 @@ Allowed group messages that do not mention the bot stay silent and are kept only
 - Inbound messages are normalized into the shared channel envelope.
 - Replies always route back to the same number or group.
 - Replies to inbound messages include native Signal quote metadata when the backend accepts the inbound timestamp and author; if quote metadata is missing or rejected, OpenClaw sends the reply as a normal message.
+- Canceling the originating delivery stops subsequent send attempts, including attachments still being prepared and native-quote fallback. A request already submitted to Signal is allowed to finish, and its accepted result is preserved; cancellation does not recall that message.
 - Configure native quote use with `channels.signal.replyToMode = off | first | all | batched`, or `channels.signal.replyToModeByChatType.direct/group` for per-chat-type overrides. Account-level values under `channels.signal.accounts.<id>` take precedence.
 
 ## Media + limits
@@ -357,9 +426,14 @@ Signal exec and plugin approval prompts use the top-level `approvals.exec` and `
 
 Approval reaction resolution requires explicit Signal approvers from `channels.signal.allowFrom`, `channels.signal.defaultTo`, or the matching account-level fields. Direct same-chat exec approval prompts can still suppress the duplicate local `/approve` fallback without explicit approvers; no-approver group approvals keep the local fallback visible.
 
-## Question reactions
+<a id="question-reactions" />
 
-For an `ask_user` prompt with one non-secret, single-select question and one to four options, Signal shows `1️⃣` through `4️⃣` beside the option labels. React to the delivered prompt with the matching number to answer it. OpenClaw verifies the reaction targets the bot-authored message, then maps the number to the canonical option through the Gateway. Stale or duplicate taps are ignored. Multi-question, multi-select, and free-text prompts remain text-reply-only; normal Signal DM/group admission rules authorize the sender.
+## Agent questions
+
+Signal does not expose the [`ask_user`](/tools/ask-user) tool. When the agent
+needs your input, it asks in an ordinary message and you reply in plain text.
+Numbered reactions do not answer questions. Approval reactions described above
+are unchanged.
 
 ## Delivery targets (CLI/cron)
 
@@ -437,6 +511,7 @@ openclaw pairing list signal
 Common failures:
 
 - Daemon reachable but no replies: verify `account`, `transport.kind`, the transport URL, and receive mode.
+- Event stream repeatedly closes: inspect the daemon or proxy; a healthy idle stream stays open, and unexpected closure appears as a lost connection in logs and channel status.
 - DMs ignored: sender is pending pairing approval.
 - Group messages ignored: group sender/mention gating blocks delivery.
 - Config validation errors after edits: run `openclaw doctor --fix`.
@@ -493,6 +568,7 @@ Provider options:
 - `channels.signal.historyLimit`: max group messages to include as context (0 disables).
 - `channels.signal.dmHistoryLimit`: DM history limit in user turns. Per-user overrides: `channels.signal.dms["<phone_or_uuid>"].historyLimit`.
 - `channels.signal.textChunkLimit`: outbound chunk size in characters (default 4000).
+- `channels.signal.markdown.tables`: Markdown table rendering mode, `off | bullets | code` (default `bullets`); `block` falls back to `code` (Signal has no native block tables).
 - `channels.signal.streaming.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.signal.mediaMaxMb`: inbound/outbound media cap in MB (default 8).
 - `channels.signal.reactionLevel`: `off | ack | minimal | extensive` (default `minimal`). See [Reactions](#reactions-message-tool).
@@ -511,5 +587,7 @@ Related global options:
 - [Channels Overview](/channels) - all supported channels
 - [Pairing](/channels/pairing) - DM authentication and pairing flow
 - [Groups](/channels/groups) - group chat behavior and mention gating
-- [Channel Routing](/channels/channel-routing) - session routing for messages
+- [Channel routing](/channels/channel-routing) - session routing for messages
+- [Reactions](/tools/reactions) - emoji reaction semantics for the `message` tool
+- [RPC adapters](/reference/rpc) - the signal-cli JSON-RPC-over-HTTP daemon pattern behind this channel
 - [Security](/gateway/security) - access model and hardening

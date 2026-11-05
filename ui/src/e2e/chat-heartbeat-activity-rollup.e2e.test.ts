@@ -1,30 +1,13 @@
-// Control UI E2E covers pooling reply-less wake activity (heartbeats) into one rollup row.
-import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-
-let artifactDir: string | undefined;
-beforeEach(() => {
-  const parent = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-  artifactDir = parent
-    ? createControlUiE2eArtifactDir("chat-heartbeat-activity-rollup", parent)
-    : undefined;
-});
+import { expect, it } from "vitest";
+import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
+import { chatMessage, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI heartbeat activity rollup",
   startServerBeforeBrowser: true,
 });
-
-async function captureProof(page: import("playwright").Page, name: string) {
-  if (!artifactDir) {
-    return;
-  }
-  await page.screenshot({ path: path.join(artifactDir, `${name}.png`), fullPage: true });
-}
 
 function heartbeatWake(index: number): Array<Record<string, unknown>> {
   const runId = `heartbeat-run-${index}`;
@@ -34,12 +17,7 @@ function heartbeatWake(index: number): Array<Record<string, unknown>> {
     {
       role: "assistant",
       content: [
-        {
-          type: "toolCall",
-          id: callId,
-          name: "heartbeat_respond",
-          arguments: { notify: false },
-        },
+        { type: "toolCall", id: callId, name: "heartbeat_respond", arguments: { notify: false } },
       ],
       runId,
       timestamp,
@@ -49,6 +27,7 @@ function heartbeatWake(index: number): Array<Record<string, unknown>> {
       toolCallId: callId,
       toolName: "heartbeat_respond",
       content: "ok",
+      isError: false,
       runId,
       timestamp: timestamp + 100,
     },
@@ -62,16 +41,13 @@ suite.define(() => {
       const wakeCount = 6;
       await installMockGateway(page, {
         sessionKey,
-        historyMessages: [
-          { role: "user", content: "Watch the queue.", timestamp: 1_000, runId: "reply-run" },
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "Watching." }],
-            timestamp: 2_000,
-            runId: "reply-run",
-          },
-          ...Array.from({ length: wakeCount }, (_, index) => heartbeatWake(index + 1)).flat(),
-        ],
+        methodResponses: {
+          "chat.history": prepareChatHistoryFixture([
+            { role: "user", content: "Watch the queue.", timestamp: 1_000, runId: "reply-run" },
+            chatMessage("assistant", "Watching.", { timestamp: 2_000, runId: "reply-run" }),
+            ...Array.from({ length: wakeCount }, (_, index) => heartbeatWake(index + 1)).flat(),
+          ]),
+        },
       });
 
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -82,18 +58,15 @@ suite.define(() => {
       await rollup.waitFor();
       await expect
         .poll(async () => rollup.locator(".chat-activity-group__label").textContent())
-        .toBe(`Used Heartbeat Respond ×${wakeCount}`);
-      // One pooled row owns all wakes; no per-wake rows remain in the transcript.
+        .toBe(`${wakeCount} other operations`);
       expect(await rollup.count()).toBe(1);
       expect(await page.locator(".chat-tool-row").count()).toBe(0);
-      await captureProof(page, "heartbeat-rollup-collapsed");
 
       await rollup.click();
       await expect
         .poll(async () => page.locator(".chat-activity-group__body .chat-tool-row").count())
         .toBe(wakeCount);
       await waitForChatScrollIdle(page);
-      await captureProof(page, "heartbeat-rollup-expanded");
     });
   });
 });

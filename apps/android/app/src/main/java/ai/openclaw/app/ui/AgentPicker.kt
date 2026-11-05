@@ -18,7 +18,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -104,7 +103,7 @@ internal fun AgentPicker(
       }
     }
 
-    DropdownMenu(
+    AppDropdownMenu(
       expanded = expanded,
       onDismissRequest = { expanded = false },
       containerColor = ClawTheme.colors.surfaceRaised,

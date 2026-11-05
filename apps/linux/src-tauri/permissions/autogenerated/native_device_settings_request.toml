@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-native-device-settings-request"
+description = "Enables the native_device_settings_request command without any pre-configured scope."
+commands.allow = ["native_device_settings_request"]
+
+[[permission]]
+identifier = "deny-native-device-settings-request"
+description = "Denies the native_device_settings_request command without any pre-configured scope."
+commands.deny = ["native_device_settings_request"]

@@ -6,7 +6,7 @@ import type {
 } from "./manifest-types.js";
 import type { OpenClawPackageManifest, PackageManifest } from "./package-manifest.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
-import type { PluginDependencySpecMap } from "./status-dependencies-core.js";
+import type { PluginDependencySpecMap } from "./status-dependencies.types.js";
 
 /** One potential plugin root discovered before manifest validation and registry normalization. */
 export type PluginCandidate = {

@@ -1,25 +1,5 @@
-// Mattermost helper module supports monitor helpers behavior.
-import { formatInboundFromLabel as formatInboundFromLabelShared } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveThreadSessionKeys as resolveThreadSessionKeysShared } from "openclaw/plugin-sdk/routing";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
-import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
-
-export { rawDataToString };
-
-export const formatInboundFromLabel = formatInboundFromLabelShared;
-
-export function resolveThreadSessionKeys(params: {
-  baseSessionKey: string;
-  threadId?: string | null;
-  parentSessionKey?: string;
-  useSuffix?: boolean;
-}): { sessionKey: string; parentSessionKey?: string } {
-  return resolveThreadSessionKeysShared({
-    ...params,
-    normalizeThreadId: (threadId) => threadId,
-  });
-}
 
 // Server mentions allow surrounding sentence punctuation, while punctuation
 // followed by username characters belongs to another local or remote account.
@@ -84,7 +64,7 @@ export function shouldDropEmptyMattermostBody(params: {
   if (/[^\p{White_Space}\p{Cc}\p{Cf}\p{M}]/u.test(params.bodyText)) {
     return false;
   }
-  const botUsername = normalizeLowercaseStringOrEmpty(params.botUsername ?? "");
+  const botUsername = normalizeLowercaseStringOrEmpty(params.botUsername);
   const bareMention = params.rawText.match(/^[ \t]*(@\S+)[ \t]*$/u)?.[1];
-  return !botUsername || normalizeLowercaseStringOrEmpty(bareMention ?? "") !== `@${botUsername}`;
+  return !botUsername || normalizeLowercaseStringOrEmpty(bareMention) !== `@${botUsername}`;
 }

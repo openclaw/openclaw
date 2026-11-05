@@ -1,28 +1,26 @@
-import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import type { CronConfig } from "../../config/types.cron.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
+import { isCronTimeoutErrorText } from "../execution-error-constants.js";
 import { type CronRetryOn, resolveCronExecutionRetryHint } from "../retry-hint.js";
-import { createCronStreamSourceIdentity } from "../stream-schedule.js";
+import { createCronSourceIdentity } from "../source-schedule.js";
+import {
+  CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
+  hasCanonicalCronDeliveryMode,
+} from "../store/delivery-codec.js";
 import type {
   CronJob,
   CronDeliveryTrace,
+  CronFailureNotificationDetail,
   CronResolvedDeliveryState,
   CronRunErrorClassification,
   CronRunStatus,
+  CronTriggerEvalOutcome,
 } from "../types.js";
-import { autoDisableCronJob } from "./auto-disable.js";
 import {
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   errorBackoffMs,
-  isJobEnabled,
+  resolveNextRunAtMsOrDisable,
 } from "./jobs-scheduling.js";
-import type {
-  CronServiceState,
-  CronSystemEventEnqueueResult,
-  DeferredCronNotifications,
-} from "./state.js";
-import type { CronTriggerEvalOutcome } from "./timer-execution-timeout.js";
-import { HEARTBEAT_SKIP_DISABLED } from "./timer-execution-timeout.js";
+import type { CronJobPolicyContext, DeferredCronNotifications } from "./state.js";
 
 /** Default max retries for cron jobs on transient errors (#24355). */
 const DEFAULT_MAX_TRANSIENT_RETRIES = 3;
@@ -32,42 +30,8 @@ type TransientCronRetryDecision = {
   consecutiveErrors: number;
   retryCategory?: CronRetryOn;
   backoffMs?: number;
-  reason: "transient retry" | "max retries exhausted" | "permanent error";
+  reason: "transient retry" | "max retries exhausted" | "permanent error" | "aborted";
 };
-
-type DisabledHeartbeatOneShotRetryDecision = {
-  retryable: boolean;
-  consecutiveSkipped: number;
-  backoffMs?: number;
-  reason: "disabled heartbeat retry" | "max retries exhausted";
-};
-
-type QueuedSystemEventHandle = {
-  accepted: boolean;
-  remove?: () => boolean | void;
-};
-
-/** Rejects outcome-generated schedule timestamps before they can persist or arm a timer. */
-export function resolveNextRunAtMsOrDisable(params: {
-  state: CronServiceState;
-  job: CronJob;
-  candidate: unknown;
-  deferredNotifications?: DeferredCronNotifications;
-}): number | undefined {
-  const nextRunAtMs = asDateTimestampMs(params.candidate);
-  if (nextRunAtMs !== undefined && nextRunAtMs > 0) {
-    return nextRunAtMs;
-  }
-  autoDisableCronJob({
-    state: params.state,
-    job: params.job,
-    reason: "schedule-errors",
-    atMs: params.state.deps.nowMs(),
-    consecutiveErrors: 1,
-    deferredNotifications: params.deferredNotifications,
-  });
-  return undefined;
-}
 
 /** Persists non-busy trigger evaluation state without touching payload-run history. */
 export function applyTriggerEvaluationState(
@@ -110,7 +74,7 @@ export function applyTriggerRunResult(
     result.status === "ok"
   ) {
     if (job.schedule.kind === "stream") {
-      job.state.streamSourceIdentity = createCronStreamSourceIdentity();
+      job.state.streamSourceIdentity = createCronSourceIdentity();
     }
     job.enabled = false;
     job.state.nextRunAtMs = undefined;
@@ -118,11 +82,11 @@ export function applyTriggerRunResult(
 }
 
 export function resolveCronNextRunWithLowerBound(params: {
-  state: CronServiceState;
+  state: CronJobPolicyContext;
   job: CronJob;
   naturalNext: number | undefined;
   lowerBoundMs: number;
-  deferredNotifications?: DeferredCronNotifications;
+  deferredNotifications: DeferredCronNotifications;
 }): number | undefined {
   if (params.naturalNext === undefined) {
     params.state.deps.log.warn(
@@ -142,14 +106,40 @@ export function resolveCronNextRunWithLowerBound(params: {
   });
 }
 
+/**
+ * True when a scheduled quick re-run targets a provider outage, so the failure alert and
+ * owner repair wait for it. Provider transport failures (DNS, refused connections, request
+ * timeouts) classify as `timeout`. Failures the job owns are not held: its scripts, command
+ * payloads, and cron's own execution watchdog usually need the owner repair promptly.
+ */
+export function holdsFailureNotificationForRetry(
+  job: CronJob,
+  result: { error?: string; failureNotificationDetail?: CronFailureNotificationDetail },
+  category: CronRetryOn | undefined,
+): boolean {
+  if (category === undefined || result.failureNotificationDetail?.kind === "script-failure") {
+    return false;
+  }
+  return (
+    category !== "timeout" ||
+    (job.payload.kind !== "command" && !isCronTimeoutErrorText(result.error))
+  );
+}
+
 export function resolveTransientCronRetryDecision(params: {
-  cronConfig?: CronConfig;
   error: string | undefined;
   errorClassification?: CronRunErrorClassification;
   lastErrorReason?: CronJob["state"]["lastErrorReason"];
   executionStarted?: boolean;
   consecutiveErrors: number | undefined;
 }): TransientCronRetryDecision {
+  if (params.errorClassification?.kind === "aborted") {
+    return {
+      retryable: false,
+      consecutiveErrors: params.consecutiveErrors ?? 0,
+      reason: "aborted",
+    };
+  }
   if (params.errorClassification?.kind === "permanent") {
     return {
       retryable: false,
@@ -195,100 +185,6 @@ export function resolveTransientCronRetryDecision(params: {
   };
 }
 
-export function resolveDisabledHeartbeatOneShotRetryDecision(params: {
-  cronConfig?: CronConfig;
-  consecutiveSkipped: number | undefined;
-}): DisabledHeartbeatOneShotRetryDecision {
-  const consecutiveSkipped = params.consecutiveSkipped ?? 0;
-  if (consecutiveSkipped > DEFAULT_MAX_TRANSIENT_RETRIES) {
-    return {
-      retryable: false,
-      consecutiveSkipped,
-      reason: "max retries exhausted",
-    };
-  }
-  return {
-    retryable: true,
-    consecutiveSkipped,
-    backoffMs: errorBackoffMs(
-      consecutiveSkipped,
-      DEFAULT_ERROR_BACKOFF_SCHEDULE_MS.slice(0, DEFAULT_MAX_TRANSIENT_RETRIES),
-    ),
-    reason: "disabled heartbeat retry",
-  };
-}
-
-export function normalizeQueuedSystemEventHandle(
-  result: CronSystemEventEnqueueResult,
-): QueuedSystemEventHandle {
-  if (typeof result === "boolean") {
-    return { accepted: result };
-  }
-  if (result && typeof result === "object") {
-    return {
-      accepted: result.accepted !== false,
-      ...(result.remove ? { remove: result.remove } : {}),
-    };
-  }
-  return { accepted: true };
-}
-
-export function removeQueuedSystemEventHandle(
-  state: CronServiceState,
-  job: CronJob,
-  queued: QueuedSystemEventHandle,
-) {
-  if (!queued.accepted || !queued.remove) {
-    return;
-  }
-  try {
-    queued.remove();
-  } catch (err) {
-    state.deps.log.warn(
-      { jobId: job.id, jobName: job.name, err },
-      "cron: failed to remove undelivered main-session system event",
-    );
-  }
-}
-
-export function shouldRetryDisabledHeartbeatOneShot(
-  job: CronJob,
-  result: { status: CronRunStatus; error?: string },
-): boolean {
-  return (
-    job.schedule.kind === "at" &&
-    job.sessionTarget === "main" &&
-    job.wakeMode === "now" &&
-    result.status === "skipped" &&
-    result.error === HEARTBEAT_SKIP_DISABLED
-  );
-}
-
-export function isScheduledTerminalOneShotRetry(
-  job: CronJob,
-  lastRunStatus: CronRunStatus,
-  lastRun: unknown,
-  nextRun: unknown,
-): boolean {
-  if (
-    !isJobEnabled(job) ||
-    typeof nextRun !== "number" ||
-    typeof lastRun !== "number" ||
-    nextRun <= lastRun
-  ) {
-    return false;
-  }
-  if (lastRunStatus === "error") {
-    return true;
-  }
-  return (
-    lastRunStatus === "skipped" &&
-    job.sessionTarget === "main" &&
-    job.wakeMode === "now" &&
-    job.state.lastError === HEARTBEAT_SKIP_DISABLED
-  );
-}
-
 export function resolveDeliveryState(params: {
   job: CronJob;
   runStatus: CronRunStatus;
@@ -298,8 +194,6 @@ export function resolveDeliveryState(params: {
   error?: string;
   deliverySuppressionReason?: CronResolvedDeliveryState["deliverySuppressionReason"];
 }): CronResolvedDeliveryState {
-  const primaryDeliveryPlan = resolveCronDeliveryPlan(params.job);
-  const primaryDeliveryRequested = primaryDeliveryPlan.requested;
   const noFailureNotification = { status: "not-requested" as const };
   const verifiedDelivery =
     params.delivered === true &&
@@ -311,6 +205,15 @@ export function resolveDeliveryState(params: {
       failureNotification: noFailureNotification,
     };
   }
+  if (!hasCanonicalCronDeliveryMode(params.job.delivery)) {
+    return {
+      status: "unknown",
+      error: CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
+      failureNotification: noFailureNotification,
+    };
+  }
+  const primaryDeliveryPlan = resolveCronDeliveryPlan(params.job);
+  const primaryDeliveryRequested = primaryDeliveryPlan.requested;
   if (!primaryDeliveryRequested) {
     if (primaryDeliveryPlan.mode === "webhook" && params.deliveryAttempted === true) {
       return {

@@ -1,14 +1,19 @@
-import { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
+import { logInboundDrop, resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveBotThreadMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { formatAudioTranscriptForAgent } from "openclaw/plugin-sdk/media-understanding-runtime";
 import { buildInboundHistoryFromEntries } from "openclaw/plugin-sdk/reply-history";
 import { isMatrixMediaSizeLimitError } from "../media-errors.js";
-import { isLikelyBareFilename } from "../media-text.js";
+import {
+  formatMatrixMessageText,
+  isLikelyBareFilename,
+  resolveMatrixMessageAttachment,
+} from "../media-text.js";
 import { fetchMatrixPollSnapshot, type MatrixPollSnapshot } from "../poll-summary.js";
 import { resolveMatrixMonitorCommandAccess } from "./access-state.js";
+import type { createMatrixEventContextResolver } from "./event-context.js";
 import {
   isMatrixAudioMediaEnabled,
-  resolveMatrixInboundBodyText,
   resolveMatrixInboundMediaContent,
   resolveMatrixMentionPrecheckText,
   resolveMatrixPendingHistoryText,
@@ -21,14 +26,9 @@ import { loadAcpBindingRuntime, loadSessionBindingRuntime } from "./handler-runt
 import type { MatrixHandlerRuntimeConfig } from "./handler-types.js";
 import { downloadMatrixMedia } from "./media.js";
 import { resolveMentions, stripMatrixMentionPrefix } from "./mentions.js";
-import {
-  isMatrixAudioContent,
-  resolveMatrixPreflightAudioTranscript,
-  sendMatrixPreflightAudioTranscriptEcho,
-} from "./preflight-audio.js";
+import { isMatrixAudioContent, matrixPreflightAudio } from "./preflight-audio.js";
 import { createRoomHistoryTracker, type HistoryEntry } from "./room-history.js";
-import { resolveMatrixInboundRoute } from "./route.js";
-import { logInboundDrop } from "./runtime-api.js";
+import { resolveMatrixInboundRouteAsync } from "./route.js";
 import type { MatrixRawEvent } from "./types.js";
 
 export async function resolveMatrixIngressContent(config: {
@@ -42,7 +42,7 @@ export async function resolveMatrixIngressContent(config: {
   eventTs?: number;
   senderId: string;
   roomHistoryTracker: ReturnType<typeof createRoomHistoryTracker>;
-  commitInboundEventIfClaimed: () => Promise<void>;
+  resolveThreadContext: ReturnType<typeof createMatrixEventContextResolver>;
 }) {
   const {
     handler,
@@ -55,7 +55,7 @@ export async function resolveMatrixIngressContent(config: {
     eventTs,
     senderId,
     roomHistoryTracker,
-    commitInboundEventIfClaimed,
+    resolveThreadContext,
   } = config;
   const {
     client,
@@ -72,7 +72,6 @@ export async function resolveMatrixIngressContent(config: {
 
   const {
     cfg,
-    liveDmAllowFrom,
     content: accessContent,
     messageId,
     audioPreflightMode,
@@ -85,19 +84,15 @@ export async function resolveMatrixIngressContent(config: {
     historyThreadId,
     discardReservedHistorySlot,
     markReservedHistorySlotConsumed,
-    commitInboundEventIfClaimedAndDiscardReserved,
     roomConfig,
     allowBotsMode,
     isConfiguredBotSender,
     selfUserId,
-    botLoopProtection,
     roomMatchMeta,
     getSenderName,
     accessState,
-    effectiveGroupAllowFrom,
-    effectiveRoomUsers,
   } = access;
-  const { messageIngress, resolveMessageIngress } = accessState;
+  const { resolveMessageIngress } = accessState;
   let content = accessContent;
   let pollSnapshotPromise: Promise<MatrixPollSnapshot | null> | null = null;
   const getPollSnapshot = async (): Promise<MatrixPollSnapshot | null> => {
@@ -128,7 +123,7 @@ export async function resolveMatrixIngressContent(config: {
   const pendingHistoryPollText =
     !pendingHistoryText && isPollEvent && historyLimit > 0 ? (await getPollSnapshot())?.text : "";
   if (!mentionPrecheckText && !mediaUrl && !isPollEvent) {
-    await commitInboundEventIfClaimedAndDiscardReserved();
+    discardReservedHistorySlot();
     return undefined;
   }
 
@@ -137,15 +132,43 @@ export async function resolveMatrixIngressContent(config: {
     contentType?: string;
     placeholder: string;
   } | null = null;
-  let preflightMediaDownloadFailed = false;
-  let preflightMediaSizeLimitExceeded = false;
+  let mediaDownloadFailed = false;
+  let mediaSizeLimitExceeded = false;
   let preflightAudioTranscript: string | undefined;
+  const downloadMedia = async (mxcUrl: string) => {
+    try {
+      return await downloadMatrixMedia({
+        client,
+        mxcUrl,
+        contentType: mediaContent.contentType,
+        sizeBytes: mediaContent.sizeBytes,
+        maxBytes: mediaMaxBytes,
+        file: mediaContent.file,
+        originalFilename: mediaContent.originalFilename,
+      });
+    } catch (err) {
+      mediaDownloadFailed = true;
+      mediaSizeLimitExceeded = isMatrixMediaSizeLimitError(err);
+      const errorText = formatErrorMessage(err);
+      logVerboseMessage(
+        `matrix: media download failed room=${roomId} id=${event.event_id ?? "unknown"} type=${content.msgtype} error=${errorText}`,
+      );
+      logger.warn("matrix media download failed", {
+        roomId,
+        eventId: event.event_id,
+        msgtype: content.msgtype,
+        encrypted: Boolean(mediaContent.file),
+        error: errorText,
+      });
+      return null;
+    }
+  };
 
   const {
     route: _route,
     configuredBinding: _configuredBinding,
     runtimeBindingId: _runtimeBindingId,
-  } = resolveMatrixInboundRoute({
+  } = await resolveMatrixInboundRouteAsync({
     cfg,
     accountId,
     roomId,
@@ -191,43 +214,23 @@ export async function resolveMatrixIngressContent(config: {
     } as const;
   }
   if (shouldRunMatrixAudioPreflight) {
-    try {
-      preflightMedia = await downloadMatrixMedia({
-        client,
-        mxcUrl: preflightAudioMediaUrl,
-        contentType: mediaContent.contentType,
-        sizeBytes: mediaContent.sizeBytes,
-        maxBytes: mediaMaxBytes,
-        file: mediaContent.file,
-        originalFilename: mediaContent.originalFilename,
-      });
-    } catch (err) {
-      preflightMediaDownloadFailed = true;
-      if (isMatrixMediaSizeLimitError(err)) {
-        preflightMediaSizeLimitExceeded = true;
-      }
-      const errorText = formatErrorMessage(err);
-      logVerboseMessage(
-        `matrix: media download failed room=${roomId} id=${event.event_id ?? "unknown"} type=${content.msgtype} error=${errorText}`,
-      );
-      logger.warn("matrix media download failed", {
-        roomId,
-        eventId: event.event_id,
-        msgtype: content.msgtype,
-        encrypted: Boolean(mediaContent.file),
-        error: errorText,
-      });
-    }
+    preflightMedia = await downloadMedia(preflightAudioMediaUrl);
     if (preflightMedia) {
-      preflightAudioTranscript = await resolveMatrixPreflightAudioTranscript({
-        mediaPath: preflightMedia.path,
-        mediaContentType: preflightMedia.contentType,
-        cfg,
-        accountId,
-        chatType: isDirectMessage ? "direct" : "channel",
-        originatingTo: `room:${roomId}`,
-        messageThreadId: thread.threadId,
-        sessionKey: _route.sessionKey,
+      preflightAudioTranscript = await matrixPreflightAudio.resolve({
+        request: {
+          ctx: {
+            media: [{ path: preflightMedia.path, contentType: preflightMedia.contentType }],
+            Provider: "matrix",
+            Surface: "matrix",
+            OriginatingChannel: "matrix",
+            OriginatingTo: `room:${roomId}`,
+            AccountId: accountId,
+            MessageThreadId: thread.threadId,
+            ChatType: isDirectMessage ? "direct" : "channel",
+            SessionKey: _route.sessionKey,
+          },
+          cfg,
+        },
       });
     }
   }
@@ -253,14 +256,13 @@ export async function resolveMatrixIngressContent(config: {
     logVerboseMessage(
       `matrix: drop configured bot sender=${senderId} (allowBots=mentions, missing mention, ${roomMatchMeta})`,
     );
-    await commitInboundEventIfClaimedAndDiscardReserved();
+    discardReservedHistorySlot();
     return undefined;
   }
   const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
     cfg,
     surface: "matrix",
   });
-  const useAccessGroups = true;
   // Keep mention stripping on the command-only path so history and agent
   // prompt text continue to see the original Matrix message.
   const commandCheckText = stripMatrixMentionPrefix({
@@ -271,7 +273,6 @@ export async function resolveMatrixIngressContent(config: {
   });
   const hasControlCommandInMessage = core.channel.text.hasControlCommand(commandCheckText, cfg);
   const commandAccess = await resolveMatrixMonitorCommandAccess(accessState, {
-    useAccessGroups,
     allowTextCommands,
     hasControlCommand: hasControlCommandInMessage,
   });
@@ -283,10 +284,10 @@ export async function resolveMatrixIngressContent(config: {
       reason: "control command (unauthorized)",
       target: senderId,
     });
-    await commitInboundEventIfClaimedAndDiscardReserved();
+    discardReservedHistorySlot();
     return undefined;
   }
-  const shouldRequireMention = isRoom
+  const configuredRequireMention = isRoom
     ? roomConfig?.autoReply === true
       ? false
       : roomConfig?.autoReply === false
@@ -295,6 +296,17 @@ export async function resolveMatrixIngressContent(config: {
           ? roomConfig?.requireMention
           : true
     : false;
+  const requireMentionInBotThreads =
+    roomConfig?.requireMentionInBotThreads ?? accountConfig?.requireMentionInBotThreads;
+  const threadContext =
+    isRoom && threadRootId && requireMentionInBotThreads !== undefined
+      ? await resolveThreadContext({ roomId, eventId: threadRootId })
+      : undefined;
+  const { requireMention: shouldRequireMention } = resolveBotThreadMentionPolicy({
+    isBotOwnedThread: threadContext?.senderId === selfUserId,
+    requireMentionInBotThreads,
+    requireMention: configuredRequireMention,
+  });
   const mentionDecision = resolveInboundMentionDecision({
     facts: {
       // Matrix native mention metadata lets us reliably decide absence even
@@ -337,11 +349,10 @@ export async function resolveMatrixIngressContent(config: {
       }
     }
     logger.info("skipping room message", { roomId, reason: "no-mention" });
-    await commitInboundEventIfClaimed();
     return undefined;
   }
   if (preflightAudioTranscript) {
-    await sendMatrixPreflightAudioTranscriptEcho({
+    await matrixPreflightAudio.send({
       transcript: preflightAudioTranscript,
       cfg,
       accountId,
@@ -363,54 +374,38 @@ export async function resolveMatrixIngressContent(config: {
     mediaContent = resolveMatrixInboundMediaContent(content);
   }
 
-  let media: {
-    path: string;
-    contentType?: string;
-    placeholder: string;
-  } | null = preflightMedia;
-  let mediaDownloadFailed = preflightMediaDownloadFailed;
-  let mediaSizeLimitExceeded = preflightMediaSizeLimitExceeded;
+  let media = preflightMedia;
   const finalMediaUrl = mediaContent.url;
   if (!media && !mediaDownloadFailed && finalMediaUrl?.startsWith("mxc://")) {
-    try {
-      media = await downloadMatrixMedia({
-        client,
-        mxcUrl: finalMediaUrl,
-        contentType: mediaContent.contentType,
-        sizeBytes: mediaContent.sizeBytes,
-        maxBytes: mediaMaxBytes,
-        file: mediaContent.file,
-        originalFilename: mediaContent.originalFilename,
-      });
-    } catch (err) {
-      mediaDownloadFailed = true;
-      if (isMatrixMediaSizeLimitError(err)) {
-        mediaSizeLimitExceeded = true;
-      }
-      const errorText = formatErrorMessage(err);
-      logVerboseMessage(
-        `matrix: media download failed room=${roomId} id=${event.event_id ?? "unknown"} type=${content.msgtype} error=${errorText}`,
-      );
-      logger.warn("matrix media download failed", {
-        roomId,
-        eventId: event.event_id,
-        msgtype: content.msgtype,
-        encrypted: Boolean(mediaContent.file),
-        error: errorText,
-      });
-    }
+    media = await downloadMedia(finalMediaUrl);
   }
 
   const rawBody = locationPayload?.text ?? mediaContent.body;
-  let bodyText = resolveMatrixInboundBodyText({
-    rawBody,
-    filename: typeof content.filename === "string" ? content.filename : undefined,
-    mediaPlaceholder: media?.placeholder,
-    msgtype: content.msgtype,
-    hadMediaUrl: Boolean(finalMediaUrl),
-    mediaDownloadFailed,
-    mediaSizeLimitExceeded,
-  });
+  const filename = typeof content.filename === "string" ? content.filename : undefined;
+  const mediaPlaceholder = media?.placeholder;
+  let bodyText = rawBody;
+  if (mediaPlaceholder) {
+    bodyText = rawBody || mediaPlaceholder;
+    if (filename?.trim()) {
+      const attachment = resolveMatrixMessageAttachment({
+        body: rawBody,
+        filename,
+        msgtype: content.msgtype,
+      });
+      if (attachment && !attachment.caption) {
+        bodyText = mediaPlaceholder;
+      }
+    }
+  } else if (mediaDownloadFailed && Boolean(finalMediaUrl)) {
+    bodyText =
+      formatMatrixMessageText({
+        body: rawBody,
+        filename,
+        msgtype: content.msgtype,
+        tooLarge: mediaSizeLimitExceeded,
+        unavailable: true,
+      }) ?? "";
+  }
   if (
     preflightMedia &&
     bodyText &&
@@ -428,7 +423,7 @@ export async function resolveMatrixIngressContent(config: {
         : `${bodyText}\n${transcriptBody}`;
   }
   if (!bodyText) {
-    await commitInboundEventIfClaimedAndDiscardReserved();
+    discardReservedHistorySlot();
     return undefined;
   }
   const commandBodyText = hasControlCommandInMessage ? commandCheckText : bodyText;
@@ -440,51 +435,32 @@ export async function resolveMatrixIngressContent(config: {
       configuredBinding: _configuredBinding,
     });
     if (!ensured.ok) {
-      logInboundDrop({
-        log: logVerboseMessage,
-        channel: "matrix",
-        reason: "configured ACP binding unavailable",
-        target: _configuredBinding.spec.conversationId,
-      });
       discardReservedHistorySlot();
-      return undefined;
+      throw new Error(`Matrix configured ACP binding is unavailable: ${ensured.error}`);
     }
   }
   if (_runtimeBindingId) {
     const { getSessionBindingService } = await loadSessionBindingRuntime();
-    getSessionBindingService().touch(_runtimeBindingId, eventTs ?? undefined, {
+    await getSessionBindingService().touchAsync(_runtimeBindingId, eventTs ?? undefined, {
       channel: "matrix",
       accountId,
     });
   }
   const preparedTrigger =
     isRoom && historyLimit > 0
-      ? reservedHistorySlot
-        ? roomHistoryTracker.prepareReservedTrigger(
-            _route.agentId,
-            roomId,
-            historyLimit,
-            reservedHistorySlot,
-            {
-              sender: senderName,
-              body: bodyText,
-              timestamp: eventTs ?? undefined,
-              messageId,
-            },
-            historyThreadId,
-          )
-        : roomHistoryTracker.prepareTrigger(
-            _route.agentId,
-            roomId,
-            historyLimit,
-            {
-              sender: senderName,
-              body: bodyText,
-              timestamp: eventTs ?? undefined,
-              messageId,
-            },
-            historyThreadId,
-          )
+      ? roomHistoryTracker.prepareTrigger(
+          _route.agentId,
+          roomId,
+          historyLimit,
+          {
+            sender: senderName,
+            body: bodyText,
+            timestamp: eventTs ?? undefined,
+            messageId,
+          },
+          historyThreadId,
+          reservedHistorySlot,
+        )
       : undefined;
   if (reservedHistorySlot && preparedTrigger) {
     markReservedHistorySlotConsumed();
@@ -495,37 +471,31 @@ export async function resolveMatrixIngressContent(config: {
         limit: historyLimit,
       })
     : undefined;
-  const triggerSnapshot = preparedTrigger;
 
   return {
-    cfg,
-    liveDmAllowFrom,
-    messageIngress,
+    ...access,
     resolveMessageIngress,
     route: _route,
     hasExplicitSessionBinding,
-    roomConfig,
-    isDirectMessage,
-    isRoom,
     shouldRequireMention,
     wasMentioned,
     effectiveWasMentioned,
     shouldBypassMention,
     canDetectMention,
     commandAuthorized,
+    isControlCommand: allowTextCommands && hasControlCommandInMessage,
     inboundHistory,
     senderName,
     bodyText,
     commandBodyText,
     media,
     preflightAudioTranscript,
-    locationPayload,
-    messageId,
-    triggerSnapshot,
-    threadRootId,
-    thread,
-    botLoopProtection,
-    effectiveGroupAllowFrom,
-    effectiveRoomUsers,
+    triggerSnapshot: preparedTrigger,
+    threadContext,
   };
 }
+
+export type MatrixIngressContent = Exclude<
+  Awaited<ReturnType<typeof resolveMatrixIngressContent>>,
+  { deferredPrefix: unknown } | undefined
+>;

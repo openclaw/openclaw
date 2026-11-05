@@ -2,6 +2,7 @@ import type { AssistantMessageDiagnostic, Model } from "../types.js";
 import {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
+  resolveClaudeOpus55ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
 } from "./anthropic-model-contract.js";
 
@@ -11,13 +12,19 @@ export const ANTHROPIC_SERVER_SIDE_FALLBACK_BETA = "server-side-fallback-2026-07
 /** Let Anthropic select the recommended model for each refusal category. */
 export const ANTHROPIC_SERVER_SIDE_FALLBACKS = "default" as const;
 
-// Anthropic's current default routes serve fallback output on Opus 5 or 4.8,
-// which share the same standard and fast-mode rates.
+// Opus 5 and 4.8 share rates; Opus 5.5 discounts cache reads further.
 export const CLAUDE_OPUS_FALLBACK_MODEL_COST = {
   input: 5,
   output: 25,
   cacheRead: 0.5,
   cacheWrite: 6.25,
+} as const;
+
+const CLAUDE_OPUS_55_FALLBACK_MODEL_COST = {
+  input: 4,
+  output: 20,
+  cacheRead: 0.2,
+  cacheWrite: 5,
 } as const;
 
 export type AnthropicFallbackBoundary = {
@@ -31,6 +38,9 @@ function resolveFallbackModelIdentity(modelId: string | null): string | null {
   }
   const ref = { id: modelId };
   const normalized = resolveClaudeModelIdentity(ref);
+  if (resolveClaudeOpus55ModelIdentity(ref)) {
+    return "claude-opus-5-5";
+  }
   if (normalized === "opus" || normalized === "opus-5" || resolveClaudeOpus5ModelIdentity(ref)) {
     return "claude-opus-5";
   }
@@ -43,8 +53,13 @@ function resolveFallbackModelIdentity(modelId: string | null): string | null {
   return normalized || null;
 }
 
-function isClaudeOpusFallbackModel(modelId: string): boolean {
-  return modelId === "claude-opus-5" || modelId === "claude-opus-4-8";
+function resolveClaudeOpusFallbackCost(modelId: string | null): Model["cost"] | undefined {
+  if (modelId === "claude-opus-5-5") {
+    return CLAUDE_OPUS_55_FALLBACK_MODEL_COST;
+  }
+  return modelId === "claude-opus-5" || modelId === "claude-opus-4-8"
+    ? CLAUDE_OPUS_FALLBACK_MODEL_COST
+    : undefined;
 }
 
 /** Resolve billed rates from the serving model reported by Anthropic's fallback stream. */
@@ -55,17 +70,25 @@ export function resolveAnthropicFallbackServingModelCost(params: {
 }): Model["cost"] {
   const requestedModelId = resolveFallbackModelIdentity(params.requestedModelId);
   const servingModelId = resolveFallbackModelIdentity(params.servingModelId);
-  if (
-    !servingModelId ||
-    servingModelId === requestedModelId ||
-    !isClaudeOpusFallbackModel(servingModelId)
-  ) {
+  const servingCost = resolveClaudeOpusFallbackCost(servingModelId);
+  if (!servingCost || servingModelId === requestedModelId) {
     return params.requestedCost;
   }
-  if (requestedModelId && isClaudeOpusFallbackModel(requestedModelId)) {
+  const requestedCost = resolveClaudeOpusFallbackCost(requestedModelId);
+  if (requestedCost === servingCost) {
     return params.requestedCost;
   }
-  return CLAUDE_OPUS_FALLBACK_MODEL_COST;
+  if (!requestedCost) {
+    return servingCost;
+  }
+  // Preserve fast/custom multipliers when Opus 5.5 changes the base rates.
+  return {
+    input: (params.requestedCost.input / requestedCost.input) * servingCost.input,
+    output: (params.requestedCost.output / requestedCost.output) * servingCost.output,
+    cacheRead: (params.requestedCost.cacheRead / requestedCost.cacheRead) * servingCost.cacheRead,
+    cacheWrite:
+      (params.requestedCost.cacheWrite / requestedCost.cacheWrite) * servingCost.cacheWrite,
+  };
 }
 
 function readBoundaryModel(value: unknown): string | null {

@@ -7,6 +7,7 @@ import { basename, isAbsolute, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expandHomePrefix, resolveOsHomeDir } from "../../../infra/home-dir.js";
 import { preserveAtPrefixedRelativePath } from "../../path-policy.js";
+import { normalizeFileReferencePrefix } from "../../sandbox-paths.js";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const NARROW_NO_BREAK_SPACE = "\u202F";
@@ -16,10 +17,6 @@ function normalizeUnicodeSpaces(str: string): string {
 
 function tryMacOSScreenshotPath(filePath: string): string {
   return filePath.replace(/ (?=(?:AM|PM)(?:\b|\.))/gi, NARROW_NO_BREAK_SPACE);
-}
-
-function normalizeAtPrefix(filePath: string): string {
-  return filePath.startsWith("@") ? filePath.slice(1) : filePath;
 }
 
 /** Expand OS-home syntax without treating a POSIX backslash as a separator. */
@@ -36,7 +33,7 @@ export function expandOsHomePrefix(filePath: string): string {
 }
 
 function expandPath(filePath: string): string {
-  const normalized = normalizeAtPrefix(filePath);
+  const normalized = normalizeFileReferencePrefix(filePath);
   if (normalized.startsWith("file://")) {
     try {
       return fileURLToPath(normalized);
@@ -56,9 +53,23 @@ export function resolveToCwd(filePath: string, cwd: string): string {
   return isAbsolute(expanded) ? expanded : resolvePath(cwd, expanded);
 }
 
+/** Expand shell drive aliases before native Windows containment checks or I/O. */
+export function normalizeLocalWindowsDrivePath(filePath: string): string {
+  if (process.platform !== "win32") {
+    return filePath;
+  }
+  // Preserve dot segments so the existing containment owner can inspect the path.
+  return filePath.replace(
+    /^(@?)\/(?:(?:cygdrive|mnt)\/)?([a-z])(?:\/|$)(.*)$/i,
+    (_match, reference: string, drive: string, suffix: string) =>
+      `${reference}${drive.toUpperCase()}:\\${suffix.replaceAll("/", "\\")}`,
+  );
+}
+
 /** Resolve local file paths using the filesystem that owns literal @ names. */
 export function resolveLocalPathToCwd(filePath: string, cwd: string): string {
-  return resolveToCwd(preserveAtPrefixedRelativePath(filePath, cwd), cwd);
+  const localPath = normalizeLocalWindowsDrivePath(filePath);
+  return resolveToCwd(preserveAtPrefixedRelativePath(localPath, cwd), cwd);
 }
 
 function collectReadPathVariants(filePath: string, includeNfd: boolean): string[] {

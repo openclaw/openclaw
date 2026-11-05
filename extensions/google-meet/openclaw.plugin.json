@@ -1,5 +1,6 @@
 {
   "id": "google-meet",
+  "categories": ["voice"],
   "doctorContract": {
     "configRepair": true
   },
@@ -225,6 +226,38 @@
       "advanced": true
     }
   },
+  "configGroups": [
+    {
+      "id": "meeting-defaults",
+      "title": "Meeting defaults",
+      "order": 10,
+      "properties": ["enabled", "defaults", "preview", "defaultTransport", "defaultMode"]
+    },
+    {
+      "id": "browser-transport",
+      "title": "Browser transport",
+      "order": 20,
+      "properties": ["chrome", "chromeNode"]
+    },
+    {
+      "id": "phone-transport",
+      "title": "Phone transport",
+      "order": 30,
+      "properties": ["twilio", "voiceCall"]
+    },
+    {
+      "id": "realtime-voice",
+      "title": "Realtime voice",
+      "order": 40,
+      "properties": ["realtime"]
+    },
+    {
+      "id": "google-account",
+      "title": "Google account",
+      "order": 50,
+      "properties": ["oauth", "auth"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

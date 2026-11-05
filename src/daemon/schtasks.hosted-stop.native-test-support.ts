@@ -6,6 +6,8 @@ import fs from "node:fs";
 import { createServer } from "node:http";
 import { runGatewayLoop } from "../cli/gateway-cli/run-loop.js";
 import { runSystemAgentGatewayTask } from "../gateway/server-methods/system-agent-execution.js";
+import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
+import { setPreRestartDeferralCheck } from "../infra/restart.js";
 import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
 import { getCommandLaneSnapshot, getTotalQueueSize } from "../process/command-queue.js";
 import {
@@ -35,20 +37,14 @@ export async function runHostedStopNativeProbe(params: {
   let requested = false;
   let responseFinished = false;
   let closed = false;
-  await runGatewayLoop({
+  const code = await runGatewayLoop({
     ownsProcessLifecycle: true,
     lockPort: params.port,
-    runtime: {
-      log: () => {},
-      error: () => {},
-      exit: (code) => {
-        appendEvent("gateway-exit", { code });
-        process.exit(code);
-      },
-    },
     completeBoot: (completion) => appendEvent("boot-completion", completion),
     start: async (options) => {
+      setPreRestartDeferralCheck(() => createGatewayActiveWorkSnapshot().counts.totalActive);
       const host = options?.hostLifecycle;
+      let requestWork: Promise<void> | undefined;
       // External stop/restart must still extinguish this idle descendant. Hosted
       // close owns its graceful IPC exit, as a real server owns worker teardown.
       const child = spawn(
@@ -59,22 +55,28 @@ export async function runHostedStopNativeProbe(params: {
       const childExit = once(child, "exit");
       fs.writeFileSync(params.childPidPath, String(child.pid));
       const server = createServer((request, response) => {
-        if (request.method !== "POST" || request.url !== "/approved-stop" || requested) {
+        const action =
+          request.url === "/approved-stop"
+            ? "stop"
+            : request.url === "/approved-restart"
+              ? "restart"
+              : null;
+        if (request.method !== "POST" || !action || requested) {
           response.writeHead(404).end();
           return;
         }
         requested = true;
-        void runWithGatewayIndependentRootWorkAdmission(async () => {
+        requestWork = runWithGatewayIndependentRootWorkAdmission(async () => {
           let callerLive = true;
           try {
             const lines: string[] = [];
             await runSystemAgentGatewayTask(async () => {
               const result = await executeSystemAgentOperation(
-                { kind: "gateway-stop" },
+                { kind: action === "stop" ? "gateway-stop" : "gateway-restart" },
                 {
                   log: (...args) => lines.push(args.join(" ")),
-                  error: () => {
-                    throw new Error("Native hosted-stop audit failed");
+                  error: (...args) => {
+                    throw new Error(`Native hosted-stop audit failed: ${args.join(" ")}`);
                   },
                   exit: () => {
                     throw new Error("SystemAgent attempted process exit");
@@ -91,17 +93,21 @@ export async function runHostedStopNativeProbe(params: {
                 },
               );
               assert.equal(result.applied, true);
-              assert(lines.includes("Scheduled Gateway stop"));
-              assert(lines.includes("[openclaw] done: gateway.stop"));
+              const summary =
+                action === "stop" ? "Scheduled Gateway stop" : "Scheduled Gateway restart";
+              assert(lines.includes(summary));
+              assert(lines.includes(`[openclaw] done: gateway.${action}`));
               const audits = createSqliteAuditRecordStore<SystemAgentAuditEntry>({
                 scope: SYSTEM_AGENT_AUDIT_SCOPE,
                 maxEntries: SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
               }).entries();
-              assert.equal(audits.length, 1);
-              assert.equal(audits[0]?.value.summary, "Scheduled Gateway stop");
+              // A supervised restart preserves the state database for the replacement.
+              // Verify this operation appended exactly once without assuming empty history.
+              assert.equal(audits.filter((entry) => entry.value.summary === summary).length, 1);
+              assert.equal(audits.at(-1)?.value.summary, summary);
               assert.equal(closed, false);
               assert.deepEqual(snapshot(), { roots: 1, active: 1, queued: 0 });
-              appendEvent("operation-settled", { ...snapshot(), audit: "Scheduled Gateway stop" });
+              appendEvent("operation-settled", { ...snapshot(), audit: summary });
             });
             assert.deepEqual(snapshot(), { roots: 1, active: 0, queued: 0 });
             await new Promise<void>((resolve, reject) => {
@@ -115,7 +121,7 @@ export async function runHostedStopNativeProbe(params: {
           } finally {
             callerLive = false;
           }
-        }, "native-hosted-stop").catch((error: unknown) => {
+        }, `native-hosted-${action}`).catch((error: unknown) => {
           const detail = error instanceof Error ? error.message.slice(0, 500) : "Non-error failure";
           appendEvent("request-failed", { detail });
           response.destroy();
@@ -132,6 +138,8 @@ export async function runHostedStopNativeProbe(params: {
         startupSettled: Promise.resolve(),
         getTailscaleIngressEndpoint: () => undefined,
         close: async () => {
+          // Match the real server's admitted connection-work drain before resource close.
+          await requestWork;
           assert.equal(responseFinished, true);
           assert.deepEqual(snapshot(), { roots: 0, active: 0, queued: 0 });
           assert.equal(getTotalQueueSize(), 0);
@@ -141,12 +149,14 @@ export async function runHostedStopNativeProbe(params: {
             server.close((error) => (error ? reject(error) : resolve()));
           });
           child.send("stop");
-          const [code, signal] = await childExit;
-          assert.equal(code, 0);
-          assert.equal(signal, null);
-          appendEvent("descendant-exit", { code });
+          const [childCode, childSignal] = await childExit;
+          assert.equal(childCode, 0);
+          assert.equal(childSignal, null);
+          appendEvent("descendant-exit", { code: childCode });
         },
       };
     },
   });
+  appendEvent("gateway-exit", { code });
+  process.exitCode = code;
 }

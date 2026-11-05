@@ -1,318 +1,100 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import type { Usage } from "../../llm/types.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { AgentSession } from "./agent-session.js";
 
-describe("AgentSession context usage", () => {
-  it("reports unknown usage after a provider checkpoint until a later measured response", () => {
-    const owner = makeAgentAssistantMessage({ content: [{ type: "text", text: "covered" }] });
-    owner.usage = {
-      ...owner.usage,
-      input: 90_000,
-      totalTokens: 90_000,
-      contextUsage: { state: "available", promptTokens: 90_000, totalTokens: 90_000 },
-    };
-    owner.providerReplay = {
-      v: 1,
-      type: "openai-responses-retained-compaction",
-      data: "opaque",
-      provider: owner.provider,
-      api: owner.api,
-      model: owner.model,
-      baseUrlHash: "hash",
-    };
-    const messages: AgentMessage[] = [owner];
-    const branchEntries = [{ type: "message", id: "checkpoint-owner", message: owner }];
-    const session = {
-      model: { contextWindow: 100_000 },
-      messages,
-      sessionManager: { getBranch: () => branchEntries },
-    } as unknown as AgentSession;
-    expect(AgentSession.prototype.getContextUsage.call(session)).toEqual({
-      tokens: null,
-      contextWindow: 100_000,
-      percent: null,
-    });
-    const later = makeAgentAssistantMessage({ content: [{ type: "text", text: "later" }] });
-    later.usage = {
-      ...later.usage,
-      input: 8_000,
-      totalTokens: 8_000,
-      contextUsage: { state: "available", promptTokens: 8_000, totalTokens: 8_000 },
-    };
-    messages.push(later);
-    branchEntries.push({ type: "message", id: "later", message: later });
-    expect(AgentSession.prototype.getContextUsage.call(session)?.tokens).toBe(8_000);
+function measuredUsage(input: number, output = 0) {
+  return {
+    ...unavailable(input, output),
+    contextUsage: { state: "available" as const, promptTokens: input, totalTokens: input + output },
+  };
+}
+
+function unavailable(input: number, output: number, cacheRead = 0, cacheWrite = 0): Usage {
+  return {
+    ...createZeroUsageFixture(),
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens: input + output + cacheRead + cacheWrite,
+    contextUsage: { state: "unavailable" },
+  };
+}
+
+const compaction = { type: "compaction" };
+
+function messageEntry(message: AgentMessage) {
+  return { type: "message", message };
+}
+
+function assistant(text: string, usage: Usage) {
+  return makeAgentAssistantMessage({ content: text ? [{ type: "text", text }] : [], usage });
+}
+
+function getUsage(messages: AgentMessage[], branchEntries: unknown[], contextWindow = 200_000) {
+  return AgentSession.prototype.getContextUsage.call({
+    model: { contextWindow },
+    messages,
+    sessionManager: { getBranch: () => branchEntries },
+  } as unknown as AgentSession);
+}
+
+it("reports unknown usage after a provider checkpoint until a later measured response", () => {
+  const owner = assistant("covered", measuredUsage(90_000));
+  owner.providerReplay = {
+    v: 1,
+    type: "openai-responses-retained-compaction",
+    data: "opaque",
+    provider: owner.provider,
+    api: owner.api,
+    model: owner.model,
+    baseUrlHash: "hash",
+  };
+  const messages: AgentMessage[] = [owner];
+  const branchEntries = [messageEntry(owner)];
+  expect(getUsage(messages, branchEntries, 100_000)).toEqual({
+    tokens: null,
+    contextWindow: 100_000,
+    percent: null,
   });
+  const later = assistant("later", measuredUsage(8_000));
+  messages.push(later);
+  branchEntries.push(messageEntry(later));
+  expect(getUsage(messages, branchEntries, 100_000)?.tokens).toBe(8_000);
+});
 
-  it("preserves an earlier exact snapshot when unavailable usage precedes any compaction", () => {
-    const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "large exact response" }],
-        stopReason: "stop",
-        usage: {
-          input: 180_000,
-          output: 10_000,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 190_000,
-          contextUsage: {
-            state: "available" as const,
-            promptTokens: 180_000,
-            totalTokens: 190_000,
-          },
-          cost: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            total: 0,
-          },
-        },
-      },
-      { role: "user", content: "small follow-up" },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "small answer" }],
-        stopReason: "stop",
-        usage: {
-          input: 12,
-          output: 8,
-          cacheRead: 180_000,
-          cacheWrite: 0,
-          totalTokens: 180_020,
-          contextUsage: { state: "unavailable" as const },
-          cost: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            total: 0,
-          },
-        },
-      },
-    ] as unknown as AgentMessage[];
-
-    const usage = AgentSession.prototype.getContextUsage.call({
-      model: { contextWindow: 200_000 },
-      messages,
-      sessionManager: { getBranch: () => [] },
-    } as unknown as AgentSession);
+it.each([
+  [false, unavailable(12, 8, 180_000)],
+  [true, unavailable(180_000, 10_000)],
+  [true, measuredUsage(0)],
+] as const)(
+  "preserves an earlier exact snapshot (compacted=%s, latest=%j)",
+  (compacted, latestUsage) => {
+    const exact = assistant("exact answer", measuredUsage(180_000, 10_000));
+    const later = assistant(latestUsage.totalTokens === 0 ? "" : "small answer", latestUsage);
+    const messages: AgentMessage[] = [exact, makeUserMessage("small follow-up", 1), later];
+    const branchEntries = compacted ? [compaction, messageEntry(exact), messageEntry(later)] : [];
+    const usage = getUsage(messages, branchEntries);
 
     expect(usage?.tokens).toBeGreaterThan(190_000);
+  },
+);
+
+it("uses a content estimate after compaction when provider context usage is unavailable", () => {
+  const unavailableUsage = unavailable(12, 15_104, 819_661, 93_130);
+  const retained = assistant("retained answer", {
+    ...unavailableUsage,
+    contextUsage: { state: "available", promptTokens: 120_000, totalTokens: 125_000 },
   });
+  const later = assistant("new answer", unavailableUsage);
+  const messages: AgentMessage[] = [retained, makeUserMessage("new prompt", 1), later];
+  const branchEntries = [compaction, messageEntry(later)];
+  const usage = getUsage(messages, branchEntries);
 
-  it("uses a content estimate after compaction when provider context usage is unavailable", () => {
-    const unavailableUsage = {
-      input: 12,
-      output: 15_104,
-      cacheRead: 819_661,
-      cacheWrite: 93_130,
-      totalTokens: 927_907,
-      contextUsage: { state: "unavailable" as const },
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      },
-    };
-    const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "retained answer" }],
-        stopReason: "stop",
-        usage: {
-          ...unavailableUsage,
-          contextUsage: {
-            state: "available" as const,
-            promptTokens: 120_000,
-            totalTokens: 125_000,
-          },
-        },
-      },
-      { role: "user", content: "new prompt" },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "new answer" }],
-        stopReason: "stop",
-        usage: unavailableUsage,
-      },
-    ] as unknown as AgentMessage[];
-    const branchEntries = [
-      {
-        type: "compaction",
-        id: "compact-1",
-        parentId: null,
-        timestamp: "2026-07-05T00:00:00.000Z",
-        summary: "summary",
-        firstKeptEntryId: "assistant-old",
-        tokensBefore: 120_000,
-      },
-      {
-        type: "message",
-        id: "assistant-new",
-        parentId: "compact-1",
-        timestamp: "2026-07-05T00:00:01.000Z",
-        message: messages[2],
-      },
-    ];
-
-    const usage = AgentSession.prototype.getContextUsage.call({
-      model: { contextWindow: 200_000 },
-      messages,
-      sessionManager: { getBranch: () => branchEntries },
-    } as unknown as AgentSession);
-
-    expect(usage?.tokens).not.toBeNull();
-    expect(usage?.tokens).toBeLessThan(1_000);
-  });
-
-  it("preserves an earlier exact post-compaction snapshot before an unavailable response", () => {
-    const exactUsage = {
-      input: 180_000,
-      output: 10_000,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 190_000,
-      contextUsage: {
-        state: "available" as const,
-        promptTokens: 180_000,
-        totalTokens: 190_000,
-      },
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      },
-    };
-    const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "exact post-compaction answer" }],
-        stopReason: "stop",
-        usage: exactUsage,
-      },
-      { role: "user", content: "small follow-up" },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "small answer" }],
-        stopReason: "stop",
-        usage: {
-          ...exactUsage,
-          contextUsage: { state: "unavailable" as const },
-        },
-      },
-    ] as unknown as AgentMessage[];
-    const branchEntries = [
-      {
-        type: "compaction",
-        id: "compact-1",
-        parentId: null,
-        timestamp: "2026-07-05T00:00:00.000Z",
-        summary: "summary",
-        firstKeptEntryId: "assistant-exact",
-        tokensBefore: 120_000,
-      },
-      {
-        type: "message",
-        id: "assistant-exact",
-        parentId: "compact-1",
-        timestamp: "2026-07-05T00:00:01.000Z",
-        message: messages[0],
-      },
-      {
-        type: "message",
-        id: "assistant-unavailable",
-        parentId: "assistant-exact",
-        timestamp: "2026-07-05T00:00:02.000Z",
-        message: messages[2],
-      },
-    ];
-
-    const usage = AgentSession.prototype.getContextUsage.call({
-      model: { contextWindow: 200_000 },
-      messages,
-      sessionManager: { getBranch: () => branchEntries },
-    } as unknown as AgentSession);
-
-    expect(usage?.tokens).toBeGreaterThan(190_000);
-  });
-
-  it("preserves an earlier exact post-compaction snapshot before zero usage", () => {
-    const exactUsage = {
-      input: 180_000,
-      output: 10_000,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 190_000,
-      contextUsage: {
-        state: "available" as const,
-        promptTokens: 180_000,
-        totalTokens: 190_000,
-      },
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    };
-    const zeroUsage = {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      contextUsage: { state: "available" as const, promptTokens: 0, totalTokens: 0 },
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    };
-    const messages = [
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "exact post-compaction answer" }],
-        stopReason: "stop",
-        usage: exactUsage,
-      },
-      { role: "user", content: "small follow-up" },
-      {
-        role: "assistant",
-        content: [],
-        stopReason: "stop",
-        usage: zeroUsage,
-      },
-    ] as unknown as AgentMessage[];
-    const branchEntries = [
-      {
-        type: "compaction",
-        id: "compact-1",
-        parentId: null,
-        timestamp: "2026-07-05T00:00:00.000Z",
-        summary: "summary",
-        firstKeptEntryId: "assistant-exact",
-        tokensBefore: 120_000,
-      },
-      {
-        type: "message",
-        id: "assistant-exact",
-        parentId: "compact-1",
-        timestamp: "2026-07-05T00:00:01.000Z",
-        message: messages[0],
-      },
-      {
-        type: "message",
-        id: "assistant-zero",
-        parentId: "assistant-exact",
-        timestamp: "2026-07-05T00:00:02.000Z",
-        message: messages[2],
-      },
-    ];
-
-    const usage = AgentSession.prototype.getContextUsage.call({
-      model: { contextWindow: 200_000 },
-      messages,
-      sessionManager: { getBranch: () => branchEntries },
-    } as unknown as AgentSession);
-
-    expect(usage?.tokens).toBeGreaterThan(190_000);
-  });
+  expect(usage?.tokens).not.toBeNull();
+  expect(usage?.tokens).toBeLessThan(1_000);
 });

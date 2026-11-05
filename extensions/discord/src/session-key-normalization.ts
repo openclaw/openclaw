@@ -1,4 +1,3 @@
-// Discord plugin module implements session key normalization behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type DiscordSessionKeyContext = {
@@ -7,31 +6,17 @@ type DiscordSessionKeyContext = {
   SenderId?: string;
 };
 
-function normalizeDiscordChatType(raw?: string): "direct" | "group" | "channel" | undefined {
-  const normalized = normalizeLowercaseStringOrEmpty(raw);
-  if (!normalized) {
-    return undefined;
-  }
-  if (normalized === "dm") {
-    return "direct";
-  }
-  if (normalized === "group" || normalized === "channel" || normalized === "direct") {
-    return normalized;
-  }
-  return undefined;
-}
-
 export function normalizeExplicitDiscordSessionKey(
   sessionKey: string,
   ctx: DiscordSessionKeyContext,
 ): string {
   let normalized = normalizeLowercaseStringOrEmpty(sessionKey);
-  if (normalizeDiscordChatType(ctx.ChatType) !== "direct") {
+  const chatType = normalizeLowercaseStringOrEmpty(ctx.ChatType);
+  if (chatType !== "direct" && chatType !== "dm") {
     return normalized;
   }
 
-  normalized = normalized.replace(/^(discord:)dm:/, "$1direct:");
-  normalized = normalized.replace(/^(agent:[^:]+:discord:)dm:/, "$1direct:");
+  normalized = normalized.replace(/^((?:agent:[^:]+:)?discord:)dm:/, "$1direct:");
   const match = normalized.match(/^((?:agent:[^:]+:)?)discord:channel:([^:]+)$/);
   if (!match) {
     return normalized;

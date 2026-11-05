@@ -7,6 +7,8 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import type {
@@ -20,17 +22,26 @@ type DebugProxyCaptureDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "capture_sessions" | "capture_events" | "capture_blobs"
 >;
-type NodeSqliteDatabase = Parameters<typeof getNodeSqliteKysely>[0];
+type NodeSqliteDatabase = EngineConnection;
 
+/** @deprecated Use AsyncDebugProxyCaptureReader and await its read operations. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export type DebugProxyCaptureReader = {
   getSessionEvents(sessionId: string, limit?: number): Array<Record<string, unknown>>;
   readBlob(blobId: string): string | null;
 };
 
 export function listDebugProxyCaptureSessions(db: NodeSqliteDatabase, limit = 50) {
-  const query = getNodeSqliteKysely<DebugProxyCaptureDatabase>(db)
-    .selectFrom("capture_sessions as s")
-    .leftJoin("capture_events as e", "e.session_id", "s.id")
+  const kysely = getNodeSqliteKysely<DebugProxyCaptureDatabase>(db);
+  // Preserve the grouped scan that selects sessions with equal start times.
+  const sessions = kysely
+    .selectFrom("capture_sessions")
+    .select(["id", "started_at", "ended_at", "mode", "source_process", "proxy_url"])
+    .groupBy("id")
+    .orderBy("started_at", "desc")
+    .limit(limit)
+    .as("s");
+  const query = kysely
+    .selectFrom(sessions)
     .select([
       "s.id",
       "s.started_at as startedAt",
@@ -39,10 +50,14 @@ export function listDebugProxyCaptureSessions(db: NodeSqliteDatabase, limit = 50
       "s.source_process as sourceProcess",
       "s.proxy_url as proxyUrl",
     ])
-    .select((eb) => eb.fn.count<number>("e.id").as("eventCount"))
-    .groupBy("s.id")
-    .orderBy("s.started_at", "desc")
-    .limit(limit);
+    .select((eb) =>
+      eb
+        .selectFrom("capture_events as e")
+        .select((event) => event.fn.count<number>("e.id").as("count"))
+        .whereRef("e.session_id", "=", "s.id")
+        .as("eventCount"),
+    )
+    .orderBy("s.started_at", "desc");
   const { compiled, bind } = compileSqliteQueryBindings(() => query);
   // Native reads retain the store's failure ownership without evicting its borrowed DB.
   return db /* sqlite-allow-raw -- Execute Kysely SQL with native failure ownership. */
@@ -88,7 +103,7 @@ export function queryDebugProxyCapturePreset(
         .groupBy(["host", "path", "method", "data_sha256"])
         .having(count, ">", 1)
         .orderBy("duplicateCount", "desc")
-        .orderBy("host", "asc");
+        .orderBy("host", (order) => order.asc().nullsFirst());
       break;
     case "retry-storms":
       query = locations
@@ -98,7 +113,7 @@ export function queryDebugProxyCapturePreset(
         .groupBy(["host", "path"])
         .having(count, ">", 1)
         .orderBy("errorCount", "desc")
-        .orderBy("host", "asc");
+        .orderBy("host", (order) => order.asc().nullsFirst());
       break;
     case "cache-busting":
       query = locations
@@ -113,7 +128,7 @@ export function queryDebugProxyCapturePreset(
         )
         .groupBy(["host", "path"])
         .orderBy("variantCount", "desc")
-        .orderBy("host", "asc");
+        .orderBy("host", (order) => order.asc().nullsFirst());
       break;
     case "ws-duplicate-frames":
       query = locations
@@ -123,7 +138,7 @@ export function queryDebugProxyCapturePreset(
         .groupBy(["host", "path", "data_sha256"])
         .having(count, ">", 1)
         .orderBy("duplicateFrames", "desc")
-        .orderBy("host", "asc");
+        .orderBy("host", (order) => order.asc().nullsFirst());
       break;
     case "missing-ack":
       query = events
@@ -147,7 +162,7 @@ export function queryDebugProxyCapturePreset(
         .where("kind", "=", "error")
         .groupBy(["host", "path"])
         .orderBy("errorCount", "desc")
-        .orderBy("host", "asc");
+        .orderBy("host", (order) => order.asc().nullsFirst());
       break;
     default:
       return [];
@@ -307,10 +322,15 @@ export function readDebugProxyCaptureBlob(db: NodeSqliteDatabase, blobId: string
   return (row.encoding === "gzip" ? gunzipSync(data) : data).toString("utf8");
 }
 
-/** Read capture rows without joining or mutating the shared-state writer lifecycle. */
+/** @deprecated Use createDebugProxyCaptureReaderAsync for worker-backed, noncreating reads. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function createDebugProxyCaptureReader(params: {
   env: NodeJS.ProcessEnv;
 }): DebugProxyCaptureReader {
+  warnPluginSdkDeprecation({
+    family: "proxy-capture-reader",
+    method: "createDebugProxyCaptureReader",
+    replacement: "createDebugProxyCaptureReaderAsync()",
+  });
   return {
     getSessionEvents(sessionId, limit) {
       return (

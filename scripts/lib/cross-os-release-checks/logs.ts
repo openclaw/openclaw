@@ -1,5 +1,4 @@
-import { closeSync, openSync, statSync } from "node:fs";
-import { readFileWindowFullySync } from "../../../src/infra/file-read.ts";
+import fs, { closeSync, openSync, statSync } from "node:fs";
 import { CROSS_OS_AGENT_LOG_FALLBACK_TAIL_BYTES } from "./config.ts";
 
 export function readLogFileSize(logPath: string) {
@@ -55,7 +54,16 @@ export function readLogTextWindow(
   const fd = openSync(logPath, "r");
   try {
     const buffer = Buffer.alloc(length);
-    const bytesRead = readFileWindowFullySync(fd, buffer, start);
+    // Each release lane runs this harness without installed repository packages.
+    // Fill the bounded window here so log diagnostics stay dependency-free.
+    let bytesRead = 0;
+    while (bytesRead < length) {
+      const count = fs.readSync(fd, buffer, bytesRead, length - bytesRead, start + bytesRead);
+      if (count === 0) {
+        break;
+      }
+      bytesRead += count;
+    }
     return buffer.subarray(0, bytesRead).toString("utf8");
   } finally {
     closeSync(fd);

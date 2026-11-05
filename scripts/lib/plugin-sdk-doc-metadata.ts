@@ -12,6 +12,14 @@ type PluginSdkDocMetadata = {
 };
 
 export const pluginSdkDocMetadata = {
+  "gateway-ingress": {
+    category: "core",
+  },
+  "database-engine-runtime": { category: "runtime" },
+  "database-engine-worker-runtime": { category: "runtime" },
+  "control-ui-link-reader": {
+    category: "core",
+  },
   core: {
     category: "core",
   },
@@ -57,16 +65,13 @@ export const pluginSdkDocMetadata = {
   "channel-ingress-runtime": {
     category: "channel",
   },
-  "channel-reply-pipeline": {
+  "channel-outbound": {
     category: "channel",
   },
   "channel-setup": {
     category: "channel",
   },
   "channel-dm-policy": {
-    category: "channel",
-  },
-  "command-auth": {
     category: "channel",
   },
   "command-status": {
@@ -87,6 +92,9 @@ export const pluginSdkDocMetadata = {
   "plugin-command-runtime": {
     category: "runtime",
   },
+  "context-engine-transcript-runtime": {
+    category: "runtime",
+  },
   "session-store-runtime": {
     category: "runtime",
   },
@@ -100,6 +108,9 @@ export const pluginSdkDocMetadata = {
     category: "runtime",
   },
   "agent-harness-runtime": {
+    category: "runtime",
+  },
+  "agent-workspace-runtime": {
     category: "runtime",
   },
   "speech-settings": {

@@ -1,6 +1,5 @@
 package ai.openclaw.app.node
 
-import android.content.Context
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -57,15 +56,17 @@ class MotionHandlerTest : NodeHandlerRobolectricTest() {
           FakeMotionDataSource(hasPermission = true, activityRecord = activity),
         )
 
-      val result = handler.handleMotionActivity(null)
+      for (params in listOf(null, "{}", """{"limit":null}""", """{"limit":1}""", """{"limit":2000}""", """{"limit":"invalid"}""", """{"limit":[]}""")) {
+        val result = handler.handleMotionActivity(params)
 
-      assertTrue(result.ok)
-      assertEquals(
-        Json.parseToJsonElement(
-          """{"activities":[{"startISO":"2026-02-28T10:00:00Z","endISO":"2026-02-28T10:00:02Z","confidence":"high","isWalking":true,"isRunning":false,"isCycling":false,"isAutomotive":false,"isStationary":false,"isUnknown":false}]}""",
-        ),
-        Json.parseToJsonElement(result.payloadJson ?: error("missing payload")),
-      )
+        assertTrue(result.ok)
+        assertEquals(
+          Json.parseToJsonElement(
+            """{"activities":[{"startISO":"2026-02-28T10:00:00Z","endISO":"2026-02-28T10:00:02Z","confidence":"high","isWalking":true,"isRunning":false,"isCycling":false,"isAutomotive":false,"isStationary":false,"isUnknown":false}]}""",
+          ),
+          Json.parseToJsonElement(result.payloadJson ?: error("missing payload")),
+        )
+      }
     }
 
   @Test
@@ -79,7 +80,6 @@ class MotionHandlerTest : NodeHandlerRobolectricTest() {
       assertTrue(result.ok)
       assertNull(dataSource.lastActivityRequest?.startISO)
       assertNull(dataSource.lastActivityRequest?.endISO)
-      assertEquals(200, dataSource.lastActivityRequest?.limit)
     }
 
   @Test
@@ -104,7 +104,7 @@ class MotionHandlerTest : NodeHandlerRobolectricTest() {
     }
 
   @Test
-  fun motionRangeRequests_preserveLiteralNullStringsAndLimitBounds() =
+  fun motionRangeRequests_preserveLiteralNullStrings() =
     runTest {
       val dataSource = FakeMotionDataSource(hasPermission = true)
       val handler = MotionHandler(appContext(), dataSource)
@@ -112,7 +112,6 @@ class MotionHandlerTest : NodeHandlerRobolectricTest() {
       assertTrue(handler.handleMotionActivity("""{"startISO":" null ","endISO":"null","limit":2000}""").ok)
       assertEquals("null", dataSource.lastActivityRequest?.startISO)
       assertEquals("null", dataSource.lastActivityRequest?.endISO)
-      assertEquals(1000, dataSource.lastActivityRequest?.limit)
 
       assertTrue(handler.handleMotionPedometer("""{"startISO":"null","endISO":" null "}""").ok)
       assertEquals("null", dataSource.lastPedometerRequest?.startISO)
@@ -200,35 +199,26 @@ private class FakeMotionDataSource(
       startISO = "2026-02-28T00:00:00Z",
       endISO = "2026-02-28T01:00:00Z",
       steps = 1234,
-      distanceMeters = null,
-      floorsAscended = null,
-      floorsDescended = null,
     ),
   private val activityError: Throwable? = null,
   private val pedometerError: Throwable? = null,
 ) : MotionDataSource {
-  var lastActivityRequest: MotionActivityRequest? = null
-  var lastPedometerRequest: MotionPedometerRequest? = null
+  var lastActivityRequest: MotionRangeRequest? = null
+  var lastPedometerRequest: MotionRangeRequest? = null
 
-  override fun isActivityAvailable(context: Context): Boolean = activityAvailable
+  override fun isActivityAvailable(): Boolean = activityAvailable
 
-  override fun isPedometerAvailable(context: Context): Boolean = pedometerAvailable
+  override fun isPedometerAvailable(): Boolean = pedometerAvailable
 
-  override fun hasPermission(context: Context): Boolean = hasPermission
+  override fun hasPermission(): Boolean = hasPermission
 
-  override suspend fun activity(
-    context: Context,
-    request: MotionActivityRequest,
-  ): MotionActivityRecord {
+  override suspend fun activity(request: MotionRangeRequest): MotionActivityRecord {
     lastActivityRequest = request
     activityError?.let { throw it }
     return activityRecord
   }
 
-  override suspend fun pedometer(
-    context: Context,
-    request: MotionPedometerRequest,
-  ): PedometerRecord {
+  override suspend fun pedometer(request: MotionRangeRequest): PedometerRecord {
     lastPedometerRequest = request
     pedometerError?.let { throw it }
     return pedometerRecord

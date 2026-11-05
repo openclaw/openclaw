@@ -1,4 +1,3 @@
-// Session metadata derives stable origin, group, and display fields from message context.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -7,95 +6,19 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
-import {
-  deliveryContextFromChannelRoute,
-  deliveryContextFromSession,
-  mergeDeliveryContext,
-  normalizeDeliveryContext,
-  normalizeSessionDeliveryState,
-  sessionDeliveryOrigin,
-  sessionDeliveryRoute,
-} from "../../utils/delivery-context.shared.js";
-import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalNonDeliveryChannel,
-  normalizeMessageChannel,
-} from "../../utils/message-channel.js";
-import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
+} from "../../utils/message-channel-constants.js";
+import { normalizeMessageChannel } from "../../utils/message-channel-core.js";
+import { resolveGroupSessionKey } from "./group.js";
+import {
+  mergeSessionOrigin,
+  projectSessionMetaPatch,
+  type PreparedSessionMetaPatch,
+} from "./metadata-projection.js";
 import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
 
-// Origin updates merge sparse channel metadata without deleting previously known fields.
-const mergeSessionOrigin = (
-  existing: SessionOrigin | undefined,
-  next: SessionOrigin | undefined,
-): SessionOrigin | undefined => {
-  if (!existing && !next) {
-    return undefined;
-  }
-  const merged: SessionOrigin = existing ? { ...existing } : {};
-  // A provider/surface/account change is a fresh channel identity (e.g. a dmScope:"main" session
-  // moving Slack -> Telegram, or between Slack accounts). Channel-keyed fields belong to the prior
-  // channel; drop them so an inbound that omits them does not keep reactions, native threading, and
-  // status reads pointed at the previous channel.
-  const nextProvider = next?.provider;
-  const nextIsDeliverableChannel =
-    nextProvider != null &&
-    nextProvider !== INTERNAL_MESSAGE_CHANNEL &&
-    !isInternalNonDeliveryChannel(nextProvider);
-  const channelChanged =
-    existing != null &&
-    nextIsDeliverableChannel &&
-    ((existing.provider != null && nextProvider !== existing.provider) ||
-      (existing.surface != null && next?.surface != null && next.surface !== existing.surface) ||
-      (existing.accountId != null &&
-        next?.accountId != null &&
-        next.accountId !== existing.accountId));
-  if (channelChanged) {
-    delete merged.nativeChannelId;
-    delete merged.nativeDirectUserId;
-    delete merged.avatar;
-    delete merged.accountId;
-    delete merged.threadId;
-  }
-  if (next?.label) {
-    merged.label = next.label;
-  }
-  if (next?.provider) {
-    merged.provider = next.provider;
-  }
-  if (next?.surface) {
-    merged.surface = next.surface;
-  }
-  if (next?.chatType) {
-    merged.chatType = next.chatType;
-  }
-  if (next?.from) {
-    merged.from = next.from;
-  }
-  if (next?.to) {
-    merged.to = next.to;
-  }
-  if (next?.nativeChannelId) {
-    merged.nativeChannelId = next.nativeChannelId;
-  }
-  if (next?.nativeDirectUserId) {
-    merged.nativeDirectUserId = next.nativeDirectUserId;
-  }
-  if (next?.avatar) {
-    merged.avatar = next.avatar;
-  }
-  if (next?.accountId) {
-    merged.accountId = next.accountId;
-  }
-  if (next?.threadId != null && next.threadId !== "") {
-    merged.threadId = next.threadId;
-  }
-  return Object.keys(merged).length > 0 ? merged : undefined;
-};
-
-/** Derives session origin metadata from an inbound message context. */
 export function deriveSessionOrigin(
   ctx: MsgContext,
   opts?: { skipSystemEventOrigin?: boolean },
@@ -103,75 +26,37 @@ export function deriveSessionOrigin(
   if (opts?.skipSystemEventOrigin && ctx.InternalTurnSource !== undefined) {
     return undefined;
   }
-  const label = normalizeOptionalString(resolveConversationLabel(ctx));
   const providerRaw =
     (typeof ctx.OriginatingChannel === "string" && ctx.OriginatingChannel) ||
     ctx.Surface ||
     ctx.Provider;
-  const provider = normalizeMessageChannel(providerRaw);
-  const surface = normalizeOptionalLowercaseString(ctx.Surface);
-  const chatType = normalizeChatType(ctx.ChatType) ?? undefined;
-  const from = normalizeOptionalString(ctx.From);
-  const to = normalizeOptionalString(
-    typeof ctx.OriginatingTo === "string" ? ctx.OriginatingTo : ctx.To,
-  );
-  const nativeChannelId = normalizeOptionalString(ctx.NativeChannelId);
-  const nativeDirectUserId = normalizeOptionalString(ctx.NativeDirectUserId);
-  const avatar = normalizeOptionalString(ctx.ConversationAvatar);
-  const accountId = normalizeOptionalString(ctx.AccountId);
-  const threadId = ctx.MessageThreadId ?? undefined;
-
-  const origin: SessionOrigin = {};
-  if (label) {
-    origin.label = label;
-  }
-  if (provider) {
-    origin.provider = provider;
-  }
-  if (surface) {
-    origin.surface = surface;
-  }
-  if (chatType) {
-    origin.chatType = chatType;
-  }
-  if (from) {
-    origin.from = from;
-  }
-  if (to) {
-    origin.to = to;
-  }
-  if (nativeChannelId) {
-    origin.nativeChannelId = nativeChannelId;
-  }
-  if (nativeDirectUserId) {
-    origin.nativeDirectUserId = nativeDirectUserId;
-  }
-  if (avatar) {
-    origin.avatar = avatar;
-  }
-  if (accountId) {
-    origin.accountId = accountId;
-  }
-  if (threadId != null && threadId !== "") {
-    origin.threadId = threadId;
-  }
-
-  return Object.keys(origin).length > 0 ? origin : undefined;
+  return mergeSessionOrigin(undefined, {
+    label: normalizeOptionalString(resolveConversationLabel(ctx)),
+    provider: normalizeMessageChannel(providerRaw),
+    surface: normalizeOptionalLowercaseString(ctx.Surface),
+    chatType: normalizeChatType(ctx.ChatType),
+    from: normalizeOptionalString(ctx.From),
+    to: normalizeOptionalString(typeof ctx.OriginatingTo === "string" ? ctx.OriginatingTo : ctx.To),
+    nativeChannelId: normalizeOptionalString(ctx.NativeChannelId),
+    nativeDirectUserId: normalizeOptionalString(ctx.NativeDirectUserId),
+    avatar: normalizeOptionalString(ctx.ConversationAvatar),
+    accountId: normalizeOptionalString(ctx.AccountId),
+    threadId: ctx.MessageThreadId,
+  });
 }
 
-function deriveGroupSessionPatch(params: {
+function prepareGroupSessionPatch(params: {
   ctx: MsgContext;
-  sessionKey: string;
-  existing?: SessionEntry;
   groupResolution?: GroupKeyResolution | null;
-}): Partial<SessionEntry> | null {
+}) {
   const resolution = params.groupResolution ?? resolveGroupSessionKey(params.ctx);
   if (!resolution?.channel) {
     return null;
   }
 
   const channel = resolution.channel;
-  const subject = params.ctx.GroupSubject?.trim();
+  const subject = normalizeOptionalString(params.ctx.GroupSubject);
+  const topicName = normalizeOptionalString(params.ctx.TopicName);
   const space = params.ctx.GroupSpace?.trim();
   const explicitChannel = params.ctx.GroupChannel?.trim();
   const subjectLooksChannel = Boolean(subject?.startsWith("#"));
@@ -190,37 +75,7 @@ function deriveGroupSessionPatch(params: {
       : undefined);
   const nextSubject = nextGroupChannel ? undefined : subject;
 
-  const patch: Partial<SessionEntry> = {
-    chatType: resolution.chatType ?? "group",
-    groupId: resolution.id,
-  };
-  if (nextSubject) {
-    patch.subject = nextSubject;
-    // These fields are alternate presentations of the same chat. Clear the stale channel title
-    // when ingress now owns a human subject, or an old opaque route id will keep winning in UI.
-    patch.groupChannel = undefined;
-  }
-  if (nextGroupChannel) {
-    patch.groupChannel = nextGroupChannel;
-    patch.subject = undefined;
-  }
-  if (space) {
-    patch.space = space;
-  }
-
-  const displayName = buildGroupDisplayName({
-    provider: channel,
-    subject: nextSubject ?? (nextGroupChannel ? undefined : params.existing?.subject),
-    groupChannel: nextGroupChannel ?? (nextSubject ? undefined : params.existing?.groupChannel),
-    space: space ?? params.existing?.space,
-    id: resolution.id,
-    key: params.sessionKey,
-  });
-  if (displayName) {
-    patch.displayName = displayName;
-  }
-
-  return patch;
+  return { resolution, nextSubject, nextGroupChannel, topicName, space };
 }
 
 export function deriveSessionMetaPatch(params: {
@@ -228,150 +83,50 @@ export function deriveSessionMetaPatch(params: {
   sessionKey: string;
   existing?: SessionEntry;
   groupResolution?: GroupKeyResolution | null;
-  preserveExistingDeliveryRoute?: boolean;
   skipSystemEventOrigin?: boolean;
 }): Partial<SessionEntry> | null {
-  const groupPatch = deriveGroupSessionPatch(params);
-  const origin = deriveSessionOrigin(params.ctx, {
-    skipSystemEventOrigin: params.skipSystemEventOrigin,
+  return projectSessionMetaPatch({
+    ...params,
+    prepared: prepareSessionMetaPatch(params),
   });
-  if (!groupPatch && !origin) {
-    return null;
-  }
-
-  const patch: Partial<SessionEntry> = groupPatch ? { ...groupPatch } : {};
-  const existingOrigin = sessionDeliveryOrigin(params.existing);
-  const mergedOrigin = mergeSessionOrigin(existingOrigin, origin);
-  if (mergedOrigin) {
-    if (!patch.chatType && mergedOrigin.chatType) {
-      patch.chatType = mergedOrigin.chatType;
-    }
-    const nextProvider = origin?.provider;
-    const nextOwnsExternalRoute = Boolean(
-      nextProvider &&
-      nextProvider !== INTERNAL_MESSAGE_CHANNEL &&
-      !isInternalNonDeliveryChannel(nextProvider),
-    );
-    const existingRoute = sessionDeliveryRoute(params.existing);
-    const existingRouteAccountId =
-      existingRoute?.accountId ?? deliveryContextFromSession(params.existing)?.accountId;
-    const freshRouteOwnsNextProvider =
-      params.preserveExistingDeliveryRoute === true &&
-      nextProvider != null &&
-      existingRoute?.channel === nextProvider &&
-      (origin?.accountId == null || existingRouteAccountId === origin.accountId);
-    const deliveryIdentityChanged =
-      nextOwnsExternalRoute &&
-      !freshRouteOwnsNextProvider &&
-      (!existingOrigin ||
-        (existingOrigin.provider != null && nextProvider !== existingOrigin.provider) ||
-        (existingOrigin.surface != null &&
-          origin?.surface != null &&
-          origin.surface !== existingOrigin.surface) ||
-        (existingOrigin.accountId != null &&
-          origin?.accountId != null &&
-          origin.accountId !== existingOrigin.accountId));
-    patch.delivery = normalizeSessionDeliveryState({
-      route: deliveryIdentityChanged ? undefined : sessionDeliveryRoute(params.existing),
-      context: deliveryIdentityChanged
-        ? {
-            channel: mergedOrigin.provider,
-            to: mergedOrigin.to,
-            accountId: mergedOrigin.accountId,
-            threadId: mergedOrigin.threadId,
-          }
-        : deliveryContextFromSession(params.existing),
-      origin: mergedOrigin,
-    });
-  }
-
-  return Object.keys(patch).length > 0 ? patch : null;
 }
 
-function withoutThread<T extends { threadId?: string | number }>(identity?: T): T | undefined {
-  if (!identity || identity.threadId == null) {
-    return identity;
-  }
-  const next: T = { ...identity };
-  delete next.threadId;
-  return next;
-}
-
-/**
- * Derives the last-route/delivery patch for an inbound routing update. Route
- * updates must not refresh activity timestamps; idle/daily reset evaluation
- * relies on updatedAt from actual session turns (#49515). Shared by the file
- * store and the SQLite accessor so both backends apply one routing policy.
- */
-export function deriveLastRoutePatch(params: {
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  threadId?: string | number;
-  route?: ChannelRouteRef;
-  deliveryContext?: DeliveryContext;
-  ctx?: MsgContext;
+/** Resolve plugin-owned ingress facts once, before handing pure metadata to the writer. */
+export function prepareSessionMetaPatch(params: {
+  ctx: MsgContext;
   groupResolution?: GroupKeyResolution | null;
-  existing: SessionEntry | undefined;
-  sessionKey: string;
-}): Partial<SessionEntry> {
-  const { channel, to, accountId, threadId, ctx, existing } = params;
-  const explicitContext = normalizeDeliveryContext(params.deliveryContext);
-  const inlineContext = normalizeDeliveryContext({
-    channel,
-    to,
-    accountId,
-    threadId,
-  });
-  const routeContext = deliveryContextFromChannelRoute(params.route);
-  const mergedInput = mergeDeliveryContext(
-    routeContext,
-    mergeDeliveryContext(explicitContext, inlineContext),
+  skipSystemEventOrigin?: boolean;
+}): PreparedSessionMetaPatch {
+  const sourceChannel = normalizeMessageChannel(
+    params.ctx.Provider ?? params.ctx.Surface ?? params.ctx.OriginatingChannel,
   );
-  const explicitDeliveryContext = params.deliveryContext;
-  const explicitThreadFromDeliveryContext =
-    explicitDeliveryContext != null && Object.hasOwn(explicitDeliveryContext, "threadId")
-      ? explicitDeliveryContext.threadId
-      : undefined;
-  const explicitThreadValue =
-    explicitThreadFromDeliveryContext ??
-    (threadId != null && threadId !== "" ? threadId : undefined);
-  const explicitRouteProvided = Boolean(
-    routeContext?.channel ||
-    routeContext?.to ||
-    explicitContext?.channel ||
-    explicitContext?.to ||
-    inlineContext?.channel ||
-    inlineContext?.to,
+  // WebChat is also the internal routing sentinel; provenance distinguishes wakes.
+  const clientChannel = normalizeMessageChannel(
+    params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
   );
-  const clearThreadFromFallback = explicitRouteProvided && explicitThreadValue == null;
-  const fallbackContext = clearThreadFromFallback
-    ? withoutThread(deliveryContextFromSession(existing))
-    : deliveryContextFromSession(existing);
-  const existingOrigin = sessionDeliveryOrigin(existing);
-  // Explicit thread absence owns both fallbacks, so origin cannot restore a stale thread.
-  const fallbackOrigin = clearThreadFromFallback ? withoutThread(existingOrigin) : existingOrigin;
-  const merged = mergeDeliveryContext(mergedInput, fallbackContext);
-  const delivery = normalizeSessionDeliveryState({
-    route: params.route,
-    context: {
-      channel: merged?.channel,
-      to: merged?.to,
-      accountId: merged?.accountId,
-      threadId: merged?.threadId,
-    },
-    origin: fallbackOrigin,
-  });
-  const nextEntry = existing ? { ...existing, delivery } : ({ delivery } as SessionEntry);
-  const metaPatch = ctx
-    ? deriveSessionMetaPatch({
-        ctx,
-        sessionKey: params.sessionKey,
-        existing: nextEntry,
-        groupResolution: params.groupResolution,
-        preserveExistingDeliveryRoute: routeContext != null,
-      })
-    : null;
-  const basePatch: Partial<SessionEntry> = { delivery };
-  return metaPatch ? { ...basePatch, ...metaPatch } : basePatch;
+  return {
+    clientCapabilities:
+      params.ctx.InternalTurnSource === undefined &&
+      (params.ctx.InputProvenance === undefined ||
+        params.ctx.InputProvenance.kind === "external_user") &&
+      clientChannel !== undefined &&
+      !isInternalNonDeliveryChannel(clientChannel)
+        ? [...new Set(params.ctx.GatewayClientCaps ?? [])].toSorted()
+        : undefined,
+    group: prepareGroupSessionPatch(params),
+    privateTelegramTopicName:
+      params.ctx.ChatType === "direct" &&
+      params.ctx.MessageThreadId != null &&
+      sourceChannel === "telegram"
+        ? normalizeOptionalString(params.ctx.ThreadLabel)
+        : undefined,
+    clearAvatar: params.ctx.ConversationAvatar === "",
+    origin: deriveSessionOrigin(params.ctx, {
+      skipSystemEventOrigin: params.skipSystemEventOrigin,
+    }),
+    internalTurn:
+      params.ctx.InternalTurnSource !== undefined ||
+      sourceChannel === INTERNAL_MESSAGE_CHANNEL ||
+      (sourceChannel != null && isInternalNonDeliveryChannel(sourceChannel)),
+  };
 }

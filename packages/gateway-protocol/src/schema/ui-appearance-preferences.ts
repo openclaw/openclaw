@@ -1,68 +1,57 @@
+import { isThemeId, normalizeThemeMode, type ThemeId, type ThemeMode } from "../theme-ids.js";
+import {
+  normalizeBackgroundPreference,
+  type BackgroundPreference,
+} from "./background-preferences.js";
+import { normalizeTabIconPreference, type TabIconPreference } from "./tab-icon.js";
+import { UI_APPEARANCE_TYPEFACE_VALUES } from "./ui-appearance-typefaces.js";
+
+export { normalizeTabIconPreference, type TabIconPreference } from "./tab-icon.js";
+
 export const UI_APPEARANCE_PREFERENCE_KEYS = {
   theme: "ui.theme",
   themeMode: "ui.themeMode",
   accent: "ui.accent",
   fontUi: "ui.fontUi",
   fontChat: "ui.fontChat",
+  background: "ui.background",
+  tabIcon: "ui.tabIcon",
 } as const;
 
-export type UiAppearancePreferenceKey =
-  (typeof UI_APPEARANCE_PREFERENCE_KEYS)[keyof typeof UI_APPEARANCE_PREFERENCE_KEYS];
+export type UiAppearancePreferenceValues = {
+  "ui.theme": ThemeId;
+  "ui.themeMode": ThemeMode;
+  "ui.accent": string;
+  "ui.fontUi": (typeof UI_APPEARANCE_TYPEFACE_VALUES)[number];
+  "ui.fontChat": (typeof UI_APPEARANCE_TYPEFACE_VALUES)[number];
+  "ui.background": BackgroundPreference;
+  "ui.tabIcon": TabIconPreference;
+};
+export type UiAppearancePreferenceKey = keyof UiAppearancePreferenceValues;
 
-// Wire-contract list of profile-storable theme names. The Control UI derives
-// its synced-theme handling from this tuple; a theme shipped in the UI but
-// missing here would silently drop that profile preference on read.
-// "custom" is deliberately absent: imported palettes are browser-local, so a
-// custom selection must never follow the profile to a browser that cannot
-// render it — it stays device-local instead.
-export const UI_APPEARANCE_THEME_VALUES = [
-  "claw",
-  "knot",
-  "dash",
-  "absolutely",
-  "tide",
-  "beacon",
-  "phosphor",
-  "crt",
-  "manuscript",
-  "rose",
-  "miami",
-] as const;
-// Wire-contract list of profile-storable typefaces. The Control UI derives
-// its override normalization from this tuple so browser and profile values agree.
-export const UI_APPEARANCE_TYPEFACE_VALUES = [
-  "instrument-sans",
-  "geist",
-  "dm-sans",
-  "ibm-plex-sans",
-  "space-grotesk",
-  "atkinson-hyperlegible",
-  "fraunces",
-  "lora",
-  "jetbrains-mono",
-  "system",
-] as const;
-const UI_APPEARANCE_THEMES = new Set<string>(UI_APPEARANCE_THEME_VALUES);
-const UI_APPEARANCE_THEME_MODES = new Set(["light", "dark", "system"]);
-const UI_APPEARANCE_TYPEFACES = new Set<string>(UI_APPEARANCE_TYPEFACE_VALUES);
+const normalizeTypeface = (value: unknown) =>
+  UI_APPEARANCE_TYPEFACE_VALUES.find((typeface) => typeface === value);
 
-export function normalizeUiAppearancePreference(
-  key: UiAppearancePreferenceKey,
+const normalizers: {
+  [K in UiAppearancePreferenceKey]: (value: unknown) => UiAppearancePreferenceValues[K] | undefined;
+} = {
+  // Legacy browser-local "custom" never follows a profile without its palette.
+  "ui.theme": (value) => (isThemeId(value) ? value : undefined),
+  "ui.themeMode": normalizeThemeMode,
+  // Explicit theme ownership is distinct from an absent (inherited) accent.
+  "ui.accent": (value) =>
+    typeof value === "string" && (value === "theme" || /^#[0-9a-f]{6}$/i.test(value))
+      ? value.toLowerCase()
+      : undefined,
+  "ui.fontUi": normalizeTypeface,
+  "ui.fontChat": normalizeTypeface,
+  "ui.background": normalizeBackgroundPreference,
+  "ui.tabIcon": normalizeTabIconPreference,
+};
+
+export function normalizeUiAppearancePreference<K extends UiAppearancePreferenceKey>(
+  key: K,
   value: unknown,
-): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  if (key === UI_APPEARANCE_PREFERENCE_KEYS.accent) {
-    return /^#[0-9a-f]{6}$/i.test(value) ? value.toLowerCase() : undefined;
-  }
-  if (
-    key === UI_APPEARANCE_PREFERENCE_KEYS.fontUi ||
-    key === UI_APPEARANCE_PREFERENCE_KEYS.fontChat
-  ) {
-    return UI_APPEARANCE_TYPEFACES.has(value) ? value : undefined;
-  }
-  const allowedValues =
-    key === UI_APPEARANCE_PREFERENCE_KEYS.theme ? UI_APPEARANCE_THEMES : UI_APPEARANCE_THEME_MODES;
-  return allowedValues.has(value) ? value : undefined;
+): UiAppearancePreferenceValues[K] | undefined {
+  return normalizers[key](value);
 }

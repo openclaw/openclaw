@@ -3,7 +3,6 @@ export { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-
 export {
   buildControlledSubagentRunsReadContext,
   DEFAULT_RECENT_MINUTES,
-  listControlledSubagentRuns,
   MAX_RECENT_MINUTES,
   resolveSubagentController,
 } from "./subagent-control-scope.js";

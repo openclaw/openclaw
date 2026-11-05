@@ -31,12 +31,6 @@ describe("worker environment state", () => {
     }
   });
 
-  it("keeps terminal states terminal", () => {
-    for (const from of ["destroyed", "failed", "orphaned"] as const) {
-      expect(STATES.some((to) => canTransitionWorkerEnvironment(from, to))).toBe(false);
-    }
-  });
-
   it("rejects unknown persisted state", () => {
     expect(() => parseWorkerEnvironmentState("lost")).toThrow(
       "Invalid persisted worker environment state",

@@ -2,39 +2,31 @@ import type {
   AgentMessage,
   EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { projectAgentHarnessTranscriptMessageForDisplay } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   attachCodexMirrorIdentity,
   attachUpstreamUserText,
+  readMirrorIdentity,
   readUpstreamUserText,
 } from "./upstream-prompt-provenance.js";
 
 type MirroredUserMessage = Extract<AgentMessage, { role: "user" }>;
 
-function buildSenderLabel(params: {
-  senderId?: string;
-  senderName?: string;
-  senderUsername?: string;
-  senderE164?: string;
-}): string | undefined {
-  const label = params.senderName ?? params.senderUsername ?? params.senderE164 ?? params.senderId;
-  if (!label) {
-    return undefined;
-  }
-  return !params.senderId || label.includes(params.senderId)
-    ? label
-    : `${label} (${params.senderId})`;
-}
-
 function buildFromPrepared(
   params: EmbeddedRunAttemptParams,
   preparedUserMessage: MirroredUserMessage | undefined,
-): AgentMessage {
+): MirroredUserMessage {
   const senderId = normalizeOptionalString(params.senderId);
   const senderName = normalizeOptionalString(params.senderName);
   const senderUsername = normalizeOptionalString(params.senderUsername);
   const senderE164 = normalizeOptionalString(params.senderE164);
-  const senderLabel = buildSenderLabel({ senderId, senderName, senderUsername, senderE164 });
+  const label = senderName ?? senderUsername ?? senderE164 ?? senderId;
+  const senderLabel =
+    label && senderId && !label.includes(senderId) ? `${label} (${senderId})` : label;
   const sourceChannel = normalizeOptionalString(
     params.inputProvenance?.sourceChannel ?? params.messageChannel ?? params.messageProvider,
   );
@@ -52,20 +44,11 @@ function buildFromPrepared(
     role: "user",
     ...metadata,
     ...(preparedUserMessage ?? { content: params.transcriptPrompt ?? params.prompt }),
-  } as AgentMessage;
+  };
 }
 
-export function buildCodexUserPromptMessage(params: EmbeddedRunAttemptParams): AgentMessage {
+export function buildCodexUserPromptMessage(params: EmbeddedRunAttemptParams): MirroredUserMessage {
   return buildFromPrepared(params, params.userTurnTranscriptRecorder?.message);
-}
-
-function buildCodexUpstreamPromptMessage(
-  params: EmbeddedRunAttemptParams,
-  identity: string,
-  upstreamUserText?: string,
-): AgentMessage {
-  const message = attachCodexMirrorIdentity(buildCodexUserPromptMessage(params), identity);
-  return upstreamUserText ? attachUpstreamUserText(message, upstreamUserText) : message;
 }
 
 export function promptSnapshot(
@@ -73,16 +56,22 @@ export function promptSnapshot(
   turnId: string,
   upstreamUserText?: string,
 ): AgentMessage[] {
-  return params.suppressNextUserMessagePersistence
-    ? []
-    : [buildCodexUpstreamPromptMessage(params, `${turnId}:prompt`, upstreamUserText)];
+  if (params.suppressNextUserMessagePersistence) {
+    return [];
+  }
+  const message = attachCodexMirrorIdentity(
+    buildCodexUserPromptMessage(params),
+    `${turnId}:prompt`,
+  );
+  return [upstreamUserText ? attachUpstreamUserText(message, upstreamUserText) : message];
 }
 
 export async function buildResolvedCodexUserPromptMessage(
   params: EmbeddedRunAttemptParams,
-): Promise<AgentMessage> {
-  const resolvedMessage = await params.userTurnTranscriptRecorder?.resolveMessage();
-  return buildFromPrepared(params, resolvedMessage ?? params.userTurnTranscriptRecorder?.message);
+): Promise<MirroredUserMessage> {
+  const recorder = params.userTurnTranscriptRecorder;
+  const resolvedMessage = recorder?.getPersistedMessage?.() ?? (await recorder?.resolveMessage());
+  return buildFromPrepared(params, resolvedMessage ?? recorder?.message);
 }
 
 export async function resolveFinalCodexMirrorMessages(params: {
@@ -112,4 +101,43 @@ export async function resolveFinalCodexMirrorMessages(params: {
   const messages = params.messagesSnapshot.slice();
   messages[firstUserIndex] = resolvedPrompt;
   return messages;
+}
+
+/** Restore host-persisted input to observers without adding a second transcript write. */
+export function buildCodexAgentEndMessages(
+  params: EmbeddedRunAttemptParams,
+  messagesSnapshot: AgentMessage[],
+  turnId?: string,
+): AgentMessage[] {
+  if (!params.suppressNextUserMessagePersistence || !params.userTurnTranscriptRecorder) {
+    return messagesSnapshot;
+  }
+  const persisted = params.userTurnTranscriptRecorder.getPersistedMessage?.();
+  if (!persisted) {
+    return messagesSnapshot;
+  }
+  const promptMirrorIdentity = turnId ? `${turnId}:prompt` : undefined;
+  const persistedAlreadyObserved = messagesSnapshot.some((message) => {
+    if (message.role !== "user") {
+      return false;
+    }
+    const messageIdempotencyKey = asOptionalRecord(message)?.idempotencyKey;
+    return (
+      (typeof messageIdempotencyKey === "string" &&
+        persisted.idempotencyKey !== undefined &&
+        messageIdempotencyKey === persisted.idempotencyKey) ||
+      (promptMirrorIdentity !== undefined && readMirrorIdentity(message) === promptMirrorIdentity)
+    );
+  });
+  if (persistedAlreadyObserved) {
+    return messagesSnapshot;
+  }
+  return [
+    projectAgentHarnessTranscriptMessageForDisplay({
+      hidden: params.privateCompletion === true || params.trigger === "memory",
+      inputProvenance: params.inputProvenance,
+      message: persisted,
+    }),
+    ...messagesSnapshot,
+  ];
 }

@@ -1,106 +1,90 @@
-// Covers channel-configured checks from bootstrap and plugin metadata.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { isChannelConfigured } from "./channel-configured.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
-vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
-  getBootstrapChannelPlugin: () => undefined,
+const bundledPlugins = vi.hoisted(() => ({
+  getBundledChannelPlugin: vi.fn<() => ChannelPlugin | undefined>(),
+  getBundledChannelSetupPlugin: vi.fn<() => ChannelPlugin | undefined>(),
 }));
 
+vi.mock("../channels/plugins/bundled.js", () => ({
+  ...bundledPlugins,
+  getBundledChannelSecrets: () => undefined,
+  getBundledChannelSetupSecrets: () => undefined,
+}));
+
+function configuredStatePlugin(
+  id: string,
+  hasConfiguredState: NonNullable<ChannelPlugin["config"]["hasConfiguredState"]>,
+): ChannelPlugin {
+  return createChannelTestPluginBase({ id, config: { hasConfiguredState } });
+}
+
+function configured(channel: string, config: OpenClawConfig["channels"], env = {}) {
+  return isChannelConfigured({ channels: config }, channel, env);
+}
+function setupPlugins(
+  id: string,
+  hasConfiguredState: NonNullable<ChannelPlugin["config"]["hasConfiguredState"]>,
+) {
+  bundledPlugins.getBundledChannelPlugin.mockReturnValue(configuredStatePlugin(id, () => false));
+  bundledPlugins.getBundledChannelSetupPlugin.mockReturnValue(
+    configuredStatePlugin(id, hasConfiguredState),
+  );
+}
+
 describe("isChannelConfigured", () => {
-  it("detects Telegram env configuration through the package metadata seam", () => {
-    expect(isChannelConfigured({}, "telegram", { TELEGRAM_BOT_TOKEN: "token" })).toBe(true);
+  beforeEach(() => {
+    bundledPlugins.getBundledChannelPlugin.mockReset();
+    bundledPlugins.getBundledChannelSetupPlugin.mockReset();
   });
 
-  it("detects Discord env configuration through the package metadata seam", () => {
-    expect(isChannelConfigured({}, "discord", { DISCORD_BOT_TOKEN: "token" })).toBe(true);
-  });
+  afterEach(() => vi.unstubAllEnvs());
 
-  it("requires both Slack identity and transport tokens through the package metadata seam", () => {
-    expect(isChannelConfigured({}, "slack", { SLACK_BOT_TOKEN: "xoxb-test" })).toBe(false);
-    expect(
-      isChannelConfigured({}, "slack", {
-        SLACK_BOT_TOKEN: "xoxb-test",
-        SLACK_APP_TOKEN: "xapp-test",
-      }),
-    ).toBe(true);
-  });
-
-  it("requires both IRC host and nick env vars through the package metadata seam", () => {
-    expect(isChannelConfigured({}, "irc", { IRC_HOST: "irc.example.com" })).toBe(false);
-    expect(
-      isChannelConfigured({}, "irc", {
-        IRC_HOST: "irc.example.com",
-        IRC_NICK: "openclaw",
-      }),
-    ).toBe(true);
-  });
-
-  it("requires both Mattermost URL and token env vars through the package metadata seam", () => {
-    expect(isChannelConfigured({}, "mattermost", { MATTERMOST_BOT_TOKEN: "token" })).toBe(false);
-    expect(
-      isChannelConfigured({}, "mattermost", {
-        MATTERMOST_URL: "https://mattermost.example.test",
-      }),
-    ).toBe(false);
-    expect(
-      isChannelConfigured({}, "mattermost", {
-        MATTERMOST_BOT_TOKEN: "token",
-        MATTERMOST_URL: "https://mattermost.example.test",
-      }),
-    ).toBe(true);
+  it.each<[string, NodeJS.ProcessEnv, boolean]>([
+    ["slack", { SLACK_BOT_TOKEN: "xoxb-test" }, false],
+    ["slack", { SLACK_BOT_TOKEN: "xoxb-test", SLACK_APP_TOKEN: "xapp-test" }, true],
+  ])("resolves %s package metadata for %j as %s", (channel, env, expected) => {
+    expect(isChannelConfigured({}, channel, env)).toBe(expected);
   });
 
   it("still falls back to generic config presence for channels without a custom hook", () => {
     expect(
-      isChannelConfigured(
-        {
-          channels: {
-            signal: {
-              transport: { kind: "managed-native", httpPort: 8080 },
-            },
-          },
-        },
-        "signal",
-        {},
-      ),
+      configured("signal", { signal: { transport: { kind: "managed-native", httpPort: 8080 } } }),
     ).toBe(true);
   });
 
-  it("treats explicit enabled channel config as configured state", () => {
-    expect(
-      isChannelConfigured(
-        {
-          channels: {
-            "openclaw-weixin": {
-              enabled: true,
-            },
-          },
-        },
-        "openclaw-weixin",
-        {},
-      ),
-    ).toBe(true);
+  it.each([true, false])("honors explicit channel enabled=%s", (enabled) => {
+    expect(configured("openclaw-weixin", { "openclaw-weixin": { enabled } })).toBe(enabled);
   });
 
-  it("does not treat disabled channel config as configured state", () => {
-    expect(
-      isChannelConfigured(
-        {
-          channels: {
-            "openclaw-weixin": {
-              enabled: false,
-            },
-          },
-        },
-        "openclaw-weixin",
-        {},
-      ),
-    ).toBe(false);
-  });
+  it("honors Matrix bootstrap metadata without consulting operational credential hooks", () => {
+    vi.stubEnv("MATRIX_HOMESERVER", "https://ambient.matrix.example");
+    const hasConfiguredState = vi.fn(() => {
+      throw new Error("operational credential storage must not be read during bootstrap");
+    });
+    setupPlugins("matrix", hasConfiguredState);
 
-  it("does not treat persisted Matrix credentials as configured channel state", () => {
     expect(
       isChannelConfigured({}, "matrix", { OPENCLAW_STATE_DIR: "state-with-matrix-creds" }),
     ).toBe(false);
+    expect(isChannelConfigured({}, "matrix", { MATRIX_ACCESS_TOKEN: "fixture-token" })).toBe(true);
+    expect(
+      configured("matrix", { matrix: { homeserver: "https://configured.matrix.example" } }),
+    ).toBe(true);
+    expect(hasConfiguredState).not.toHaveBeenCalled();
+  });
+
+  it("retains setup bootstrap hooks when no configured-state metadata is declared", () => {
+    const hasConfiguredState = vi.fn(
+      ({ env }: { env?: NodeJS.ProcessEnv }) => env?.FIXTURE_TOKEN === "configured",
+    );
+    setupPlugins("fixture", hasConfiguredState);
+    const env = { FIXTURE_TOKEN: "configured" };
+
+    expect(isChannelConfigured({}, "fixture", env)).toBe(true);
+    expect(isChannelConfigured({}, "fixture", {})).toBe(false);
   });
 });

@@ -1,101 +1,95 @@
+import { onTestFinished } from "vitest";
+import { registerListener } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import { createSessionCapability } from "./index.ts";
 import type { SessionGateway } from "./session-capability.ts";
 
-export function createTestSessionCapability(gateway: SessionGateway, selectedId = "main") {
-  return createSessionCapability(gateway, {
-    state: { selectedId },
-    subscribe: () => () => undefined,
-  });
-}
-
-export function sessionsResult(
-  sessions: SessionsListResult["sessions"],
-  ts: number,
-): SessionsListResult {
-  return {
-    ts,
-    path: "(multiple)",
-    count: sessions.length,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions,
-  };
-}
-
-export function runningSessionsResult(): SessionsListResult {
-  return sessionsResult(
-    [
-      {
-        key: "agent:main:main",
-        kind: "direct",
-        updatedAt: 1,
-        hasActiveRun: true,
-        activeRunIds: ["run-1"],
-        status: "running",
-        startedAt: 1,
-      },
-    ],
-    1,
-  );
-}
+type Snapshot = {
+  client: GatewayBrowserClient | null;
+  phase: "connected" | "reconnecting";
+  sessionKey: string;
+  assistantAgentId: string | null;
+  hello: GatewayHelloOk | null;
+  selfUser: { readonly id: string } | null;
+};
 
 export function createGatewayHarness(
   client: GatewayBrowserClient,
   featureMethods?: string[],
-  options?: { selfUser?: { readonly id: string } | null },
+  options?: { selfUser?: Snapshot["selfUser"]; initial?: Partial<Snapshot> },
 ) {
-  let snapshot: {
-    client: GatewayBrowserClient | null;
-    phase: "connected" | "reconnecting";
-    sessionKey: string;
-    assistantAgentId: string | null;
-    hello: GatewayHelloOk | null;
-    selfUser: { readonly id: string } | null;
-  } = {
+  let snapshot: Snapshot = {
     client,
-    phase: "connected" as const,
+    phase: "connected",
     sessionKey: "agent:main:main",
     assistantAgentId: "main",
-    hello:
-      featureMethods === undefined
-        ? null
-        : ({ features: { methods: featureMethods } } as GatewayHelloOk),
+    hello: featureMethods ? ({ features: { methods: featureMethods } } as GatewayHelloOk) : null,
     selfUser: options?.selfUser ?? null,
+    ...options?.initial,
   };
-  const listeners = new Set<(next: typeof snapshot) => void>();
-  const eventListeners = new Set<(event: GatewayEventFrame) => void>();
+  const changes = new Set<(next: Snapshot) => void>();
+  const events = new Set<(event: GatewayEventFrame) => void>();
+  const update = (patch: Partial<Snapshot>) => {
+    snapshot = { ...snapshot, ...patch };
+    changes.forEach((listener) => listener(snapshot));
+  };
   return {
     gateway: {
       get snapshot() {
         return snapshot;
       },
-      subscribe(listener: (next: typeof snapshot) => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-      subscribeEvents(listener: (event: GatewayEventFrame) => void) {
-        eventListeners.add(listener);
-        return () => eventListeners.delete(listener);
-      },
+      subscribe: (listener: (next: Snapshot) => void) => registerListener(changes, listener),
+      subscribeEvents: (listener: (event: GatewayEventFrame) => void) =>
+        registerListener(events, listener),
     },
-    emitEvent: (event: GatewayEventFrame) => {
-      for (const listener of eventListeners) {
-        listener(event);
-      }
-    },
-    publish: (connected: boolean, nextClient: GatewayBrowserClient | null = snapshot.client) => {
-      snapshot = {
-        ...snapshot,
-        client: nextClient,
-        phase: connected ? "connected" : "reconnecting",
-      };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
-    },
+    update,
+    publish: (connected: boolean, nextClient = snapshot.client) =>
+      update({ client: nextClient, phase: connected ? "connected" : "reconnecting" }),
+    emitEvent: (event: GatewayEventFrame) => events.forEach((listener) => listener(event)),
   };
+}
+
+export function createTestSessionCapability(gateway: SessionGateway, selectedId = "main") {
+  const selection = { state: { selectedId }, subscribe: () => () => undefined };
+  const sessions = createSessionCapability(gateway, selection);
+  const dispose = sessions.dispose;
+  let disposed = false;
+  sessions.dispose = () => {
+    dispose();
+    disposed = true;
+  };
+  onTestFinished(() => {
+    if (!disposed) {
+      dispose();
+    }
+  });
+  return sessions;
+}
+
+export function sessionsResult(rows: SessionsListResult["sessions"], ts = 1): SessionsListResult {
+  return {
+    ts,
+    path: "(multiple)",
+    count: rows.length,
+    defaults: { modelProvider: null, model: null, contextTokens: null },
+    sessions: rows,
+  };
+}
+
+export function runningSessionsResult(): SessionsListResult {
+  return sessionsResult([
+    {
+      key: "agent:main:main",
+      kind: "direct",
+      updatedAt: 1,
+      hasActiveRun: true,
+      activeRunIds: ["run-1"],
+      status: "running",
+      startedAt: 1,
+    },
+  ]);
 }
 
 export function sessionChangedEvent(key: string): GatewayEventFrame {
@@ -108,14 +102,12 @@ export function sessionChangedEvent(key: string): GatewayEventFrame {
 
 export function createSessionCapabilityHarness(
   request: GatewayBrowserClient["request"],
-  options?: { ownerId?: string },
+  { ownerId }: { ownerId?: string } = {},
 ) {
   const { gateway, emitEvent } = createGatewayHarness(
     { request } as GatewayBrowserClient,
     undefined,
-    {
-      selfUser: options?.ownerId ? { id: options.ownerId } : null,
-    },
+    { selfUser: ownerId ? { id: ownerId } : null },
   );
   return { sessions: createTestSessionCapability(gateway), emitEvent };
 }
@@ -125,30 +117,15 @@ export function createSubscriptionHydrationHarness(
   savedAgentId: string | null = null,
 ) {
   const client = { request } as GatewayBrowserClient;
-  let snapshot = {
-    client: null as GatewayBrowserClient | null,
-    phase: "reconnecting" as "connected" | "reconnecting",
-    sessionKey: "agent:main:main",
-    assistantAgentId: null as string | null,
-    hello: null as GatewayHelloOk | null,
-  };
-  const gatewayListeners = new Set<(next: typeof snapshot) => void>();
-  const publish = () => gatewayListeners.forEach((listener) => listener(snapshot));
-  const gateway = {
+  const h = createGatewayHarness(client, undefined, {
+    initial: { client: null, phase: "reconnecting", assistantAgentId: null },
+  });
+  const gateway = Object.assign(h.gateway, {
     connection: { gatewayUrl: "ws://gateway.example.test" },
-    get snapshot() {
-      return snapshot;
-    },
-    subscribe(listener: (next: typeof snapshot) => void) {
-      gatewayListeners.add(listener);
-      return () => gatewayListeners.delete(listener);
-    },
-    subscribeEvents: () => () => undefined,
     setSessionKey(sessionKey: string) {
-      snapshot = { ...snapshot, sessionKey };
-      publish();
+      h.update({ sessionKey });
     },
-  };
+  });
   const selection = createAgentSelectionCapability(
     gateway,
     {
@@ -157,10 +134,7 @@ export function createSubscriptionHydrationHarness(
           defaultId: "main",
           mainKey: "main",
           scope: "per-sender",
-          agents: [
-            { id: "main", kind: "agent" },
-            { id: "writer", kind: "agent" },
-          ],
+          agents: ["main", "writer"].map((id) => ({ id, kind: "agent" as const })),
         },
       },
       subscribe: () => () => undefined,
@@ -173,13 +147,8 @@ export function createSubscriptionHydrationHarness(
     gateway,
     selection,
     sessions,
-    connect: () => {
-      snapshot = { ...snapshot, client, phase: "connected", assistantAgentId: "main" };
-      publish();
-    },
-    disconnect: () => {
-      snapshot = { ...snapshot, phase: "reconnecting" };
-      publish();
-    },
+    emitEvent: h.emitEvent,
+    connect: () => h.update({ client, phase: "connected", assistantAgentId: "main" }),
+    disconnect: () => h.update({ phase: "reconnecting" }),
   };
 }

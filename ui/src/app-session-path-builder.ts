@@ -3,19 +3,17 @@ import {
   type ControlUiSessionNamespace,
 } from "@openclaw/session-url-contract";
 
-type SessionPathDetails = {
-  displayName?: string | null;
-  exactKey?: boolean;
-  mainKey?: string | null;
-  shortIdLength?: number;
-};
-
 export function pathForSession(
   face: ControlUiSessionNamespace,
   agentId: string,
   sessionKey: string,
   basePath = "",
-  details: SessionPathDetails = {},
+  details: {
+    displayName?: string | null;
+    exactKey?: boolean;
+    mainKey?: string | null;
+    shortIdLength?: number;
+  } = {},
 ): string | null {
   return buildControlUiSessionPath({
     namespace: face,
@@ -25,6 +23,6 @@ export function pathForSession(
     displayName: details.displayName ?? undefined,
     exactKey: details.exactKey,
     mainKey: details.mainKey ?? undefined,
-    shortIdLength: details.shortIdLength,
+    shortIdLength: details.shortIdLength ?? 32,
   });
 }

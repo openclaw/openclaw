@@ -1,17 +1,21 @@
-// Msteams plugin module assembles stable inbound activity facts.
 import { serializeMSTeamsAdaptiveCardActionValue } from "../adaptive-card-submit.js";
 import {
   resolveMSTeamsAdvertisedMedia,
   summarizeMSTeamsHtmlAttachments,
-  type MSTeamsAttachmentLike,
-} from "../attachments.js";
-import { extractHtmlFromAttachment } from "../attachments/shared.js";
+} from "../attachments/html.js";
+import {
+  extractHtmlFromAttachment,
+  replaceTeamsEmojiSpriteImagesWithAltText,
+} from "../attachments/shared.js";
+import type { MSTeamsAttachmentLike } from "../attachments/types.js";
 import { tryNormalizeBotFrameworkServiceUrl } from "../bot-framework-service-url.js";
 import type { StoredConversationReference } from "../conversation-store.js";
 import {
   extractMSTeamsConversationMessageId,
   extractMSTeamsQuoteInfo,
+  htmlToPlainText,
   normalizeMSTeamsConversationId,
+  normalizeMSTeamsMentionTags,
   stripMSTeamsMentionTags,
   wasMSTeamsBotMentioned,
 } from "../inbound.js";
@@ -19,22 +23,22 @@ import type { MSTeamsIngressLifecycle } from "../msteams-ingress.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { wasMSTeamsMessageSentWithPersistence } from "../sent-message-cache.js";
 
-function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): string {
+function extractTextFromHtmlAttachments(
+  attachments: MSTeamsAttachmentLike[],
+  activity: MSTeamsTurnContext["activity"],
+): string {
   for (const attachment of attachments) {
     const raw = extractHtmlFromAttachment(attachment);
     if (!raw) {
       continue;
     }
-    const text = raw
-      .replace(/<at[^>]*>.*?<\/at>/gis, " ")
-      .replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gis, "$2 $1")
-      .replace(/<br\s*\/?>/gi, "\n")
-      .replace(/<\/p>/gi, "\n")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/&nbsp;/gi, " ")
-      .replace(/&amp;/gi, "&")
-      .replace(/\s+/g, " ")
-      .trim();
+    const text = htmlToPlainText(
+      // Teams emoji sprites are message text: keep their alt text when the
+      // media reference is discarded so emoji-only messages stay deliverable.
+      normalizeMSTeamsMentionTags(replaceTeamsEmojiSpriteImagesWithAltText(raw), activity, {
+        preserveHtml: true,
+      }).replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>(.*?)<\/a>/gis, "$2 $1"),
+    );
     if (text) {
       return text;
     }
@@ -42,35 +46,33 @@ function extractTextFromHtmlAttachments(attachments: MSTeamsAttachmentLike[]): s
   return "";
 }
 
-export type MSTeamsDebounceEntry = {
-  context: MSTeamsTurnContext;
-  rawText: string;
-  text: string;
-  attachments: MSTeamsAttachmentLike[];
-  wasMentioned: boolean;
-  implicitMentionKinds: Array<"reply_to_bot">;
-  turnAdoptionLifecycle?: MSTeamsIngressLifecycle;
-};
+export type MSTeamsDebounceEntry = Awaited<ReturnType<typeof prepareMSTeamsDebounceEntry>>;
 
 export async function prepareMSTeamsDebounceEntry(params: {
   context: MSTeamsTurnContext;
+  accountId: string;
   turnAdoptionLifecycle?: MSTeamsIngressLifecycle;
-}): Promise<MSTeamsDebounceEntry> {
+}) {
   const activity = params.context.activity;
   const attachments: MSTeamsAttachmentLike[] = Array.isArray(activity.attachments)
     ? activity.attachments
     : [];
   const rawText = activity.text?.trim() ?? "";
-  const htmlText = extractTextFromHtmlAttachments(attachments);
-  const valueText =
-    rawText || htmlText ? "" : serializeMSTeamsAdaptiveCardActionValue(activity.value);
-  const text = stripMSTeamsMentionTags(rawText || htmlText || valueText || "");
+  // Normalize mention markup before decoding so literally typed <at> tags survive.
+  const text = rawText
+    ? normalizeMSTeamsMentionTags(rawText, activity)
+    : extractTextFromHtmlAttachments(attachments, activity) ||
+      stripMSTeamsMentionTags(serializeMSTeamsAdaptiveCardActionValue(activity.value) || "");
   const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
-  const replyToId = activity.replyToId ?? undefined;
+  const replyToId = activity.replyToId;
   const implicitMentionKinds: Array<"reply_to_bot"> =
     conversationId &&
     replyToId &&
-    (await wasMSTeamsMessageSentWithPersistence({ conversationId, messageId: replyToId }))
+    (await wasMSTeamsMessageSentWithPersistence({
+      conversationId,
+      messageId: replyToId,
+      accountId: params.accountId,
+    }))
       ? ["reply_to_bot"]
       : [];
 
@@ -85,16 +87,13 @@ export async function prepareMSTeamsDebounceEntry(params: {
   };
 }
 
-function buildStoredConversationReference(params: {
-  activity: MSTeamsTurnContext["activity"];
-  conversationId: string;
-  conversationType: string;
-  teamId?: string;
-  threadId?: string;
-}): StoredConversationReference {
-  const { activity, conversationId, conversationType, teamId, threadId } = params;
-  const from = activity.from;
+/** Proactive sends replay this reference, so every inbound owner stores the same shape. */
+export function buildMSTeamsConversationReference(
+  activity: MSTeamsTurnContext["activity"],
+  threadId?: string,
+): StoredConversationReference {
   const conversation = activity.conversation;
+  const from = activity.from;
   const clientInfo = activity.entities?.find((entity) => entity.type === "clientInfo") as
     | { timezone?: string }
     | undefined;
@@ -108,13 +107,13 @@ function buildStoredConversationReference(params: {
     user: from ? { id: from.id, name: from.name, aadObjectId: from.aadObjectId } : undefined,
     agent: activity.recipient,
     conversation: {
-      id: conversationId,
-      conversationType,
+      id: normalizeMSTeamsConversationId(conversation?.id ?? ""),
+      conversationType: conversation?.conversationType ?? "personal",
       tenantId,
     },
     ...(tenantId ? { tenantId } : {}),
     ...(aadObjectId ? { aadObjectId } : {}),
-    teamId,
+    teamId: activity.channelData?.team?.id,
     channelId: activity.channelId,
     ...(serviceUrl ? { serviceUrl } : {}),
     locale: activity.locale,
@@ -123,11 +122,7 @@ function buildStoredConversationReference(params: {
   };
 }
 
-export function assembleMSTeamsInboundFacts(params: {
-  entry: MSTeamsDebounceEntry;
-  mediaMaxBytes: number;
-}) {
-  const { entry, mediaMaxBytes } = params;
+export function assembleMSTeamsInboundFacts(entry: MSTeamsDebounceEntry) {
   const activity = entry.context.activity;
   const conversation = activity.conversation;
   const rawConversationId = conversation?.id ?? "";
@@ -136,13 +131,9 @@ export function assembleMSTeamsInboundFacts(params: {
   const conversationType = conversation?.conversationType ?? "personal";
   const isChannel = conversationType === "channel";
   const teamId = activity.channelData?.team?.id;
-  const threadId = isChannel
-    ? (conversationMessageId ?? activity.replyToId ?? undefined)
-    : undefined;
-  const advertisedMedia = resolveMSTeamsAdvertisedMedia(entry.attachments, {
-    maxInlineBytes: mediaMaxBytes,
-    maxInlineTotalBytes: mediaMaxBytes,
-  });
+  const threadId = isChannel ? (conversationMessageId ?? activity.replyToId) : undefined;
+  const advertisedMedia = resolveMSTeamsAdvertisedMedia(entry.attachments);
+  const conversationRef = buildMSTeamsConversationReference(activity, threadId);
 
   return {
     ...entry,
@@ -152,14 +143,7 @@ export function assembleMSTeamsInboundFacts(params: {
     rawBody: entry.text,
     advertisedMedia,
     quoteInfo: extractMSTeamsQuoteInfo(entry.attachments),
-    attachmentTypes: entry.attachments
-      .map((attachment) =>
-        typeof attachment.contentType === "string" ? attachment.contentType : undefined,
-      )
-      .filter(Boolean)
-      .slice(0, 3),
     htmlSummary: summarizeMSTeamsHtmlAttachments(entry.attachments),
-    rawConversationId,
     conversationId,
     conversationMessageId,
     conversationType,
@@ -167,12 +151,8 @@ export function assembleMSTeamsInboundFacts(params: {
     teamId,
     graphChannelId: activity.channelData?.channel?.id?.trim() || conversationId,
     threadId,
-    conversationRef: buildStoredConversationReference({
-      activity,
-      conversationId,
-      conversationType,
-      teamId,
-      threadId,
-    }),
+    // Pending history must follow the channel thread through recording, reads, and cleanup.
+    historyKey: threadId ? `${conversationId}:thread:${threadId}` : conversationId,
+    conversationRef,
   };
 }

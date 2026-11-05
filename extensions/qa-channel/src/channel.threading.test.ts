@@ -2,6 +2,57 @@ import { describe, expect, it } from "vitest";
 import { qaChannelPlugin } from "../api.js";
 
 describe("qa-channel thread delivery contracts", () => {
+  it.each<{
+    name: string;
+    currentMessageId?: string;
+    replyToId?: string | null;
+    explicit?: boolean;
+    mode?: "off" | "first" | "all" | "batched";
+    expected: { replyToId: string } | null;
+  }>([
+    {
+      name: "implicit current inbound",
+      currentMessageId: "queued-inbound",
+      expected: { replyToId: "queued-inbound" },
+    },
+    {
+      name: "all mode",
+      currentMessageId: "queued-inbound",
+      mode: "all",
+      expected: { replyToId: "queued-inbound" },
+    },
+    { name: "first mode", currentMessageId: "queued-inbound", mode: "first", expected: null },
+    {
+      name: "explicit null opt-out",
+      currentMessageId: "queued-inbound",
+      replyToId: null,
+      expected: null,
+    },
+    {
+      name: "explicit target",
+      currentMessageId: "queued-inbound",
+      replyToId: "explicit-target",
+      expected: null,
+    },
+    {
+      name: "explicit intent without target",
+      currentMessageId: "queued-inbound",
+      explicit: true,
+      expected: null,
+    },
+    { name: "missing inbound", expected: null },
+  ])("preserves $name during queued reply resolution", (testCase) => {
+    expect(
+      qaChannelPlugin.threading?.resolveReplyTransport?.({
+        cfg: {},
+        currentMessageId: testCase.currentMessageId,
+        replyToId: testCase.replyToId,
+        replyToIsExplicit: testCase.explicit,
+        ...(testCase.mode ? { replyDelivery: { replyToMode: testCase.mode } } : {}),
+      }),
+    ).toEqual(testCase.expected);
+  });
+
   it.each([
     {
       name: "channel thread with shared-room ChatType",
@@ -151,7 +202,7 @@ describe("qa-channel thread delivery contracts", () => {
     });
   });
 
-  it("extracts thread replies as canonical QA thread targets", () => {
+  it("extracts thread replies with structured thread identity", () => {
     expect(
       qaChannelPlugin.actions?.extractToolSend?.({
         args: {
@@ -161,6 +212,6 @@ describe("qa-channel thread delivery contracts", () => {
           message: "hello thread",
         },
       }),
-    ).toEqual({ to: "thread:qa-room/thread-1" });
+    ).toEqual({ to: "channel:qa-room", threadId: "thread-1" });
   });
 });

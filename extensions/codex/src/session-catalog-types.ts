@@ -1,4 +1,4 @@
-import type { CodexAppServerRuntimeOptions } from "./app-server/config.js";
+import type { CodexAppServerRuntimeOptions, CodexPluginConfig } from "./app-server/config.js";
 import type {
   CodexThread,
   CodexThreadForkParams,
@@ -11,7 +11,35 @@ import type {
   CodexThreadItemsListResponse,
 } from "./app-server/protocol.js";
 
+/** Bounded native metadata prepared by projectCodexCatalogNativeThread. */
+export type CodexCatalogNativeThread = Pick<
+  CodexThread,
+  | "id"
+  | "projectId"
+  | "sessionId"
+  | "ephemeral"
+  | "name"
+  | "cwd"
+  | "modelProvider"
+  | "cliVersion"
+  | "path"
+  | "originator"
+  | "createdAt"
+  | "updatedAt"
+  | "recencyAt"
+  | "preview"
+  | "source"
+  | "gitInfo"
+  | "status"
+> & { catalogError?: "oversized-thread" };
+
+export type CodexCatalogNativePage = Omit<CodexThreadListResponse, "data"> & {
+  data: CodexCatalogNativeThread[];
+};
+
 export type CodexCatalogHome = {
+  /** Revalidate discovery before a new operation captures its source. */
+  assertCurrent(): void;
   sourceHomeId: string;
   hostId: string;
   label: string;
@@ -22,7 +50,6 @@ export type CodexCatalogHome = {
   usesProcessHomeFallback: boolean;
 };
 
-/** Read-only metadata for one Codex app-server thread. */
 export type CodexSessionCatalogSession = {
   threadId: string;
   /** Opaque connection identity; never exposes the underlying Codex home path. */
@@ -33,6 +60,8 @@ export type CodexSessionCatalogSession = {
   fallbackName?: string;
   cwd?: string;
   status: string;
+  /** The native preview could not fit; identity and continuation were recovered. */
+  catalogError?: "oversized-thread";
   activeFlags?: string[];
   createdAt?: number;
   updatedAt?: number;
@@ -48,6 +77,10 @@ export type CodexSessionCatalogSession = {
 
 export type CodexSessionCatalogPage = {
   sessions: CodexSessionCatalogSession[];
+  /** Canonical node-owned home identity; absent from older read-only node pages. */
+  sourceHomeId?: string;
+  /** The node's selected source must explicitly support Chat continuation. */
+  canContinueCodex?: boolean;
   /** Internal provenance filtered before this page reaches the provider catalog. */
   managedThreads?: Array<{ threadId: string; rolloutPath?: string }>;
   nextCursor?: string;
@@ -66,7 +99,7 @@ export type CodexSessionCatalogControl = {
   forkContext?: {
     client: import("./app-server/client.js").CodexAppServerClient;
     appServer: CodexAppServerRuntimeOptions;
-    pluginConfig: unknown;
+    pluginConfig: CodexPluginConfig;
     agentDir: string;
     localSessionsRoot?: string;
   };
@@ -75,6 +108,8 @@ export type CodexSessionCatalogControl = {
   clientId?: string;
   connectionFingerprint?: string;
   withPinnedConnection<T>(run: (control: CodexSessionCatalogControl) => Promise<T>): Promise<T>;
+  /** Lifecycle hydration; listPage only reads the resident snapshot. */
+  initialize(): Promise<void>;
   listPage(params: CodexSessionCatalogPageParams): Promise<CodexSessionCatalogPage>;
   requireEligibleThread(threadId: string): Promise<CodexThread>;
   listDescendantPage(params: CodexThreadListParams): Promise<CodexThreadListResponse>;
@@ -89,12 +124,23 @@ export type CodexSessionCatalogControl = {
 };
 
 export type CodexSessionCatalogControlFactory = {
+  hasActiveWork(this: void): boolean;
+  /** Drain node-owned state and transports while permitting the next connection. */
+  disconnect(this: void): Promise<void>;
   forRequest(agentId: string, source?: CodexCatalogHome): CodexSessionCatalogControl;
-  homesForAgent(agentId: string): readonly CodexCatalogHome[];
+  /** Native default, with the shipped agent selector retained for explicitly configured sources. */
+  forNode(agentId?: string): Promise<{
+    assertCurrent(): void;
+    control: CodexSessionCatalogControl;
+    sourceHomeId: string;
+    codexHome: string;
+    transport: CodexAppServerRuntimeOptions["start"]["transport"];
+  }>;
+  homesForAgent(agentId: string): Promise<readonly CodexCatalogHome[]>;
   forUpstream(
     agentId: string,
     connectionFingerprint: string,
-  ): CodexSessionCatalogControl | undefined;
+  ): Promise<CodexSessionCatalogControl | undefined>;
 };
 
 export type CodexSessionCatalogError = {
@@ -103,6 +149,7 @@ export type CodexSessionCatalogError = {
 };
 
 export type CodexSessionCatalogHost = {
+  pending?: boolean;
   hostId: string;
   label: string;
   kind: "gateway" | "node";
@@ -115,10 +162,6 @@ export type CodexSessionCatalogHost = {
   nextCursor?: string;
   backwardsCursor?: string;
   error?: CodexSessionCatalogError;
-};
-
-export type CodexSessionCatalogResult = {
-  hosts: CodexSessionCatalogHost[];
 };
 
 export type CodexSessionTranscriptPage = {

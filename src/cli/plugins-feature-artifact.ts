@@ -1,13 +1,20 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { create as createArchive } from "tar";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { root } from "../infra/fs-safe.js";
 import { readPluginControlUiAssets } from "../plugins/control-ui-assets.js";
+import { safePluginInstallFileName } from "../plugins/install-paths.js";
+import type { PluginDiagnostic } from "../plugins/manifest-types.js";
 import { loadPluginManifest, resolvePackageExtensionEntries } from "../plugins/manifest.js";
+import {
+  resolvePackageRuntimeExtensionSources,
+  resolvePackageSetupSource,
+  validatePackageExtensionEntriesForInstall,
+} from "../plugins/package-entry-resolution.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { defaultRuntime } from "../runtime.js";
 import { collectPluginsValidationResult } from "./plugins-authoring-command.js";
@@ -31,24 +38,40 @@ async function packFeaturePlugin(opts: PluginsPackOptions) {
   if (extensions.status !== "ok" || extensions.entries.length !== 1) {
     throw new Error("Plugin artifacts require exactly one backend entrypoint.");
   }
-  const entry = extensions.entries[0]!;
+  const entriesValid = await validatePackageExtensionEntriesForInstall({
+    packageDir: rootDir,
+    manifest: packageManifest,
+    extensions: extensions.entries,
+    allowSourceTypeScriptEntries: true,
+  });
+  if (!entriesValid.ok) {
+    throw new Error(entriesValid.error);
+  }
+  const diagnostics: PluginDiagnostic[] = [];
+  const resolution = {
+    packageDir: rootDir,
+    manifest: packageManifest,
+    origin: "config" as const,
+    requireBuiltRuntimeEntry: false,
+    sourceLabel: rootDir,
+    diagnostics,
+  };
+  const [entry] = resolvePackageRuntimeExtensionSources({
+    ...resolution,
+    extensions: extensions.entries,
+  });
+  const setupEntry = resolvePackageSetupSource(resolution);
+  if (!entry || diagnostics.length > 0) {
+    throw new Error(diagnostics.map((diagnostic) => diagnostic.message).join("\n"));
+  }
   const loaded = withPluginCache(createPluginCache(), () => loadPluginManifest(rootDir, false));
   if (!loaded.ok) {
     throw new Error(loaded.error);
   }
-  const require = createRequire(path.join(rootDir, "package.json"));
-  // SAFETY: Node resolves the plugin's installed esbuild package with this public API.
-  const builder = require("esbuild") as typeof import("esbuild");
-  const files = await buildPluginBundle(builder, {
-    absWorkingDir: rootDir,
-    entryPoints: [entry],
-    outfile: "dist/index.js",
-    platform: "node",
-    target: "node22",
-    external: ["openclaw", "openclaw/*"],
-  });
   const pluginId = loaded.manifest.id;
-  const outputPath = path.resolve(opts.out ?? path.join(rootDir, `${pluginId}.tgz`));
+  const outputPath = path.resolve(
+    opts.out ?? path.join(rootDir, `${safePluginInstallFileName(pluginId)}.tgz`),
+  );
   if (!/\.(?:tgz|tar\.gz)$/u.test(outputPath)) {
     throw new Error("Plugin artifact output must end in .tgz or .tar.gz.");
   }
@@ -61,7 +84,12 @@ async function packFeaturePlugin(opts: PluginsPackOptions) {
       hardlinks: "reject",
     });
     await destination.ensureRoot();
-    const { controlUi: _source, ...openclaw } = packageManifest.openclaw;
+    const {
+      controlUi: _source,
+      runtimeExtensions: _runtime,
+      runtimeSetupEntry: _runtimeSetup,
+      ...openclaw
+    } = packageManifest.openclaw;
     // Only runtime package metadata travels with the archive. Build-time dependencies
     // and scripts cannot trigger additional executable downloads after approval.
     const packedPackage = {
@@ -76,22 +104,46 @@ async function packFeaturePlugin(opts: PluginsPackOptions) {
       typeof packageManifest.peerDependencies.openclaw === "string"
         ? { peerDependencies: { openclaw: packageManifest.peerDependencies.openclaw } }
         : {}),
-      openclaw: { ...openclaw, extensions: ["./dist/index.js"] },
+      openclaw: {
+        ...openclaw,
+        extensions: ["./dist/index.js"],
+        ...(setupEntry ? { setupEntry: "./dist/setup.js" } : {}),
+      },
     };
     await destination.create("package.json", `${JSON.stringify(packedPackage, null, 2)}\n`);
     await destination.create(
       "openclaw.plugin.json",
       await source.readBytes("openclaw.plugin.json"),
     );
-    await destination.mkdir("dist");
-    await destination.create("dist/index.js", Buffer.from(files[0]!.contents));
+    // One build keeps modules shared by setup and runtime in the same artifact graph.
+    const files = await buildPluginBundle({
+      absWorkingDir: rootDir,
+      entryPoints: { index: entry, ...(setupEntry ? { setup: setupEntry } : {}) },
+      outdir: "dist",
+      splitting: true,
+      platform: "node",
+      target: "node22",
+      external: ["openclaw", "openclaw/*"],
+    });
+    for (const file of files) {
+      const relativePath = path.relative(rootDir, file.path);
+      await destination.mkdir(path.dirname(relativePath));
+      await destination.create(relativePath, Buffer.from(file.contents));
+    }
     const controlUi = loaded.manifest.controlUi;
     if (controlUi) {
-      const { directory, assets } = await readPluginControlUiAssets(rootDir, controlUi);
+      const { directory, assets, panelIcon } = await readPluginControlUiAssets(rootDir, controlUi);
       for (const [name, asset] of assets) {
         const relativePath = path.posix.join(directory, name);
         await destination.mkdir(path.posix.dirname(relativePath));
         await destination.create(relativePath, asset.body);
+      }
+      if (panelIcon) {
+        const iconDirectory = path.posix.dirname(panelIcon.path);
+        if (iconDirectory !== ".") {
+          await destination.mkdir(iconDirectory);
+        }
+        await destination.create(panelIcon.path, panelIcon.body);
       }
     }
     const archive = path.join(staging, "plugin.tgz");
@@ -125,6 +177,6 @@ export async function runPluginsPackCommand(opts: PluginsPackOptions): Promise<v
     return;
   }
   defaultRuntime.log(
-    `Packed ${receipt.pluginId}: ${receipt.path}\nSHA256: ${receipt.sha256}\nUse plugin_activate_artifact with this path and digest to request activation approval.`,
+    terminalText`Packed ${receipt.pluginId}: ${receipt.path}\nSHA256: ${receipt.sha256}\nUse plugin_activate_artifact with this path and digest to request activation approval.`,
   );
 }

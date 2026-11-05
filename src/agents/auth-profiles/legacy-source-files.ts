@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveOAuthDir } from "../../config/paths.js";
 import { resolveUserPath } from "../../utils.js";
+import { authProfileSourceExists } from "./file-state.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 
 export type LegacyAuthProfileSourceKind =
@@ -44,13 +45,13 @@ export function resolveLegacyAuthProfileSourceCandidates(params: {
   return candidates;
 }
 
-/** Detects retired auth files by name only; runtime code must never read their contents. */
+/** Detect retired files by name; only migration diagnostics may inspect provider metadata. */
 export function listLegacyAuthProfileSources(params: {
   agentDir?: string;
   env?: NodeJS.ProcessEnv;
 }): LegacyAuthProfileSource[] {
   return resolveLegacyAuthProfileSourceCandidates(params).filter((candidate) =>
-    fs.existsSync(candidate.path),
+    authProfileSourceExists(candidate.path),
   );
 }
 

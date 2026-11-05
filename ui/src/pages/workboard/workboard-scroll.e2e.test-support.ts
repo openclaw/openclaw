@@ -38,9 +38,9 @@ export async function readMobileScrollGeometry(content: Locator, cardTitle: stri
 
 export async function cardFitsWithinWorkboardContent(card: Locator) {
   return card.evaluate((element) => {
-    const content = element.closest<HTMLElement>(".content--workboard");
+    const content = element.closest<HTMLElement>(".workboard-column__cards");
     if (!content) {
-      throw new Error("Mobile Workboard content container is missing");
+      throw new Error("Mobile Workboard column scroll container is missing");
     }
     const contentRect = content.getBoundingClientRect();
     const cardRect = element.getBoundingClientRect();

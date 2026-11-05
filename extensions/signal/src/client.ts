@@ -1,16 +1,23 @@
-// Signal plugin module implements client behavior.
 import { Buffer } from "node:buffer";
+import { randomUUID } from "node:crypto";
 import http, { type ClientRequest, type IncomingMessage } from "node:http";
 import https from "node:https";
+import net from "node:net";
+import { fileURLToPath } from "node:url";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
-import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
+import {
+  asPositiveFiniteNumber,
+  floorPositiveFiniteNumber,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { SignalRpcOptions, SignalSseEvent } from "./client-types.js";
+import { isSignalQuoteMetadataRejection } from "./quote-rejection.js";
+import { assertSignalSocketEndpoint } from "./socket-path.js";
 
-export type SignalRpcOptions = {
-  baseUrl: string;
-  timeoutMs?: number;
-  maxResponseBytes?: number;
-};
+export type { SignalRpcOptions } from "./client-types.js";
 
 type SignalRpcError = {
   code?: number;
@@ -34,12 +41,6 @@ export class SignalSseRejectionError extends Error {
     super(`Signal SSE failed (${status} ${statusText})`);
   }
 }
-
-type SignalSseEvent = {
-  event?: string;
-  data?: string;
-  id?: string;
-};
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_SIGNAL_HTTP_RESPONSE_MAX_BYTES = 1_048_576;
@@ -105,19 +106,6 @@ function parseSignalRpcResponse<T>(text: string, status: number): SignalRpcRespo
   return rpc;
 }
 
-function assertSignalHttpProtocol(url: URL, label: string): void {
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error(`Signal ${label} unsupported protocol: ${url.protocol}`);
-  }
-}
-
-function normalizeSignalHttpResponseMaxBytes(value: number | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return DEFAULT_SIGNAL_HTTP_RESPONSE_MAX_BYTES;
-  }
-  return Math.floor(value);
-}
-
 function normalizeSignalSseTimeoutMs(timeoutMs: number): number | null {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     return null;
@@ -133,38 +121,31 @@ function requestSignalHttp(
     body?: string;
     timeoutMs: number;
     maxResponseBytes?: number;
+    assertDirectAdapterHandoff?: () => void;
   },
 ): Promise<SignalHttpResponse> {
-  assertSignalHttpProtocol(url, "HTTP");
+  return captureEffectAuthority().initiate(() => initiateSignalHttp(url, options));
+}
+
+function initiateSignalHttp(
+  url: URL,
+  options: Parameters<typeof requestSignalHttp>[1],
+): Promise<SignalHttpResponse> {
   const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, DEFAULT_TIMEOUT_MS);
   const client = url.protocol === "https:" ? https : http;
+  options.assertDirectAdapterHandoff?.();
   return new Promise((resolve, reject) => {
-    let settled = false;
     const deadline = setTimeout(() => {
       request?.destroy(new Error(`Signal HTTP exceeded deadline after ${timeoutMs}ms`));
     }, timeoutMs);
     deadline.unref?.();
-    const cleanup = () => {
+    const rejectResponse = (error: Error) => {
       clearTimeout(deadline);
-      request?.setTimeout(0);
+      reject(error);
     };
-    const rejectOnce = (error: unknown) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      reject(toErrorObject(error, "Non-Error rejection"));
-    };
-    const resolveOnce = (response: SignalHttpResponse) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      resolve(response);
-    };
-    const maxResponseBytes = normalizeSignalHttpResponseMaxBytes(options.maxResponseBytes);
+    const maxResponseBytes = Math.floor(
+      asPositiveFiniteNumber(options.maxResponseBytes) ?? DEFAULT_SIGNAL_HTTP_RESPONSE_MAX_BYTES,
+    );
     const request: ClientRequest | undefined = client.request(
       url,
       {
@@ -181,24 +162,22 @@ function requestSignalHttp(
             const error = new Error("Signal HTTP response exceeded size limit");
             request?.destroy(error);
             res.destroy(error);
-            rejectOnce(error);
+            rejectResponse(error);
             return;
           }
           chunks.push(next);
         });
-        res.on("error", rejectOnce);
+        res.on("error", rejectResponse);
         res.on("end", () => {
-          resolveOnce({
+          clearTimeout(deadline);
+          resolve({
             status: res.statusCode ?? 0,
             body: Buffer.concat(chunks),
           });
         });
       },
     );
-    request.setTimeout(timeoutMs, () => {
-      request?.destroy(new Error(`Signal HTTP timed out after ${timeoutMs}ms`));
-    });
-    request.on("error", rejectOnce);
+    request.on("error", rejectResponse);
     if (options.body !== undefined) {
       request.write(options.body);
     }
@@ -206,11 +185,155 @@ function requestSignalHttp(
   });
 }
 
+const MAX_FRAME_BYTES = 1_048_576;
+
+type RpcMessage = Record<string, unknown>;
+
+function socketPath(baseUrl: string): string {
+  const url = new URL(baseUrl.trim());
+  if (
+    url.protocol !== "unix:" ||
+    url.host ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error("Signal UNIX URL must contain only an absolute socket path");
+  }
+  return fileURLToPath(`file://${url.pathname}`);
+}
+
+function abortError(): Error {
+  return Object.assign(new Error("Signal UNIX stream aborted"), { name: "AbortError" });
+}
+
+async function openSocket(options: SignalRpcOptions, abortSignal?: AbortSignal) {
+  if (abortSignal?.aborted) {
+    throw abortError();
+  }
+  const path = socketPath(options.baseUrl);
+  await assertSignalSocketEndpoint(path);
+  if (abortSignal?.aborted) {
+    throw abortError();
+  }
+  const socket = net.createConnection({ path });
+  // Keep errors observed even before the iterator starts or while a consumer is awaiting work.
+  socket.on("error", () => {});
+  const timeoutMs = resolveTimerTimeoutMs(
+    options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    DEFAULT_TIMEOUT_MS,
+  );
+  const deadline = setTimeout(() => {
+    socket.destroy(new Error(`Signal UNIX RPC exceeded deadline after ${timeoutMs}ms`));
+  }, timeoutMs);
+  deadline.unref();
+  const onAbort = () => socket.destroy(abortError());
+  abortSignal?.addEventListener("abort", onAbort, { once: true });
+  return {
+    socket,
+    ready: () => clearTimeout(deadline),
+    close: () => {
+      clearTimeout(deadline);
+      abortSignal?.removeEventListener("abort", onAbort);
+      socket.destroy();
+    },
+  };
+}
+
+async function* messages(socket: net.Socket, maxBytes = MAX_FRAME_BYTES) {
+  let pending: Buffer = Buffer.alloc(0);
+  for await (const chunk of socket) {
+    if (!Buffer.isBuffer(chunk)) {
+      throw new Error("Signal UNIX RPC expected a byte stream");
+    }
+    let offset = 0;
+    while (offset < chunk.length) {
+      const newline = chunk.indexOf(10, offset);
+      const end = newline < 0 ? chunk.length : newline;
+      const fragment = chunk.subarray(offset, end);
+      if (pending.length + fragment.length > maxBytes) {
+        throw new Error("Signal UNIX RPC frame exceeded size limit");
+      }
+      pending = Buffer.concat([pending, fragment]);
+      if (newline < 0) {
+        break;
+      }
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(pending);
+      pending = Buffer.alloc(0);
+      offset = newline + 1;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        throw new Error("Signal UNIX RPC returned malformed JSON");
+      }
+      if (!isRecord(parsed)) {
+        throw new Error("Signal UNIX RPC returned invalid response envelope");
+      }
+      yield parsed;
+    }
+  }
+  if (pending.length) {
+    throw new Error("Signal UNIX RPC closed with an incomplete frame");
+  }
+}
+
+function result(message: RpcMessage): unknown {
+  if (message.jsonrpc !== "2.0" || (!Object.hasOwn(message, "result") && !message.error)) {
+    throw new Error("Signal UNIX RPC returned invalid response envelope");
+  }
+  if (message.error) {
+    const error = isRecord(message.error) ? message.error : {};
+    const code = typeof error.code === "number" ? error.code : "unknown";
+    // Classify a definitive quote-metadata rejection without echoing raw remote text,
+    // which can carry PII. The safe message keeps the send-path fallback classifier working.
+    if (
+      typeof error.message === "string" &&
+      isSignalQuoteMetadataRejection(`Signal RPC ${code}: ${error.message}`)
+    ) {
+      throw new Error(`Signal RPC ${code}: quote metadata rejected (redacted)`);
+    }
+    throw new Error(`Signal RPC ${code}: remote error`);
+  }
+  return message.result;
+}
+
+async function signalUnixRpcRequest<T>(
+  method: string,
+  params: Record<string, unknown> | undefined,
+  options: SignalRpcOptions,
+): Promise<T> {
+  const effect = captureEffectAuthority();
+  const connection = await openSocket(options);
+  const id = randomUUID();
+  const maxBytes = floorPositiveFiniteNumber(options.maxResponseBytes) || MAX_FRAME_BYTES;
+  try {
+    const frame = `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`;
+    await effect.initiate(() => {
+      options.assertDirectAdapterHandoff?.();
+      connection.socket.write(frame);
+    });
+    for await (const message of messages(connection.socket, maxBytes)) {
+      if (message.id === id) {
+        // SAFETY: The generic caller owns the method's result type after JSON-RPC envelope validation.
+        return result(message) as T;
+      }
+    }
+    throw new Error("Signal UNIX RPC closed before response");
+  } finally {
+    connection.close();
+  }
+}
+
 export async function signalRpcRequest<T = unknown>(
   method: string,
   params: Record<string, unknown> | undefined,
   opts: SignalRpcOptions,
 ): Promise<T> {
+  if (opts.baseUrl.trim().startsWith("unix:")) {
+    return signalUnixRpcRequest<T>(method, params, opts);
+  }
   const id = generateSecureUuid();
   const body = JSON.stringify({
     jsonrpc: "2.0",
@@ -227,6 +350,7 @@ export async function signalRpcRequest<T = unknown>(
     body,
     timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     maxResponseBytes: opts.maxResponseBytes,
+    assertDirectAdapterHandoff: opts.assertDirectAdapterHandoff,
   });
   if (res.status === 201) {
     return undefined as T;
@@ -250,6 +374,10 @@ export async function signalCheck(
   timeoutMs = DEFAULT_TIMEOUT_MS,
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
   try {
+    if (baseUrl.trim().startsWith("unix:")) {
+      await signalUnixRpcRequest("version", undefined, { baseUrl, timeoutMs });
+      return { ok: true, status: null, error: null };
+    }
     const res = await requestSignalHttp(resolveSignalEndpointUrl(baseUrl, "/api/v1/check"), {
       method: "GET",
       timeoutMs,
@@ -267,18 +395,94 @@ export async function signalCheck(
   }
 }
 
-function openSignalEventStream(
-  url: URL,
-  abortSignal?: AbortSignal,
-  timeoutMs = DEFAULT_TIMEOUT_MS,
-): Promise<{ response: IncomingMessage; cleanup: () => void }> {
-  assertSignalHttpProtocol(url, "SSE");
+export async function streamSignalEvents(params: {
+  baseUrl: string;
+  account?: string;
+  abortSignal?: AbortSignal;
+  timeoutMs?: number;
+  lastEventId?: string;
+  onEvent: (event: SignalSseEvent) => unknown;
+  onStreamOpen?: () => void;
+}): Promise<void> {
+  if (params.baseUrl.trim().startsWith("unix:")) {
+    // The monitor uses zero for unlimited stream idle time, not a 1 ms handshake.
+    // Bound subscription establishment separately; ready() clears it after acknowledgement.
+    const connection = await openSocket(
+      { ...params, timeoutMs: params.timeoutMs === 0 ? DEFAULT_TIMEOUT_MS : params.timeoutMs },
+      params.abortSignal,
+    );
+    const id = randomUUID();
+    let subscription: number | undefined;
+    try {
+      connection.socket.write(
+        `${JSON.stringify({
+          jsonrpc: "2.0",
+          id,
+          method: "subscribeReceive",
+          params: params.account ? { account: params.account } : undefined,
+        })}\n`,
+      );
+      for await (const message of messages(connection.socket)) {
+        if (params.abortSignal?.aborted) {
+          throw abortError();
+        }
+        if (message.id === id) {
+          const value = result(message);
+          if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+            throw new Error("Signal UNIX RPC returned invalid receive subscription");
+          }
+          subscription = value;
+          connection.ready();
+          params.onStreamOpen?.();
+          continue;
+        }
+        if (
+          message.jsonrpc !== "2.0" ||
+          message.method !== "receive" ||
+          !isRecord(message.params)
+        ) {
+          continue;
+        }
+        const notification = message.params;
+        // signal-cli manual receive wraps the regular SSE payload in a subscription result.
+        if (subscription !== undefined && notification.subscription !== subscription) {
+          continue;
+        }
+        const payload = notification.result;
+        if (!isRecord(payload)) {
+          continue;
+        }
+        const account = payload.account;
+        if (params.account && typeof account === "string" && account !== params.account) {
+          continue;
+        }
+        await params.onEvent({ event: "receive", data: JSON.stringify(payload) });
+      }
+      if (subscription === undefined) {
+        throw new Error("Signal UNIX RPC closed before receive subscription");
+      }
+    } finally {
+      // signal-cli removes connection-owned subscriptions when the socket closes.
+      connection.close();
+    }
+    return;
+  }
+  const url = resolveSignalEndpointUrl(params.baseUrl, "/api/v1/events");
+  if (params.account) {
+    url.searchParams.set("account", params.account);
+  }
+
+  const abortSignal = params.abortSignal;
+  const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   if (abortSignal?.aborted) {
     throw createSignalSseAbortError();
   }
 
   const client = url.protocol === "https:" ? https : http;
-  return new Promise((resolve, reject) => {
+  const { response: streamResponse, cleanup: cleanupStream } = await new Promise<{
+    response: IncomingMessage;
+    cleanup: () => void;
+  }>((resolve, reject) => {
     let settled = false;
     let response: IncomingMessage | undefined;
     let onAbort: () => void = () => {};
@@ -301,19 +505,22 @@ function openSignalEventStream(
       }
       abortSignal?.removeEventListener("abort", onAbort);
     };
-    const rejectOnce = (error: unknown) => {
+    const rejectOnce = (error: Error) => {
       if (settled) {
         return;
       }
       settled = true;
       cleanup();
-      reject(toErrorObject(error, "Non-Error rejection"));
+      reject(error);
     };
     const request: ClientRequest = client.request(
       url,
       {
         method: "GET",
-        headers: { Accept: "text/event-stream" },
+        headers: {
+          Accept: "text/event-stream",
+          ...(params.lastEventId ? { "Last-Event-ID": params.lastEventId } : {}),
+        },
       },
       (res) => {
         const status = res.statusCode ?? 0;
@@ -345,26 +552,6 @@ function openSignalEventStream(
     request.on("error", rejectOnce);
     request.end();
   });
-}
-
-export async function streamSignalEvents(params: {
-  baseUrl: string;
-  account?: string;
-  abortSignal?: AbortSignal;
-  timeoutMs?: number;
-  onEvent: (event: SignalSseEvent) => unknown;
-  onStreamOpen?: () => void;
-}): Promise<void> {
-  const url = resolveSignalEndpointUrl(params.baseUrl, "/api/v1/events");
-  if (params.account) {
-    url.searchParams.set("account", params.account);
-  }
-
-  const { response, cleanup } = await openSignalEventStream(
-    url,
-    params.abortSignal,
-    params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  );
   params.onStreamOpen?.();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -373,7 +560,7 @@ export async function streamSignalEvents(params: {
   let currentEventDataBytes = 0;
 
   const flushEvent = async () => {
-    if (!currentEvent.data && !currentEvent.event && !currentEvent.id) {
+    if (!currentEvent.data && !currentEvent.event && currentEvent.id === undefined) {
       return;
     }
     await params.onEvent({
@@ -409,7 +596,7 @@ export async function streamSignalEvents(params: {
         throw new Error("Signal SSE event data exceeded size limit");
       }
       currentEvent.data = currentEvent.data ? `${currentEvent.data}${segment}` : segment;
-    } else if (field === "id") {
+    } else if (field === "id" && !value.includes("\0")) {
       currentEvent.id = value;
     }
   };
@@ -429,7 +616,7 @@ export async function streamSignalEvents(params: {
   };
 
   try {
-    for await (const chunk of response as AsyncIterable<Buffer | string>) {
+    for await (const chunk of streamResponse as AsyncIterable<Buffer | string>) {
       const value = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
       bufferedBytes += value.byteLength;
       if (bufferedBytes > MAX_SIGNAL_SSE_BUFFER_BYTES) {
@@ -448,8 +635,6 @@ export async function streamSignalEvents(params: {
     }
     await drainCompleteLines();
   } finally {
-    cleanup();
+    cleanupStream();
   }
-
-  await flushEvent();
 }

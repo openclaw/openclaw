@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Lists source docs pages and renders on-demand heading metadata for docs-aware tooling.
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,9 +38,6 @@ function assertDocsDir(docsDir) {
 function compactStrings(values) {
   const result = [];
   for (const value of values) {
-    if (value === null || value === undefined) {
-      continue;
-    }
     const normalized =
       typeof value === "string"
         ? value.trim()
@@ -218,13 +214,17 @@ function extractHeadings(raw) {
   let fenceMarker = null;
 
   for (const rawLine of lines) {
-    const trimmed = rawLine.trim();
+    const trimmed = rawLine.trimStart();
     const fenceMatch = /^(?<marker>`{3,}|~{3,})/u.exec(trimmed);
     if (fenceMatch) {
       const marker = fenceMatch.groups.marker;
       if (!fenceMarker) {
         fenceMarker = marker;
-      } else if (marker[0] === fenceMarker[0] && marker.length >= fenceMarker.length) {
+      } else if (
+        marker[0] === fenceMarker[0] &&
+        marker.length >= fenceMarker.length &&
+        /^[ \t]*$/u.test(trimmed.slice(marker.length))
+      ) {
         fenceMarker = null;
       }
       continue;
@@ -257,10 +257,6 @@ function routeForFile(relativePath) {
   return `/${withoutExtension}`;
 }
 
-function normalizeDocsMapRelativePath(relativePath) {
-  return relativePath.replace(/\\/gu, "/");
-}
-
 /** Render the publish-only docs heading map without creating a source-tree mirror. */
 export function renderDocsHeadingMap(docsDir = DOCS_DIR, options = {}) {
   assertDocsDir(docsDir);
@@ -269,7 +265,7 @@ export function renderDocsHeadingMap(docsDir = DOCS_DIR, options = {}) {
     excludedFiles: DOCS_MAP_EXCLUDED_FILES,
     relativePath: options.relativePath,
   })
-    .map(normalizeDocsMapRelativePath)
+    .map((relativePath) => relativePath.replace(/\\/gu, "/"))
     .toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0));
   const lines = [
     "---",

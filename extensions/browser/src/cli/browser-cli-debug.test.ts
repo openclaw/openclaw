@@ -1,30 +1,19 @@
-// Browser tests cover browser cli debug plugin behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import * as browserCliSharedModule from "./browser-cli-shared.js";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   createBrowserProgram,
-  getBrowserCliRuntime,
+  mockBrowserGateway,
+  mockBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
 } from "./browser-cli.test-support.js";
-import * as cliCoreApiModule from "./core-api.js";
 
-const mocks = vi.hoisted(() => ({
-  callBrowserRequest: vi.fn(async (..._args: unknown[]) => ({ ok: true })),
-}));
-
-vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.callBrowserRequest);
-const browserCliRuntime = getBrowserCliRuntime();
-vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(
-  browserCliRuntime.writeJson,
-);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+const gatewayMock = mockBrowserGateway();
+mockBrowserCliRuntime();
 
 const { registerBrowserDebugCommands } = await import("./browser-cli-debug.js");
 
 describe("browser debug command timeouts", () => {
   beforeEach(() => {
-    mocks.callBrowserRequest.mockClear();
+    gatewayMock.mockClear();
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
   });
 
@@ -33,7 +22,7 @@ describe("browser debug command timeouts", () => {
     { args: ["errors"], path: "/errors" },
     { args: ["requests"], path: "/requests" },
     { args: ["trace", "start"], path: "/trace/start" },
-    { args: ["trace", "stop"], path: "/trace/stop" },
+    { args: ["trace", "stop", "--out", " trace.zip "], path: "/trace/stop" },
   ])("inherits the parent timeout for $path", async ({ args, path }) => {
     for (const timeout of ["30000", "60000"]) {
       const { program, browser, parentOpts } = createBrowserProgram();
@@ -43,10 +32,15 @@ describe("browser debug command timeouts", () => {
 
       await program.parseAsync(["browser", ...parentArgs, ...args], { from: "user" });
 
-      expect(mocks.callBrowserRequest).toHaveBeenLastCalledWith(
-        expect.objectContaining({ timeout }),
-        expect.objectContaining({ path }),
+      expect(gatewayMock).toHaveBeenLastCalledWith(
+        "browser.request",
+        expect.objectContaining({ timeout: String(Number(timeout) + 130_000) }),
+        expect.objectContaining({ path, timeoutMs: Number(timeout) }),
+        expect.objectContaining({ scopes: ["operator.admin"] }),
       );
+      if (path === "/trace/stop") {
+        expect(gatewayMock.mock.calls.at(-1)?.[2].body).toMatchObject({ path: " trace.zip " });
+      }
     }
   });
 });

@@ -3,6 +3,7 @@
 export {
   durableMessageBatchMayHaveReachedRecipient,
   sendDurableMessageBatchCore,
+  sendStructuredDurableMessageBatchCore,
   serializeDurableMessagePayloadOutcomes,
   withDurableMessageSendContextCore,
 } from "./send.js";

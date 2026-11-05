@@ -1,7 +1,7 @@
 // Shared-auth websocket test helpers.
 // Opens authenticated gateway sockets and reads config snapshots in tests.
 import { expect } from "vitest";
-import { WebSocket } from "ws";
+import { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 import { acquireGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { connectOk, rpcReq, trackConnectChallengeNonce } from "./test-helpers.js";
 

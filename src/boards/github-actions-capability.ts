@@ -1,11 +1,15 @@
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
+import {
+  BOARD_GITHUB_ACTIONS_QUERY_FIELDS,
+  type BoardWidgetDataQuery,
+} from "../../packages/gateway-protocol/src/schema/board.js";
 import { BoardValidationError } from "./board-layout.js";
 
 export const GITHUB_ACTIONS_BINDING_ID = "github.actions.runs";
 export const GITHUB_ACTIONS_GRANT_PREFIX = `${GITHUB_ACTIONS_BINDING_ID}:`;
 export const GITHUB_ACTIONS_AUTHOR_GUIDANCE =
-  'With a usable connected agent GitHub identity: await openclaw.data.read("github.actions.runs",{repository:"owner/repo",perPage:20}); grant capabilities.tools:["github.actions.runs:owner/repo"]. Identity is checked before save; reconnect in Settings if unavailable. Optional workflow (ID/filename), branch, status, created (ISO day/comparison/range), excludePullRequests=true (omits PR objects); perPage 1..30. Shares private Actions metadata with the widget/session audience; never preview or My GitHub auth. No netOrigins needed.';
+  'Saved Actions summaries: use session:report. Live refresh: declare capabilities.queries with name, bindingId:"github.actions.runs", complete params (repository, workflow, branch, status, created, perPage:1..30, excludePullRequests), and selected fields; explicit null means all/no filter. Call openclaw.data.query(name). Approval shares selected private and future results using agent credentials with session readers. Query edits require renewed approval. Repository-only grants/data.read do not authorize session-only readers. Needs usable agent GitHub identity; reconnect in Settings if unavailable. No netOrigins.';
 
 const repositorySchema = z
   .string()
@@ -63,6 +67,49 @@ const paramsSchema = z.strictObject({
   created: createdSchema.optional(),
   excludePullRequests: z.boolean().default(true),
 });
+
+const queriesSchema = z
+  .array(
+    z.strictObject({
+      name: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/u),
+      bindingId: z.literal(GITHUB_ACTIONS_BINDING_ID),
+      params: paramsSchema.extend({
+        workflow: paramsSchema.shape.workflow.unwrap().nullable(),
+        branch: paramsSchema.shape.branch.unwrap().nullable(),
+        status: paramsSchema.shape.status.unwrap().nullable(),
+        created: paramsSchema.shape.created.unwrap().nullable(),
+        perPage: paramsSchema.shape.perPage.removeDefault(),
+        excludePullRequests: paramsSchema.shape.excludePullRequests.removeDefault(),
+      }),
+      fields: z.array(z.enum(BOARD_GITHUB_ACTIONS_QUERY_FIELDS)).min(1).max(14),
+    }),
+  )
+  .max(8);
+
+/** Stored definitions use the same selectors as the Actions adapter, with no runtime defaults. */
+export function normalizeBoardWidgetDataQueries(value: unknown): BoardWidgetDataQuery[] {
+  if (value === undefined) {
+    return [];
+  }
+  const parsed = queriesSchema.safeParse(value);
+  if (
+    !parsed.success ||
+    new Set(parsed.data.map((query) => query.name)).size !== parsed.data.length
+  ) {
+    throw new BoardValidationError(
+      "invalid_operation",
+      "Invalid named Actions queries: use unique names, explicit selectors (null for all/no filter), perPage 1..30, excludePullRequests, and selected response fields",
+    );
+  }
+  for (const query of parsed.data) {
+    query.fields = [...new Set(query.fields)].toSorted();
+  }
+  return parsed.data.toSorted((a, b) => (a.name < b.name ? -1 : 1));
+}
+
+export function boardWidgetDataQueryParams(query: BoardWidgetDataQuery): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(query.params).filter(([, value]) => value !== null));
+}
 
 export function normalizeGitHubActionsGrant(tool: string): string {
   if (!tool.startsWith(GITHUB_ACTIONS_GRANT_PREFIX)) {

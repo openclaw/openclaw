@@ -15,7 +15,6 @@ import {
   withMatrixQaIsolatedE2eeDriverRoom,
 } from "./scenario-runtime-e2ee-room.js";
 import {
-  MATRIX_QA_SYNC_STATE_AFTER_FAULT_RULE_ID,
   MATRIX_QA_SYNC_STATE_AFTER_PARAM,
   isMatrixQaE2eeNoticeTriggeredSutReply,
   resolveMatrixQaE2eeScenarioGroupRoom,
@@ -39,12 +38,6 @@ export async function runMatrixQaE2eeBasicReplyScenario(
     tokenPrefix: "MATRIX_QA_E2EE_BASIC",
   });
   return {
-    artifacts: {
-      driverEventId: result.driverEventId,
-      reply: result.reply,
-      roomKey: result.roomKey,
-      roomId: result.roomId,
-    },
     details: [
       `encrypted room key: ${result.roomKey}`,
       `encrypted room id: ${result.roomId}`,
@@ -57,12 +50,6 @@ export async function runMatrixQaE2eeBasicReplyScenario(
 export async function runMatrixQaE2eeStateAfterMissingEncryptionScenario(
   context: MatrixQaScenarioContext,
 ): Promise<MatrixQaScenarioExecution> {
-  if (!context.restartGatewayAfterStateMutation) {
-    throw new Error("Matrix E2EE state_after QA scenario requires hard gateway restart support");
-  }
-  if (!context.installFaultRule) {
-    throw new Error("Matrix E2EE state_after QA scenario requires in-place fault injection");
-  }
   const accountId = context.sutAccountId ?? "sut";
   const faultRule = context.installFaultRule(
     buildSyncStateAfterMissingEncryptionFaultRule(context.sutAccessToken),
@@ -78,25 +65,13 @@ export async function runMatrixQaE2eeStateAfterMissingEncryptionScenario(
       scenarioId: "matrix-e2ee-state-after-missing-encryption",
       tokenPrefix: "MATRIX_QA_E2EE_STATE_AFTER",
     });
-    const stateAfterHits = faultRule
-      .hits()
-      .filter((hit) => hit.ruleId === MATRIX_QA_SYNC_STATE_AFTER_FAULT_RULE_ID);
+    const stateAfterHits = faultRule.hits();
     if (stateAfterHits.length > 0) {
       throw new Error(
         `Matrix E2EE gateway still sent ${MATRIX_QA_SYNC_STATE_AFTER_PARAM}=true on /sync`,
       );
     }
     return {
-      artifacts: {
-        driverEventId: result.driverEventId,
-        faultProxyBaseUrl: context.baseUrl,
-        reply: result.reply,
-        roomKey: result.roomKey,
-        roomId: result.roomId,
-        stateAfterFaultHitCount: stateAfterHits.length,
-        stateAfterFaultRuleId: MATRIX_QA_SYNC_STATE_AFTER_FAULT_RULE_ID,
-        strippedSyncStateAfterParam: true,
-      },
       details: [
         `encrypted room key: ${result.roomKey}`,
         `encrypted room id: ${result.roomId}`,
@@ -161,13 +136,6 @@ export async function runMatrixQaE2eeThreadFollowUpScenario(
     },
   );
   return {
-    artifacts: {
-      driverEventId: result.driverEventId,
-      reply: result.reply,
-      rootEventId: result.rootEventId,
-      roomKey,
-      roomId,
-    },
     details: [
       `encrypted room key: ${roomKey}`,
       `encrypted room id: ${roomId}`,
@@ -181,9 +149,6 @@ export async function runMatrixQaE2eeThreadFollowUpScenario(
 export async function runMatrixQaE2eeRestartResumeScenario(
   context: MatrixQaScenarioContext,
 ): Promise<MatrixQaScenarioExecution> {
-  if (!context.restartGateway) {
-    throw new Error("Matrix E2EE restart scenario requires gateway restart support");
-  }
   const restartGateway = context.restartGateway;
   return await withMatrixQaIsolatedE2eeDriverRoom(
     context,
@@ -205,16 +170,6 @@ export async function runMatrixQaE2eeRestartResumeScenario(
         tokenPrefix: "MATRIX_QA_E2EE_AFTER_RESTART",
       });
       return {
-        artifacts: {
-          driverUserId,
-          firstDriverEventId: first.driverEventId,
-          firstReply: first.reply,
-          recoveredDriverEventId: recovered.driverEventId,
-          recoveredReply: recovered.reply,
-          restartSignal: "gateway-restart",
-          roomKey: recovered.roomKey,
-          roomId: recovered.roomId,
-        },
         details: [
           `encrypted room key: ${recovered.roomKey}`,
           `encrypted room id: ${recovered.roomId}`,
@@ -269,12 +224,6 @@ export async function runMatrixQaE2eeVerificationNoticeNoTriggerScenario(
         throw new Error(`unexpected E2EE verification-notice reply: ${result.event.eventId}`);
       }
       return {
-        artifacts: {
-          expectedNoReplyWindowMs: resolveMatrixQaNoReplyWindowMs(context.timeoutMs),
-          noticeEventId,
-          roomKey,
-          roomId,
-        },
         details: [
           `encrypted room key: ${roomKey}`,
           `encrypted room id: ${roomId}`,
@@ -311,13 +260,6 @@ export async function runMatrixQaE2eeArtifactRedactionScenario(
         );
       }
       return {
-        artifacts: {
-          driverEventId: result.driverEventId,
-          driverUserId,
-          reply: result.reply,
-          roomKey: result.roomKey,
-          roomId: result.roomId,
-        },
         details: [
           "decrypted E2EE payload reached in-memory assertions only",
           "observed-event artifacts redact body/formatted_body unless OPENCLAW_QA_MATRIX_CAPTURE_CONTENT=1",
@@ -374,14 +316,6 @@ export async function runMatrixQaE2eeMediaImageScenario(
         sender: matched.event.sender,
       };
       return {
-        artifacts: {
-          attachmentFilename: MATRIX_QA_IMAGE_ATTACHMENT_FILENAME,
-          driverEventId,
-          driverUserId,
-          reply,
-          roomKey,
-          roomId,
-        },
         details: [
           `encrypted room key: ${roomKey}`,
           `encrypted room id: ${roomId}`,

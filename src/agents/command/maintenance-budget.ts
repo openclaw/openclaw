@@ -1,20 +1,20 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { monotonicNow, remainingMonotonicMs } from "../../shared/monotonic-time.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 
-export function createCommandMaintenanceBudget(
-  startedAt: number,
-  timeoutMs: number,
-  parent?: AbortSignal,
-) {
+export function createCommandBudget(startedAt: number, timeoutMs: number, parent?: AbortSignal) {
   const controller = new AbortController();
-  const deadline = timeoutMs === MAX_TIMER_TIMEOUT_MS ? undefined : startedAt + timeoutMs;
+  // Project the caller's epoch-valued start once: setTimeout counts down on the monotonic
+  // clock, so a wall-clock correction must not move the deadline it is counting toward.
+  const startedAtMonotonic = monotonicNow() - Math.max(0, Date.now() - startedAt);
+  const deadline = timeoutMs === MAX_TIMER_TIMEOUT_MS ? undefined : startedAtMonotonic + timeoutMs;
   const expire = () => {
     if (!controller.signal.aborted) {
-      controller.abort(createAbortError("Post-turn maintenance reached the command deadline"));
-      log.debug("Post-turn maintenance stopped at the command deadline.");
+      controller.abort(createAbortError("Command reached its deadline"));
+      log.debug("Command work stopped at its deadline.");
     }
   };
   const remainingMs = () => {
@@ -22,7 +22,7 @@ export function createCommandMaintenanceBudget(
       ? 0
       : deadline === undefined
         ? timeoutMs
-        : Math.max(0, deadline - Date.now());
+        : Math.max(0, Math.floor(remainingMonotonicMs(deadline)));
     if (remaining === 0) {
       expire();
     }

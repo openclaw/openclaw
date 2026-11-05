@@ -58,11 +58,21 @@ openclaw models auth login --provider anthropic --method cli --set-default
 
 This is two steps: log Claude Code into Anthropic on the host, then tell OpenClaw to route Anthropic models through the local `claude-cli` backend.
 
-OpenClaw never reads, stores, refreshes, or forwards the native login tokens. The installed `claude` process reads and refreshes its own login. `CLAUDE_CONFIG_DIR` selects a separate Claude login when set on the Gateway process. OpenClaw-managed setup tokens and API keys remain separate credentials.
+The installed `claude` process reads and refreshes its own native login. By default, OpenClaw uses a non-secret route marker rather than copying its tokens. Set `CLAUDE_CONFIG_DIR` on the Gateway process and use the same directory for `claude auth login` to keep this login separate from your personal Claude CLI login. To share an existing file-backed login with separate settings instead, see [separate Claude configuration](/gateway/cli-backends#separate-claude-configuration). OpenClaw-managed setup tokens and API keys remain separate credentials.
 
 The gateway service must resolve `claude` on `PATH`. If a deployment needs a
 nonstandard executable path, register a wrapper through a
 [CLI backend plugin](/plugins/cli-backend-plugins).
+
+### Anthropic setup-token
+
+Run `claude setup-token` on any machine with Claude Code installed. It prints a long-lived token starting with `sk-ant-oat01-`. Store it on the gateway host with:
+
+```bash
+openclaw models auth login --provider anthropic --method setup-token
+```
+
+The command requires an interactive TTY. See [`openclaw models`](/cli/models#auth-profiles) for the auth-profile commands that manage the stored token afterwards, and [Anthropic](/providers/anthropic) for the provider-side details.
 
 ## Manual token entry
 
@@ -97,7 +107,7 @@ Automation-friendly check, exit `1` when expired/missing, `2` when expiring:
 openclaw models status --check
 ```
 
-Live auth probes (add `--probe-provider`, `--probe-profile`, `--probe-timeout`, `--probe-concurrency`, or `--probe-max-tokens` to narrow scope):
+Live auth checks (add `--probe-provider`, `--probe-profile`, `--probe-timeout`, `--probe-concurrency`, or `--probe-max-tokens` to narrow scope):
 
 ```bash
 openclaw models status --probe
@@ -105,9 +115,9 @@ openclaw models status --probe
 
 Notes:
 
-- Probe rows can come from auth profiles, env credentials, or `models.json`.
-- If `auth.order.<provider>` omits a stored profile, probe reports `excluded_by_auth_order` for that profile instead of trying it.
-- If auth exists but OpenClaw can't resolve a probeable model for that provider, probe reports `status: no_model`.
+- Check rows can come from auth profiles, env credentials, or `models.json`.
+- If `auth.order.<provider>` omits a stored profile, the check reports `excluded_by_auth_order` for that profile instead of trying it.
+- If auth exists but OpenClaw can't resolve a model that can be tested for that provider, the check reports `status: no_model`.
 - Rate-limit cooldowns can be model-scoped: a profile cooling down for one model can still serve a sibling model on the same provider.
 
 Optional ops scripts (systemd/Termux): [Auth monitoring scripts](/help/scripts#auth-monitoring-scripts).
@@ -141,7 +151,7 @@ When you remove provider auth through the gateway control plane, OpenClaw delete
 
 ### OpenAI and legacy `openai-codex` ids
 
-OpenAI API-key profiles and ChatGPT/Codex OAuth profiles both use the canonical provider id `openai`. Use `openai:*` profile ids and `auth.order.openai` for new config.
+OpenAI API-key profiles and ChatGPT/Codex OAuth profiles both use the standard provider id `openai`. Use `openai:*` profile ids and `auth.order.openai` for new config.
 
 If you see `openai-codex` in older config, auth profile ids, or `auth.order.openai-codex`, treat it as legacy migration input — don't create new `openai-codex` profiles. Run:
 
@@ -150,7 +160,7 @@ openclaw doctor --fix
 openclaw models auth list --provider openai
 ```
 
-Doctor rewrites legacy `openai-codex:*` profile ids and `auth.order.openai-codex` entries to the canonical `openai` route. For OpenAI-specific model/runtime routing, see [OpenAI](/providers/openai).
+Doctor rewrites legacy `openai-codex:*` profile ids and `auth.order.openai-codex` entries to the current `openai` route. For OpenAI-specific model/runtime routing, see [OpenAI](/providers/openai).
 
 ### During login (CLI)
 
@@ -190,7 +200,7 @@ Use `--agent <id>` to target a specific agent; omit it to use the configured def
 
 ### "No credentials found"
 
-Configure an Anthropic API key on the **gateway host**, or set up the Anthropic setup-token path, then re-check:
+Configure an Anthropic API key on the **gateway host**, or set up the [Anthropic setup-token](#anthropic-setup-token) path, then re-check:
 
 ```bash
 openclaw models status
@@ -198,7 +208,7 @@ openclaw models status
 
 ### Token expiring/expired
 
-Run `openclaw models status` to see which profile is expiring. If an Anthropic token profile is missing or expired, refresh it via setup-token or migrate to an Anthropic API key.
+Run `openclaw models status` to see which profile is expiring. If an Anthropic token profile is missing or expired, refresh it via [setup-token](#anthropic-setup-token) or migrate to an Anthropic API key.
 
 ## Related
 

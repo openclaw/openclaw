@@ -1,64 +1,46 @@
-import type { CronJob } from "../types.js";
-import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
+import { resolveCronCompletionStatus } from "../completion-status.js";
+import type { CronRunHistorySource } from "../store/run-history.js";
+import type {
+  CronEvent,
+  CronFailureNotificationDetail,
+  CronRunErrorClassification,
+  CronTriggerEvalOutcome,
+} from "../types.js";
+import { finishCronRun } from "./run-history.js";
 import { cronFailureNotificationEventContext, emit, type CronServiceState } from "./state.js";
-import { tryFinishCronTaskRun } from "./task-runs.js";
-import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
 
-function cronOutcomeEvent(job: CronJob, result: TimedCronRunOutcome, runAtMs: number) {
-  return {
-    jobId: job.id,
-    action: "finished",
-    job,
-    status: result.status,
-    completionStatus: result.completionStatus,
-    error: result.error,
-    summary: result.summary,
-    diagnostics: result.diagnostics,
-    delivered: job.state.lastDelivered,
-    deliveryStatus: job.state.lastDeliveryStatus,
-    deliveryError: job.state.lastDeliveryError,
-    deliverySuppressionReason: job.state.deliverySuppressionReason,
-    failureNotificationDelivery: failureNotificationDeliveryFromJobState(job),
-    delivery: result.delivery,
-    sessionId: result.sessionId,
-    sessionKey: result.sessionKey,
-    runAtMs,
-    durationMs: job.state.lastDurationMs,
-    nextRunAtMs: job.state.nextRunAtMs,
-    ...(result.triggerEval?.fired ? { triggerFired: true } : {}),
-    model: result.model,
-    provider: result.provider,
-    usage: result.usage,
-  } as const;
-}
+export type ManualRunTerminalTracker = { emitted: boolean };
 
-export function recordCronOutcomeForJob(
+export async function emitCronRunFinished(
   state: CronServiceState,
-  job: CronJob,
-  result: TimedCronRunOutcome,
-): void {
-  const event = cronOutcomeEvent(job, result, result.startedAt);
-  tryFinishCronTaskRun(state, {
-    taskRunId: result.taskRunId,
-    job,
+  evt: CronEvent & { action: "finished" },
+  tracker?: ManualRunTerminalTracker,
+  taskRunId?: string,
+  details?: {
+    triggerEval?: CronTriggerEvalOutcome;
+    scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown };
+    errorClassification?: CronRunErrorClassification;
+    failureNotificationDetail?: CronFailureNotificationDetail;
+    historySource?: CronRunHistorySource;
+  },
+): Promise<void> {
+  const event = {
+    ...evt,
+    completionStatus:
+      evt.completionStatus ??
+      resolveCronCompletionStatus({ status: evt.status, deliveryStatus: evt.deliveryStatus }),
+  };
+  await finishCronRun(state, {
+    taskRunId,
+    job: evt.job,
     event,
-    errorClassification: result.errorClassification,
-    scriptResult: {
-      scriptStateChanged: result.scriptStateChanged,
-      scriptState: result.scriptState,
-    },
-    ...(result.triggerEval ? { triggerEval: result.triggerEval } : {}),
+    historySource: details?.historySource,
+    errorClassification: details?.errorClassification,
+    ...(details?.scriptResult ? { scriptResult: details.scriptResult } : {}),
+    ...(details?.triggerEval ? { triggerEval: details.triggerEval } : {}),
   });
-}
-
-export function emitCronOutcomeEventForJob(
-  state: CronServiceState,
-  job: CronJob,
-  result: TimedCronRunOutcome,
-): void {
-  emit(
-    state,
-    cronOutcomeEvent(job, result, result.startedAt),
-    cronFailureNotificationEventContext(result.failureNotificationDetail),
-  );
+  emit(state, event, cronFailureNotificationEventContext(details?.failureNotificationDetail));
+  if (tracker) {
+    tracker.emitted = true;
+  }
 }

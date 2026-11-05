@@ -1,6 +1,18 @@
-// Discord tests cover native command reply plugin behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { Container, TextDisplay } from "../internal/discord.js";
+import assert from "node:assert/strict";
+import { setImmediate } from "node:timers/promises";
+import {
+  ComponentType,
+  type APIContainerComponent,
+  type APIButtonComponentWithCustomId,
+} from "discord-api-types/v10";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { discordComponentRegistryState } from "../components-registry-state.js";
+import { resolveDiscordComponentEntryWithPersistence } from "../components-registry.js";
+import { clearDiscordComponentEntriesForTest } from "../components-registry.test-support.js";
+import { parseDiscordComponentCustomId } from "../components.js";
+import type { MessagePayload } from "../internal/discord.js";
 import { createDiscordLoopbackRest } from "../send.test-harness.js";
 import {
   deliverDiscordInteractionReply,
@@ -9,230 +21,292 @@ import {
 } from "./native-command-reply.js";
 
 const loadWebMediaMock = vi.hoisted(() => vi.fn());
-vi.mock("openclaw/plugin-sdk/web-media", () => ({
+vi.mock("openclaw/plugin-sdk/web-media", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/web-media")>()),
   loadWebMedia: loadWebMediaMock,
 }));
 
 function createInteraction() {
   return {
-    reply: vi.fn().mockResolvedValue({ ok: true }),
-    followUp: vi.fn().mockResolvedValue({ ok: true }),
+    reply: vi.fn<(payload: MessagePayload) => Promise<unknown>>().mockResolvedValue({ ok: true }),
+    followUp: vi
+      .fn<(payload: MessagePayload) => Promise<unknown>>()
+      .mockResolvedValue({ ok: true }),
   };
 }
 
-describe("deliverDiscordInteractionReply", () => {
-  beforeEach(() => {
-    loadWebMediaMock.mockReset();
+const componentRoute = {
+  accountId: "work",
+  agentId: "assistant",
+  sessionKey: "agent:assistant:discord:direct:owner",
+};
+
+function deliver(
+  params: Omit<Parameters<typeof deliverDiscordInteractionReply>[0], "textLimit" | "chunkMode">,
+) {
+  return deliverDiscordInteractionReply({
+    textLimit: 2000,
+    chunkMode: "length",
+    ...params,
   });
+}
 
-  it("sends component-only native command replies as follow-ups", async () => {
-    const interaction = createInteraction();
-    const components = [new Container([new TextDisplay("Pick a model")])];
-    const payload = {
-      channelData: {
-        discord: {
-          components,
-        },
+function presentation(buttons: [label: string, command: string][], text?: string) {
+  return {
+    blocks: [
+      ...(text ? [{ type: "text" as const, text }] : []),
+      {
+        type: "buttons" as const,
+        buttons: buttons.map(([label, command]) => ({
+          label,
+          action: { type: "command" as const, command },
+        })),
       },
-    };
+    ],
+  };
+}
 
-    expect(hasRenderableReplyPayload(payload)).toBe(true);
+async function expectUnregistered(ids: string[]) {
+  for (const id of ids) {
+    expect(await resolveDiscordComponentEntryWithPersistence({ id, consume: false })).toBeNull();
+  }
+}
 
-    await deliverDiscordInteractionReply({
+beforeEach(() => {
+  loadWebMediaMock.mockReset();
+  clearDiscordComponentEntriesForTest();
+});
+
+afterEach(() => clearDiscordComponentEntriesForTest());
+
+it.each([
+  [false, false],
+  [true, false],
+  [false, true],
+])(
+  "registers buttons after native acceptance (message ID=%s, expired=%s)",
+  async (hasMessageId, expires) => {
+    const interaction = createInteraction();
+    const started = createDeferred<void>();
+    const accepted = createDeferred<unknown>();
+    const sender = interaction.followUp;
+    sender.mockImplementation(() => {
+      started.resolve();
+      return accepted.promise;
+    });
+    const choices: [string, string][] = [
+      ["All models", "/login choice token 0"],
+      ["Keep restrictions", "/login choice token 1"],
+    ];
+    const delivery = deliver({
       interaction: interaction as never,
-      payload,
-      textLimit: 2000,
-      preferFollowUp: true,
+      payload: {
+        text: "Choose model access: /login choice token 0 or /login choice token 1",
+        presentationTextMode: "fallback",
+        presentation: presentation(choices, "Credentials saved. Choose model access."),
+      },
+      componentRoute,
       responseEphemeral: true,
-      chunkMode: "length",
     });
-
-    expect(interaction.followUp).toHaveBeenCalledWith({
-      components,
-      ephemeral: true,
-    });
-    expect(interaction.reply).not.toHaveBeenCalled();
-  });
-
-  it("sends component-only native command replies through the initial reply when not deferred", async () => {
-    const interaction = createInteraction();
-    const components = [new Container([new TextDisplay("Choose an action")])];
-
-    await deliverDiscordInteractionReply({
-      interaction: interaction as never,
-      payload: {
-        channelData: {
-          discord: {
-            components,
-          },
-        },
-      },
-      textLimit: 2000,
-      preferFollowUp: false,
-      chunkMode: "length",
-    });
-
-    expect(interaction.reply).toHaveBeenCalledWith({
-      components,
-    });
-    expect(interaction.followUp).not.toHaveBeenCalled();
-  });
-
-  it.each([true, false])(
-    "sends embed-only native command replies with preferFollowUp=%s",
-    async (preferFollowUp) => {
-      const interaction = createInteraction();
-      const embeds = [{ title: "Status", description: "All systems operational" }];
-      const payload = { channelData: { discord: { embeds } } };
-
-      expect(hasRenderableReplyPayload(payload)).toBe(true);
-      await expect(
-        deliverDiscordInteractionReply({
-          interaction: interaction as never,
-          payload,
-          textLimit: 2000,
-          preferFollowUp,
-          responseEphemeral: true,
-          chunkMode: "length",
-        }),
-      ).resolves.toBe(true);
-
-      const sender = preferFollowUp ? interaction.followUp : interaction.reply;
-      expect(sender).toHaveBeenCalledWith({ embeds, ephemeral: true });
-    },
-  );
-
-  it.each([false, true])(
-    "keeps native reply embeds on the first chunk with media=%s",
-    async (includeMedia) => {
-      const interaction = createInteraction();
-      const embeds = [{ title: "Status" }];
-      if (includeMedia) {
-        loadWebMediaMock.mockResolvedValue({
-          buffer: Buffer.from("image"),
-          fileName: "status.png",
-          contentType: "image/png",
-        });
-      }
-
-      await deliverDiscordInteractionReply({
-        interaction: interaction as never,
-        payload: {
-          text: "x".repeat(2_100),
-          ...(includeMedia ? { mediaUrls: ["file:///tmp/status.png"] } : {}),
-          channelData: { discord: { embeds } },
-        },
-        textLimit: 2000,
-        preferFollowUp: false,
-        chunkMode: "length",
-      });
-
-      expect(interaction.reply).toHaveBeenCalledWith(
-        expect.objectContaining({ embeds, ...(includeMedia ? { files: expect.any(Array) } : {}) }),
+    const outcome = delivery.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    await started.promise;
+    const message = sender.mock.calls[0]?.[0];
+    assert(message && typeof message !== "string");
+    expect(message).not.toHaveProperty("content");
+    expect(message.ephemeral).toBe(true);
+    const component = message.components?.[0];
+    assert(component && "serialize" in component);
+    const container = component.serialize() as APIContainerComponent;
+    expect(container.type).toBe(ComponentType.Container);
+    const buttons = container.components
+      .flatMap((part) => (part.type === ComponentType.ActionRow ? part.components : []))
+      .filter(
+        (part): part is APIButtonComponentWithCustomId =>
+          part.type === ComponentType.Button && "custom_id" in part,
       );
-      expect(interaction.followUp).toHaveBeenCalledWith({ content: "x".repeat(100) });
-    },
-  );
-
-  it("omits legacy content and embeds from native Components V2 replies", async () => {
-    const interaction = createInteraction();
-    const components = [{ type: 17, components: [{ type: 10, content: "Choose" }] }];
-
-    await deliverDiscordInteractionReply({
-      interaction: interaction as never,
-      payload: {
-        text: "legacy fallback",
-        channelData: {
-          discord: { components, embeds: [{ title: "legacy embed" }] },
-        },
-      },
-      textLimit: 2000,
-      preferFollowUp: false,
-      chunkMode: "length",
+    expect(buttons.map((button) => button.label)).toEqual(choices.map(([label]) => label));
+    const ids = buttons.map((button) => {
+      const parsed = parseDiscordComponentCustomId(button.custom_id);
+      assert(parsed);
+      return parsed.componentId;
     });
+    await expectUnregistered(ids);
+    if (expires) {
+      accepted.reject({ discordCode: 10062 });
+    } else {
+      accepted.resolve(hasMessageId ? { id: "native-message" } : undefined);
+    }
+    const result = await outcome;
+    if (expires) {
+      expect(result).toEqual({ error: expect.any(PlatformMessageNotDispatchedError) });
+      await expectUnregistered(ids);
+      return;
+    }
+    expect(result).toEqual({ value: true });
+    const entries = await Promise.all(
+      ids.map((id) => resolveDiscordComponentEntryWithPersistence({ id, consume: false })),
+    );
+    expect(entries.map((entry) => [entry?.label, entry?.callbackData])).toEqual(choices);
+    for (const entry of entries) {
+      expect(entry).toMatchObject({
+        ...componentRoute,
+        callbackDataKind: "command",
+        messageId: hasMessageId ? "native-message" : undefined,
+      });
+    }
+  },
+);
 
-    expect(interaction.reply).toHaveBeenCalledWith({ components });
-    expect(interaction.followUp).not.toHaveBeenCalled();
+it.each([false, true])(
+  "waits for native button persistence without changing delivery on failure=%s",
+  async (fail) => {
+    const started = createDeferred<void>();
+    const registered = createDeferred<void>();
+    discordComponentRegistryState.persistentComponentStore = {
+      register: async () => {
+        started.resolve();
+        await registered.promise;
+      },
+      lookup: async () => undefined,
+      consume: async () => undefined,
+      delete: async () => false,
+    };
+    const interaction = createInteraction();
+    let completed = false;
+    const delivery = deliver({
+      interaction: interaction as never,
+      payload: { presentation: presentation([["Choose", "/help"]]) },
+      componentRoute,
+    }).then((value) => {
+      completed = true;
+      return value;
+    });
+    try {
+      await started.promise;
+      await setImmediate();
+      expect(interaction.followUp).toHaveBeenCalledOnce();
+      expect(completed).toBe(false);
+      if (fail) {
+        registered.reject(new Error("synthetic persistence unavailable"));
+      } else {
+        registered.resolve();
+      }
+      expect(await delivery).toBe(true);
+      expect(discordComponentRegistryState.persistentRegistryDisabled).toBe(fail);
+    } finally {
+      registered.resolve();
+      await delivery;
+    }
+  },
+);
+
+it("preserves native attachments and embeds with shared presentation", async () => {
+  const interaction = createInteraction();
+  const onDelivered = vi.fn(async () => {});
+  const embeds = [{ title: "Status" }];
+  loadWebMediaMock.mockResolvedValue({
+    buffer: Buffer.from("image"),
+    fileName: "status.png",
+    contentType: "image/png",
   });
 
-  it.each([
-    {
-      name: "plural media URLs",
-      media: { mediaUrls: ["file:///tmp/sticker.webp"] },
+  await deliver({
+    interaction: interaction as never,
+    payload: {
+      text: "x".repeat(2_100),
+      presentationTextMode: "fallback",
+      presentation: presentation([["Continue", "/status"]], "Status details"),
+      mediaUrls: ["file:///tmp/status.png"],
+      channelData: { discord: { embeds } },
     },
-    {
-      name: "singular media URL after blank plural URLs",
-      media: { mediaUrls: ["   "], mediaUrl: "file:///tmp/sticker.webp" },
-    },
-  ])(
-    "sends detected WebP media across a real interaction multipart request ($name)",
-    async ({ media }) => {
-      const loopback = await createDiscordLoopbackRest();
-      loadWebMediaMock.mockResolvedValue({
-        buffer: Buffer.from("webp"),
-        fileName: "sticker.webp",
-        contentType: "image/webp",
-        kind: "image",
-      });
-      const interaction = {
-        reply: vi.fn(async (data: unknown) =>
-          loopback.rest.post("/interactions/123/token/callback", {
-            body: { type: 4, data },
-          }),
-        ),
-        followUp: vi.fn(),
-      };
+    onDelivered,
+  });
 
-      try {
-        const payload = { text: "sticker", ...media };
-        expect(hasRenderableReplyPayload(payload)).toBe(true);
-
-        await deliverDiscordInteractionReply({
-          interaction: interaction as never,
-          payload,
-          textLimit: 2000,
-          preferFollowUp: false,
-          chunkMode: "length",
-        });
-
-        expect(loadWebMediaMock).toHaveBeenCalledWith("file:///tmp/sticker.webp", {
-          localRoots: undefined,
-        });
-        const upload = loopback.requests.find((request) => request.method === "POST");
-        expect(upload?.path).toContain("/interactions/123/token/callback");
-        expect(upload?.contentType).toMatch(/^multipart\/form-data; boundary=/);
-        expect(upload?.body).toContain('name="files[0]"; filename="sticker.webp"');
-        expect(upload?.body).toContain("Content-Type: image/webp");
-      } finally {
-        await loopback.close();
-      }
-    },
+  expect(interaction.followUp).toHaveBeenNthCalledWith(1, {
+    content: "x".repeat(2_000),
+    embeds,
+    files: [{ name: "status.png", data: Buffer.from("image"), contentType: "image/png" }],
+  });
+  expect(interaction.followUp).toHaveBeenNthCalledWith(2, { content: "x".repeat(100) });
+  expect(onDelivered).toHaveBeenCalledExactlyOnceWith(
+    ["x".repeat(2_000), "Status", "x".repeat(100)].join("\n"),
   );
 });
 
-describe("settleDiscordInteractionWithoutVisibleReply", () => {
-  it("deletes a deferred slash-command loading response", async () => {
-    const interaction = {
-      responseState: "deferred",
-      deleteReply: vi.fn().mockResolvedValue(undefined),
-    };
+it("omits legacy content and embeds from native Components V2 replies", async () => {
+  const interaction = createInteraction();
+  const onDelivered = vi.fn(async () => {});
+  const components = [
+    {
+      type: 17,
+      components: [
+        { type: 10, content: "Choose" },
+        {
+          type: 9,
+          components: [{ type: 10, content: "Actions" }],
+          accessory: { type: 2, style: 1, label: "Read", custom_id: "private-action-id" },
+        },
+      ],
+    },
+  ];
 
-    await settleDiscordInteractionWithoutVisibleReply(interaction as never);
-
-    expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
+  await deliver({
+    interaction: interaction as never,
+    payload: {
+      text: "legacy fallback",
+      channelData: { discord: { components, embeds: [{ title: "legacy embed" }] } },
+    },
+    onDelivered,
   });
 
-  it.each(["unacknowledged", "deferred-update", "replied"])(
-    "does not delete an interaction in the %s state",
-    async (responseState) => {
-      const interaction = {
-        responseState,
-        deleteReply: vi.fn().mockResolvedValue(undefined),
-      };
+  expect(interaction.followUp).toHaveBeenCalledWith({ components });
+  expect(interaction.reply).not.toHaveBeenCalled();
+  expect(onDelivered).toHaveBeenCalledExactlyOnceWith("Choose\nActions\nRead");
+});
 
-      await settleDiscordInteractionWithoutVisibleReply(interaction as never);
+it("sends singular WebP media after blank plural URLs across a real multipart request", async () => {
+  const loopback = await createDiscordLoopbackRest();
+  loadWebMediaMock.mockResolvedValue({
+    buffer: Buffer.from("webp"),
+    fileName: "sticker.webp",
+    contentType: "image/webp",
+    kind: "image",
+  });
+  const interaction = {
+    reply: vi.fn(),
+    followUp: vi.fn(async (data: unknown) =>
+      loopback.rest.post("/webhooks/123/token", { body: data }),
+    ),
+  };
 
-      expect(interaction.deleteReply).not.toHaveBeenCalled();
-    },
-  );
+  try {
+    const payload = { text: "sticker", mediaUrls: ["   "], mediaUrl: "file:///tmp/sticker.webp" };
+    expect(hasRenderableReplyPayload(payload)).toBe(true);
+
+    await deliver({ interaction: interaction as never, payload });
+
+    expect(loadWebMediaMock).toHaveBeenCalledWith("file:///tmp/sticker.webp", {
+      localRoots: undefined,
+    });
+    const upload = loopback.requests.find((request) => request.method === "POST");
+    expect(upload).toMatchObject({
+      path: expect.stringContaining("/webhooks/123/token"),
+      contentType: expect.stringMatching(/^multipart\/form-data; boundary=/),
+    });
+    expect(upload?.body).toContain('name="files[0]"; filename="sticker.webp"');
+    expect(upload?.body).toContain("Content-Type: image/webp");
+  } finally {
+    await loopback.close();
+  }
+});
+it.each([
+  ["deferred", 1],
+  ["deferred-update", 0],
+] as const)("settles %s without deleting component messages", async (responseState, calls) => {
+  const interaction = { responseState, deleteReply: vi.fn().mockResolvedValue(undefined) };
+  await settleDiscordInteractionWithoutVisibleReply(interaction as never);
+  expect(interaction.deleteReply).toHaveBeenCalledTimes(calls);
 });

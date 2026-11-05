@@ -7,9 +7,10 @@ import {
   DEFAULT_UPDATE_TIMEOUT_MS,
   summarizeUpdateRunResponse,
 } from "../../gateway/update-run-summary.js";
+import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { getUpdateRun } from "../../infra/update-run-ledger.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
+import { renderUpdateRunSummary } from "../../infra/update-run-notice.js";
+import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { commandReply, defineGatewayControlCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 
@@ -17,23 +18,23 @@ export const handleUpdateCommand: CommandHandler = defineGatewayControlCommand(
   "/update",
   async (params) => {
     try {
+      const gatewayOptions = {
+        resolveGatewayContext:
+          readChannelContextGatewayContextResolver(params.ctx) ?? getInProcessGatewayToolContext,
+        timeoutMs: DEFAULT_UPDATE_TIMEOUT_MS,
+      };
       const response = await callInProcessGatewayTool(
         "update.run",
         {
           sessionKey: params.sessionKey,
           note: "/update",
-          timeoutMs: DEFAULT_UPDATE_TIMEOUT_MS,
           requester: {
             channel: params.command.channel ?? params.ctx.Provider,
             accountId: params.ctx.AccountId,
             senderId: params.command.senderId,
           },
         },
-        {
-          resolveGatewayContext:
-            readChannelContextGatewayContextResolver(params.ctx) ?? getInProcessGatewayToolContext,
-          timeoutMs: DEFAULT_UPDATE_TIMEOUT_MS,
-        },
+        gatewayOptions,
       );
       const summary = summarizeUpdateRunResponse(response);
       // The Gateway sends the acknowledgement before handing off its process;
@@ -44,7 +45,18 @@ export const handleUpdateCommand: CommandHandler = defineGatewayControlCommand(
       if (summary.ok && summary.acknowledgement) {
         return commandReply(summary.acknowledgement);
       }
-      const run = summary.runId ? getUpdateRun(summary.runId) : undefined;
+      if (summary.ok && summary.handoff?.status === "started") {
+        return commandReply(renderUpdateRunSummary({ status: "running", reason: null }));
+      }
+      const run = summary.runId
+        ? (
+            await callInProcessGatewayTool<{ run: UpdateRunRecord | null }>(
+              "update.runs.get",
+              { runId: summary.runId },
+              gatewayOptions,
+            )
+          ).run
+        : undefined;
       if (!run) {
         throw new Error(
           summary.message ??
@@ -52,16 +64,16 @@ export const handleUpdateCommand: CommandHandler = defineGatewayControlCommand(
             "Update run unavailable; run openclaw update status to inspect the outcome.",
         );
       }
-      const command = summary.handoff?.command;
-      const message = summary.message ?? summary.handoff?.message;
-      const nextAction = summary.ok
-        ? undefined
-        : [message, command && !message?.includes(command) ? `Run manually: ${command}` : undefined]
-            .filter(Boolean)
-            .join("\n");
-      return commandReply(renderUpdateRunReport(run, nextAction ? { nextAction } : {}).markdown);
+      return commandReply(
+        renderUpdateRunSummary(run, {
+          manualCommand: summary.ok ? undefined : summary.handoff?.command,
+        }),
+      );
     } catch (err) {
-      return commandReply(`⚠️ Update request failed: ${formatErrorMessage(err)}`);
+      logVerbose(`Update request failed: ${formatErrorMessage(err)}`);
+      return commandReply(
+        "⚠️ Couldn't confirm the update. Open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
+      );
     }
   },
 );

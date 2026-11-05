@@ -1,4 +1,7 @@
-import type { RealtimeVoiceToolCallEvent } from "../talk/provider-types.js";
+import type {
+  RealtimeVoiceAgentConsultRunner,
+  RealtimeVoiceToolCallEvent,
+} from "../talk/provider-types.js";
 import type { RealtimeVoiceSessionHarness } from "../talk/realtime-session-harness.js";
 import type { RealtimeVoiceBridgeSession } from "../talk/session-runtime.js";
 import type { TalkEventInput } from "../talk/talk-events.js";
@@ -20,17 +23,34 @@ export function readMeetingRealtimeToolAbortSignal(
 export function createMeetingRealtimeToolContinuity<
   TCall extends MeetingRealtimeToolContinuityCall,
 >(handleToolCall: (call: TCall) => Promise<void>) {
-  let epoch = 0;
   const activeControllers = new Set<AbortController>();
 
   // Reset invalidates provider submissions and Talk events together so late
   // async completions cannot leak into the replacement provider generation.
   const reset = (reason: string) => {
-    epoch += 1;
     for (const controller of activeControllers) {
       controller.abort(reason);
     }
     activeControllers.clear();
+  };
+
+  const runConsult = async (
+    request: Parameters<RealtimeVoiceAgentConsultRunner>[0],
+    consult: RealtimeVoiceAgentConsultRunner,
+  ) => {
+    const controller = new AbortController();
+    activeControllers.add(controller);
+    const signal = request.signal
+      ? AbortSignal.any([controller.signal, request.signal])
+      : controller.signal;
+    try {
+      signal.throwIfAborted();
+      const result = await consult({ ...request, signal });
+      signal.throwIfAborted();
+      return result;
+    } finally {
+      activeControllers.delete(controller);
+    }
   };
 
   const run = (params: {
@@ -38,10 +58,9 @@ export function createMeetingRealtimeToolContinuity<
     call: Omit<TCall, "session" | "onTalkEvent">;
     harness: Pick<RealtimeVoiceSessionHarness, "emit" | "ensureTurn">;
   }): Promise<void> => {
-    const callEpoch = epoch;
     const controller = new AbortController();
     activeControllers.add(controller);
-    const isActive = () => !controller.signal.aborted && callEpoch === epoch;
+    const isActive = () => !controller.signal.aborted;
     const turnId = params.harness.ensureTurn();
     params.harness.emit({
       type: "tool.call",
@@ -78,5 +97,5 @@ export function createMeetingRealtimeToolContinuity<
       });
   };
 
-  return { reset, run };
+  return { reset, run, runConsult };
 }

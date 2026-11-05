@@ -3,6 +3,7 @@ import type { InputRichMessage, ReplyParameters } from "grammy/types";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import {
   inputRichBlocksToPlainText,
+  normalizeInputRichBlocks,
   type InputRichBlock,
   type TelegramRichBlocksDegradationReason,
 } from "./rich-block-model.js";
@@ -24,12 +25,6 @@ type TelegramRichMessageOptions = {
   tableMode?: MarkdownTableMode;
 };
 
-type TelegramRichTextChunk = {
-  richMessage: TelegramInputRichMessage;
-  plainText: string;
-  degradationReasons: readonly TelegramRichBlocksDegradationReason[];
-};
-
 type TelegramRichMessagePlan = {
   richMessage: TelegramInputRichMessage;
   plainText: string;
@@ -40,7 +35,11 @@ type TelegramSendRichMessageOptions = NonNullable<Parameters<Bot["api"]["sendRic
 
 export type TelegramRichMessageContextParams = Pick<
   TelegramSendRichMessageOptions,
-  "disable_notification" | "direct_messages_topic_id" | "message_thread_id" | "reply_parameters"
+  | "disable_notification"
+  | "direct_messages_topic_id"
+  | "message_effect_id"
+  | "message_thread_id"
+  | "reply_parameters"
 >;
 
 const TELEGRAM_RICH_EMAIL_TOKEN_RE =
@@ -69,16 +68,17 @@ export function toTelegramRichMessageContextParams(
 ): TelegramRichMessageContextParams {
   const richParams: TelegramRichMessageContextParams = {};
   const directMessagesTopicId = finiteInteger(params?.direct_messages_topic_id);
-  if (directMessagesTopicId !== undefined) {
-    richParams.direct_messages_topic_id = directMessagesTopicId;
-  } else {
-    const messageThreadId = finiteInteger(params?.message_thread_id);
-    if (messageThreadId !== undefined) {
-      richParams.message_thread_id = messageThreadId;
-    }
+  const topicField =
+    directMessagesTopicId === undefined ? "message_thread_id" : "direct_messages_topic_id";
+  const topicId = directMessagesTopicId ?? finiteInteger(params?.message_thread_id);
+  if (topicId !== undefined) {
+    richParams[topicField] = topicId;
   }
   if (params?.disable_notification === true) {
     richParams.disable_notification = true;
+  }
+  if (typeof params?.message_effect_id === "string") {
+    richParams.message_effect_id = params.message_effect_id;
   }
   if (isReplyParameters(params?.reply_parameters)) {
     richParams.reply_parameters = params.reply_parameters;
@@ -114,14 +114,19 @@ export function removeTelegramRichNativeQuoteParam(
   };
 }
 
-function toRichMessage(
+function buildRichMessagePlan(
   blocks: InputRichBlock[],
   plainText: string,
   options?: TelegramRichMessageOptions,
-): TelegramInputRichMessage {
-  return shouldSkipTelegramRichEntityDetection(plainText, options)
-    ? { blocks, skip_entity_detection: true }
-    : { blocks };
+  degradationReasons: readonly TelegramRichBlocksDegradationReason[] = [],
+): TelegramRichMessagePlan {
+  return {
+    richMessage: shouldSkipTelegramRichEntityDetection(plainText, options)
+      ? { blocks, skip_entity_detection: true }
+      : { blocks },
+    plainText,
+    degradationReasons,
+  };
 }
 
 export function buildTelegramRichMarkdownPlan(
@@ -133,85 +138,45 @@ export function buildTelegramRichMarkdownPlan(
     tableMode: options?.tableMode,
     skipEntityDetection,
   });
-  return {
-    richMessage: toRichMessage(rendered.blocks, rendered.plainText, {
-      ...options,
-      skipEntityDetection,
-    }),
-    plainText: rendered.plainText,
-    degradationReasons: rendered.degradationReasons,
-  };
-}
-
-export function buildTelegramRichMarkdown(
-  markdown: string,
-  options?: TelegramRichMessageOptions,
-): TelegramInputRichMessage {
-  return buildTelegramRichMarkdownPlan(markdown, options).richMessage;
+  return buildRichMessagePlan(
+    rendered.blocks,
+    rendered.plainText,
+    { skipEntityDetection },
+    rendered.degradationReasons,
+  );
 }
 
 export function buildTelegramRichBlocksPlan(
   blocks: InputRichBlock[],
-  options?: TelegramRichMessageOptions & { plainText?: string },
+  options?: Pick<TelegramRichMessageOptions, "skipEntityDetection">,
 ): TelegramRichMessagePlan {
-  const plainText = options?.plainText ?? inputRichBlocksToPlainText(blocks);
-  return {
-    richMessage: toRichMessage(blocks, plainText, options),
-    plainText,
-    degradationReasons: [],
-  };
+  const normalized = normalizeInputRichBlocks(blocks);
+  const plainText = inputRichBlocksToPlainText(normalized);
+  return buildRichMessagePlan(normalized, plainText, options);
 }
 
-export function splitTelegramRichMessageTextChunks(
-  params:
-    | {
-        text: string;
-        textLimit: number;
-        tableMode?: MarkdownTableMode;
-        skipEntityDetection?: boolean;
-      }
-    | {
-        plan: TelegramRichMessagePlan;
-        textLimit: number;
-      },
-): TelegramRichTextChunk[] {
+export function splitTelegramRichMessageTextChunks(params: {
+  plan: TelegramRichMessagePlan;
+  textLimit: number;
+}): TelegramRichMessagePlan[] {
   // Convert the full markdown document first so fences/tables stay intact, then
   // enforce block/char limits on the typed block list (including oversized pre).
-  const plan =
-    "plan" in params
-      ? params.plan
-      : buildTelegramRichMarkdownPlan(params.text, {
-          tableMode: params.tableMode,
-          skipEntityDetection: params.skipEntityDetection,
-        });
+  const { plan } = params;
   // The render already committed to the document-level linkify decision (a
   // skip anywhere disables our file-ref code-wrapping everywhere), so every
   // chunk must carry the same wire flag; re-deriving per chunk would let
   // Telegram re-linkify unprotected chunks.
   const skipEntityDetection = plan.richMessage.skip_entity_detection === true;
   const chunkOptions = { skipEntityDetection };
-  const chunked = splitTelegramRichBlocks(plan.richMessage.blocks, {
+  return splitTelegramRichBlocks(plan.richMessage.blocks, {
     blockLimit: TELEGRAM_RICH_BLOCK_LIMIT,
     textLimit: params.textLimit,
-  }).map((blocks, index) => {
-    const plainText = inputRichBlocksToPlainText(blocks);
-    return {
-      richMessage: toRichMessage(blocks, plainText, chunkOptions),
-      plainText,
-      degradationReasons: index === 0 ? plan.degradationReasons : [],
-    };
-  });
-  if (chunked.length === 0 && "text" in params && params.text.trim()) {
-    // Markdown that projects to zero blocks (e.g. link definitions only) must
-    // still send readable source text instead of silently dropping the reply.
-    const blocks: InputRichBlock[] = [{ type: "paragraph", text: params.text }];
-    return [
-      {
-        richMessage: toRichMessage(blocks, params.text, chunkOptions),
-        plainText: params.text,
-        degradationReasons: plan.degradationReasons,
-      },
-    ];
-  }
-  return chunked;
+  }).map((blocks, index) =>
+    buildRichMessagePlan(
+      blocks,
+      inputRichBlocksToPlainText(blocks),
+      chunkOptions,
+      index === 0 ? plan.degradationReasons : [],
+    ),
+  );
 }

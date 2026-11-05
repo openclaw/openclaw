@@ -25,6 +25,7 @@ describe("sessions.resolve presentation contract", () => {
     agentId: "main",
     displayName: "Deploy monitor",
     boardFace: "dashboard",
+    boardPresentation: "expanded",
   } as const;
 
   it("preserves owner-backed public exports, types, and protocol registrations", () => {
@@ -77,6 +78,11 @@ describe("sessions.resolve presentation contract", () => {
   });
 
   it("rejects invalid faces, unexpected facts, and more than ten candidates", () => {
+    for (const boardPresentation of ["fullscreen", null, true]) {
+      expect(Value.Check(SessionsResolveCandidateSchema, { ...candidate, boardPresentation })).toBe(
+        false,
+      );
+    }
     expect(Value.Check(SessionsResolveCandidateSchema, { ...candidate, boardFace: "grid" })).toBe(
       false,
     );

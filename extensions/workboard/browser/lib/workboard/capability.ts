@@ -1,7 +1,11 @@
+import { setWorkboardCards } from "./card-state.ts";
 import {
+  getWorkboardRuntime,
   getWorkboardState,
-  stopWorkboardLifecycleRefresh,
+  notifyWorkboard,
+  resetWorkboardConnectionState,
   stopWorkboardLiveRefresh,
+  subscribeWorkboard,
 } from "./runtime.ts";
 import type { WorkboardUiState } from "./types.ts";
 
@@ -16,7 +20,6 @@ export type WorkboardCapability = {
 };
 
 export function createWorkboardCapability(): WorkboardCapability {
-  const listeners = new Set<() => void>();
   let disposed = false;
   let boardsReady = false;
   const capability: WorkboardCapability = {
@@ -30,9 +33,7 @@ export function createWorkboardCapability(): WorkboardCapability {
       if (disposed) {
         return;
       }
-      for (const listener of listeners) {
-        listener();
-      }
+      notifyWorkboard(capability);
     },
     setBoardsReady(ready) {
       boardsReady = ready;
@@ -42,8 +43,7 @@ export function createWorkboardCapability(): WorkboardCapability {
       const wasReady = boardsReady;
       boardsReady = false;
       capability.state.boards = [];
-      capability.state.cards = [];
-      capability.state.tasksByCardId.clear();
+      setWorkboardCards(capability.state, []);
       capability.state.loaded = false;
       capability.state.loadAttempted = false;
       if (hadRows || wasReady) {
@@ -51,14 +51,13 @@ export function createWorkboardCapability(): WorkboardCapability {
       }
     },
     subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+      return subscribeWorkboard(capability, listener);
     },
     dispose() {
       disposed = true;
       stopWorkboardLiveRefresh(capability);
-      stopWorkboardLifecycleRefresh(capability);
-      listeners.clear();
+      resetWorkboardConnectionState(capability);
+      getWorkboardRuntime(capability).listeners?.clear();
     },
   };
   return capability;

@@ -1,4 +1,3 @@
-// Github Copilot API module exposes the plugin public contract.
 import type { ProviderDefaultThinkingPolicyContext } from "openclaw/plugin-sdk/core";
 import { resolveCopilotThinkingLevelMap } from "./model-metadata.js";
 
@@ -10,6 +9,7 @@ export function resolveThinkingProfile(context: ProviderDefaultThinkingPolicyCon
     context.modelId,
     context.compat,
     context.api,
+    context.params,
   );
   const extendedLevels = (["xhigh", "max"] as const).filter((id) => thinkingLevelMap?.[id]);
 

@@ -1,77 +1,56 @@
-import type { Result } from "@openclaw/normalization-core/result";
-import { getRuntimeConfig } from "../config/config.js";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   appendSessionTranscriptReport,
   readLatestSessionTranscriptReport,
   type SessionTranscriptWriteScope,
 } from "../config/sessions/session-accessor.js";
+import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import { boundedWorkerError } from "./worker-environments/worker-error.js";
 import {
   formatWorkspaceConflictSummary,
   projectWorkspaceResultConflict,
   WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
   WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
+  WORKSPACE_HISTORY_NOTE_TRANSCRIPT_TYPE,
   WORKSPACE_RECOVERY_FAILURE_TRANSCRIPT_TYPE,
-  type WorkerWorkspaceRecoveryFailureReport,
+  type WorkerWorkspaceConflictReport,
+  type WorkspaceResultConflictLookup,
 } from "./worker-environments/workspace-conflicts.js";
 
 export function createWorkerWorkspaceConflictTranscriptHandlers(
-  loadSessionRuntime: () => Promise<{
-    resolveCanonicalSessionEntryFromStoreKeys: typeof import("./session-utils.js").resolveCanonicalSessionEntryFromStoreKeys;
-    resolveGatewaySessionStoreTargetWithStore: typeof import("./session-utils.js").resolveGatewaySessionStoreTargetWithStore;
-  }>,
+  target: SessionTranscriptWriteScope,
+  assertCurrent: () => void,
 ) {
   async function withWorkerTranscript<T>(
-    identity: Pick<WorkerWorkspaceRecoveryFailureReport, "sessionId" | "sessionKey" | "agentId">,
-    run: (target: SessionTranscriptWriteScope) => Promise<Result<T, unknown>>,
+    run: () => Promise<Result<T, unknown>>,
     missingMessage?: string,
-    strictIdentity = false,
-  ): Promise<T | undefined> {
-    const runtime = await loadSessionRuntime();
-    const target = runtime.resolveGatewaySessionStoreTargetWithStore({
-      cfg: getRuntimeConfig(),
-      key: identity.sessionKey,
-      agentId: identity.agentId,
-      clone: false,
-      exactRead: true,
-    });
-    const lostSession = () => {
+  ): Promise<Result<T, "session-unavailable">> {
+    assertCurrent();
+    const lostSession = (): Result<T, "session-unavailable"> => {
       if (missingMessage) {
-        throw new Error(`${missingMessage} lost session ${identity.sessionId}`);
+        throw new Error(`${missingMessage} lost session ${target.sessionId}`);
       }
-      return undefined;
+      return err("session-unavailable");
     };
-    const entry = runtime.resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
-    if (
-      entry?.sessionId !== identity.sessionId ||
-      (strictIdentity &&
-        (target.canonicalKey !== identity.sessionKey || target.agentId !== identity.agentId))
-    ) {
-      return lostSession();
-    }
-    const result = await run({
-      agentId: target.agentId,
-      sessionId: identity.sessionId,
-      sessionKey: target.canonicalKey,
-      storePath: target.storePath,
-    });
-    return result.ok ? result.value : lostSession();
+    const result = await withSessionTranscriptWriteAssertion(target, assertCurrent, run);
+    assertCurrent();
+    return result.ok ? ok(result.value) : lostSession();
   }
 
   return {
-    resolveWorkspaceResultConflict: async (identity: {
-      sessionId: string;
-      sessionKey: string;
-      agentId: string;
-    }) => {
-      const transcriptEntry = await withWorkerTranscript(identity, (target) =>
+    resolveConflict: async (): Promise<WorkspaceResultConflictLookup> => {
+      const result = await withWorkerTranscript(() =>
         readLatestSessionTranscriptReport(target, [
           WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
           WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
         ]),
       );
+      if (!result.ok) {
+        return { kind: "unknown", reason: result.error };
+      }
+      const transcriptEntry = result.value;
       if (transcriptEntry?.customType !== WORKSPACE_CONFLICT_TRANSCRIPT_TYPE) {
-        return undefined;
+        return { kind: "absent" };
       }
       const details = transcriptEntry.details as
         | { paths?: unknown; stagedResultRef?: unknown; totalCount?: unknown }
@@ -88,23 +67,20 @@ export function createWorkerWorkspaceConflictTranscriptHandlers(
             (details.totalCount as number) >= details.paths.length)) &&
         /^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u.test(details.stagedResultRef)
       ) {
-        return projectWorkspaceResultConflict(
-          details.paths,
-          details.stagedResultRef,
-          details.totalCount as number | undefined,
-        );
+        return {
+          kind: "conflict",
+          conflict: projectWorkspaceResultConflict(
+            details.paths,
+            details.stagedResultRef,
+            details.totalCount as number | undefined,
+          ),
+        };
       }
-      return undefined;
+      return { kind: "unknown", reason: "malformed-report" };
     },
-    reportWorkspaceResultConflict: async (
-      conflict: { sessionId: string; sessionKey: string; agentId: string } & (
-        | { paths: string[]; stagedResultRef: string; totalCount: number }
-        | { cleared: true }
-      ),
-    ) => {
+    reportConflict: async (conflict: WorkerWorkspaceConflictReport) => {
       await withWorkerTranscript(
-        conflict,
-        (target) =>
+        () =>
           appendSessionTranscriptReport(target, {
             kind: "custom",
             customTypes: [
@@ -156,17 +132,30 @@ export function createWorkerWorkspaceConflictTranscriptHandlers(
         "Recovered cloud workspace conflict",
       );
     },
-    reportWorkspaceResultRecoveryFailure: async (
-      recovery: WorkerWorkspaceRecoveryFailureReport,
-    ) => {
+    reportNote: async (note: string) => {
       await withWorkerTranscript(
-        recovery,
-        (target) =>
+        () =>
+          appendSessionTranscriptReport(target, {
+            kind: "custom",
+            customTypes: [WORKSPACE_HISTORY_NOTE_TRANSCRIPT_TYPE],
+            selectReport: (latestNote) => {
+              const content = boundedWorkerError(note, 768);
+              return latestNote?.content === content
+                ? undefined
+                : { customType: WORKSPACE_HISTORY_NOTE_TRANSCRIPT_TYPE, content, display: true };
+            },
+          }),
+        "Cloud workspace history note",
+      );
+    },
+    reportFailure: async (failure: string) => {
+      await withWorkerTranscript(
+        () =>
           appendSessionTranscriptReport(target, {
             kind: "custom",
             customTypes: [WORKSPACE_RECOVERY_FAILURE_TRANSCRIPT_TYPE],
             selectReport: (latestRecovery) => {
-              const error = boundedWorkerError(recovery.error, 768);
+              const error = boundedWorkerError(failure, 768);
               const content = `Cloud workspace recovery attempt failed: ${error}. OpenClaw preserved the result and will retry.`;
               if (latestRecovery?.content !== content) {
                 return {
@@ -180,7 +169,6 @@ export function createWorkerWorkspaceConflictTranscriptHandlers(
             },
           }),
         "Cloud workspace recovery",
-        true,
       );
     },
   };

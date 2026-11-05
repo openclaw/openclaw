@@ -7,13 +7,16 @@ import {
   createOverflowRunParams,
   mockedCompactDirect,
   mockedRunEmbeddedAttempt,
-  resetSharedRunIntegrationHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
-import { loadSharedRunIntegrationHarness } from "./run.shared-integration-harness.test-support.js";
+import {
+  createFreshRunIntegrationState,
+  loadSharedRunIntegrationHarness,
+} from "./run.shared-integration-harness.test-support.js";
 
 let state: OpenClawTestState;
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 let agentDatabase: typeof import("../../state/openclaw-agent-db.js");
+let agentDatabaseTest: typeof import("../../state/openclaw-agent-db.test-support.js");
 let sessionAccessor: typeof import("../../config/sessions/session-accessor.js");
 let activeEvents: typeof import("../../config/sessions/session-accessor.sqlite-active-events.js");
 let sqliteScope: typeof import("../../config/sessions/session-accessor.sqlite-scope.js");
@@ -23,6 +26,7 @@ describe("runEmbeddedAgent transcript projection retry", () => {
   beforeAll(async () => {
     runEmbeddedAgent = await loadSharedRunIntegrationHarness();
     agentDatabase = await import("../../state/openclaw-agent-db.js");
+    agentDatabaseTest = await import("../../state/openclaw-agent-db.test-support.js");
     sessionAccessor = await import("../../config/sessions/session-accessor.js");
     activeEvents = await import("../../config/sessions/session-accessor.sqlite-active-events.js");
     sqliteScope = await import("../../config/sessions/session-accessor.sqlite-scope.js");
@@ -30,15 +34,13 @@ describe("runEmbeddedAgent transcript projection retry", () => {
   });
 
   beforeEach(async () => {
-    resetSharedRunIntegrationHarnessMocks();
-    const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
-    state = await createOpenClawTestState({ label: "run.projection-retry" });
+    state = await createFreshRunIntegrationState("run.projection-retry");
   });
 
   afterEach(async () => {
     await state?.cleanup();
     expect(
-      agentDatabase
+      agentDatabaseTest
         .listOpenClawAgentDatabasesForTest()
         .filter((database) => database.path.startsWith(`${state.stateDir}${path.sep}`)),
     ).toEqual([]);
@@ -64,13 +66,25 @@ describe("runEmbeddedAgent transcript projection retry", () => {
     const databaseOptions = sqliteScope.toDatabaseOptions(
       sqliteScope.resolveSqliteTranscriptReadScope(sessionTarget),
     );
+    const readPage = () =>
+      activeEvents.readSessionTranscriptMessageEventPage(sessionTarget, {
+        maxMessages: 1,
+        offset: 0,
+      });
     const controller = new AbortController();
     const originalWaitForProjection = reconcile.waitForSessionTranscriptProjection;
+    let compactionFinished = false;
     let ownedProjectionSettled = false;
+    let ownedProjectionSignal: AbortSignal | undefined;
     const waitForProjection = vi
       .spyOn(reconcile, "waitForSessionTranscriptProjection")
       .mockImplementation(async (scope, abortSignal) => {
         await originalWaitForProjection(scope, abortSignal);
+        // The foreground startup barrier cannot settle a later compaction.
+        if (!compactionFinished) {
+          return;
+        }
+        ownedProjectionSignal = abortSignal;
         expect(
           agentDatabase
             .openOpenClawAgentDatabase(databaseOptions)
@@ -93,15 +107,11 @@ describe("runEmbeddedAgent transcript projection retry", () => {
         )
         .mockImplementationOnce(async () => {
           expect(ownedProjectionSettled).toBe(true);
-          expect(
-            activeEvents.readSessionTranscriptMessageEventPage(sessionTarget, {
-              maxMessages: 1,
-              offset: 0,
-            }).totalMessages,
-          ).toBe(1);
+          expect(readPage().totalMessages).toBe(1);
           return makeAttemptResult({ sessionIdUsed: sessionId });
         });
       mockedCompactDirect.mockImplementationOnce(async () => {
+        expect(ownedProjectionSettled).toBe(false);
         const database = agentDatabase.openOpenClawAgentDatabase(databaseOptions);
         database.db
           .prepare(
@@ -109,16 +119,12 @@ describe("runEmbeddedAgent transcript projection retry", () => {
           )
           .run(sessionId);
 
-        expect(() =>
-          activeEvents.readSessionTranscriptMessageEventPage(sessionTarget, {
-            maxMessages: 1,
-            offset: 0,
-          }),
-        ).toThrow(activeEvents.SessionTranscriptProjectionUnavailableError);
+        expect(readPage).toThrow(activeEvents.SessionTranscriptProjectionUnavailableError);
         reconcile.startSessionTranscriptIndexReconcile({
           ...databaseOptions,
           preferredSessionId: sessionId,
         });
+        compactionFinished = true;
         return makeCompactionSuccess({
           summary: "compacted before projection retry",
           tokensBefore: 160_000,
@@ -137,20 +143,17 @@ describe("runEmbeddedAgent transcript projection retry", () => {
       });
 
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-      expect(waitForProjection).toHaveBeenCalledOnce();
       expect(waitForProjection).toHaveBeenCalledWith(
         { ...sessionTarget, expectedWriterRunId: "run-owned-projection-retry" },
-        controller.signal,
+        expect.any(AbortSignal),
       );
-      agentDatabase.closeOpenClawAgentDatabaseByPath(
+      await agentDatabase.closeOpenClawAgentDatabaseByPathAsync(
         agentDatabase.resolveOpenClawAgentSqlitePath(databaseOptions),
       );
-      expect(
-        activeEvents.readSessionTranscriptMessageEventPage(sessionTarget, {
-          maxMessages: 1,
-          offset: 0,
-        }).totalMessages,
-      ).toBe(1);
+      expect(readPage().totalMessages).toBe(1);
+      const cancellation = new Error("caller stopped projection work");
+      controller.abort(cancellation);
+      expect(ownedProjectionSignal?.reason).toBe(cancellation);
     } finally {
       waitForProjection.mockRestore();
       await reconcile.waitForSessionTranscriptIndexReconcile(databaseOptions);
