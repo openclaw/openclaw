@@ -400,6 +400,45 @@ describe("Codex native configuration lifecycle", () => {
     expect(resumed.preparedOpenClawBaseInstructions).toBe(creationBase);
   });
 
+  // The native-owned incognito continuation sends nothing, so reports keep the creation base.
+  it("reports the creation base on a native-owned incognito continuation", async () => {
+    params.sessionKey = "agent:main:dashboard:incognito-native-owned";
+    registerCodexTestSessionIdentity(sessionFile, "session-1", params.sessionKey);
+    const fixture = await createAgentLifecycleHarness({
+      respond: async (method) =>
+        method === "thread/start"
+          ? threadStartResult("native-owned-thread", { cwd: workspaceDir })
+          : readNativeConfig(method),
+    });
+    const first = await startOrResumeThread(lifecycleParams(fixture.client));
+    const creationBase = first.preparedOpenClawBaseInstructions;
+    expect(creationBase).toContain("You are a personal assistant running inside OpenClaw.");
+    const stored = await readCodexAppServerBinding(sessionFile);
+    if (stored?.threadId !== first.threadId) {
+      throw new Error("expected the started incognito binding");
+    }
+    await writeCodexAppServerBinding(sessionFile, { ...stored, preserveNativeModel: true });
+    await retainCodexAppServerLiveThread(
+      fixture.client,
+      first.threadId,
+      first.liveThreadOwnership?.release,
+      first.liveThreadConfigFingerprint,
+      null,
+      first.liveThreadEphemeralPolicy,
+    );
+    // Current inputs now render a different base that this live thread never receives.
+    params.promptMode = "minimal";
+    const continued = await startOrResumeThread(lifecycleParams(fixture.client));
+
+    expect(continued).toMatchObject({ threadId: first.threadId, lifecycle: { action: "resumed" } });
+    expect(continued.preparedOpenClawBaseInstructions).toBe(creationBase);
+    const threadRequests = fixture.writes
+      .map((line): unknown => JSON.parse(line))
+      .filter(isJsonObject)
+      .filter((frame) => frame.method === "thread/start" || frame.method === "thread/resume");
+    expect(threadRequests.map((frame) => frame.method)).toEqual(["thread/start"]);
+  });
+
   it("refuses warm incognito reuse when OpenClaw's base changes beside an authored native base", async () => {
     params.sessionKey = "agent:main:dashboard:incognito-operator-base";
     registerCodexTestSessionIdentity(sessionFile, "session-1", params.sessionKey);

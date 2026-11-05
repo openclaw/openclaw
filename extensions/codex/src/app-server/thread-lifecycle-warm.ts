@@ -377,8 +377,10 @@ export async function tryReuseCodexLiveThread(
         kind: "ready",
         binding: {
           ...binding,
+          // Nothing is sent to this live thread, so report the base it got at creation,
+          // never a render of current inputs.
           preparedOpenClawBaseInstructions:
-            options.resolveRetainedOpenClawBaseInstructions(binding),
+            creationPolicy?.baseInstructions ?? binding.openClawCreationBaseInstructions,
           lifecycle: { action: "resumed" },
         },
       };
