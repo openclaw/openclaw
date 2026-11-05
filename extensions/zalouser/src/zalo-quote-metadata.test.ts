@@ -199,6 +199,20 @@ it("extracts quote metadata and implicit mentions", async () => {
 });
 
 it.each([
+  ["/btw why?\n  first frame\n\n    second frame", "/btw why?\n  first frame\n\n    second frame"],
+  ["/loop 5m check\n  deploy status", "/loop 5m check\n  deploy status"],
+  ["/btw   progress?", "/btw progress?"],
+])(
+  "preserves the argument text of a bot-mentioned %j for command dispatch",
+  async (command, expected) => {
+    const [message] = await captureInbound([
+      { content: `@Bot ${command}`, mentions: [{ uid: "555444333", pos: 0, len: 4 }] },
+    ]);
+    expect(message?.commandContent).toBe(expected);
+  },
+);
+
+it.each([
   [1_764_000_000, 1_764_000_000_000],
   ["1764000000.5", 1_764_000_000_500],
   [1_764_000_000_000, 1_764_000_000_000],
@@ -214,16 +228,16 @@ it.each([
 
 it("reuses group context until its five-minute TTL expires", async () => {
   const { api, getGroupInfo } = groupApi("group-ttl", "Group");
-  const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+  const now = vi.spyOn(performance, "now").mockReturnValue(0);
 
   await withStoredSession("cache-ttl", api, async () => {
     await expect(resolveZaloGroupContext("cache-ttl", "group-ttl")).resolves.toMatchObject({
       name: "Group",
     });
-    now.mockReturnValue(1_700_000_299_999);
+    now.mockReturnValue(299_999);
     await resolveZaloGroupContext("cache-ttl", "group-ttl");
     expect(getGroupInfo).toHaveBeenCalledOnce();
-    now.mockReturnValue(1_700_000_300_000);
+    now.mockReturnValue(300_000);
     await resolveZaloGroupContext("cache-ttl", "group-ttl");
   });
 

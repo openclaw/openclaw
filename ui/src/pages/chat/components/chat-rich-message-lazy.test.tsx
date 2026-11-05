@@ -2,11 +2,11 @@
 
 import { createSignal, For } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createAsyncQuestionPresentation } from "./chat-async-question.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
-import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import { createToolResultMessage } from "./chat-message.test-support.ts";
 
 it("keeps ordinary transcript text synchronous", () => {

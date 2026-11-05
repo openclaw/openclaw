@@ -1,11 +1,9 @@
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
-import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { captureSqliteWorkerClosePolicy } from "./bun-sqlite-library.js";
 import { captureStateDatabaseAccess } from "./gateway-state-owner.js";
 import { runtimeNeedsTypeScriptLoader } from "./runtime-worker-url.js";
-import { runWithSqliteDatabaseAdmissionTurn } from "./sqlite-database-admission-turn.js";
 import {
   SQLITE_WORKER_ADMISSION_TIMEOUT_MS as ADMISSION_TIMEOUT_MS,
   assertSqliteWorkerActorReusable,
@@ -24,6 +22,7 @@ import {
   retainSqliteWorkerAdmissionPathReferences,
   suspendSqliteWorkerScheduledMaintenance,
   validateSqliteWorkerDatabaseLocator,
+  waitForSqliteOpen,
 } from "./sqlite-worker-broker-admission.js";
 import { createSqliteWorkerLifecycle } from "./sqlite-worker-broker-lifecycle.js";
 import {
@@ -42,6 +41,7 @@ import type {
   Slot,
   SqliteWorkerStoreOptions,
   StoreClient,
+  SqliteWorkerClientBinding,
   SqliteWorkerOpenCustody,
   SqliteWorkerInputPreparation,
   SqliteWorkerInputRetention,
@@ -70,8 +70,11 @@ const MAX_QUEUED_COMMAND_BYTES = 64 * 1024 * 1024;
 export const SQLITE_WORKER_MAX_REQUESTS_PER_WORKER = 128;
 const SQLITE_WORKER_MAX_QUEUED_BYTES = 256 * 1024 * 1024;
 
-function waitForSqliteOpen<T>(pending: Promise<T>, signal?: AbortSignal) {
-  return racePromiseWithAbortSignal(pending, signal, (aborted) => aborted.reason);
+// These live readers outlast opening; their scope must contain only the retained actor.
+function captureSqliteWorkerRetirementReaders(
+  actor: Actor,
+): [() => Actor["closeReceipt"], () => boolean] {
+  return [() => actor.closeReceipt, () => actor.openDispatch.openRefused === true];
 }
 
 export class SqliteWorkerBroker {
@@ -152,6 +155,7 @@ export class SqliteWorkerBroker {
     return this.inputAdmission
       .open(
         sqliteWorkerRequestBytes(snapshot.input, snapshot.stateContext, snapshot.preparation),
+        snapshot.databasePath,
         async () => {
           if (!reserved) {
             await reclaimSqliteWorkerClient(
@@ -162,9 +166,7 @@ export class SqliteWorkerBroker {
               () => this.draining !== undefined,
             );
           }
-          return runWithSqliteDatabaseAdmissionTurn([snapshot.databasePath], () =>
-            this.openAdmitted<Operations>(snapshot, client),
-          );
+          return this.openAdmitted<Operations>(snapshot, client);
         },
         snapshot.signal,
         reusable ? () => this.openAdmitted<Operations>(snapshot, client, reusable) : undefined,
@@ -181,7 +183,7 @@ export class SqliteWorkerBroker {
     client: object,
     reusable?: StoreClient,
   ): Promise<SqliteWorkerStore<Operations> | undefined> {
-    // Cached client callbacks share this scope; never capture the opening options in it.
+    // Opening custody stays in this frame; persistent clients are bound separately.
     const { maintenanceScope, cleanupAccess } = options;
     const databaseIdentity = options.expectedIdentity
       ? {
@@ -348,11 +350,10 @@ export class SqliteWorkerBroker {
         options.retainCleanup,
         this.lifecycle.closeActor.bind(this.lifecycle, owned, maintenanceScope),
       );
-      options.onNativeStopped?.(
-        owned.nativeStopped,
-        () => owned.closeReceipt,
-        () => owned.openDispatch.openRefused === true,
-      );
+      if (options.onNativeStopped) {
+        const [readCloseReceipt, readOpenRefused] = captureSqliteWorkerRetirementReaders(owned);
+        options.onNativeStopped(owned.nativeStopped, readCloseReceipt, readOpenRefused);
+      }
       await actor.opened;
       options.assertCurrent?.();
       if (actor.retirementRequested) {
@@ -365,20 +366,43 @@ export class SqliteWorkerBroker {
       resumeScheduledMaintenance?.();
       return this.lifecycle.rejectActorAdmission(actor, error, options.maintenanceScope);
     }
-    const releasePaths = retainSqliteWorkerAdmissionPathReferences(owned, admittedPaths);
-    let referenceReleased = false;
+    return this.bindClient<Operations>(owned, client, {
+      releasePaths: retainSqliteWorkerAdmissionPathReferences(owned, admittedPaths),
+      databaseIdentity,
+      maintenanceScope,
+      cleanupAccess,
+      resumeScheduledMaintenance,
+      retireIdle: options.retireIdle,
+    });
+  }
+
+  // A live client retains its actor and cleanup custody, never the completed opening request.
+  private bindClient<Operations extends SqliteWorkerOperations>(
+    owned: Actor,
+    client: object,
+    binding: SqliteWorkerClientBinding,
+  ): SqliteWorkerStore<Operations> {
+    const releaseClient = this.lifecycle.bindClientRelease({
+      actor: owned,
+      client,
+      clientReservations: this.clients,
+      releasePaths: binding.releasePaths,
+      maintenanceScope: binding.maintenanceScope,
+      resumeScheduledMaintenance: binding.resumeScheduledMaintenance,
+      readDraining: () => this.draining,
+    });
     const { store, client: storeClient } = createSqliteWorkerClient<Operations>({
       actor: owned,
       isDraining: () => this.draining !== undefined,
       isAvailable: () => !owned.slot.failed && !owned.cleanupState && !owned.retirementRequested,
-      retireIdle: options.retireIdle,
+      retireIdle: binding.retireIdle,
       dispatch: (payload, signal, scope, assertCurrent, createAdmission, requestClass) =>
         this.enqueue(
           owned.slot,
           {
             type: "execute",
             actor: owned.id,
-            databaseIdentity,
+            databaseIdentity: binding.databaseIdentity,
             input: payload,
             ...(scope?.stateContext ? { stateContext: scope.stateContext } : {}),
           },
@@ -389,34 +413,15 @@ export class SqliteWorkerBroker {
             scope,
             assertCurrent,
             createAdmission,
-            cleanupAccess,
-            maintenanceScope: cleanupAccess
+            cleanupAccess: binding.cleanupAccess,
+            maintenanceScope: binding.cleanupAccess
               ? undefined
               : scope
                 ? scope.maintenanceScope
                 : getOpenClawDatabaseMaintenanceScope(),
           },
         ),
-      release: async (reclaiming) => {
-        if (!referenceReleased) {
-          referenceReleased = true;
-          resumeScheduledMaintenance?.();
-          this.lifecycle.releaseActorReference(owned);
-          this.stores.delete(store);
-          this.clients.delete(client);
-          releasePaths();
-        }
-        if (this.draining && !reclaiming && !owned.stateContext) {
-          // Canonical shared-state close must release its clients before host drainage joins it.
-          await this.draining;
-        } else if (owned.slot.failed) {
-          // A nonlast client must still join the failed worker's native cleanup.
-          await owned.slot.exit;
-        }
-        if (!owned.references) {
-          await this.lifecycle.closeActor(owned, maintenanceScope);
-        }
-      },
+      release: (reclaiming): Promise<void> => releaseClient(store, reclaiming),
     });
     this.stores.set(store, storeClient);
     return store;
@@ -643,7 +648,7 @@ export class SqliteWorkerBroker {
     job.custody.activate();
     slot.current = job;
     slot.worker.ref();
-    job.observation.started();
+    job.observation.started(slot.worker.threadId);
     void dispatchSqliteWorkerJob(slot, job, (error, retire) => {
       // Slot failure owns settlement after joining preparation and native retirement.
       if (slot.current !== job) {

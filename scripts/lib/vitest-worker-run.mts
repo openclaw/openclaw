@@ -149,69 +149,90 @@ export function createVitestWorkerRun(
       return manifest;
     })());
   }
+  function borrow<T>(
+    child: ChildProcess,
+    completion: Promise<T>,
+    onPreparationProgress?: () => void,
+  ): Promise<T> {
+    let request: Promise<void> | undefined;
+    const onMessage = (message: unknown) => {
+      if (message !== VITEST_WORKER_PREPARE_REQUEST || request) {
+        return;
+      }
+      request = (async () => {
+        let reply: { type: string; error?: string } = { type: VITEST_WORKER_PREPARE_REPLY };
+        try {
+          const manifest = await prepare();
+          await verifyVitestWorkerArtifacts(directory, manifest);
+          if (disposal) {
+            throw new Error("Compiled subprocess owner is closing");
+          }
+          onPreparationProgress?.();
+        } catch (error) {
+          reply = { type: VITEST_WORKER_PREPARE_REPLY, error: String(error) };
+        }
+        if (child.connected) {
+          child.send(reply, (error) => {
+            channelError ??= error ?? undefined;
+          });
+        }
+      })();
+      // Only accepted admission and verified readiness count as progress.
+      // Duplicate IPC and the compiler's intermediate output cannot renew it.
+      if (!disposal) {
+        onPreparationProgress?.();
+      }
+    };
+    child.on("message", onMessage);
+    // Existing Windows completion observes exit; artifact ownership additionally
+    // waits for close so inherited handles cannot outlive deletion.
+    const closed = new Promise<void>((resolve) => {
+      child.once("close", () => resolve());
+    });
+    const joined = (async () => {
+      try {
+        return await completion;
+      } finally {
+        await closed;
+        child.off("message", onMessage);
+      }
+    })();
+    // Child completion must let callers reach disposal to cancel compilation.
+    // The owner still joins admission reads before releasing their generation.
+    const ownedCompletion = (async () => {
+      try {
+        await joined;
+      } finally {
+        await request;
+      }
+    })();
+    borrowers.push(ownedCompletion);
+    void ownedCompletion.catch(() => {});
+    return joined;
+  }
   return {
     descriptor: { directory, preset } satisfies VitestWorkerDescriptor,
     prepare,
-    borrow<T>(
-      child: ChildProcess,
-      completion: Promise<T>,
-      onPreparationProgress?: () => void,
-    ): Promise<T> {
-      let request: Promise<void> | undefined;
-      const onMessage = (message: unknown) => {
-        if (message !== VITEST_WORKER_PREPARE_REQUEST || request) {
-          return;
+    borrow,
+    async withBorrower<T>(run: (onReady: (child: ChildProcess) => void) => Promise<T>): Promise<T> {
+      const completion = Promise.withResolvers<T>();
+      let borrower: Promise<T> | undefined;
+      try {
+        const result = await run((child) => {
+          borrower = borrow(child, completion.promise);
+        });
+        completion.resolve(result);
+        return result;
+      } catch (error) {
+        // A startup failure has no borrower observing the deferred rejection.
+        if (borrower) {
+          completion.reject(error);
         }
-        request = (async () => {
-          let reply: { type: string; error?: string } = { type: VITEST_WORKER_PREPARE_REPLY };
-          try {
-            const manifest = await prepare();
-            await verifyVitestWorkerArtifacts(directory, manifest);
-            if (disposal) {
-              throw new Error("Compiled subprocess owner is closing");
-            }
-            onPreparationProgress?.();
-          } catch (error) {
-            reply = { type: VITEST_WORKER_PREPARE_REPLY, error: String(error) };
-          }
-          if (child.connected) {
-            child.send(reply, (error) => {
-              channelError ??= error ?? undefined;
-            });
-          }
-        })();
-        // Only accepted admission and verified readiness count as progress.
-        // Duplicate IPC and the compiler's intermediate output cannot renew it.
-        if (!disposal) {
-          onPreparationProgress?.();
-        }
-      };
-      child.on("message", onMessage);
-      // Existing Windows completion observes exit; artifact ownership additionally
-      // waits for close so inherited handles cannot outlive deletion.
-      const closed = new Promise<void>((resolve) => {
-        child.once("close", () => resolve());
-      });
-      const joined = (async () => {
-        try {
-          return await completion;
-        } finally {
-          await closed;
-          child.off("message", onMessage);
-        }
-      })();
-      // Child completion must let callers reach disposal to cancel compilation.
-      // The owner still joins admission reads before releasing their generation.
-      const ownedCompletion = (async () => {
-        try {
-          await joined;
-        } finally {
-          await request;
-        }
-      })();
-      borrowers.push(ownedCompletion);
-      void ownedCompletion.catch(() => {});
-      return joined;
+        throw error;
+      } finally {
+        // Command settlement precedes close; retain the loan through that join.
+        await borrower;
+      }
     },
     /** `interrupted`: the invocation is exiting by signal, so its outcome cannot change. */
     dispose({ interrupted = false }: { interrupted?: boolean } = {}): Promise<void> {

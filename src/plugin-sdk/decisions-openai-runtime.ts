@@ -1,7 +1,8 @@
 import type { ResolvedProviderAuth } from "../agents/model-auth-runtime-shared.js";
 import { getModelProviderRequestTransport } from "../agents/provider-request-config.js";
 import type { ModelProviderRequestTransportOverrides } from "../agents/provider-request-config.types.js";
-import type { DecisionExecutionContext, DecisionReasoning } from "../decisions/execution-types.js";
+import type { DecisionExecutionContext } from "../decisions/execution-types.js";
+import type { DecisionReasoning } from "../decisions/input-types.js";
 import {
   decodeOpenAIDecisionResult,
   encodeOpenAIDecisionRequest,

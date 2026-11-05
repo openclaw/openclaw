@@ -1,5 +1,5 @@
 import type { ModelDecisionCapabilities } from "@openclaw/model-catalog-core/model-catalog-types";
-import type { DecisionReasoning } from "./execution-types.js";
+import type { DecisionReasoning } from "./input-types.js";
 import type { DecisionBatchV2 } from "./types-v2.js";
 
 /** Facts used for input eligibility; route protocol, billing and grounding are host concerns. */

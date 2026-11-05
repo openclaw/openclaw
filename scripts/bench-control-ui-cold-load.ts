@@ -279,7 +279,9 @@ const { values } = parseArgs({
     "row-facts": { type: "boolean", default: false },
     "late-row-facts": { type: "boolean", default: false },
     "pane-chrome-probe": { type: "boolean", default: false },
+    "pane-chrome-facts": { type: "boolean", default: false },
     "archived-session": { type: "boolean", default: false },
+    "details-session-facts": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
     "dashboard-widget": { type: "boolean", default: false },
     "connect-not-before-ms": { type: "string" },
@@ -671,11 +673,13 @@ if (
     port === sandboxPort ||
     [port, sandboxPort].some(
       (value) =>
-        value === undefined || !Number.isInteger(value) || value < 40_000 || value > 65_535,
+        value === undefined ||
+        !Number.isInteger(value) ||
+        !((value >= 19_600 && value <= 19_699) || (value >= 40_000 && value <= 65_535)),
     ))
 ) {
   throw new Error(
-    "Explicit port and sandbox-port require a built bundle and distinct ports from 40000 to 65535",
+    "Explicit port and sandbox-port require a built bundle and distinct ports in 19600–19699 or 40000–65535",
   );
 }
 if (
@@ -839,6 +843,8 @@ const fixture = createControlUiTeamScaleFixture({
   lateRowFacts: values["late-row-facts"],
   offRosterSession: values["off-roster-route"],
   archivedSession: values["archived-session"],
+  paneChromeFacts: values["pane-chrome-facts"],
+  detailsSessionFacts: values["details-session-facts"],
   transcriptMessages,
   dashboardWidgetFontUrl: dashboardFont
     ? `http://127.0.0.1:${address.port}${dashboardFontPath}`
@@ -1441,6 +1447,16 @@ try {
       }
     }
   }
+  await page.addInitScript((entries) => {
+    if (window !== window.top || location.protocol === "about:") {
+      return;
+    }
+    for (const [key, value] of Object.entries(entries)) {
+      if (localStorage.getItem(key) === null) {
+        localStorage.setItem(key, value);
+      }
+    }
+  }, fixture.paneChromeSettings);
   await page.addInitScript(
     ({ key, pins, mode, bootstrap, bootstrapAttribute, fixtureUrl, splitLayout }) => {
       if (window !== window.top || location.protocol === "about:") {

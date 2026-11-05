@@ -172,6 +172,7 @@ export class GatewayPendingRequests {
     return new Promise<T>((resolve, reject) => {
       let timeout: ReturnType<typeof setTimeout> | undefined;
       let startupRetry: ReturnType<typeof setTimeout> | undefined;
+      let startupRetryDelayMs = 0;
       let requestSent = false;
       let inFlight = false;
       const pending: GatewayPendingRequest = {
@@ -292,10 +293,12 @@ export class GatewayPendingRequests {
         pending.retryStartup = (retryAfterMs) => {
           pending.resend = send;
           clearTimeout(startupRetry);
-          startupRetry = setTimeout(
-            send,
+          // Startup can outlast many hints; back off without shortening the server's minimum.
+          startupRetryDelayMs = Math.max(
             resolveFiniteTimeoutDelayMs(retryAfterMs, GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS),
+            Math.min(8_000, startupRetryDelayMs * 2),
           );
+          startupRetry = setTimeout(send, startupRetryDelayMs);
           startupRetry.unref?.();
         };
         if (

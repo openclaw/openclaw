@@ -37,6 +37,8 @@ type PageAction = {
 type PageDefinition = {
   ready: string;
   rows?: { selector: string; minimum: number; totalSelector?: string };
+  /** Keep the measurement open through incremental mounting, after first visibility. */
+  completion?: { selector: string; minimum: number; maximum?: number }[];
   landed?: RouteId;
   search?: string;
   action?: PageAction;
@@ -82,6 +84,8 @@ export const enginePageFixtureCounts = {
   portals: 30,
   systems: 61,
   custodianChanges: 50,
+  advancedRows: 303,
+  advancedControls: 437,
 };
 const quantity = enginePageFixtureCounts;
 const excluded: Partial<Record<RouteId, string>> = {
@@ -367,7 +371,20 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   },
   connection: {
     ready: "openclaw-connection-page .settings-page",
-    action: disclosure("openclaw-connection-page details"),
+    action: {
+      label: "Reveal the Gateway secret field",
+      run: async (page) => {
+        const toggle = page.locator(
+          'openclaw-connection-page button[aria-label="Toggle secret visibility"]',
+        );
+        await toggle.click();
+        await page
+          .locator('openclaw-connection-page input[aria-label="Gateway secret"][type="text"]')
+          .waitFor({ state: "visible" });
+        await frames(page);
+        return { opened: true };
+      },
+    },
   },
   custodian: {
     ready: "openclaw-custodian-page .custodian-surface",
@@ -601,6 +618,14 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   },
   "plugin-settings": {
     ready: "openclaw-plugins-page [data-plugin-id]",
+    completion: [
+      { selector: "openclaw-plugins-page [data-plugin-id]", minimum: quantity.catalog },
+      {
+        selector: '.plugins-settings-content .settings-group[aria-busy="true"]',
+        minimum: 0,
+        maximum: 0,
+      },
+    ],
     source: catalogSource,
     action: { label: "Filter 1,000 installed plugins", run: catalogSource.run },
   },
@@ -851,6 +876,15 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   security: configPage(),
   advanced: {
     ...configPage(),
+    completion: [
+      { selector: "openclaw-config-page .settings-row", minimum: quantity.advancedRows },
+      { selector: 'openclaw-config-page .settings-page[aria-busy="true"]', minimum: 0, maximum: 0 },
+      {
+        selector:
+          "openclaw-config-page input, openclaw-config-page select, openclaw-config-page textarea, openclaw-config-page button",
+        minimum: quantity.advancedControls,
+      },
+    ],
     action: disclosure("openclaw-config-page details.cfg-object:not([open])"),
   },
   automation: configPage(),
@@ -861,12 +895,12 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
       run: async (page) => {
         const card = page.locator("openclaw-mcp-servers-card");
         await card.getByRole("button", { name: "Add server", exact: true }).click();
-        const form = card.locator(".mcp-server-form");
+        const form = page.locator(".mcp-server-form");
         await form.locator('input[name="mcp-name"]:enabled').waitFor({ state: "visible" });
         await form.locator('input[name="mcp-target"]:enabled').waitFor({ state: "visible" });
         assert.equal(
-          await form.locator('select[name="mcp-transport"]').inputValue(),
-          "streamable-http",
+          await form.locator('input[type="radio"][value="streamable-http"]').isChecked(),
+          true,
         );
         await frames(page);
         return { addServerForm: true };
@@ -1430,6 +1464,16 @@ async function ready(page: Page, id: RouteId, definition: PageDefinition) {
       definition.rows,
     );
   }
+  if (definition.completion) {
+    await page.waitForFunction(
+      (requirements) =>
+        requirements.every(({ selector, minimum, maximum }) => {
+          const count = document.querySelectorAll(selector).length;
+          return count >= minimum && (maximum === undefined || count <= maximum);
+        }),
+      definition.completion,
+    );
+  }
   if (id === "cloud-workers") {
     await page.waitForFunction(() => {
       const reads: { rpcs: ColdLoadRpcRecord[]; pendingMethods: string[]; queued: number } =
@@ -1482,10 +1526,12 @@ export async function collectEnginePageStructure(page: Page): Promise<Interactio
 
 async function measureVisit(page: Page, id: RouteId, definition: PageDefinition) {
   return page.evaluate(
-    ({ id: routeId, pathname, search: routeSearch, landed, selector, rows }) =>
-      new Promise<number>((resolve, reject) => {
+    ({ id: routeId, pathname, search: routeSearch, landed, selector, rows, completion }) =>
+      new Promise<{ readyMs: number; contentReadyMs: number }>((resolve, reject) => {
         const started = performance.now();
         let readyFrames = 0;
+        let completeFrames = 0;
+        let readyMs: number | undefined;
         const probe = () => {
           const snapshot = window.openclawControlUi?.snapshot();
           const route = snapshot?.route;
@@ -1539,7 +1585,18 @@ async function measureVisit(page: Page, id: RouteId, definition: PageDefinition)
             cloudReadsReady;
           readyFrames = pageReady ? readyFrames + 1 : 0;
           if (readyFrames >= 2) {
-            resolve(performance.now() - started);
+            readyMs ??= performance.now() - started;
+          }
+          const contentReady =
+            pageReady &&
+            (!completion ||
+              completion.every(({ selector: contentSelector, minimum, maximum }) => {
+                const count = document.querySelectorAll(contentSelector).length;
+                return count >= minimum && (maximum === undefined || count <= maximum);
+              }));
+          completeFrames = contentReady ? completeFrames + 1 : 0;
+          if (readyMs !== undefined && completeFrames >= 2) {
+            resolve({ readyMs, contentReadyMs: performance.now() - started });
           } else if (performance.now() - started > 60_000) {
             reject(new Error(`Page readiness timed out: ${routeId} (${selector})`));
           } else {
@@ -1556,6 +1613,7 @@ async function measureVisit(page: Page, id: RouteId, definition: PageDefinition)
       landed: definition.landed ?? id,
       selector: definition.ready,
       rows: definition.rows,
+      completion: definition.completion,
     },
   );
 }
@@ -1598,12 +1656,12 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
     const visit: EngineScenario = {
       ...common,
       id: `page-${id}-visit`,
-      expected: `First visit after boot to ${coverage.path}; ${definition.ready} is visible and the route is settled.`,
+      expected: `First visit after boot to ${coverage.path}; ${definition.ready} is visible, the route is settled, and all configured content counts are complete.`,
       prepare: boot,
       run: async (page) => {
-        const visitReadyMs = await measureVisit(page, id, definition);
+        const timing = await measureVisit(page, id, definition);
         await ready(page, id, definition);
-        return { visitReadyMs };
+        return { visitReadyMs: timing.readyMs, contentReadyMs: timing.contentReadyMs };
       },
     };
     const leave: EngineScenario = {
@@ -1613,10 +1671,10 @@ export function createEnginePageScenarios(): readonly EngineScenario[] {
       prepare: enter,
       run: async (page) => {
         const destination = id === "about" ? "connection" : "about";
-        const leaveReadyMs = await measureVisit(page, destination, definitions[destination]!);
+        const timing = await measureVisit(page, destination, definitions[destination]!);
         await frames(page);
         assert.equal(await page.locator(definition.ready).filter({ visible: true }).count(), 0);
-        return { retired: true, leaveReadyMs };
+        return { retired: true, leaveReadyMs: timing.readyMs };
       },
     };
     if (!definition.action) {

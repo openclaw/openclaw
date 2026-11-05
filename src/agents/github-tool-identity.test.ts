@@ -369,6 +369,7 @@ describe("GitHub tool identity", () => {
     oauthMocks.inspect.mockClear();
     expect(await prepareGitHubPublicationOptionsIdentity(params)).toEqual({
       source: "system-configured",
+      host: "github.com",
       account: { accountId: 202, login: "managed-user", avatarUrl: null },
     });
     expect(oauthMocks.inspect).not.toHaveBeenCalled();

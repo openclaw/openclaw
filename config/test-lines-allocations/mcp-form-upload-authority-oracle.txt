@@ -1,0 +1,2 @@
+# Exercise retired requester authority through the prepared upload callback.
+5
