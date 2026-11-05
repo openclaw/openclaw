@@ -186,6 +186,7 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
     private let createGate: SessionActionCompletionGate?
     private let resetGate: SessionActionCompletionGate?
     private let createIsUnsupported: Bool
+    private let directCreateSupported: Bool
     private let forkGate: SessionActionCompletionGate?
     private let rewindGate: SessionActionCompletionGate?
     private let forkAtMessageGate: SessionActionCompletionGate?
@@ -209,6 +210,7 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         createGate: SessionActionCompletionGate? = nil,
         resetGate: SessionActionCompletionGate? = nil,
         createIsUnsupported: Bool = false,
+        directCreateSupported: Bool = false,
         forkGate: SessionActionCompletionGate? = nil,
         rewindGate: SessionActionCompletionGate? = nil,
         forkAtMessageGate: SessionActionCompletionGate? = nil,
@@ -231,6 +233,7 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         self.createGate = createGate
         self.resetGate = resetGate
         self.createIsUnsupported = createIsUnsupported
+        self.directCreateSupported = directCreateSupported
         self.forkGate = forkGate
         self.rewindGate = rewindGate
         self.forkAtMessageGate = forkAtMessageGate
@@ -346,6 +349,28 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         await self.state.recordPatch(key, expectedSessionID: expectedSessionID)
     }
 
+    func createSession(
+        key: String,
+        label _: String?,
+        agentID: String?,
+        parentSessionKey: String?,
+        worktree _: Bool?,
+        worktreeBaseRef: String?) async throws -> OpenClawChatCreateSessionResponse
+    {
+        guard self.directCreateSupported else {
+            // Mirror the protocol default so direct-path expectations stay fail-closed.
+            let message = agentID == nil && worktreeBaseRef == nil
+                ? "sessions.create not supported by this transport"
+                : "sessions.create agent/base-ref options not supported by this transport"
+            throw NSError(
+                domain: "OpenClawChatTransport",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: message])
+        }
+        _ = await self.state.recordCreate(key: key, agentID: agentID, parentKey: parentSessionKey)
+        return OpenClawChatCreateSessionResponse(ok: true, key: key, sessionId: nil)
+    }
+
     func acquireSessionGroupsRouteLease() async -> OpenClawChatSessionGroupsRouteLease? {
         let state = self.state
         return OpenClawChatSessionGroupsRouteLease(
@@ -394,24 +419,6 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
                 }
                 return OpenClawChatCreateSessionResponse(ok: true, key: key, sessionId: nil)
             })
-    }
-
-    func createSession(
-        key: String,
-        label _: String?,
-        agentID: String?,
-        parentSessionKey: String?,
-        worktree _: Bool?,
-        worktreeBaseRef _: String?) async throws -> OpenClawChatCreateSessionResponse
-    {
-        if self.createIsUnsupported {
-            throw NSError(
-                domain: "OpenClawChatTransport",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "sessions.create not supported by this transport"])
-        }
-        _ = await self.state.recordCreate(key: key, agentID: agentID, parentKey: parentSessionKey)
-        return OpenClawChatCreateSessionResponse(ok: true, key: key, sessionId: nil)
     }
 
     func resetSession(sessionKey: String) async throws {
@@ -766,9 +773,10 @@ struct ChatViewModelSessionActionTests {
     }
 
     @Test func `unsupported create with advanced options fails without resetting`() async {
-        // The transport throws the canonical unsupported error; the worktree request must
+        // SessionActionTransport relies on the protocol's default createSession,
+        // which throws the canonical unsupported error; the worktree request must
         // surface it instead of taking the plain-new reset fallback.
-        let transport = SessionActionTransport(createIsUnsupported: true)
+        let transport = SessionActionTransport()
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
 
         let created = await viewModel.startNewSession(worktree: true)
@@ -780,7 +788,7 @@ struct ChatViewModelSessionActionTests {
 
     @Test(arguments: ["agent:worker:ordinary", "agent:worker:main"], [false, true])
     func `sidebar new chat does not inherit the selected conversation`(key: String, captured: Bool) async throws {
-        let transport = SessionActionTransport()
+        let transport = SessionActionTransport(directCreateSupported: !captured)
         let viewModel = OpenClawChatViewModel(sessionKey: key, transport: transport)
         if captured {
             let lease = try await viewModel.newSessionRouteLease()
@@ -794,30 +802,13 @@ struct ChatViewModelSessionActionTests {
 
     @Test(arguments: ["agent:worker:ordinary", "agent:worker:main"])
     func `slash new retains parent for gateway settings inheritance`(key: String) async {
-        let transport = SessionActionTransport()
+        let transport = SessionActionTransport(directCreateSupported: true)
         let viewModel = OpenClawChatViewModel(sessionKey: key, transport: transport)
         viewModel.input = "/new"
         await viewModel.send()?.value
         // The parent is the request-level contract for Gateway model, auth,
         // effort, fast-mode, tool, and communication settings inheritance.
         #expect(await transport.createdParentKeys() == [key])
-    }
-
-    @Test func `ambiguous agent ownership omits the parent session`() async throws {
-        let transport = SessionActionTransport()
-        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
-        // Roster entries must not decide the current agent: "main" is unscoped and
-        // no active agent is set, so agent selection crosses an ownership boundary.
-        viewModel.sessions = [self.entry(key: "agent:worker:main")]
-        let lease = try await viewModel.newSessionRouteLease()
-
-        await viewModel.startNewSession(
-            agentID: "worker",
-            worktree: false,
-            worktreeBaseRef: nil,
-            using: lease)
-
-        #expect(await transport.createdParentKeys() == [nil])
     }
 
     @Test func `sidebar creation with active agent identity omits parent for an unscoped current key`() async throws {
@@ -839,13 +830,82 @@ struct ChatViewModelSessionActionTests {
 
     @Test(arguments: ["worker", "other"])
     func `inheriting creation respects authoritative agent ownership`(agentID: String) async {
-        let transport = SessionActionTransport()
+        let transport = SessionActionTransport(directCreateSupported: true)
         let viewModel = OpenClawChatViewModel(
             sessionKey: "agent:worker:ordinary", transport: transport)
         #expect(await viewModel.performStartNewSession(
             agentID: agentID, inheritCurrentSession: true, worktree: false))
         #expect(await transport.createdAgentIDs() == [agentID])
         #expect(await transport.createdParentKeys() == [agentID == "worker" ? "agent:worker:ordinary" : nil])
+    }
+
+    @Test func `ambiguous agent ownership omits the parent session`() async throws {
+        let transport = SessionActionTransport()
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        // Roster entries must not decide the current agent: "main" is unscoped and
+        // no active agent is set, so agent selection crosses an ownership boundary.
+        viewModel.sessions = [self.entry(key: "agent:worker:main")]
+        let lease = try await viewModel.newSessionRouteLease()
+
+        await viewModel.startNewSession(
+            agentID: "worker",
+            worktree: false,
+            worktreeBaseRef: nil,
+            using: lease)
+
+        #expect(await transport.createdParentKeys() == [nil])
+    }
+
+    @Test func `active agent identity keeps ordinary creation standalone`() async throws {
+        let transport = SessionActionTransport()
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: transport,
+            activeAgentId: "worker")
+        let lease = try await viewModel.newSessionRouteLease()
+
+        await viewModel.startNewSession(
+            agentID: "worker",
+            worktree: false,
+            worktreeBaseRef: nil,
+            using: lease)
+
+        #expect(await transport.createdParentKeys() == [nil])
+        #expect(await transport.createdAgentIDs() == ["worker"])
+    }
+
+    @Test func `same-agent creation from a non-main session omits the parent through a route lease`() async throws {
+        // #189432: the selected conversation must not become the persisted parent of
+        // an ordinary new chat; nested lineage hid the new session in the PWA sidebar.
+        let transport = SessionActionTransport()
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "agent:main:pinned-dashboard-thread",
+            transport: transport)
+        let lease = try await viewModel.newSessionRouteLease()
+
+        await viewModel.startNewSession(
+            agentID: "main",
+            worktree: false,
+            worktreeBaseRef: nil,
+            using: lease)
+
+        #expect(await transport.createdParentKeys() == [nil])
+    }
+
+    @Test func `plain new chat from a non-main session omits the parent on the direct transport path`() async throws {
+        // #189432: covers the lease-less call path (new-chat button, /new command).
+        let transport = SessionActionTransport(directCreateSupported: true)
+        let viewModel = OpenClawChatViewModel(
+            sessionKey: "agent:main:pinned-dashboard-thread",
+            transport: transport)
+
+        let created = await viewModel.startNewSession()
+
+        #expect(created)
+        #expect(await transport.createdParentKeys() == [nil])
+        let createdKeys = await transport.createdKeys()
+        #expect(createdKeys.count == 1)
+        #expect(createdKeys[0].hasPrefix("agent:main:ios-"))
     }
 
     @Test func `rewind seeds editor and refreshes history`() async {
@@ -1345,9 +1405,7 @@ struct ChatViewModelSessionActionTests {
         viewModel.handleTransportEvent(.sessionsChanged(.init(sessionKey: "other", reason: "branch-switch")))
         #expect(viewModel.replyTarget != nil)
         #expect(viewModel.canSend)
-        let reconcile = viewModel.handleTransportEvent(.sessionsChanged(.init(
-            sessionKey: "main",
-            reason: "branch-switch")))
+        let reconcile = viewModel.handleTransportEvent(.sessionsChanged(.init(sessionKey: "main", reason: "branch-switch")))
         #expect(viewModel.hasBlockingRunActivity)
         #expect(viewModel.canSend == false)
 
