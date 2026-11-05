@@ -513,7 +513,9 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
                 accountId: deliveryAccountId,
                 bestEffort: form.deliveryBestEffort,
               }),
-          ...(form.deliveryThreadId !== undefined ? { threadId: form.deliveryThreadId } : {}),
+          threadId:
+            form.deliveryThreadId ??
+            (editingJob?.delivery?.threadId !== undefined ? null : undefined),
           ...(selectedDeliveryMode === "announce" && form.deliveryCompletionDestination
             ? { completionDestination: form.deliveryCompletionDestination }
             : {}),
