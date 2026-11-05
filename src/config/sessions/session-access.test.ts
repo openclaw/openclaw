@@ -8,24 +8,20 @@ import { applySessionEntryWritePolicy } from "./session-entry-write-policy.js";
 import { resolveSessionPublicShare } from "./session-public-share.js";
 import type { SessionEntry } from "./types.js";
 
-const cfg: OpenClawConfig = {
-  session: {
-    sharing: {
-      accessPolicy: {
-        default: "creator",
-        groups: [
-          {
-            agentId: "main",
-            channel: "telegram",
-            peerId: "-100123",
-            peerAliases: ["-456"],
-            profileIds: ["selected"],
-          },
-        ],
-      },
-    },
-  },
+function configWithGroups(
+  groups: NonNullable<
+    NonNullable<NonNullable<OpenClawConfig["session"]>["sharing"]>["accessPolicy"]
+  >["groups"],
+): OpenClawConfig {
+  return { session: { sharing: { accessPolicy: { default: "creator", groups } } } };
+}
+const selectedGroup = {
+  agentId: "main",
+  channel: "telegram",
+  peerId: "-100123",
+  profileIds: ["selected"],
 };
+const cfg = configWithGroups([{ ...selectedGroup, peerAliases: ["-456"] }]);
 const group = "agent:main:telegram:group:-100123";
 const entry: SessionEntry = {
   sessionId: "s",
@@ -68,40 +64,14 @@ describe("confidential session access, independent of visibility and participati
     }
   });
   it("closes ambiguous duplicate routes rather than borrowing the first grant", () => {
-    const duplicate: OpenClawConfig = {
-      session: {
-        sharing: {
-          accessPolicy: {
-            default: "creator",
-            groups: [
-              { agentId: "main", channel: "telegram", peerId: "-100123", profileIds: ["selected"] },
-              { agentId: "main", channel: "telegram", peerId: "-100123", profileIds: ["other"] },
-            ],
-          },
-        },
-      },
-    };
+    const duplicate = configWithGroups([
+      selectedGroup,
+      { ...selectedGroup, profileIds: ["other"] },
+    ]);
     expect(canReadSessionAccess(duplicate, group, entry, matches("selected"))).toBe(false);
   });
   it("supports account-specific group routes without granting other accounts", () => {
-    const accountCfg: OpenClawConfig = {
-      session: {
-        sharing: {
-          accessPolicy: {
-            default: "creator",
-            groups: [
-              {
-                agentId: "main",
-                channel: "telegram",
-                accountId: "bot",
-                peerId: "-100123",
-                profileIds: ["selected"],
-              },
-            ],
-          },
-        },
-      },
-    };
+    const accountCfg = configWithGroups([{ ...selectedGroup, accountId: "bot" }]);
     expect(
       canReadSessionAccess(
         accountCfg,

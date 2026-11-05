@@ -31,8 +31,11 @@ byte ranges through a bounded-memory stream. An archive that
 would expand past 4 GiB fails with a visible error and remains unchanged.
 Archive publication verifies compressed output against the original plaintext byte
 count, preserving compression and disk-budget retention.
-Read-cache files left by older versions can be deleted after those Gateway
-processes have stopped; current readers do not use them.
+Doctor reports the size of read-cache directories left by older versions.
+`openclaw doctor --fix` (also run during updates) removes recognized cache files
+and the directory if empty, preserving unrelated entries. Cleanup is best effort:
+files still open on Windows may remain until a later run; current readers do not
+use them.
 
 To continue the same Gateway-owned session in the Control UI, terminal, or a
 coding harness, see [Session synchronization and attachment](/concepts/session-attachment).
