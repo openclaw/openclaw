@@ -317,6 +317,9 @@ it("warms medium row data while idle and paints the next viewport during fast sc
   expect(
     view.container.querySelector('[data-virtual-row-key="fragment:16"]')?.hasAttribute("inert"),
   ).toBe(false);
+  const rows = transcriptRows(view.container);
+  const active = rows.filter((row) => !row.hasAttribute("inert"));
+  expect(rows.length).toBeLessThanOrEqual(Math.max(12, active.length));
 });
 
 it("bounds initial HTML warming and keeps distant rows out of the DOM", async () => {

@@ -96,12 +96,6 @@ export class TranscriptInitialRange {
     }
     if (!this.tailRows) {
       const indexes = new Set(this.normalIndexes(range));
-      for (const key of this.preparedRowKeys) {
-        const index = this.rowIndexes.get(key);
-        if (index !== undefined) {
-          indexes.add(index);
-        }
-      }
       const preparingIndex = this.preparingRowKey
         ? this.rowIndexes.get(this.preparingRowKey)
         : undefined;
@@ -110,6 +104,18 @@ export class TranscriptInitialRange {
       }
       for (const index of this.endIndexes()) {
         indexes.add(index);
+      }
+      const limit = this.hasForwardWindow(range)
+        ? Math.max(PREPARED_ROW_LIMIT, indexes.size)
+        : Infinity;
+      // Arriving rows share the retained budget; keep required rows and newest history first.
+      for (const key of [...this.preparedRowKeys].reverse()) {
+        const index = this.rowIndexes.get(key);
+        if (index !== undefined && (indexes.has(index) || indexes.size < limit)) {
+          indexes.add(index);
+        } else {
+          this.preparedRowKeys.delete(key);
+        }
       }
       return [...indexes].toSorted((left, right) => left - right);
     }
@@ -156,6 +162,15 @@ export class TranscriptInitialRange {
       : [];
   }
 
+  private hasForwardWindow(range: Range): boolean {
+    return (
+      this.isReaderMoving() &&
+      this.scrollSample.direction > 0 &&
+      this.scrollSample.distance >= (this.virtualizer().scrollRect?.height ?? 600) &&
+      Boolean(this.rows[range.startIndex]?.prewarm && this.rows[range.startIndex]?.retainDom)
+    );
+  }
+
   private normalIndexes(range: Range): number[] {
     if (this.viewportOnly) {
       return this.normalRange({ ...range, overscan: 0 }, this.rowIndexes);
@@ -175,11 +190,7 @@ export class TranscriptInitialRange {
         },
         this.rowIndexes,
       );
-      if (
-        this.scrollSample.direction > 0 &&
-        this.rows[range.startIndex]?.prewarm &&
-        this.rows[range.startIndex]?.retainDom
-      ) {
+      if (this.hasForwardWindow(range)) {
         const virtualizer = this.virtualizer();
         const top = (virtualizer.scrollOffset ?? 0) + this.scrollSample.distance;
         const start = virtualizer.getVirtualItemForOffset(top);
@@ -347,8 +358,12 @@ export class TranscriptInitialRange {
       direction: Math.sign(delta),
     };
     this.finish();
-    // Prediction can change before the visible range crosses a row boundary.
-    this.refresh();
+    // Refresh entering, advancing or leaving a predicted forward window, even
+    // when the visible range has not crossed a row boundary.
+    const height = this.virtualizer().scrollRect?.height ?? 600;
+    if ((delta > 0 && delta >= height) || (previous.direction > 0 && previous.distance >= height)) {
+      this.refresh();
+    }
   }
 
   readonly measureElement = (
