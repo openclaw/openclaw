@@ -99,7 +99,10 @@ Views are retained in least-recently-used order, with limits of 512 cache slots
 retention per projection. The estimate counts history identities, current row
 references and cached row/fact encodings, serialized array buffers, selection and
 partition entries, query keys, and view overhead. Shared current row encodings are
-counted once per projection, while packed replies are charged per view. This is a
+counted once per projection, while packed replies are charged per view. Selection
+refreshes remove superseded filtered partitions and their byte charges together;
+unchanged partitions remain reusable. This accounting does not depend on garbage
+collection. This is a
 retention estimate rather than whole-heap
 attribution. A response exceeding the budget is
 served without retaining its baseline. Eviction does not change authorization
