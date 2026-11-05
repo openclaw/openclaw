@@ -2556,6 +2556,14 @@ export function isCanonicalNodeTestConfig(config: string): boolean {
   return resolveCanonicalTargetInventory(config).configs.has(config);
 }
 
+export function isCompleteCanonicalNodeTestTarget(target: string, config: string): boolean {
+  const inventory = resolveCanonicalTargetInventory(config);
+  return (
+    inventory.completeConfigs.has(config) &&
+    inventory.configsByFile.get(target)?.has(config) === true
+  );
+}
+
 /** Null excludes a file from a complete inventory; undefined leaves ownership unresolved. */
 export function resolveCanonicalNodeTestConfig(
   target: string,

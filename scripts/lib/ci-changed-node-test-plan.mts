@@ -48,6 +48,7 @@ import {
   normalizeSingletonNodeTestJob,
   nodeTestConfigRequiresCanonicalMetadata,
   resolveCanonicalNodeTestConfig,
+  isCompleteCanonicalNodeTestTarget,
   isCanonicalNodeTestConfig,
   isRuntimeTestFileIncluded,
   SOURCE_CHANNEL_TEST_POLICY,
@@ -428,7 +429,8 @@ function isIndependentMarkdownCompanion(file: string, cwd: string): boolean {
   if (
     targets.length !== 1 ||
     targets[0] !== file ||
-    (plan.includePatterns && plan.forwardedArgs.length > 0)
+    (plan.forwardedArgs.length > 0 &&
+      (plan.forwardedArgs.length !== 1 || plan.forwardedArgs[0] !== file))
   ) {
     return false;
   }
@@ -437,7 +439,7 @@ function isIndependentMarkdownCompanion(file: string, cwd: string): boolean {
   return Boolean(
     config &&
     config !== "test/vitest/vitest.unit-fast.config.ts" &&
-    listNodeTestConfigFiles(config)?.includes(file),
+    isCompleteCanonicalNodeTestTarget(file, config),
   );
 }
 

@@ -16,7 +16,9 @@ export function createAdaptiveMarkdownFilter(
 ) {
   /** @param {string} file */
   const isMarkdownSource = (file) =>
-    /^packages\/markdown-core\/src\/[^/]+\.ts$/u.test(file) && !file.includes(".test");
+    /^packages\/markdown-core\/src\/[^/]+\.ts$/u.test(file) &&
+    !file.includes(".test") &&
+    !file.includes(".spec");
   const eligible =
     changedPaths.some(isMarkdownSource) &&
     changedPaths.every(

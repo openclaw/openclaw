@@ -1,12 +1,17 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
-import qualification from "../../config/ci-adaptive-markdown.json" with { type: "json" };
+import { afterEach, expect, it, vi } from "vitest";
+import markdownQualification from "../../config/ci-adaptive-markdown.json" with { type: "json" };
 import { createAdaptiveMarkdownFilter } from "../../scripts/lib/ci-adaptive-markdown.mjs";
 import { resolveChangedNodeTestTargets } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { createTestInputFingerprint } from "../../scripts/test-projects.test-support.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+vi.mock("../../config/ci-adaptive-markdown.json", async (importOriginal) => {
+  const actual = await importOriginal<{ default: typeof markdownQualification }>();
+  return { default: structuredClone(actual.default) };
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const root = "packages/markdown-core/src/";
@@ -95,31 +100,40 @@ it("admits qualified companions and allocations only alongside a Markdown source
   const independent = (file: string) => file === companion;
   expect(select([changed, companion, allocation], independent)).toEqual([changedTest]);
   expect(select([changed, companion])).toEqual([changedTest, unchanged]);
+  expect(select([changed, changedTest])).toEqual([changedTest, unchanged]);
+  expect(select([changed, `${root}companion.spec.ts`])).toEqual([changedTest, unchanged]);
   expect(select([companion, allocation], independent)).toEqual([changedTest, unchanged]);
 });
 
-it("preserves process ownership and qualification expiry for real companion changes", () => {
+it("admits a real separate-process companion with qualified inputs, retaining shared workers", () => {
   const production = `${root}link-spans.ts`;
   const separate = "src/link-understanding/runner.transport.test.ts";
   const allocation = "config/test-lines-allocations/reference-citation-link-budget.txt";
   const options = { selectionMode: "aggressive" as const };
   const changes = [production, separate, allocation];
-  const baseline = resolveChangedNodeTestTargets(changes, options);
-  const selected = resolveChangedNodeTestTargets(changes, { ...options, adaptiveMarkdown: true });
-  expect(baseline).toContain(unchanged);
   const fingerprint = createTestInputFingerprint(process.cwd());
-  if (fingerprint(qualification.common) !== qualification.commonHash) {
-    expect(selected).toEqual(baseline);
-  } else {
-    const qualified =
-      fingerprint([unchanged]) === qualification.tests["packages/markdown-core/src/fences.test.ts"];
-    expect(selected.includes(unchanged)).toBe(!qualified);
-  }
-  expect(selected).toContain(separate);
-  for (const companion of ["src/auto-reply/chunk.test.ts", `${root}fences.test.ts`]) {
-    const shared = [production, companion];
-    expect(resolveChangedNodeTestTargets(shared, { ...options, adaptiveMarkdown: true })).toEqual(
-      resolveChangedNodeTestTargets(shared, options),
+  const commonHash = markdownQualification.commonHash;
+  const testHash = markdownQualification.tests["packages/markdown-core/src/fences.test.ts"];
+  try {
+    // Qualify this fixture explicitly; dependency updates must not expire the admission proof.
+    const commonFingerprint = fingerprint(markdownQualification.common);
+    const testFingerprint = fingerprint([unchanged]);
+    if (commonFingerprint === null || testFingerprint === null) {
+      throw new Error("The admission fixture needs complete common and test inputs");
+    }
+    markdownQualification.commonHash = commonFingerprint;
+    markdownQualification.tests["packages/markdown-core/src/fences.test.ts"] = testFingerprint;
+    const baseline = resolveChangedNodeTestTargets(changes, options);
+    const selected = resolveChangedNodeTestTargets(changes, { ...options, adaptiveMarkdown: true });
+    expect(baseline).toContain(unchanged);
+    expect(selected).not.toContain(unchanged);
+    expect(selected).toContain(separate);
+    const shared = [production, "src/auto-reply/chunk.test.ts"];
+    expect(resolveChangedNodeTestTargets(shared, { ...options, adaptiveMarkdown: true })).toContain(
+      unchanged,
     );
+  } finally {
+    markdownQualification.commonHash = commonHash;
+    markdownQualification.tests["packages/markdown-core/src/fences.test.ts"] = testHash;
   }
 });
