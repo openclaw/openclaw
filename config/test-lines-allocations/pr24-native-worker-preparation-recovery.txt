@@ -1,0 +1,2 @@
+163
+# Preserve native prepared-worker cache identities through source recovery, drift refusal, and retention.

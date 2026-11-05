@@ -11,9 +11,11 @@ import {
   registerTestPlugin,
 } from "../../../../src/plugin-sdk/plugin-test-contracts.js";
 import { getPluginInstance } from "../../../../src/plugins/plugin-instance-scope.js";
+import { createRepositorySourceFixture } from "../../../../src/plugins/repository-source.test-support.js";
 import { createPluginRecord } from "../../../../src/plugins/status.test-helpers.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { PreparedGitHubSourceReadIdentity } from "../../read-identity-api.js";
+import { createGitHubRepositorySource } from "../../repository-source-api.js";
+import type { RepositoryReadIdentityFacts } from "../../worker-source-identity-api.js";
 
 const mocks = vi.hoisted(() => ({
   captureAgentLifecycleBinding: vi.fn(),
@@ -66,7 +68,7 @@ const admission = {
 const initial = { ...admission, repository: { agentId: "main", url: repositoryUrl } };
 
 describe("repository project admission", () => {
-  let selection: PreparedGitHubSourceReadIdentity["selection"];
+  let selection: RepositoryReadIdentityFacts;
   let token: string | undefined;
   let selected: boolean;
   let repositoryId: string;
@@ -187,6 +189,127 @@ describe("repository project admission", () => {
     vi.unstubAllGlobals();
     clearRuntimeConfigSnapshot();
   });
+
+  const nativeSnapshot = (
+    key = "5f3a252d4721416c63de96e5736650e1b83d356e31df48b7442ec4d60ea17189",
+  ) => ({
+    key,
+    baseCommit: commit,
+    source: {
+      kind: "repository" as const,
+      url: repositoryUrl,
+      repositoryId,
+      owner: { agent, identity: structuredClone(selection) },
+    },
+  });
+  // Fixed predecessor keys protect native cache identity and visibility partitioning.
+  it.each([
+    ["anonymous", false, "64a61de5d5873d98cd8e79d4ff7075197c58638f7e1696dd2ecdafa4b93b03c5"],
+    ["system-detected", false, "a64403a5856294a05363749d776f039b0ff2f044d0aae52f35facf5d9e6c8a31"],
+    ["system-detected", true, "ae7b9f4cad982c6f04cf82f6c9be1fcc995f9fe9b587ff7c0916cb177ef49fbb"],
+    [
+      "system-configured",
+      false,
+      "5f3a252d4721416c63de96e5736650e1b83d356e31df48b7442ec4d60ea17189",
+    ],
+    ["system-configured", true, "bdcbb15850d4c14b92f2de8c5a35ed274b7aa19542c50f91e2a1de1b8c672e2e"],
+    ["agent-override", false, "66187e81867665a2596fdcb34a3dede11706eef5eae8bdfe265d2b79c1b0ac56"],
+    ["agent-override", true, "b10aa1726cdf728adaa57e1a4ef5ae46cbee96c7fb2409e2f348c3372e8284ca"],
+  ] as const)("reopens a native %s snapshot (private=%s)", async (source, isPrivate, key) => {
+    selection =
+      source === "anonymous"
+        ? { source }
+        : source === "system-detected"
+          ? { source, accountId: 1 }
+          : { source, accountId: 1, profileId: `ghp_${"1".repeat(32)}` };
+    privateRepository = isPrivate;
+    if (source === "anonymous") {
+      token = undefined;
+    }
+    const expected = nativeSnapshot(key);
+    const reopened = await prepareRepositoryWorkerProjectSource({ ...admission, expected });
+    expect(reopened.project).toEqual(expected);
+    selection = { source: "system-detected", accountId: 2 };
+    await expect(reopened.revalidate()).rejects.toThrow("identity changed");
+  });
+
+  it.each(["account", "profile", "visibility", "repository", "commit", "hash", "agent"] as const)(
+    "refuses native recovery after %s drift",
+    async (change) => {
+      const expected = nativeSnapshot();
+      if (change === "account" && selection.source !== "anonymous") {
+        selection.accountId = 2;
+      } else if (change === "profile" && selection.source === "system-configured") {
+        selection.profileId = `ghp_${"2".repeat(32)}`;
+      } else if (change === "visibility") {
+        privateRepository = true;
+      } else if (change === "repository") {
+        repositoryId = "R_recreated_project";
+      } else if (change === "commit") {
+        expected.baseCommit = "e".repeat(40);
+      } else if (change === "hash") {
+        expected.key = "f".repeat(64);
+      } else if (change === "agent") {
+        mocks.matchesAgentLifecycleBindingAsync.mockResolvedValue(false);
+      }
+      await expect(
+        prepareRepositoryWorkerProjectSource({ ...admission, expected }),
+      ).rejects.toThrow("identity changed");
+    },
+  );
+
+  it.each(["retired", "unavailable", "changed URL"] as const)(
+    "does not redirect native recovery to another source when GitHub is %s",
+    async (change) => {
+      const registry = createPluginRegistryFixture();
+      const replacement = createPluginRegistryFixture();
+      let accepts = true;
+      const github = createGitHubRepositorySource(
+        () => ({}),
+        async () => {},
+      );
+      const alternatePrepare = vi.fn();
+      const canonical = createRepositorySourceFixture(
+        {
+          ...github,
+          resolve: (url) => (accepts ? github.resolve(url) : undefined),
+        },
+        registry.registry,
+        "github-repositories",
+      );
+      const alternate = {
+        ...github,
+        worker: { ...github.worker!, prepare: alternatePrepare },
+      };
+      createRepositorySourceFixture(alternate, registry.registry, "other-forge");
+      createRepositorySourceFixture(alternate, replacement.registry, "other-forge");
+      let active = registry.registry.registry;
+      const getRepositorySources = () =>
+        createRepositorySources(new AbortController().signal, active);
+      const expected = nativeSnapshot();
+      const reopened = await prepareRepositoryWorkerProjectSource({
+        ...admission,
+        getRepositorySources,
+        expected,
+      });
+      expect(reopened.project).toEqual(expected);
+      if (change === "retired") {
+        await canonical.instance.dispose();
+        await expect(reopened.revalidate()).rejects.toThrow();
+      } else if (change === "unavailable") {
+        active = replacement.registry.registry;
+      } else {
+        accepts = false;
+        expect(reopened.assertCurrent).toThrow();
+      }
+      fetchImpl.mockClear();
+      await expect(
+        prepareRepositoryWorkerProjectSource({ ...admission, getRepositorySources, expected }),
+      ).rejects.toThrow();
+      expect(alternatePrepare).not.toHaveBeenCalled();
+      expect(fetchImpl).not.toHaveBeenCalled();
+    },
+  );
 
   it("retains the recorded source of reusable capacity when another source accepts its URL", async () => {
     const host = new AbortController();
@@ -901,14 +1024,16 @@ describe("repository project admission", () => {
     expect(() =>
       readRepositoryWorkerProjectSnapshot({ ...project, token: "unpersistable" }),
     ).toThrow("invalid repository");
-    expect(() =>
-      readRepositoryWorkerProjectSnapshot({
-        ...project,
-        source: {
-          ...project.source,
-          owner: { ...project.source.owner, token: "unpersistable" },
-        },
-      }),
-    ).toThrow("invalid repository");
+    for (const owner of [
+      { ...project.source.owner, identity: { source: "anonymous" } },
+      { ...project.source.owner, token: "unpersistable" },
+    ]) {
+      expect(() =>
+        readRepositoryWorkerProjectSnapshot({
+          ...project,
+          source: { ...project.source, owner },
+        }),
+      ).toThrow("invalid repository");
+    }
   });
 });

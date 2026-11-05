@@ -4,6 +4,7 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import type { RepositorySources } from "../repository-sources.js";
 import type { PreparedPoolPresenceDemand } from "./prepared-pool-presence.types.js";
+import { repositoryWorkerSourceBinding } from "./repository-project-source.js";
 
 export async function readPreparedPoolPresenceDemand(): Promise<
   PreparedPoolPresenceDemand | undefined
@@ -23,7 +24,10 @@ export async function writePreparedPoolPresenceDemand(
   let source: ReturnType<RepositorySources["resolve"]> | undefined;
   try {
     source = value
-      ? sources?.resolve(value.project.source.url, value.project.source.repositorySourceId)
+      ? sources?.resolve(
+          value.project.source.url,
+          repositoryWorkerSourceBinding(value.project.source).sourceId,
+        )
       : undefined;
   } catch {
     throw new Error("Prepared-pool presence demand is invalid");

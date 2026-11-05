@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { nativeGitHubWorkerSourceBinding } from "../../../extensions/github-repositories/host-api.js";
 import {
   RepositoryWorkerProjectSchema,
   type RepositoryWorkerProjectSnapshot,
@@ -29,5 +30,21 @@ export function readRepositoryWorkerProjectSnapshot(
   ) {
     throw new Error("Worker environment has an invalid repository preparation snapshot");
   }
+  repositoryWorkerSourceBinding(parsed.data.source);
   return parsed.data;
+}
+
+/** Project saved source authority without changing its accepted content/cache identity. */
+export function repositoryWorkerSourceBinding(source: RepositoryWorkerProjectSnapshot["source"]) {
+  const identity = source.owner.identity;
+  if (identity.source !== "plugin") {
+    if (source.repositorySourceId !== undefined) {
+      throw new Error("Worker environment has an invalid repository preparation snapshot");
+    }
+    return nativeGitHubWorkerSourceBinding(identity);
+  }
+  if (!source.repositorySourceId) {
+    throw new Error("Worker environment has an invalid repository preparation snapshot");
+  }
+  return { sourceId: source.repositorySourceId, identityKey: identity.key };
 }

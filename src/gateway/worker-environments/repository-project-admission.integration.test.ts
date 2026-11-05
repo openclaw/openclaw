@@ -80,6 +80,29 @@ it("admits public source without a native CLI and fences later configured identi
     assertCurrent: () => {},
   });
   expect(reopened.project).toEqual(admitted.project);
+  // Upgrade recovery uses the real identity and agent owners, substituting only HTTP.
+  const nativeSnapshot = {
+    key: "efb68a57c4e6e9301090e846340f53b3e2e2bdb580b971099c7c6876af95bbfd",
+    baseCommit: commit,
+    source: {
+      kind: "repository" as const,
+      url: repositoryUrl,
+      repositoryId: "R_public_fixture",
+      owner: {
+        agent: { agentId: "public-source", provenance: null },
+        identity: { source: "anonymous" as const },
+      },
+    },
+  };
+  const recovered = await prepareRepositoryWorkerProjectSource({
+    expected: structuredClone(nativeSnapshot),
+    namespace: "public-source-test",
+    getConfig: () => config,
+    getRepositorySources: () => sources,
+    assertCurrent: () => {},
+  });
+  expect(recovered.project).toEqual(nativeSnapshot);
+  await expect(recovered.revalidate()).resolves.toBeUndefined();
   expect(admitted).not.toHaveProperty("readGitToken");
   expect(fetchMock).toHaveBeenCalled();
   await fs.writeFile(path.join(nativeConfig, "config.yml"), "{}\n");

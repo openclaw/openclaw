@@ -114,7 +114,13 @@ Existing plugins need no new registration or manifest fields. The bundled
 `github-repositories` plugin supplies the GitHub source and its account/configuration
 migration. The host keeps saved source snapshots, managed checkout storage,
 accepted checkpoints, publication receipts, and recovery; plugin code owns forge
-transport and identity policy. See [GitHub](/plugins/github#repository-integration).
+transport and identity policy. Native GitHub preparations saved before the
+cutover retain their original content keys, identity facts, and visibility
+partition. Recovery binds those snapshots only to the enabled
+`github-repositories/repositories` source and revalidates the original account,
+repository, and pinned commit; it does not rewrite the snapshot or fall back to
+another source. New preparations use plugin-owned identities. See
+[GitHub](/plugins/github#repository-integration).
 
 Managed-checkout transports can reuse `configureProjectCheckoutMaintenance` from
 `openclaw/plugin-sdk/process-runtime` when adopting an existing clone. It uses the

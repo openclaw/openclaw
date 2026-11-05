@@ -18,7 +18,7 @@ vi.mock("./repository-project-admission.js", () => ({
 describe("prepared project retention compatibility", () => {
   const fixture = usePreparedPoolFixture();
 
-  async function setup() {
+  async function setup(native = false) {
     sourceAdmission
       .mockReset()
       .mockRejectedValue(new Error("Retention must not access the repository"));
@@ -33,13 +33,17 @@ describe("prepared project retention compatibility", () => {
         kind: "repository",
         url: "https://github.com/openclaw/prepared-fixture.git",
         repositoryId: "R_prepared_fixture",
-        repositorySourceId: "repository-example/repositories",
+        repositorySourceId: "github-repositories/repositories",
         owner: {
           agent: { agentId: "main", provenance: null },
           identity: { source: "plugin", key: JSON.stringify({ source: "anonymous" }) },
         },
       },
     };
+    if (native) {
+      delete project.source.repositorySourceId;
+      project.source.owner.identity = { source: "anonymous" };
+    }
     const profileSnapshot = { settings: {}, install: "bundle", executionMode: "worker-turn" };
     const preparation = createWorkerPreparationIdentity({
       namespace: "gateway",
@@ -167,25 +171,32 @@ describe("prepared project retention compatibility", () => {
     }
   });
 
-  it("checks canonical retained contents without source admission or an allocation authority", async () => {
-    const { record, preparation, preparedProfile, owner } = await setup();
-    const retained = await owner.prepareRetention(record, preparation, fixture.abort.signal);
-    expect(retained).toBeDefined();
-    expect(retained!.isCurrent()).toBe(true);
-    expect(sourceAdmission).not.toHaveBeenCalled();
-    expect(fixture.store.get(record.environmentId)).toEqual(record);
-    expect(() =>
-      owner.assertPreparedIntentCurrent(record.profileId, {
-        providerId: record.providerId,
-        profileSnapshot: preparedProfile,
-      }),
-    ).toThrow("not owned by this lifecycle");
-  });
+  it.each([false, true])(
+    "checks retained contents (native=%s) without source admission or allocation authority",
+    async (native) => {
+      const { record, preparation, preparedProfile, owner } = await setup(native);
+      const retained = await owner.prepareRetention(record, preparation, fixture.abort.signal);
+      expect(retained).toBeDefined();
+      expect(retained!.isCurrent()).toBe(true);
+      expect(sourceAdmission).not.toHaveBeenCalled();
+      expect(fixture.store.get(record.environmentId)).toEqual(record);
+      expect(() =>
+        owner.assertPreparedIntentCurrent(record.profileId, {
+          providerId: record.providerId,
+          profileSnapshot: preparedProfile,
+        }),
+      ).toThrow("not owned by this lifecycle");
+    },
+  );
 
-  it.each(["provider", "target", "owner selection", "agent deletion"])(
-    "rejects %s drift on the next retention pass without external source authority",
-    async (mutation) => {
-      const { record, preparation, owner, providerFor } = await setup();
+  it.each(
+    ["provider", "target", "owner selection", "agent deletion"].flatMap((mutation) =>
+      [false, true].map((native) => ({ mutation, native })),
+    ),
+  )(
+    "rejects $mutation drift (native=$native) without external source authority",
+    async ({ mutation, native }) => {
+      const { record, preparation, owner, providerFor } = await setup(native);
       const retained = await owner.prepareRetention(record, preparation, fixture.abort.signal);
       expect(retained).toBeDefined();
       const unavailable = mutation === "owner selection" || mutation === "agent deletion";

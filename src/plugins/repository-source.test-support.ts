@@ -8,10 +8,11 @@ import { withPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-
 export function createRepositorySourceFixture(
   source: RepositorySourceV1,
   builder = createTestPluginRegistry(),
+  pluginId = "repository-example",
 ) {
   const record = createPluginRecord({
-    id: "repository-example",
-    source: "/synthetic/repository-example.ts",
+    id: pluginId,
+    source: `/synthetic/${pluginId}.ts`,
     origin: "global",
     enabled: true,
     configSchema: false,
@@ -28,7 +29,7 @@ export function createRepositorySourceFixture(
     registry: builder.registry,
     api,
     instance,
-    id: `repository-example/${source.id}`,
+    id: `${pluginId}/${source.id}`,
     run<T>(operation: () => T) {
       return withPluginRuntimeGatewayRequestScope(
         { pluginRegistry: builder.registry, isWebchatConnect: () => false },

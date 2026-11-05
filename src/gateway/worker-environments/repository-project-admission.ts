@@ -15,7 +15,10 @@ import {
   type EnvironmentRecipe,
   type EnvironmentRecipeEntry,
 } from "./environment-recipe.js";
-import { readRepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
+import {
+  readRepositoryWorkerProjectSnapshot,
+  repositoryWorkerSourceBinding,
+} from "./repository-project-source.js";
 import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 
 export type RepositoryProjectAdmissionRequest = {
@@ -54,13 +57,14 @@ export async function prepareRepositoryWorkerProjectSource(
   params: RepositoryProjectAdmissionRequest,
 ) {
   const expected = params.expected && readRepositoryWorkerProjectSnapshot(params.expected);
+  const expectedBinding = expected && repositoryWorkerSourceBinding(expected.source);
   const request = expected
     ? {
         agentId: expected.source.owner.agent.agentId,
         url: expected.source.url,
         baseCommit: expected.baseCommit,
         ref: undefined,
-        repositorySourceId: expected.source.repositorySourceId,
+        repositorySourceId: expectedBinding?.sourceId,
       }
     : params.repository;
   if (!request || !/^[A-Za-z0-9_-]{1,128}$/u.test(params.namespace)) {
@@ -100,11 +104,8 @@ export async function prepareRepositoryWorkerProjectSource(
     ref: request.ref,
     baseCommit: request.baseCommit,
     expected:
-      expected && expected.source.owner.identity.source === "plugin"
-        ? {
-            repositoryId: expected.source.repositoryId,
-            identityKey: expected.source.owner.identity.key,
-          }
+      expected && expectedBinding
+        ? { repositoryId: expected.source.repositoryId, identityKey: expectedBinding.identityKey }
         : undefined,
     signal: params.signal,
     assertCurrent,
@@ -119,6 +120,13 @@ export async function prepareRepositoryWorkerProjectSource(
   ) {
     throw new Error("Repository source returned invalid immutable project facts.");
   }
+  if (
+    expected &&
+    (lease.repositoryId !== expected.source.repositoryId ||
+      lease.identityKey !== expectedBinding?.identityKey)
+  ) {
+    sourceChanged();
+  }
   const assertLease = () => {
     assertCurrent();
     lease.assertCurrent();
@@ -132,8 +140,14 @@ export async function prepareRepositoryWorkerProjectSource(
     kind: "repository" as const,
     url: source.url,
     repositoryId: lease.repositoryId,
-    owner: { agent, identity: { source: "plugin" as const, key: lease.identityKey } },
-    repositorySourceId: source.id,
+    // Preserve native cache keys and owner facts; the bound plugin lease above
+    // independently verifies the original account, repository and pinned commit.
+    ...(expected && expected.source.owner.identity.source !== "plugin"
+      ? { owner: { agent, identity: expected.source.owner.identity } }
+      : {
+          owner: { agent, identity: { source: "plugin" as const, key: lease.identityKey } },
+          repositorySourceId: source.id,
+        }),
   };
   const project = readRepositoryWorkerProjectSnapshot({
     key: createHash("sha256")

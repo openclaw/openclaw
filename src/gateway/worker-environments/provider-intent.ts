@@ -24,6 +24,7 @@ import {
   requireAdmittedWorkerRetentionPolicy,
 } from "./provider-retention-policy.js";
 import { prepareRepositoryWorkerProjectSource } from "./repository-project-admission.js";
+import { repositoryWorkerSourceBinding } from "./repository-project-source.js";
 import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import * as validation from "./service-validation.js";
@@ -459,13 +460,14 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
         return true;
       }
       try {
+        const binding = repositoryWorkerSourceBinding(project.source);
         const repositorySource = options
           .getRepositorySources?.()
-          .resolve(project.source.url, project.source.repositorySourceId);
+          .resolve(project.source.url, binding.sourceId);
         return (
           repositorySource?.isWorkerIdentityCurrent({
             agentId: project.source.owner.agent.agentId,
-            identity: project.source.owner.identity,
+            identity: { source: "plugin", key: binding.identityKey },
           }) ?? false
         );
       } catch {

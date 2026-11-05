@@ -15,6 +15,7 @@ import type { GatewayRequestContext } from "../server-methods/types.js";
 
 const { createGitHubRepositorySource } = await loadBundledPluginFacade<{
   createGitHubRepositorySource(
+    this: void,
     getRuntimeConfig: () => OpenClawConfig,
     refresh: (agentId: string) => Promise<void>,
   ): RepositorySourceV1;
@@ -27,6 +28,8 @@ export function createRepositorySourcesFixture(
   const lifetime = new AbortController();
   const fixture = createRepositorySourceFixture(
     createGitHubRepositorySource(getConfig, async () => {}),
+    undefined,
+    "github-repositories",
   );
   const sources = createRepositorySources(lifetime.signal, fixture.registry);
   onTestFinished(() => lifetime.abort());
