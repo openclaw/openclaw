@@ -116,6 +116,11 @@ runs:
             ;;
         esac
 
+    - name: Prepare Git capabilities
+      if: runner.os == 'Linux'
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/ensure-git.sh"
+
     - name: Prepare semantic check containment
       if: runner.os == 'Linux' && inputs.semantic-checks == 'true'
       shell: bash
