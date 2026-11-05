@@ -57,7 +57,7 @@ final class DashboardBrowserTab {
 
     func trackNavigation(_ navigation: WKNavigation?) {
         guard let navigation else { return }
-        self.pendingNavigation = (navigation, false)
+        self.pendingNavigation = self.webView.isLoading ? (navigation, false) : nil
     }
 
     func stopLoading() {
@@ -154,7 +154,12 @@ final class DashboardBrowserTab {
     func observeNavigationState(onChange: @escaping @MainActor () -> Void) {
         // KVO catches late WebKit updates and same-document SPA navigation.
         self.observations = [\WKWebView.canGoBack, \.canGoForward, \.isLoading].map { keyPath in
-            self.webView.observe(keyPath, options: [.new]) { _, _ in
+            self.webView.observe(keyPath, options: [.new]) { [weak self] webView, _ in
+                // Same-document loads finish through KVO, without navigation delegates.
+                // WebKit notifies on the main thread; retire before another page action.
+                MainActor.assumeIsolated {
+                    if !webView.isLoading { self?.pendingNavigation = nil }
+                }
                 Task { @MainActor in onChange() }
             }
         } + [

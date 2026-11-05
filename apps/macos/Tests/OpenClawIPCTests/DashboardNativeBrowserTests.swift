@@ -560,69 +560,14 @@ struct DashboardNativeBrowserHostTests {
     }
 }
 
-@Suite(.serialized, .timeLimit(.minutes(1)))
 @MainActor
-struct DashboardNativeBrowserFaviconTests {
-    private static let favicon = "data:image/png;base64," +
+private enum DashboardArticleFixture {
+    static let favicon = "data:image/png;base64," +
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
 
-    @Test func `navigations that keep the displayed page keep its favicon`() async throws {
-        let unreachable = try await DashboardHTTPFixture.start()
-        let unreachableURL = unreachable.url("/gone")
-        unreachable.stop()
-        let server = try await Self.server()
-        defer { server.stop() }
-        let controller = Self.controller(server)
-        defer { controller.closeDashboard() }
-        try controller.nativeBrowser.open(tabId: "mac-article", url: server.url("/article"), sessionKey: "")
-        let article = try #require(controller.nativeBrowser.webView(for: "mac-article"))
-
-        for trigger in ["fragment", "unreachable", "cancelled"] {
-            try controller.nativeBrowser.navigate(tabId: "mac-article", url: server.url("/article"))
-            try await TestWait.state("article favicon before \(trigger)") {
-                !article.isLoading && controller.nativeBrowser.state.tabs.first?.favicon == Self.favicon
-            }
-            if trigger == "fragment" {
-                _ = try await article.evaluateJavaScript("document.getElementById('jump').click(); true")
-                try await TestWait.state("fragment navigation") { article.url?.fragment == "section" }
-            } else {
-                try controller.nativeBrowser.navigate(
-                    tabId: "mac-article",
-                    url: trigger == "unreachable" ? unreachableURL : server.url("/archive.bin"))
-                try #require(article.isLoading)
-                try await TestWait.state("\(trigger) navigation ends") { !article.isLoading }
-                #expect(article.url?.path == "/article")
-            }
-            #expect(controller.nativeBrowser.state.tabs.first?.favicon == Self.favicon, "\(trigger)")
-        }
-    }
-
-    @Test func `replacement documents drop the previous page's favicon, including history restores`() async throws {
-        let server = try await Self.server()
-        defer { server.stop() }
-        let controller = Self.controller(server)
-        defer { controller.closeDashboard() }
-        try controller.nativeBrowser.open(tabId: "mac-article", url: server.url("/article"), sessionKey: "")
-        let article = try #require(controller.nativeBrowser.webView(for: "mac-article"))
-        try await TestWait.state("article favicon") {
-            controller.nativeBrowser.state.tabs.first?.favicon == Self.favicon
-        }
-
-        try controller.nativeBrowser.navigate(tabId: "mac-article", url: server.url("/plain"))
-        try await TestWait.state("plain page") { !article.isLoading && article.url?.path == "/plain" }
-        #expect(controller.nativeBrowser.state.tabs.first?.favicon == nil)
-
-        article.goBack()
-        try await TestWait.state("article favicon after back") {
-            !article.isLoading && controller.nativeBrowser.state.tabs.first?.favicon == Self.favicon
-        }
-        article.goForward()
-        try await TestWait.state("plain page after forward") { !article.isLoading && article.url?.path == "/plain" }
-        #expect(controller.nativeBrowser.state.tabs.first?.favicon == nil)
-    }
-
-    private static func server() async throws -> DashboardHTTPFixture {
+    static func server(port: UInt16 = 0) async throws -> DashboardHTTPFixture {
         try await DashboardHTTPFixture.start(
+            port: port,
             html: """
             <!doctype html><html><head><title>Article</title><link rel="icon" href="\(self.favicon)"></head>
             <body><a id="jump" href="#section">Section</a><h2 id="section">Section</h2></body></html>
@@ -640,6 +585,66 @@ struct DashboardNativeBrowserFaviconTests {
                         "Connection: close\r\n\r\n\(body)").utf8))
             })
     }
+}
+
+@Suite(.serialized, .timeLimit(.minutes(1)))
+@MainActor
+struct DashboardNativeBrowserFaviconTests {
+    @Test func `navigations that keep the displayed page keep its favicon`() async throws {
+        let unreachable = try await DashboardHTTPFixture.start()
+        let unreachableURL = unreachable.url("/gone")
+        unreachable.stop()
+        let server = try await DashboardArticleFixture.server()
+        defer { server.stop() }
+        let controller = Self.controller(server)
+        defer { controller.closeDashboard() }
+        try controller.nativeBrowser.open(tabId: "mac-article", url: server.url("/article"), sessionKey: "")
+        let article = try #require(controller.nativeBrowser.webView(for: "mac-article"))
+
+        for trigger in ["fragment", "unreachable", "cancelled"] {
+            try controller.nativeBrowser.navigate(tabId: "mac-article", url: server.url("/article"))
+            try await TestWait.state("article favicon before \(trigger)") {
+                !article.isLoading && controller.nativeBrowser.state.tabs.first?.favicon == DashboardArticleFixture
+                    .favicon
+            }
+            if trigger == "fragment" {
+                _ = try await article.evaluateJavaScript("document.getElementById('jump').click(); true")
+                try await TestWait.state("fragment navigation") { article.url?.fragment == "section" }
+            } else {
+                try controller.nativeBrowser.navigate(
+                    tabId: "mac-article",
+                    url: trigger == "unreachable" ? unreachableURL : server.url("/archive.bin"))
+                try #require(article.isLoading)
+                try await TestWait.state("\(trigger) navigation ends") { !article.isLoading }
+                #expect(article.url?.path == "/article")
+            }
+            #expect(controller.nativeBrowser.state.tabs.first?.favicon == DashboardArticleFixture.favicon, "\(trigger)")
+        }
+    }
+
+    @Test func `replacement documents drop the previous page's favicon, including history restores`() async throws {
+        let server = try await DashboardArticleFixture.server()
+        defer { server.stop() }
+        let controller = Self.controller(server)
+        defer { controller.closeDashboard() }
+        try controller.nativeBrowser.open(tabId: "mac-article", url: server.url("/article"), sessionKey: "")
+        let article = try #require(controller.nativeBrowser.webView(for: "mac-article"))
+        try await TestWait.state("article favicon") {
+            controller.nativeBrowser.state.tabs.first?.favicon == DashboardArticleFixture.favicon
+        }
+
+        try controller.nativeBrowser.navigate(tabId: "mac-article", url: server.url("/plain"))
+        try await TestWait.state("plain page") { !article.isLoading && article.url?.path == "/plain" }
+        #expect(controller.nativeBrowser.state.tabs.first?.favicon == nil)
+
+        article.goBack()
+        try await TestWait.state("article favicon after back") {
+            !article.isLoading && controller.nativeBrowser.state.tabs.first?.favicon == DashboardArticleFixture.favicon
+        }
+        article.goForward()
+        try await TestWait.state("plain page after forward") { !article.isLoading && article.url?.path == "/plain" }
+        #expect(controller.nativeBrowser.state.tabs.first?.favicon == nil)
+    }
 
     private static func controller(_ server: DashboardHTTPFixture) -> DashboardWindowController {
         DashboardWindowController(
@@ -654,9 +659,6 @@ struct DashboardNativeBrowserFaviconTests {
 @Suite(.serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct DashboardNativeBrowserFailureTests {
-    private static let favicon = "data:image/png;base64," +
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
-
     @Test func `a failed first load explains the failure and Reload retries the attempted URL`() async throws {
         let (port, attempted) = try await Self.releasedEndpoint("/article")
         let dashboard = try await DashboardHTTPFixture.start()
@@ -689,7 +691,7 @@ struct DashboardNativeBrowserFailureTests {
 
     @Test func `a failed navigation from a loaded page keeps its favicon and toolbar Reload retries it`() async throws {
         let (port, attempted) = try await Self.releasedEndpoint("/article")
-        let server = try await Self.server()
+        let server = try await DashboardArticleFixture.server()
         defer { server.stop() }
         let controller = Self.controller(server)
         defer { controller.closeDashboard() }
@@ -697,7 +699,7 @@ struct DashboardNativeBrowserFailureTests {
         let webView = try #require(controller.nativeBrowser.webView(for: "mac-article"))
         let browser = try #require(controller.nativeBrowser.browserTab(for: webView))
         try await TestWait.state("loaded article") {
-            !webView.isLoading && controller.nativeBrowser.state.tabs.first?.favicon == Self.favicon
+            !webView.isLoading && controller.nativeBrowser.state.tabs.first?.favicon == DashboardArticleFixture.favicon
         }
 
         try controller.nativeBrowser.navigate(tabId: "mac-article", url: attempted)
@@ -705,7 +707,7 @@ struct DashboardNativeBrowserFailureTests {
         #expect(webView.url == server.url("/article"))
         let failed = try #require(controller.nativeBrowser.state.tabs.first)
         #expect(failed.url == attempted.absoluteString)
-        #expect(failed.favicon == Self.favicon)
+        #expect(failed.favicon == DashboardArticleFixture.favicon)
 
         let revived = try await Self.reclaim(port)
         defer { revived.stop() }
@@ -717,9 +719,9 @@ struct DashboardNativeBrowserFailureTests {
         #expect(webView.canGoBack)
     }
 
-    @Test(arguments: ["download", "stop", "stop-before-start", "replacement"])
+    @Test(arguments: ["download", "stop", "stop-before-start", "stop-after-fragment", "replacement"])
     func `deliberate interruptions keep the page without failure UI`(_ trigger: String) async throws {
-        let server = try await Self.server()
+        let server = try await DashboardArticleFixture.server()
         defer { server.stop() }
         let requestReceived = AsyncTestGate()
         let stalled = try await DashboardHTTPFixture.start(beforeResponse: {
@@ -738,7 +740,14 @@ struct DashboardNativeBrowserFailureTests {
         switch trigger {
         case "download": try controller.nativeBrowser.navigate(tabId: "mac-article", url: server.url("/archive.bin"))
         default:
-            try controller.nativeBrowser.navigate(tabId: "mac-article", url: stalled.url("/pending"))
+            if trigger == "stop-after-fragment" {
+                try controller.nativeBrowser.navigate(tabId: "mac-article", url: server.url("/article#section"))
+                try await TestWait
+                    .state("fragment navigation") { webView.url?.fragment == "section" && !webView.isLoading }
+                _ = try await webView.evaluateJavaScript("location.href = '\(stalled.url("/pending"))'; true")
+            } else {
+                try controller.nativeBrowser.navigate(tabId: "mac-article", url: stalled.url("/pending"))
+            }
             if trigger != "stop-before-start" { try await requestReceived.wait("request reaches the stalled server") }
             switch trigger {
             case "replacement": try controller.nativeBrowser.navigate(tabId: "mac-article", url: server.url("/plain"))
@@ -863,31 +872,10 @@ struct DashboardNativeBrowserFailureTests {
     private static func reclaim(_ port: UInt16) async throws -> DashboardHTTPFixture {
         var revived: DashboardHTTPFixture?
         try await TestWait.state("released endpoint accepts again") {
-            revived = try? await self.server(port: port)
+            revived = try? await DashboardArticleFixture.server(port: port)
             return revived != nil
         }
         return try #require(revived)
-    }
-
-    private static func server(port: UInt16 = 0) async throws -> DashboardHTTPFixture {
-        try await DashboardHTTPFixture.start(
-            port: port,
-            html: """
-            <!doctype html><html><head><title>Article</title><link rel="icon" href="\(self.favicon)"></head>
-            <body>Article</body></html>
-            """,
-            contentSecurityPolicy: "default-src 'none'; img-src data:; connect-src data:",
-            rawResponseHandler: { request in
-                let responses = [
-                    "/archive.bin": ("application/octet-stream", "PK\u{3}\u{4}"),
-                    "/plain": ("text/html", "<!doctype html><title>Plain</title>"),
-                ]
-                guard let (type, body) = responses.first(where: { request.hasPrefix("GET \($0.key) ") })?.value
-                else { return nil }
-                return .init(data: Data((
-                    "HTTP/1.1 200 OK\r\nContent-Type: \(type)\r\nContent-Length: \(body.utf8.count)\r\n" +
-                        "Connection: close\r\n\r\n\(body)").utf8))
-            })
     }
 
     private static func controller(_ server: DashboardHTTPFixture) -> DashboardWindowController {
