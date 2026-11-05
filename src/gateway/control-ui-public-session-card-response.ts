@@ -35,6 +35,7 @@ export async function servePublicSessionCardRepresentation(params: {
 }): Promise<true> {
   const { res, config, gate, locator, projection, card } = params;
   const result = await gate.run({
+    kind: "card",
     publicationKey: locator.shareId,
     sessionKey: locator.sessionKey,
     config,

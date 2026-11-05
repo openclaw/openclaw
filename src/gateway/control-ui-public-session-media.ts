@@ -94,6 +94,7 @@ export async function serveControlUiPublicSessionMedia(params: {
       return unavailable(503);
     }
     const result = await gate.run({
+      kind: "transcript",
       publicationKey: locator.shareId,
       sessionKey: locator.sessionKey,
       config,
