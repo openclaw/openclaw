@@ -51,7 +51,9 @@ export function projectChatPositions(
       markers.set(id, { id, role, anchorId: messageId, message });
     }
     markerIdsByMessageId.set(messageId, id);
-    messageRowKeysById.set(messageId, rowKey);
+    if (!messageRowKeysById.has(messageId)) {
+      messageRowKeysById.set(messageId, rowKey);
+    }
   };
   const group = (item: MessageGroup, rowKey: string) => {
     if (

@@ -26,6 +26,7 @@ import {
   filterFilesByPatterns,
   isPlainRepoRelativePath,
 } from "../../test/vitest/vitest.include-patterns.ts";
+import { markdownTestFiles } from "../../test/vitest/vitest.markdown-paths.mjs";
 import {
   autoReplyCoreTestInclude,
   autoReplyCoreTestExclude,
@@ -151,6 +152,7 @@ const CONFIG_FILE_OWNERS = new Map<string, Parameters<typeof listScopedOwnerTest
   ],
 ]);
 const EXACT_CONFIG_FILES = new Map<string, string[]>([
+  ["test/vitest/vitest.markdown.config.ts", markdownTestFiles],
   ["test/vitest/vitest.boundary.config.ts", boundaryTestFiles],
   ["test/vitest/vitest.tui-pty.config.ts", tuiPtyTestFiles],
   ["test/vitest/vitest.gateway-server-isolated.config.ts", gatewayServerIsolatedTestFiles],
@@ -184,6 +186,7 @@ const WHOLE_CONFIG_FILE_OWNERS = new Map<
   string,
   { listFiles: () => string[]; splitByFile?: false }
 >([
+  ["core-markdown", { listFiles: () => markdownTestFiles }],
   [
     "agentic-agents-tools",
     {

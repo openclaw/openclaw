@@ -82,6 +82,7 @@ const enCron = {
       deliverySection: "Delivery",
       active: "Active",
       paused: "Paused",
+      autoDisabled: "Auto-disabled",
     },
     actions: {
       runNow: "Start now",
@@ -95,6 +96,18 @@ const enCron = {
       removeConfirmMessage:
         "This deletes the automation and stops future activity. This can’t be undone.",
       moreJob: "More actions for {name}",
+    },
+
+    attention: {
+      title: "Run failed",
+      autoDisabledTitle: "Automatically stopped",
+      causeUnknown:
+        "No failure details were recorded. Review the run history for available evidence.",
+      nextRun: "Next run is scheduled for {time}.",
+      noNextRun: "No further run is scheduled.",
+      running: "A new run is in progress. Review its outcome before starting another run.",
+      effectsUnknown: "Check for completed actions before running again.",
+      reviewRun: "Review run",
     },
 
     jobs: {
@@ -352,7 +365,6 @@ const enCron = {
       transcriptUnavailable:
         "Couldn’t identify this conversation. Refresh the activity history and try again.",
       next: "Next {rel}",
-      due: "Due {rel}",
     },
     events: {
       label: "Event",

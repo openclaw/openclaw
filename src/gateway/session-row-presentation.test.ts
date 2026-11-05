@@ -1,6 +1,9 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { SESSION_ROWS_DELTA_PREFIX } from "../../packages/gateway-protocol/src/session-row-fields.js";
+import {
+  expandSessionRowFacts,
+  SESSION_ROWS_DELTA_PREFIX,
+} from "../../packages/gateway-protocol/src/session-row-fields.js";
 import * as processes from "../agents/bash-process-registry.js";
 import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
@@ -220,6 +223,69 @@ it("does not derive discarded diagnostics while interleaving row modes and viewe
         })
       ).sessions,
     ).toEqual([]);
+  });
+});
+
+it("propagates stored child activity through idle ancestors and clears it on settlement", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const keys = [
+      "agent:main:dashboard:waiting-root",
+      "agent:main:subagent:waiting-child",
+      "agent:main:subagent:waiting-grandchild",
+      "agent:main:subagent:working-leaf",
+    ];
+    const entries = keys.map((key, index) => ({
+      sessionId: key,
+      updatedAt: Date.now(),
+      status: "done" as const,
+      ...(index > 0 ? { spawnedBy: keys[index - 1], parentSessionKey: keys[index - 1] } : {}),
+    }));
+    keys.forEach((key, index) => seedRow(key, entries[index]!));
+    using projection = await createTestProjection({ cfg: {}, modelCatalog: [] });
+    const read = async (search?: string) => {
+      const result = await listProjectedSessions({
+        projection,
+        opts: { rowMode: "sidebar", search },
+      });
+      return expandSessionRowFacts(result.sessions, result.sharedFacts);
+    };
+    const activity = async () => {
+      const rows = await read();
+      return keys.map((key) => rows.find((row) => row.key === key)!.hasActiveSubagentRun === true);
+    };
+    const work = (index: number, runId: string) => {
+      const claim = claimAgentRunContext(
+        runId,
+        {
+          sessionKey: keys[index],
+          sessionId: keys[index],
+          agentId: "main",
+          projectSessionActive: true,
+        },
+        { trackOwner: true, ownsContext: true },
+      );
+      if (!claim) {
+        throw new Error("Expected an active execution claim");
+      }
+      return { [Symbol.dispose]: () => releaseAgentRunContext(runId, claim) };
+    };
+    {
+      using _ = work(1, "direct-work");
+      expect((await read("waiting-root"))[0]?.hasActiveSubagentRun).toBe(true);
+    }
+    {
+      using _ = work(3, "nested-work");
+      // Present only the ancestor first: no intermediate UI row needs to be loaded.
+      expect((await read("waiting-root"))[0]?.hasActiveSubagentRun).toBe(true);
+      expect((await activity()).slice(0, 3)).toEqual([true, true, true]);
+      expect(
+        (await read()).filter((row) => row.key !== keys[3]).some((row) => row.hasActiveRun),
+      ).toBe(false);
+    }
+    expect(await activity()).toEqual([false, false, false, false]);
+    // Malformed stored cycles neither invent activity nor recurse forever.
+    seedRow(keys[0]!, { ...entries[0]!, spawnedBy: keys[3] });
+    expect(await activity()).toEqual([false, false, false, false]);
   });
 });
 

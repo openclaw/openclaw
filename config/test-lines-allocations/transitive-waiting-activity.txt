@@ -1,0 +1,3 @@
+# Stored-child activity regression through the public sidebar row presenter;
+# includes the typed fixture-owner cutover. No shared scalar change.
+70
