@@ -811,6 +811,39 @@ describe("agentCommand compaction transcript rotation", () => {
     expect(storedEntry?.pendingFinalDelivery).toBeUndefined();
   });
 
+  it("keeps the CLI backend as compaction owner after a failed turn clears its winner", async () => {
+    const sessionId = "cli-cleared-winner";
+    const failed = makeResult({ sessionId, text: "reply delivered before the empty retry" });
+    // Shape of a claude-cli turn settled as incomplete; the failed terminal clears its winner.
+    failed.meta.stopReason = "error";
+    failed.meta.error = {
+      kind: "incomplete_turn",
+      message: "CLI backend returned an empty response.",
+      fallbackSafe: false,
+    };
+    failed.meta.executionTrace = {
+      runner: "cli",
+      cliBackendId: "claude-cli",
+      winnerProvider: "claude-cli",
+      winnerModel: "claude-opus-5-5",
+      attempts: [{ provider: "claude-cli", model: "claude-opus-5-5", result: "surface_error" }],
+      fallbackUsed: false,
+    };
+    state.runAgentAttemptMock.mockResolvedValueOnce(failed);
+
+    await agentCommand({
+      message: "wake",
+      sessionId,
+      sessionKey: `agent:main:explicit:${sessionId}`,
+    });
+
+    expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledOnce();
+    expect(state.runCliTurnCompactionLifecycleMock.mock.calls[0]?.[0]).toMatchObject({
+      provider: "openai",
+      cliBackendId: "claude-cli",
+    });
+  });
+
   it("resumes the next turn from the rotated successor", async () => {
     const storePath = requireStorePath();
     const sessionKey = "agent:main:explicit:old-session";
