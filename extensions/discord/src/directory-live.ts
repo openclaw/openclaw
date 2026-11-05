@@ -6,7 +6,7 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
 import { resolveDiscordAccount } from "./accounts.js";
 import { DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS, fetchDiscord } from "./api.js";
 import { rememberDiscordDirectoryUser } from "./directory-cache.js";
-import { normalizeDiscordSlug } from "./monitor/allow-list.js";
+import { normalizeDiscordDisplaySlug } from "./monitor/allow-list.js";
 import { normalizeDiscordToken } from "./token.js";
 
 type DiscordGuild = { id: string; name: string };
@@ -46,6 +46,7 @@ async function listDiscordDirectoryLive(
     return [];
   }
   const { token, query, accountId } = access;
+  const channelQuery = normalizeDiscordDisplaySlug(query);
   const guilds = await listDiscordGuilds(token);
   const rows: ChannelDirectoryEntry[] = [];
   const seenUserIds = new Set<string>();
@@ -64,7 +65,7 @@ async function listDiscordDirectoryLive(
         if (!name) {
           continue;
         }
-        if (query && !normalizeDiscordSlug(name).includes(normalizeDiscordSlug(query))) {
+        if (channelQuery && !normalizeDiscordDisplaySlug(name).includes(channelQuery)) {
           continue;
         }
         rows.push({
