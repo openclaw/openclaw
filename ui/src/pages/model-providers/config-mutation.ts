@@ -311,11 +311,16 @@ export async function runModelProviderConfigMutation(
   }
 }
 
-/** Credential writes share config serialization and retain acknowledged success during refresh. */
+/**
+ * Credential writes share config serialization and retain acknowledged success during refresh.
+ * A saved key is then checked against its provider while the form stays busy, so the message
+ * the user sees is the check's outcome rather than a save receipt for a key that doesn't work.
+ */
 export async function runModelProviderApiKeyMutation(
   owner: ModelProviderConfigMutationOwner & {
     canMutate: () => boolean;
     refreshProviders: () => Promise<string | null>;
+    checkSavedKey: () => Promise<ModelProviderRowMessage | null>;
   },
   params: {
     client: GatewayBrowserClient;
@@ -324,7 +329,7 @@ export async function runModelProviderApiKeyMutation(
     apiKey: string;
     success: string;
   },
-): Promise<{ ok: false } | { ok: true; warning: string | null }> {
+): Promise<{ ok: false } | { ok: true; warning: string | null; verified: boolean }> {
   const isCurrent = () => owner.isCurrentClient() && owner.isCurrentAgent();
   owner.setBusy(true);
   owner.setMessage(null);
@@ -355,8 +360,14 @@ export async function runModelProviderApiKeyMutation(
     if (!isCurrent()) {
       return { ok: false };
     }
-    owner.setMessage({ kind: "success", text: params.success, ...(warning ? { warning } : {}) });
-    return { ok: true, warning };
+    const checked = await owner.checkSavedKey();
+    if (!isCurrent()) {
+      return { ok: false };
+    }
+    const message = checked ?? { kind: "success" as const, text: params.success };
+    const warnings = [message.warning, warning].filter(Boolean).join(" ");
+    owner.setMessage({ ...message, ...(warnings ? { warning: warnings } : {}) });
+    return { ok: true, warning, verified: message.kind === "success" };
   } finally {
     if (isCurrent()) {
       owner.setBusy(false);
