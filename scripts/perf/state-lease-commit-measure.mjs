@@ -14,7 +14,6 @@
  * The 1GiB payload and 10k retained lease rows
  * exercise a populated state store; no agent DB or workspace scan is involved.
  */
-/* eslint-disable unicorn/require-post-message-target-origin -- Node worker ports have no browser target origin. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -208,7 +207,7 @@ if (!isMainThread) {
       ).run(expiresAt);
       scheduler.schedule(gateway, expiresAt);
       scheduler.schedule(entry, expiresAt);
-      parentPort.postMessage({ ready: true, synchronous, journalMode, autoCheckpointPages });
+      parentPort.postMessage({ ready: true, synchronous, journalMode, autoCheckpointPages }, []);
     } else if (message === "stop") {
       started = false;
       for (const timer of retries) {
@@ -221,17 +220,20 @@ if (!isMainThread) {
       const { profile } = await inspector.post("HeapProfiler.stopSampling");
       inspector.disconnect();
       db.close();
-      parentPort.postMessage({
-        done: true,
-        commits,
-        failures,
-        contentions,
-        errors,
-        expired,
-        durations,
-        cpuMs: cpuMs(used),
-        sampledBytes: sampledBytes(profile),
-      });
+      parentPort.postMessage(
+        {
+          done: true,
+          commits,
+          failures,
+          contentions,
+          errors,
+          expired,
+          durations,
+          cpuMs: cpuMs(used),
+          sampledBytes: sampledBytes(profile),
+        },
+        [],
+      );
       parentPort.close();
     }
   }
@@ -255,7 +257,7 @@ if (!isMainThread) {
       worker.once("error", reject);
     });
   let ready = nextMessage();
-  worker.postMessage("start");
+  worker.postMessage("start", []);
   ready = await ready;
   assert(ready.ready && ready.synchronous === 2 && ready.journalMode === "wal");
   fs.writeFileSync(marker, "1");
@@ -282,7 +284,7 @@ if (!isMainThread) {
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
   inspector.disconnect();
   const done = nextMessage();
-  worker.postMessage("stop");
+  worker.postMessage("stop", []);
   const renewal = await done;
   fs.rmSync(marker);
   db.close();
