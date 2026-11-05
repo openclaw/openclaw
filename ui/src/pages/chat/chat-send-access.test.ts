@@ -69,7 +69,7 @@ it.each(["access", "recovery", "session"])("retains the composer behind %s", asy
   expect(host.request).not.toHaveBeenCalled();
   const error =
     hold === "session" ? "Couldn’t open the active session. Refresh and try again." : earlierError;
-  expect(host).toMatchObject({ chatError: error, lastError: error ?? null });
+  expect([host.chatError, host.lastError]).toEqual([error, error ?? null]);
   if (hold === "recovery") {
     readiness!.mockReturnValue(true);
     await handleSendChat(host);

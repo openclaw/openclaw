@@ -599,6 +599,13 @@ if (runtimePullRequest && runNodeFull) {
     includeReleaseOnlyRuntimeTests,
     includePrExemptRuntimeTests,
     selectionMode: nodeSelectionMode,
+    adaptiveMarkdown:
+      isCanonicalRepository &&
+      compactPullRequest &&
+      !releaseGate &&
+      !frozenTarget &&
+      !compatibilityTarget &&
+      nodeSelectionMode === "aggressive",
     onSelection: (selection) => nodeSelectionReasons.push(selection),
   });
 }
@@ -1959,6 +1966,10 @@ if (hybridHostedEligible) {
     "check-docs": count(manifest.run_check_docs),
     "postgres-conformance": count(manifest.run_postgres_conformance, 3),
     "skills-python": count(manifest.run_skills_python_job),
+    "checks-windows": count(
+      manifest.run_checks_windows,
+      manifest.checks_windows_matrix.include.length,
+    ),
     "macos-node": count(manifest.run_macos_node, manifest.macos_node_matrix.include.length),
     "macos-swift": count(manifest.run_macos_swift, 2),
     "ios-build": count(manifest.run_ios_build),
@@ -2134,6 +2145,13 @@ if (process.env.GITHUB_STEP_SUMMARY) {
     );
   }
   if (selectedTestTargets) {
+    const adaptiveOmissions = [
+      ...new Set(
+        nodeSelectionReasons
+          .filter(({ rule }) => rule === "adaptive-qualified-unchanged")
+          .flatMap(({ targets }) => targets),
+      ),
+    ];
     /** @type {Map<string, Set<string>>} */
     const reasons = new Map();
     for (const { rule, targets } of nodeSelectionReasons) {
@@ -2149,6 +2167,9 @@ if (process.env.GITHUB_STEP_SUMMARY) {
       `### PR Node test selection (${nodeSelectionMode})\n\n` +
         `Selected ${selectedTestTargets.length} files; ${changedNodeTestShards?.filter((shard) => !shard.requiresDist).length ?? 0} Node rows. ` +
         "Set repository variable `OPENCLAW_CI_NODE_SELECTION=full` to restore the previous selection.\n\n" +
+        (adaptiveOmissions.length
+          ? `Adaptive Markdown pilot omitted ${adaptiveOmissions.length} unchanged qualified tests. Scheduled and release runs retain the full suite.\n\n<details><summary>Omitted Markdown tests</summary>\n<pre>${adaptiveOmissions.map(escapeSummaryHtml).join("\n")}</pre>\n</details>\n\n`
+          : "") +
         "<details><summary>Selected files and selection rules</summary>\n<pre>" +
         selectedTestTargets
           .map((file) =>

@@ -159,7 +159,7 @@ it("preserves source and reports copy failure", async () => {
   const imageUrl = await waitForImage(element!);
 
   expect(renderSvg).toHaveBeenCalledWith(original, expect.objectContaining({ darkMode: false }));
-  expect(action(element!, "Expand diagram").disabled).toBe(false);
+  expect(element!.querySelector("button.preview[title]")).toBeNull();
   await selectAction(element!, "Show source");
   await expectCopyableSource(element, original, false);
   expect(mountMermaidBlocks(container)).toBe(false);
@@ -331,7 +331,7 @@ it("keeps escaped metadata as text and replaces expanded alternatives with their
   );
   const { element } = await mount("Escaped metadata");
   await waitForImage(element);
-  await selectAction(element, "Expand diagram");
+  element.querySelector<HTMLButtonElement>("button.preview")!.click();
   const viewer = await expanded(element, title);
   const expandedDescription = () =>
     document.getElementById(viewer.querySelector("img")?.getAttribute("aria-describedby") ?? "");

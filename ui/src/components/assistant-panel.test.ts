@@ -723,7 +723,6 @@ describe("assistant panel", () => {
       ),
     ).toThrow("Couldn’t open the session dock. Reopen the Control UI and try again.");
     openReview(currentContext.assistantDock);
-    await panel.updateComplete;
-    expect(home(panel)?.sessionKey).toBe("agent:research:review");
+    await vi.waitFor(() => expect(home(panel)?.sessionKey).toBe("agent:research:review"));
   });
 });

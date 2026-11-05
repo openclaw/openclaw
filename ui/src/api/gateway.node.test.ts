@@ -555,15 +555,9 @@ describe("GatewayBrowserClient", () => {
     async ({ name, message, code, reason, guidance }) => {
       vi.useFakeTimers();
       const onClose = vi.fn();
-      vi.stubGlobal(
-        "WebSocket",
-        class {
-          static OPEN = 1;
-          constructor() {
-            throw Object.assign(new Error(message), { name });
-          }
-        },
-      );
+      vi.stubGlobal("WebSocket", function () {
+        throw Object.assign(new Error(message), { name });
+      });
       const client = createClient({
         url: "ws://gateway.example:18789",
         token: "shared-auth-token",
@@ -580,6 +574,7 @@ describe("GatewayBrowserClient", () => {
           details: { code, browserErrorName: name, browserMessage: message },
         },
       });
+      expect(wsInstances).toHaveLength(0);
       await vi.advanceTimersByTimeAsync(30_000);
       expect(onClose).toHaveBeenCalledTimes(1);
     },

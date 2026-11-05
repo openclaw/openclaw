@@ -197,15 +197,16 @@ it("drags passive header chrome while keeping changing tabs and controls interac
 
 it("activates the Browser panel before selecting a hosted id containing colons", async () => {
   const { region, panel, page, layout } = await mount();
+  const select = panel.selectHostedTab;
   await layout(activatePanel(region.layout, "workspace"));
   page(secondTab.id).click();
   expect(region.callbacks!.activatePanel).toHaveBeenCalledExactlyOnceWith("browser");
-  expect(panel.selectHostedTab).toHaveBeenCalledExactlyOnceWith("native:page:2");
-  expect(region.callbacks!.activatePanel).toHaveBeenCalledBefore(panel.selectHostedTab);
+  expect(select).toHaveBeenCalledExactlyOnceWith(secondTab.id, expect.any(MouseEvent));
+  expect(region.callbacks!.activatePanel).toHaveBeenCalledBefore(select);
   await layout(activatePanel(region.layout, "browser"));
   page(secondTab.id).click();
   expect(region.callbacks!.activatePanel).toHaveBeenCalledTimes(1);
-  expect(panel.selectHostedTab).toHaveBeenCalledTimes(2);
+  expect(select).toHaveBeenCalledTimes(2);
 });
 
 it.each([false, true])("closes pages before the empty panel (native=%s)", async (native) => {
@@ -291,6 +292,7 @@ it.each([
 );
 
 it("presents non-browser hosted tabs with their title, status, badge and class", async () => {
+  const onActivate = vi.fn();
   const { page, icon } = await mount({
     slot: "terminal",
     tabs: [
@@ -299,6 +301,7 @@ it("presents non-browser hosted tabs with their title, status, badge and class",
         statusLabel: "Exited (0)",
         badge: "agent",
         className: "is-exited",
+        onActivate,
       }),
     ],
   });
@@ -307,6 +310,8 @@ it("presents non-browser hosted tabs with their title, status, badge and class",
   expect(tab.querySelector(".tabstrip-tab__status")?.textContent).toBe("Exited (0)");
   expect(tab.querySelector(".tabstrip-tab__badge")?.textContent).toBe("agent");
   expect(tab.classList.contains("is-exited")).toBe(true);
+  tab.click();
+  expect(onActivate).toHaveBeenCalledOnce();
   expect(icon("shell:1", 'polyline[points="4 17 10 11 4 5"]')).not.toBeNull();
 });
 

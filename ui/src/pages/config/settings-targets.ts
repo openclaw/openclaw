@@ -459,7 +459,7 @@ export const SETTINGS_SEARCH_TARGETS = {
       "configView.notifications.nativeTitle",
       "configView.notifications.openSystemSettings",
     ],
-    aliases: "vapid gateway access",
+    aliases: "vapid gateway",
   },
   // Workspace pages without config schemas need explicit search destinations.
   usage: {

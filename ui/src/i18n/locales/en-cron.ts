@@ -333,6 +333,8 @@ const enCron = {
     },
     jobState: {
       nextRelative: "Next {at}",
+      waiting: "Waiting: {reason} since {since}",
+      waitingWarning: "Warning: admission deferred {count} times",
     },
     runEntry: {
       tokens: "{count} Tokens",
@@ -342,13 +344,14 @@ const enCron = {
       runAt: "Started at",
       transcript: "Conversation",
       viewTranscript: "View transcript",
-      transcriptEmpty: "No messages in this activity yet.",
+      transcriptScope:
+        "This is the conversation used by the selected run. Shared conversations can include messages from before and after that run.",
+      transcriptEmpty: "No messages in this conversation yet.",
       transcriptMissingMetadata:
         "Couldn’t open this conversation. Its session information is missing.",
       transcriptUnavailable:
         "Couldn’t identify this conversation. Refresh the activity history and try again.",
       next: "Next {rel}",
-      due: "Due {rel}",
     },
     events: {
       label: "Event",

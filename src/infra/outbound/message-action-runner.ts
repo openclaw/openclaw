@@ -326,7 +326,7 @@ async function handleInternalSourceReplySendAction(
         input.workspaceDir ?? (agentId ? resolveAgentWorkspaceDir(input.cfg, agentId) : undefined),
     });
     throwIfAborted(input.abortSignal);
-    if (!normalizeOptionalString(params.message)) {
+    if (!normalizeOptionalString(params.message) && !normalizeOptionalString(params.caption)) {
       params.message = recommendations.text;
     }
   }

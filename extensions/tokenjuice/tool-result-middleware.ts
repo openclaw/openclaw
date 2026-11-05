@@ -7,6 +7,9 @@ import type {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createTokenjuiceOpenClawEmbeddedExtension } from "./runtime-api.js";
 
+// Tokenjuice's process-wide rule cache has one entry per cwd and no eviction.
+const retainedRuleScopes = new Set<string>();
+
 type TokenjuiceToolResultHandler = (
   event: {
     toolName: string;
@@ -48,11 +51,9 @@ function normalizeDetails(
     (typeof rawExitCode === "number" && Number.isFinite(rawExitCode) && rawExitCode !== 0);
   const exitCode =
     typeof rawExitCode === "number" && Number.isFinite(rawExitCode) ? rawExitCode : failed ? 1 : 0;
-  return {
-    ...metadata,
-    status: failed ? "failed" : "completed",
-    exitCode,
-  };
+  metadata.status = failed ? "failed" : "completed";
+  metadata.exitCode = exitCode;
+  return metadata;
 }
 
 export function createTokenjuiceAgentToolResultMiddleware(): AgentToolResultMiddleware {
@@ -68,28 +69,43 @@ export function createTokenjuiceAgentToolResultMiddleware(): AgentToolResultMidd
   return async (event) => {
     const current = event.result;
     const workdir = event.args.workdir;
-    const cwd = event.cwd?.trim()
-      ? event.cwd
-      : typeof workdir === "string" && workdir.trim()
+    const details = normalizeDetails(event, current);
+    const detailsCwd = isRecord(details) ? details.cwd : undefined;
+    // Match Tokenjuice's cwd precedence; ignored fallbacks must not evict rules.
+    const cwd =
+      typeof workdir === "string" && workdir.trim()
         ? workdir
-        : process.cwd();
-    const next = await handler?.(
-      {
-        toolName: event.toolName,
-        input: event.args,
-        content: current.content,
-        details: normalizeDetails(event, current),
-        isError: event.isError,
-      },
-      { cwd },
-    );
-    return next
-      ? {
-          result: Object.assign({}, current, {
-            content: next.content ?? current.content,
-            details: next.details ?? current.details,
-          }),
-        }
-      : undefined;
+        : typeof detailsCwd === "string" && detailsCwd.trim()
+          ? detailsCwd
+          : event.cwd?.trim()
+            ? event.cwd
+            : process.cwd();
+    try {
+      const next = await handler?.(
+        {
+          toolName: event.toolName,
+          input: event.args,
+          content: current.content,
+          details,
+          isError: event.isError,
+        },
+        { cwd },
+      );
+      return next
+        ? {
+            result: Object.assign({}, current, {
+              content: next.content ?? current.content,
+              details: next.details ?? current.details,
+            }),
+          }
+        : undefined;
+    } finally {
+      retainedRuleScopes.add(cwd);
+      if (retainedRuleScopes.size >= 128) {
+        const { clearRuleCache } = await import("tokenjuice");
+        clearRuleCache();
+        retainedRuleScopes.clear();
+      }
+    }
   };
 }
