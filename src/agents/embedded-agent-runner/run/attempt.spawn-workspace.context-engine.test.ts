@@ -608,14 +608,19 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     },
   );
 
-  it("keeps runtime-only context hidden when orphan repair merges an empty transcript", async () => {
+  it("keeps runtime-only context hidden when internal orphan repair merges an empty transcript", async () => {
     hoisted.sessionManager.getHeader.mockReturnValue({ version: 4 });
     const { seen, sessionPrompt } = capturePrompt();
     hoisted.sessionManager.getLeafEntry.mockReturnValueOnce({
       id: "orphan-leaf",
       parentId: "parent-leaf",
       type: "message",
-      message: { role: "user", content: "orphaned ask", timestamp: 1 },
+      message: {
+        role: "user",
+        content: "orphaned ask",
+        timestamp: 1,
+        provenance: { kind: "internal_system", sourceTool: "heartbeat" },
+      },
     });
 
     const result = await runAttempt({
