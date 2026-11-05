@@ -3,6 +3,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
@@ -89,7 +90,7 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
   if (payload.partial === true || statusWarnings.length > 0) {
     lines.push(theme.warn("Channel status is partial:"));
     for (const warning of statusWarnings) {
-      lines.push(`- ${warning.slice(0, 500)}`);
+      lines.push(`- ${truncateUtf16Safe(warning, 500)}`);
     }
     lines.push("");
   }
