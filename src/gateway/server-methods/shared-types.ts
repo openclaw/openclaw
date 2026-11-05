@@ -199,13 +199,8 @@ type GatewayKernelContext = {
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
   /** Instance-owned startup observation; never lends preparation or write authority. */
-  agentDatabaseStartup?: {
-    readonly hasPendingAgents: boolean;
-    waitForAgentPreparation: (
-      agentId: string,
-      options?: { signal?: AbortSignal; forWrite?: boolean },
-    ) => Promise<void> | undefined;
-  };
+  agentDatabaseStartup?: import("../../state/agent-database-preparation-context.js").AgentDatabasePreparation;
+  restartResumeWindow?: import("../../infra/gateway-boot-lifecycle.js").GatewayRestartResumeWindow;
   channelAdmissionAudit?: import("../../channels/message-access/admission-evidence.js").ChannelAdmissionAudit;
   /** Last serving policy committed by this Gateway, excluding tentative secret activation. */
   getCommittedRuntimeConfig?: () => OpenClawConfig;
@@ -518,6 +513,8 @@ export type SessionMutationAuthorization = {
   release?: () => void;
   /** Retain these facts until a detached effect settles, independently of the request. */
   retain?: () => () => void;
+  /** Retain published sharing facts for a run, independently of request and writer guards. */
+  retainForRun?: () => { assertCurrent: () => void; release: () => void };
   /** Transfer retained facts to admitted work; request cleanup then leaves them with that owner. */
   takeRelease?: () => () => void;
   bindCreation?: (
@@ -590,6 +587,15 @@ export type GatewayRequestHandlerOptions = Omit<
 > & {
   params: Record<string, unknown>;
   sessionMutationAuthorization?: SessionMutationAuthorization;
+  /** Source-authorized plugin adoption; bound to this request's caller and lifetime. */
+  copySessionCatalogToGateway?: (source: {
+    provider: import("../../plugins/session-catalog.js").SessionCatalogProvider;
+    request: import("../../../packages/gateway-protocol/src/index.js").SessionsCatalogContinueParams;
+    assertCurrent: () => void;
+    /** Resolve an existing handoff under read policy; never imports, creates, or binds. */
+    resolveOnly?: true;
+  }) => Promise<void>;
+  sessionCreationOperation?: import("../../config/sessions/session-creation-operation.js").SessionCreationOperation;
   /** Synchronously consume current chat.send authority without starting a turn. */
   withSessionTurnAuthority?: <T>(
     target: { sessionKey: string; agentId?: string; sessionId: string },

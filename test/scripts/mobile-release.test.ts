@@ -631,6 +631,7 @@ describe("mobile release CLI", () => {
       const result = f.invoke("run", ["--destination", "testflight"], { OPENAI_API_KEY: "" });
       expect(fs.existsSync(f.uploadAudit)).toBe(false);
       expect(exists(f.recovery, "release-notes.json")).toBe(false);
+      expect(exists(f.recovery, "source")).toBe(false);
       expect(git(f.root, "rev-parse", "--is-shallow-repository")).toBe("true");
       if (outcome === "recovery-required") {
         expectResult(result, 1, "Recover its saved destination");
@@ -641,7 +642,6 @@ describe("mobile release CLI", () => {
           groupId: "external-fixture",
           sourceSha: f.base,
         });
-        expect(exists(f.recovery, "source")).toBe(false);
       }
     },
   );

@@ -30,6 +30,7 @@ import {
 } from "./service-child-relay-preparation.js";
 import {
   createServiceChildRelayRetirement,
+  joinStartupFailureCleanup,
   stopServiceChildOwner,
 } from "./service-child-relay-retirement.js";
 import type { AwaitedStdoutConsumer, ProcessAdapterStartup } from "./types.js";
@@ -269,17 +270,17 @@ export async function createServiceChildRelayAdapter(
     nextSequence: () => ++outboundSequence,
     startedAt: () => cleanupDeadline.startedAt!,
     anchorGone: () => {
-      if (anchorPid === undefined) {
-        return false;
-      }
       try {
-        return isOwnedProcessGroupGone(anchorPid);
+        // A native certificate leaves only the retained owner, without PGID authority.
+        return useLinuxSubreaper
+          ? closingReceipt === "linux-subreaper"
+          : anchorPid !== undefined && isOwnedProcessGroupGone(anchorPid);
       } catch {
         return false;
       }
     },
     canRetire: () =>
-      !useLinuxSubreaper &&
+      (!useLinuxSubreaper || closingReceipt === "linux-subreaper") &&
       state === "closing" &&
       control?.closed === true &&
       lineage?.readableEnded === true &&
@@ -461,6 +462,9 @@ export async function createServiceChildRelayAdapter(
       closingReceipt = message.descendantsReaped === true ? "linux-subreaper" : "process-group";
       state = "closing";
       cleanupDeadline.begin();
+      if (useLinuxSubreaper && closingReceipt === "linux-subreaper") {
+        retirement.request();
+      }
       retirement.reconcile();
       if (control) {
         // Retire cancellation before acknowledging this exact POSIX receipt.
@@ -618,9 +622,11 @@ export async function createServiceChildRelayAdapter(
       ]);
       // Preserve admission failure over the secret pipe it closes as a consequence.
       if (startupResult.status === "rejected") {
-        await startupErrorAckDelivery;
-        await cleanup.promise;
-        throw startupResult.reason;
+        throw await joinStartupFailureCleanup(
+          startupResult.reason,
+          startupErrorAckDelivery,
+          cleanup.promise,
+        );
       }
       if (secretDeliveryResult.status === "rejected") {
         throw secretDeliveryResult.reason;

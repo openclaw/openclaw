@@ -132,7 +132,7 @@ it.each([true, false])(
   },
 );
 
-it("gives missing-setup context in minimal prompts without a callable", () => {
+it("gives missing-setup context in minimal prompts without a callable", async () => {
   const render = (webSearchUnconfigured: boolean, capabilityToolNames: string[] = []) =>
     buildConfiguredAgentSystemPrompt({
       config: {},
@@ -142,13 +142,13 @@ it("gives missing-setup context in minimal prompts without a callable", () => {
       webSearchUnconfigured,
       promptMode: "minimal",
     });
-  const prompt = render(true);
+  const prompt = await render(true);
   expect(prompt).toContain(unconfigured);
   expect(prompt).toContain("openclaw configure --section web");
   expect(prompt).toContain("Settings → Ask OpenClaw");
   expect(prompt).not.toContain("- web_search:");
-  expect(render(false)).not.toContain(unconfigured);
-  expect(render(true, ["web_search"])).not.toContain(unconfigured);
+  expect(await render(false)).not.toContain(unconfigured);
+  expect(await render(true, ["web_search"])).not.toContain(unconfigured);
 });
 
 async function unexpectedRead(): Promise<never> {

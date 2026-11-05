@@ -4,9 +4,9 @@ import { copyFileSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } fro
 import { createRequire } from "node:module";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parse } from "yaml";
 import { parseArgs, resolveBaselines } from "../../scripts/resolve-upgrade-survivor-baselines.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { readWorkflow, readWorkflowOutputs as readOutputs } from "./ci-workflow.test-support.js";
 import {
   readJsonLines,
   writeExecutable,
@@ -25,18 +25,7 @@ type Workflow = {
   };
   jobs: { resolve_package: { steps: Steps } };
 };
-const workflow = () =>
-  parse(readFileSync(".github/workflows/package-acceptance.yml", "utf8")) as Workflow;
-const readOutputs = (file: string) =>
-  Object.fromEntries(
-    readFileSync(file, "utf8")
-      .trimEnd()
-      .split("\n")
-      .map((line) => {
-        const separator = line.indexOf("=");
-        return [line.slice(0, separator), line.slice(separator + 1)];
-      }),
-  );
+const workflow = () => readWorkflow(".github/workflows/package-acceptance.yml") as Workflow;
 
 let root: string;
 let bin: string;
@@ -44,6 +33,8 @@ let output: string;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   root = tempDirs.make("openclaw-upgrade-baselines-");
+  // Exercise PATH tools in ESM scope even outside workspace-local temp roots.
+  writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
   bin = path.join(root, "bin");
   output = path.join(root, "output");
   mkdirSync(bin);
@@ -164,13 +155,14 @@ describe("scripts/resolve-upgrade-survivor-baselines", () => {
       writeExecutable(
         path.join(bin, "gh"),
         `#!/usr/bin/env node
-const fs = require("node:fs");
+import fs from "node:fs";
+import assert from "node:assert/strict";
 const releases = JSON.parse(fs.readFileSync(process.env.RELEASE_FIXTURE, "utf8"));
 const args = process.argv.slice(2);
 if (args[0] === "release") {
   console.log(JSON.stringify(releases.slice(0, Number(args[args.indexOf("--limit") + 1]))));
 } else {
-  require("node:assert/strict").deepEqual(args, ["api", "--paginate", "--slurp", "repos/openclaw/openclaw/releases?per_page=100"]);
+  assert.deepEqual(args, ["api", "--paginate", "--slurp", "repos/openclaw/openclaw/releases?per_page=100"]);
   const pages = [releases.slice(0, 100), releases.slice(100)].map(page => page.map(release => ({
     tag_name: release.tagName, published_at: release.publishedAt, prerelease: release.isPrerelease,
   })));
@@ -228,13 +220,11 @@ if (process.env.FAIL_API === "true") process.exit(75);
     "minimum",
   ])("pins the %s workflow baseline once before Docker fanout", (entrypoint) => {
     const packageWorkflow = workflow();
-    const migration = parse(readFileSync(".github/workflows/update-migration.yml", "utf8")) as {
+    const migration = readWorkflow(".github/workflows/update-migration.yml") as {
       on: { workflow_dispatch: { inputs: { baselines: { default: string } } } };
     };
     const inputs = packageWorkflow.on.workflow_call.inputs;
-    const release = parse(
-      readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8"),
-    ) as {
+    const release = readWorkflow(".github/workflows/openclaw-release-checks.yml") as {
       jobs: {
         package_acceptance_release_checks: {
           with: { published_upgrade_survivor_baselines: string };
@@ -268,7 +258,7 @@ if (process.env.FAIL_API === "true") process.exit(75);
     writeExecutable(
       path.join(bin, "npm"),
       `#!/usr/bin/env node
-const fs = require("node:fs");
+import fs from "node:fs";
 const file = process.env.FIXTURE_NPM_CALLS;
 fs.appendFileSync(file, JSON.stringify(process.argv.slice(2)) + "\\n");
 console.log(JSON.stringify(process.argv[4] === "dist-tags"

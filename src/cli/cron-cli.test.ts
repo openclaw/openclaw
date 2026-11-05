@@ -2,12 +2,14 @@ import { Command } from "commander";
 import { afterEach, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import type { CronRunLogEntry } from "../cron/run-log-types.js";
+import { cronTestJob } from "../cron/service.fixture-builders.test-support.js";
 import type { CronDeliveryPreview, CronJob, CronJobCreate, CronJobPatch } from "../cron/types.js";
 import { ExitError } from "../runtime.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { registerCronCli } from "./cron-cli.js";
-import { ExpectedCliError, formatCliJsonFailure } from "./failure-output.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
+import { formatCliJsonFailure } from "./failure-output.js";
 
 const mocks = vi.hoisted(() => {
   const defaultRuntime = {
@@ -57,15 +59,8 @@ vi.mock("../runtime.js", async (importOriginal) => ({
   defaultRuntime: mocks.defaultRuntime,
 }));
 
-function buildProgram() {
-  const program = new Command().enablePositionalOptions().exitOverride();
-  registerCronCli(program);
-  return program;
-}
-
 function resetGatewayMock() {
-  callGatewayFromCli.mockClear();
-  callGatewayFromCli.mockImplementation(defaultGatewayMock);
+  callGatewayFromCli.mockClear().mockImplementation(defaultGatewayMock);
   for (const mock of Object.values(defaultRuntime)) {
     mock.mockClear();
   }
@@ -89,7 +84,11 @@ async function runCronCommand(args: string[]): Promise<void> {
   await parse(args);
 }
 
-const parse = (args: string[]) => buildProgram().parseAsync(args, { from: "user" });
+function parse(args: string[]) {
+  const program = new Command().enablePositionalOptions().exitOverride();
+  registerCronCli(program);
+  return program.parseAsync(args, { from: "user" });
+}
 
 const CREATE = ["cron", "add", "--name", "job"];
 const ADD = [...CREATE, "--cron", "* * * * *"];
@@ -133,21 +132,7 @@ async function expectCronCommandExit(args: string[]): Promise<void> {
   await expect(runCronCommand(args)).rejects.toMatchObject({ name: "ExitError", code: 1 });
 }
 
-function createCronJob(id: string, name: string): CronJob {
-  const now = Date.now();
-  return {
-    id,
-    name,
-    enabled: true,
-    createdAtMs: now,
-    updatedAtMs: now,
-    schedule: { kind: "at", at: new Date(now + 3_600_000).toISOString() },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: "hello" },
-    state: {},
-  };
-}
+const createCronJob = (id: string, name: string) => cronTestJob({ id, name });
 
 function mockExistingJob(job: Partial<CronJob>): void {
   resetGatewayMock();
@@ -486,7 +471,7 @@ it("creates a configured agent job from a positional cron schedule and prompt", 
       "--thread-id": " 42 ",
     },
     "0 2 * * *",
-    "hello",
+    "    code\r\n    line\r\n",
   );
   expect(params).toMatchObject({
     name: "job",
@@ -495,7 +480,7 @@ it("creates a configured agent job from a positional cron schedule and prompt", 
     schedule: { kind: "cron", expr: "0 2 * * *", staggerMs: 45_000 },
     payload: {
       kind: "agentTurn",
-      message: "hello",
+      message: "    code\r\n    line\r\n",
       model: "opus",
       thinking: "low",
       lightContext: true,
@@ -509,10 +494,10 @@ it("creates a configured agent job from a positional cron schedule and prompt", 
 });
 
 it("keeps the default-agent warning off JSON stdout and preserves an empty tool grant", async () => {
-  const params = await namedAdd("--message", "hello", "--tools", "", "--json");
+  const params = await namedAdd("--message", "    code\r\n    line\r\n", "--tools", "", "--json");
   expect(params).toMatchObject({
     sessionTarget: "isolated",
-    payload: { kind: "agentTurn", message: "hello", toolsAllow: [] },
+    payload: { kind: "agentTurn", message: "    code\r\n    line\r\n", toolsAllow: [] },
   });
   expect(params.payload).toHaveProperty("timeoutSeconds", undefined);
   expectRuntimeErrorContaining("No --agent specified");
@@ -520,7 +505,7 @@ it("keeps the default-agent warning off JSON stdout and preserves an empty tool 
   expect(stdoutText()).not.toContain("No --agent specified");
   expect(JSON.parse(stdoutText())).toMatchObject({
     ok: true,
-    params: { name: "job", payload: { message: "hello" } },
+    params: { name: "job", payload: { message: "    code\r\n    line\r\n" } },
   });
 });
 
@@ -601,82 +586,70 @@ it("accepts a positional every interval without delivery", async () => {
   });
 });
 
-it("creates a shell command with limits and environment overrides", async () => {
-  const params = await addOptions({
-    "--name": "job",
-    "--every": "10m",
-    "--command": "echo ok",
-    "--command-cwd": "/srv/app",
-    "--command-env": "FOO=bar",
-    "--timeout-seconds": "0",
-    "--no-output-timeout-seconds": "5",
-    "--output-max-bytes": "4096",
-    "--tools": "read write",
-    "--no-deliver": true,
-  });
-  expect(params).toMatchObject({
-    sessionTarget: "isolated",
-    delivery: { mode: "none" },
-    payload: {
-      kind: "command",
-      argv: ["sh", "-lc", "echo ok"],
-      cwd: "/srv/app",
-      env: { FOO: "bar" },
-      timeoutSeconds: 0,
-      noOutputTimeoutSeconds: 5,
-      outputMaxBytes: 4096,
-      toolsAllow: ["read", "write"],
-    },
-  });
-  expect(defaultRuntime.error).not.toHaveBeenCalled();
-});
-
 function answerSystemInfo(answer: () => unknown) {
   callGatewayFromCli.mockImplementation(async (method: string, opts: unknown, params?: unknown) =>
     method === "system.info" ? answer() : defaultGatewayMock(method, opts, params),
   );
 }
 
-it.each([
-  ["add", [...CREATE, "--every", "10m", "--command", "echo ok"], "cron.add"],
-  ["edit", [...EDIT, "--command", "echo ok"], "cron.update"],
-] as const)("%s wraps --command in cmd.exe for a Windows Gateway", async (_label, args, method) => {
-  resetGatewayMock();
-  answerSystemInfo(() => ({ platform: "win32" }));
-  await parse([...args]);
-  const params = rpcParams<{ payload?: CronJobCreate["payload"]; patch?: CronJobPatch }>(method);
-  expect(params.payload ?? params.patch?.payload).toMatchObject({
-    kind: "command",
-    argv: ["cmd.exe", "/d", "/s", "/c", "echo ok"],
-  });
+it.each(["add", "edit"])("%s uses the Gateway shell", async (mode) => {
+  for (const [platform, flag, input, argv] of [
+    ["linux", "--command", "echo ok", ["sh", "-lc", "echo ok"]],
+    ["win32", "--command", "echo ok", ["cmd.exe", "/d", "/s", "/c", "echo ok"]],
+    ["win32", "--command-argv", '["sh","-c","echo ok"]', ["sh", "-c", "echo ok"]],
+  ] as const) {
+    resetGatewayMock();
+    answerSystemInfo(() => ({ platform }));
+    await parse([
+      ...(mode === "add" ? [...CREATE, "--every", "10m"] : EDIT),
+      ...flags({
+        [flag]: input,
+        "--command-cwd": "/srv/app",
+        "--command-env": "FOO=bar",
+        "--timeout-seconds": "0",
+        "--no-output-timeout-seconds": "5",
+        "--output-max-bytes": "4096",
+        "--tools": "read write",
+        "--no-deliver": true,
+      }),
+    ]);
+    const params = rpcParams<{ payload?: unknown; patch?: CronJobPatch }>(
+      `cron.${mode === "add" ? "add" : "update"}`,
+    );
+    expect(params.payload ?? params.patch?.payload).toMatchObject({
+      kind: "command",
+      argv,
+      cwd: "/srv/app",
+      env: { FOO: "bar" },
+      timeoutSeconds: 0,
+      noOutputTimeoutSeconds: 5,
+      outputMaxBytes: 4096,
+      toolsAllow: ["read", "write"],
+    });
+    if (flag === "--command-argv") {
+      expect(callGatewayFromCli.mock.calls.some(([method]) => method === "system.info")).toBe(
+        false,
+      );
+    }
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+  }
 });
 
-it.each([
-  [
-    "has no system.info",
-    () => {
-      throw new GatewayClientRequestError({
-        code: "INVALID_REQUEST",
-        message: "unknown method: system.info",
-      });
-    },
-  ],
-  ["omits the platform", () => ({})],
-] as const)("rejects --command when the Gateway %s", async (_label, answer) => {
+it.each([undefined, {}])("requires a Gateway platform (%j)", async (info) => {
   resetGatewayMock();
-  answerSystemInfo(answer);
+  answerSystemInfo(() => {
+    if (info) return info;
+    throw new GatewayClientRequestError({
+      code: "INVALID_REQUEST",
+      message: "unknown method: system.info",
+    });
+  });
   await expect(parse([...CREATE, "--every", "10m", "--command", "echo ok"])).rejects.toMatchObject({
     name: "ExitError",
     code: 1,
   });
   expectRuntimeErrorContaining("--command-argv");
   expect(rpcParams("cron.add")).toBeUndefined();
-});
-
-it("keeps explicit --command-argv without asking the Gateway platform", async () => {
-  const params = await add(...ADD.slice(2), "--command-argv", '["sh","-c","echo ok"]');
-  expect(params.payload).toMatchObject({ kind: "command", argv: ["sh", "-c", "echo ok"] });
-  expect(rpcParams("system.info")).toBeUndefined();
 });
 
 it("creates stream schedules from exact argv flags", async () => {
@@ -847,7 +820,7 @@ it.each([
   [[...AGENT_ADD, "--script", "   "], "--script must not be blank"],
   [[...AGENT_ADD, "--webhook", "not-a-url"], "--webhook must be a valid http(s) URL"],
   [
-    ["cron", "create", "0 2 * * *", "Positional", "--name", "job", "--message", "Option"],
+    ["cron", "create", "0 2 * * *", "    code\n", "--name", "job", "--message", "code"],
     "Pass the automation message either positionally or with --message",
   ],
   [

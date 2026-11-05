@@ -157,8 +157,8 @@ export function registerCronAddCommand(cron: Command) {
             const resolvedPayload = await (async () => {
               // System events require main; agent turns may also run in its shared conversation.
               const systemEvent = normalizeOptionalString(opts.systemEvent) ?? "";
-              const optionMessage = normalizeOptionalString(opts.message);
-              const positionalMessage = normalizeOptionalString(messageArg);
+              const optionMessage = readNonBlankString(opts.message);
+              const positionalMessage = readNonBlankString(messageArg);
               const commandShell = readNonBlankString(opts.command);
               const commandArgv = parseCronCommandArgv(opts.commandArgv);
               // File arguments identify exact local paths; trimming can select another file.

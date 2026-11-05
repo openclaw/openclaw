@@ -475,6 +475,7 @@ export async function prepareVisitorPublicationFixture(f: {
         subagent: {
           complete: unexpected,
           forkSession: unexpected,
+          runForkedTurn: unexpected,
           run: unexpected,
           waitForRun: unexpected,
           getSessionMessages: unexpected,

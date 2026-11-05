@@ -83,6 +83,8 @@ it.each(["saved", "failed"])(
     ));
     flush();
     const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
+    expect(trigger.textContent?.trim()).toBe("Ask me");
+    expect(trigger.getAttribute("aria-label")).toBe("Permissions: Default (Ask me)");
     trigger.click();
     const menu = container.querySelector<HTMLElement>('[role="menu"]')!;
     await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(true));
@@ -95,9 +97,10 @@ it.each(["saved", "failed"])(
       container
         .querySelector('[data-chat-permission-option="default"]')
         ?.getAttribute("aria-label"),
-    ).toBe("Default (Guarded)");
+    ).toBe("Agent default (Ask me)");
     menu.dispatchEvent(new KeyboardEvent("keydown", { key: "4", bubbles: true, cancelable: true }));
     await waitForSolid(() => expect(trigger.getAttribute("aria-busy")).toBe("true"));
+    expect(trigger.textContent?.trim()).toBe("Auto-review");
     expect(trigger.disabled).toBe(false);
     expect(menu.matches(":popover-open")).toBe(true);
     expect(
@@ -125,6 +128,7 @@ it.each(["saved", "failed"])(
     }
     await waitForSolid(() => expect(menu.matches(":popover-open")).toBe(false));
     expect(trigger.getAttribute("aria-busy")).toBeNull();
+    expect(trigger.textContent?.trim()).toBe(outcome === "failed" ? "Ask me" : "Auto-review");
   },
 );
 
@@ -193,9 +197,10 @@ it("preserves option content on unrelated refreshes while admitting permission c
   setProps({ ...options });
   flush();
   expect(container.querySelector('[data-chat-permission-option="default"]')).toBe(row);
-  expect(row.textContent).toContain("The agent's configured permissions.");
+  expect(row.textContent).toContain("Agent default");
+  expect(row.textContent).toContain("Uses this agent’s settings.");
   expect(row.getAttribute("aria-checked")).toBe("false");
-  expect(row.getAttribute("aria-label")).toBe("Default (Guarded)");
+  expect(row.getAttribute("aria-label")).toBe("Agent default (Ask me)");
   expect(container.querySelector('[data-chat-permission-option="guarded"]')?.textContent).toContain(
     "Default",
   );

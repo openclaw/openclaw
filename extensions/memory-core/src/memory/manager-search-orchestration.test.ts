@@ -123,6 +123,51 @@ describe("memory index", () => {
   const writeMemory = (name: string, content: string) =>
     fs.writeFile(path.join(fixture.paths.memory, name), content);
 
+  it.each(["search-bootstrap", "search"])(
+    "keeps nested sync failure details redacted in the %s warning",
+    async (reason) => {
+      const manager =
+        reason === "search" ? await syncedKeyword() : await getPersistentManager(keywordConfig());
+      const failure = new Error("memory index maintenance failed", {
+        cause: Object.assign(new Error("database is not open; password=memory-warning-secret"), {
+          code: "ERR_INVALID_STATE",
+        }),
+      });
+      const rejectSync = (target: Manager) =>
+        vi
+          .spyOn(target as unknown as MaintenanceFields, "syncMemoryFiles")
+          .mockRejectedValue(failure);
+      const sync =
+        reason === "search"
+          ? interceptMaintenance((target) => {
+              rejectSync(target);
+            })
+          : rejectSync(manager);
+      try {
+        markDirty(manager);
+        memoryWarnings.mockClear();
+
+        const results = await manager.search("zebra", { minScore: 0 });
+        await awaitIdle(manager);
+
+        if (reason === "search") {
+          expectFixtureHit(results);
+        } else {
+          expect(results).toEqual([]);
+        }
+        const warning = memoryWarnings.mock.calls
+          .map((call) => String(call[0]))
+          .find((message) => message.startsWith(`memory sync failed (${reason}):`));
+        expect(warning).toContain("memory index maintenance failed");
+        expect(warning).toContain("database is not open");
+        expect(warning).toContain("ERR_INVALID_STATE");
+        expect(warning).not.toContain("memory-warning-secret");
+      } finally {
+        sync.mockRestore();
+      }
+    },
+  );
+
   it("reuses published facts across searches and observes the next publication", async () => {
     const manager = await getPersistentManager(keywordConfig());
     const publishedPath = path.join(fixture.paths.memory, "published.md");

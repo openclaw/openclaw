@@ -358,6 +358,7 @@ export function registerCronEditCommand(cron: Command) {
           const scriptPath = readNonBlankString(opts.script);
           const commandShell = readNonBlankString(opts.command);
           const commandArgv = parseCronCommandArgv(opts.commandArgv);
+          const commandEnv = parseCronCommandEnv(opts.commandEnv);
           if (commandShell && commandArgv) {
             throw new CronCliError(
               "Pass command payload either with --command or --command-argv, not both.",
@@ -494,6 +495,7 @@ export function registerCronEditCommand(cron: Command) {
               );
             }
           }
+          let droppedEnvKeys: string[] = [];
           let payload: Record<string, unknown> | undefined;
           if (payloadKind === "systemEvent") {
             payload = { kind: "systemEvent" };
@@ -510,41 +512,33 @@ export function registerCronEditCommand(cron: Command) {
               assignIf(payload, "thinking", parseCronThinkingOption(thinking), Boolean(thinking));
             }
             assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
-            assignIf(
-              payload,
-              "lightContext",
-              opts.lightContext,
-              typeof opts.lightContext === "boolean",
-            );
-            assignIf(
-              payload,
-              "skipIfScratchEmpty",
-              opts.skipIfScratchEmpty,
-              typeof opts.skipIfScratchEmpty === "boolean",
-            );
-            assignIf(
-              payload,
-              "includeReasoning",
-              opts.includeReasoning,
-              typeof opts.includeReasoning === "boolean",
-            );
+            assignIf(payload, "lightContext", opts.lightContext);
+            assignIf(payload, "skipIfScratchEmpty", opts.skipIfScratchEmpty);
+            assignIf(payload, "includeReasoning", opts.includeReasoning);
           } else if (payloadKind === "command") {
-            payload = { kind: "command" };
-            assignIf(payload, "argv", commandArgv, Boolean(commandArgv));
-            if (commandShell) {
-              payload.argv = await buildCronCommandShellArgvForGateway(commandShell, opts);
+            payload = {
+              kind: "command",
+              argv:
+                commandArgv ??
+                (commandShell
+                  ? await buildCronCommandShellArgvForGateway(commandShell, opts)
+                  : undefined),
+              cwd: commandCwd,
+              env: commandEnv,
+              input: hasCommandInput ? opts.commandInput : undefined,
+              timeoutSeconds,
+              noOutputTimeoutSeconds,
+              outputMaxBytes,
+            };
+            if (commandEnv) {
+              // Diagnostics are best effort; an unavailable snapshot must not block a patch.
+              const existing = (await readExistingCronJob().catch(() => undefined))?.payload;
+              if (existing?.kind === "command") {
+                droppedEnvKeys = Object.keys(existing.env ?? {}).filter(
+                  (key) => !Object.hasOwn(commandEnv, key),
+                );
+              }
             }
-            assignIf(payload, "cwd", commandCwd, Boolean(commandCwd));
-            assignIf(
-              payload,
-              "env",
-              parseCronCommandEnv(opts.commandEnv),
-              opts.commandEnv !== undefined,
-            );
-            assignIf(payload, "input", opts.commandInput, hasCommandInput);
-            assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
-            assignIf(payload, "noOutputTimeoutSeconds", noOutputTimeoutSeconds);
-            assignIf(payload, "outputMaxBytes", outputMaxBytes);
           } else if (payloadKind === "script") {
             payload = { kind: "script" };
             if (scriptPath) {
@@ -710,6 +704,11 @@ export function registerCronEditCommand(cron: Command) {
             ...(expectedConfigRevision !== undefined ? { expectedConfigRevision } : {}),
           });
           defaultRuntime.writeJson(res);
+          if (droppedEnvKeys.length > 0) {
+            defaultRuntime.error(
+              `warning: --command-env replaces the whole command environment; removed ${droppedEnvKeys.join(", ")}. Repeat every variable you want to keep.`,
+            );
+          }
           await warnIfCronSchedulerDisabled(opts);
         } catch (err) {
           handleCronCliError(err);

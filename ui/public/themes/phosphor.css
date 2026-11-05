@@ -53,6 +53,8 @@
     "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
   --font-body: var(--mono);
   --font-chat: var(--mono);
+  --link: var(--accent);
+  --link-on-tint: var(--link);
 }
 
 :root[data-theme="phosphor-light"] {
@@ -98,4 +100,6 @@
     "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
   --font-body: var(--mono);
   --font-chat: var(--mono);
+  --link: var(--accent);
+  --link-on-tint: #006133;
 }

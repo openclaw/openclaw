@@ -294,10 +294,13 @@ it("does not rewrite Codex refs during an ordinary cron normalization pass", () 
   expect(job?.payload).toMatchObject({ model: "codex/gpt-5.6-sol" });
 });
 
-it("converts legacy agent command prompts into command cron payloads", () => {
+it.each([
+  ["linux", ["sh", "-lc"]],
+  ["win32", ["cmd.exe", "/d", "/s", "/c"]],
+] as const)("converts legacy agent command prompts on %s", (platform, shell) => {
   const command =
     "cd /home/openclaw/.razor/quant && ./scripts/system/run_position_control.sh --write-card --silent-token NO_REPLY";
-  const { job, result } = withMockedPlatform("linux", () =>
+  const { job, result } = withMockedPlatform(platform, () =>
     normalizeLegacy({
       sessionTarget: "isolated",
       payload: {
@@ -319,27 +322,10 @@ it("converts legacy agent command prompts into command cron payloads", () => {
     delivery: { mode: "announce", channel: "telegram", to: "123" },
     payload: {
       kind: "command",
-      argv: ["sh", "-lc", command],
+      argv: [...shell, command],
       cwd: "/home/openclaw/.razor/quant",
       timeoutSeconds: 900,
     },
-  });
-});
-
-it("converts legacy agent command prompts with the Windows Gateway shell", () => {
-  const { job } = withMockedPlatform("win32", () =>
-    normalizeLegacy({
-      sessionTarget: "isolated",
-      payload: {
-        kind: "agentTurn",
-        message: "Command to run:\n- command: echo ok",
-        toolsAllow: ["group:runtime"],
-      },
-    }),
-  );
-
-  expectFields(job, {
-    payload: { kind: "command", argv: ["cmd.exe", "/d", "/s", "/c", "echo ok"] },
   });
 });
 

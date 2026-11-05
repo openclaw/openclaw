@@ -219,7 +219,7 @@ suite.define(() => {
           expect(await copy.isDisabled()).toBe(false);
           expect(await copy.getAttribute("aria-busy")).toBeNull();
           expect(await copy.getAttribute("aria-label")).toBe(
-            transport === "failure" ? "Copy failed" : "Copied!",
+            transport === "failure" ? "Couldn’t copy. Try again." : "Copied",
           );
           await expectClipboard(page, 1, transport === "modern" ? 0 : 1, text);
           await page.keyboard.press("Enter");
@@ -299,9 +299,11 @@ suite.define(() => {
         await expectClipboard(page, 1, 0, text);
         expect(await copy.count()).toBe(1);
         expect(await copy.isDisabled()).toBe(false);
-        expect(await menu.getByRole("menuitem", { name: "Copy failed", exact: true }).count()).toBe(
-          0,
-        );
+        expect(
+          await menu
+            .getByRole("menuitem", { name: "Couldn’t copy. Try again.", exact: true })
+            .count(),
+        ).toBe(0);
         await page.keyboard.press("Escape");
         expect(await menu.count()).toBe(0);
       });
@@ -332,7 +334,7 @@ suite.define(() => {
           .getByRole("menuitem", { name: label, exact: true })
           .click();
 
-        const alert = page.getByRole("alert").filter({ hasText: "Copy failed" });
+        const alert = page.getByRole("alert").filter({ hasText: "Couldn’t copy. Try again." });
         await alert.waitFor({ state: "visible", timeout: 10_000 });
         await expectClipboard(page, 1, 1, value);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
@@ -342,9 +344,16 @@ suite.define(() => {
     },
   );
 
-  it.each([1280, 390])(
-    "keeps message-copy failure readable after leaving the control at %dpx",
-    async (width) => {
+  it.each([
+    { width: 1280, role: "assistant", index: 0 },
+    { width: 1280, role: "assistant", index: 1 },
+    { width: 390, role: "assistant", index: 0 },
+    { width: 390, role: "assistant", index: 1 },
+    { width: 390, role: "user", index: 0 },
+    { width: 390, role: "user", index: 1 },
+  ] as const)(
+    "keeps failed $role copy $index readable and retryable at $width px",
+    async ({ width, role, index }) => {
       await withClipboardPage(
         {
           locale: "en-US",
@@ -352,31 +361,86 @@ suite.define(() => {
           viewport: { height: 900, width },
         },
         async (page) => {
+          const texts = ["Copy this complete message.", "Keep this other message."] as const;
           await installMockGateway(page, {
-            historyMessages: [textMessage("assistant", "Copy this complete message.")],
+            presenceUsers: [
+              {
+                id: "viewer",
+                name: "Viewer",
+                identity: { type: "profile", id: "viewer" },
+                self: true,
+              },
+              { id: "peer", name: "Riley", identity: { type: "profile", id: "peer" } },
+            ],
+            historyMessages: texts.map((text, position) =>
+              textMessage(role, text, {
+                timestamp: position + 1,
+                __openclaw:
+                  role === "user"
+                    ? {
+                        senderId: "peer",
+                        senderName: "Riley",
+                        senderIdentity: { type: "profile", id: "peer" },
+                      }
+                    : undefined,
+              }),
+            ),
           });
           await page.goto(`${suite.server.baseUrl}chat`);
-          const message = page.locator(".chat-group.assistant").filter({
-            hasText: "Copy this complete message.",
-          });
-          await message.locator(".chat-text").click();
-          await message.hover();
-          const copy = message.getByRole("button", { name: "Copy as markdown", exact: true });
+          const message = page.locator(".chat-group").filter({ hasText: texts[0] });
+          await expect.poll(() => message.locator(".chat-copy-btn").count()).toBe(2);
+          if (role === "user") {
+            expect(await message.getAttribute("class")).toContain("chat-group--peer");
+          }
+          await message.locator(".chat-text").nth(index).click();
+          await message.locator(".chat-bubble").nth(index).hover();
+          const copy = message.locator(".chat-copy-btn").nth(index);
           await copy.click();
           await page.locator(".agent-chat__composer-combobox textarea").focus();
           await page.mouse.move(0, 0);
-          const feedback = message.getByRole("status").filter({ hasText: "Copy failed" });
+          const feedback = message
+            .getByRole("status")
+            .filter({ hasText: "Couldn’t copy. Try again." });
           await feedback.waitFor({ state: "visible" });
+          // Include child controls: their fade can outlive the footer transition.
+          await message.evaluate(async (group) => {
+            await Promise.all(
+              group.getAnimations({ subtree: true }).map((animation) => animation.finished),
+            );
+          });
           expect(
             await feedback.evaluate((element) =>
               element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }),
             ),
           ).toBe(true);
+          expect(
+            await copy.evaluate((element) => {
+              const rect = element.getBoundingClientRect();
+              return (
+                element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) &&
+                element.contains(
+                  document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2),
+                )
+              );
+            }),
+          ).toBe(true);
+          expect(
+            await message
+              .locator(".chat-copy-btn")
+              .nth(1 - index)
+              .evaluate((element) =>
+                element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }),
+              ),
+          ).toBe(false);
           const bounds = await feedback.boundingBox();
           expect(bounds).not.toBeNull();
           expect(bounds!.x).toBeGreaterThanOrEqual(0);
           expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
-          await expectClipboard(page, 1, 1, "Copy this complete message.");
+          await expectClipboard(page, 1, 1, texts[index]);
+          await deferClipboard(page);
+          await copy.click();
+          await resolveClipboard(page);
+          await expectClipboard(page, 2, 1, texts[index]);
           await page.clock.fastForward(2_000);
           await feedback.waitFor({ state: "hidden" });
           await expect.poll(() => copy.getAttribute("aria-label")).toBe("Copy as markdown");

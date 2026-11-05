@@ -81,12 +81,12 @@
 .templates-workspace-file__open::after {
   position: absolute;
   inset: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   content: "";
 }
 
 .templates-workspace-file:has(.templates-workspace-file__open:hover) {
-  background: var(--bg-elevated);
+  background: var(--surface-hover);
 }
 
 .templates-workspace-file__open:focus-visible::after {
@@ -104,6 +104,11 @@
   height: 28px;
   border-radius: var(--radius-sm);
   color: var(--muted);
+}
+
+.templates-workspace-file__info svg {
+  width: 14px;
+  height: 14px;
 }
 
 .templates-workspace-file__info:hover,

@@ -1,11 +1,13 @@
 import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
-import { compareMcpCatalogTools, mcpCatalogToolsSignature } from "./agent-bundle-mcp-names.js";
-import { sessionMcpRuntimeOwners } from "./agent-bundle-mcp-runtime-owner.js";
-import { SESSION_MCP_MAX_LIVE_RUNTIMES } from "./agent-bundle-mcp-runtime-shared.js";
 import type {
   McpCatalogTool,
   McpServerCatalog,
   McpToolCatalog,
+} from "./agent-bundle-mcp-catalog.types.js";
+import { compareMcpCatalogTools, mcpCatalogToolsSignature } from "./agent-bundle-mcp-names.js";
+import { sessionMcpRuntimeOwners } from "./agent-bundle-mcp-runtime-owner.js";
+import { SESSION_MCP_MAX_LIVE_RUNTIMES } from "./agent-bundle-mcp-runtime-shared.js";
+import type {
   RequesterScopedMcpRuntimeHandle,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";

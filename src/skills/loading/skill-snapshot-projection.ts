@@ -32,10 +32,7 @@ export function buildSkillSnapshotProjection(input: SkillSnapshotProjectionInput
   const limits = input.config?.skills?.limits;
   const agentLimits = resolveEffectiveAgentSkillsLimits(input.config, input.agentId);
   const prepared = prepareSkillsForPrompt({
-    skills: compactPromptSkills(resolvedSkills, {
-      config: input.config,
-      agentId: input.agentId,
-    }),
+    skills: compactPromptSkills(resolvedSkills),
     maxSkillsInPrompt: limits?.maxSkillsInPrompt,
     maxSkillsPromptChars: agentLimits?.maxSkillsPromptChars ?? limits?.maxSkillsPromptChars,
     remoteNote,

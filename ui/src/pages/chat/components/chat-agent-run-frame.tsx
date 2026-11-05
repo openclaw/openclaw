@@ -189,6 +189,8 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
     senderLabel: firstAssistant?.senderLabel,
     replyToSender: firstAssistant?.replyToSender ?? streamRun?.replyToSender,
     replyToMessage: firstAssistant?.replyToMessage ?? streamRun?.replyToMessage,
+    replyPreviousMessageId:
+      firstAssistant?.replyPreviousMessageId ?? streamRun?.replyPreviousMessageId,
     replyShared: firstAssistant?.replyShared,
     replyTurnSource: firstAssistant?.replyTurnSource,
     replyCurrentSource: firstAssistant?.replyCurrentSource,
@@ -201,7 +203,10 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
     runId: frame.runId,
   };
   const frameReplyLine = resolveGroupReplyLine(
-    (actionOwner && groups.find((group) => group.messages.includes(actionOwner))) || shell,
+    {
+      ...((actionOwner && groups.find((group) => group.messages.includes(actionOwner))) || shell),
+      replyPreviousMessageId: shell.replyPreviousMessageId,
+    },
     opts.renderGroupOptions(shell).resolveReplyPreview,
     groups.flatMap((group) => group.messages),
   );
@@ -233,8 +238,9 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
   );
   const sourcePreviews = actionOwner
     ? extractChatSourcePreviews({
-        groups,
-        answer: actionOwner.actionMessage ?? actionOwner.message,
+        // Cited results can sit in an earlier rollup that no visible reply owns.
+        groups: frame.detachedGroups ? [...frame.detachedGroups, ...groups] : groups,
+        answer: actionOwner.message,
         runId: frame.runId,
         basePath: opts.basePath,
         sessionPublicOrigin: opts.sessionPublicOrigin,
@@ -262,6 +268,19 @@ export function AgentRunFrame(props: FrameProps) {
 
 function RunFrame(props: FrameProps) {
   const state = createMemo(() => prepareFrame(props.frame, props.options));
+  const timedWork = createMemo(() => {
+    const recap = props.options.turnRecap;
+    const work = props.frame.parts.find(
+      (part) => part.kind === "work-group" && part.replyRunId === props.frame.runId,
+    );
+    // The recap retains this run's terminal timing after the session moves on.
+    // Run duration appears only on the Worked summary; turns without one show no timing.
+    if (!recap || work?.kind !== "work-group") {
+      return undefined;
+    }
+    const durationMs = work.durationMs ?? recap.runtimeMs;
+    return durationMs > 0 ? { ...work, durationMs } : undefined;
+  });
   const frameContent = [
     <FrameBody parts={state().bodyParts} options={props.options}>
       {(input) => {
@@ -309,7 +328,7 @@ function RunFrame(props: FrameProps) {
               {(work) => (
                 <>
                   <WorkGroupSummary
-                    item={work()}
+                    item={timedWork()?.key === work().key ? timedWork()! : work()}
                     options={{
                       expanded: options().isWorkExpanded(work().key),
                       mediaReadAllowed: options().streamOptions.mediaReadAllowed,

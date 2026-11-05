@@ -286,6 +286,67 @@ it("never saves Apple inputs from PRs, dispatches, non-main refs, or frozen targ
   }
 });
 
+it("reuses trusted simulator libraries and shared package downloads without publishing caches", () => {
+  const jobs = readCiWorkflow().jobs;
+  const capture = jobs["ios-screenshot-capture"];
+  expect(capture.env.HISTORICAL_TARGET).toBe(jobs["ios-build"].env.HISTORICAL_TARGET);
+  const restore = capture.steps.find((step: WorkflowStep) => step.id === "watch-rtc-cache");
+  const producer = jobs["ios-build"].steps.find(
+    (step: WorkflowStep) => step.id === "watch-rtc-cache",
+  );
+  expect(restore?.with).toEqual(producer.with);
+  expect(producer.with["restore-keys"]).toBe(
+    "watch-rtc-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-\n",
+  );
+  for (const [file, job] of [
+    ["macos-periphery.yml", "ios-index"],
+    ["ios-store-release.yml", "screenshots"],
+  ] as const) {
+    const consumer = readWorkflow(`.github/workflows/${file}`).jobs[job].steps.find(
+      (step: WorkflowStep) => step.name === "Restore Watch RTC build inputs",
+    );
+    expect(consumer.with).toEqual(producer.with);
+  }
+  const packages = capture.steps.find((step: WorkflowStep) => step.id === "ios-packages-cache");
+  const nativePackages = jobs["ios-build"].steps.find(
+    (step: WorkflowStep) => step.id === "ios-packages-cache",
+  );
+  const saves = capture.steps.filter((step: WorkflowStep) =>
+    step.uses?.startsWith("actions/cache/save@"),
+  );
+  expect(saves).toHaveLength(0);
+  expect(packages.with).toEqual(nativePackages.with);
+  expect(packages.with.path).toBe("apps/ios/build/SourcePackages");
+  expect(packages.with.key).toMatch(/^ios-source-packages-v2-/);
+  expect(packages.with["restore-keys"]).toBeUndefined();
+  for (const owner of [restore, packages]) {
+    expect(owner["continue-on-error"]).toBe(true);
+    expect(owner["timeout-minutes"]).toBe(3);
+  }
+  const identify = capture.steps.find((step: WorkflowStep) => step.id === "ios-cache-inputs");
+  for (const historical of ["true", "false"]) {
+    for (const frozen of ["true", "false"]) {
+      expect(
+        evaluateWorkflow(`\${{ ${identify.if} }}`, {
+          env: { HISTORICAL_TARGET: historical },
+          preflightOutputs: { frozen_target: frozen },
+          fileHashes: { "apps/shared/OpenClawWatchRTC/build.sh": "present" },
+        }),
+      ).toBe(historical !== "true" && frozen !== "true");
+    }
+  }
+  for (const owner of [restore, packages]) {
+    for (const cache_mode of ["off", "restore"]) {
+      expect(
+        evaluateWorkflow(`\${{ ${owner.if} }}`, {
+          preflightOutputs: { cache_mode },
+          steps: { "ios-cache-inputs": { outputs: { xcode: "xcode" } } },
+        }),
+      ).toBe(cache_mode !== "off");
+    }
+  }
+});
+
 it("shares release device libraries only between trusted main release destinations", () => {
   const job = readWorkflow(".github/workflows/ios-store-release.yml").jobs.release;
   const restore = job.steps.find((step: WorkflowStep) => step.id === "watch-rtc-cache");
