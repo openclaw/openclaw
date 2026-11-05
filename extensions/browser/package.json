@@ -5,7 +5,7 @@
   "description": "OpenClaw browser tool plugin",
   "type": "module",
   "dependencies": {
-    "@modelcontextprotocol/client": "2.3.1",
+    "@modelcontextprotocol/client": "2.4.0",
     "acorn": "8.19.0",
     "chrome-devtools-mcp": "1.12.0",
     "express": "5.3.0",
@@ -15,7 +15,7 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "1.32.1",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "@openclaw/plugin-sdk": "workspace:*",
     "@types/yargs-parser": "21.0.3",
     "undici": "8.12.3"

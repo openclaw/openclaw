@@ -7,7 +7,7 @@
   "dependencies": {
     "@openclaw/fs-safe": "0.27.1",
     "dompurify": "3.4.17",
-    "marked": "18.1.1",
+    "marked": "18.1.2",
     "typebox": "1.4.3",
     "yaml": "2.9.1"
   },
