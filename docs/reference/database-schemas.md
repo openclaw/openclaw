@@ -207,7 +207,7 @@ retains the physical database's completed validation facts for later opens in th
 same process. Explicit retirement closes the host identity descriptor only after
 all sibling native handles have drained, preserving their POSIX locks.
 
-Shared-state commands load their registered domain directly. The remaining command
+Shared-state commands, including sandbox registry reads, load their registered domain directly. The remaining command
 runtime loads only when an operation needs it, so workers serving registered
 operations alone do not retain unrelated command modules. Preparation still
 finishes before synchronous database execution; writer admission and receipts
