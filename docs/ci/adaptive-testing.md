@@ -253,6 +253,10 @@ along with aggressive selection. Refresh fingerprints only after reviewing the
 changed input closure and repeating full-versus-selected Node/Bun proof, including
 an injected regression. A successful provider call does not qualify a test.
 
+The Markdown worker reads Node execution flags independently of the test watchdog
+and its other-lane inventories. Updating an unrelated lane's test list does not
+invalidate Markdown qualification. Changes to the Node flag policy still do.
+
 ## Plan in shadow mode
 
 The selector consumes an observation export and an explicit current inventory.
