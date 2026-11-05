@@ -1,0 +1,2 @@
+# PostgreSQL capture-owner regression: Git/package held ownership refusals plus stopped-service and SQLite controls; stable retention fixtures remain unchanged.
+69
