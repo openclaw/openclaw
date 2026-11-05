@@ -205,10 +205,14 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await readiness.getByRole("button", { name: "Add account", exact: true }).click();
       const search = page.locator("[data-models-login-search]");
       await search.waitFor();
-      expect(await search.evaluate((element) => element.getBoundingClientRect().width)).toBeCloseTo(
-        await search.locator("..").evaluate((element) => element.getBoundingClientRect().width),
-        1,
-      );
+      const widthDifference = await search.evaluate((element) => {
+        const parent = element.parentElement;
+        if (!parent) {
+          throw new Error("Search input has no layout parent");
+        }
+        return element.getBoundingClientRect().width - parent.getBoundingClientRect().width;
+      });
+      expect(widthDifference).toBeCloseTo(0, 1);
       expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
     } finally {
       await context.close();

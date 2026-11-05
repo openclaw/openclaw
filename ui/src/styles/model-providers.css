@@ -584,7 +584,6 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--muted);
 }
 
 .model-providers__agent-icon svg {
