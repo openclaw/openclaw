@@ -658,6 +658,9 @@ deduplicated by resolved session and run ID. While the `system.run` invocation
 that started the run still waits for its result, the Gateway holds the finished
 notification: the caller receives the output inline, and the notification is queued
 only if that invocation then fails (timeout, cancellation or disconnect). A
+started, finished, or denied event that arrives after the caller already received
+a successful result inline produces no notification; a terminal event consumes
+the retained authorization. A
 heartbeat wake is requested only after a system event is queued.
 
 Node event delivery is best-effort, not a durable completion ledger.
