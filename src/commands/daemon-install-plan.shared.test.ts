@@ -82,8 +82,13 @@ describe("durable CLI for an npx copy", () => {
     ];
   });
 
-  it("does not install a durable copy while planning", async () => {
-    await expect(plan()).resolves.toMatchObject({ cliEntrypoint: undefined });
+  it("names the explicit install instead of planning a missing durable copy", async () => {
+    const npxPackage = path.dirname(process.argv[1] ?? "");
+    fs.writeFileSync(
+      path.join(npxPackage, "package.json"),
+      '{"name":"openclaw","version":"1.2.3"}',
+    );
+    await expect(plan()).rejects.toThrow(/missing.*npx openclaw@1\.2\.3 gateway install --force/u);
     expect(fs.existsSync(path.join(root, "state", "npm"))).toBe(false);
   });
 

@@ -42,7 +42,7 @@ export function formatDurableInstallCommand(
   return `npx ${command.replace(/^openclaw\b/u, `openclaw@${version}`)}`;
 }
 
-/** A durable copy exists but fails its version or integrity check; only an install replaces it. */
+/** The durable copy is missing or fails its version or integrity check; only an install replaces it. */
 export class DurableServiceCliError extends Error {
   override name = "DurableServiceCliError";
 }
@@ -112,7 +112,8 @@ async function collectDurableCopyErrors(packageRoot: string, version: string): P
  *
  * Neither mode installs. `install: false` (Doctor, repair, install comparisons) reuses an
  * existing copy only when it matches this CLI's version and passes the package integrity
- * checks, and throws DurableServiceCliError naming the explicit reinstall otherwise.
+ * checks, and throws DurableServiceCliError naming the explicit reinstall otherwise, including
+ * when the copy is missing: a disposable CLI is never a service's entrypoint.
  * `install: true` returns the replacement for installDurableServiceCli, which checks the copy
  * under the package lock and reuses or replaces it inside the service install.
  */
@@ -128,15 +129,6 @@ export async function resolveDurableServiceCli(
     return undefined;
   }
   const { layout, packageRoot, entrypoint: durableEntrypoint } = resolveDurableLayout(env);
-  if (
-    !options.install &&
-    !(await fs.access(durableEntrypoint).then(
-      () => true,
-      () => false,
-    ))
-  ) {
-    return undefined;
-  }
   // Package-inspection machinery loads only for a disposable CLI.
   const [{ resolveOpenClawPackageRoot }, { readPackageVersion }] = await Promise.all([
     import("../infra/openclaw-root.js"),
