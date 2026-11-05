@@ -211,51 +211,76 @@ internal fun prepareCompletedWorkSpans(
         if (knownRunIds(turn[end + 1]).any { it !in replyPositions }) break
         end++
       }
-      val work = mutableListOf<Int>()
-      val answers = mutableListOf<Int>()
+      val unansweredRows = mutableSetOf<Int>()
+      val completedReplyPositions = replyPositions.toMutableMap()
       for (index in start..end) {
         val item = turn[index]
+        if (!hasUnresolvedWork(item)) continue
         val message = source(item)
         val owners = knownRunIds(item)
         val sourcePosition = message?.let { sourcePositions.getValue(it.id) } ?: -1
         val replyPosition = owners.mapNotNull(replyPositions::get).minOrNull() ?: terminalPosition
         val unresolvedPosition = if (item is ChatTimelineItem.ToolActivity) maxOf(sourcePosition, item.lastFailureMessageIndex) else sourcePosition
-        val unansweredWork = hasUnresolvedWork(item) && unresolvedPosition >= replyPosition
-        val replylessRun = owners.any { it !in replyPositions }
-        if (index != finalIndex && isWork(item) && !unansweredWork && !replylessRun) work.add(turnOffset + index) else answers.add(turnOffset + index)
+        if (unresolvedPosition >= replyPosition) unansweredRows.add(index)
+        owners.forEach { runId ->
+          if (unresolvedPosition >= (replyPositions[runId] ?: terminalPosition)) completedReplyPositions.remove(runId)
+        }
       }
-      if (work.isEmpty()) {
-        return@forEachIndexed
-      }
-      val continuationBoundary = continuations[turnIndex]?.let { turns[it].firstOrNull() } as? ChatTimelineItem.Message
-      val identity = if (finalIndex >= 0) terminal.message else continuationBoundary?.message ?: terminal.message
-      val key = identity.entryId ?: identity.idempotencyKey ?: identity.id
+      val work = mutableListOf<Int>()
+      val answers = mutableListOf<Int>()
+      var spanStart = start
       val boundary = turn.firstOrNull() as? ChatTimelineItem.Message
-      val startTime =
+      val turnStartTime =
         boundary
           ?.takeIf {
             it.message.role
               .trim()
               .equals("user", ignoreCase = true)
           }?.message
-          ?.timestampMs ?: source(rows[work.first()])?.timestampMs
-      val endTime = (work.mapNotNull { source(rows[it])?.timestampMs } + listOfNotNull(terminal.message.timestampMs)).maxOrNull()
-      val duration = if (startTime != null && endTime != null && terminal.message.timestampMs?.let { it > startTime } == true) endTime - startTime else null
-      add(
-        PreparedChatWorkSpan(
-          start = turnOffset + start,
-          endExclusive = turnOffset + end + 1,
-          workRowIndexes = work,
-          preservedRowIndexes = answers,
-          key = key,
-          durationMs = duration,
-          outcomes = workedToolOutcomes(rows, work),
-          inLatestTurn = turnIndex == turns.lastIndex,
-          inLatestRunChain = turnIndex in latestRunChain,
-          turnIndex = turnIndex,
-          runLastTurnIndexes = chainRuns[chainRoots[turnIndex]].orEmpty(),
-        ),
-      )
+          ?.timestampMs
+
+      fun finishSpan(
+        spanEnd: Int,
+        reply: ChatMessage,
+        identity: ChatMessage = reply,
+      ) {
+        if (work.isNotEmpty()) {
+          val startTime = turnStartTime?.takeIf { spanStart == start } ?: source(rows[work.first()])?.timestampMs
+          val endTime = (work.mapNotNull { source(rows[it])?.timestampMs } + listOfNotNull(reply.timestampMs)).maxOrNull()
+          val duration = if (startTime != null && endTime != null && reply.timestampMs?.let { it > startTime } == true) endTime - startTime else null
+          add(
+            PreparedChatWorkSpan(
+              start = turnOffset + spanStart,
+              endExclusive = turnOffset + spanEnd + 1,
+              workRowIndexes = work.toList(),
+              preservedRowIndexes = answers.toList(),
+              key = identity.entryId ?: identity.idempotencyKey ?: identity.id,
+              durationMs = duration,
+              outcomes = workedToolOutcomes(rows, work),
+              inLatestTurn = turnIndex == turns.lastIndex,
+              inLatestRunChain = turnIndex in latestRunChain,
+              turnIndex = turnIndex,
+              runLastTurnIndexes = chainRuns[chainRoots[turnIndex]].orEmpty(),
+            ),
+          )
+        }
+        work.clear()
+        answers.clear()
+        spanStart = spanEnd + 1
+      }
+
+      for (index in start..end) {
+        val item = turn[index]
+        // Later runs must not fold completed replies; unanswered failures still keep a run's earlier text as work.
+        val completedRunReply = item is ChatTimelineItem.Message && replyRunId(item)?.let { completedReplyPositions[it] == sourcePositions.getValue(item.message.id) } == true
+        val replylessRun = knownRunIds(item).any { it !in replyPositions }
+        if (index != finalIndex && !completedRunReply && isWork(item) && index !in unansweredRows && !replylessRun) work.add(turnOffset + index) else answers.add(turnOffset + index)
+        // Newly preserved replies fence later work without regrouping explicit final answers or attachments.
+        if (completedRunReply && index != finalIndex && isWork(item)) finishSpan(index, item.message)
+      }
+      val continuationBoundary = continuations[turnIndex]?.let { turns[it].firstOrNull() } as? ChatTimelineItem.Message
+      val identity = if (finalIndex >= 0) terminal.message else continuationBoundary?.message ?: terminal.message
+      finishSpan(end, terminal.message, identity)
     }
   }
 }
