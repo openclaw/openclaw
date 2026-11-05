@@ -8,6 +8,7 @@ import {
   formatFastModeValue,
   resolveFastModeState,
 } from "../../agents/fast-mode.js";
+import { resolveAgentHarnessOperatorPolicyError } from "../../agents/operator-access-program.js";
 import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox/runtime-status.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
@@ -203,7 +204,9 @@ export async function handleDirectiveOnly(
   thinkingCatalog = preparedModel?.catalog ?? thinkingCatalog;
   const modelRuntimeResolution = preparedModel?.runtime ?? { kind: "unchanged" as const };
   const validateSelection = () =>
-    modelResolution.validateModelSelection?.() ?? preparedModel?.validateRuntimeSelection?.();
+    modelResolution.validateModelSelection?.() ??
+    resolveAgentHarnessOperatorPolicyError(preparedModel?.harness, params.operatorAuthority) ??
+    preparedModel?.validateRuntimeSelection?.();
   const prospectiveSessionEntry = { ...sessionEntry };
   applyModelRuntimeDirective(prospectiveSessionEntry, modelRuntimeResolution);
   const selectedCatalogEntry = findSelectedCatalogEntry({
@@ -457,7 +460,7 @@ export async function handleDirectiveOnly(
           modelSelectionUpdated && sessionEntry.liveModelSwitchPending === true,
         touchedFields: touchedSessionFields,
         commitGuard: modelResolution.modelSelectionSource,
-        validateCommit: preparedModel?.validateRuntimeSelection,
+        validateCommit: validateSelection,
       });
       if (persistence.status !== "applied") {
         const errorText =

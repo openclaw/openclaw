@@ -30,6 +30,7 @@ import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js"
 import * as userTurnOwner from "./server-methods/chat-user-turn-recorder.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
+import { configureProofModelProvider } from "./server.agent-runtime-authority-proof.test-support.js";
 import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import { dispatchInboundMessageMock, prepareGatewayReplyRuntimeForTest } from "./test-helpers.js";
 
@@ -48,6 +49,8 @@ export async function runIndependentCreationInputCase(
     | "operator revocation",
   signal: AbortSignal,
 ) {
+  // Visible creation validates its inherited model against the Gateway catalog.
+  await configureProofModelProvider();
   await prepareGatewayReplyRuntimeForTest();
   const baseCfg = context.getRuntimeConfig();
   const guest = boundary === "guest after acceptance";
@@ -110,6 +113,21 @@ export async function runIndependentCreationInputCase(
         "creation-guest",
       );
     }
+    // Like production tool construction, creation inherits from the requester's stored session.
+    await sessionAccessor.upsertSessionEntryCore(
+      { agentId: "main", sessionKey: sourceKey },
+      {
+        sessionId: "independent-source-" + sourceRunId,
+        updatedAt: Date.now(),
+        createdActor: {
+          type: "human",
+          source: "profile",
+          id: expectDefined(client.authenticatedUserProfile, "requesting profile").profileId,
+        },
+        // A guest's own sessions are stamped at creation; delegation inherits that isolation.
+        ...(guest ? { sandbox: "required" as const } : {}),
+      },
+    );
     const sourceRevocation = new AbortController();
     const operator = expectDefined(
       await captureGatewayOperatorRunAuthority({
@@ -239,7 +257,10 @@ export async function runIndependentCreationInputCase(
             personalToolParticipants: participants,
           },
           () =>
-            expectDefined(createSessionsCreateTool(), "available create tool").execute(
+            expectDefined(
+              createSessionsCreateTool({ agentSessionKey: sourceKey }),
+              "available create tool",
+            ).execute(
               "create-custody",
               {
                 label: `Independent input: ${boundary}`,
@@ -290,12 +311,24 @@ export async function runIndependentCreationInputCase(
       sessionId: receipt.sessionId,
       storePath: target.storePath,
     };
+    // sessions_create shares visible-spawn attribution: the agent creates on the human's behalf.
+    // A required (guest) parent keeps its human isolation identity on delegation.
     expect(target.entry).toMatchObject({
-      createdVia: "operator",
-      createdActor: { type: "human", source: "profile", id: operator.authority.profileId },
+      createdVia: "spawn",
+      createdActor: guest
+        ? expect.objectContaining({
+            type: "human",
+            source: "profile",
+            id: operator.authority.profileId,
+          })
+        : {
+            type: "agent",
+            id: "main",
+            delegatedBy: { type: "human", source: "profile", id: operator.authority.profileId },
+          },
+      spawnedBy: sourceKey,
+      spawnDepth: 1,
     });
-    expect(target.entry?.spawnedBy).toBeUndefined();
-    expect(target.entry?.spawnDepth ?? 0).toBe(0);
     if (guest) {
       expect(target.entry?.sandbox).toBe("required");
       expect(operator.authority.scopes).toEqual(["operator.sessions.write"]);
@@ -333,7 +366,8 @@ export async function runIndependentCreationInputCase(
       provenance: {
         kind: "inter_session",
         sourceSessionKey: sourceKey,
-        sourceTool: "sessions_create",
+        // The visible-spawn owner writes the opening message for both tools.
+        sourceTool: "sessions_spawn",
       },
     });
     expect(recorder.getPersistedMessage?.()).not.toHaveProperty("__openclaw.senderIdentity");

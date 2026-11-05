@@ -430,6 +430,18 @@ it.skipIf(!connection)(
             verifyMatchedPostgresBackup(entry.exportDirectory, "exact"),
           ).resolves.toMatchObject({ profile: "exact" });
           await client.query(`UPDATE "${namespace}".workboard_cards SET title = 'Migrated'`);
+          const obstruction = `${credentialsPath}.migrated-pg-exact-recovery`;
+          await fs.writeFile(obstruction, "synthetic recovery obstruction", { flag: "wx" });
+          await expect(
+            restoreUpdateDatabaseBackup({
+              backup,
+              runId: "pg-exact-recovery",
+              env: state.env,
+              assertCurrent() {},
+            }),
+          ).rejects.toThrow("Migrated database recovery file already exists");
+          expect(readBackupEngine(anchorPath)).toEqual({ engine: "postgres", namespace, storeId });
+          await fs.unlink(obstruction);
           const displaced = await restoreUpdateDatabaseBackup({
             backup,
             runId: "pg-exact-recovery",

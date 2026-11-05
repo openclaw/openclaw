@@ -429,9 +429,11 @@ export function inspectDatabaseWorkerBoundaries(
   const compilerSymbols = new Map<ts.Node, Symbol | undefined>();
   const symbolsAt = (nodes: readonly ts.Node[]): (Symbol | undefined)[] => {
     const missing = [...new Set(nodes.filter((node) => !compilerSymbols.has(node)))];
-    if (missing.length) {
-      const symbols = checker.getSymbolAtLocation(missing);
-      for (const [index, node] of missing.entries()) {
+    // An unbounded cross-file response can exceed Node's JSON string limit.
+    for (let offset = 0; offset < missing.length; offset += 256) {
+      const batch = missing.slice(offset, offset + 256);
+      const symbols = checker.getSymbolAtLocation(batch);
+      for (const [index, node] of batch.entries()) {
         compilerSymbols.set(node, symbols[index]);
       }
     }
@@ -1013,7 +1015,7 @@ export function inspectDatabaseWorkerBoundaries(
         ts.isStringLiteral(expression.parent.argumentExpression))
     );
   };
-  for (const { file, source } of sources) {
+  const sourceReferences = sources.map(({ file, source }) => {
     const references: ts.Node[] = [];
     const visit = (node: ts.Node) => {
       // `extends` is a runtime reference even though its AST wrapper is a type.
@@ -1051,6 +1053,12 @@ export function inspectDatabaseWorkerBoundaries(
       node.forEachChild(visit);
     };
     source.forEachChild(visit);
+    return { file, source, references };
+  });
+  // Reference discovery is independent across files in this immutable snapshot.
+  // Resolve the full batch before classifying callers instead of one RPC per file.
+  symbolsAt(sourceReferences.flatMap(({ references }) => references));
+  for (const { file, source, references } of sourceReferences) {
     const symbols = symbolsAt(references);
     const pendingAccesses = new Set<ts.Expression>();
     const receiverBindings = new Map<ts.Node, ts.ObjectBindingPattern>();
