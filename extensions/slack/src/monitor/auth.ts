@@ -108,7 +108,8 @@ async function resolveSlackChannelMemberIds(
 ): Promise<Set<string>> {
   const cache = getOrCreateWeakOwnerMap(slackChannelMembersCache, ctx);
   const key = `${ctx.accountId}:${eventScope ? `${eventScope.teamId}:` : ""}${channelId}`;
-  const nowMs = Date.now();
+  // Member roster expiry runs on elapsed time so a wall-clock step cannot pin a stale roster.
+  const nowMs = performance.now();
   const cached = cache.get(key);
   if (cached?.members) {
     if (cached.expiresAtMs >= nowMs) {
@@ -129,7 +130,7 @@ async function resolveSlackChannelMemberIds(
   try {
     const members = await pending;
     cache.set(key, {
-      expiresAtMs: Date.now() + CHANNEL_MEMBERS_CACHE_TTL_MS,
+      expiresAtMs: performance.now() + CHANNEL_MEMBERS_CACHE_TTL_MS,
       members,
     });
     pruneMapToMaxSize(cache, CHANNEL_MEMBERS_CACHE_MAX);

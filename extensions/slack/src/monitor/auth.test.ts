@@ -235,6 +235,21 @@ describe("authorizeSlackSystemEventSender", () => {
     expect(conversationsMembers).toHaveBeenCalledTimes(1);
   });
 
+  it("expires cached channel members on elapsed time when the wall clock steps backwards", async () => {
+    vi.useFakeTimers();
+    try {
+      const { authorize, conversationsMembers } = makeChannelMemberAuth();
+      await expect(authorize()).resolves.toBe(true);
+      // A backwards wall-clock step must not keep a stale roster past its TTL.
+      vi.setSystemTime(Date.now() - 60 * 60 * 1000);
+      await vi.advanceTimersByTimeAsync(60_001);
+      await expect(authorize()).resolves.toBe(true);
+      expect(conversationsMembers).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("coalesces in-flight channel member lookups", async () => {
     const members = createDeferred<MembersResponse>();
     const { authorize, conversationsMembers } = makeChannelMemberAuth(vi.fn(() => members.promise));
