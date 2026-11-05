@@ -43,6 +43,7 @@ import { beginSessionPermissionChange } from "./session-permission-change.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { shareSidebarSessionRows } from "./session-row-presentation.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
+import { serializeSessionRow } from "./session-row-serialization.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
@@ -162,6 +163,13 @@ it("reuses packed row bytes across sibling changes without retaining another vie
   expect(JSON.stringify(first.sessions)).toBe(
     '[{"key":"a","kind":"direct","updatedAt":1,"rowMode":"sidebar","label":"A","sharedFacts":[0]},{"key":"b","kind":"direct","updatedAt":1,"rowMode":"sidebar","label":"B🦞","sharedFacts":[0]},{"key":"c","kind":"direct","updatedAt":1,"rowMode":"sidebar","label":"C","sharedFacts":[0]}]',
   );
+  // Aliased source rows must not repack an earlier response through their new shared layout.
+  const previousBytes = first.sessions.map(serializeSessionRow);
+  const duplicates = shareSidebarSessionRows([ownerRows[0]!, ownerRows[0]!]);
+  expect(duplicates.sessions.map(serializeSessionRow)).toEqual(
+    duplicates.sessions.map((value) => JSON.stringify(value)),
+  );
+  expect(first.sessions.map(serializeSessionRow)).toEqual(previousBytes);
   expect(first.sharedFacts).toEqual([{ visibility: "shared", sharingRole: "owner" }]);
   expect(viewer.sharedFacts).toEqual([{ visibility: "shared", sharingRole: "viewer" }]);
   using stringify = vi.spyOn(JSON, "stringify");
