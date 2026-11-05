@@ -45,7 +45,7 @@ grep, regex, or parser per file kind. The same `oc://` path can be validated,
 resolved, searched, dry-run, and written from the terminal, which keeps narrow
 automation reviewable and replayable. It preserves the rest of the file, so
 writing one leaf does not disturb its comments, line endings, or nearby
-formatting.
+formatting. YAML edits also retain an existing UTF-8 byte order mark (BOM).
 
 Use it when the thing you want has a logical address, but the file shape
 varies:
@@ -210,7 +210,8 @@ the `OC_JSONC_INPUT_TOO_LARGE` diagnostic; other file kinds use
 | JSONL         | `.jsonl`, `.ndjson`         | Top-level line addresses (`L1`, `L2`, `$first`, `$last`), then JSONC-style descent inside the line. |
 | YAML/.lobster | `.yaml`, `.yml`, `.lobster` | Map keys and sequence indexes; comments and flow style are handled by the YAML document API.        |
 
-Markdown bullet fields are terminal: `name.absent` cannot match a `name` field.
+Markdown bullet fields and frontmatter keys are terminal: `name.absent` cannot
+match a `name` field or key.
 Recursive wildcards may consume zero segments, so `name.**` and `**.name` can
 still match it. A quoted `"**"` addresses a literal field key.
 For JSONL, `**` can span both the physical line and nested value keys:
@@ -221,6 +222,11 @@ For JSONL, `**` can span both the physical line and nested value keys:
 text plus a `leafType` so plugin authors can render previews without
 depending on the per-kind AST shape.
 
+Markdown frontmatter string reads decode YAML quoting and inline comments:
+`key: value # note` resolves to `value`. A quoted `#` or adjacent hash such as
+`a#b` remains part of the string, and non-string scalar spelling such as
+`00123` is preserved. Reads leave the source bytes unchanged.
+
 ## Mutation contract
 
 `set` writes one concrete target:
@@ -229,7 +235,10 @@ depending on the per-kind AST shape.
   leaves. Item field replacements must contain non-whitespace text; blank
   replacements are rejected without writing. Frontmatter values may be empty.
   Values are literal, including `$1`, `$&`, and `$$`. Markdown
-  insertions append sections, frontmatter keys, or section items. Edits replace
+  insertions append sections, frontmatter keys, or section items. New frontmatter
+  keys must start with an ASCII letter or underscore and contain only ASCII
+  letters, digits, underscores, or hyphens; unsupported keys are rejected before
+  writing. Edits replace
   only the selected source range: body edits preserve the original frontmatter,
   and frontmatter edits preserve the body, including comments, quoting, blank
   lines, CRLF, and a missing final newline. Frontmatter uses `---` delimiters;

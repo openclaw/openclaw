@@ -4,7 +4,7 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
-import { parseGatewayPortOption } from "../cli/gateway-port-option.js";
+import { parseGatewayClientPortOption } from "../cli/gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../cli/parse-timeout.js";
 import { withProgress } from "../cli/progress.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
@@ -22,6 +22,7 @@ import {
   buildGatewayDiscoveryTarget,
   serializeGatewayDiscoveryBeacon,
 } from "../infra/gateway-discovery-targets.js";
+import { formatHostForUrl } from "../infra/net/hostname.js";
 import { pickBestEffortPrimaryTailnetIPv4 } from "../infra/network-discovery-display.js";
 import type { SshTunnel } from "../infra/ssh-tunnel.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
@@ -57,7 +58,7 @@ function buildSshTarget(input: { user?: string; host?: string; port?: number }):
     return null;
   }
   const user = normalizeOptionalString(input.user) ?? "";
-  return `${user ? `${user}@` : ""}${host}${input.port ? `:${input.port}` : ""}`;
+  return `${user ? `${user}@` : ""}${formatHostForUrl(host)}${input.port ? `:${input.port}` : ""}`;
 }
 
 export async function gatewayStatusCommand(
@@ -87,7 +88,7 @@ export async function gatewayStatusCommand(
   const overallTimeoutMs = parseTimeoutMsWithFallback(opts.timeout, defaultTimeoutMs, {
     invalidType: "error",
   });
-  const portOverride = parseGatewayPortOption(opts.port);
+  const portOverride = parseGatewayClientPortOption(opts.port);
   const wideAreaDomain = resolveWideAreaDiscoveryDomain({
     configDomain: cfg.discovery?.wideArea?.domain,
   });
@@ -269,7 +270,7 @@ export async function gatewayStatusCommand(
                 const parsed = parseSshTarget(sshRouteTarget);
                 if (parsed) {
                   const config = await resolveSshConfig(parsed, {
-                    explicitPort: /:\d+$/.test(sshRouteTarget.trim()),
+                    explicitPort: parsed.explicitPort,
                     identity: sshIdentity ?? undefined,
                     timeoutMs: Math.min(800, remainingMs()),
                     signal: controller.signal,

@@ -54,6 +54,7 @@ afterAll(() => restoreMigrationRuntime?.());
 
 function createPluginConfig(pluginId: string, config?: Record<string, string>, paths?: string[]) {
   return {
+    meta: { migrations: { skillWorkshopPlugin: true as const } },
     gateway: { mode: "local" as const },
     plugins: {
       allow: [pluginId],

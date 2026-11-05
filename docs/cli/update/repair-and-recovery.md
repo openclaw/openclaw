@@ -172,6 +172,8 @@ migration resources. The capture stays beside the selected state directory in
 `<state-directory>.update-captures/<run-id>`. Doctor continuations keep the same
 capture; they do not replace it with already migrated state. State-directory
 relocation leaves its original location and recorded paths intact.
+Each database copy is one coherent SQLite image, so a Gateway that keeps committing
+during capture, as its owner lease does every 30 seconds, leaves the copy valid.
 Continuation verifies the recorded live updater's process identity and ancestry;
 unreadable supervisors above that updater do not prevent its Doctor from reusing the capture.
 If ancestry cannot be verified through the live updater, Doctor defers maintenance
@@ -415,7 +417,10 @@ by the updater's activation phase while the Gateway is currently stopped. Target
 selection may record a package-manager method without losing the handoff evidence.
 It restores a verified original installation
 when activation never started, or completes an interrupted package publication
-and runs post-core repair before restarting the verified candidate. Its private
+and runs post-core repair before restarting the verified candidate. Post-core
+repair first settles a plugin cohort that the killed updater reserved for the
+same update; a restored original runtime settles it the same way before its
+Gateway restarts. Its private
 staged runtime survives a missing installed package and records a terminal result
 in `openclaw update status`. This requires the helper that started the update to
 contain the recovery fix. `update repair` remains the backstop if the helper also

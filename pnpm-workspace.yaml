@@ -11,6 +11,15 @@ minimumReleaseAgeStrict: true
 
 # Trusted Codex runtimes are outside the dependency cooldown.
 minimumReleaseAgeExclude:
+  # Approved LanceDB compromised-CA remediation; remove after 2026-11-05T09:36:54.156Z.
+  - "@lancedb/lancedb@0.41.0"
+  - "@lancedb/lancedb-darwin-arm64@0.41.0"
+  - "@lancedb/lancedb-linux-arm64-gnu@0.41.0"
+  - "@lancedb/lancedb-linux-arm64-musl@0.41.0"
+  - "@lancedb/lancedb-linux-x64-gnu@0.41.0"
+  - "@lancedb/lancedb-linux-x64-musl@0.41.0"
+  - "@lancedb/lancedb-win32-arm64-msvc@0.41.0"
+  - "@lancedb/lancedb-win32-x64-msvc@0.41.0"
   - "@openai/codex"
   - "@openai/codex-*"
   # Reviewed libterminal 0.3.11 release; remove after 2026-11-08T02:20:47.166Z.
@@ -43,18 +52,18 @@ minimumReleaseAgeExclude:
   - "node-edge-tts@1.2.11"
   # Reviewed acpx 0.21.0 release (agent process env controls, openclaw/acpx#897); remove after 2026-10-31T00:42:33.101Z.
   - "acpx@0.21.0"
-  # Reviewed fs-safe 0.27.0 release and native helpers; remove after 2026-11-06T23:51:48.523Z.
-  - "@openclaw/fs-safe-darwin-arm64@0.27.0"
-  - "@openclaw/fs-safe-darwin-x64@0.27.0"
-  - "@openclaw/fs-safe-freebsd-arm64@0.27.0"
-  - "@openclaw/fs-safe-freebsd-x64@0.27.0"
-  - "@openclaw/fs-safe-linux-arm64-gnu@0.27.0"
-  - "@openclaw/fs-safe-linux-arm64-musl@0.27.0"
-  - "@openclaw/fs-safe-linux-x64-gnu@0.27.0"
-  - "@openclaw/fs-safe-linux-x64-musl@0.27.0"
-  - "@openclaw/fs-safe-win32-arm64-msvc@0.27.0"
-  - "@openclaw/fs-safe-win32-x64-msvc@0.27.0"
-  - "@openclaw/fs-safe@0.27.0"
+  # Reviewed fs-safe 0.27.1 release and native helpers; remove after 2026-11-11T20:05:13.550Z.
+  - "@openclaw/fs-safe-darwin-arm64@0.27.1"
+  - "@openclaw/fs-safe-darwin-x64@0.27.1"
+  - "@openclaw/fs-safe-freebsd-arm64@0.27.1"
+  - "@openclaw/fs-safe-freebsd-x64@0.27.1"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.27.1"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.27.1"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.27.1"
+  - "@openclaw/fs-safe-linux-x64-musl@0.27.1"
+  - "@openclaw/fs-safe-win32-arm64-msvc@0.27.1"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.27.1"
+  - "@openclaw/fs-safe@0.27.1"
   # Reviewed fs-safe 0.26.15 release and native helpers; remove after 2026-11-06T18:45:32.211Z.
   - "@openclaw/fs-safe@0.26.15"
   - "@openclaw/fs-safe-darwin-arm64@0.26.15"

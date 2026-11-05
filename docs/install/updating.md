@@ -53,6 +53,55 @@ backup.
 
 ## Update implementation contract
 
+Candidate Gateway rehearsal can prepare strictly valid config in its complete
+private update namespace even when a newer release wrote the config. It preserves
+the source writer stamp for installed-updater capture checks; the target's normal
+validated-downgrade writer records its version before live restart. Ordinary
+service startup, force/reset actions, invalid config, and paths outside that
+private namespace retain their future-config refusal. The candidate Gateway must
+contain this repair; the installed updater needs no change.
+
+Candidate state inventory includes normally discovered global plugins even when
+there is no install record or explicit load path. Their private copies retain
+`extensions/<name>` discovery, including linked plugin directories, so candidate
+Doctor validates configured slots against the same installed plugins. The
+candidate snapshot worker must contain this fix; validation remains strict and
+live plugin configuration is unchanged.
+
+During captured SQLite migrations, candidate Doctor reads current update authority
+through private snapshots. It does not retain an independent WAL reader that can
+block its own next migration's exclusive lock. Exec approvals policy, local socket
+credentials, and verified rollback attribution retain their existing checks. This
+repair requires the candidate Doctor; the installed updater needs no change.
+
+Gateway cleanup preserves retired managed npm plugin generations referenced by
+absolute or home-relative paths in startup or current configuration. This keeps
+explicit executable pins working after an update without rewriting their settings.
+Removing a startup reference allows reclamation after a Gateway restart; current
+references protect their files on each cleanup pass. The candidate Gateway must
+contain this fix. It does not restore generations already deleted or discover
+references supplied only through environment variables, relative paths, or external
+symlinks. An incidental path-valued setting can conservatively retain extra files.
+
+The candidate macOS app's narrow credential Doctor also completes pending local
+service-runtime intent migration before native startup selects a Gateway. This
+prevents an absent migration receipt from preserving the old seed after credential
+cutover advances shared state. The daemon migration owner keeps explicit pins and
+conflict refusals; preparation does not seed a runtime or start a service. Retry
+also reconciles intent when credential cutover already completed. The candidate
+must contain this fix; older installed updaters are unchanged.
+
+After draining database readers and writers, candidate Doctor inspects SQLite
+reclamation mode without copying databases whose WAL is empty or absent and whose
+rollback journal is absent. Immutable reads preserve source artifacts; databases
+with recovery content retain the private snapshot path. Conversion still uses the
+existing maintenance, space, and integrity checks. This requires the candidate
+Doctor; the installed updater needs no new protocol.
+
+Synchronous integrity workers preserve the migration owner's selected schema-only
+check, matching the asynchronous worker path. Explicit full verification keeps
+its full coverage; the candidate must contain this transport fix.
+
 Candidate Doctor prepares its read-only SQLite inspection snapshots asynchronously,
 including lease and auth inspection and captured session repair planning. Cancellation
 joins the snapshot child and its cleanup. Snapshot allocation checks the destination's
@@ -152,6 +201,11 @@ must contain the diagnostic repair; an older updater cannot gain it from a newer
 candidate alone. If capture refuses before the package changes, final recovery
 restarts and verifies the previous owned Gateway unless recorded data is at risk.
 
+PostgreSQL update rollback uses a fresh prepared anchor on each attempt. After a
+prepublication refusal, correcting the reported obstruction allows the same native
+`update restore` request to retry without overwriting an earlier recovery preparation.
+The candidate restore implementation must contain this fix; the supervisor needs no change.
+
 When artifact-preserving SQLite inspection exhausts its stabilization attempts,
 update failures retain the final consistency reason code and attempt count in
 `openclaw update status` and the prepared failure report. The candidate worker
@@ -213,9 +267,14 @@ bookkeeping available while the installed package is missing. An untouched
 publication preparation is retired and the verified original Gateway restored;
 an interrupted publication completes the recorded candidate, runs post-core
 repair as the same update's continuation, then restarts and verifies the managed
-Gateway. Update history records rollback, success with recovery, or an actionable
-failure. Lost ownership, named data risk, and unverifiable runtime identity still
-keep the Gateway stopped. The helper that starts the update must contain this
+Gateway. A plugin cohort that the killed updater reserved for this update is
+settled by that continuation before Doctor runs; after a restored original,
+the original runtime settles it before the Gateway restarts. If that settlement
+fails, the original Gateway still restarts and update history names
+`openclaw update repair` before the next update. The helper never settles a cohort
+that belongs to another update. Update history records rollback, success with
+recovery, or an actionable failure. Lost ownership, named data risk, and
+unverifiable runtime identity still keep the Gateway stopped. The helper that starts the update must contain this
 change; staging a newer candidate cannot repair an older helper.
 
 During overlapping Gateway restarts, config recovery reads health facts through
@@ -1247,6 +1306,14 @@ Startup failure reports retain the last meaningful stderr diagnostic and the end
 of bounded log lines, with secrets redacted. Canary progress markers do not
 replace the failure reason. The installed updater owns this reporting, so an
 older updater can retain its earlier diagnostic behavior on the first update.
+During private rehearsal, exec SecretRef providers are deferred and their owners
+start cold with a recorded warning. Provider prerequisites such as a 1Password
+service-account token stay in the serving state directory; rehearsal does not
+copy them or run a resolver against that directory. SecretRefs remain references
+in the copied configuration. Credential availability is checked by the normally
+activated Gateway. This repair must be present in the candidate; it also applies
+to older updaters that supply the complete private-rehearsal environment.
+
 The canary verifies the copied plugin payloads without downloading replacements.
 It warns when plugin refresh is deferred; live update finalization owns that
 refresh, so a slow registry cannot consume the canary's startup budget.
@@ -1361,6 +1428,9 @@ ownership. It preserves later independent changes; conflicting records, settings
 or artifacts leave recovery unfinished instead of overwriting those changes or
 reporting the old Gateway ready. The updater performing the operation must contain
 this support; installing a newer candidate does not add it to an older parent.
+When recovery stays pending, the update prints the first failure below the
+unfinished-recovery refusal and names `openclaw update repair` when it can settle
+that plugin cohort.
 When a legacy Doctor fails or is interrupted, package rollback leaves compatible
 databases in place. Database restoration still requires the existing schema and
 write-generation checks; later independent changes prevent an unsafe restore.
@@ -2050,7 +2120,7 @@ openclaw doctor
 
 Migrates config, audits DM policies, and checks gateway health. Doctor also compares active official plugins with the OpenClaw package the managed service will load after restart. Resolve any plugin restart-readiness warning before continuing. Details: [Doctor](/gateway/doctor)
 
-Standalone repair cancels its pre-repair original-state capture after ten minutes.
+Standalone repair allows up to twenty minutes for its pre-repair original-state capture.
 If that capture times out, Doctor waits for its workers to settle and reports a
 warning with backup and retry instructions; repair-specific migration backups still apply.
 Doctor restores a managed Gateway it stopped, including after SIGINT, SIGTERM,
@@ -2085,6 +2155,12 @@ On Linux, `openclaw doctor --fix` can reclaim abandoned updater runtimes even
 after a systemd user-manager re-exec. The manager's `--deserialize` argument and
 its protected `(sd-pam)` child do not count as runtime holders. Actual runtime
 references and unverified processes still preserve the affected artifacts.
+
+On Windows, the same reclamation reads native process command lines and working
+directories. Processes owned by another account and protected system processes
+do not hold runtimes, matching unreadable foreign processes on macOS. A process
+of the same account whose command line is hidden still preserves runtimes when
+its image is Node.js, Bun, or OpenClaw, and Doctor names its PID.
 
 On Windows, `openclaw doctor --fix` can also retry abandoned backup scratch
 cleanup after an older release reported `EPERM` while renaming to an
