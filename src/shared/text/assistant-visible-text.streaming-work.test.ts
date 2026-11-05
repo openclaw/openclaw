@@ -143,6 +143,7 @@ it.each([
     "",
   ],
   ["Read [guide](https://example.test/guide) for the exact instructions.", 128, ""],
+  ["Read [guide](https://example.test/guide) and `code` for instructions.", 2, ""],
   ["repeat", 2, "```text\ninside\n\ninside\n```\n\n"],
 ] as const)("bounds duplicate paragraph work %#: %j", (paragraph, copies, prefix) => {
   const tail = prefix
