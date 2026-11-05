@@ -20,10 +20,6 @@ import {
   type QuestionClient,
   type QuestionClientResolutionOwner,
 } from "./question-prompt-client.ts";
-import {
-  attachQuestionContinuationReceipts,
-  refreshQuestionContinuationReceipt,
-} from "./question-prompt-continuation.ts";
 import { parseQuestion } from "./question-prompt-parse.ts";
 import {
   clearSecretQuestionDrafts,
@@ -293,19 +289,21 @@ function recordQuestionResolution(
     const revision = currentPrompt.revision;
     // Receipt invalidation must not reinstall stale question records or start
     // recovery for an unmatched outcome; reconnect hydration owns those reads.
-    void refreshQuestionContinuationReceipt(
-      client,
-      currentPrompt,
-      () =>
-        state.client === client &&
-        state.clientGeneration === generation &&
-        state.prompts.get(resolved.id) === currentPrompt &&
-        currentPrompt.revision === revision,
-      state.onChange,
-      (changedPrompt) => {
-        changedPrompt.revision = ++state.revision;
-      },
-    ).catch(() => {});
+    void Promise.all([
+      requestQuestionGateway(client, "question.list", { includeContinuation: true }),
+      import("./question-prompt-continuation.ts"),
+    ])
+      .then(([result, { attachCurrentQuestionContinuationReceipt }]) =>
+        attachCurrentQuestionContinuationReceipt(
+          result,
+          state,
+          client,
+          currentPrompt,
+          generation,
+          revision,
+        ),
+      )
+      .catch(() => {});
   }
 }
 
@@ -376,6 +374,9 @@ async function refreshPendingQuestions(
     invalidateQuestionList(client);
     return false;
   }
+  const continuation = listResult.continuations?.length
+    ? await import("./question-prompt-continuation.ts")
+    : undefined;
   if (!isCurrentClient()) {
     return false;
   }
@@ -386,7 +387,7 @@ async function refreshPendingQuestions(
       storeQuestionRecord(state, record.id, record, previous);
     }
   }
-  attachQuestionContinuationReceipts(
+  continuation?.attachQuestionContinuationReceipts(
     listResult,
     (id) => state.prompts.get(id),
     (prompt) => {

@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { requestQuestionGateway, type QuestionClient } from "./question-prompt-client.ts";
+import type { QuestionClient } from "./question-prompt-client.ts";
 type ContinuationPrompt = { id: string; continuationMessage?: string };
 
 export function attachQuestionContinuationReceipts<Prompt extends ContinuationPrompt>(
@@ -31,23 +31,36 @@ export function attachQuestionContinuationReceipts<Prompt extends ContinuationPr
   }
 }
 
-export async function refreshQuestionContinuationReceipt<Prompt extends ContinuationPrompt>(
+export function attachCurrentQuestionContinuationReceipt<
+  Prompt extends ContinuationPrompt & { revision: number },
+>(
+  result: unknown,
+  state: {
+    client: QuestionClient | null;
+    clientGeneration: number;
+    prompts: Map<string, Prompt>;
+    revision: number;
+    onChange: () => void;
+  },
   client: QuestionClient,
   prompt: Prompt,
-  isCurrent: () => boolean,
-  onChange: () => void,
-  onReceiptChanged: (prompt: Prompt) => void,
-): Promise<void> {
-  const result = await requestQuestionGateway(client, "question.list", {
-    includeContinuation: true,
-  });
-  if (!isCurrent()) {
+  generation: number,
+  revision: number,
+): void {
+  if (
+    state.client !== client ||
+    state.clientGeneration !== generation ||
+    state.prompts.get(prompt.id) !== prompt ||
+    prompt.revision !== revision
+  ) {
     return;
   }
   attachQuestionContinuationReceipts(
     result,
     (id) => (id === prompt.id ? prompt : undefined),
-    onReceiptChanged,
+    (changed) => {
+      changed.revision = ++state.revision;
+    },
   );
-  onChange();
+  state.onChange();
 }
