@@ -5,12 +5,13 @@ import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
+import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import { createSqliteFamilyEngines } from "../infra/database-engine/selection-fixture.test-support.js";
 import {
   executeSqliteQueryTakeFirstSync,
   executeSqliteQuerySync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import {
   findStartupMaintenanceRequiredError,
   StartupMaintenanceRequiredError,
@@ -19,11 +20,9 @@ import { writeLegacyStateSchemaV1 } from "../infra/state-migrations.caller-mode.
 import { migrateLegacyConfigHealth } from "../infra/state-migrations.runtime-state.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { withLiveStateReads } from "../state/artifact-preserving-state-reads.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
-import {
-  withArtifactPreservingStateReads,
-  withOpenClawStateDatabaseReadSnapshot as readDatabaseSnapshot,
-} from "../state/openclaw-state-db-readonly.js";
+import { withOpenClawStateDatabaseReadSnapshot as readDatabaseSnapshot } from "../state/openclaw-state-db-readonly.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
@@ -373,15 +372,18 @@ describe("observation scope", () => {
     return { ...fixtureState, raw, snapshot };
   }
 
-  it("shares boot health observations until a committed owner write changes them", async () => {
-    const { configPath, capture, setSignature } = fixture();
+  it.each([false, true])("shares health until committed write (live=%s)", async (live) => {
+    const { deps, configPath, capture, setSignature } = fixture();
     await closeDatabase();
     const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-    const copies = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationAwaited");
-    const observe = () => withArtifactPreservingStateReads(() => capture().read());
+    const selection = { effectiveEngines: createSqliteFamilyEngines() };
+    const read = () => capture().read();
+    const observe = () =>
+      withDatabaseEngineSelection(selection, () =>
+        live ? withLiveStateReads(() => readDatabaseSnapshot(read, deps)) : read(),
+      );
     const before = await observe();
     expect(before.state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe("before");
-    expect(copies).not.toHaveBeenCalled();
     expect(await observe()).toEqual(before);
     expect(reads).toHaveBeenCalledTimes(1);
 
@@ -392,18 +394,15 @@ describe("observation scope", () => {
     expect(reads).toHaveBeenCalledTimes(2);
 
     const owner = capture();
-    await expect(
-      owner.update({ lastObservedSuspiciousSignature: "worker commit" }, after),
-    ).resolves.toEqual({ status: "applied" });
-    expect((await observe()).state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe(
-      "worker commit",
-    );
-    await expect(
-      owner.update({ lastObservedSuspiciousSignature: "stale" }, before),
-    ).resolves.toEqual({ status: "conflict" });
-    expect((await observe()).state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe(
-      "worker commit",
-    );
+    await expect(owner.update(signaturePatch("worker commit"), after)).resolves.toEqual({
+      status: "applied",
+    });
+    const committed = await observe();
+    expect(committed.state.entries?.[configPath]).toMatchObject(signaturePatch("worker commit"));
+    await expect(owner.update(signaturePatch("stale"), before)).resolves.toEqual({
+      status: "conflict",
+    });
+    expect(await observe()).toEqual(committed);
     expect(reads).toHaveBeenCalledTimes(3);
   });
 
