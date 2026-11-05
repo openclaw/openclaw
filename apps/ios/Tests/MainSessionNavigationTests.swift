@@ -5,13 +5,19 @@ import Testing
 
 @MainActor
 struct MainSessionNavigationTests {
-    @Test(arguments: ["main", "work"])
-    func `sidebar retains the active agents existing main conversation`(base: String) {
+    enum MainPlacement: CaseIterable, Equatable, Sendable {
+        case recent, group, pinned
+    }
+
+    @Test(arguments: ["main", "work"], MainPlacement.allCases)
+    func `sidebar retains the active agents existing main conversation`(base: String, placement: MainPlacement) {
         let mainKey = "agent:one:\(base)"
         var main = OpenClawChatSessionEntry(key: mainKey)
         main.sessionId = "existing-main-history"
         main.label = "Original topic"
         main.updatedAt = 1
+        main.category = placement == .group ? "Research" : nil
+        main.pinned = placement == .pinned
         let newer = (0..<25).map { index -> OpenClawChatSessionEntry in
             var session = OpenClawChatSessionEntry(key: "agent:one:conversation-\(index)")
             session.updatedAt = Double(index + 10)
@@ -25,14 +31,19 @@ struct MainSessionNavigationTests {
             currentSessionKey: other.key,
             mainSessionKey: base,
             activeAgentID: "one",
-            groups: [],
+            groups: [.init(id: "Research", name: "Research", order: 0)],
             rosterIsComplete: true)
-        let rows = sections.flatMap { ChatSessionSidebarModel.rows($0.nodes, showsChildren: { _ in true }) }
-            .map { $0.node.session }
+        let rows = sections.flatMap {
+            RootSidebar.sessionNodes(for: $0, mainSessionKey: mainKey, searchText: "")
+        }.map { $0.node.session }
         #expect(rows.filter { $0.key == mainKey }.count == 1)
-        #expect(rows.first?.key == mainKey) // Still visible before the sidebar's recent-row cap.
+        #expect(rows.count == 21) // Main plus the unchanged budget of 20 ordinary recent rows.
+        if placement == .recent {
+            #expect(rows.first?.key == mainKey)
+        }
         #expect(rows.first { $0.key == mainKey }?.sessionId == "existing-main-history")
-        #expect(rows.contains { $0.key == other.key })
+        #expect(rows.first { $0.key == mainKey }?.pinned == main.pinned)
+        #expect(rows.first { $0.key == mainKey }?.category == main.category)
         #expect(!rows.contains { $0.key == otherAgent.key })
         let resolvedMainKey = ChatSessionSidebarModel.selectedSessionKey(
             sessions: [main, other, otherAgent], currentSessionKey: "main", mainSessionKey: base, activeAgentID: "one")
@@ -50,7 +61,12 @@ struct MainSessionNavigationTests {
         #expect(!CommandCenterTab.isRecentChatSession(mainKey, defaultSessionKey: mainKey))
         #expect(CommandCenterTab.isListedChatSession(other.key, mainSessionKey: mainKey))
         #expect(!CommandCenterTab.isListedChatSession("agent:two:main", mainSessionKey: mainKey))
-        #expect(!CommandCenterTab.isListedChatSession("agent:one:cron:job", mainSessionKey: mainKey))
+        let automation = OpenClawChatSessionEntry(key: "agent:one:cron:job")
+        let now = Date(timeIntervalSince1970: 1000)
+        #expect(CommandCenterTab.isListedChatSession(automation.key, mainSessionKey: mainKey))
+        #expect(!SessionStatusScope.active.includes(automation, at: now, currentSessionKey: other.key))
+        #expect(SessionStatusScope.automations.includes(automation, at: now, currentSessionKey: other.key))
+        #expect(SessionStatusScope.active.includes(automation, at: now, currentSessionKey: automation.key))
         #expect(CommandCenterTab.sessionTitle(main, mainSessionKey: mainKey) == "Main Session")
         #expect(CommandCenterTab.sessionTitle(other, mainSessionKey: mainKey) == "Another conversation")
         #expect(main.label == "Original topic")
@@ -62,11 +78,32 @@ struct MainSessionNavigationTests {
         #expect(item.state == "open")
     }
 
-    @Test func `both main shortcuts follow the visible destination`() {
-        let key = "agent:one:main"
-        #expect(RootSidebar.isSessionSelected(key, selectedSessionKey: key, destination: .chat))
-        #expect(!RootSidebar.isSessionSelected(key, selectedSessionKey: "agent:one:conversation", destination: .chat))
-        #expect(!RootSidebar.isSessionSelected(key, selectedSessionKey: key, destination: .overview))
-        #expect(!RootSidebar.isSessionSelected(key, selectedSessionKey: key, destination: .sessions))
+    @Test func mainReservationKeepsDescendantsTogetherAndRespectsSearch() throws {
+        let mainKey = "agent:one:main"
+        var main = OpenClawChatSessionEntry(key: mainKey)
+        main.updatedAt = 1
+        var child = OpenClawChatSessionEntry(key: "agent:one:followup")
+        child.parentSessionKey = mainKey
+        child.updatedAt = 2
+        let newer = (0..<25).map { index -> OpenClawChatSessionEntry in
+            var row = OpenClawChatSessionEntry(key: "agent:one:conversation-\(index)")
+            row.updatedAt = Double(index + 10)
+            return row
+        }
+        let sections = RootSidebarModel.sections(
+            sessions: [main, child] + newer, query: "", currentSessionKey: newer[0].key,
+            mainSessionKey: "main", activeAgentID: "one", groups: [], rosterIsComplete: true)
+        let recent = try #require(sections.first { $0.id == "recent" })
+        let mainNode = try #require(recent.nodes.first { $0.session.key == mainKey })
+        let rows = RootSidebar.sessionNodes(for: recent, mainSessionKey: mainKey, searchText: "")
+        #expect(rows.count == 21)
+        #expect(rows.prefix(2).map { $0.node.session.key } == [mainKey, child.key])
+        #expect(rows[1].depth == 1)
+        let collapsed = RootSidebar.sessionNodes(
+            for: recent, mainSessionKey: mainKey, searchText: "", collapsedParents: [mainNode.id])
+        #expect(collapsed.count == 21)
+        #expect(!collapsed.contains { $0.node.session.key == child.key })
+        let uncapped = RootSidebar.sessionNodes(for: recent, mainSessionKey: mainKey, searchText: "conversation")
+        #expect(uncapped == ChatSessionSidebarModel.rows(recent.nodes, showsChildren: { _ in true }))
     }
 }

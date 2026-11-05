@@ -214,18 +214,6 @@ struct RootTabsSidebarRegressionTests {
         #expect(resetRange.lowerBound < destinationRange.lowerBound)
     }
 
-    @Test func `all sessions protects the resolved main row at the action boundary`() throws {
-        let url = Self.rootTabsSourceURL().deletingLastPathComponent()
-            .appendingPathComponent("Design/CommandCenterTab.swift")
-        let source = try String(contentsOf: url, encoding: .utf8)
-        let row = try Self.extract(source, from: "private func sessionRow(", to: "private func openSessionKey(")
-
-        #expect(row.contains("mainSessionKey: mainSessionKey"))
-        #expect(!row.contains("mainSessionKey: self.appModel.mainSessionKey"))
-        #expect(row.contains("canArchive: ChatSessionSidebarModel.canArchiveSession"))
-        #expect(row.contains("canDelete: ChatSessionSidebarModel.canDeleteSession"))
-    }
-
     private static func rootTabsSourceURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

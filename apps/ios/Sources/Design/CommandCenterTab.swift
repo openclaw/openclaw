@@ -1201,6 +1201,7 @@ struct CommandSessionsScreen: View {
             CommandSessionRow(item: item)
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("SessionDashboard.Session.\(session.key)")
         .commandSessionActions(
             session: session,
             mainSessionKey: mainSessionKey,

@@ -198,8 +198,9 @@ credentials are not exported to Apple Watch or cloud workers.
 the fixed **Pages** shortcut, the sidebar **Sessions** list, or **All Sessions…**.
 Both sidebar shortcuts are selected while that conversation is open; switching
 to another conversation or page moves the selection. These entry points share
-the same history and do not create a new session. Main Session cannot be deleted,
-archived, or snoozed.
+the same history and do not create a new session. The main row remains visible
+when the recent-session list is capped. Its name is fixed: the iOS menus do not
+offer rename, delete, archive, or snooze actions for Main Session.
 
 Choose **All Sessions…** in the sidebar to browse **Active**, **Snoozed**,
 **Automations**, or **Archived** sessions. Automation-created sessions stay out of

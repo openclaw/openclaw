@@ -426,7 +426,9 @@ struct RootSidebar: View {
                             for: Self.flattened(section.nodes).map(\.session), targetID: "section:\(section.id)")
                     }
                     if !self.searchText.isEmpty || !self.collapsedGroups.contains(section.id) {
-                        ForEach(self.sessionNodes(for: section)) { row in
+                        ForEach(Self.sessionNodes(
+                            for: section, mainSessionKey: rowPass.mainSessionKey, searchText: self.searchText,
+                            collapsedParents: self.collapsedParents)) { row in
                             self.sessionTreeRow(row, rowPass: rowPass)
                         }
                     }
@@ -619,12 +621,27 @@ struct RootSidebar: View {
         nodes.flatMap { [$0] + self.flattened($0.children) }
     }
 
-    private func sessionNodes(for section: ChatSessionSidebarModel.Section) -> [ChatSessionSidebarModel.Row] {
-        let nodes = self.displayRows(section.nodes)
-        guard section.id == "recent", let limit = Self.recentSessionCap(searchText: self.searchText) else {
-            return nodes
+    static func sessionNodes(
+        for section: ChatSessionSidebarModel.Section,
+        mainSessionKey: String,
+        searchText: String,
+        collapsedParents: Set<String> = []) -> [ChatSessionSidebarModel.Row]
+    {
+        var nodes = section.nodes
+        var limit = section.id == "recent" ? Self.recentSessionCap(searchText: searchText) : nil
+        if let recentLimit = limit,
+           let mainIndex = nodes.firstIndex(where: {
+               CommandCenterTab.isMainSession($0.session.key, mainSessionKey: mainSessionKey)
+           })
+        {
+            // Reserve a row without persisting a pin or changing shared recency.
+            // Move the whole tree so descendants stay adjacent and use the ordinary budget.
+            let main = nodes.remove(at: mainIndex)
+            nodes.insert(main, at: 0)
+            limit = recentLimit + 1
         }
-        return Array(nodes.prefix(limit))
+        let rows = ChatSessionSidebarModel.rows(nodes, showsChildren: { !collapsedParents.contains($0.id) })
+        return limit.map { Array(rows.prefix($0)) } ?? rows
     }
 
     static func recentSessionCap(searchText: String) -> Int? {
@@ -766,6 +783,7 @@ struct RootSidebar: View {
                     mainSessionKey: rowPass.mainSessionKey),
                 performMutation: self.performSessionMutation,
                 fork: { self.forkSession(session) })
+            .accessibilityIdentifier("RootTabs.Sidebar.Session.\(session.key)")
             .accessibilityAddTraits(isSelected ? .isSelected : [])
             .accessibilityValue(Self.sessionAccessibilityValue(
                 isPinned: session.pinned == true,
