@@ -45,6 +45,11 @@ backup.
 
 ## Update implementation contract
 
+Standalone update admission pins the current handoff database before checking
+earlier Gateway custody. Ancestor path aliases that resolve to that same admitted
+store do not acquire a second fence. Distinct stores and live owners still block
+conflicting updates; replaced or hardlinked database files remain refused.
+
 Explicit repair also settles version-2 triage/repair leases left in `closing`
 after their owners die, even without recovery metadata. Native triage still
 requires proof that its systemd scope is closed. Repair warns when reclaiming a

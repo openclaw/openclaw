@@ -3,7 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
-import { captureManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
+import {
+  captureManagedUpdateLeaseDatabaseIdentity,
+  prepareManagedHandoffLeaseDatabaseIdentity,
+} from "../../infra/update-managed-service-handoff-database.js";
 import {
   prepareManagedHandoffLeaseStore,
   resolveManagedUpdateLeaseDatabasePath,
@@ -358,9 +361,22 @@ export async function withUpdateCommandExecutor<T>(
             managedHandoff = true;
           } else {
             // An earlier macOS Gateway's store still fences its unsettled custody.
+            const legacyDatabasePath = resolveLegacyGatewayManagedUpdateLeaseDatabasePath();
+            if (
+              legacyDatabasePath &&
+              fs.existsSync(legacyDatabasePath) &&
+              fs.existsSync(databasePath)
+            ) {
+              // Earn and retain the current store's pin before legacy discovery
+              // awaits, so deduplicating an alias cannot adopt a replaced database.
+              existingIdentity ??= await prepareManagedHandoffLeaseDatabaseIdentity(databasePath);
+              databasePath = existingIdentity.databasePath;
+              store = await openStore(existingIdentity, key);
+            }
             const legacyFence = await fenceLegacyGatewayCustody(
               key,
-              resolveLegacyGatewayManagedUpdateLeaseDatabasePath(),
+              legacyDatabasePath,
+              existingIdentity,
             );
             if ("refusal" in legacyFence) {
               throw new UpdateCommandRecoveryPendingError(legacyFence.refusal);
