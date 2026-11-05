@@ -194,10 +194,33 @@ const loaders = {
       (m) => m.workerInferenceOperations,
     ),
   workerPlacements: () =>
-    import("../gateway/worker-environments/placement-lifecycle.worker.js").then((m) => ({
-      ...m.placementLifecycleOperations,
-      ...m.placementReadOperations,
-    })),
+    import("../gateway/worker-environments/placement-lifecycle.worker.js").then(
+      (m) => m.placementLifecycleOperations,
+    ),
+  "workerPlacements.clearLocalTurnClaims": () =>
+    import("../gateway/worker-environments/placement-recovery.worker.js").then(
+      (m) => m.placementRecoveryOperations,
+    ),
+  "workerPlacements.read": () =>
+    import("../gateway/worker-environments/placement-read.worker.js").then(
+      (m) => m.placementReadOperations,
+    ),
+  "workerPlacements.readIdentities": () =>
+    import("../gateway/worker-environments/placement-read.worker.js").then(
+      (m) => m.placementReadOperations,
+    ),
+  "workerPlacements.readMove": () =>
+    import("../gateway/worker-environments/placement-read.worker.js").then(
+      (m) => m.placementReadOperations,
+    ),
+  "workerPlacements.readReconcile": () =>
+    import("../gateway/worker-environments/placement-read.worker.js").then(
+      (m) => m.placementReadOperations,
+    ),
+  "workerPlacements.readWithMove": () =>
+    import("../gateway/worker-environments/placement-projection.worker.js").then(
+      (m) => m.placementProjectionOperations,
+    ),
   placementTools: () =>
     import("../gateway/worker-environments/placement-session-tool-operations.worker.js").then(
       (m) => m.placementSessionToolOperations,
