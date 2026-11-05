@@ -14,11 +14,6 @@ export function formatRelativeTimestamp(
   return format.formatRelativeTimestamp(...args);
 }
 
-export function formatDateMs(...args: Parameters<typeof format.formatDateMs>) {
-  getLocale();
-  return format.formatDateMs(...args);
-}
-
 export function formatTimeMs(...args: Parameters<typeof format.formatTimeMs>) {
   getLocale();
   return format.formatTimeMs(...args);

@@ -167,6 +167,35 @@ afterEach(() => {
 });
 
 describe("OpenAI Responses continuation", () => {
+  it("matches replay aliases without allocating per-call sets", () => {
+    const state = continuationState(
+      [toolCall("call_latest")],
+      [firstUser, toolCall("call_sent"), toolOutput("call_sent")],
+    );
+    const request = {
+      ...state.lastRequest,
+      input: [
+        ...(state.lastRequest.input ?? []),
+        toolCall("call_latest"),
+        toolOutput("call_latest"),
+      ],
+    };
+    const sets = vi.spyOn(globalThis, "Set");
+    let allocations: number;
+    let result: ReturnType<typeof resolve>;
+    try {
+      result = resolve(state, request);
+      allocations = sets.mock.calls.length;
+    } finally {
+      sets.mockRestore();
+    }
+    expect(result).toMatchObject({
+      continuationStatus: "continued",
+      request: { previous_response_id: "resp_1", input: [toolOutput("call_latest")] },
+    });
+    expect(allocations).toBe(0);
+  });
+
   it("extends immutable prefix hashes without re-encoding retained entries across branches", () => {
     const host = createAiTransportHost({
       immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
@@ -333,13 +362,19 @@ describe("OpenAI Responses continuation", () => {
       expect(resolve(state, request).continuationStatus).toBe("continued");
       const keys = vi.spyOn(Object, "keys");
       try {
-        expect(resolve(state, request)).toMatchObject({
+        const continued = resolve(state, request);
+        const projections = keys.mock.calls.filter(
+          ([value]) =>
+            retained.some((item) => item === value) ||
+            (typeof value === "object" &&
+              value !== null &&
+              Reflect.get(value, "type") === "function_call_output"),
+        ).length;
+        expect(continued).toMatchObject({
           continuationStatus: "continued",
           request: { previous_response_id: "resp_cached", input: [toolOutput(rawId)] },
         });
-        expect(
-          keys.mock.calls.filter(([value]) => retained.some((item) => item === value)),
-        ).toHaveLength(0);
+        expect(projections).toBe(0);
       } finally {
         keys.mockRestore();
       }
@@ -355,6 +390,30 @@ describe("OpenAI Responses continuation", () => {
         ],
       });
       expect(resolve(state, structuredClone(request)).continuationStatus).toBe("continued");
+    });
+  });
+
+  it.each([false, true])("copies opaque replay accessors once (frozen=%s)", (frozen) => {
+    const host = createAiTransportHost({
+      immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
+    });
+    runWithAiTransportHost(host, () => {
+      const content = vi.fn(() => [{ type: "input_text" as const, text: "answer" }]);
+      const item = {
+        type: "message" as const,
+        role: "assistant" as const,
+        get content() {
+          return content();
+        },
+      };
+      const state = continuationState([], [frozen ? Object.freeze(item) : item]);
+      const request = {
+        ...state.lastRequest,
+        input: [{ ...item }, secondUser],
+      };
+      content.mockClear();
+      expect(resolve(state, request).continuationStatus).toBe("continued");
+      expect(content).toHaveBeenCalledTimes(1);
     });
   });
 

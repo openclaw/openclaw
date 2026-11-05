@@ -327,6 +327,7 @@ describe("chat pane approval requester identity", () => {
       { container },
     );
     try {
+      await vi.dynamicImportSettled();
       for (const label of [undefined, "Source", "Renamed", undefined]) {
         Object.assign(context.sessions.state, {
           result: sessionsResult(label ? [host, { ...source, label }] : [host], now),

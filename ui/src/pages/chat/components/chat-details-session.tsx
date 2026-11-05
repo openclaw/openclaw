@@ -575,6 +575,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                     showProcesses={false}
                   />
                   <ChatDetailsProcesses
+                    details={props.props!}
                     processes={processes}
                     presented={active()}
                     expanded={sectionExpanded("processes")}
