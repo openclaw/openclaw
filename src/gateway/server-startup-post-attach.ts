@@ -208,6 +208,22 @@ export async function startGatewayPostAttachRuntime(params: {
       return await disposeUnattached();
     }
     pluginRegistry = loaded.pluginRegistry;
+    if (!params.isClosing?.()) {
+      const { cleanupRetiredGitPluginInstalls, gitInstallProtectPaths } =
+        await import("../plugins/retired-git-installs.js");
+      await cleanupRetiredGitPluginInstalls({
+        protectPaths: gitInstallProtectPaths({ plugins: pluginRegistry.plugins }),
+        assertCurrent: () => {
+          if (params.isClosing?.()) {
+            throw new Error("Gateway is closing");
+          }
+        },
+      }).catch((error: unknown) => {
+        if (!params.isClosing?.()) {
+          params.log.warn(`retired git plugin cleanup failed: ${String(error)}`);
+        }
+      });
+    }
     params.broadcast?.(
       "plugins.changed",
       { generation: getPluginRegistryVersion(pluginRegistry) },

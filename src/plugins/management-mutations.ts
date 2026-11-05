@@ -573,16 +573,37 @@ export async function reloadManagedPlugin(
       }
     }
     await prepareEffect();
+    const application = await params.applyRuntime({
+      config,
+      pluginIds,
+      reason: "reload",
+      ...(params.waitForDrain ? { waitForDrain: true, drainSignal: params.signal } : {}),
+      ...(expected.size ? { expectedSourceDigests: Object.fromEntries(expected) } : {}),
+      assertInvokerOwned: beforePersistentApply,
+    });
+    const { cleanupRetiredGitPluginInstalls, gitInstallProtectPaths } =
+      await import("./retired-git-installs.js");
+    const { getActivePluginRegistry } = await import("./runtime.js");
+    const retired = await cleanupRetiredGitPluginInstalls({
+      env,
+      pluginIds,
+      protectPaths: gitInstallProtectPaths({
+        installPaths: Object.values(metadata.index.installRecords ?? {}).map(
+          (record) => record.installPath,
+        ),
+        plugins: getActivePluginRegistry()?.plugins,
+      }),
+      assertCurrent: beforePersistentApply,
+    });
     return {
       pluginIds: resolved.map((target) => target.pluginId),
-      application: await params.applyRuntime({
-        config,
-        pluginIds,
-        reason: "reload",
-        ...(params.waitForDrain ? { waitForDrain: true, drainSignal: params.signal } : {}),
-        ...(expected.size ? { expectedSourceDigests: Object.fromEntries(expected) } : {}),
-        assertInvokerOwned: beforePersistentApply,
-      }),
+      application:
+        retired.warnings.length > 0
+          ? {
+              ...application,
+              warnings: [...(application.warnings ?? []), ...retired.warnings],
+            }
+          : application,
     };
   });
 }

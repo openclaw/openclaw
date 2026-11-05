@@ -1,0 +1,3 @@
+153
+# Git checkout retirement after a failed plugin activation. The install regression
+# and the cleanup boundaries do not fit in the inherited test-line slack.

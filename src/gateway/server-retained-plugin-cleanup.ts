@@ -92,6 +92,29 @@ export async function cleanupGatewayRetiredPluginArtifacts(params: {
             }
             return true;
           });
+          const { cleanupRetiredGitPluginInstalls, gitInstallProtectPaths } =
+            await import("../plugins/retired-git-installs.js");
+          const { getActivePluginRegistry } = await import("../plugins/runtime.js");
+          const activePlugins = getActivePluginRegistry()?.plugins;
+          const removedGitInstalls = await cleanupRetiredGitPluginInstalls({
+            protectPaths: gitInstallProtectPaths({
+              installPaths: [
+                ...params.startupInstallPaths,
+                ...configuredPaths,
+                ...Object.values(records).flatMap((record) =>
+                  record.installPath ? [record.installPath] : [],
+                ),
+              ],
+              plugins: activePlugins,
+            }),
+            assertCurrent: assertInventoryCurrent,
+          });
+          for (const warning of removedGitInstalls.warnings) {
+            params.log.warn(warning);
+          }
+          if (removedGitInstalls.removed > 0) {
+            params.log.info(`cleaned ${removedGitInstalls.removed} retired git plugin checkout(s)`);
+          }
           const removedGenerations = await cleanupRetainedManagedNpmInstallGenerations({
             assertCurrent: assertInventoryCurrent,
             activeInstallPaths: [
