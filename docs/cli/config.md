@@ -517,6 +517,18 @@ Use `--replace-path <path>` when one object or array must become exactly the pro
 openclaw config patch --file ./discord.patch.json5 --replace-path 'channels.discord.guilds["123"].channels'
 ```
 
+For an intentional large reduction, use `config patch --allow-size-drop` with the
+Gateway stopped. The flag permits only the size reduction; schema validation,
+explicit agent-removal authorization, read-only mode, and concurrent-write guards
+still apply. Remove roster entries explicitly with `null`. Normal backups and
+config recovery remain enabled, and a successful write records the new config as
+the accepted health baseline. The command refuses a live Gateway owner instead
+of routing this offline-only option through RPC.
+
+```bash
+openclaw config patch --file ./smaller-config.patch.json5 --allow-size-drop
+```
+
 `--dry-run` runs schema and SecretRef resolvability checks without writing. Exec-backed SecretRefs are skipped by default during dry-run; add `--allow-exec` when you intentionally want dry-run to execute provider commands.
 
 ## Dry run
