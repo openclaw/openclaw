@@ -228,18 +228,76 @@ describe("noteSecurityWarnings gateway exposure", () => {
       cfg: { tools: { subagents: { tools: { allow: [] } } } },
       allowPath: "tools.subagents.tools.allow",
     },
-  ] satisfies { name: string; cfg: OpenClawConfig; allowPath: string }[])(
-    "notes $name allow: [] that reads as deny-all",
-    async ({ cfg, allowPath }) => {
-      await noteSecurityWarnings(cfg);
-
-      expectMessage(`${allowPath} is [] with no deny, alsoAllow or profile`, 'deny to ["*"]');
+    {
+      name: "legacy agent list",
+      cfg: { agents: { list: [{ id: "ops", tools: { allow: [] } }] } },
+      allowPath: "agents.list.0.tools.allow",
     },
-  );
+  ] satisfies {
+    name: string;
+    cfg: OpenClawConfig | OpenClawConfigWithLegacyRoster;
+    allowPath: string;
+  }[])("notes $name allow: [] that reads as deny-all", async ({ cfg, allowPath }) => {
+    await noteSecurityWarnings(cfg);
+
+    expectMessage(`${allowPath} is [] with no deny or profile`, 'deny to ["*"]');
+  });
+
+  it("notes empty allow lists on sender, provider, sandbox, agent, and channel policies", async () => {
+    note.mockClear();
+    await noteSecurityWarnings({
+      tools: {
+        byProvider: { openai: { allow: [] }, "openai/gpt": { allow: [] } },
+        toolsBySender: { "e164:+390000000000": { allow: [] } },
+        sandbox: { tools: { allow: [] } },
+      },
+      agents: {
+        entries: {
+          chat: { tools: { toolsBySender: { "id:guest": { allow: [] } } } },
+        },
+      },
+      channels: {
+        whatsapp: {
+          groups: {
+            family: {
+              tools: { allow: [] },
+              toolsBySender: { "id:owner": { allow: [] } },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    expectMessage(
+      "tools.byProvider.openai.allow is []",
+      'tools.byProvider["openai/gpt"].allow is []',
+      'tools.toolsBySender["e164:+390000000000"].allow is []',
+      "tools.sandbox.tools.allow is []",
+      "restores the sandbox default allowlist",
+      'agents.entries.chat.tools.toolsBySender["id:guest"].allow is []',
+      "channels.whatsapp.groups.family.tools.allow is []",
+      'channels.whatsapp.groups.family.toolsBySender["id:owner"].allow is []',
+    );
+  });
+
+  it("notes allow: [] beside alsoAllow except where sub-agent policy narrows", async () => {
+    note.mockClear();
+    await noteSecurityWarnings({
+      tools: {
+        allow: [],
+        alsoAllow: ["read"],
+        subagents: { tools: { allow: [], alsoAllow: ["read"] } },
+      },
+    });
+
+    const message = lastMessage();
+    expect(message).toContain("tools.allow is []");
+    expect(message).toContain("alsoAllow does not narrow an empty allow in this scope");
+    expect(message).not.toContain("tools.subagents.tools.allow");
+  });
 
   it.each([
     { name: "deny sibling", tools: { allow: [], deny: ["exec"] } },
-    { name: "alsoAllow sibling", tools: { allow: [], alsoAllow: ["read"] } },
     { name: "profile sibling", tools: { profile: "coding", allow: [] } },
     { name: "omitted allow", tools: {} },
   ] satisfies { name: string; tools: NonNullable<OpenClawConfig["tools"]> }[])(
@@ -251,6 +309,23 @@ describe("noteSecurityWarnings gateway exposure", () => {
       expect(lastMessage()).not.toContain("is [] with no deny");
     },
   );
+
+  it("stays silent for empty lists that are not permissive tool-allow policies", async () => {
+    note.mockClear();
+    await noteSecurityWarnings({
+      tools: {
+        gatewayPolicy: { allow: [] },
+        message: { actions: { allow: [] } },
+        agentToAgent: { allow: [] },
+        subagents: { tools: { allow: [], alsoAllow: ["read"] } },
+      },
+      channels: {
+        whatsapp: { groups: { family: { tools: { allow: [], deny: ["exec"] } } } },
+      },
+    } as OpenClawConfig);
+
+    expect(lastMessage()).not.toContain("is [] with no deny or profile");
+  });
 
   it("agrees with secrets audit for a sensitive header", async () => {
     await withExecApprovalsFile({ version: 1 }, async () => {

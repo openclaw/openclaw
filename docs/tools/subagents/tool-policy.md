@@ -148,16 +148,22 @@ the already-resolved tool set, but it cannot **add back** a tool removed
 by `tools.profile`.
 
 > **Empty `allow` means allow-all, not deny-all.** An explicit `allow: []`
-> adds no restriction at that layer; global `deny` and the built-in
-> sub-agent hard denies still apply. If you mean "no tools", use
-> `deny: ["*"]`. One exception: under `tools.subagents.tools`, `allow: []`
-> merges with `alsoAllow`, so `{ allow: [], alsoAllow: ["read"] }` resolves
-> to `allow: ["read"]`.
+> adds no restriction at that layer. Other deny lists still apply, and hidden
+> sub-agents keep their built-in denies. Visible spawned sessions do not get
+> those built-in denies. If you mean "no tools", use `deny: ["*"]`. One
+> exception: under `tools.subagents.tools`, `allow: []` merges with
+> `alsoAllow`, so `{ allow: [], alsoAllow: ["read"] }` resolves to
+> `allow: ["read"]`. In every other tool-policy scope, `alsoAllow` beside
+> `allow: []` stays permissive.
 >
-> `openclaw doctor` adds a note when `tools`, `tools.subagents.tools` or an
-> agent's `tools` has `allow: []` with no `deny`, `alsoAllow` or `profile`,
-> because that shape reads as deny-all. Config validation does not warn,
-> and runtime behavior is unchanged.
+> `openclaw doctor` notes that shape when `allow: []` has no `deny` or
+> `profile`. It checks `tools` (including `byProvider`, `toolsBySender`,
+> `subagents.tools`, and `sandbox.tools`), the same fields on each agent, and
+> channel group, room, and direct `tools` / `toolsBySender` policies. The
+> sub-agent `alsoAllow` merge is the one case that stays quiet. For sandbox
+> tool policy, removing `allow: []` restores the sandbox default allowlist.
+> Elsewhere, removing the empty list leaves allow-all. Config validation does
+> not warn, and runtime behavior is unchanged.
 
 For example, `tools.profile: "coding"` includes
 `web_search`/`web_fetch` but not the `browser` tool. To let

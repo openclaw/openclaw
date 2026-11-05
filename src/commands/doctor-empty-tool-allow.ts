@@ -3,24 +3,152 @@ import { listAgentEntriesWithSource } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SecurityAuditFinding } from "../security/audit.types.js";
 
+const BARE_POLICY_KEYS = new Set(["allow", "alsoAllow", "deny", "profile"]);
+
+type PolicySlot = {
+  path: string;
+  policy: unknown;
+  /** True only for `tools.subagents.tools`, where `[]` + `alsoAllow` narrows. */
+  alsoAllowNarrows: boolean;
+};
+
 function isNonEmptyList(value: unknown): boolean {
   return Array.isArray(value) && value.length > 0;
 }
 
+function segment(key: string): string {
+  return /^[A-Za-z0-9_-]+$/.test(key) ? `.${key}` : `[${JSON.stringify(key)}]`;
+}
+
+function sortedEntries(value: unknown): Array<[string, unknown]> {
+  if (!isRecord(value)) {
+    return [];
+  }
+  return Object.entries(value).toSorted(([left], [right]) => left.localeCompare(right));
+}
+
 /**
- * True only when `allow: []` is the whole policy: no deny, no alsoAllow and no
- * profile. That shape restricts nothing yet reads as "no tools", so the
- * author most likely meant deny-all. Any sibling restriction means the empty
- * list is a deliberate part of a larger policy, and Doctor stays silent.
+ * Channel group, room, and direct configs reuse `tools` / `toolsBySender` for
+ * the same allow/deny matcher. A bare policy object is only those fields, so
+ * containers such as `gatewayPolicy` or `message.actions` stay out of this walk.
  */
-function looksLikeIntendedDenyAll(policy: unknown): boolean {
+function isBareToolPolicy(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && Object.keys(value).every((key) => BARE_POLICY_KEYS.has(key));
+}
+
+/**
+ * True when explicit `allow: []` reads as deny-all but adds no restriction.
+ * A non-empty deny or a profile is a real restriction, so Doctor stays silent.
+ * `alsoAllow` suppresses the note only where that scope merges it into `[]`.
+ */
+function looksLikeIntendedDenyAll(policy: unknown, alsoAllowNarrows: boolean): boolean {
   if (!isRecord(policy) || !Array.isArray(policy.allow) || policy.allow.length > 0) {
     return false;
   }
-  if (isNonEmptyList(policy.deny) || isNonEmptyList(policy.alsoAllow)) {
+  if (isNonEmptyList(policy.deny)) {
+    return false;
+  }
+  if (alsoAllowNarrows && isNonEmptyList(policy.alsoAllow)) {
     return false;
   }
   return typeof policy.profile !== "string" || policy.profile.length === 0;
+}
+
+function pushToolRoot(
+  slots: PolicySlot[],
+  path: string,
+  tools: unknown,
+  includeSubagents: boolean,
+): void {
+  if (tools === undefined) {
+    return;
+  }
+  slots.push({ path, policy: tools, alsoAllowNarrows: false });
+  if (!isRecord(tools)) {
+    return;
+  }
+  for (const [key, policy] of sortedEntries(tools.byProvider)) {
+    slots.push({ path: `${path}.byProvider${segment(key)}`, policy, alsoAllowNarrows: false });
+  }
+  for (const [key, policy] of sortedEntries(tools.toolsBySender)) {
+    slots.push({ path: `${path}.toolsBySender${segment(key)}`, policy, alsoAllowNarrows: false });
+  }
+  const sandbox = tools.sandbox;
+  if (isRecord(sandbox) && sandbox.tools !== undefined) {
+    slots.push({ path: `${path}.sandbox.tools`, policy: sandbox.tools, alsoAllowNarrows: false });
+  }
+  if (!includeSubagents) {
+    return;
+  }
+  const subagents = tools.subagents;
+  if (isRecord(subagents) && subagents.tools !== undefined) {
+    slots.push({
+      path: `${path}.subagents.tools`,
+      policy: subagents.tools,
+      alsoAllowNarrows: true,
+    });
+  }
+}
+
+function visitChannelNode(slots: PolicySlot[], path: string, value: unknown): void {
+  if (!isRecord(value)) {
+    return;
+  }
+  if (isBareToolPolicy(value.tools)) {
+    slots.push({ path: `${path}.tools`, policy: value.tools, alsoAllowNarrows: false });
+  }
+  for (const [key, policy] of sortedEntries(value.toolsBySender)) {
+    if (!isBareToolPolicy(policy)) {
+      continue;
+    }
+    slots.push({ path: `${path}.toolsBySender${segment(key)}`, policy, alsoAllowNarrows: false });
+  }
+  for (const [key, child] of sortedEntries(value)) {
+    if (key === "tools" || key === "toolsBySender") {
+      continue;
+    }
+    visitChannelNode(slots, `${path}${segment(key)}`, child);
+  }
+}
+
+function collectPolicySlots(cfg: OpenClawConfig): PolicySlot[] {
+  const slots: PolicySlot[] = [];
+  pushToolRoot(slots, "tools", cfg.tools, true);
+  for (const { entry, source } of listAgentEntriesWithSource(cfg)) {
+    const path =
+      source.kind === "entries"
+        ? `agents.entries.${source.key}.tools`
+        : `agents.list.${source.index}.tools`;
+    pushToolRoot(slots, path, entry.tools, false);
+  }
+  visitChannelNode(slots, "channels", cfg.channels);
+  return slots;
+}
+
+function detailFor(path: string, policy: Record<string, unknown>): string {
+  const alsoAllowNote = isNonEmptyList(policy.alsoAllow)
+    ? " alsoAllow does not narrow an empty allow in this scope."
+    : "";
+  return (
+    `${path}.allow is [] with no deny or profile, so the empty list adds no restriction at this layer.` +
+    `${alsoAllowNote} Other deny lists still apply, and hidden sub-agents keep their built-in denies.`
+  );
+}
+
+function remediationFor(path: string): string {
+  const denyAll = `If you meant "no tools", set ${path}.deny to ["*"].`;
+  // Sandbox treats explicit `allow: []` as allow-all and an omitted allow as
+  // the default sandbox allowlist. Other layers treat both as allow-all.
+  if (path.endsWith(".sandbox.tools")) {
+    return [
+      denyAll,
+      `Removing ${path}.allow restores the sandbox default allowlist. An explicit [] is allow-all at this layer, not that default.`,
+    ].join("\n");
+  }
+  return [
+    denyAll,
+    "If allow-all is intended, remove the empty allow list; behavior is the same.",
+  ].join("\n");
 }
 
 /**
@@ -29,27 +157,16 @@ function looksLikeIntendedDenyAll(policy: unknown): boolean {
  * unchanged, and `allow: []` stays a supported allow-all setting. Refs #147342.
  */
 export function collectEmptyToolAllowHints(cfg: OpenClawConfig): SecurityAuditFinding[] {
-  const scopes: { path: string; policy: unknown }[] = [
-    { path: "tools", policy: cfg.tools },
-    { path: "tools.subagents.tools", policy: cfg.tools?.subagents?.tools },
-    ...listAgentEntriesWithSource(cfg).map(({ entry, source }) => ({
-      path:
-        source.kind === "entries"
-          ? `agents.entries.${source.key}.tools`
-          : `agents.list.${source.index}.tools`,
-      policy: entry.tools,
-    })),
-  ];
-  return scopes
-    .filter(({ policy }) => looksLikeIntendedDenyAll(policy))
-    .map(({ path }) => ({
-      checkId: "doctor.empty_tool_allow",
-      severity: "info",
-      title: "Note",
-      detail: `${path}.allow is [] with no deny, alsoAllow or profile, so the empty list adds no restriction at this layer (global deny and built-in sub-agent hard denies still apply).`,
-      remediation: [
-        `If you meant "no tools", set ${path}.deny to ["*"].`,
-        "If allow-all is intended, remove the empty allow list; behavior is the same.",
-      ].join("\n"),
-    }));
+  return collectPolicySlots(cfg)
+    .filter((slot) => looksLikeIntendedDenyAll(slot.policy, slot.alsoAllowNarrows))
+    .map((slot) => {
+      const policy = slot.policy as Record<string, unknown>;
+      return {
+        checkId: "doctor.empty_tool_allow",
+        severity: "info" as const,
+        title: "Note",
+        detail: detailFor(slot.path, policy),
+        remediation: remediationFor(slot.path),
+      };
+    });
 }
