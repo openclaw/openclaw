@@ -29,7 +29,7 @@ import { createChatPaneResourceProps } from "./chat-pane-resource-presentation.t
 import {
   createChatPaneQueuedEditProps,
   createChatPaneSessionActionCallbacks,
-  canDismissChatPendingInputs,
+  createChatPanePendingInputControls,
   readChatPaneMutationAccess,
   renderChatPaneComposerControls,
 } from "./chat-pane-session-controls.ts";
@@ -368,7 +368,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         ? this.captureProgressCardRefreshAction()
         : undefined;
     const props: ChatProps = {
-      canDismissPendingInputs: canDismissChatPendingInputs(mutationAccess, selectedSession, {
+      ...createChatPanePendingInputControls(mutationAccess, selectedSession, {
         nativeConversation,
         participationBlocked: sessionParticipationBlocked,
       }),

@@ -269,6 +269,9 @@ const enChatSession = {
       copyPath: en.chat.workspaceFiles.copyPath,
     },
     pendingInputs: {
+      sendNow: "Send now",
+      steerBlocked: "Waiting for {tools}; cannot interrupt safely.",
+      steerUnavailable: "Waiting for the next model turn; this runtime cannot interrupt tools.",
       agentUpdate: {
         cancelled: "This agent update was cancelled before delivery.",
       },

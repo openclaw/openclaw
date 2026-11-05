@@ -38,6 +38,8 @@ export type Authority =
 /** Stable verification failure codes. Callers match codes, never detail text. */
 export type VerifyErrorCode =
   | "malformed"
+  /** A well-formed envelope or descriptor version this build does not implement: update required. */
+  | "unsupported_version"
   | "bad_signature"
   | "wrong_signer"
   | "not_an_owner"
