@@ -77,6 +77,8 @@ it.each(["inline", "inbound"] as const)("authorizes %s artifact reads", async (s
               content: "Read this file.",
               __openclaw: {
                 media: [
+                  null,
+                  {},
                   {
                     url: `media://inbound/${inbound.id}`,
                     contentType: "text/plain",

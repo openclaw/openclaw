@@ -19,7 +19,11 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { hasUncommittedSqliteWrites } from "../infra/sqlite-schema-facts.js";
 import { parseInboundMediaUri } from "../media/inbound-media-uri.js";
-import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
+import {
+  isImageMediaFact,
+  isMeaningfulMediaFact,
+  readPersistedMediaFacts,
+} from "../media/media-facts.js";
 import { readMediaBuffer } from "../media/store.js";
 import type { TranscriptReadWindow } from "../sessions/transcript-read-window.js";
 import {
@@ -184,6 +188,9 @@ function collectArtifactsFromMessage(
   const storedMedia = new Map<number, string | undefined>();
   if (!params.imagesOnly) {
     for (const [index, fact] of (readPersistedMediaFacts(msg) ?? []).entries()) {
+      if (!isMeaningfulMediaFact(fact)) {
+        continue;
+      }
       // Only the canonical custody URI can make an uploaded fact downloadable.
       // Keep paths and malformed references visible without granting file access.
       let inbound: string | undefined;
