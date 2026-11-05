@@ -352,6 +352,20 @@ describe("createFeishuReplyDispatcher markdown table modes", () => {
       expect(run.chat.split(rest)).toHaveLength(2);
     });
 
+    // Rows: "<tables> | <script after the opening preview> | <chat>". X is a fenced example whose rows
+    // equal the table, and K a code block the posted block opens with.
+    it.each([
+      "off | preview P+X+T; block T; preview P+X+T+S | om_stream:P+X om-1:T@ om-2:S@",
+      "block | preview P+G; block G; preview P+G+Q+X+T; block T; preview P+G+Q+X+T+S | om_stream:P om-1:G#@ om-2:Q+X+T# om-3:S@",
+      "block | preview P+X; block T; idle; preview P+X+T+S | om_stream:P+X om-1:T#@ om-2:S@",
+      "off | preview P+T+X; block T; preview P+T+X+S | om_stream:P om-1:T@ om-2:X+S@",
+      "off | preview P+K+T; block K+T; preview P+K+T+S | om_stream:P om-1:K+T@ om-2:S@",
+    ])("posts the table rather than a fenced copy of it, %s", async (row) => {
+      const [tables, script, chat] = row.split(" | ") as ["block" | "off", string, string];
+      const fenced = { X: `\`\`\`md\n${shape.text}\n\`\`\``, K: "```js\nconst a = 1;\n```" };
+      expect((await drive(tables, `preview P; ${script}; end`, { names: fenced })).chat).toBe(chat);
+    });
+
     it("posts a new assistant message with the prefix the settled one had", async () => {
       expect(await drive("block", `${early}; message; preview P+T+S; end`)).toMatchObject({
         chat: "om_stream:P om-1:T#@ om-2:P+T#+S@",

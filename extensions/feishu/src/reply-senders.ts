@@ -12,6 +12,7 @@ import {
 import type { ClawdbotConfig, ReplyPayload } from "../runtime-api.js";
 import {
   chunkFeishuPostMarkdown,
+  codeBlockLines,
   materializeFeishuPostMarkdownSoftBreaks,
   postFencesSurvive,
 } from "./markdown.js";
@@ -78,6 +79,27 @@ function coveredPrefix(text: string, sent = ""): string {
     at += char.length;
   }
   return text.slice(0, at);
+}
+
+/**
+ * Where `block` starts in `text`, or -1. A copy whose lines are code where the block's own are
+ * not, such as a fenced example of the table, is not where the block was posted.
+ */
+function blockOffset(text: string, block: string): number {
+  const code = text.includes(block) ? codeBlockLines(text) : new Set<number>();
+  const own = codeBlockLines(block);
+  const lines = block.split("\n");
+  for (
+    let at = text.indexOf(block);
+    at >= 0 && at < text.length;
+    at = text.indexOf(block, at + 1)
+  ) {
+    const first = text.slice(0, at).split("\n").length - 1;
+    if (lines.every((_, line) => code.has(first + line) === own.has(line))) {
+      return at;
+    }
+  }
+  return -1;
 }
 
 type FeishuReplySenderContext = {
@@ -464,7 +486,7 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
   let previewAdoptsClose = false;
   const leadingBlockProse = (answer: string, reasoning = "") => {
     const first = blockPostDeliveries[0];
-    const at = leadingPreview && first ? answer.indexOf(first[0]) : -1;
+    const at = leadingPreview && first ? blockOffset(answer, first[0]) : -1;
     if (at <= 0) {
       return undefined;
     }
@@ -533,7 +555,7 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
       }
       remaining = remaining.slice(blockText.length).replace(/^\s*\n/u, "");
     }
-    const at = remaining.indexOf(text);
+    const at = blockOffset(remaining, text);
     const before = (at < 0 ? remaining : remaining.slice(0, at)).trimEnd();
     if (tableNeedsPostPath(before) || answerTableNeedsPostPath(before)) {
       return { text, answer: preview };
@@ -558,7 +580,9 @@ export function createFeishuReplySenders(ctx: FeishuReplySenderContext) {
     return {
       text: posted,
       answer:
-        at >= 0 || preview.includes(text) ? preview : [preview, text].filter(Boolean).join("\n\n"),
+        at >= 0 || blockOffset(preview, text) >= 0
+          ? preview
+          : [preview, text].filter(Boolean).join("\n\n"),
     };
   };
 
