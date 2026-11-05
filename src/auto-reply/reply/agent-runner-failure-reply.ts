@@ -6,6 +6,7 @@ import {
   classifyOAuthRefreshFailure,
   classifyOAuthRefreshFailureError,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { CliCredentialRemovedError } from "../../agents/cli-runner/auth-profile-preparation-error.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
   renderAgentHarnessPreflightUserMessage,
@@ -224,6 +225,15 @@ export function buildExternalRunFailureReply(
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
+  const removedCredential = collectErrorGraphCandidates(error, readErrorCauses).find(
+    (candidate) => candidate instanceof CliCredentialRemovedError,
+  );
+  if (removedCredential) {
+    return {
+      text: `⚠️ ${removedCredential.userMessage(options?.includeAuthProfileId)}`,
+      isGenericRunnerFailure: false,
+    };
+  }
   const buildUnclassifiedReply = (): ExternalRunFailureReply => {
     const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
     return {
