@@ -387,6 +387,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         executionIntent: input.executionIntent,
         executionScopeKey: input.executionScopeKey ?? scopeKey,
         assertCurrent: input.assertCurrent,
+        ...(input.mode === "child" ? { prepareTargetSpawn: input.prepareTargetSpawn } : {}),
         beforeSpawn: input.beforeSpawn,
         initiateSpawn: input.initiateSpawn,
         cwd: input.cwd,

@@ -166,6 +166,8 @@ export type SpawnInput =
       input?: string;
       /** Prepare input authority at the adapter's stdin delivery boundary. */
       prepareInput?: () => void | Promise<void>;
+      /** Prepare async policy after transport setup, before the target starts. */
+      prepareTargetSpawn?: () => void | Promise<void>;
       stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
       secretInput?: SpawnSecretInput;
       onStdoutRaw?: (chunk: Buffer) => void;
