@@ -143,6 +143,9 @@ export async function materializeSessionArchiveForRead(filePath: string): Promis
   // Concurrent readers may race to the same identity; last rename wins with
   // identical content, so neither can observe a torn or missing cache file.
   fs.renameSync(tempPath, cachePath);
+  // Enforce the budget on the write itself: one archive-reading pass can materialize every
+  // archive inside a single sweep interval. The cache is bounded, so this walk stays cheap.
+  sweepMaterializedArchiveCache(cacheDir, true);
   return cachePath;
 }
 
@@ -150,21 +153,60 @@ export async function materializeSessionArchiveForRead(filePath: string): Promis
 // by budget eviction cannot leave decompressed copies behind indefinitely,
 // and the cache itself cannot outgrow the archives it mirrors for long.
 const MATERIALIZED_ARCHIVE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+// Age alone cannot bound this cache: one archive-reading pass can materialize every archive,
+// so a deployment whose /tmp is a small tmpfs fills it long before the 24h TTL expires.
+const MATERIALIZED_ARCHIVE_CACHE_MAX_ENTRIES = 64;
+const MATERIALIZED_ARCHIVE_CACHE_MAX_BYTES = 256 * 1024 * 1024;
 let lastMaterializedArchiveCacheSweepMs = 0;
 
-function sweepMaterializedArchiveCache(cacheDir: string): void {
+function sweepMaterializedArchiveCache(cacheDir: string, force = false): void {
   const now = Date.now();
-  if (now - lastMaterializedArchiveCacheSweepMs < MATERIALIZED_ARCHIVE_CACHE_TTL_MS / 24) {
+  if (
+    !force &&
+    now - lastMaterializedArchiveCacheSweepMs < MATERIALIZED_ARCHIVE_CACHE_TTL_MS / 24
+  ) {
     return;
   }
   lastMaterializedArchiveCacheSweepMs = now;
+  const survivors: Array<{ path: string; mtimeMs: number; size: number }> = [];
   for (const entry of walkDirectorySync(cacheDir, { maxDepth: 1, symlinks: "include" }).entries) {
     try {
-      if (now - fs.statSync(entry.path).mtimeMs > MATERIALIZED_ARCHIVE_CACHE_TTL_MS) {
+      const stat = fs.statSync(entry.path);
+      if (now - stat.mtimeMs > MATERIALIZED_ARCHIVE_CACHE_TTL_MS) {
         fs.rmSync(entry.path, { force: true });
+        continue;
       }
+      survivors.push({ path: entry.path, mtimeMs: stat.mtimeMs, size: stat.size });
     } catch {
       // Another sweep may have removed it first; nothing to do.
+    }
+  }
+  let entryCount = survivors.length;
+  let totalBytes = survivors.reduce((sum, entry) => sum + entry.size, 0);
+  if (
+    entryCount <= MATERIALIZED_ARCHIVE_CACHE_MAX_ENTRIES &&
+    totalBytes <= MATERIALIZED_ARCHIVE_CACHE_MAX_BYTES
+  ) {
+    return;
+  }
+  // Evict least-recently-read first: a miss re-materializes one archive, so the stalest
+  // entries are the cheapest to lose.
+  survivors.sort((a, b) => a.mtimeMs - b.mtimeMs);
+  for (const entry of survivors) {
+    if (
+      entryCount <= MATERIALIZED_ARCHIVE_CACHE_MAX_ENTRIES &&
+      totalBytes <= MATERIALIZED_ARCHIVE_CACHE_MAX_BYTES
+    ) {
+      break;
+    }
+    try {
+      fs.rmSync(entry.path, { force: true });
+      entryCount -= 1;
+      totalBytes -= entry.size;
+    } catch {
+      // Another writer may have replaced it; keep accounting honest by moving on.
+      entryCount -= 1;
+      totalBytes -= entry.size;
     }
   }
 }

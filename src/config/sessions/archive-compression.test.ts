@@ -2,8 +2,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+
+// Keep the materialized read cache inside a temp dir so the budget assertions are isolated
+// from other readers of the real /tmp/openclaw cache.
+const cacheRoot = vi.hoisted(() => ({ dir: "" }));
+vi.mock("../../infra/tmp-openclaw-dir.js", () => ({
+  resolvePreferredOpenClawTmpDir: () => cacheRoot.dir,
+}));
 import {
   encodeSessionArchiveContent,
   materializeSessionArchiveForRead,
@@ -76,5 +83,30 @@ describe("archive compression", () => {
     expect(second).toBe(first);
     expect(fs.readFileSync(first, "utf8")).toBe(content);
     expect(first.endsWith(".jsonl")).toBe(true);
+  });
+});
+
+describe("archive read cache budget", () => {
+  it("bounds the materialized cache by entries and bytes", async () => {
+    const workspace = tempDirs.make("openclaw-archive-budget-");
+    cacheRoot.dir = workspace;
+    const cacheDir = path.join(workspace, "session-archive-read-cache");
+    const archives = path.join(workspace, "archives");
+    fs.mkdirSync(archives, { recursive: true });
+    const payload = zstdCompressSync(Buffer.from(`${"x".repeat(1024)}\n`));
+
+    for (let index = 0; index < 80; index += 1) {
+      const archivePath = path.join(archives, `archive-${index}.jsonl.zst`);
+      fs.writeFileSync(archivePath, payload);
+      await materializeSessionArchiveForRead(archivePath);
+    }
+
+    const entries = fs.readdirSync(cacheDir).filter((name) => !name.endsWith(".tmp"));
+    const totalBytes = entries.reduce(
+      (sum, name) => sum + fs.statSync(path.join(cacheDir, name)).size,
+      0,
+    );
+    expect(entries.length).toBeLessThanOrEqual(64);
+    expect(totalBytes).toBeLessThanOrEqual(256 * 1024 * 1024);
   });
 });
