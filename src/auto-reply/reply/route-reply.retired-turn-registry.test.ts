@@ -11,6 +11,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
+import { installDeliveryQueueTmpDirHooks } from "../../infra/outbound/delivery-queue.test-helpers.js";
 import { activatePluginRegistry } from "../../plugins/loader-shared.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import {
@@ -30,41 +31,8 @@ import {
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { routeReply } from "./route-reply.js";
 
-// The durable queue needs a host state broker; resolve and call the channel adapter in the
-// caller's plugin scope instead, which is the boundary under test.
-const { deliverThroughScopedChannel } = vi.hoisted(() => ({
-  deliverThroughScopedChannel: async (params: {
-    cfg: unknown;
-    channel: string;
-    to: string;
-    payloads: Array<{ text?: string }>;
-  }) => {
-    const { getChannelPlugin } = await import("../../channels/plugins/registry.js");
-    const sendText = getChannelPlugin(params.channel)?.outbound?.sendText;
-    if (!sendText) {
-      throw new Error(`missing ${params.channel} sender`);
-    }
-    const results = [];
-    for (const payload of params.payloads) {
-      results.push(
-        await sendText({ cfg: params.cfg, to: params.to, text: payload.text ?? "" } as never),
-      );
-    }
-    return results;
-  },
-}));
-vi.mock("../../infra/outbound/deliver-runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/outbound/deliver-runtime.js")>()),
-  deliverOutboundPayloads: deliverThroughScopedChannel,
-  deliverOutboundPayloadsInternal: deliverThroughScopedChannel,
-}));
-vi.mock("../../infra/outbound/deliver.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/outbound/deliver.js")>()),
-  deliverOutboundPayloads: deliverThroughScopedChannel,
-  deliverOutboundPayloadsInternal: deliverThroughScopedChannel,
-}));
-
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const queueState = installDeliveryQueueTmpDirHooks();
 const channelId = "borrowed-channel";
 const freshId = "prepared-only";
 
@@ -106,7 +74,7 @@ async function setupRetiredTurnRegistry(cleanup: AsyncDisposableStack) {
     registration: "",
   });
   vi.stubEnv("OPENCLAW_HOME", root);
-  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", queueState.tmpDir());
   vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledDir);
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
   const config: OpenClawConfig = {
