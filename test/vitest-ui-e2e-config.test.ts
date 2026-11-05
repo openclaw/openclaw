@@ -38,7 +38,10 @@ const serialGatewayFiles =
     .split(/\s+/u)
     .map((name) => `ui/src/e2e/${name}.real-gateway.e2e.test.ts`)
     .concat("ui/src/e2e/mcp-app-conformance.e2e.test.ts");
-const sharedSerialGatewayFile = "ui/src/e2e/guest-personal-groups.real-gateway.e2e.test.ts";
+const sharedSerialGatewayFiles = [
+  "ui/src/e2e/guest-personal-groups.real-gateway.e2e.test.ts",
+  "ui/src/e2e/slack-inline-identity.e2e.test.ts",
+];
 const realGatewayFiles = `activity-run-inspector.real-gateway agent-file-lifecycle.real-gateway
   background-work.real-gateway chat-collaborator-scroll.real-gateway chat-html-publication.real-gateway
   chat-completed-assistant.real-gateway chat-daybreak.real-gateway chat-html-csp.real-gateway
@@ -64,7 +67,7 @@ const realGatewayFiles = `activity-run-inspector.real-gateway agent-file-lifecyc
   usage-sessions-owner-attribution worker-initial-setup.real-gateway`
   .split(/\s+/u)
   .map((name) => `ui/src/e2e/${name}.e2e.test.ts`)
-  .concat(qaLabFiles, serialGatewayFiles, sharedSerialGatewayFile, workboardFile);
+  .concat(qaLabFiles, serialGatewayFiles, sharedSerialGatewayFiles, workboardFile);
 const mcpFile = "ui/src/e2e/mcp-app-conformance.e2e.test.ts";
 const builtGatewayFile = "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts";
 const prebuiltBuildInfo = { buildId: "prepared-ui-build", version: "2026.9.23" };
@@ -485,13 +488,13 @@ describe("Control UI E2E resource ownership", () => {
             workers: 1,
             fileParallelism: false,
           })),
-          {
-            file: sharedSerialGatewayFile,
+          ...sharedSerialGatewayFiles.map((file) => ({
+            file,
             project: "ui-e2e-serial",
             phase: 1,
             workers: 1,
             fileParallelism: false,
-          },
+          })),
         ].toSorted((left, right) => left.file.localeCompare(right.file)),
       );
       const parallel = result.files.filter((entry) => entry.phase === 2);

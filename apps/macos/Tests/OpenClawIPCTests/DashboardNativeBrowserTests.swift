@@ -753,6 +753,106 @@ struct DashboardNativeBrowserFailureTests {
         #expect(controller.nativeBrowser.state.tabs.first?.url == webView.url?.absoluteString, "\(trigger)")
     }
 
+    @Test func `repeated content process exits stop automatic reloads in only that tab until the user reloads`() async throws {
+        var loads: [String: Int] = [:]
+        let server = try await DashboardHTTPFixture.start(
+            html: "<!doctype html><title>Article</title>",
+            requestHandler: { request in
+                let path = request.split(separator: " ").dropFirst().first.map(String.init) ?? ""
+                loads[path, default: 0] += 1
+                return nil
+            })
+        defer { server.stop() }
+        let controller = Self.controller(server)
+        defer { controller.closeDashboard() }
+        let crashingURL = server.url("/crashing")
+        // A different host keeps the second tab out of the first tab's content process.
+        let otherURL = try #require(URL(string: "http://localhost:\(server.port)/other"))
+        try controller.nativeBrowser.open(tabId: "mac-crashing", url: crashingURL, sessionKey: "")
+        try controller.nativeBrowser.open(tabId: "mac-other", url: otherURL, sessionKey: "")
+        let crashing = try #require(controller.nativeBrowser.webView(for: "mac-crashing"))
+        let other = try #require(controller.nativeBrowser.webView(for: "mac-other"))
+        let browser = try #require(controller.nativeBrowser.browserTab(for: crashing))
+        try await TestWait.state("both tabs loaded") {
+            !crashing.isLoading && crashing.title == "Article" && !other.isLoading && other.title == "Article"
+        }
+        try #require(Self.contentProcess(of: crashing) != Self.contentProcess(of: other))
+
+        for exit in 1...DashboardBrowserTab.automaticReloadLimit {
+            let before = loads["/crashing", default: 0]
+            try Self.terminateContentProcess(of: crashing)
+            try await TestWait.state("automatic reload \(exit)") {
+                loads["/crashing", default: 0] > before && !crashing.isLoading && crashing.title == "Article"
+            }
+        }
+        let before = loads["/crashing", default: 0]
+        try Self.terminateContentProcess(of: crashing)
+        try await TestWait.state("exhausted budget") {
+            browser.failureView != nil || crashing.isLoading || loads["/crashing", default: 0] > before
+        }
+        #expect(browser.failureView != nil)
+        #expect(!crashing.isLoading)
+        #expect(loads["/crashing", default: 0] == before)
+        #expect(controller.nativeBrowser.state.tabs.first?.url == crashingURL.absoluteString)
+
+        // The other tab still recovers on its own budget.
+        let otherBefore = loads["/other", default: 0]
+        try Self.terminateContentProcess(of: other)
+        try await TestWait.state("other tab reload") {
+            loads["/other", default: 0] > otherBefore && !other.isLoading && other.title == "Article"
+        }
+
+        // Explicit Reload recovers the page and restores automatic recovery.
+        try controller.nativeBrowser.perform(.reload, tabId: "mac-crashing")
+        try await TestWait.state("manual reload") {
+            loads["/crashing", default: 0] > before && !crashing.isLoading && crashing.title == "Article"
+        }
+        #expect(browser.failureView == nil)
+        let reloaded = loads["/crashing", default: 0]
+        try Self.terminateContentProcess(of: crashing)
+        try await TestWait.state("automatic reload after manual reload") {
+            loads["/crashing", default: 0] > reloaded && !crashing.isLoading && crashing.title == "Article"
+        }
+
+        // Navigate menu Back and Forward (Command-[ and Command-]) restore the full budget too.
+        let secondURL = server.url("/second")
+        crashing.load(URLRequest(url: secondURL))
+        try await TestWait.state("second page") {
+            crashing.url?.path == "/second" && !crashing.isLoading && crashing.title == "Article"
+        }
+        let window = try #require(controller.window)
+        let rect = DashboardBrowserRect(x: 0, y: 0, width: 300, height: 200)
+        try controller.nativeBrowser.present(scope: "panel", tabId: "mac-crashing", rect: rect, visible: true)
+        #expect(window.makeFirstResponder(crashing))
+        for back in [true, false] {
+            let path = back ? crashingURL.path : secondURL.path
+            if back { controller.navigateBack() } else { controller.navigateForward() }
+            try await TestWait.state("menu history to \(path)") {
+                crashing.url?.path == path && !crashing.isLoading
+            }
+            for exit in 1...DashboardBrowserTab.automaticReloadLimit {
+                let before = loads[path, default: 0]
+                try Self.terminateContentProcess(of: crashing)
+                try await TestWait.state("automatic reload \(exit) at \(path)") {
+                    browser.failureView != nil ||
+                        (loads[path, default: 0] > before && !crashing.isLoading && crashing.title == "Article")
+                }
+                try #require(browser.failureView == nil, "exit \(exit) at \(path) after menu history")
+            }
+        }
+    }
+
+    private static func contentProcess(of webView: WKWebView) -> pid_t {
+        (webView.value(forKey: "_webProcessIdentifier") as? NSNumber)?.int32Value ?? 0
+    }
+
+    /// Kills only the content process WebKit reports for this test-owned tab.
+    private static func terminateContentProcess(of webView: WKWebView) throws {
+        let pid = self.contentProcess(of: webView)
+        try #require(pid > 1 && pid != getpid())
+        try #require(Darwin.kill(pid, SIGKILL) == 0)
+    }
+
     /// Reserves a loopback port and releases it, so loads fail with a refused connection.
     private static func releasedEndpoint(_ path: String) async throws -> (UInt16, URL) {
         let fixture = try await DashboardHTTPFixture.start()

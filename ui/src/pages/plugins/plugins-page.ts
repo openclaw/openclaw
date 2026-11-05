@@ -197,6 +197,8 @@ export function createPluginsPage(options: {
     };
   };
 
+  onSettled(() => context.overlays.subscribe(publish));
+
   const canMutate = () => state.result?.mutationAllowed === true && accessBlockedReason() === null;
 
   const mutationPresentation = createPluginsMutationPresentation({
