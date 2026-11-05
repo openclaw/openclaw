@@ -1,5 +1,6 @@
 import { rmSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createProviderHttpError } from "../agents/provider-http-errors.js";
 import {
   markCommandReplyForDelivery,
   setReplyPayloadMetadata,
@@ -59,6 +60,86 @@ function speak(
 ) {
   return synthesizeSpeech({ text: "Read this fixture.", cfg, ...options });
 }
+
+it.each([
+  { mode: "buffered", status: 429, code: "quota_exceeded" },
+  { mode: "streaming", status: 503, code: "service_unavailable" },
+  { mode: "telephony", status: 401, code: "invalid_api_key" },
+])("preserves HTTP failure classification in $mode TTS results", async ({ mode, status, code }) => {
+  const error = await createProviderHttpError(
+    new Response(JSON.stringify({ error: { code, message: "Synthetic speech failure" } }), {
+      status,
+      headers: { "Retry-After": "2", "x-request-id": "synthetic-request-id" },
+    }),
+    "Synthetic speech API",
+  );
+  const fail = vi.fn(async () => {
+    throw error;
+  });
+  installSpeechProviders([
+    createMockSpeechProvider("mock", {
+      synthesize: fail,
+      streamSynthesize: fail,
+      synthesizeTelephony: fail,
+    }),
+  ]);
+  const params = {
+    text: "Synthetic speech.",
+    cfg: createTtsConfig("structured-failure-" + mode),
+    prefsPath: prefsPathFor("structured-failure-" + mode),
+  };
+  const result = await (mode === "streaming"
+    ? textToSpeechStream(params)
+    : mode === "telephony"
+      ? textToSpeechTelephony(params)
+      : synthesizeSpeech(params));
+  expect(result.success).toBe(false);
+  const attempt = requireAttempt(result.attempts, 0);
+  expect(attempt).toMatchObject({
+    provider: "mock",
+    outcome: "failed",
+    reasonCode: "provider_error",
+    status,
+    errorCode: code,
+    retryAfterMs: 2000,
+  });
+  for (const field of ["errorBody", "headers", "requestId", "cause", "stack"]) {
+    expect(attempt).not.toHaveProperty(field);
+  }
+  expect(fail).toHaveBeenCalledOnce();
+});
+
+it.each([false, true])(
+  "keeps the original TTS failure with invalid metadata (getter: %s)",
+  async (getter) => {
+    const error = Object.assign(new Error("Synthetic original failure"), {
+      errorCode: "not a machine code",
+      status: "503",
+      closeCode: 999,
+      retryAfterMs: Infinity,
+    });
+    if (getter) {
+      Object.defineProperty(error, "errorCode", {
+        get() {
+          throw new Error("Synthetic getter failure");
+        },
+      });
+    }
+    synthesizeMock.mockRejectedValueOnce(error);
+    const result = await speak(createTtsConfig("invalid-failure-metadata"), {
+      disableFallback: true,
+    });
+    expect(result.success).toBe(false);
+    const attempt = requireAttempt(result.attempts, 0);
+    expect(attempt).toMatchObject({
+      error: "mock: Synthetic original failure",
+      reasonCode: "provider_error",
+    });
+    for (const field of ["errorCode", "status", "closeCode", "retryAfterMs"]) {
+      expect(attempt).not.toHaveProperty(field);
+    }
+  },
+);
 
 const routedPayloads = vi.hoisted(() => [] as ReplyPayload[]);
 afterEach(() => {
