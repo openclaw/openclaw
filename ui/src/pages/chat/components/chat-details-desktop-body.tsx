@@ -1,74 +1,103 @@
 import type { JSX } from "@solidjs/web";
-import { onSettled } from "solid-js";
+import { createEffect, onCleanup, onSettled } from "solid-js";
 import { DETAILS_SECTION_MOTION } from "../../../components/details-section-motion.ts";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
-import { createMediaQuery } from "../../../lib/reactive/platform.ts";
-import "../../../styles/chat/details-desktop.css";
+import "../../../styles/chat/details-desktop-body.css";
 
 /** One scroll owner around Session and Progress; mounted only by the desktop host. */
 export function ChatDetailsDesktopBody(props: {
   presented: boolean;
-  ready?: boolean;
+  loading?: boolean;
   children: JSX.Element;
   onScrollPortRef?: (element: HTMLDivElement) => void;
 }) {
   let scroll!: HTMLDivElement;
   let content!: HTMLDivElement;
-  const reduced = createMediaQuery("(prefers-reduced-motion: reduce)");
-  let ready: boolean | undefined;
-  let height = 0;
+  let loadingHeight = 0;
   let destination = 0;
   let deadline = 0;
   let animation: Animation | undefined;
+  let mounted = false;
   const finish = () => {
-    animation?.cancel();
-    animation = undefined;
-    scroll.style.height = "";
-  };
-  const measure = (state: readonly [boolean, boolean, boolean] | undefined) => {
-    if (!state) {
-      return undefined;
+    loadingHeight = 0;
+    if (!animation) {
+      return;
     }
-    const [presented, contentReady, reducedMotion] = state;
-    const nextHeight = content.getBoundingClientRect().height;
-    const handoff = ready === false && contentReady && height > 0;
-    const from = animation ? scroll.getBoundingClientRect().height : height;
+    animation.cancel();
+    animation = undefined;
+    scroll.style.removeProperty("height");
+  };
+  const animate = (from: number, to: number, duration: number) => {
+    destination = to;
+    scroll.style.height = to + "px";
+    animation = scroll.animate([{ height: from + "px" }, { height: to + "px" }], {
+      ...DETAILS_SECTION_MOTION,
+      duration,
+    });
+    animation.onfinish = finish;
+  };
+  // Only a mounted fallback arms the handoff. Cached opens and settled updates
+  // keep the original frame-batched scrollbar/fade work, without height reads.
+  const handoff = ([presented, loading]: readonly [boolean, boolean]) => {
+    if (!mounted) {
+      return;
+    }
+    if (!presented) {
+      finish();
+      return;
+    }
+    if (loading) {
+      finish();
+      loadingHeight = scroll.getBoundingClientRect().height;
+      return;
+    }
+    if (!loadingHeight) {
+      return;
+    }
+    const from = loadingHeight;
+    loadingHeight = 0;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      return;
+    }
+    const to = scroll.getBoundingClientRect().height;
+    if (from !== to) {
+      deadline = performance.now() + DETAILS_SECTION_MOTION.duration;
+      animate(from, to, DETAILS_SECTION_MOTION.duration);
+    }
+  };
+  createEffect(() => [props.presented, props.loading === true] as const, handoff);
+  onSettled(() => {
+    mounted = true;
+    handoff([props.presented, props.loading === true]);
+  });
+  const measure = () => {
+    if (props.presented && props.loading) {
+      loadingHeight = scroll.getBoundingClientRect().height;
+    }
+    const nextHeight = animation ? content.getBoundingClientRect().height : destination;
     const resize = Boolean(animation) && nextHeight !== destination;
-    ready = contentReady;
-    height = nextHeight;
+    const from = resize ? scroll.getBoundingClientRect().height : 0;
     const fadeTop = scroll.scrollTop > 1;
     const fadeBottom = scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop > 1;
     return () => {
-      if (!presented || reducedMotion) {
-        finish();
-      } else if (handoff || resize) {
-        if (handoff) {
-          deadline = performance.now() + DETAILS_SECTION_MOTION.duration;
-        }
+      if (resize && animation) {
         const duration = deadline - performance.now();
         finish();
-        if (duration > 0 && from !== nextHeight) {
-          destination = nextHeight;
-          scroll.style.height = `${nextHeight}px`;
-          animation = scroll.animate([{ height: `${from}px` }, { height: `${nextHeight}px` }], {
-            ...DETAILS_SECTION_MOTION,
-            duration,
-          });
-          animation.onfinish = finish;
+        if (duration > 0) {
+          animate(from, nextHeight, duration);
         }
       }
       scroll.toggleAttribute("data-fade-top", fadeTop);
       scroll.toggleAttribute("data-fade-bottom", fadeBottom);
     };
   };
-  // Retain one measured shell across the lazy handoff. Later section animations
-  // keep their own geometry; the shell releases its height when this handoff ends.
-  const update = createLayoutMeasurement(
-    () => [props.presented, props.ready ?? true, reduced()] as const,
-    measure,
-    { targets: () => [scroll, content], changeTiming: "sync" },
-  );
-  onSettled(() => finish);
+  const update = createLayoutMeasurement(() => props.presented, measure, {
+    targets: () => [scroll, content],
+  });
+  onCleanup(() => {
+    mounted = false;
+    finish();
+  });
   return (
     <div
       ref={(element) => {
