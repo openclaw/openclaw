@@ -1,3 +1,4 @@
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import { defaultRuntime as runtime } from "../runtime.js";
@@ -23,7 +24,7 @@ export async function configureCommandFromSectionsArg(rawSections: unknown): Pro
   const { sections, invalid } = parseConfigureWizardSections(rawSections);
   if (invalid.length > 0) {
     runtime.error(
-      `Invalid --section: ${invalid.map((section) => section || '""').join(", ")}. Expected one of: ${CONFIGURE_WIZARD_SECTIONS.join(", ")}. Run ${formatCliCommand("openclaw configure")} without --section to use the full wizard.`,
+      terminalText`Invalid --section: ${invalid.map((section) => section || '""').join(", ")}. Expected one of: ${CONFIGURE_WIZARD_SECTIONS.join(", ")}. Run ${formatCliCommand("openclaw configure")} without --section to use the full wizard.`,
     );
     runtime.exit(1);
     return;

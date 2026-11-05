@@ -47,7 +47,9 @@ export function splitBatchRequestsByLimits<T>(
   let current: T[] = [];
   let currentBytes = 0;
   for (const request of requests) {
-    const requestBytes = Buffer.byteLength(JSON.stringify(request) ?? "", "utf8");
+    // A normalized zero is still a byte cap; only an absent cap skips sizing.
+    const requestBytes =
+      maxJsonlBytes === undefined ? 0 : Buffer.byteLength(JSON.stringify(request) ?? "", "utf8");
     const separatorBytes = current.length === 0 ? 0 : 1;
     const wouldExceedRequests = current.length >= maxRequests;
     const wouldExceedBytes =

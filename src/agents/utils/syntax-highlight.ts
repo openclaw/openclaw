@@ -33,6 +33,7 @@ function loadHighlightJsRuntime(): HighlightJs {
   // highlight.js ships `/// <reference lib="dom" />` in its d.ts, which would
   // silently re-inject DOM globals into the DOM-free core program. Load it
   // untyped and validate the narrow API we use instead of importing its types.
+  // Package builds rewrite this load to one bundled chunk (tsdown.config.ts).
   const runtime: unknown = createRequire(import.meta.url)("highlight.js");
   if (!isHighlightJs(runtime)) {
     throw new TypeError("highlight.js did not expose the expected Node API");

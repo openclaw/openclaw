@@ -27,6 +27,7 @@ import { createFixture } from "./plugin-generation-artifact.admission.test-suppo
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import type { GenerationWorkerInput } from "./plugin-generation-worker-contract.js";
 import { preparePluginGenerationArtifact } from "./plugin-generation-worker.js";
+import { isPluginSourceAcquisitionError } from "./plugin-instance-error.js";
 import {
   nativeAdmissionStateFor,
   preparePluginNativeAdmissions,
@@ -86,6 +87,48 @@ function sourceFixture(version?: string) {
   });
   return { root, source, entry };
 }
+
+it("transports source acquisition classification and errno after worker cleanup", async () => {
+  const root = temp.make("plugin-worker-unavailable-");
+  const missing = path.join(root, "missing");
+  await withStorage(root, async () => {
+    let failure: unknown;
+    try {
+      await preparePluginGenerationArtifact({
+        rootDir: missing,
+        source: path.join(missing, "index.cjs"),
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({ name: "Error", code: "ENOENT" });
+    expect(isPluginSourceAcquisitionError(failure)).toBe(true);
+    expect(workersActive()).toBe(false);
+  });
+});
+
+it.each(["missing", "directory"] as const)(
+  "classifies an owned %s entry preparation call after initial capture",
+  async (kind) => {
+    const { root, source, entry } = sourceFixture();
+    writeTree(source, { "directory.cjs/index.cjs": "module.exports = {};" });
+    await withStorage(root, async () => {
+      const prepared = await preparePluginGenerationArtifact({ rootDir: source, source: entry });
+      let failure: unknown;
+      try {
+        const target = path.join(source, `${kind}.cjs`);
+        prepared.artifact.prepareModule(prepared.artifact.resolve(target));
+      } catch (error) {
+        failure = error;
+      } finally {
+        await prepared.artifact.disposeAsync();
+      }
+      expect(failure).toBeInstanceOf(Error);
+      expect(isPluginSourceAcquisitionError(failure)).toBe(true);
+      expect(workersActive()).toBe(false);
+    });
+  },
+);
 
 it("signals posted source-mapping callbacks before their worker task can finish", async () => {
   const { root, source, entry } = sourceFixture();

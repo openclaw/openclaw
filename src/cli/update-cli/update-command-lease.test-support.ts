@@ -56,33 +56,54 @@ export async function runUpdateLeaseChild(): Promise<void> {
       await runUpdateLeaseChildWithCleanup();
       return;
     }
+    const startedAt = performance.now();
+    let tracing = false;
+    let phaseCount = 0;
+    const progress = (phase: string) => {
+      // Trace config-flow custody through cleanup without displacing intentional-failure output.
+      tracing ||= phase === "config:start";
+      if (tracing && phaseCount++ < 32) {
+        process.stderr.write(
+          `doctor fixture phase: ${phase} +${Math.round(performance.now() - startedAt)}ms\n`,
+        );
+      }
+    };
     const [{ retainUpdateDoctorProcesses }, { withCommandProcessScope }] = await Promise.all([
       import("../../infra/update-doctor-process-custody.js"),
       import("../../process/exec-spawn.js"),
     ]);
     // Match Doctor's custody lifetime, including its final worker joins.
     using custody = await retainUpdateDoctorProcesses();
-    await withCommandProcessScope(runUpdateLeaseChildWithCleanup, undefined, custody);
+    await withCommandProcessScope(
+      () => runUpdateLeaseChildWithCleanup(progress),
+      undefined,
+      custody,
+    );
+    progress("scope:joined");
   } finally {
     observationHook?.deregister();
   }
 }
 
-async function runUpdateLeaseChildWithCleanup(): Promise<void> {
+async function runUpdateLeaseChildWithCleanup(progress?: (phase: string) => void): Promise<void> {
   try {
-    await runUpdateLeaseScenario();
+    await runUpdateLeaseScenario(progress);
   } finally {
     // Fixture children bypass CLI cleanup and must join their database workers.
+    progress?.("state-close:start");
     const { closeOpenClawStateDatabaseAsync } =
       await import("../../state/openclaw-state-db-cache.js");
     await closeOpenClawStateDatabaseAsync();
+    progress?.("state-close:done");
+    progress?.("native-close:start");
     const { closeDefaultRetainedNativeWorkerSource } =
       await import("../../infra/worker-native-lifecycle.js");
     await closeDefaultRetainedNativeWorkerSource();
+    progress?.("native-close:done");
   }
 }
 
-async function runUpdateLeaseScenario(): Promise<void> {
+async function runUpdateLeaseScenario(progress?: (phase: string) => void): Promise<void> {
   const stateDir = process.env.OPENCLAW_STATE_DIR;
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   assert.ok(stateDir && configPath);
@@ -261,6 +282,7 @@ async function runUpdateLeaseScenario(): Promise<void> {
       return;
     }
     if (scenario.runDoctorConfigFlow) {
+      progress?.("config:start");
       const { loadAndMaybeMigrateDoctorConfig } =
         await import("../../commands/doctor-config-flow.js");
       const { createDoctorPrompter } = await import("../../commands/doctor-prompter.js");
@@ -273,6 +295,7 @@ async function runUpdateLeaseScenario(): Promise<void> {
       // One real maintenance owner serves every migration in this Doctor invocation.
       const maintenance = await beginDoctorMaintenance({ root: null, options, runtime });
       assert.ok(maintenance);
+      progress?.("maintenance:acquired");
       try {
         const config = await maintenance.run(async () => {
           await using configResult = await loadAndMaybeMigrateDoctorConfig({
@@ -281,6 +304,8 @@ async function runUpdateLeaseScenario(): Promise<void> {
             runtime,
             confirm: (params) => prompter.confirm(params),
           });
+          progress?.("config:loaded");
+          progress?.("config-write:start");
           await runInitialConfigWriteHealth({
             runtime,
             options,
@@ -294,11 +319,17 @@ async function runUpdateLeaseScenario(): Promise<void> {
             runWithPluginMetadataSnapshot: configResult.runWithPluginMetadataSnapshot,
             invalidatePluginMetadataSnapshot: configResult.invalidatePluginMetadataSnapshot,
           });
+          progress?.("config-write:done");
           return configResult.cfg;
         });
+        progress?.("config:disposed");
+        progress?.("maintenance-finish:start");
         await maintenance.finish(config);
+        progress?.("maintenance-finish:done");
       } finally {
+        progress?.("maintenance-release:start");
         await maintenance.release();
+        progress?.("maintenance-release:done");
       }
     }
     if (scenario.doctorWarningsByInvocation) {

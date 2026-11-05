@@ -5,10 +5,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { parseUpdateRecoveryBackupManifest } from "../commands/backup-verify-manifest.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -214,12 +216,14 @@ it.each(["auto", "off"] as const)(
     const f = await fixture(true);
     const previous = getFsSafeNativeConfig();
     const audit = vi.spyOn(sqliteIntegrity, "assertSqliteIntegrity");
-    const generations = vi.spyOn(generationReads, "readUpdateDatabaseGenerations");
+    const generations = vi.spyOn(generationReads, "readUpdateDatabaseGeneration");
+    const engineImages = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocationSync");
     try {
       configureFsSafeNative({ mode });
       const backup = await f.capture({ stopped: true });
       expect(audit).not.toHaveBeenCalled();
       expect(generations).not.toHaveBeenCalled();
+      expect(engineImages).not.toHaveBeenCalled();
       expect(backup.databases).toHaveLength(3);
       for (const entry of backup.databases) {
         const bytes = await fs.readFile(entry.snapshotPath);
@@ -269,6 +273,7 @@ it.each([
       }
     }
     const reader = activity.startsWith("reader");
+    const engineImages = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocationSync");
     const capture = f.capture({
       stopped: true,
       onProgress: ({ phase, path: source }) => {
@@ -302,6 +307,7 @@ it.each([
       return;
     }
     const backup = await capture;
+    expect(engineImages).toHaveBeenCalledTimes(activity === "reader-empty-wal" ? 0 : 1);
     expect(await Promise.all(files.slice(0, 2).map((file) => fs.readFile(file)))).toEqual(
       before.slice(0, 2),
     );
@@ -330,7 +336,7 @@ it.each(["original-custody", "rollback", "ordinary", "maintenance"] as const)(
       "INSERT INTO payload VALUES ('checkpoint pending');",
     );
     const parentImages = vi.spyOn(sqliteSource, "prepareSqliteReadOnlyLocationSync");
-    const generations = vi.spyOn(generationReads, "readUpdateDatabaseGenerations");
+    const generations = vi.spyOn(generationReads, "readUpdateDatabaseGeneration");
     await using scope =
       mode === "ordinary" || mode === "maintenance" ? maintenanceScope() : undefined;
     const input = { ...f.input, preserveSourceArtifacts: true };
@@ -358,8 +364,8 @@ it.each(["original-custody", "rollback", "ordinary", "maintenance"] as const)(
       expect(parentImages.mock.calls.map(([file]) => file)).toEqual(
         mode === "original-custody" ? [f.shared] : [],
       );
-      expect(generations.mock.calls.flatMap(([paths]) => paths)).toEqual(
-        mode === "original-custody" ? [] : [f.shared, f.shared],
+      expect(generations.mock.calls.map(([file]) => file)).toEqual(
+        mode === "original-custody" ? [] : [f.shared],
       );
     }
     expect(await readFiles(files)).toEqual(family);
@@ -531,7 +537,14 @@ async function originalCaptureFixture(externalAgents = false) {
     bytes,
     family,
     familyPaths,
-    captureOriginal: (runId: string, acquisition?: UpdateRecoveryCaptureAcquisition) =>
+    captureOriginal: (
+      runId: string,
+      acquisition?: UpdateRecoveryCaptureAcquisition,
+      options: Pick<
+        Parameters<typeof captureUpdateRecoveryBaseline>[0],
+        "discardIncompleteOnFailure" | "signal"
+      > = {},
+    ) =>
       captureUpdateRecoveryBaseline({
         runId,
         installRoot: f.root,
@@ -539,6 +552,7 @@ async function originalCaptureFixture(externalAgents = false) {
         drivers: [],
         assertCurrent: () => {},
         acquisition,
+        ...options,
       }),
   };
 }
@@ -575,6 +589,58 @@ it("refuses an original capture before writing when its payload will not fit", a
   );
   await expectMissing(store);
   expect((await fs.stat(f.applicationFile)).size).toBe(payloadBytes);
+});
+
+it("discards only settled unsealed Doctor attempts and preserves sealed recovery", async () => {
+  const f = await originalCaptureFixture();
+  const sealed = await f.captureOriginal("last-sealed");
+  const manifest = await readManifest(sealed.ref);
+  const owner = await import("./update-database-backup.js");
+  const backup = vi.spyOn(owner, "createUpdateDatabaseBackup");
+  for (const mode of ["update", "uncertain", "revoked", "published", "settled"] as const) {
+    const failure =
+      mode === "uncertain" ? new CommandProcessCleanupError() : new Error("capture interrupted");
+    const controller = new AbortController();
+    let current = true;
+    backup.mockImplementationOnce(async ({ backupRoot }) => {
+      const directory = path.dirname(backupRoot);
+      await fs.writeFile(path.join(directory, "payload", "unfinished"), "private original bytes");
+      await fs.writeFile(path.join(directory, "manifest.json.partial"), "unfinished manifest");
+      if (mode === "published") {
+        await fs.writeFile(path.join(directory, "manifest.json"), "possibly published manifest");
+      }
+      current = mode !== "revoked";
+      controller.abort(failure);
+      throw failure;
+    });
+    const runId = `failed-${mode}`;
+    const rejection = await f
+      .captureOriginal(runId, undefined, {
+        signal: controller.signal,
+        discardIncompleteOnFailure:
+          mode === "update"
+            ? undefined
+            : {
+                assertCurrent() {
+                  if (!current) {
+                    throw new Error("maintenance ownership revoked");
+                  }
+                },
+              },
+      })
+      .catch((error: unknown) => error);
+    expect(collectNestedErrorCandidates(rejection)).toContain(failure);
+    const directory = path.join(resolveUpdateCaptureRoot(f.stateDir), runId);
+    if (mode === "settled") {
+      await expectMissing(directory);
+    } else {
+      expect(await fs.readFile(path.join(directory, "payload", "unfinished"), "utf8")).toBe(
+        "private original bytes",
+      );
+    }
+  }
+  expect(await readManifest(sealed.ref)).toEqual(manifest);
+  await expectOriginalDatabase(sealed.ref, f.shared);
 });
 
 it("seals equivalent original bytes under isolated and maintenance-owned capture", async () => {
@@ -831,31 +897,28 @@ it("seals the chosen manual image without discarding later live writes", async (
   ]);
 });
 
-it("seals a verified manual image with its unavailable-generation warnings", async () => {
+it("seals a live manual image without generation warnings while a writer commits", async () => {
   const f = await originalCaptureFixture();
-  const owner = await import("./update-database-backup.js");
-  const capture = owner.createUpdateDatabaseBackup;
-  const producerWarnings = [
-    `Database write generation unavailable for ${f.shared}: SQLITE_BUSY: database is locked`,
-    `Database changed during capture; its snapshot requires manual recovery: ${f.shared}`,
-  ];
-  vi.spyOn(owner, "createUpdateDatabaseBackup").mockImplementationOnce(async (params) => {
-    const captured = await capture(params);
-    const { [f.shared]: _unverified, ...sourceGenerations } = captured.sourceGenerations;
-    return {
-      ...captured,
-      sourceGenerations,
-      warnings: [
-        ...captured.warnings,
-        "Available disk space could not be measured near /elsewhere; database backup will be attempted.",
-        ...producerWarnings,
-      ],
-    };
-  });
-  const captured = await f.captureOriginal("unverified");
-  await expectOriginalDatabase(captured.ref, f.shared);
-  expect(captured.diagnostics.databaseWarnings).toEqual(expect.arrayContaining(producerWarnings));
-  expect(await readFiles(f.familyPaths)).toEqual(f.family);
+  using writer = new DatabaseSync(f.shared);
+  // Stands in for a running Gateway, whose owner lease alone commits every 30 s.
+  const commits = setInterval(() => {
+    try {
+      writer.exec("INSERT INTO payload VALUES ('later')");
+    } catch (error) {
+      if (!String(error).includes("locked")) {
+        throw error;
+      }
+    }
+  }, 1);
+  try {
+    const captured = await f.captureOriginal("live-writer");
+    expect(captured.diagnostics.databaseWarnings).toEqual([]);
+    expect((await readManifest(captured.ref)).entries).toContainEqual(
+      expect.objectContaining({ sourcePath: f.shared, kind: "file", sqlite: true }),
+    );
+  } finally {
+    clearInterval(commits);
+  }
 });
 
 it.each(["insufficient", "unknown"] as const)(

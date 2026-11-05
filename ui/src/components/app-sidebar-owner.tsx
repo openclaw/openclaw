@@ -11,6 +11,7 @@ import {
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import "./sidebar-attention.tsx";
 import "./tooltip.ts";
+import { SidebarOnlineHeader, SidebarPagesHeader } from "./app-sidebar-panel-headers.tsx";
 import { hidePersonalSidebarCatalog } from "./app-sidebar-personal-navigation.ts";
 import { renderSidebarRail } from "./app-sidebar-rail.tsx";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
@@ -32,6 +33,7 @@ import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-rend
 import {
   loadStoredSidebarCatalogGrouping,
   SIDEBAR_SESSION_PAGE_SIZE,
+  sidebarSessionPagination,
   storeSidebarCatalogGrouping,
   type SidebarRecentSession,
   type SidebarToolActivity,
@@ -132,24 +134,39 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
 
   releaseSidebarSnapshot(): void {
     const snapshot = this.sidebarSnapshot;
-    if (snapshot) {
-      const rows = this.reconciledSidebarZone().sessionRows;
-      this.pinnedSessions.seed(
-        snapshot.pinnedSessions.flatMap(({ key }) => {
-          const row = rows.get(key);
-          return row ? [row] : [];
-        }),
+    if (!snapshot) {
+      return;
+    }
+    const rows = this.reconciledSidebarZone().sessionRows;
+    this.pinnedSessions.seed(
+      snapshot.pinnedSessions.flatMap(({ key }) => {
+        const row = rows.get(key);
+        return row ? [row] : [];
+      }),
+    );
+    // Newer pagination choices override the saved view, independently per mode.
+    if (snapshot.mode === "roster") {
+      const limits = snapshot.sections.map(
+        ({ id, visibleLimit }) =>
+          [
+            id,
+            Math.max(sidebarSessionPagination("category", id).initialLimit, visibleLimit),
+          ] as const,
       );
-      // Newer pagination choices override the saved view, independently per mode.
-      const limits = snapshot.sections.map(({ id, visibleLimit }) => [id, visibleLimit] as const);
+      this.rosterVisibleSessionLimits = new Map([...limits, ...this.rosterVisibleSessionLimits]);
+    } else if (snapshot.grouping) {
+      const grouping = snapshot.grouping;
+      const limits = snapshot.sections.map(
+        ({ id, visibleLimit }) =>
+          [sidebarSessionPagination(grouping, id).key, visibleLimit] as const,
+      );
       this.sessionData.visibleSessionLimits = new Map([
         ...limits,
         ...this.sessionData.visibleSessionLimits,
       ]);
-      this.rosterVisibleSessionLimits = new Map([...limits, ...this.rosterVisibleSessionLimits]);
     }
     this.sidebarPluginSnapshot =
-      snapshot && this.context.plugins.registryStatus !== "complete"
+      this.context.plugins.registryStatus !== "complete"
         ? { entries: snapshot.entries, plugins: snapshot.plugins }
         : null;
     this.sidebarSnapshot = null;
@@ -322,22 +339,28 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
 
   setVisibleSessionLimit(sectionId: string, limit: number): void {
     const grouped = this.sidebarAgentsMode === "roster" && sectionId.startsWith("agent:");
+    const grouping = this.effectiveSessionsGrouping();
+    const { key, initialLimit } = sidebarSessionPagination(grouping, sectionId);
     const previousLimit =
       (grouped ? this.rosterVisibleSessionLimits : this.sessionData.visibleSessionLimits).get(
-        sectionId,
-      ) ?? SIDEBAR_SESSION_PAGE_SIZE;
+        key,
+      ) ?? initialLimit;
     if (limit < previousLimit) {
       this.sessionProjection.resetMembership(sectionId);
     }
     if (grouped) {
-      this.rosterVisibleSessionLimits = new Map(this.rosterVisibleSessionLimits).set(
-        sectionId,
-        limit,
-      );
+      this.rosterVisibleSessionLimits = new Map(this.rosterVisibleSessionLimits).set(key, limit);
       this.invalidate();
     } else {
-      this.sessionData.setVisibleSessionLimit(sectionId, limit);
+      this.sessionData.setVisibleSessionLimit(key, limit);
     }
+  }
+
+  resetVisibleSessionLimit(sectionId: string): void {
+    this.setVisibleSessionLimit(
+      sectionId,
+      sidebarSessionPagination(this.effectiveSessionsGrouping(), sectionId).initialLimit,
+    );
   }
 
   async loadMoreSidebarSessions(): Promise<void> {
@@ -352,6 +375,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     const query = () => JSON.stringify(this.sessionData.sessionListQuery(this.expandedAgentId()));
     const initialQuery = query();
     const mode = this.sidebarAgentsMode;
+    const grouping = this.effectiveSessionsGrouping();
     const readRows = () => this.selectedAgentSessionRows(this.getSessionNavigationState());
     const previousKeys = new Set(readRows().map((row) => row.key));
     // Server pages include workers and scheduled/system sessions hidden by the
@@ -363,6 +387,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       if (
         this.context.sessions !== sessions ||
         this.sidebarAgentsMode !== mode ||
+        this.effectiveSessionsGrouping() !== grouping ||
         !sessions.isConnectionScopeCurrent(scope) ||
         query() !== initialQuery
       ) {
@@ -437,7 +462,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         <LazyCatalog {...props} />
       </Boundary>
     );
-    const nativeList = (
+    const NativeList = () => (
       <SessionList
         host={host()}
         empty={visibleSessions().length === 0}
@@ -469,7 +494,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         >
           <LoadCatalogRenderer />
         </Show>
-        <Show when={host().sidebarAgentsMode === "roster"} fallback={nativeList}>
+        <Show when={host().sidebarAgentsMode === "roster"} fallback={<NativeList />}>
           <SidebarViewBoundary>
             <SidebarAgentRoster
               host={host()}
@@ -518,6 +543,18 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
           {rail}
           <div class="sidebar-shell" onMouseDown={beginNativeWindowDragFromTopInset}>
             <div class="sidebar-shell__content">
+              {/* Every panel header sits above the scroller so it stays pinned, keeps
+                  one geometry across views, and the scroll fade starts below it. */}
+              <Show
+                when={this.navigationView === "pages"}
+                fallback={
+                  <Show when={this.navigationView === "online"} fallback={toolbar}>
+                    <SidebarOnlineHeader host={this} />
+                  </Show>
+                }
+              >
+                <SidebarPagesHeader host={this} />
+              </Show>
               <div
                 ref={scrollRef}
                 class={["sidebar-shell__body", `sidebar-shell__body--scroll-${scroll.state()}`]}
@@ -530,7 +567,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                       when={this.navigationView === "online"}
                       fallback={
                         <>
-                          {toolbar}
                           <div
                             ref={scroll.createContentRef()}
                             class="sidebar-session-content"

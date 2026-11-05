@@ -35,7 +35,9 @@ export function readUpdateHeldAgentPaths(
       // Doctor still migrates pending deletions; only its held stores are exempt.
       return (
         deletion &&
-        (typeof deletion === "string" || deletion.cleanupCompleted || deletion.manualClawRemoval)
+        (typeof deletion === "string" ||
+          deletion.cleanupCompleted ||
+          deletion.manualTemplateRemoval)
       );
     });
 }

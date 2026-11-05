@@ -29,6 +29,7 @@ export type CompactionAccountingTarget = Readonly<
 /** Ordered producer observations; unknown context never borrows an older request's usage. */
 export type EmbeddedContextAccountingEvent = Readonly<
   | { kind: "compaction"; tokensAfter: number | undefined }
+  | { kind: "request"; contextTokens: number }
   | { kind: "model"; contextTokens: number | undefined; successful: boolean }
 >;
 
@@ -50,6 +51,17 @@ export type CompactionAccountingFact = Readonly<
 >;
 
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
+  /** The reply owner checkpoints the source before recovery rewrites its context. */
+  beforeRecoveryCompaction?: (context: {
+    sessionId: string;
+    provider: string;
+    model: string;
+    authProfileId?: string;
+    authProfileIdSource: "auto" | "user";
+    contextTokenBudget: number;
+  }) => Promise<string>;
+  /** A recovery checkpoint must not compact away the history it is trying to save. */
+  disableCompactionRecovery?: true;
   /** Original admitted settings, retained by the host across private runtime selection. */
   joinObservation?: ReplyMessageJoinObservation;
   /** The logical run already invoked model routing before preparing its candidate chain. */
