@@ -104,6 +104,30 @@ function handleConnectionControl(req, res) {
   }
   return true;
 }
+// Artifacts UI proof: --session-artifacts, using the same loopback setup as above.
+// Pair an owned simulator with this fixture and open its main chat; run
+// TEST_RUNNER_OPENCLAW_IOS_ARTIFACTS_PROOF=1 xcodebuild test ... \
+//   -only-testing:OpenClawUITests/SessionArtifactsUITests/testFindPreviewAndShareSessionArtifacts
+// This fixture proves the native UI with deterministic bytes, not server authorization/TLS.
+const sessionArtifactsMode = process.argv.includes("--session-artifacts");
+const sessionArtifactFiles = sessionArtifactsMode
+  ? JSON.parse(
+      readFileSync(
+        new URL("../apps/ios/Tests/Fixtures/session-artifacts.json", import.meta.url),
+        "utf8",
+      ),
+    )
+  : [];
+const sessionArtifacts = sessionArtifactFiles.map((file) => ({
+  id: file.id,
+  type: file.type,
+  title: file.title,
+  mimeType: file.mimeType,
+  sizeBytes: Buffer.from(file.data, "base64").length,
+  sessionKey: "agent:main:main",
+  source: "session-transcript",
+  download: { mode: "bytes" },
+}));
 const attachmentMode = process.argv.includes("--attachments");
 const attachmentMessage = attachmentMode
   ? JSON.parse(
@@ -147,16 +171,19 @@ const approval = {
     host: "gateway",
   },
 };
-const sessions = Array.from({ length: attachmentMode ? 1 : 205 }, (_, i) => ({
-  key: i === 0 ? "agent:main:main" : `agent:main:navigation-${i}`,
-  displayName: i === 0 ? "Navigation proof" : `Synthetic session ${i}`,
-  label: i === 0 ? "Navigation proof" : `Synthetic session ${i}`,
-  kind: "direct",
-  updatedAt: created - i * 1000,
-  totalTokens: 100 + i,
-  inputTokens: 80 + i,
-  outputTokens: 20,
-}));
+const sessions = Array.from(
+  { length: attachmentMode || sessionArtifactsMode ? 1 : 205 },
+  (_, i) => ({
+    key: i === 0 ? "agent:main:main" : `agent:main:navigation-${i}`,
+    displayName: i === 0 ? "Navigation proof" : `Synthetic session ${i}`,
+    label: i === 0 ? "Navigation proof" : `Synthetic session ${i}`,
+    kind: "direct",
+    updatedAt: created - i * 1000,
+    totalTokens: 100 + i,
+    inputTokens: 80 + i,
+    outputTokens: 20,
+  }),
+);
 const methods = [
   "health",
   "config.get",
@@ -176,7 +203,8 @@ const methods = [
   "models.list",
   "sessions.preview",
   "chat.send",
-  ...(attachmentMode ? ["artifacts.download"] : []),
+  ...(attachmentMode || sessionArtifactsMode ? ["artifacts.download"] : []),
+  ...(sessionArtifactsMode ? ["artifacts.list"] : []),
 ];
 
 function policyCatalog() {
@@ -626,7 +654,37 @@ wss.on("connection", (ws) => {
         );
         break;
       }
+      case "artifacts.list": {
+        if (!sessionArtifactsMode || !["main", "agent:main:main"].includes(params.sessionKey)) {
+          fail("Unexpected artifact scope");
+          break;
+        }
+        if (
+          params.type !== undefined ||
+          params.limit !== undefined ||
+          params.cursor !== undefined ||
+          params.messageRole !== undefined
+        ) {
+          fail("This fixture supports the unpaged conversation catalog only");
+          break;
+        }
+        reply({ artifacts: sessionArtifacts });
+        break;
+      }
       case "artifacts.download":
+        if (sessionArtifactsMode) {
+          const index = sessionArtifactFiles.findIndex((file) => file.id === params.artifactId);
+          if (index < 0 || !["main", "agent:main:main"].includes(params.sessionKey)) {
+            fail("Unexpected artifact scope");
+            break;
+          }
+          reply({
+            artifact: sessionArtifacts[index],
+            encoding: "base64",
+            data: sessionArtifactFiles[index].data,
+          });
+          break;
+        }
         if (
           !attachmentMode ||
           params.artifactId !== document.artifactId ||

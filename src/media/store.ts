@@ -672,9 +672,10 @@ export async function readMediaBuffer(
   id: string,
   subdir = "inbound",
   maxBytes = MEDIA_MAX_BYTES,
+  env: NodeJS.ProcessEnv = process.env,
 ): Promise<ReadMediaBufferResult> {
   const relativePath = resolveMediaRelativePath(id, subdir, "readMediaBuffer");
-  await using opened = await openMediaStore(maxBytes)
+  await using opened = await openMediaStore(maxBytes, getMediaDir(env))
     .open(relativePath)
     .catch(() => null);
   if (!opened?.stat.isFile()) {

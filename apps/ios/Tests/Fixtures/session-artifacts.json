@@ -1,0 +1,58 @@
+[
+  {
+    "title": "Project brief.txt",
+    "mimeType": "text/plain",
+    "data": "UHJvamVjdCBicmllZgoKQSBuYXRpdmUgcGxhY2UgdG8gZmluZCwgcHJldmlldywgYW5kIHNhdmUgZmlsZXMgc2hhcmVkIGluIHRoaXMgY29udmVyc2F0aW9uLgoKU3ludGhldGljIHRlc3QgZGF0YS4K",
+    "role": "assistant",
+    "type": "file",
+    "id": "artifact_fixture_0"
+  },
+  {
+    "title": "Preview.pdf",
+    "mimeType": "application/pdf",
+    "data": "JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCA0MjAgMjgwXSAvUmVzb3VyY2VzIDw8IC9Gb250IDw8IC9GMSA0IDAgUiA+PiA+PiAvQ29udGVudHMgNSAwIFIgPj4KZW5kb2JqCjQgMCBvYmoKPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+CmVuZG9iago1IDAgb2JqCjw8IC9MZW5ndGggMTIwID4+CnN0cmVhbQpCVCAvRjEgMjAgVGYgMzIgMjIwIFRkIChTZXNzaW9uIGFydGlmYWN0cyBwcmV2aWV3KSBUaiAwIC0zNiBUZCAvRjEgMTIgVGYgKFN5bnRoZXRpYyBQREYgLSBubyBwZXJzb25hbCBpbmZvcm1hdGlvbikgVGogRVQKZW5kc3RyZWFtCmVuZG9iagp4cmVmCjAgNgowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1OCAwMDAwMCBuIAowMDAwMDAwMTE1IDAwMDAwIG4gCjAwMDAwMDAyNDEgMDAwMDAgbiAKMDAwMDAwMDMxMSAwMDAwMCBuIAp0cmFpbGVyCjw8IC9TaXplIDYgL1Jvb3QgMSAwIFIgPj4Kc3RhcnR4cmVmCjQ4MgolJUVPRgo=",
+    "role": "assistant",
+    "type": "file",
+    "id": "artifact_fixture_1"
+  },
+  {
+    "title": "Color study.png",
+    "mimeType": "image/png",
+    "data": "iVBORw0KGgoAAAANSUhEUgAAAUAAAAC0CAIAAABqhmJGAAACJ0lEQVR4nO3TQQ0AIBDAsBODPsSiCA98yJImFbDPZu0DRM33AuCZgSHMwBBmYAgzMIQZGMIMDGEGhjADQ5iBIczAEGZgCDMwhBkYwgwMYQaGMANDmIEhzMAQZmAIMzCEGRjCDAxhBoYwA0OYgSHMwBBmYAgzMIQZGMIMDGEGhjADQ5iBIczAEGZgCDMwhBkYwgwMYQaGMANDmIEhzMAQZmAIMzCEGRjCDAxhBoYwA0OYgSHMwBBmYAgzMIQZGMIMDGEGhjADQ5iBIczAEGZgCDMwhBkYwgwMYQaGMANDmIEhzMAQZmAIMzCEGRjCDAxhBoYwA0OYgSHMwBBmYAgzMIQZGMIMDGEGhjADQ5iBIczAEGZgCDMwhBkYwgwMYQaGMANDmIEhzMAQZmAIMzCEGRjCDAxhBoYwA0OYgSHMwBBmYAgzMIQZGMIMDGEGhjADQ5iBIczAEGZgCDMwhBkYwgwMYQaGMANDmIEhzMAQZmAIMzCEGRjCDAxhBoYwA0OYgSHMwBBmYAgzMIQZGMIMDGEGhjADQ5iBIczAEGZgCDMwhBkYwgwMYQaGMANDmIEhzMAQZmAIMzCEGRjCDAxhBoYwA0OYgSHMwBBmYAgzMIQZGMIMDGEGhjADQ5iBIczAEGZgCDMwhBkYwgwMYQaGMANDmIEhzMAQZmAIMzCEGRjCDAxhBoYwA0OYgSHMwBBmYAgzMIQZGMIMDGEGhjADQ5iBIczAEHYBOrH2SSL/ipEAAAAASUVORK5CYII=",
+    "role": "assistant",
+    "type": "image",
+    "id": "artifact_fixture_2"
+  },
+  {
+    "title": "Notes.txt",
+    "mimeType": "text/plain",
+    "data": "VGhlc2Ugbm90ZXMgd2VyZSB1cGxvYWRlZCBieSB0aGUgdXNlci4K",
+    "role": "user",
+    "type": "file",
+    "id": "artifact_fixture_3"
+  },
+  {
+    "title": "Notes.txt",
+    "mimeType": "text/plain",
+    "data": "VGhlc2Ugbm90ZXMgd2VyZSByZXR1cm5lZCBieSB0aGUgYXNzaXN0YW50Lgo=",
+    "role": "assistant",
+    "type": "file",
+    "id": "artifact_fixture_4"
+  },
+  {
+    "title": "Empty.txt",
+    "mimeType": "text/plain",
+    "data": "",
+    "role": "assistant",
+    "type": "file",
+    "id": "artifact_fixture_5"
+  },
+  {
+    "title": "Archive.bin",
+    "mimeType": "application/octet-stream",
+    "data": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+    "role": "assistant",
+    "type": "file",
+    "id": "artifact_fixture_6"
+  }
+]

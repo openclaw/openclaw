@@ -36,6 +36,16 @@ struct ChatProTab: View {
         self.appModel.chatPresentation.viewModel
     }
 
+    private struct ArtifactsPresentation: Identifiable {
+        let id = UUID()
+        let sessionKey: String
+        let title: String
+        let identity: String
+        let controlUIInputs: GatewayConnectConfig.ControlUIInputs?
+        let transport: IOSGatewayChatTransport
+    }
+
+    @State private var artifactsPresentation: ArtifactsPresentation?
     @State private var transcriptShareItem: TranscriptShareItem?
     @State private var showsTranscriptExportError = false
     @State private var showsNewSessionOptions = false
@@ -94,6 +104,20 @@ struct ChatProTab: View {
                         self.chatToolbar
                     }
                 }
+                .sheet(item: self.$artifactsPresentation) { item in
+                    SessionArtifactsScreen(sessionTitle: item.title) {
+                        guard await self.isCurrentArtifactsPresentation(item) else { throw CancellationError() }
+                        let access = try await item.transport.acquireSessionArtifactAccess(sessionKey: item.sessionKey)
+                        guard await self.isCurrentArtifactsPresentation(item) else { throw CancellationError() }
+                        return access
+                    }
+                }
+                .onChange(of: self.artifactsIdentity) { _, _ in
+                    self.artifactsPresentation = nil
+                }
+                .onChange(of: self.appModel.activeGatewayConnectConfig?.controlUIInputs) { _, _ in
+                    self.artifactsPresentation = nil
+                }
                 .sheet(item: self.$transcriptShareItem) { item in
                     OpenClawChatFileShareSheet(fileURL: item.fileURL)
                 }
@@ -130,6 +154,12 @@ struct ChatProTab: View {
             self.headerAgentIdentity
         }
         .sharedBackgroundVisibility(.hidden)
+        if !self.appModel.isLocalChatFixtureEnabled {
+            ToolbarItem(placement: .topBarTrailing) {
+                self.artifactsButton
+            }
+            .sharedBackgroundVisibility(.hidden)
+        }
         ToolbarItem(placement: .topBarTrailing) {
             self.chatActionsMenu
         }
@@ -430,6 +460,28 @@ struct ChatProTab: View {
             isTalkActive: self.appModel.isTalkCaptureActive)
     }
 
+    private var artifactsButton: some View {
+        Button {
+            self.openArtifacts()
+        } label: {
+            Label {
+                Text("Artifacts").font(OpenClawType.body)
+            } icon: {
+                Image(systemName: "tray.full")
+                    .font(.system(size: 18))
+            }
+            .labelStyle(.iconOnly)
+            .foregroundStyle(OpenClawBrand.accent)
+        }
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
+        .buttonStyle(.plain)
+        .disabled(self.viewModel == nil || !self.gatewayConnected)
+        .accessibilityLabel("Artifacts")
+        .accessibilityHint("Browse files shared in this conversation")
+        .accessibilityIdentifier("chat-session-artifacts")
+    }
+
     private var chatActionsMenu: some View {
         Button {
             self.showsChatActions.toggle()
@@ -544,6 +596,30 @@ struct ChatProTab: View {
         case .newSessionOptions:
             self.showsNewSessionOptions = true
         }
+    }
+
+    private func openArtifacts() {
+        guard self.gatewayConnected, let viewModel,
+              let transport = self.appModel.makeChatTransport() as? IOSGatewayChatTransport
+        else { return }
+        self.artifactsPresentation = ArtifactsPresentation(
+            sessionKey: viewModel.sessionKey,
+            title: viewModel.sessions.first { $0.key == viewModel.sessionKey }?.displayName ??
+                (viewModel.sessionKey == self.appModel
+                    .mainSessionKey ? String(localized: "Main Session") : viewModel.sessionKey),
+            identity: self.artifactsIdentity,
+            controlUIInputs: self.appModel.activeGatewayConnectConfig?.controlUIInputs,
+            transport: transport)
+    }
+
+    private var artifactsIdentity: String {
+        "\(self.appModel.chatViewModelIdentityID)|\(self.viewModel?.sessionKey ?? "")"
+    }
+
+    @MainActor private func isCurrentArtifactsPresentation(_ item: ArtifactsPresentation) -> Bool {
+        self.artifactsPresentation?.id == item.id && self.artifactsIdentity == item.identity &&
+            self.appModel.activeGatewayConnectConfig?.controlUIInputs == item.controlUIInputs &&
+            self.appModel.chatPresentation.isCurrent(appModel: self.appModel) && self.gatewayConnected
     }
 
     private func exportTranscript() {

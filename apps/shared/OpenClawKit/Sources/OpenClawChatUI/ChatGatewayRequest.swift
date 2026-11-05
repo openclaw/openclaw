@@ -139,13 +139,22 @@ public enum OpenClawChatGatewayRequests {
     public static func artifactDownload(
         sessionKey: String,
         agentID: String?,
-        artifactId: String) -> OpenClawChatGatewayRequest
+        artifactId: String,
+        httpTransport: Bool = false) -> OpenClawChatGatewayRequest
     {
         var params = self.sessionParams(sessionKey: sessionKey, agentID: agentID, key: "sessionKey")
         params["artifactId"] = AnyCodable(artifactId)
+        if httpTransport { params["transport"] = AnyCodable("http") }
         return OpenClawChatGatewayRequest(
             method: "artifacts.download",
             params: params,
+            timeoutMs: self.defaultTimeoutMs)
+    }
+
+    public static func artifactsList(sessionKey: String, agentID: String?) -> OpenClawChatGatewayRequest {
+        OpenClawChatGatewayRequest(
+            method: "artifacts.list",
+            params: self.sessionParams(sessionKey: sessionKey, agentID: agentID, key: "sessionKey"),
             timeoutMs: self.defaultTimeoutMs)
     }
 

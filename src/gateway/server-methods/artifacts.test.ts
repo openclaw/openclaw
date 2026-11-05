@@ -254,6 +254,35 @@ describe("artifacts RPC handlers", () => {
   });
 
   it.each([
+    { path: "/private/synthetic.txt" },
+    { url: "file:///private/synthetic.txt" },
+    { url: "media://outgoing/synthetic.txt" },
+    { url: "media://inbound/folder%2Fsynthetic.txt" },
+  ])("keeps noncanonical persisted media unsupported: %j", async (source) => {
+    mockedMessages([
+      {
+        role: "user",
+        content: "Read this file.",
+        __openclaw: {
+          seq: 4,
+          media: [{ ...source, fileName: "input.txt", kind: "document" }],
+        },
+      },
+    ]);
+    const artifact = expectFirstArtifact(
+      (await listArtifacts({ sessionKey: "agent:main:main" })).calls,
+    );
+    expect(artifact).toMatchObject({ title: "input.txt", download: { mode: "unsupported" } });
+    expect(artifact).not.toHaveProperty("url");
+    const artifactId = requireNonEmptyString(artifact?.id, "expected persisted media item");
+    expect(
+      expectErrorDetails(
+        (await downloadArtifact({ sessionKey: "agent:main:main", artifactId })).calls,
+      ),
+    ).toMatchObject({ type: "artifact_download_unsupported" });
+  });
+
+  it.each([
     { block: { data: "JVBERi0" }, expected: "JVBERi0=", sizeBytes: 5, inspected: ["JVBERi0"] },
     { block: { data: " \t-_\r\n8=\n" }, expected: "+/8=", sizeBytes: 2, inspected: ["-_\r\n8="] },
     ...[

@@ -195,6 +195,20 @@ describe("media store", () => {
     }
   });
 
+  it("reads the captured media root without changing the process environment", async () => {
+    const ambient = await store.saveMediaBuffer(Buffer.from("ambient"), "text/plain");
+    const captured = { OPENCLAW_STATE_DIR: path.join(home, "captured-state") };
+    await fileFixture(path.join(store.getMediaDir(captured), "inbound", ambient.id), "captured");
+    const before = process.env.OPENCLAW_STATE_DIR;
+    const [local, selected] = await Promise.all([
+      store.readMediaBuffer(ambient.id),
+      store.readMediaBuffer(ambient.id, "inbound", undefined, captured),
+    ]);
+    expect(local.buffer.toString()).toBe("ambient");
+    expect(selected.buffer.toString()).toBe("captured");
+    expect(process.env.OPENCLAW_STATE_DIR).toBe(before);
+  });
+
   it("finishes short nonblocking media reads", async () => {
     const content = Buffer.from("synthetic media bytes");
     const saved = await store.saveMediaBuffer(content, "text/plain");
