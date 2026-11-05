@@ -259,7 +259,7 @@ function* repairOpenedStateSchemaSteps(
   preparation: { credentialCustody?: ClientCredentialCustody | null } = {},
 ): Generator<
   StateSchemaRepairStep,
-  { changes: string[]; warnings: string[] },
+  { changes: string[]; warnings: string[]; failure?: unknown },
   void | (() => void)
 > {
   const rebuiltIndexNames = new Set<string>();
@@ -715,6 +715,8 @@ function* repairOpenedStateSchemaSteps(
     return {
       changes: indexChanges,
       warnings: [`${diagnostic}${reason}`],
+      // Warnings stay text; callers that refuse on them keep the cause's classification.
+      failure: err,
     };
   } finally {
     if (!ownershipRefused) {

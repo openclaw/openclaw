@@ -84,7 +84,10 @@ describe("prepareSystemdGatewayActivation", () => {
   it("does not repeat repair in-process when a reader blocks the migration", async () => {
     const acquired = owner(
       vi.fn(async () => {
-        throw Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
+        // prepareDoctorDatabaseMigrations reports repair warnings as a plain Error with this cause.
+        throw new Error("Failed migrating shared state database schema", {
+          cause: Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" }),
+        });
       }),
     );
     mocks.begin.mockResolvedValue(acquired);

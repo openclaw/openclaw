@@ -75,8 +75,8 @@ export async function prepareSystemdGatewayActivation(params: {
     const { beginDoctorMaintenance } = await import("../../commands/doctor-maintenance.js");
     // A null install root deliberately excludes service stop/install/start. This
     // process is already the unit's MainPID; only systemd may control its lifecycle.
-    // Doctor waits out recorded CLI holders. Unidentified holders retry here, on
-    // the budget that also keeps supervised starts under the unit's start limit.
+    // Doctor waits out recorded CLI holders on its own deadline, which can exceed
+    // this one. Unidentified holders retry here, which keeps starts under the limit.
     let announcedWait = false;
     const maintenance = await acquireWithWait({
       acquire: async () => {

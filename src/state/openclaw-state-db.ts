@@ -126,7 +126,7 @@ export { detectOpenClawStateDatabaseSchemaMigrations } from "./openclaw-state-db
 
 const deferredStateDatabases = new WeakSet<EngineConnection>();
 
-type StateSchemaRepairResult = { changes: string[]; warnings: string[] };
+type StateSchemaRepairResult = { changes: string[]; warnings: string[]; failure?: unknown };
 
 export function repairOpenClawStateDatabaseSchema(
   options: OpenClawStateDatabaseOptions & {
