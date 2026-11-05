@@ -249,20 +249,6 @@ export class ChatTranscriptRenderer {
     return this.column;
   }
 
-  coversViewport(range: { startIndex: number; endIndex: number } | null): boolean {
-    const snapshot = this.committed;
-    if (!range || !snapshot) {
-      return false;
-    }
-    for (let index = range.startIndex; index <= range.endIndex; index++) {
-      const row = snapshot.rows[index];
-      if (!row || !snapshot.activeRowKeys.has(row.key)) {
-        return false;
-      }
-    }
-    return true;
-  }
-
   subscribe(listener: () => void): () => void {
     this.publish = listener;
     return () => {

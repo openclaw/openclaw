@@ -149,6 +149,26 @@ a terminal result no longer blocks a new request.
 
 ### Chat input reconciliation
 
+`chat.steerNow` accelerates an already accepted steer without stopping its run.
+Pass `{ sessionKey, sessionId, runId, agentId? }`, using the pending input's
+submission `runId`. The method requires current session write access
+(`operator.write`, or `operator.sessions.write` for the caller's own session).
+It targets the exact run that accepted that input; a replaced session is rejected.
+
+The result is `{ status, tools }`. `interrupted` means safe tool cancellation was
+requested; tool cleanup and the recorded interruption result still precede
+steering delivery. `idle` means no running tool needed cancellation. `blocked`
+lists running tools that cannot safely be interrupted, and changes nothing.
+`unavailable` means the selected runtime cannot perform the action. `settled`
+means this input no longer has pending steering work. Repeated requests cannot
+interrupt later tools. Confirm consumption through the normal input receipts.
+
+Pending `chat.history` items expose `steerNow: { status: "available" | "blocked",
+tools: string[] }` only while the captured runtime owns the steer. An empty
+blocked tool list indicates an unsupported runtime. Clients offer **Send now**
+only for `available`; blocked state should explain why the input must wait.
+`sessions.changed` with reason `agent.input.steering` refreshes this projection.
+
 The `chat-input-custody-v1` server capability advertises `chat.send.queueMode`
 (`steer`, `followup`, `collect`, `interrupt`) and exact input receipts. It does not
 promise active-backend injection or mid-response model steering: input that

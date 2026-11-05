@@ -201,9 +201,9 @@ it(
           }
         } else if (scenario.parentCalls === 5) {
           expect(scenario.revoke).toBe(false);
-          expect((JSON.stringify(output) ?? "").replaceAll("\\", "")).toContain(
-            'cannot create sessions for agent "sibling"',
-          );
+          expect(typeof output === "string" ? JSON.parse(output) : output).toMatchObject({
+            status: "forbidden",
+          });
           reply("The delegated item is done. The remaining Goal item is unfinished.");
         } else if (scenario.parentCalls === 6) {
           expect(scenario.revoke).toBe(false);

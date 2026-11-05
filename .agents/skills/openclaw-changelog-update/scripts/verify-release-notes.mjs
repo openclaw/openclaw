@@ -1132,7 +1132,7 @@ export function canonicalPullRequests(
   return [...new Set(pullRequests)].toSorted((left, right) => left - right);
 }
 
-function canonicalMainCommits(base, mainRef) {
+function canonicalMainCommits(base, mainRef, filters = []) {
   if (!mainRef) {
     return [];
   }
@@ -1142,6 +1142,7 @@ function canonicalMainCommits(base, mainRef) {
     "log",
     "--reverse",
     "--format=%H%x1f%s%x1f%an%x1f%ae%x1f%B%x1e",
+    ...filters,
     `${mainBase}..${mainCommit}`,
   ]);
   const commits = [];
@@ -1906,6 +1907,72 @@ export function recoverUnavailablePullRequests({
   return recovered;
 }
 
+function canonicalSourceCommit(hash) {
+  const [subject, authorName, authorEmail, ...body] = git([
+    "show",
+    "-s",
+    "--format=%s%x1f%an%x1f%ae%x1f%B",
+    hash,
+  ]).split("\x1f");
+  return {
+    hash,
+    subject: subject.replace(/^\[[^\]]+\]\s*/, ""),
+    authorName,
+    authorEmail,
+    body: body.join("\x1f"),
+    changedPaths: changedPathsForCommit(hash),
+  };
+}
+
+function hasCanonicalMainSource(node, mainCommit, resolveNodes) {
+  const source = canonicalSourceCommit(node.mergeCommit.oid);
+  const subjectPattern = normalizedCommitSubject(source.subject)
+    .replace(/[.*+?^$()|[\]\\]/g, "\\$&")
+    .replace(/\s+/g, "[[:space:]]+");
+  const candidates = new Map(
+    canonicalMainCommits(source.hash, mainCommit, [
+      "--extended-regexp",
+      "--regexp-ignore-case",
+      "--grep=" + source.hash,
+      "--grep=" + subjectPattern,
+    ]).map((candidate) => [
+      candidate.hash,
+      {
+        ...candidate,
+        subject: candidate.subject.replace(/^\[[^\]]+\]\s*/, ""),
+        changedPaths: changedPathsForCommit(candidate.hash),
+      },
+    ]),
+  );
+  for (const hash of cherryPickOrigins(source.body)) {
+    if (gitIsAncestor(hash, mainCommit)) {
+      const candidate = canonicalSourceCommit(hash);
+      // Squash bodies can retain unrelated constituent cherry-pick trailers.
+      if (pathsOverlap(source.changedPaths, candidate.changedPaths)) {
+        candidates.set(hash, candidate);
+      }
+    }
+  }
+  const origins = backportPullRequestOrigins(source.body);
+  const namedSources = origins.length > 0 ? resolveNodes(origins) : new Map();
+  for (const [number, origin] of namedSources) {
+    if (
+      origin?.baseRefName === "main" &&
+      origin.mergedAt &&
+      origin.mergeCommit?.oid &&
+      gitIsAncestor(origin.mergeCommit.oid, mainCommit)
+    ) {
+      const candidate = canonicalSourceCommit(origin.mergeCommit.oid);
+      candidates.set(candidate.hash, { ...candidate, pullRequests: [number] });
+    }
+  }
+  const mainCandidates = [...candidates.values()];
+  return (
+    mainCandidates.some((candidate) => cherryPickOrigins(candidate.body).includes(source.hash)) ||
+    canonicalMainCommitMatches(source, mainCandidates).length > 0
+  );
+}
+
 export function validateReleaseProvenanceOverrides(
   provenanceOverrides,
   nodes,
@@ -1913,8 +1980,8 @@ export function validateReleaseProvenanceOverrides(
   isMainAncestor = gitIsAncestor,
   resolveNodes = (numbers) => resolveReferences(numbers).nodes,
 ) {
-  // Shipped-ref subtraction removes already-released PRs from the release
-  // inventory, but markers naming them still need the same main validation.
+  // Subtraction does not excuse source validation. A merged release-only
+  // original is valid only until the corresponding main forward-port exists.
   const missing = [...new Set([...provenanceOverrides.values()].flat())].filter(
     (number) => !nodes.has(number),
   );
@@ -1922,15 +1989,18 @@ export function validateReleaseProvenanceOverrides(
   for (const [commit, pullRequests] of provenanceOverrides) {
     for (const number of pullRequests) {
       const node = nodes.get(number) ?? markerNodes.get(number);
-      // Markers may name current-main forward-ports, but never release-only or unmerged PRs.
-      if (
-        node?.__typename !== "PullRequest" ||
-        node.baseRefName !== "main" ||
-        !node.mergedAt ||
-        !node.mergeCommit?.oid ||
-        !isMainAncestor(node.mergeCommit.oid, mainCommit)
-      ) {
-        fail(`release provenance marker for ${commit} references non-main PR #${number}`);
+      const merged = node?.__typename === "PullRequest" && node.mergedAt && node.mergeCommit?.oid;
+      const onMain =
+        merged && node.baseRefName === "main" && isMainAncestor(node.mergeCommit.oid, mainCommit);
+      const releaseOnly =
+        merged &&
+        node.baseRefName?.startsWith("release/") &&
+        !isMainAncestor(node.mergeCommit.oid, mainCommit) &&
+        !hasCanonicalMainSource(node, mainCommit, resolveNodes);
+      if (!onMain && !releaseOnly) {
+        fail(
+          "release provenance marker for " + commit + " references invalid source PR #" + number,
+        );
       }
     }
   }
