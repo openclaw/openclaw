@@ -64,6 +64,7 @@ describe("bedrock mantle discovery", () => {
   let testRegionIndex = 0;
   let testRegion = "";
   let now = 0;
+  let perfNow = 0;
   const fetchMock = vi.fn<typeof fetch>();
   const tokenProvider = vi.fn(async () => "synthetic-runtime-token");
   const discover = (overrides: Partial<Parameters<typeof discoverMantleModels>[0]> = {}) =>
@@ -79,7 +80,9 @@ describe("bedrock mantle discovery", () => {
     fetchMock.mockReset();
     vi.stubGlobal("fetch", fetchMock);
     now = Date.UTC(2026, 7, 31);
+    perfNow = 0;
     vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(performance, "now").mockImplementation(() => perfNow);
     discoveryDebugSpy.mockClear();
     testRegion = `test-region-${++testRegionIndex}`;
   });
@@ -104,9 +107,6 @@ describe("bedrock mantle discovery", () => {
       env: { AWS_REGION: "af-south-1", AWS_BEARER_TOKEN_BEDROCK: "my-token" },
     },
   ])("skips IAM generation for $label", async ({ env, pluginConfig }) => {
-    getTokenProviderMock.mockImplementation(() => {
-      throw new Error("rejected discovery should not generate a token");
-    });
     await expect(resolveProvider({ env, pluginConfig })).resolves.toBeNull();
     expect(getTokenProviderMock).not.toHaveBeenCalled();
   });
@@ -179,8 +179,9 @@ describe("bedrock mantle discovery", () => {
         .mockResolvedValueOnce(modelResponse("openai.gpt-oss-120b"));
 
       await discover();
+      now -= 7200_000;
 
-      now += 7200_000;
+      perfNow += 7200_000;
       const refresh = () => discover({ discoveryMode: "strict" });
       await expect(refresh()).rejects.toThrow();
       await expect(refresh()).resolves.toMatchObject([{ id: "openai.gpt-oss-120b" }]);
@@ -203,9 +204,6 @@ describe("bedrock mantle discovery", () => {
 
   it("preserves the strict empty resolver contract without IAM generation", async () => {
     fetchMock.mockResolvedValue(modelResponse());
-    getTokenProviderMock.mockImplementation(() => {
-      throw new Error("Explicit bearer takes precedence");
-    });
     const params = {
       env: {
         AWS_REGION: "eu-south-1",
@@ -224,7 +222,7 @@ describe("bedrock mantle discovery", () => {
       .mockResolvedValueOnce(modelResponse("public-model"))
       .mockRejectedValue(new Error("offline"));
     const first = await discover({ bearerToken: "first" });
-    now += 7200_000;
+    perfNow += 7200_000;
     await expect(discover({ bearerToken: "first" })).resolves.toEqual(first);
     await expect(discover({ bearerToken: "first", discoveryMode: "strict" })).rejects.toThrow(
       "offline",

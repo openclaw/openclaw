@@ -1,3 +1,4 @@
+import { createCipheriv } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, expect, it } from "vitest";
@@ -12,7 +13,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { WorktreeGcProgress } from "./gc-progress.js";
 import { createWorktreeGitMaintenance } from "./git-maintenance.js";
-import { requireGit } from "./git.js";
+import { requireGit, requireGitBuffer } from "./git.js";
 import { insertRegistryWorktree } from "./registry.js";
 import { makeWorktreeRecord, useManagedWorktreeTestRepository } from "./service.test-support.js";
 
@@ -23,15 +24,67 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
-const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("worktree-pack-state-") };
+let env: NodeJS.ProcessEnv;
 const initRepo = useManagedWorktreeTestRepository();
 const git = (repo: string, ...args: string[]) =>
   requireGit(repo, args, {
     env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
     executionIntent: "agent-tool",
   });
-beforeEach(() => setRuntimeConfigSnapshot({}));
+beforeEach(() => {
+  env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("worktree-pack-state-") };
+  setRuntimeConfigSnapshot({});
+});
 afterEach(() => clearRuntimeConfigSnapshot());
+
+it.each([false, true])(
+  "compresses separately acquired revisions (promisor=%s)",
+  async (promisor) => {
+    const repo = await initRepo(tempDirs.make("worktree-revision-packs-"));
+    await insertRegistryWorktree(env, makeWorktreeRecord(repo, `revisions-${promisor}`));
+    const directory = path.join(repo, ".git", "objects", "pack");
+    const payload = createCipheriv("aes-256-ctr", Buffer.alloc(32), Buffer.alloc(16)).update(
+      Buffer.alloc(256 * 1024),
+    );
+    const objects = [];
+    for (let revision = 0; revision < 8; revision++) {
+      const contents = Buffer.from(payload);
+      contents.writeUInt32LE(revision);
+      const oid = await requireGit(repo, ["hash-object", "-w", "--stdin"], { input: contents });
+      const hash = await requireGit(
+        repo,
+        ["pack-objects", "--window=0", path.join(directory, "pack")],
+        {
+          input: `${oid}\n`,
+        },
+      );
+      if (promisor) {
+        await fs.writeFile(path.join(directory, `pack-${hash}.promisor`), "");
+      }
+      objects.push({ oid, contents });
+    }
+    await git(repo, "prune-packed");
+    const packedBytes = async () => {
+      const names = (await fs.readdir(directory)).filter((name) => name.endsWith(".pack"));
+      return (
+        await Promise.all(
+          names.map(async (name) => (await fs.stat(path.join(directory, name))).size),
+        )
+      ).reduce((sum, bytes) => sum + bytes, 0);
+    };
+    const before = await packedBytes();
+    const progress = new WorktreeGcProgress();
+    await createWorktreeGitMaintenance(env)({ progress });
+    expect(progress.result.gitMaintenance?.stage).toBe("completed");
+    expect(await packedBytes()).toBeLessThan(before / 3);
+    expect((await fs.readdir(directory)).filter((name) => name.endsWith(".promisor"))).toHaveLength(
+      promisor ? 1 : 0,
+    );
+    for (const { oid, contents } of objects) {
+      expect(await requireGitBuffer(repo, ["cat-file", "blob", oid])).toEqual(contents);
+    }
+  },
+);
 
 it("compacts committed loose packs while retaining unpublished temporary packs", async () => {
   const repo = await initRepo(tempDirs.make("worktree-loose-packs-"));

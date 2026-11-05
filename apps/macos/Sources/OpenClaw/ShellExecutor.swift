@@ -41,8 +41,11 @@ enum ShellExecutor {
             let stdoutData = (try? Data(contentsOf: self.stdoutURL)) ?? Data()
             let stderrData = (try? Data(contentsOf: self.stderrURL)) ?? Data()
             try? FileManager.default.removeItem(at: self.stdoutURL.deletingLastPathComponent())
+            // Preserve diagnostics around malformed or truncated UTF-8 from subprocesses.
             return (
+                // swiftlint:disable:next optional_data_string_conversion
                 String(decoding: stdoutData, as: UTF8.self),
+                // swiftlint:disable:next optional_data_string_conversion
                 String(decoding: stderrData, as: UTF8.self))
         }
 

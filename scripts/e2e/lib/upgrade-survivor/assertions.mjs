@@ -1390,13 +1390,20 @@ function readInstalledPluginIndex() {
 
 function assertBaselinePlugin([expectedVersion, pluginId, tag]) {
   assert(["latest", "beta", "alpha"].includes(tag), "baseline plugin selector is not moving");
-  const record = readInstalledPluginIndex().installRecords[pluginId];
-  assert(record?.source === "npm", "baseline plugin was not installed from npm");
-  assert(record.spec === `@openclaw/${pluginId}@${tag}`, "baseline plugin selector changed");
-  const installed = readJson(path.join(resolveHomePath(record.installPath), "package.json"));
+  const records = readInstalledPluginIndex().installRecords;
+  const record = records[pluginId];
+  const installed =
+    record?.source === "npm"
+      ? readJson(path.join(resolveHomePath(record.installPath), "package.json"))
+      : assertExternalPluginInstall(records, pluginId, `@openclaw/${pluginId}`);
+  const prefix = record.source === "clawhub" ? "clawhub:" : "";
+  assert(
+    record.spec === `${prefix}@openclaw/${pluginId}@${tag}`,
+    "baseline plugin selector changed",
+  );
   assert(installed.name === `@openclaw/${pluginId}`, "baseline plugin package identity changed");
   assert(installed.version === expectedVersion, "baseline plugin is not the baseline version");
-  console.log(`Baseline npm plugin: @openclaw/${pluginId}@${expectedVersion}, selector=${tag}.`);
+  console.log(`Baseline plugin: @openclaw/${pluginId}@${expectedVersion}, selector=${tag}.`);
 }
 
 function assertExternalPluginInstall(records, pluginId, packageName) {
