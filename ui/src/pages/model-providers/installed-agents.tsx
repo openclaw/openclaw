@@ -521,7 +521,10 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
             <Show
               when={hasProviderBrandIcon(view().agent.id)}
               fallback={
-                <span class="model-providers__icon model-providers__agent-icon" aria-hidden="true">
+                <span
+                  class="model-providers__icon model-providers__agent-icon muted"
+                  aria-hidden="true"
+                >
                   <Icon name="terminal" />
                 </span>
               }
