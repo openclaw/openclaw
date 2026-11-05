@@ -1,6 +1,13 @@
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
+export function describePendingSteerWait(tools: readonly string[]): string {
+  return t(
+    tools.length ? "chat.pendingInputs.steerBlocked" : "chat.pendingInputs.steerUnavailable",
+    { tools: tools.join(", ") },
+  );
+}
+
 export function isChatSendReconnecting(
   state: ChatQueueItem["sendState"],
   connected: boolean | undefined,
