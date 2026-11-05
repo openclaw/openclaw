@@ -20,7 +20,10 @@ import { redactOtelAttributes } from "./service-attributes.js";
 import { MAX_RETAINED_TRUSTED_SPAN_CONTEXTS } from "./service-constants.js";
 import { contextForTraceContext, normalizedTrustedTraceContext } from "./service-trace-context.js";
 
-export function createDiagnosticsTraceRuntime(tracer: Tracer) {
+export function createDiagnosticsTraceRuntime(
+  tracer: Tracer,
+  runtimeOptions: { captureContent?: boolean } = {},
+) {
   const activeTrustedSpans = new Map<string, ReturnType<typeof tracer.startSpan>>();
   const activeTrustedSpanAliases = new Map<
     string,
@@ -306,6 +309,18 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     }
     if (evt.agentId) {
       spanAttrs["openclaw.agent"] = normalizeDiagnosticValue(evt.agentId);
+    }
+    // Session identity rides the captureContent gate: a collector trusted with raw
+    // prompt and tool content is trusted with the stable session identifier, so trace
+    // backends can group spans per conversation. gen_ai.conversation.id is the GenAI
+    // semantic-conventions spelling; openclaw.session.id is the OpenClaw-native one.
+    // Metric attributes stay low-cardinality and never carry session identifiers.
+    if (runtimeOptions.captureContent) {
+      const sessionId = evt.sessionKey ?? evt.sessionId;
+      if (sessionId) {
+        spanAttrs["gen_ai.conversation.id"] = sessionId;
+        spanAttrs["openclaw.session.id"] = sessionId;
+      }
     }
   };
 

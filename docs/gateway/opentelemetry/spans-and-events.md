@@ -80,6 +80,14 @@ Omitting the option preserves prompt statistics for interested subscribers.
 - `openclaw.memory.pressure`
   - `openclaw.memory.level`, `openclaw.memory.reason`, `openclaw.memory.rss_bytes`, `openclaw.memory.heap_used_bytes`, `openclaw.memory.heap_total_bytes`, `openclaw.memory.external_bytes`, `openclaw.memory.array_buffers_bytes`, optional `openclaw.memory.threshold_bytes`/`openclaw.memory.rss_growth_bytes`/`openclaw.memory.window_ms`
 
+Run-scoped spans (run, message and prompt processing, model call, model usage,
+harness, tool execution, and skill use) additionally carry
+`gen_ai.conversation.id` and `openclaw.session.id` — the session key, so trace
+backends group turns into one conversation — but only while
+`diagnostics.otel.captureContent` is `true`; the attributes are absent by
+default and never label metrics. See
+[privacy and trace context](privacy-and-trace-context.md#session-identity).
+
 When content capture is explicitly enabled, model and tool spans can also
 include bounded, redacted `openclaw.content.*` attributes for the specific
 content classes you opted into.
@@ -113,7 +121,9 @@ payloads.
 **Upgrade note:** if you already run with `diagnostics.otel.captureContent:
 true`, these message and run span attributes are new — your existing setting
 now also exports this prompt and reply content with no further configuration
-change. Nothing new is exported while `captureContent` is unset or `false`.
+change, and stamps `gen_ai.conversation.id` / `openclaw.session.id` (the
+session key) on run-scoped spans. Nothing new is exported while
+`captureContent` is unset or `false`.
 
 ## Diagnostic event catalog
 
