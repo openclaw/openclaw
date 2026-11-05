@@ -135,10 +135,10 @@ import {
   resolveLocalFullSuiteProfile,
   type VitestHostInfo,
 } from "./lib/vitest-local-scheduling.mts";
+import { resolveVitestNodeArgs } from "./lib/vitest-node-args.mts";
 import {
   DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
   resolveDefaultVitestNoOutputTimeoutMs,
-  resolveVitestNodeArgs,
 } from "./lib/vitest-process-env.mts";
 import {
   estimateVitestTestFileSeconds,
@@ -4711,6 +4711,7 @@ function resolveBoundedChangedTestTargetPlan(
           createTestInputFingerprint(cwd, changedPaths),
           adaptiveMarkdownQualification,
           options.adaptiveMarkdown.isIndependentCompanion,
+          cwd,
         )
       : (owners: string[]) => owners;
   const graphOptions = {
