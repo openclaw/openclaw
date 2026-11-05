@@ -1,23 +1,23 @@
-// Gateway dispatch proof lives with the A2A plugin. Core type graphs must not
-// import bundled extension files, and this is the route that otherwise falls
-// through to the root Control UI document.
+// Proves unsupported /a2a/v1 descendants get the plugin JSON 404 instead of the
+// root Control UI document. Lives under test/ so the core type graph does not
+// import the bundled plugin and the plugin tests do not import core internals.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resetPluginRuntimeStateForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, expect, it, vi } from "vitest";
+import { a2aChannelPlugin } from "../extensions/a2a/api.js";
+import { createA2aGatewayFixture } from "../extensions/a2a/src/gateway.test-support.js";
 import {
   AUTH_NONE,
   sendRequest,
   withGatewayServer,
-} from "../../../src/gateway/server-http.test-harness.js";
+} from "../src/gateway/server-http.test-harness.js";
 import {
   createGatewayPluginRequestHandler,
   shouldEnforceGatewayAuthForPluginPath,
-} from "../../../src/gateway/server/plugins-http.js";
-import type { createSubsystemLogger } from "../../../src/logging/subsystem.js";
-import { withTempDir } from "../../../src/test-utils/temp-dir.js";
-import { a2aChannelPlugin } from "./channel.js";
-import { createA2aGatewayFixture } from "./gateway.test-support.js";
+} from "../src/gateway/server/plugins-http.js";
+import type { createSubsystemLogger } from "../src/logging/subsystem.js";
+import { withTempDir } from "../src/test-utils/temp-dir.js";
 
 const CONTROL_UI_DOCUMENT = "<!doctype html><html>spa fallback</html>\n";
 const JSON_NOT_FOUND = JSON.stringify({ error: "Not found" });

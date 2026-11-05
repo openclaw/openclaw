@@ -1,3 +1,4 @@
-# Unsupported /a2a/v1 descendants need a Gateway routing regression beside the A2A plugin.
-# The CI base still had slack; this allocation covers only the 49 lines past that slack.
-49
+# Gateway routing regression for unsupported /a2a/v1 descendants.
+# CI on 6b9e6d708149 was over by 104 with net delta +133 while this credit was 49.
+# 129 matches this branch's test-line delta after the proof moved under test/.
+129
