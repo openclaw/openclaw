@@ -4,7 +4,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { formatErrorMessage } from "../../infra/errors.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
-import { formatUpdateFinalizationError } from "./update-command-result.js";
+import { formatUpdateFinalizationError } from "./update-command-error-format.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 

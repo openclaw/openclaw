@@ -118,7 +118,6 @@ vi.mock("../cli/update-cli/update-command-post-update.js", () => ({
   finishUpdate: fixture.finish,
 }));
 vi.mock("../cli/update-cli/update-command-result.js", () => ({
-  formatUpdateFinalizationError: String,
   UpdateCommandFailure: class extends Error {},
 }));
 vi.mock("../cli/update-cli/update-command-service-maintenance.js", () => ({

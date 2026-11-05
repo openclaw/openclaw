@@ -3,6 +3,7 @@ import path from "node:path";
 import { retainCliProcessJobUntilExit, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
 import type { UpdateCommandOptions } from "../cli/update-cli/shared.js";
 import { withUpdateDatabaseEngine } from "../cli/update-cli/update-command-database-engine.js";
+import { formatUpdateFinalizationError } from "../cli/update-cli/update-command-error-format.js";
 import {
   captureUpdateCommandExecutorAuthority,
   withDelegatedUpdateCommandExecutor,
@@ -21,17 +22,7 @@ import type {
   MigratedUpdateFinalizationResult,
   UpdatePluginCohortSettlementResult,
 } from "../cli/update-cli/update-command-migrated-types.js";
-import { writePostCoreUpdateFailureFile } from "../cli/update-cli/update-command-post-core.js";
-import { finishUpdate } from "../cli/update-cli/update-command-post-update.js";
-import {
-  formatUpdateFinalizationError,
-  UpdateCommandFailure,
-} from "../cli/update-cli/update-command-result.js";
-import { createWindowsTaskAutoStartGuard } from "../cli/update-cli/update-command-service-maintenance.js";
-import { withUpdateCommandTerminalResult } from "../cli/update-cli/update-command-terminal.js";
-import { createWindowsTaskAutoStartRecovery } from "../cli/update-cli/update-command-windows-task.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import { withPluginCohortConfigCapture } from "../config/plugin-cohort-recovery.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
@@ -47,7 +38,6 @@ import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { closePostgresPool, preparePostgresPoolForUpdate } from "./postgres-sync/pool.js";
 import { resolveEnvironmentValue } from "./process-env.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
-import { stopSupervisedPredecessorGateway } from "./update-candidate-predecessor-stop.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import { createDoctorServiceInspectionBudget } from "./update-doctor-deadline.js";
 import {
@@ -58,10 +48,6 @@ import {
 } from "./update-doctor-result.js";
 import { resolveUpdateFinalizationTimeoutMs } from "./update-finalization-budget.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
-import {
-  commitReadyUpdatePluginCohort,
-  settleDelegatedUpdatePluginCohort,
-} from "./update-plugin-cohort-worker.js";
 import {
   POST_CORE_EXECUTOR_CAPABILITY,
   POST_CORE_MUTATION_PROTOCOL,
@@ -96,7 +82,19 @@ async function finalizeMigratedUpdate(): Promise<void> {
   // Validation imports this whole candidate graph before activation. The helper
   // also needs the stable recovery barrel's writer after an actual schema bump.
   if (process.argv[2] === "--check") {
-    const { finishUpdateRun } = await import("../cli/daemon-cli.js");
+    const [{ finishUpdateRun }] = await Promise.all([
+      import("../cli/daemon-cli.js"),
+      import("../cli/update-cli/update-command-post-update.js"),
+      import("../cli/update-cli/update-command-terminal.js"),
+      import("../cli/update-cli/update-command-service-maintenance.js"),
+      import("../cli/update-cli/update-command-windows-task.js"),
+      import("../cli/update-cli/update-command-result.js"),
+      import("../cli/update-cli/update-command-post-core.js"),
+      import("../config/plugin-cohort-recovery.js"),
+      import("./update-candidate-predecessor-stop.js"),
+      import("./update-plugin-cohort-worker.js"),
+      import("../flows/doctor-health.js"),
+    ]);
     routeLogsToStderr();
     if (typeof finishUpdateRun !== "function") {
       throw new Error("Update recovery writer is unavailable.");
@@ -143,12 +141,14 @@ async function finalizeMigratedUpdate(): Promise<void> {
   }
   const text = Buffer.concat(chunks).toString("utf8");
   if (commitPluginCohort) {
+    const { commitReadyUpdatePluginCohort } = await import("./update-plugin-cohort-worker.js");
     pluginCohortSettlementResult = await commitReadyUpdatePluginCohort(
       readUpdatePluginCohortCommitInput(JSON.parse(text)),
     );
     return;
   }
   if (settlePluginCohort) {
+    const { settleDelegatedUpdatePluginCohort } = await import("./update-plugin-cohort-worker.js");
     pluginCohortSettlementResult = await settleDelegatedUpdatePluginCohort(
       readUpdatePluginCohortSettlementInput(JSON.parse(text)),
     );
@@ -172,6 +172,8 @@ async function finalizeMigratedUpdate(): Promise<void> {
       "Full-state checkpoint recovery is deferred; retained state was left unchanged.",
     );
   }
+  const { withUpdateCommandTerminalResult } =
+    await import("../cli/update-cli/update-command-terminal.js");
   // Engine selection is process-local; restore the updater owner before ledger access.
   await withUpdateDatabaseEngine(process.env, async () => {
     const omittedOperatorTimeout = isOmittedUpdateTimeout(input.params.opts.timeout, input);
@@ -332,6 +334,8 @@ async function runDelegatedPostCore(input: DecodedUpdatePostCoreInput): Promise<
     await fs.rename(`${resultPath}.pending`, resultPath);
   } catch (error) {
     if (!hasCommandProcessCleanupError(error)) {
+      const { writePostCoreUpdateFailureFile } =
+        await import("../cli/update-cli/update-command-post-core.js");
       await writePostCoreUpdateFailureFile(resultPath, error);
     }
     throw error;
@@ -385,7 +389,15 @@ async function runDelegatedDoctor(input: DecodedUpdateDoctorInput): Promise<void
         process.exitCode = 1;
         return;
       }
-      const { runDoctorHealthFlow } = await import("../flows/doctor-health.js");
+      const [
+        { runDoctorHealthFlow },
+        { withPluginCohortConfigCapture },
+        { stopSupervisedPredecessorGateway },
+      ] = await Promise.all([
+        import("../flows/doctor-health.js"),
+        import("../config/plugin-cohort-recovery.js"),
+        import("./update-candidate-predecessor-stop.js"),
+      ]);
       assertCurrent();
       remaining();
       const databaseWriteCapture = isStatePostgres()
@@ -518,6 +530,17 @@ async function finalizeInput(
   executorFence: UpdateRecoveryFence,
   registerRun: (run: NonNullable<UpdateCommandOptions["run"]>) => void,
 ) {
+  const [
+    { finishUpdate },
+    { UpdateCommandFailure },
+    { createWindowsTaskAutoStartGuard },
+    { createWindowsTaskAutoStartRecovery },
+  ] = await Promise.all([
+    import("../cli/update-cli/update-command-post-update.js"),
+    import("../cli/update-cli/update-command-result.js"),
+    import("../cli/update-cli/update-command-service-maintenance.js"),
+    import("../cli/update-cli/update-command-windows-task.js"),
+  ]);
   const transferredRun = input.params.opts.run;
   if (
     !transferredRun ||
