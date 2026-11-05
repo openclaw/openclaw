@@ -224,9 +224,11 @@ describe("native device settings pages", () => {
       expect.any(Function),
     );
     flush();
-    expect(hosting.querySelector<HTMLInputElement>("input.settings-toggle__input")!.disabled).toBe(
-      true,
-    );
+    expect(
+      hosting
+        .querySelector<HTMLInputElement>("input.settings-toggle__input")!
+        .hasAttribute("aria-disabled"),
+    ).toBe(true);
     const saved = createNativeDeviceSettingsSnapshot();
     saved.app.keepGatewayRunning = true;
     native.settle(0, saved);
@@ -251,9 +253,11 @@ describe("native device settings pages", () => {
     saved.app.keepGatewayRunningAvailable = false;
     native.publish(saved);
     flush();
-    expect(hosting.querySelector<HTMLInputElement>("input.settings-toggle__input")!.disabled).toBe(
-      true,
-    );
+    expect(
+      hosting
+        .querySelector<HTMLInputElement>("input.settings-toggle__input")!
+        .hasAttribute("aria-disabled"),
+    ).toBe(true);
     native.capability.set.mockClear();
     hosting.click();
     expect(native.capability.set).not.toHaveBeenCalled();
@@ -356,8 +360,9 @@ describe("native device settings pages", () => {
     iconStyles.dispatchEvent(new Event("change", { bubbles: true }));
     expect(capability.set).toHaveBeenCalledWith("app.iconStyle", "origami");
     expect(
-      row(page, "Launch at login").querySelector<HTMLInputElement>("input.settings-toggle__input")!
-        .disabled,
+      row(page, "Launch at login")
+        .querySelector<HTMLInputElement>("input.settings-toggle__input")!
+        .hasAttribute("aria-disabled"),
     ).toBe(true);
     expect(row(page, "Launch at login").textContent).toContain("requires a bundled app");
     expect(
@@ -408,9 +413,9 @@ describe("native device settings pages", () => {
         .checked,
     ).toBe(false);
     expect(
-      row(page, "Enable Peekaboo Bridge").querySelector<HTMLInputElement>(
-        "input.settings-toggle__input",
-      )!.disabled,
+      row(page, "Enable Peekaboo Bridge")
+        .querySelector<HTMLInputElement>("input.settings-toggle__input")!
+        .hasAttribute("aria-disabled"),
     ).toBe(true);
     expect(page.querySelector('[aria-label="Computer Control provider"]')).toBeNull();
     expect(page.querySelector('[aria-label="Dock icon"]')).toBeNull();
@@ -814,8 +819,9 @@ describe("native device settings pages", () => {
     const native = createCapability();
     const page = await mount("openclaw-device-permissions-page", native.capability);
     expect(
-      row(page, "Precise location").querySelector<HTMLInputElement>("input.settings-toggle__input")!
-        .disabled,
+      row(page, "Precise location")
+        .querySelector<HTMLInputElement>("input.settings-toggle__input")!
+        .hasAttribute("aria-disabled"),
     ).toBe(true);
     row(page, "Location access")
       .querySelector<HTMLInputElement>('input.settings-segmented__input[value="whileUsing"]')!
@@ -826,8 +832,9 @@ describe("native device settings pages", () => {
     native.publish(next);
     flush();
     expect(
-      row(page, "Precise location").querySelector<HTMLInputElement>("input.settings-toggle__input")!
-        .disabled,
+      row(page, "Precise location")
+        .querySelector<HTMLInputElement>("input.settings-toggle__input")!
+        .hasAttribute("aria-disabled"),
     ).toBe(false);
     toggle(page, "Precise location", true);
     expect(native.capability.set).toHaveBeenCalledWith("permissions.location.precise", true);

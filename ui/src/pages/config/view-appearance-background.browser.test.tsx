@@ -117,7 +117,7 @@ describe("Appearance backgrounds", () => {
     const modes = [
       ...host.querySelectorAll<HTMLButtonElement>('[data-test-id^="background-presentation-"]'),
     ];
-    expect(modes.every((mode) => mode.disabled)).toBe(true);
+    expect(modes.every((mode) => mode.hasAttribute("aria-disabled"))).toBe(true);
     expect(
       host
         .querySelector('[data-test-id="background-presentation-full-bleed"]')
@@ -157,7 +157,7 @@ describe("Appearance backgrounds", () => {
     ).toBe("true");
     const switches = [...host.querySelectorAll<HTMLInputElement>(".settings-toggle__input")];
     expect(switches).toHaveLength(2);
-    expect(switches.every((input) => input.disabled)).toBe(true);
+    expect(switches.every((input) => input.hasAttribute("aria-disabled"))).toBe(true);
     expect(host.querySelector<HTMLInputElement>('input[type="range"]')?.disabled).toBe(true);
     expect(props.onRemoveImage).not.toHaveBeenCalled();
     host.querySelector<HTMLButtonElement>("[data-background-remove]")!.click();
@@ -240,7 +240,9 @@ describe("Appearance backgrounds", () => {
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("Image <failed>");
     expect(host.querySelector("failed")).toBeNull();
     expect(
-      [...host.querySelectorAll<HTMLButtonElement>("button")].every((button) => button.disabled),
+      [...host.querySelectorAll<HTMLButtonElement>("button")].every((button) =>
+        button.matches(':disabled, [aria-disabled="true"]'),
+      ),
     ).toBe(true);
   });
 });

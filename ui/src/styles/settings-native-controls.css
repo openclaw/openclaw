@@ -74,12 +74,12 @@
   outline-offset: 1px;
 }
 
-.settings-toggle:has(input:disabled) {
+.settings-toggle:has(input:is(:disabled, [aria-disabled="true"])) {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.settings-row--toggle:has(.settings-toggle__input:disabled) {
+.settings-row--toggle:has(.settings-toggle__input:is(:disabled, [aria-disabled="true"])) {
   cursor: not-allowed;
 }
 
@@ -100,7 +100,7 @@
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
-.settings-segmented > .settings-segmented__btn:has(> input:disabled) {
+.settings-segmented > .settings-segmented__btn:has(> input:is(:disabled, [aria-disabled="true"])) {
   opacity: 0.5;
   cursor: not-allowed;
 }

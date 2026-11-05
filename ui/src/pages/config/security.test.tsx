@@ -104,14 +104,18 @@ describe("Security", () => {
       "Full",
     );
     expect(
-      profileButton.querySelector<HTMLInputElement>(".settings-segmented__input")?.disabled,
+      profileButton
+        .querySelector<HTMLInputElement>(".settings-segmented__input")
+        ?.hasAttribute("aria-disabled"),
     ).toBe(true);
     profileButton.click();
     expect(onToolProfileChange).not.toHaveBeenCalled();
     const browserRow = expectRowByTitle(container, "Browser enabled");
-    expect(browserRow.querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled).toBe(
-      true,
-    );
+    expect(
+      browserRow
+        .querySelector<HTMLInputElement>(".settings-toggle__input")
+        ?.hasAttribute("aria-disabled"),
+    ).toBe(true);
   });
 
   it("shows gateway auth as a dot status, not a pill", () => {

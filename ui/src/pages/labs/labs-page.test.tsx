@@ -408,7 +408,7 @@ describe("LabsPage Decision assistance", () => {
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
     flush();
     expect(toggle.checked).toBe(true);
-    expect(toggle.hasAttribute("disabled")).toBe(true);
+    expect(toggle.hasAttribute("aria-disabled")).toBe(true);
     expect(labRow(page, "Decision assistance").textContent).not.toContain("Preference saved.");
     pending.resolve(false);
     await pending.promise;

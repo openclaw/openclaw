@@ -258,7 +258,7 @@ function ToggleControl(
         type="checkbox"
         role="switch"
         checked={props.checked}
-        disabled={props.disabled}
+        aria-disabled={props.disabled ? "true" : undefined}
         aria-labelledby={props.labelledBy ?? labelId}
         onClick={(event) => settingsSwitchClick(event, props)}
         onChange={(event) => settingsSwitchChange(event, props)}
@@ -343,11 +343,12 @@ export function SettingsSegmented<T extends string>(props: SettingsSegmentedProp
                   name={name}
                   value={option().value}
                   checked={option().value === props.value}
-                  disabled={props.disabled || option().disabled}
+                  disabled={option().disabled}
+                  aria-disabled={props.disabled ? "true" : undefined}
                   aria-label={option().ariaLabel}
                   onClick={(event) => settingsRadioClick(event, option().value, props)}
                   onChange={(event) => settingsRadioChange(event, option().value, props)}
-                  onKeyDown={settingsRadioKeyDown}
+                  onKeyDown={(event) => settingsRadioKeyDown(event, props.disabled)}
                 />
                 {option().label}
               </label>
@@ -395,13 +396,14 @@ function SettingsSegmentedButtons<T extends string>(props: SettingsSegmentedProp
             data-compact-label={option().compactLabel}
             data-test-id={option().testId}
             title={option().title}
-            disabled={props.disabled || option().disabled}
+            disabled={option().disabled}
+            aria-disabled={props.disabled ? "true" : undefined}
             onClick={(event) => {
-              if (props.mode !== "buttons") {
+              if (props.mode !== "buttons" || props.disabled) {
                 return;
               }
               props.onClick?.(event, option().value);
-              if (event.defaultPrevented || props.disabled || option().disabled) {
+              if (event.defaultPrevented || option().disabled) {
                 return;
               }
               if (option().value === props.value) {

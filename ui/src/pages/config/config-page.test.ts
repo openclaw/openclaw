@@ -663,9 +663,9 @@ describe("ConfigPage Updates integration", () => {
     expect(container.querySelector(".settings-status")?.textContent).toContain(
       "Checking for updates…",
     );
-    expect(container.querySelector<HTMLInputElement>(".settings-segmented__input")?.disabled).toBe(
-      true,
-    );
+    expect(
+      container.querySelector(".settings-segmented__input")?.hasAttribute("aria-disabled"),
+    ).toBe(true);
     context.overlays.snapshot.updateStatusRefreshing = false;
     context.overlays.snapshot.updateStatusCheckBanner = {
       mode: "manual",

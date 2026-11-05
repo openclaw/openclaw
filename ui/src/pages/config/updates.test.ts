@@ -291,7 +291,7 @@ describe("renderUpdates", () => {
     const automatic = row("Check for updates automatically").querySelector<HTMLInputElement>(
       'input[role="switch"]',
     )!;
-    expect(automatic.hasAttribute("disabled")).toBe(false);
+    expect(automatic.hasAttribute("aria-disabled")).toBe(false);
     automatic.checked = false;
     automatic.dispatchEvent(new Event("change"));
     expect(nativeDeviceSettings.set).toHaveBeenCalledWith("updates.automatic", false);
@@ -431,7 +431,7 @@ describe("renderUpdates", () => {
     expect(selected?.checked).toBe(true);
     const automatic = automaticUpdatesControl().toggle;
     expect(automatic.checked).toBe(false);
-    expect(automatic.hasAttribute("disabled")).toBe(true);
+    expect(automatic.hasAttribute("aria-disabled")).toBe(true);
   });
 
   it("keeps the authored channel ahead of the Gateway schedule channel", () => {
@@ -481,7 +481,7 @@ describe("renderUpdates", () => {
     expect(checks.hasAttribute("disabled")).toBe(false);
     const automatic = automaticUpdatesControl().toggle;
     expect(automatic.checked).toBe(true);
-    expect(automatic.hasAttribute("disabled")).toBe(true);
+    expect(automatic.hasAttribute("aria-disabled")).toBe(true);
     expect(row("Automatic updates").textContent).toContain("Check for updates");
     checks.checked = true;
     checks.dispatchEvent(new Event("change"));
@@ -526,7 +526,7 @@ describe("renderUpdates", () => {
     );
 
     const automatic = automaticUpdatesControl();
-    expect(automatic.toggle.hasAttribute("disabled")).toBe(disabled);
+    expect(automatic.toggle.hasAttribute("aria-disabled")).toBe(disabled);
     if (description) {
       expect(automatic.row.textContent).toContain(description);
     }
