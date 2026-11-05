@@ -125,13 +125,15 @@ import { probeColdLoadOverlays } from "./lib/control-ui-overlay-probe.ts";
 import { installPaneChromeProbe } from "./lib/control-ui-pane-chrome-probe.ts";
 import { createControlUiStreamingReply } from "./lib/control-ui-streaming-fixture.ts";
 import { createStreamingReplyProbeInitScript } from "./lib/control-ui-streaming-reply.ts";
-import { warmReloadProbe, type TranscriptWitnesses } from "./lib/control-ui-warm-reload-probe.ts";
+import { createTranscriptReloadWitness } from "./lib/control-ui-transcript-reload-fixture.ts";
+import { warmReloadProbe } from "./lib/control-ui-warm-reload-probe.ts";
 import {
   GATEWAY_HEAP_SAMPLE_INTERVAL,
   readGatewayHeapProfile,
 } from "./lib/gateway-bench-profile.ts";
 import {
   installWarmReloadBrowserProbe,
+  installWarmReloadTranscriptProbe,
   summarizeDetailsGeometry,
 } from "./perf/warm-reload-browser-probe.ts";
 type SidebarPresentationSnapshot = ReturnType<ReturnType<typeof sidebarPresentationProbe>["read"]>;
@@ -293,6 +295,8 @@ const { values } = parseArgs({
     allocations: { type: "boolean", default: false },
     "warm-reload": { type: "boolean", default: false },
     "transcript-witness": { type: "boolean", default: false },
+    "active-transcript": { type: "boolean", default: false },
+    "active-transcript-reader": { type: "boolean", default: false },
     "transcript-witness-hold": { type: "boolean", default: false },
     "row-facts": { type: "boolean", default: false },
     "late-row-facts": { type: "boolean", default: false },
@@ -945,77 +949,14 @@ const fixture = createControlUiTeamScaleFixture({
   dashboardPaintMarker: values["dashboard-paint-marker"],
 });
 const witnessPhaseKey = "openclaw-bench-transcript-witness-phase";
+if (values["active-transcript"] && !values["transcript-witness"]) {
+  throw new Error("active-transcript requires transcript-witness for native saved/live phases");
+}
+if (values["active-transcript-reader"] && !values["active-transcript"]) {
+  throw new Error("active-transcript-reader requires active-transcript");
+}
 const transcriptWitness = values["transcript-witness"]
-  ? (() => {
-      const messages = fixture.scenario.historyMessages ?? [];
-      const index = messages.length - 1;
-      const message = messages[index];
-      const metadata = message?.["__openclaw"];
-      if (
-        message?.role !== "assistant" ||
-        typeof metadata?.id !== "string" ||
-        !Array.isArray(message.content)
-      ) {
-        throw new Error("Transcript witness requires an existing final assistant text message");
-      }
-      const originalText = "The current implementation is ready for verification.";
-      const witnesses: TranscriptWitnesses = {
-        saved: {
-          messageId: `${metadata.id}-cache`,
-          rowKey: "",
-          text: "The cached implementation is ready for verification.",
-        },
-        live: {
-          messageId: `${metadata.id}-fresh`,
-          rowKey: "",
-          text: "The latest implementation is ready for verification.",
-        },
-      };
-      const variants = { saved: messages, live: messages };
-      for (const source of ["saved", "live"] as const) {
-        const witness = witnesses[source];
-        witness.rowKey = `group:assistant:msg:id:${witness.messageId}:0`;
-        let replacements = 0;
-        const content = message.content.slice();
-        content.forEach((value, position) => {
-          if (
-            value.type !== "text" ||
-            typeof value.text !== "string" ||
-            !value.text.includes(originalText)
-          ) {
-            return;
-          }
-          replacements++;
-          content[position] = { ...value, text: value.text.replace(originalText, witness.text) };
-        });
-        if (replacements !== 1) {
-          throw new Error("Transcript witness requires exactly one existing fixture paragraph");
-        }
-        const replacement = { ...message };
-        replacement["__openclaw"] = { ...metadata, id: witness.messageId };
-        replacement.content = content;
-        const variant = messages.slice();
-        variant[index] = replacement;
-        variants[source] = variant;
-      }
-      // Preserve the visible reaction across both IDs; one unused lookup alias remains per phase.
-      const reactions = fixture.scenario.sessionReactions?.[fixture.selectedSessionKey];
-      const reaction = reactions?.[metadata.id];
-      if (reactions && reaction) {
-        reactions[witnesses.saved.messageId] = reaction;
-        reactions[witnesses.live.messageId] = reaction;
-        delete reactions[metadata.id];
-      }
-      return {
-        witnesses,
-        variants,
-        originalMessageId: metadata.id,
-        messageCount: messages.length,
-        // Native persistence retains the last 80 distinct-sequence fixture messages.
-        snapshotMessageCount: Math.min(messages.length, 80),
-        preparedAt: new Date().toISOString(),
-      };
-    })()
+? createTranscriptReloadWitness(fixture, values["active-transcript"])
   : undefined;
 if (transcriptWitness && fixture.liveHistory) {
   fixture.liveHistory.messages = transcriptWitness.variants.live;
@@ -1649,7 +1590,7 @@ try {
       : "";
   const warmProbes =
     values["warm-reload"] || firstLoad
-      ? `\n${paneChromeScript}\n(${warmReloadProbe.toString()})(${JSON.stringify({ rowFacts: values["row-facts"], avatars: values["transcript-avatars"], lateRowFacts: values["late-row-facts"], witnesses: transcriptWitness?.witnesses })}, ${values["pane-chrome-probe"] ? "__paneChrome.sample" : "undefined"});`
+      ? `\n${paneChromeScript}\n${values["active-transcript"] ? `(${installWarmReloadTranscriptProbe.toString()})(${JSON.stringify(values["active-transcript-reader"] ? "reader" : "end")});` : ""}\n(${warmReloadProbe.toString()})(${JSON.stringify({ rowFacts: values["row-facts"], avatars: values["transcript-avatars"], lateRowFacts: values["late-row-facts"], witnesses: transcriptWitness?.witnesses })}, ${values["pane-chrome-probe"] ? "__paneChrome.sample" : "undefined"});`
       : "";
   const warmPerformanceProbe = values["warm-reload-perf-probe"]
     ? `\nReflect.set(window, "__warmReloadProof", (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(face)}));`
@@ -1678,8 +1619,7 @@ try {
   const witnessInit = transcriptWitness
     ? `
     const witnessLive = localStorage.getItem(${JSON.stringify(witnessPhaseKey)}) === "live";
-    const witnessMessages = ${JSON.stringify(transcriptWitness.variants.saved)};
-    if (witnessLive) witnessMessages[witnessMessages.length - 1] = ${JSON.stringify(transcriptWitness.variants.live.at(-1))};
+    const witnessMessages = witnessLive ? ${JSON.stringify(transcriptWitness.variants.live)} : ${JSON.stringify(transcriptWitness.variants.saved)};
     window.openclawControlUiE2eGateway.setHistoryMessages(witnessMessages);
     if (witnessLive && ${values["transcript-witness-hold"]}) window.openclawControlUiE2eGateway.deferNext("chat.startup");
   `
@@ -2869,13 +2809,13 @@ try {
         wire.length > 0 &&
         wire.every(
           (entry: { saved: number; live: number; messageCount: number }) =>
-            entry.saved === 0 &&
+            entry.saved === (values["active-transcript"] ? 1 : 0) &&
             entry.live === 1 &&
-            entry.messageCount === transcriptWitness.messageCount,
+            entry.messageCount === transcriptWitness.liveMessageCount,
         ) &&
-        observed.attached.live &&
-        !observed.attached.saved &&
-        observed.live.paintMs !== null;
+        (values["active-transcript-reader"] || observed.attached.live) &&
+        (values["active-transcript"] || !observed.attached.saved) &&
+        (values["active-transcript-reader"] || observed.live.paintMs !== null);
       await writeFile(
         path.join(artifactDir, `run-${run + 1}.transcript-witness.json`),
         JSON.stringify(

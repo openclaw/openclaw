@@ -83,21 +83,17 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     this.scheduleEndReconcile();
   };
   readonly layout = new TranscriptLayoutOwner(this.recordEndLayoutCorrection);
-  private readonly followEnd = () =>
-    this.scrollToEnd({
-      source: "auto",
-      behavior: this.offsetState.scrollCommand?.behavior ?? "auto",
-    });
   private readonly reconcileEnd = () => {
     if (this.connected && !this.offsetState.pendingInteractionAnchor) {
       this.commitComposerResize(true);
       // Initial layout owns positioning until the visible range is measured.
       if (!this.initialRange.pending) {
-        this.endAnchor.reconcile(
-          this.scrollElement,
+        this.presentation.reconcileEnd(
+          this,
+          this.endAnchor,
           this.canAutoFollow(),
           this.offsetState.pendingScrollOffset !== null || this.offsetState.touchActive,
-          this.followEnd,
+          this.offsetState.scrollCommand?.behavior ?? "auto",
         );
       }
     }

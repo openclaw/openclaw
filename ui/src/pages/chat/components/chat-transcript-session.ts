@@ -9,6 +9,7 @@ import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts
 import type { ChatSessionScrollPosition } from "../scroll.ts";
 import type { ChatMessageEntryAnimations } from "./chat-message-entry.ts";
 import type { TranscriptAnnouncement } from "./chat-transcript-announcement.ts";
+import type { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
 import { measureTranscriptRow, readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
 import type {
   ComposerActivityLayout,
@@ -165,6 +166,30 @@ export function createTranscriptPresentation(
       return [applyRows?.() ?? false, applyRail] as const;
     },
     measureRows: () => readConnectedRows()?.() ?? false,
+    reconcileEnd(
+      host: {
+        readonly contentElement: HTMLElement | null;
+        readonly headerHeight: number;
+        readonly layout: Pick<TranscriptLayoutOwner, "commitRange">;
+        scrollToEnd(options: ChatScrollToEndOptions): boolean;
+      },
+      anchor: TranscriptEndAnchor,
+      canFollow: boolean,
+      suspended: boolean,
+      behavior: ScrollBehavior,
+    ) {
+      if (canFollow && host.contentElement) {
+        // Appended rows must replace their estimates before choosing the new end.
+        presentation.measureRows();
+        host.layout.commitRange(
+          host.contentElement,
+          virtualizer.getTotalSize() + host.headerHeight,
+        );
+      }
+      anchor.reconcile(scrollElement(), canFollow, suspended, () =>
+        host.scrollToEnd({ source: "auto", behavior }),
+      );
+    },
     measureRowsWithoutScrollAdjustment() {
       const adjustScroll = virtualizer.shouldAdjustScrollPositionOnItemSizeChange;
       virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false;
