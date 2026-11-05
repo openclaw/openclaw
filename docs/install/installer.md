@@ -22,6 +22,10 @@ native builds use these assembled scripts. The npm package keeps both source
 files together for installed updater compatibility. Installing from the website
 never downloads a separate policy helper.
 
+The Bash installers tighten their process umask to disallow group and other
+writes, while preserving stricter inherited masks. This
+does not change the invoking shell or repair permissions on existing files.
+
 Git installs retry transient remote-ref lookup failures up to three times. Failed
 lookups print Git's diagnostic with URLs, authorization headers, and GitHub tokens
 redacted. Missing refs and authentication failures stop without retrying.
