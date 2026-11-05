@@ -220,7 +220,10 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
 async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   // Settle retired-plugin state cleanup (may replace ctx.cfg) before the
   // legacy-state detect/migrate pair reads the config.
-  await runCoreContributionHealth(ctx, ["core/doctor/removed-workspaces-state"]);
+  await runCoreContributionHealth(ctx, [
+    "core/doctor/removed-workspaces-state",
+    "core/doctor/session-archive-read-cache",
+  ]);
   const doctorOnlyStateMigrations = ctx.options.repair === true || ctx.options.yes === true;
   if (
     !doctorOnlyStateMigrations ||
