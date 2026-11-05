@@ -1914,9 +1914,9 @@ class TalkModeManagerTest {
     }
 
   @Test
-  fun voiceModeChangeDetachesAcceptedConsultWhileTalkStopAbortsIt() =
+  fun voiceModeChangeAndEndTalkDetachAcceptedConsult() =
     runBlocking {
-      for ((trigger, disposition) in listOf("mode change" to "detach", "stop" to "abort")) {
+      for (trigger in listOf("mode change", "end talk")) {
         val closed = CompletableDeferred<JsonObject>()
         withNodeOwningRealtimePlayback(
           workDispatcher = Dispatchers.Unconfined,
@@ -1925,12 +1925,12 @@ class TalkModeManagerTest {
             false
           },
         ) { runtime, proof ->
-          if (trigger == "stop") runtime.setTalkModeEnabled(false) else runtime.setMicEnabled(true)
+          if (trigger == "end talk") runtime.setTalkModeEnabled(false) else runtime.setMicEnabled(true)
           assertFalse(proof.manager.isEnabled.value)
           proof.scheduler.runCurrent()
           val close = withContext(Dispatchers.Default) { withTimeout(5_000) { closed.await() } }
           assertEquals("playback-relay", close.getValue("sessionId").jsonPrimitive.content)
-          assertEquals(disposition, close["disposition"]?.jsonPrimitive?.content)
+          assertEquals("$trigger preserves accepted work", "detach", close["disposition"]?.jsonPrimitive?.content)
         }
       }
     }
