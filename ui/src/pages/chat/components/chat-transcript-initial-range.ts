@@ -119,7 +119,7 @@ export class TranscriptInitialRange {
         ? Math.max(this.preparedRowLimit, indexes.size + this.scrollPrepareRowLimit)
         : Infinity;
       // Keep the active and paced preparation windows; spend remaining slots on recent history.
-      for (const key of [...this.preparedRowKeys].reverse()) {
+      for (const key of [...this.preparedRowKeys].toReversed()) {
         const index = this.rowIndexes.get(key);
         if (index !== undefined && (indexes.has(index) || indexes.size < limit)) {
           indexes.add(index);
