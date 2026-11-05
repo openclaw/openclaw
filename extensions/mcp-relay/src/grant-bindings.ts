@@ -19,14 +19,14 @@ export async function registerRelayPrincipalRecovery(
     }
     return {
       audienceId,
-      recoveryId: String(grant.createdAt),
+      recoveryId: grant.issuanceId,
       principal: grant.principal,
       operatorScopeCeiling: grant.ceiling,
       signal,
       assertCurrent: () => {
         signal.throwIfAborted();
         state.assertGrantCurrent(audienceId);
-        if (state.getGrant(audienceId)?.createdAt !== grant.createdAt) {
+        if (state.getGrant(audienceId)?.issuanceId !== grant.issuanceId) {
           throw new GatewayControlUiIngressError(
             "forbidden",
             "The original relay grant was replaced.",

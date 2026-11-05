@@ -80,6 +80,9 @@ export const GATEWAY_OWNER_ONLY_CORE_TOOLS = [
 ] as const;
 
 const gatewayOwnerOnlyCoreToolNames = new Set<string>(GATEWAY_OWNER_ONLY_CORE_TOOLS);
+// Retained operator custody covers these control-plane paths, not every
+// owner-only executor. Other tools keep their sender or scoped admission.
+const retainedOperatorToolNames = new Set<string>(GATEWAY_CONTROL_PLANE_TOOLS);
 
 function isGatewayOwnerOnlyCoreTool(toolName: string): boolean {
   return gatewayOwnerOnlyCoreToolNames.has(toolName);
@@ -116,7 +119,7 @@ export function assertGatewayOwnerToolAuthority(
   }
   if (
     !hasGatewayOwnerToolAuthority(senderIsOwner, operatorAuthority, turnTainted) ||
-    (toolName === "intent" && senderIsOwner !== true)
+    (senderIsOwner !== true && !retainedOperatorToolNames.has(toolName))
   ) {
     throw new Error(
       turnTainted
@@ -134,7 +137,7 @@ export function resolveGatewayOwnerOnlyToolDenylist(
   if (operatorAuthority) {
     const eligible = hasGatewayOwnerToolAuthority(senderIsOwner, operatorAuthority, turnTainted);
     return GATEWAY_OWNER_ONLY_CORE_TOOLS.filter(
-      (name) => !eligible || (name === "intent" && senderIsOwner !== true),
+      (name) => !eligible || (senderIsOwner !== true && !retainedOperatorToolNames.has(name)),
     );
   }
   // Standing intents always require explicit owner identity, including on internal turns.

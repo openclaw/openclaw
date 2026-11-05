@@ -81,19 +81,12 @@ export class RelayService {
     this.#ingress = options.controlUiIngress;
   }
 
-  start(): void {
-    this.#options.scheduler.schedule({
-      id: "connect",
-      delayMs: 0,
-      run: async () => {
-        await registerRelayPrincipalRecovery(
-          this.#ingress,
-          this.#options.state,
-          this.#options.scheduler.signal,
-        );
-        this.#connect();
-      },
-    });
+  async start(): Promise<void> {
+    const { scheduler } = this.#options;
+    scheduler.signal.throwIfAborted();
+    await registerRelayPrincipalRecovery(this.#ingress, this.#options.state, scheduler.signal);
+    scheduler.signal.throwIfAborted();
+    scheduler.schedule({ id: "connect", delayMs: 0, run: () => this.#connect() });
   }
 
   async stop(): Promise<void> {

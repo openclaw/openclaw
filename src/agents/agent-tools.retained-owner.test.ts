@@ -33,14 +33,19 @@ it.each([
   "policy-denied",
   "tainted",
   "tainted-later",
+  "mobile_ui",
+  "openclaw",
+  "portal",
 ] as const)(
-  "retained owner-only gateway tool keeps sender attribution false and authorizes %s at effect",
+  "retained owner-only tool keeps sender attribution false and authorizes %s at effect",
   (state) =>
     withOpenClawTestState({ scenario: "minimal" }, async (fixture) => {
+      const unsupported = state === "mobile_ui" || state === "openclaw" || state === "portal";
+      const toolName = unsupported ? state : "gateway";
       const config = {
         tools: {
           profile: "full" as const,
-          allow: ["gateway"],
+          allow: [toolName],
           ...(state === "policy-denied" ? { deny: ["gateway"] } : {}),
         },
       };
@@ -96,13 +101,33 @@ it.each([
                   includePluginTools: false,
                 },
               });
-              const gateway = tools.find((tool) => tool.name === "gateway");
+              const gateway = tools.find((tool) => tool.name === toolName);
               if (state === "policy-denied") {
                 expect(gateway).toBeUndefined();
                 expect(request).not.toHaveBeenCalled();
                 return;
               }
               assert(gateway);
+              if (unsupported) {
+                const dispatch = vi
+                  .spyOn(scopedGateway, "callInProcessGatewayTool")
+                  .mockResolvedValue({});
+                try {
+                  const args =
+                    state === "mobile_ui"
+                      ? { action: "observe" }
+                      : state === "openclaw"
+                        ? { message: "A retained operator is not a new owner sender." }
+                        : { action: "list" };
+                  const result = await gateway.execute("unsupported-owner-call", args);
+                  expect(JSON.stringify(result)).toContain("gated");
+                  expect(dispatch).not.toHaveBeenCalled();
+                  expect(request).not.toHaveBeenCalled();
+                } finally {
+                  dispatch.mockRestore();
+                }
+                return;
+              }
               expect(getGatewayToolCallerIdentity()?.operatorAuthority).toBe(authority);
               if (state === "revoked") {
                 current = false;

@@ -3,4 +3,5 @@
 # gates, independently scoped siblings, and principal replay anonymization.
 # Owning-boundary fixtures caught real admission and settlement defects that
 # helper-only tests missed. Preserve those distinct contracts; scalar unchanged.
-831
+# Includes exact-issuance migration, awaited startup and declared warning feedback.
+1008
