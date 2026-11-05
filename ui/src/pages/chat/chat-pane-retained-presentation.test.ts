@@ -52,6 +52,65 @@ import {
 } from "./sidebar-layout.ts";
 
 describe("chat pane retained presentation lifecycle", () => {
+  it("confirms reset Undo without a Board and keeps failed or stale actions honest", async () => {
+    const undoReset = vi.fn().mockRejectedValue(new Error("This reset is no longer current."));
+    const { pane: runtime } = createTestChatPane({
+      sessions: { undoReset } as unknown as SessionCapability,
+    });
+    const pane = runtime as typeof runtime & {
+      handleUndoReset: (boundaryId: string, ownsAction: () => boolean) => Promise<void>;
+      history: { undoResetPending: boolean };
+      renderResetConfirmation: () => {
+        undoReset?: boolean;
+        onResolve: (confirmed: boolean) => void;
+      } | null;
+      settleResetConfirmation: (confirmed: boolean) => void;
+    };
+    pane.state.chatMessages = [
+      {
+        role: "system",
+        content: [],
+        __openclaw: { kind: "reset", id: "reset", boundaryId: "reset-entry" },
+      },
+    ];
+    pane.state.chatMessage = "Keep my unsent draft";
+    const ownsAction = vi.fn(() => true);
+    const first = pane.handleUndoReset("reset-entry", ownsAction);
+    expect(pane.history.undoResetPending).toBe(true);
+    expect(pane.renderResetConfirmation()?.undoReset).toBe(true);
+    expect(undoReset).not.toHaveBeenCalled();
+    pane.settleResetConfirmation(true);
+    await first;
+    expect(undoReset).toHaveBeenCalledExactlyOnceWith("agent:main:current", "reset-entry", {});
+    expect(pane.state.chatError).toContain("This reset is no longer current.");
+    expect(pane.state.chatMessage).toBe("Keep my unsent draft");
+    expect(pane.history.undoResetPending).toBe(false);
+
+    const retry = pane.handleUndoReset("reset-entry", ownsAction);
+    const cancelledDialog = pane.renderResetConfirmation();
+    expect(cancelledDialog?.undoReset).toBe(true);
+    cancelledDialog?.onResolve(false);
+    await retry;
+    expect(undoReset).toHaveBeenCalledTimes(1);
+
+    const revoked = pane.handleUndoReset("reset-entry", ownsAction);
+    cancelledDialog?.onResolve(true);
+    expect(pane.renderResetConfirmation()).not.toBeNull();
+    expect(undoReset).toHaveBeenCalledTimes(1);
+    ownsAction.mockReturnValue(false);
+    pane.settleResetConfirmation(true);
+    await revoked;
+    expect(undoReset).toHaveBeenCalledTimes(1);
+    ownsAction.mockReturnValue(true);
+
+    const stale = pane.handleUndoReset("reset-entry", ownsAction);
+    pane.state.sessionKey = "agent:main:different";
+    pane.settleResetConfirmation(true);
+    await stale;
+    expect(undoReset).toHaveBeenCalledTimes(1);
+    expect(pane.history.undoResetPending).toBe(false);
+  });
+
   afterEach(() => {
     resetChatComposerState();
     vi.unstubAllGlobals();

@@ -26,6 +26,7 @@ export type SessionTranscriptTree<T> = {
   hasLeafUpdate: boolean;
   hasExplicitLeafUpdate: boolean;
   hasInvalidLeafControl: boolean;
+  reopenedResetIds: ReadonlySet<string>;
 };
 
 function isCanonicalSessionEntryType(value: unknown): boolean {
@@ -208,6 +209,52 @@ export function scanSessionTranscriptNavigation<T>(
   let hasExplicitLeafUpdate = false;
   let hasInvalidLeafControl = false;
   let latestResetId: string | undefined;
+  const reopenedResetIds = new Set<string>();
+  let resetFenceNeedsAncestry = false;
+
+  // Undo can select an older reset window while retaining the newer branch.
+  // Rebuild only the selected fence, using the same bounded-storage path visitor.
+  const selectResetFence = (targetId: string | null) => {
+    let selectedResetId: string | undefined;
+    visitSessionTranscriptTreePathNodes(byId, targetId, new Set(), (node) => {
+      if (selectedResetId === undefined && isRecord(node.entry) && node.entry.type === "reset") {
+        selectedResetId = node.id;
+      }
+    });
+    if (selectedResetId === latestResetId) {
+      return;
+    }
+    latestResetId = selectedResetId;
+    resetDescendantIds.clear();
+    if (selectedResetId !== undefined) {
+      resetDescendantIds.add(selectedResetId);
+    }
+    resetFenceNeedsAncestry = selectedResetId !== undefined;
+  };
+  const isResetDescendant = (id: string) => {
+    if (resetDescendantIds.has(id)) {
+      return true;
+    }
+    if (!resetFenceNeedsAncestry || latestResetId === undefined) {
+      return false;
+    }
+    let descendant = false;
+    const path: string[] = [];
+    visitSessionTranscriptTreePathNodes(byId, id, new Set(), (node) => {
+      path.push(node.id);
+      descendant ||= node.id === latestResetId;
+    });
+    if (descendant) {
+      resetDescendantIds.add(id);
+      for (const pathId of path) {
+        resetDescendantIds.add(pathId);
+        if (pathId === latestResetId) {
+          break;
+        }
+      }
+    }
+    return descendant;
+  };
 
   let nextIndex = 0;
   for (const entry of entries) {
@@ -215,12 +262,29 @@ export function scanSessionTranscriptNavigation<T>(
     let explicitTreeEntry = parseSessionTranscriptTreeEntry(entry);
     const isLeafControl =
       explicitTreeEntry !== undefined && isRecord(entry) && entry.type === "leaf";
+    const isKnownLeafReference = (id: string | null): boolean =>
+      id === null || (byId.has(id) && !invalidLeafControlIds.has(id));
+    if (
+      latestResetId !== undefined &&
+      isLeafControl &&
+      isRecord(entry) &&
+      entry.undoResetId === latestResetId &&
+      explicitTreeEntry?.leafId !== undefined &&
+      explicitTreeEntry.leafId !== null &&
+      isKnownLeafReference(explicitTreeEntry.leafId) &&
+      isKnownLeafReference(explicitTreeEntry.appendParentId) &&
+      (explicitTreeEntry.leafId === byId.get(latestResetId)?.parentId ||
+        reopenedResetIds.has(latestResetId))
+    ) {
+      reopenedResetIds.add(latestResetId);
+      selectResetFence(explicitTreeEntry.leafId);
+    }
     if (
       latestResetId &&
       leafId !== null &&
       explicitTreeEntry?.leafId !== undefined &&
       isLeafControl &&
-      (explicitTreeEntry.leafId === null || !resetDescendantIds.has(explicitTreeEntry.leafId))
+      (explicitTreeEntry.leafId === null || !isResetDescendant(explicitTreeEntry.leafId))
     ) {
       explicitTreeEntry = {
         ...explicitTreeEntry,
@@ -229,8 +293,6 @@ export function scanSessionTranscriptNavigation<T>(
         appendParentId: leafId,
       };
     }
-    const isKnownLeafReference = (id: string | null): boolean =>
-      id === null || (byId.has(id) && !invalidLeafControlIds.has(id));
     const invalidLeafControl =
       explicitTreeEntry?.leafId !== undefined &&
       isLeafControl &&
@@ -265,7 +327,7 @@ export function scanSessionTranscriptNavigation<T>(
       const crossesResetBoundary =
         latestResetId !== undefined &&
         treeEntry.appendMode !== "side" &&
-        (treeEntry.parentId === null || !resetDescendantIds.has(treeEntry.parentId));
+        (treeEntry.parentId === null || !isResetDescendant(treeEntry.parentId));
       const logicalParentId = crossesResetBoundary
         ? leafId
         : treeEntry.appendMode !== "side" && canonicalParentIsStale
@@ -292,8 +354,10 @@ export function scanSessionTranscriptNavigation<T>(
     byId.set(node.id, node);
     if (isRecord(entry) && entry.type === "reset") {
       latestResetId = node.id;
+      reopenedResetIds.clear();
       resetDescendantIds.clear();
       resetDescendantIds.add(node.id);
+      resetFenceNeedsAncestry = false;
     } else if (
       latestResetId !== undefined &&
       node.parentId !== null &&
@@ -304,6 +368,9 @@ export function scanSessionTranscriptNavigation<T>(
     appendParentId = node.appendParentId;
     if (node.leafId !== undefined) {
       leafId = node.leafId;
+      if (reopenedResetIds.size > 0 && isLeafControl) {
+        selectResetFence(leafId);
+      }
       hasLeafUpdate = true;
       if (explicitTreeEntry) {
         hasExplicitLeafUpdate = true;
@@ -321,6 +388,7 @@ export function scanSessionTranscriptNavigation<T>(
     hasLeafUpdate,
     hasExplicitLeafUpdate,
     hasInvalidLeafControl,
+    reopenedResetIds,
   };
 }
 

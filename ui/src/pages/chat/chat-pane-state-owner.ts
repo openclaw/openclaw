@@ -599,6 +599,7 @@ export abstract class ChatPaneStateOwner {
     pending:
       | {
           scopeKey: string;
+          undoReset?: boolean;
           promise: Promise<boolean>;
           resolve: (confirmed: boolean) => void;
         }
@@ -659,6 +660,7 @@ export abstract class ChatPaneStateOwner {
   readonly history = projectChatFields<{
     catalogMessages: unknown[];
     catalogLoading: boolean;
+    undoResetPending: boolean;
     loadingOlder: boolean;
     olderError: string | null;
     catalogCursor: string | undefined;
@@ -667,6 +669,7 @@ export abstract class ChatPaneStateOwner {
   }>({
     catalogMessages: [],
     catalogLoading: false,
+    undoResetPending: false,
     loadingOlder: false,
     olderError: null,
     catalogCursor: undefined,

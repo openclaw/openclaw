@@ -9,7 +9,10 @@ import {
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
+import {
+  scopedAgentParamsForSession,
+  visibleSessionMatches,
+} from "../../lib/sessions/navigation.ts";
 import { resolveSessionCreateParams } from "../../lib/sessions/session-create-params.ts";
 import {
   isSubagentSessionKey,
@@ -18,11 +21,14 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { pluginDetailLocation } from "../plugins/detail-tabs.ts";
 import { cloneChatAttachmentsForIndependentOwner } from "./attachment-payload-store.ts";
+import { undoChatReset } from "./chat-history-actions.ts";
 import { isExpiredIncognitoSession, setChatError } from "./chat-history-state.ts";
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { resolveChatPaneParentSession } from "./chat-pane-header-identity.ts";
 import { ChatPaneRetainedPresentation } from "./chat-pane-retained-presentation.ts";
+import { currentResetBoundaryId } from "./chat-progress.ts";
 import { canCreateChatSession, resolveChatAgentId } from "./chat-state-route.ts";
+import { getChatSessionProjection } from "./history-merge.ts";
 
 registerSessionNavigationEnglish();
 
@@ -30,6 +36,32 @@ registerSessionNavigationEnglish();
 registerSessionOrganizationSharedEnglish();
 
 export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentation {
+  protected async handleUndoReset(boundaryId: string, ownsAction: () => boolean): Promise<void> {
+    const scope = this.captureConnectionScope();
+    if (!scope || this.history.undoResetPending) {
+      return;
+    }
+    const state = scope.state;
+    const sourceKey = state.sessionKey;
+    const agentParams = scopedAgentParamsForSession(state, sourceKey);
+    const ownsBoundary = () =>
+      this.ownsHeaderOutcomeScope(scope) &&
+      visibleSessionMatches(state, sourceKey, agentParams.agentId) &&
+      currentResetBoundaryId(getChatSessionProjection(state).messages) === boundaryId;
+    if (!ownsBoundary() || !ownsAction()) {
+      return;
+    }
+    this.history.undoResetPending = true;
+    try {
+      if (!(await this.confirmConversationReset(true)) || !ownsBoundary() || !ownsAction()) {
+        return;
+      }
+      await undoChatReset(state, boundaryId);
+    } finally {
+      this.history.undoResetPending = false;
+    }
+  }
+
   readonly sessionCreation = { creatingIncognito: false };
 
   private activeCatalogContinuation: symbol | null = null;

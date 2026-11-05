@@ -48,12 +48,14 @@ function SystemLine(props: {
   label: string;
   children?: JSX.Element;
   metric?: string;
+  action?: JSX.Element;
+  interactive?: boolean;
   compaction?: "active" | "complete";
 }) {
   return (
     <div
       class="chat-divider__rule"
-      role={props.compaction ? "status" : "separator"}
+      role={props.compaction ? "status" : props.interactive ? "group" : "separator"}
       aria-live={props.compaction ? "polite" : undefined}
       aria-label={props.metric ? `${props.label}, ${props.metric}` : props.label}
     >
@@ -89,13 +91,18 @@ function SystemLine(props: {
           </span>
           <span class="chat-divider__metric">{props.metric}</span>
         </Show>
+        {props.action}
       </span>
       <span class="chat-divider__line" />
     </div>
   );
 }
 
-export function ChatDivider(props: { item: Extract<ChatItem, { kind: "divider" }> }) {
+export function ChatDivider(props: {
+  item: Extract<ChatItem, { kind: "divider" }>;
+  onUndoReset?: (boundaryId: string) => void;
+  undoResetPending?: boolean;
+}) {
   return (
     <div
       class={[
@@ -110,6 +117,24 @@ export function ChatDivider(props: { item: Extract<ChatItem, { kind: "divider" }
         label={props.item.label}
         metric={props.item.metric}
         compaction={props.item.compaction}
+        interactive={Boolean(props.item.boundaryId && props.onUndoReset)}
+        action={
+          props.item.boundaryId && props.onUndoReset ? (
+            <button
+              type="button"
+              class="btn btn--sm btn--ghost"
+              disabled={props.undoResetPending}
+              aria-busy={props.undoResetPending ? "true" : undefined}
+              onClick={() => {
+                if (props.item.boundaryId && !props.undoResetPending) {
+                  props.onUndoReset?.(props.item.boundaryId);
+                }
+              }}
+            >
+              {t("common.undo")}
+            </button>
+          ) : undefined
+        }
       />
       <Show when={props.item.description}>
         <div class="chat-divider__details">

@@ -3,6 +3,7 @@ import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/recor
 import { readMessageWorkContext } from "../../chat/work-context.js";
 import { assertModelSelectionUnlocked } from "../../sessions/model-overrides.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
+import { isManualSessionResetBoundary } from "./reset-policy.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import type { SessionMessageCutMutationResult } from "./session-accessor.types.js";
 import { findSessionTranscriptHeader } from "./session-entry-codec.js";
@@ -26,7 +27,7 @@ import { MIN_READABLE_SESSION_VERSION } from "./version.js";
 
 type MessageCut = {
   status: "cut";
-  message: Record<string, unknown>;
+  message?: Record<string, unknown>;
   parentId: string | null;
   prefix: TranscriptEvent[];
 };
@@ -78,7 +79,9 @@ export function selectSessionMessageCut(
   const cut =
     params.mode === "switch"
       ? undefined
-      : resolveMessageCut(events, params.entryId, params.mode === "fork");
+      : params.undoReset && params.mode === "rewind"
+        ? resolveResetUndo(events, params.entryId)
+        : resolveMessageCut(events, params.entryId, params.mode === "fork");
   if (cut && cut.status !== "cut") {
     return cut;
   }
@@ -140,6 +143,17 @@ export function planSessionMessageCut(
             ),
           ],
   });
+  let undoResetId = params.undoReset && params.mode === "rewind" ? params.entryId : undefined;
+  if (params.mode === "switch") {
+    const tree = scanSessionTranscriptTree(events);
+    const boundary = selectSessionTranscriptTreePathNodes(tree, tree.leafId).findLast(
+      (node) => asRecord(node.entry)?.type === "reset",
+    );
+    if (boundary && tree.reopenedResetIds.has(boundary.id)) {
+      // Explicit branch selection can revisit a window already opened by Undo.
+      undoResetId = boundary.id;
+    }
+  }
   const nextEvents =
     params.mode === "fork" && cut
       ? [header, ...cut.prefix]
@@ -152,6 +166,7 @@ export function planSessionMessageCut(
             parentId: readLastEventId(events),
             timestamp: new Date().toISOString(),
             targetId: params.mode === "switch" ? params.entryId : (cut?.parentId ?? null),
+            ...(undoResetId ? { undoResetId } : {}),
           },
         ];
   // Rotating transcript identity fences stale live managers: later snapshot-replace writes
@@ -236,10 +251,12 @@ export function planSessionMessageCut(
         previous: currentEntry,
         sessionKey: params.targetKey,
       });
+  const editorMessage = cut?.message;
   const editorText =
-    cut && (readMessageWorkContext(cut.message)?.text ?? extractEditorText(cut.message.content));
-  const editorAttachments = cut && extractEditorAttachments(cut.message.content);
-  const editorMediaRefs = cut && extractEditorMediaRefs(cut.message);
+    editorMessage &&
+    (readMessageWorkContext(editorMessage)?.text ?? extractEditorText(editorMessage.content));
+  const editorAttachments = editorMessage && extractEditorAttachments(editorMessage.content);
+  const editorMediaRefs = editorMessage && extractEditorMediaRefs(editorMessage);
   return {
     status: "prepared",
     header,
@@ -271,6 +288,26 @@ function validateBranchTip(
     return "not-branch-tip";
   }
   return tree.leafId === entryId ? "already-active" : undefined;
+}
+
+function resolveResetUndo(
+  events: readonly TranscriptEvent[],
+  entryId: string,
+): MessageCut | Exclude<SessionMessageCutMutationResult, { status: "created" }> {
+  const tree = scanSessionTranscriptTree(events);
+  const path = selectSessionTranscriptTreePathNodes(tree, tree.leafId);
+  const boundaryIndex = path.findLastIndex((node) => asRecord(node.entry)?.type === "reset");
+  const boundary = path[boundaryIndex];
+  if (!boundary || boundary.id !== entryId || !isManualSessionResetBoundary(boundary.entry)) {
+    return { status: "not-latest-reset" };
+  }
+  if (
+    boundary.parentId === null ||
+    !path.slice(0, boundaryIndex).some((node) => asRecord(node.entry)?.type === "message")
+  ) {
+    return { status: "missing-reset-history" };
+  }
+  return { status: "cut", parentId: boundary.parentId, prefix: [] };
 }
 
 function resolveMessageCut(

@@ -61,6 +61,7 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import { prepareSessionForkFilesystemRoot } from "./session-create-root.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { resolveEditorMediaAttachments } from "./session-rewind-editor-media.js";
+import { resolveSessionMessageCutError } from "./session-rewind-error.js";
 import { prepareRewindRepositoryEntries } from "./session-rewind-repository-entries.js";
 import { waitForTerminalSessionRunSettlement } from "./session-run-settlement.js";
 import { listSessionBranchesForGateway } from "./sessions-branches-list.js";
@@ -162,6 +163,7 @@ async function mutatePreparedSessionAtMessage({
   assertSourceCurrent: () => void;
 }): Promise<void> {
   const { params, respond, context, client } = options;
+  const undoReset = action === "rewind" && "undoReset" in params && params.undoReset === true;
   const memory = getSessionActorStorageBinding({
     sessionKey: initial.canonicalKey,
     agentId: initial.agentId,
@@ -260,6 +262,13 @@ async function mutatePreparedSessionAtMessage({
     agentId: requestedAgentId,
   });
   let queuedWork: SessionControllerStopCapture | undefined;
+  const pendingUndoMessage = "Undo reset is unavailable while input is queued.";
+  const assertHistoryMutationCurrent = () => {
+    assertMutationCurrent();
+    if (undoReset && queuedWork?.selectPendingInputs().length) {
+      throw new Error(pendingUndoMessage);
+    }
+  };
   await runSessionMutation({
     target: controllerTarget,
     prepare: async () => {
@@ -298,6 +307,10 @@ async function mutatePreparedSessionAtMessage({
       // A queued sharing mutation can revoke participation without rotating the source identity.
       // Revalidate under the shared lifecycle fence before delegating or writing history.
       assertMutationCurrent();
+      if (undoReset && queuedWork?.selectPendingInputs().length) {
+        reject(pendingUndoMessage, ErrorCodes.UNAVAILABLE);
+        return;
+      }
       if (blockedByActiveRun) {
         reject(
           action === "switch"
@@ -373,7 +386,7 @@ async function mutatePreparedSessionAtMessage({
           upstreamLink && upstreamForkHarness
             ? await prepareUpstreamForkCurrentGuard({
                 client,
-                commitGuard: assertMutationCurrent,
+                commitGuard: assertHistoryMutationCurrent,
                 context,
                 forkHarness: upstreamForkHarness,
                 requestedAgentId,
@@ -490,7 +503,7 @@ async function mutatePreparedSessionAtMessage({
           : undefined;
       const mutationParams = {
         agentId: current.agentId,
-        commitGuard: assertMutationCurrent,
+        commitGuard: assertHistoryMutationCurrent,
         sessionKey: current.canonicalKey,
         sessionStoreKey: current.canonicalKey,
         storePath: current.storePath,
@@ -560,7 +573,7 @@ async function mutatePreparedSessionAtMessage({
           creation: { ...creation, sandbox },
         };
         result = await mutateSqliteSessionAtMessage(
-          action === "fork" ? forkParams : { ...mutationParams, entryId },
+          action === "fork" ? forkParams : { ...mutationParams, entryId, undoReset },
           action,
           memory ? undefined : expectedState,
           {
@@ -605,22 +618,7 @@ async function mutatePreparedSessionAtMessage({
         }
       }
       if (result.status !== "created") {
-        const actionLabel = action === "switch" ? "branch switch" : action;
-        const message = {
-          conflict: `Session changed; retry ${action}.`,
-          "missing-session": "session not found",
-          "missing-entry": `${action === "switch" ? "branch" : "message"} entry not found: ${entryId}`,
-          "not-branch-tip": `entry is not a branch tip: ${entryId}`,
-          "already-active": `branch is already active: ${entryId}`,
-          "not-user-message": `entry is not a user message: ${entryId}`,
-          "off-active-path": `message entry is not on the active path: ${entryId}`,
-          "unsupported-storage": `session transcript storage does not support ${actionLabel}`,
-          failed: `failed to ${actionLabel} session`,
-        }[result.status];
-        reject(
-          message,
-          result.status === "failed" ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-        );
+        respond(false, undefined, resolveSessionMessageCutError(result, action, entryId));
         return;
       }
       const committedResult = result;
@@ -640,7 +638,7 @@ async function mutatePreparedSessionAtMessage({
               ];
         if (action !== "fork") {
           // The committed cut retires captured inputs while the mutation still fences claims.
-          if (queuedWork) {
+          if (queuedWork && !undoReset) {
             cancelCapturedSessionControllerSource(queuedWork);
           }
         } else {

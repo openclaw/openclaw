@@ -732,12 +732,16 @@ export type SessionMessageCutMutationResult =
   | { status: "missing-session" }
   | { status: "missing-entry" }
   | { status: "not-user-message" }
+  | { status: "not-latest-reset" }
+  | { status: "missing-reset-history" }
   | { status: "off-active-path" }
   | { status: "unsupported-storage" }
   | { status: "failed" };
 
 export type SessionMessageCutMutationParams = {
   agentId?: string;
+  /** Rewind before the latest active reset instead of before a user message. */
+  undoReset?: boolean;
   /** Synchronous authority check run inside the transcript commit transaction. */
   commitGuard?: () => void;
   creation?: {

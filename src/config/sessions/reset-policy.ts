@@ -1,9 +1,23 @@
-// Session reset policy resolves automatic freshness for direct, group, and thread sessions.
 import {
   asFiniteNumber,
   asFiniteNumberInRange,
 } from "@openclaw/normalization-core/number-coercion";
+// Session reset policy owns automatic freshness and manual reset recovery eligibility.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
+
+/** Older clear boundaries omitted context; kept-tail and explicit automatic context never undo. */
+export function isManualSessionResetBoundary(record: unknown): boolean {
+  return (
+    isRecord(record) &&
+    record.type === "reset" &&
+    (record.reason === "new" || record.reason === "reset") &&
+    (record.context === undefined || record.context === "clear") &&
+    Boolean(readNonBlankString(record.parentId)) &&
+    !readNonBlankString(record.firstKeptEntryId)
+  );
+}
 
 export type SessionResetMode = "none" | "daily" | "idle";
 type SessionStaleReason = Exclude<SessionResetMode, "none">;

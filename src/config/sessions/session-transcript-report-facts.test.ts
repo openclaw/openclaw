@@ -96,6 +96,7 @@ it.each<ProjectionCase>([
   ...[
     { targetId: null },
     { targetId: "parent", appendParentId: null },
+    { targetId: "parent", undoResetId: "reset-boundary" },
     { targetId: "parent", appendParentId: "opaque", appendMode: "side" as const },
   ].map((control): ProjectionCase => ({
     raw: { ...base, type: "leaf", ...control },

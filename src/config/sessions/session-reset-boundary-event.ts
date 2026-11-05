@@ -26,6 +26,7 @@ type SessionResetBoundaryEvent = {
   parentId: string | null;
   timestamp: string;
   reason: SessionResetBoundaryReason;
+  context?: SessionResetBoundaryRequest["context"];
   firstKeptEntryId?: string;
 };
 
@@ -117,6 +118,7 @@ export function buildSessionResetBoundaryEvent(
     parentId: recordId(activeEntries.at(-1)) ?? null,
     timestamp: new Date().toISOString(),
     reason: params.reason,
+    context: params.context,
     ...(firstKeptEntryId ? { firstKeptEntryId } : {}),
   };
 }

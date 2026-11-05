@@ -73,6 +73,7 @@ import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
+  loadTranscriptEvents,
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -305,6 +306,41 @@ async function archiveSourceSession(storePath?: string): Promise<void> {
 }
 
 describe("session message-cut methods", () => {
+  it.each(["queued", "unadopted"])(
+    "rejects reset undo with %s input without changing history or work",
+    async (phase) => {
+      await appendTranscriptEvent(transcriptScope, {
+        type: "reset",
+        id: "manual-reset",
+        parentId: "assistant-entry",
+        reason: "reset",
+        timestamp: "2026-07-18T01:00:00.000Z",
+      });
+      const entry = await readEntry();
+      const events = await loadTranscriptEvents(transcriptScope);
+      const queued = phase === "queued" ? enqueueSessionWork("undo-reset") : undefined;
+      const source = queued?.rpcSource ?? registerSource("unadopted-undo-reset").entry;
+      const depth = getFollowupQueueDepth(sessionKey);
+      const inputPhase = source.input.phase;
+      try {
+        const response = await invoke("sessions.rewind", "manual-reset", {
+          params: { sessionKey, entryId: "manual-reset", undoReset: true },
+        });
+        expectCutFailure(response, {
+          code: ErrorCodes.UNAVAILABLE,
+          message: "Undo reset is unavailable while input is queued.",
+        });
+        expect(await readEntry()).toEqual(entry);
+        expect(await loadTranscriptEvents(transcriptScope)).toEqual(events);
+        expect(getFollowupQueueDepth(sessionKey)).toBe(depth);
+        expect(isRpcSourceRegistered(source)).toBe(true);
+        expect(source.input.phase).toBe(inputPhase);
+        expect(source.input.custody.cancellationRetired).toBeFalsy();
+      } finally {
+        clearQueuedSessionWork(sourceTarget());
+      }
+    },
+  );
   it("rejects a disallowed agent fork without restricting existing-session rewind", async () => {
     const { options } = await restrictedOperator(
       "restricted-fork-creator@example.com",

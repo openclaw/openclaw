@@ -5,6 +5,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import type { SessionResetBoundaryRequest } from "../config/sessions/session-reset-boundary-event.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createResetBoundaryTranscriptSource } from "./session-end-transcript-reader.js";
@@ -46,8 +47,12 @@ function compaction(id: string, firstKeptEntryId: string) {
   };
 }
 
-function reset(id: string, firstKeptEntryId?: string) {
-  return { type: "reset" as const, id, timestamp, reason: "reset", firstKeptEntryId };
+function reset(
+  id: string,
+  firstKeptEntryId?: string,
+  options?: Partial<SessionResetBoundaryRequest>,
+) {
+  return { type: "reset" as const, id, timestamp, reason: "reset", firstKeptEntryId, ...options };
 }
 
 function customMessage(id: string, display: unknown, customType = "run-failed-before-reply") {
@@ -151,7 +156,7 @@ describe("session transcript reader marker projection", () => {
 
   async function writeTranscript(
     sessionId: string,
-    events: Array<{ id: string }>,
+    events: Event[],
   ): Promise<SessionTranscriptReadScope> {
     const scope = {
       agentId: "main",
@@ -165,6 +170,39 @@ describe("session transcript reader marker projection", () => {
     ]);
     return scope;
   }
+
+  test("advertises Undo only for explicit resets with retained parent history", async () => {
+    const recoverable = await writeTranscript("undoable-reset", [
+      message("prior"),
+      reset("undoable"),
+    ]);
+    const history = await readFull(recoverable, {
+      mode: "full",
+      reason: "reset Undo metadata proof",
+    });
+    expect(history).toEqual([
+      expect.objectContaining({ __openclaw: expect.objectContaining({ boundaryId: "undoable" }) }),
+    ]);
+
+    for (const [name, events] of [
+      ["empty", [reset("empty-reset")]],
+      ["automatic", [message("prior"), reset("daily-reset", undefined, { reason: "daily" })]],
+      ["preserved-tail", [message("prior"), reset("tail-reset", "prior")]],
+      [
+        "empty-preserved-tail",
+        [message("prior"), reset("empty-tail", undefined, { context: "preserve-tail" })],
+      ],
+    ] as const) {
+      const scope = await writeTranscript(name, [...events]);
+      const rows = await readFull(scope, {
+        mode: "full",
+        reason: "unavailable reset Undo metadata",
+      });
+      for (const row of rows) {
+        expect(row).not.toHaveProperty("__openclaw.boundaryId");
+      }
+    }
+  });
 
   test("reads a bounded ended window without successor turns after same-ID reset", async () => {
     const boundaryId = "ended-boundary";
