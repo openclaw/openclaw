@@ -13,6 +13,14 @@ export const RELEASE_VALIDATION_WAIVERS = [
       "(FRV 41800680256 run kova-261104-084310-8bd049); crash, correctness, isolation, " +
       "data-integrity, and install/update failures stay blocking and are checked in the report.",
   },
+  {
+    targetVersion: "2026.11.1",
+    childRole: "releaseChecksIndependent",
+    jobName: "Run repo/live E2E validation / validate_release_live_cache",
+    reason:
+      "OpenRouter returned HTTP 402 for the release key (FRV 41881174354 job on C 3a4983e15f96); " +
+      "billing failure at the last provider, tracked in the 2026.11.1 release handoff.",
+  },
 ];
 
 const SUCCESSFUL_CONCLUSIONS = new Set(["success", "skipped", "neutral"]);

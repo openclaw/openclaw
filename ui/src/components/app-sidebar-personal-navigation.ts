@@ -497,11 +497,12 @@ export function personalSidebarOwnerProjection(
 ) {
   const context = host.sessionDataContext;
   const self = context ? gatewayPresentationScope(context.gateway).displayUser : null;
+  const selectedOwnerId = host.sessionOwnerFilterId;
   return applySidebarSessionOwnerFilter({
     projected,
     ownerFacet,
-    selectedOwnerId: host.sessionOwnerFilterId,
-    selectedProfileId: host.sessionOwnerFilterId === self?.id ? self.id : undefined,
+    selectedOwnerId,
+    selectedProfileId: selectedOwnerId === self?.id ? self.id : undefined,
     self,
   });
 }

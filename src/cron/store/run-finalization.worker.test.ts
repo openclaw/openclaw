@@ -156,7 +156,7 @@ it.each([undefined, "timeout"] as const)(
 );
 
 it.each(["cancel", "disable"] as const)(
-  "retains an unstarted due slot across receipt pruning without replay after %s",
+  "coalesces deferred receipts without replay after %s",
   async (terminalAction) => {
     await withOpenClawTestState({ label: "cron-deferred-receipts" }, async (fixture) => {
       const now = 1_800_000_000_000;
@@ -170,20 +170,21 @@ it.each(["cancel", "disable"] as const)(
       const database = openOpenClawStateDatabase();
       withWorkerState({ environment: { OPENCLAW_STATE_DIR: fixture.stateDir } }, () => {
         const request = scheduled(storeKey, original, now);
+        let attemptAt = now;
         const claim = () =>
-          requestCronRunsInWorker(database, { storeKey, nowMs: now, requests: [request] });
+          requestCronRunsInWorker(database, { storeKey, nowMs: attemptAt, requests: [request] });
         const current = () => loadCronStoreFromDatabase(database.db, storeKey).store.jobs[0]!;
-        // Exercise real retention: the first receipt must disappear, but the slot remains due.
-        for (let index = 0; index < 65; index += 1) {
+        // Each retry replaces its unstarted receipt while preserving the pending slot.
+        for (let index = 0; index < 2; index += 1) {
           expect(claim().accepted).toHaveLength(1);
           const run = drainCronQueueInWorker(database, {
             storeKey,
-            nowMs: now + 1,
+            nowMs: attemptAt,
             requests: [],
             maxConcurrentRuns: 1,
           }).launches[0]!;
           expect(run).toBeDefined();
-          const result = finalize(database, storeKey, now + index + 10, {
+          const result = finalize(database, storeKey, attemptAt, {
             job: run.job,
             runReceipt: run.runReceipt,
             status: "skipped",
@@ -199,6 +200,13 @@ it.each(["cancel", "disable"] as const)(
           expect(result.outcome.eventPlans).toEqual([]);
           expect(current().state).toMatchObject(original.state);
           expect(current().state.runningAtMs).toBeUndefined();
+          expect(
+            database.db
+              .prepare("SELECT COUNT(*) AS count FROM cron_run_receipts WHERE store_key = ?")
+              .get(storeKey),
+          ).toEqual({ count: 1 });
+          expect(claim().accepted).toEqual([]);
+          attemptAt = current().state.admissionDeferred!.retryAtMs;
         }
         expect(
           database.db
@@ -239,7 +247,7 @@ it.each(["cancel", "disable"] as const)(
           { jobId: original.id, receiptId: request.receiptId, reason: "already-requested" },
         ]);
         if (terminalAction === "cancel") {
-          expect(current().state.nextRunAtMs).toBe(now + 60_000);
+          expect(current().state.nextRunAtMs).toBe(now + 120_000);
         }
         expect(current().state.queuedAtMs).toBeUndefined();
         expect(database.db.prepare("SELECT COUNT(*) AS count FROM task_runs").get()).toEqual({
