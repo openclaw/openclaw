@@ -370,17 +370,22 @@ struct ChatSourcePreviewTests {
         #expect(render([revised]) == [[], [self.second]])
         #expect(parsed == ["", "Read \(self.first).", "Read \(self.second)."])
 
-        // Same row and content; only the footer's stop reason changes, which surfaces its cited error text.
-        func footer(_ stopReason: String?) -> OpenClawChatMessage {
+        // Same row and content; each step changes one footer input of the visible text from the step before.
+        func footer(_ stopReason: String?, cites url: String? = nil, ownsFooter: Bool = true) -> OpenClawChatMessage {
             var part = OpenClawChatMessage(
                 id: cited.id, role: "assistant", content: [.init(type: "text", text: "")], timestamp: 3,
-                transcriptRunID: self.runID, stopReason: stopReason, errorMessage: "See \(self.second).")
+                transcriptRunID: self.runID, stopReason: stopReason, errorMessage: "See \(url ?? self.second).")
             part.presentationBlockIndex = 5
+            part.presentationOwnsFooter = ownsFooter
             return part
         }
-        #expect(state.previews(for: footer(nil)).isEmpty)
-        #expect(state.previews(for: footer("error")).map(\.url.absoluteString) == [self.second])
-        #expect(parsed.suffix(2) == ["", "See \(self.second)."])
+        let cards = { (part: OpenClawChatMessage) in state.previews(for: part).map(\.url.absoluteString) }
+        #expect(cards(footer(nil)).isEmpty)
+        #expect(cards(footer("error")) == [self.second])
+        #expect(cards(footer("error", cites: self.first)).isEmpty)
+        #expect(cards(footer("error")) == [self.second])
+        #expect(cards(footer("error", ownsFooter: false)).isEmpty)
+        #expect(parsed.suffix(5) == ["", "See \(self.second).", "See \(self.first).", "See \(self.second).", ""])
     }
 
     private func answer(_ text: String) -> OpenClawChatMessage {
