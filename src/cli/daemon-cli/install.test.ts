@@ -470,7 +470,9 @@ describe("runDaemonInstall", () => {
       "gateway",
       "install",
     ]);
-    // The real planner selects the runtime; every Bun probe reports no supported Bun.
+    // The real planner selects the runtime; any Bun it probes (even a Bun test host) is 1.3.0.
+    const probe = JSON.parse(nodeProbeOutput("26.12.1").stdout);
+    runExecMock.mockResolvedValue({ stdout: JSON.stringify({ ...probe, bunVersion: "1.3.0" }) });
     const { buildGatewayInstallPlan } = await vi.importActual<
       typeof import("../../commands/daemon-install-helpers.js")
     >("../../commands/daemon-install-helpers.js");
