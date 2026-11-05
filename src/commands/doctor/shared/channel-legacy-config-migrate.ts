@@ -10,12 +10,12 @@ import { findUninspectedPluginDiagnostic } from "../../../plugins/discovery-avai
 import { discoverConfiguredPluginLoadPaths } from "../../../plugins/discovery.js";
 import { applyPluginDoctorCompatibilitySequence } from "../../../plugins/doctor-compatibility-migration.js";
 import type { PluginDoctorCompatibilityNormalizer } from "../../../plugins/doctor-contract-module.js";
-import type { PluginManifestRegistry } from "../../../plugins/manifest-registry.types.js";
 import {
   applyPluginDoctorCompatibilityMigrations,
   collectDoctorConfigRepairPluginIds,
   isPluginDoctorMigrationDeferred,
 } from "../../../plugins/doctor-contract-registry.js";
+import type { PluginManifestRegistry } from "../../../plugins/manifest-registry.types.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 import { isRecord, visitChannelEntries } from "./legacy-config-record-shared.js";
 import { HISTORICAL_WEBHOOK_CHANNELS } from "./legacy-webhook-pins.js";
@@ -173,7 +173,9 @@ export function applyChannelDoctorCompatibilityMigrations(
     options?.pluginContracts === false
       ? []
       : (options?.pluginCompatibility?.pluginIds ??
-        [...new Set([...unresolvedChannelIds, ...collectDoctorConfigRepairPluginIds(cfg)])].toSorted());
+        [
+          ...new Set([...unresolvedChannelIds, ...collectDoctorConfigRepairPluginIds(cfg)]),
+        ].toSorted());
   const plugins: ReturnType<typeof applyPluginDoctorCompatibilityMigrations> =
     pluginIds.length || options?.historicalWebhookListeners
       ? applyPluginDoctorCompatibilityMigrations(bundled.config, {
@@ -182,7 +184,9 @@ export function applyChannelDoctorCompatibilityMigrations(
             ? [...new Set([...pluginIds, ...HISTORICAL_WEBHOOK_CHANNELS])]
             : pluginIds,
           historicalWebhookListeners: options?.historicalWebhookListeners,
-          manifestRegistry: options?.pluginCompatibility?.manifestRegistry,
+          ...(options?.pluginCompatibility
+            ? { manifestRegistry: options.pluginCompatibility.manifestRegistry }
+            : {}),
         })
       : { config: bundled.config, changes: [] };
   // Bundled and installed contract views can report the same warning-only condition.
