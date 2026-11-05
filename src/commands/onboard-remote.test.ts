@@ -220,6 +220,40 @@ describe("promptRemoteGatewayConfig", () => {
     });
   });
 
+  it("keeps an IPv6 discovery host bracketed in the direct URL", async () => {
+    const { next } = await runRemotePrompt({
+      beacons: [createGatewayDiscoveryBeacon({ host: "2001:db8::1" })],
+      text: urlText((params) => String(params.initialValue), "token-123"),
+    });
+
+    expect(next.gateway).toMatchObject({
+      mode: "remote",
+      remote: {
+        url: "wss://[2001:db8::1]:18789",
+        transport: "direct",
+      },
+    });
+  });
+
+  it("keeps an IPv6 discovery host bracketed in the SSH tunnel hint", async () => {
+    vi.stubEnv("OPENCLAW_LOCALE", "en");
+    try {
+      const { prompter } = await runRemotePrompt({
+        beacons: [
+          createGatewayDiscoveryBeacon({ host: "2001:db8::1", port: 18789, sshPort: 2222 }),
+        ],
+        connection: "ssh",
+        text: urlText(() => "ws://127.0.0.1:18789"),
+      });
+      expect(prompter.note).toHaveBeenCalledWith(
+        expect.stringContaining("ssh -N -L 18789:127.0.0.1:18789 <user>@[2001:db8::1] -p 2222"),
+        "SSH tunnel",
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it.each([
     { port: 18789, sshPort: undefined, url: "ws://127.0.0.1:18789" },
     { port: 29443, sshPort: 2222, url: "ws://127.0.0.1:18789/" },
