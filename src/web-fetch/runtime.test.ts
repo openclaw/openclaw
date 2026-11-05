@@ -138,6 +138,33 @@ describe("web fetch runtime", () => {
     expectProvider({ config: {}, providerId: "Firecrawl" });
   });
 
+  it("keeps an explicit selection matching a mixed-case registered id", () => {
+    pluginProviders.mockReturnValue([
+      createProvider("firecrawl", firecrawlCredential),
+      createWebFetchTestProvider({
+        pluginId: "acme",
+        id: "MixedCase",
+        credentialPath: "plugins.entries.acme.config.webFetch.apiKey",
+        autoDetectOrder: 0,
+        requiresCredential: false,
+      }),
+    ]);
+    expectProvider({ config: {}, providerId: "MixedCase" }, "MixedCase");
+  });
+
+  it.each(["", "   "])(
+    "keeps a blank explicit provider id (%j) from selecting another provider",
+    (blankId) => {
+      useFirecrawl();
+      expect(
+        resolveWebFetchDefinition({
+          config: selectedProviderConfig("firecrawl"),
+          providerId: blankId,
+        }),
+      ).toBeNull();
+    },
+  );
+
   it("does not auto-detect a keyless provider without a credential", () => {
     useFirecrawl({ requiresCredential: false });
     expect(resolveWebFetchDefinition({ config: {} })).toBeNull();

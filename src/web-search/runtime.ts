@@ -352,7 +352,19 @@ function selectWebSearchCandidates(
     return provider.id;
   }
 
-  const explicitProviderId = normalizeOptionalLowercaseString(options?.providerId);
+  // An explicit provider id resolves back to its registered spelling (exact match
+  // first, then case-insensitive) instead of lowercasing the request, because
+  // registrations keep their original casing; unknown explicit ids keep the
+  // unknown-provider error.
+  const requestedProviderId = options?.providerId?.trim();
+  const explicitProviderId =
+    options?.providerId === undefined
+      ? undefined
+      : (providers.find((entry) => entry.id === requestedProviderId)?.id ??
+        (requestedProviderId
+          ? providers.find((entry) => entry.id.toLowerCase() === requestedProviderId.toLowerCase())
+              ?.id
+          : undefined));
   const preferredIds = uniqueStrings(
     [
       explicitProviderId,
@@ -368,8 +380,8 @@ function selectWebSearchCandidates(
     ].filter((value): value is string => Boolean(value)),
   );
 
-  if (explicitProviderId && !providers.some((entry) => entry.id === explicitProviderId)) {
-    throw new Error(`Unknown web_search provider "${explicitProviderId}".`);
+  if (requestedProviderId && !explicitProviderId) {
+    throw new Error(`Unknown web_search provider "${requestedProviderId}".`);
   }
   const explicitSelection = hasExplicitWebSearchSelection({
     search,
