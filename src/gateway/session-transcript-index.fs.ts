@@ -226,7 +226,8 @@ async function prepareTranscriptIndexStep(
     // Count retained bytes too: finishing a partial line must not decode a second page's payload.
     let bytes = bounded ? state.length : 0;
     let lines = 0;
-    scan: while (state.offset < cached.size && (!bounded || lines < SOURCE_PAGE_MAX_MESSAGES)) {
+    const lineLimit = bounded ? SOURCE_PAGE_MAX_MESSAGES : Infinity;
+    scan: while (state.offset < cached.size && lines < lineLimit) {
       const remaining = bounded ? SOURCE_PAGE_MAX_BYTES - bytes : ARCHIVE_READ_BYTES;
       if (remaining <= 0 && (!bounded || state.length < SOURCE_PAGE_MAX_BYTES)) {
         break;
@@ -256,7 +257,7 @@ async function prepareTranscriptIndexStep(
         }
         state.afterCr = false;
       }
-      while (start < chunk.length && (!bounded || lines < SOURCE_PAGE_MAX_MESSAGES)) {
+      while (start < chunk.length && lines < lineLimit) {
         const lf = chunk.indexOf(10, start);
         const cr = chunk.indexOf(13, start);
         const end = lf < 0 ? cr : cr < 0 ? lf : Math.min(lf, cr);
