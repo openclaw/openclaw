@@ -177,6 +177,54 @@ describe.runIf("__vitest_browser__" in globalThis)("plugin activity icon decoder
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
+  it("rasterizes an ordinary transform and a long valid transform list", async ({
+    onTestFinished,
+  }) => {
+    const fetch = vi.spyOn(globalThis, "fetch");
+    for (const [pluginId, transform] of [
+      ["ordinary-transform", "translate(1 2) scale(1.5)"],
+      ["long-transform", "scale(1) ".repeat(40)],
+    ]) {
+      fetch.mockImplementation(
+        async () =>
+          new Response(
+            `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 4h16v16H4Z" transform="${transform}"/></svg>`,
+            { headers: { "content-type": "image/svg+xml" } },
+          ),
+      );
+      const url = await fetchPluginActivityIconBlobUrl({
+        ...common,
+        pluginId,
+        signal: new AbortController().signal,
+      });
+      expect(url).not.toBeNull();
+      if (!url) {
+        throw new Error("Expected a rasterized transform");
+      }
+      onTestFinished(() => URL.revokeObjectURL(url));
+      expect((await (await nativeFetch(url)).blob()).type).toBe("image/png");
+    }
+  });
+
+  it("rejects an unclosed transform through the activity loader without stalling", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(
+          `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 4h16v16H4Z" transform="scale(${"\t\t)scale(".repeat(24)}"/></svg>`,
+          { headers: { "content-type": "image/svg+xml" } },
+        ),
+    );
+    const started = performance.now();
+    await expect(
+      fetchPluginActivityIconBlobUrl({
+        ...common,
+        pluginId: "stalling-transform",
+        signal: new AbortController().signal,
+      }),
+    ).resolves.toBeNull();
+    expect(performance.now() - started).toBeLessThan(250);
+  });
+
   it.each([
     ["package PNG", "image/png", "png"],
     [
