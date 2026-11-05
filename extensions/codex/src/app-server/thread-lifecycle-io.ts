@@ -367,8 +367,7 @@ export async function resumeExistingCodexThread(
         },
         params,
       ),
-      preparedOpenClawBaseInstructions:
-        context.resolveRetainedOpenClawBaseInstructions(resumeBinding),
+      preparedOpenClawBaseInstructions: context.resolveOpenClawBaseInstructions(resumeBinding),
       lifecycle: {
         action: "resumed",
         ...(activeTurnIds.length ? { activeTurnIds } : {}),
@@ -634,8 +633,6 @@ export async function startFreshCodexThread(
     pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
     pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
     pluginAppPolicyContext: pluginThreadConfig?.policyContext,
-    openClawCreationBaseInstructions:
-      startParams.baseInstructions === baseInstructions ? baseInstructions : undefined,
   };
   if (!preserveExistingBinding) {
     const nextBinding: CodexAppServerThreadBinding = {

@@ -43,14 +43,14 @@ resume. Merely sending `developerInstructions` on `thread/resume` does not
 refresh the model-visible policy on stock Codex. Explicit `systemPrompt: ""` sends
 a withdrawal, not a fallback to older instructions.
 
-A `systemPrompt` replacement, including an empty one, withdraws OpenClaw's base
-instructions only on new threads. OpenClaw then sends no base and does not move its
-policy into the developer instructions, so a new thread keeps Codex's own model
-prompt or the authored native base. An existing thread keeps the base saved when it
-was created until it rotates to a fresh thread, because Codex restores that saved
-base when a resume sends none. Reports count that saved text while it stays active,
-and that thread's configured developer instructions start with a notice withdrawing it, so
-the withdrawal survives native compaction.
+A `systemPrompt` replacement, including an empty one, replaces the base instructions
+too, as the replacement replaces the whole prompt on the default engine. OpenClaw sends
+an empty base and does not move its policy into the developer instructions, so the
+replacement is the only OpenClaw-supplied policy. An existing thread keeps its ID and
+history: the changed base takes the cold-resume path, which settles and unloads the
+thread before `thread/resume` replaces its saved base in place. Every cold resume sends
+the intended base. When Codex configuration authors `model_instructions_file` or
+`instructions`, that operator base stays.
 
 Ordinary incognito turns can reuse unchanged generic policy, but changed or emptied
 policy is rejected without sending another native turn or discarding the live

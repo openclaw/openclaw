@@ -379,8 +379,7 @@ export async function tryReuseCodexLiveThread(
           ...binding,
           // Nothing is sent to this live thread, so report the base it got at creation,
           // never a render of current inputs.
-          preparedOpenClawBaseInstructions:
-            creationPolicy?.baseInstructions ?? binding.openClawCreationBaseInstructions,
+          preparedOpenClawBaseInstructions: creationPolicy?.baseInstructions,
           lifecycle: { action: "resumed" },
         },
       };
@@ -707,7 +706,7 @@ export async function tryReuseCodexLiveThread(
         liveThreadConfigFingerprint,
         liveThreadEphemeralPolicy,
         liveThreadOwnership: retainedThread,
-        preparedOpenClawBaseInstructions: options.resolveRetainedOpenClawBaseInstructions(binding),
+        preparedOpenClawBaseInstructions: options.resolveOpenClawBaseInstructions(binding),
         ...(!incognito && retainedThread.serviceTier && resumeParams.serviceTier === undefined
           ? { clearInheritedServiceTier: true }
           : {}),

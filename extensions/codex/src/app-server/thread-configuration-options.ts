@@ -30,8 +30,6 @@ export type CodexThreadConfigurationOptions = {
   modelProvider?: string | null;
   /** Supervised threads have no outer runtime plan; this provider owns their prompt guidance. */
   nativeModelProvider?: string;
-  /** OpenClaw base a resumed thread pinned at creation; Codex restores it when a resume sends none. */
-  openClawCreationBaseInstructions?: string;
   hostSystemAgentActive?: boolean;
   restrictedToolSurfaceInheritedMcpServerNames?: readonly string[];
   shellEnvironment?: Readonly<Record<string, string>>;

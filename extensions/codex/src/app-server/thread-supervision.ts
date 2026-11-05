@@ -257,10 +257,6 @@ export async function materializePendingSupervisionBranch(
       nativeAttempt,
       nativeStartOptions,
     );
-    const openClawCreationBaseInstructions =
-      startParams.baseInstructions === openClawBaseInstructions
-        ? openClawBaseInstructions
-        : undefined;
     assertExactSupervisionModelSelection(startParams, {
       model: nativeModel,
       modelProvider: nativeModelProvider,
@@ -344,7 +340,6 @@ export async function materializePendingSupervisionBranch(
             model: nativeModel,
             modelProvider: bindingModelProvider,
             historyCoveredThrough,
-            openClawCreationBaseInstructions,
           },
         },
         params.throwIfAborted,
@@ -408,7 +403,6 @@ export async function materializePendingSupervisionBranch(
       model: nativeModel,
       modelProvider: bindingModelProvider,
       historyCoveredThrough,
-      openClawCreationBaseInstructions,
       preparedOpenClawBaseInstructions: openClawBaseInstructions,
       lifecycle: { action: "forked" },
     };

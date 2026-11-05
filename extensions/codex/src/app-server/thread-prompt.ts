@@ -171,32 +171,16 @@ export function resolveCodexOpenClawBaseInstructions(
 }
 
 /**
- * OpenClaw's base a resumed thread holds. A resume without a base keeps the rollout's
- * creation base unless an authored base overrides it (codex-rs/core/src/session/mod.rs, base
- * priority order), so after a systemPrompt replacement the saved creation text stays active
- * until the thread rotates.
- */
-export function resolveCodexRetainedOpenClawBaseInstructions(
-  params: CodexThreadPromptContext,
-  options: CodexThreadConfigurationOptions,
-): string | undefined {
-  if (!options.systemPromptReplaced) {
-    return resolveCodexOpenClawBaseInstructions(params, options);
-  }
-  return hasAuthoredCodexBaseInstructions(options)
-    ? undefined
-    : options.openClawCreationBaseInstructions;
-}
-
-const CODEX_RETAINED_BASE_WITHDRAWAL =
-  "The OpenClaw-supplied generic policy in this conversation's base instructions is withdrawn and no longer applies: a configured system prompt replaced it. Follow the developer instructions below in its place; when there are none, no OpenClaw generic policy applies.";
-
-/**
  * A request base outranks `model_instructions_file` and `instructions`
  * (codex-rs/core/src/config/mod.rs), so with either authored OpenClaw omits the base and
  * carries its policy ahead of the developer instructions. Start and resume place it alike,
- * keeping warm reuse and fork snapshots consistent with the creation request. A replaced
- * system prompt sends no base, so Codex keeps its own model prompt or the authored one.
+ * keeping warm reuse and fork snapshots consistent with the creation request.
+ *
+ * A replaced system prompt replaces the base too: an explicit empty base outranks the
+ * rollout's saved one on a cold resume (codex-rs/core/src/session/mod.rs, base priority
+ * order), so an existing thread drops OpenClaw's base in place. A loaded thread ignores
+ * the override; the base is part of the configuration fingerprint, so the change takes the
+ * cold-resume path. An authored base stays the operator's.
  */
 export function placeCodexBaseInstructions(
   params: CodexThreadPromptContext,
@@ -208,20 +192,10 @@ export function placeCodexBaseInstructions(
     return { ...ringZero, developerInstructions };
   }
   const baseInstructions = resolveCodexOpenClawBaseInstructions(params, options);
-  if (baseInstructions === undefined) {
-    // The resumed thread keeps its OpenClaw creation base, so the withdrawal rides the
-    // configured developer instructions that local compaction rebuilds from, not only the
-    // injected handoff it drops (codex-rs/core/src/compact.rs).
-    return {
-      developerInstructions:
-        resolveCodexRetainedOpenClawBaseInstructions(params, options) === undefined
-          ? developerInstructions
-          : joinPresentSections(CODEX_RETAINED_BASE_WITHDRAWAL, developerInstructions),
-    };
+  if (hasAuthoredCodexBaseInstructions(options)) {
+    return { developerInstructions: joinPresentSections(baseInstructions, developerInstructions) };
   }
-  return hasAuthoredCodexBaseInstructions(options)
-    ? { developerInstructions: joinPresentSections(baseInstructions, developerInstructions) }
-    : { baseInstructions, developerInstructions };
+  return { baseInstructions: baseInstructions ?? "", developerInstructions };
 }
 
 /** Move only the exact section annotated by its producer; later policy additions survive. */

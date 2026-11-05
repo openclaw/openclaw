@@ -336,45 +336,61 @@ describe("Codex native configuration lifecycle", () => {
     },
   );
 
-  // A replacement places no OpenClaw base. A thread created before it keeps its creation base, so
-  // reports count it and the developer instructions local compaction rebuilds from withdraw it.
+  // A replacement replaces the base too, as on the default engine. A live thread keeps its ID and
+  // history: it is unloaded, then cold-resumed with the explicit base, which beats its saved one.
   it.each([
     ["from creation", undefined],
     ["from creation beside a native base", "instructions"],
     ["after creation", undefined],
-  ] as const)("withdraws OpenClaw policy for a systemPrompt replacement %s", async (when, key) => {
+  ] as const)("replaces the base for a systemPrompt replacement %s", async (when, key) => {
     registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
     const native = threadStartResult("replaced-thread", { cwd: workspaceDir });
     const fixture = await createAgentLifecycleHarness({
       respond: async (method) =>
         method === "thread/start" || method === "thread/resume"
           ? native
-          : readNativeConfig(method, key ? { [key]: "Operator policy" } : {}),
+          : method === "thread/inject_items"
+            ? {}
+            : readNativeConfig(method, key ? { [key]: "Operator policy" } : {}),
     });
-    const replaced = { ...lifecycleParams(fixture.client), developerInstructions: "" };
-    const retained = when === "after creation";
-    const created = await startOrResumeThread(
-      retained ? lifecycleParams(fixture.client) : { ...replaced, systemPromptReplaced: true },
-    );
-    fixture.seed(native, { loaded: false, subscribed: false });
-    const resumed = await startOrResumeThread({ ...replaced, systemPromptReplaced: true });
+    const replaced = {
+      ...lifecycleParams(fixture.client),
+      developerInstructions: "",
+      systemPromptReplaced: true,
+    };
+    const live = when === "after creation";
+    const created = await startOrResumeThread(live ? lifecycleParams(fixture.client) : replaced);
+    if (live) {
+      await retainLiveThread(fixture.client, created);
+    } else {
+      fixture.seed(native, { loaded: false, subscribed: false });
+    }
+    const resumed = await startOrResumeThread(replaced);
 
-    const [start, resume] = fixture.writes
+    const frames = fixture.writes
       .map((line): unknown => JSON.parse(line))
       .filter(isJsonObject)
       .map((frame) => [frame.method, isJsonObject(frame.params) ? frame.params : {}] as const)
-      .filter(([method]) => method === "thread/start" || method === "thread/resume");
-    expect([start?.[0], resume?.[0]]).toEqual(["thread/start", "thread/resume"]);
-    const creationBase = start?.[1].baseInstructions;
-    expect(creationBase).toEqual(
-      retained ? expect.stringContaining("personal assistant running inside OpenClaw") : undefined,
+      .filter(
+        ([method]) =>
+          typeof method === "string" && /^thread\/(?:start|unsubscribe|resume)$/u.test(method),
+      );
+    expect(frames.map(([method]) => method)).toEqual(
+      live
+        ? ["thread/start", "thread/unsubscribe", "thread/resume"]
+        : ["thread/start", "thread/resume"],
     );
-    expect(created.openClawCreationBaseInstructions).toBe(creationBase);
-    expect(resumed.preparedOpenClawBaseInstructions).toBe(creationBase);
-    expect(resume?.[1]).not.toHaveProperty("baseInstructions");
-    expect(resume?.[1].developerInstructions).toEqual(
-      retained ? expect.stringContaining("base instructions is withdrawn") : "",
+    expect(resumed.threadId).toBe(created.threadId);
+    expect(frames[0]?.[1].baseInstructions).toEqual(
+      live
+        ? expect.stringContaining("personal assistant running inside OpenClaw")
+        : key
+          ? undefined
+          : "",
     );
+    expect(frames.at(-1)?.[1]).toMatchObject({ developerInstructions: "" });
+    expect(frames.at(-1)?.[1].baseInstructions).toBe(key ? undefined : "");
+    expect(resumed.preparedOpenClawBaseInstructions).toBeUndefined();
   });
 
   // The native-owned incognito continuation sends nothing, so reports keep the creation base.
