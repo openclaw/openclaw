@@ -661,8 +661,12 @@ it.each([false, true])("keeps large-transcript accounting correct (invalidate: %
     using context = reader(f);
 
     context.install();
-    using stats = countStatements(f.database.db, ["aggregate"], (sql) =>
-      /\bsum\(/iu.test(sql) && sql.includes('"transcript_events"') ? "aggregate" : null,
+    using stats = countStatements(f.database.db, ["aggregate", "hydration"], (sql) =>
+      /\bsum\(/iu.test(sql) && sql.includes('"transcript_events"')
+        ? "aggregate"
+        : sql.includes('as "actor_participants"')
+          ? "hydration"
+          : null,
     );
     const originalBytes = events.reduce((total, event) => total + storedBytes(event), 0);
     const appended = {
@@ -702,6 +706,7 @@ it.each([false, true])("keeps large-transcript accounting correct (invalidate: %
       f.writeEntry({ ...f.nativeEntry()!, label: "before append" });
     }
     expect(f.mutate(command)).toMatchObject({ kind: "committed" });
+    expect(stats.textBytes.hydration).toBeLessThan(10_000);
     context.install();
     context.expectAccounting(events.length + 1, originalBytes + storedBytes(appended));
     if (invalidate) {
