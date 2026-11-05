@@ -117,7 +117,7 @@ struct NodeMenuEntryFormatter {
         return (nil, legacy)
     }
 
-    static func isHeadlessPlatform(_ entry: NodeInfo) -> Bool {
+    private static func isHeadlessPlatform(_ entry: NodeInfo) -> Bool {
         let raw = entry.platform?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
         // macOS node hosts report "macos" (mapped from darwin), not "darwin".
         return raw == "darwin" || raw == "macos" || raw == "linux" || raw == "win32" || raw == "windows"

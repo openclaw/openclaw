@@ -2,29 +2,31 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
-/// Covers the headless-platform classifier behind the Nodes menu version label
-/// (`core` vs `ui`) for legacy single-version node hosts (issue #193527).
+/// Covers the Nodes menu version label for legacy single-version node hosts
+/// (`core` vs `ui`, issue #193527): macOS node hosts report platform "macos"
+/// (mapped from darwin), which must keep its version on the core label, while
+/// Apple app platforms stay on the ui label.
 struct NodesMenuHeadlessPlatformTests {
     private static func node(_ platform: String) throws -> NodeInfo {
         try JSONDecoder().decode(
             NodeInfo.self,
-            from: Data(#"{"nodeId":"node-1","platform":"\#(platform)"}"#.utf8),
+            from: Data(
+                #"{"nodeId":"node-1","platform":"\#(platform)","version":"2026.10.9"}"#.utf8,
+            ),
         )
     }
 
-    @Test func `classifies headless platforms for the version label`() throws {
-        let cases: [(String, Bool)] = [
-            ("macos", true), // macOS node hosts report macos (mapped from darwin)
-            ("darwin", true),
-            ("linux", true),
-            ("win32", true),
-            ("windows", true),
-            ("ios", false),
-            ("iPadOS 18.2", false), // versioned Apple app platforms stay non-headless
-            ("macOS 26.0", false),
+    @Test func `labels a legacy single-version node host by platform`() throws {
+        let cases: [(String, String)] = [
+            ("macos", "core 2026.10.9"),
+            ("darwin", "core 2026.10.9"),
+            ("windows", "core 2026.10.9"),
+            ("ios", "ui 2026.10.9"),
+            ("iPadOS 18.2", "ui 2026.10.9"),
+            ("macOS 26.0", "ui 2026.10.9"),
         ]
         for (platform, expected) in cases {
-            #expect(NodeMenuEntryFormatter.isHeadlessPlatform(try Self.node(platform)) == expected)
+            #expect(NodeMenuEntryFormatter.detailRightVersion(try Self.node(platform)) == expected)
         }
     }
 }
