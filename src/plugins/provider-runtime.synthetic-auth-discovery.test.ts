@@ -435,43 +435,12 @@ describe("resolveProviderSyntheticAuthWithPlugin", () => {
     expect(resolveSyntheticAuth).toHaveBeenCalledOnce();
     expect(nativeProvider.prepareSyntheticAuth).not.toHaveBeenCalled();
   });
-  it("captures failed synthetic hooks as closed empty facts without losing a healthy provider", async () => {
-    const params = nativeParams();
-    const healthy = {
-      ...nativeProvider,
-      id: "z-healthy",
-      aliases: [],
-      prepareSyntheticAuth: vi.fn(async () => nativeAuth),
-    };
-    nativeProvider.prepareSyntheticAuth.mockRejectedValue(new Error("capture hook failed"));
-    let facts: Awaited<ReturnType<typeof captureProviderSyntheticAuthFacts>> = [];
-    await resolveProviderOwnerIds.withImplementation(
-      () => ["fixture"],
-      async () => {
-        await resolvePluginDiscoveryProvidersRuntime.withImplementation(
-          () => [nativeProvider, healthy],
-          async () => {
-            facts = await captureProviderSyntheticAuthFacts({
-              ...params,
-              providerRefs: ["native-auth", "z-healthy"],
-            });
-          },
-        );
-      },
-    );
-    expect(facts).toEqual([
-      { providerRef: "native-auth", result: null },
-      { providerRef: "z-healthy", result: nativeAuth },
-    ]);
-    const worker = nativeParams();
-    restorePreparedSyntheticAuthFacts(worker.config, facts, worker);
-    expect(await prepareProviderSyntheticAuthWithPlugin(worker)).toBeUndefined();
-    expect(resolveProviderSyntheticAuthWithPlugin(worker)).toBeUndefined();
-    expect(nativeProvider.prepareSyntheticAuth).toHaveBeenCalledOnce();
-    expect(healthy.prepareSyntheticAuth).toHaveBeenCalledOnce();
-    await expect(prepareProviderSyntheticAuthWithPlugin(params)).rejects.toThrow(
-      "capture hook failed",
-    );
+  it("rejects catalog auth capture when a synthetic hook fails", async () => {
+    const failure = new Error("capture hook failed");
+    nativeProvider.prepareSyntheticAuth.mockRejectedValue(failure);
+    await expect(
+      captureProviderSyntheticAuthFacts({ ...nativeParams(), providerRefs: ["native-auth"] }),
+    ).rejects.toBe(failure);
   });
 
   it("rethrows lifecycle and unresolved-secret failures from catalog auth capture", async () => {

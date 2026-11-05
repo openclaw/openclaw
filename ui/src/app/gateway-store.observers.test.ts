@@ -53,6 +53,7 @@ describe("createApplicationGateway connection ownership", () => {
   beforeEach(() => {
     scheduleStaleChunkReloadMock.mockClear();
     stubGatewayStoreTestGlobals();
+    vi.stubGlobal("window", {});
     ({ gateway, current, clients } = createStore());
   });
 

@@ -1,6 +1,7 @@
 import { writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeEach, expect, it } from "vitest";
+import { performance } from "node:perf_hooks";
+import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as fixtures from "./isolated-completion.test-support.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 
@@ -26,6 +27,7 @@ afterEach(async () => {
   await clearActivePluginRegistry();
   resetPluginLoaderTestStateForTest();
   Reflect.deleteProperty(globalThis, contextEvaluation);
+  vi.restoreAllMocks();
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
@@ -112,6 +114,8 @@ it("completes without loading configured context/memory or unrelated startup plu
     };
   });
   useHarness("Gateway log rotation");
+  // Scope selection is independent of cold loader speed; deadline behavior has its own suite.
+  vi.spyOn(performance, "now").mockReturnValue(0);
   await expect(
     fixtures.runIsolatedCompletion({ ...fixtures.isolatedRequest(), config }),
   ).resolves.toMatchObject({

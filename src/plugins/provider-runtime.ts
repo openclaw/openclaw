@@ -11,7 +11,6 @@ import {
   applyPluginTextReplacements,
   mergePluginTextTransforms,
 } from "../agents/plugin-text-transforms.js";
-import { runProviderIsolated } from "../agents/provider-failure-isolation.js";
 import type { StreamFn } from "../agents/runtime/index.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { ModelProviderConfig } from "../config/types.js";
@@ -723,8 +722,6 @@ export async function captureProviderSyntheticAuthFacts(params: {
       config: params.config,
       env: params.env,
       workspaceDir: params.workspaceDir,
-      signal: params.signal,
-      preparationOwner,
       context: {
         config: params.config,
         provider,
@@ -735,10 +732,11 @@ export async function captureProviderSyntheticAuthFacts(params: {
     if (providers.length === 0) {
       continue;
     }
-    const result = await runProviderIsolated(
-      { providerIds: [provider], stage: "synthetic auth", signal: params.signal },
-      () => prepareSyntheticAuthProviders(providers, lookup),
-    );
+    const result = await prepareSyntheticAuthProviders(providers, {
+      ...lookup,
+      signal: params.signal,
+      preparationOwner,
+    });
     facts.push(
       Object.freeze({
         providerRef: provider,

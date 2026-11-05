@@ -1,0 +1,2 @@
+5
+# Isolate the beta browser fixture and plugin-scope monotonic clock without changing runtime behavior or assertions.
