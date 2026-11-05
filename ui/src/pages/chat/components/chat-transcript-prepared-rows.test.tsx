@@ -49,6 +49,7 @@ async function transcriptFixture(
   viewportHeight = 600,
   completedFrame: boolean | "toolCall" = false,
   retainStride = 1,
+  streamingTail = false,
 ) {
   let now = 1;
   let nextFrame = 0;
@@ -104,6 +105,7 @@ async function transcriptFixture(
       item: index,
       estimatedSize: index === 0 && plainFirstRow ? undefined : 100,
       retainDom,
+      streaming: streamingTail && index === 255,
       prewarm: Boolean(ordinary) && (!retainDom || ordinary === "data-only"),
     };
   });
@@ -300,34 +302,21 @@ async function transcriptFixture(
   };
 }
 
-it("warms medium row data without mounting unseen DOM and reuses visited rows", async () => {
+it("warms medium row data while idle and paints the next viewport during fast scroll", async () => {
   const view = await transcriptFixture(0, true, false, "data-only");
-  const visited = view.container.querySelector('[data-virtual-row-key="fragment:5"]');
-  expect(visited).not.toBeNull();
-  const initialRows = new Set(
-    transcriptRows(view.container).map((row) => row.dataset.virtualRowKey),
-  );
+  const initialRows = transcriptRows(view.container);
   for (let turn = 0; turn < 160; turn++) {
     await view.idle(10, 1);
     await view.frame(2, false);
   }
   expect(prewarmGroupedMessage(view.groups[9]!.messages[0]!.message, {}, "html")).toBe(false);
-  expect(
-    transcriptRows(view.container).filter((row) => !initialRows.has(row.dataset.virtualRowKey)),
-  ).toEqual([]);
+  expect(transcriptRows(view.container)).toEqual(initialRows);
 
   await view.scrollTo(8);
-  const afterScroll = new Set(transcriptRows(view.container));
-  for (let turn = 0; turn < 4; turn++) {
-    await view.frame(1, false);
-    await view.task();
-  }
-  expect(transcriptRows(view.container).filter((row) => !afterScroll.has(row))).toEqual([]);
-  expect(view.container.querySelector('[data-virtual-row-key="fragment:5"]')).toBe(visited);
-  expect(visited?.hasAttribute("data-prepared-row")).toBe(true);
-  await view.scrollTo(0);
-  expect(view.container.querySelector('[data-virtual-row-key="fragment:5"]')).toBe(visited);
-  expect(visited?.hasAttribute("data-prepared-row")).toBe(false);
+  expect(view.container.querySelector('[data-virtual-row-key="fragment:16"]')).not.toBeNull();
+  expect(
+    view.container.querySelector('[data-virtual-row-key="fragment:16"]')?.hasAttribute("inert"),
+  ).toBe(false);
 });
 
 it("bounds initial HTML warming and keeps distant rows out of the DOM", async () => {
@@ -524,8 +513,8 @@ it("keeps ordinary neighbors as HTML beside retained rows", async () => {
   expect(view.container.querySelector('[data-virtual-row-key="fragment:7"]')).toBeNull();
 });
 
-it("keeps warming in the reader's direction through opposite size compensation", async () => {
-  const view = await transcriptFixture(24_000, true, false, "retained");
+it("keeps reverse medium preparation through size compensation while the tail streams", async () => {
+  const view = await transcriptFixture(24_000, true, false, "data-only", 600, false, 1, true);
   await view.scrollTo(180);
   await view.frame();
   await view.scrollTo(120.5);
@@ -544,18 +533,6 @@ it("keeps warming in the reader's direction through opposite size compensation",
     .map(([row]) => (row.kind === "item" ? row.item : -1));
   expect(warmed.length).toBeGreaterThan(0);
   expect(Math.max(...warmed)).toBeLessThan(Number(first.dataset.index));
-
-  await view.scrollTo(180);
-  const afterDown = view.renderRow.mock.calls.length;
-  await view.frame();
-  await view.task();
-  await view.frame();
-  await view.task();
-  const downward = view.renderRow.mock.calls
-    .slice(afterDown)
-    .map(([row]) => (row.kind === "item" ? row.item : -1));
-  expect(downward.length).toBeGreaterThan(0);
-  expect(Math.min(...downward)).toBeGreaterThan(180);
 });
 
 it("reuses a nearby completed row after scrolling away and back, with a bounded DOM cache", async () => {

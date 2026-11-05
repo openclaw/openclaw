@@ -19,6 +19,7 @@ export class TranscriptInitialRange {
   private tailRows: number;
   private rows: readonly TranscriptRow[] = [];
   private hasIdleDomRows = false;
+  private hasRetainedRows = false;
   private hasPrewarmRows = false;
   // Completed text rows have no widget custody. Retain their keyed DOM while
   // keeping inactive rows outside the visible range's flow.
@@ -120,9 +121,11 @@ export class TranscriptInitialRange {
     if (this.rows !== rows) {
       this.rows = rows;
       this.hasIdleDomRows = false;
+      this.hasRetainedRows = false;
       this.hasPrewarmRows = false;
       for (const row of rows) {
         this.hasPrewarmRows ||= Boolean(row.prewarm || row.retainDom);
+        this.hasRetainedRows ||= Boolean(row.retainDom);
         if (row.retainDom && !row.prewarm) {
           this.hasIdleDomRows = true;
           break;
@@ -164,7 +167,7 @@ export class TranscriptInitialRange {
       // The first row starts at its cached offset. Shorter arriving rows leave
       // space after the window, so retain following overscan without mounting
       // the already-skipped preceding neighbour during a large jump.
-      return this.normalRange(
+      const indexes = this.normalRange(
         {
           ...range,
           endIndex: Math.min(range.count - 1, range.endIndex + range.overscan),
@@ -172,6 +175,27 @@ export class TranscriptInitialRange {
         },
         this.rowIndexes,
       );
+      if (
+        this.scrollSample.direction > 0 &&
+        this.rows[range.startIndex]?.prewarm &&
+        this.rows[range.startIndex]?.retainDom
+      ) {
+        const virtualizer = this.virtualizer();
+        const top = (virtualizer.scrollOffset ?? 0) + this.scrollSample.distance;
+        const start = virtualizer.getVirtualItemForOffset(top);
+        const end = virtualizer.getVirtualItemForOffset(
+          top + (virtualizer.scrollRect?.height ?? 600),
+        );
+        if (start && end) {
+          // Keep the next viewport painted without mounting the rows skipped between jumps.
+          const upcoming = Array.from(
+            { length: end.index - start.index + 1 },
+            (_, i) => start.index + i,
+          );
+          return [...new Set([...indexes, ...upcoming])].toSorted((left, right) => left - right);
+        }
+      }
+      return indexes;
     }
     return this.normalRange(range, this.rowIndexes);
   }
@@ -323,6 +347,8 @@ export class TranscriptInitialRange {
       direction: Math.sign(delta),
     };
     this.finish();
+    // Prediction can change before the visible range crosses a row boundary.
+    this.refresh();
   }
 
   readonly measureElement = (
@@ -377,7 +403,7 @@ export class TranscriptInitialRange {
     if (
       this.cancelPreparation ||
       !this.hasPrewarmRows ||
-      (!this.hasIdleDomRows && this.rows.at(-1)?.streaming) ||
+      (!this.hasRetainedRows && this.rows.at(-1)?.streaming) ||
       this.preparingEnd ||
       this.pending ||
       this.tailRows > 0 ||
@@ -422,7 +448,7 @@ export class TranscriptInitialRange {
       if (
         this.preparingEnd ||
         !this.hasPrewarmRows ||
-        (!this.hasIdleDomRows && this.rows.at(-1)?.streaming) ||
+        (!this.hasRetainedRows && this.rows.at(-1)?.streaming) ||
         !this.canPrepare() ||
         !range ||
         !virtualizer.scrollElement ||
@@ -698,6 +724,7 @@ export class TranscriptInitialRange {
   releaseRows(): void {
     this.rows = [];
     this.hasIdleDomRows = false;
+    this.hasRetainedRows = false;
     this.hasPrewarmRows = false;
   }
 
