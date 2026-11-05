@@ -230,11 +230,9 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     const uiHints =
       runtimeSchema?.uiHints ??
       (await import("../config/schema-base.js")).computeBaseConfigUiHints();
-    // SAFETY: the validated snapshot config is a JSON object tree and the resolver only reads it.
-    const configTree = snapshot.config as Record<string, unknown>; // SAFETY: read-only object tree
     const res = getAtPath(
       redactConfigObject(snapshot.config, uiHints),
-      resolveAgentEntryKeyCase(configTree, parsedPath),
+      resolveAgentEntryKeyCase(snapshot.config, parsedPath),
     );
     if (!res.found || res.value === undefined) {
       const schema =

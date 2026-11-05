@@ -251,9 +251,7 @@ export async function runConfigOperations(params: {
     let operation = requestedOperation;
     // Address the stored agent-entry spelling when only casing differs, so the same id that
     // `agents list` prints is editable through `config set/unset`.
-    // SAFETY: `next` is the mutable JSON config tree this runner edits; the resolver only reads it.
-    const nextTree = next as Record<string, unknown>; // SAFETY: read-only object tree
-    const resolvedSetPath = resolveAgentEntryKeyCase(nextTree, operation.setPath);
+    const resolvedSetPath = resolveAgentEntryKeyCase(next, operation.setPath);
     if (resolvedSetPath.some((segment, index) => segment !== operation.setPath[index])) {
       operation = { ...operation, setPath: resolvedSetPath };
     }

@@ -13,7 +13,7 @@ import { getAtPath, type PathSegment } from "./config-cli-path.js";
  * onto a different agent (unlike normalizing the request).
  */
 export function resolveAgentEntryKeyCase(
-  root: Record<string, unknown>,
+  root: { agents?: unknown },
   path: readonly PathSegment[],
 ): PathSegment[] {
   if (path[0] !== "agents" || path[1] !== "entries" || typeof path[2] !== "string") {
