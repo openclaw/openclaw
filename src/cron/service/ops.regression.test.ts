@@ -37,6 +37,7 @@ import { cronStoreKey } from "../store/key.js";
 import type { CronEvent, CronJob } from "../types.js";
 import { remove, update } from "./ops-mutations.js";
 import { enqueueRun, run, waitForManualRun } from "./ops-run.js";
+import type { CronServiceDeps } from "./state.js";
 import { ensureLoaded } from "./store.js";
 import { onTimer } from "./timer.test-support.js";
 
@@ -362,6 +363,7 @@ it("keeps a queued quiet schedule event separate from its one terminal event", a
     trigger: { script: "return false" },
   });
   const terminal = terminalEvents(job.id, undefined, true);
+  let finishedContext: Parameters<NonNullable<CronServiceDeps["onEvent"]>>[1];
   const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
   const state = await prepareJob(job, {
     cronConfig: { triggers: { enabled: true } },
@@ -371,7 +373,12 @@ it("keeps a queued quiet schedule event separate from its one terminal event", a
       fire: false,
     })),
     runIsolatedAgentJob,
-    onEvent: terminal.onEvent,
+    onEvent: (event, context) => {
+      if (event.action === "finished") {
+        finishedContext = context;
+      }
+      terminal.onEvent(event);
+    },
   });
 
   try {
@@ -392,6 +399,7 @@ it("keeps a queued quiet schedule event separate from its one terminal event", a
       status: "skipped",
       error: "queued manual run skipped: trigger condition not met",
     });
+    expect(finishedContext).toMatchObject({ quietTrigger: true });
   } finally {
     await Promise.allSettled(state.queuedManualRuns.values());
   }

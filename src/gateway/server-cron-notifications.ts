@@ -557,6 +557,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
   evt: CronEvent;
   job?: CronJob;
   runNotStarted?: boolean;
+  quietTrigger?: boolean;
   resolveCronAgent?: CronAgentResolver;
   logger: CronLogger;
   webhookToken?: unknown;
@@ -565,6 +566,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
   if (
     params.job &&
     params.resolveCronAgent &&
+    !params.quietTrigger &&
     (params.evt.status === "skipped" || (params.evt.status === "error" && params.runNotStarted))
   ) {
     const job = params.job;

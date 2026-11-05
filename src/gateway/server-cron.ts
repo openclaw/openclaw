@@ -639,7 +639,7 @@ export function buildGatewayCronService(params: {
         dispatchGatewayCronFinishedNotifications({
           evt,
           job: jobSnapshot,
-          runNotStarted: eventContext?.runNotStarted,
+          ...eventContext,
           resolveCronAgent,
           logger: cronServiceLogger,
           webhookToken: params.cfg.cron?.webhookToken,
