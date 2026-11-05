@@ -46,7 +46,10 @@ export function resolveFeishuGroupSession(params: {
     params;
   const normalizedThreadId = threadId?.trim();
   const normalizedRootId = rootId?.trim();
-  const threadReply = Boolean(normalizedThreadId || normalizedRootId);
+  // Ordinary inline quotes also carry root_id; only thread metadata proves topic membership.
+  const threadReply = Boolean(
+    normalizedThreadId || (chatType === "topic_group" && normalizedRootId),
+  );
   const replyInThread =
     (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled" ||
     threadReply;
