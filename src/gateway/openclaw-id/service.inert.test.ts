@@ -87,6 +87,23 @@ describe("OpenClaw ID with the Labs switch off", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
+  it("reads only the local claw record for saved token bindings at Gateway start", async () => {
+    const { createOpenClawIdAuthority } = await import("./authority.js");
+    const { memoryStore } = await import("./openclaw-id.test-support.js");
+    const service = createOpenClawIdService({
+      getConfig: () => ({ enabled: false, relayUrl: "https://relay.example.test/" }),
+      getStateDir: () => "/nonexistent/openclaw-id-inert-test",
+      log,
+      createAuthority: async () => createOpenClawIdAuthority(memoryStore()),
+    });
+    await service.loadTokenBindings();
+    await service.reconcileRuntimePolicy();
+    await service.stop();
+
+    expectNoEffects();
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
   it("returns to inert after the switch turns off again", async () => {
     let config: GatewayOpenClawIdConfig | undefined = { enabled: true };
     const service = createOpenClawIdService({

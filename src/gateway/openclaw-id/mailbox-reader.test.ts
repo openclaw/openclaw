@@ -124,7 +124,7 @@ describe("mailbox reader callbacks", () => {
     const stop = new AbortController();
     const submit = vi.fn(async () => ({
       ok: true as const,
-      status: "accepted" as const,
+      status: "applied" as const,
       events: [],
     }));
     await applyMailboxMessage(

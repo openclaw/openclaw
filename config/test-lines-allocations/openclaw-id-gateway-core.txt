@@ -1,3 +1,4 @@
-# OpenClaw ID Gateway core: new membership authority, publication, People events and
-# Labs-off tests for new surface (src/gateway/openclaw-id). No existing tests replaced.
-3485
+# OpenClaw ID Gateway core: new membership authority, publication, People events,
+# Gateway-start device-token binding enforcement and Labs-off tests for new surface
+# (src/gateway/openclaw-id). No existing tests replaced.
+3596

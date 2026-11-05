@@ -1,8 +1,10 @@
 // Device tokens bound to the authenticated endpoint key (spec section 5 step 6,
 // G5). A token issued over the tunnel records the device key W that obtained
 // it; presenting it from any other W, or relayed without the W it was issued
-// to, is refused and logged as a security event. While OpenClaw ID is off no
-// binding owner is published and nothing here runs.
+// to, is refused and logged as a security event. The bindings are read from the
+// local claw record once at Gateway start, whatever the Labs switch says, so a
+// restart with the switch off keeps refusing tunnel-issued tokens on ordinary
+// ingress. Without saved bindings no owner is published and nothing here runs.
 
 /** One recorded binding: the token of (device, role) belongs to `peerKey`. */
 export type DeviceTokenBinding = {
@@ -27,11 +29,26 @@ export type DeviceTokenBindingOwner = {
   }): void;
 };
 
-let owner: DeviceTokenBindingOwner | undefined;
+/** Why a device token was refused on this connection. */
+export type DeviceTokenPeerRefusal =
+  | "device-token-peer-mismatch"
+  | "device-token-bindings-unreadable";
+
+// "unreadable": the saved bindings could not be read, so no device token can be
+// told apart from a tunnel-issued one and every device token is refused.
+let owner: DeviceTokenBindingOwner | "unreadable" | undefined;
+let loading: Promise<void> = Promise.resolve();
 
 /** Publishes or clears the binding owner (the OpenClaw ID service does this). */
-export function setDeviceTokenBindingOwner(next: DeviceTokenBindingOwner | undefined): void {
+export function setDeviceTokenBindingOwner(
+  next: DeviceTokenBindingOwner | "unreadable" | undefined,
+): void {
   owner = next;
+}
+
+/** Holds every device-token check until the Gateway-start binding read settles. */
+export function setDeviceTokenBindingsLoading(next: Promise<void>): void {
+  loading = next;
 }
 
 /**
@@ -40,13 +57,17 @@ export function setDeviceTokenBindingOwner(next: DeviceTokenBindingOwner | undef
  * other ingress. Tokens issued over the tunnel are usable only from their W;
  * relayed connections may use only tokens bound to their own W.
  */
-export function checkDeviceTokenPeer(params: {
+export async function checkDeviceTokenPeer(params: {
   deviceId: string;
   role: string;
   peerKey: string | undefined;
-}): { ok: true } | { ok: false; reason: "device-token-peer-mismatch" } {
+}): Promise<{ ok: true } | { ok: false; reason: DeviceTokenPeerRefusal }> {
+  await loading;
   if (!owner) {
     return { ok: true };
+  }
+  if (owner === "unreadable") {
+    return { ok: false, reason: "device-token-bindings-unreadable" };
   }
   const boundTo = owner.lookup(params.deviceId, params.role);
   if (boundTo === undefined && params.peerKey === undefined) {
@@ -70,7 +91,7 @@ export async function recordDeviceTokenPeer(params: {
   role: string;
   peerKey: string | undefined;
 }): Promise<void> {
-  if (owner && params.peerKey) {
+  if (owner && owner !== "unreadable" && params.peerKey) {
     await owner.record(params.deviceId, params.role, params.peerKey);
   }
 }

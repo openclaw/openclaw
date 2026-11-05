@@ -509,12 +509,14 @@ export async function prepareGatewayKernelState(params: {
     }),
   );
   const transportBridge = createGatewayTransportBridge();
-  // Inert until the Labs switch is on; the switch is reconciled after ready.
+  // Inert until the Labs switch is on; the switch is reconciled after ready. Saved
+  // device-token bindings are read now, before any listener admits a connection.
   const openclawIdService = createOpenClawIdService({
     getConfig: () => getRuntimeConfig().gateway?.openclawId,
     getStateDir: () => resolveStateDir(),
     log: log.child("openclaw-id"),
   });
+  void openclawIdService.loadTokenBindings();
   const presencePublisher = createPresencePublisher({
     scheduler,
     broadcast: connectionState.broadcast,

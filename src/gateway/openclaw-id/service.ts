@@ -29,6 +29,7 @@ import { createOwnerExpiryTimer } from "./owner-expiry.js";
 import { inactivityWindows, ownerLifecycleEvents } from "./owner-lifecycle.js";
 import { createPublicationRetry } from "./publication-retry.js";
 import type { PublishOutcome } from "./publisher.js";
+import { createTokenBindingPublisher } from "./service-token-bindings.js";
 
 /** What the Control UI and `openclaw status` show for OpenClaw ID. */
 export type OpenClawIdStatus =
@@ -152,7 +153,8 @@ export function createOpenClawIdService(params: {
   // The removal effects load once; they also start remembering run custody.
   const getEffects = () => (effectsPromise ??= loadEffects?.());
 
-  const getAuthority = async (): Promise<OpenClawIdAuthority> => {
+  // The persisted authority, created once and not yet observed for People changes.
+  const createdAuthority = async (): Promise<OpenClawIdAuthority> => {
     if (!authority) {
       // Connection and run events can request the owner together during startup.
       loadingAuthority ??= params.createAuthority
@@ -162,18 +164,23 @@ export function createOpenClawIdService(params: {
           );
       authority = await loadingAuthority;
     }
+    return authority;
+  };
+
+  const getAuthority = async (): Promise<OpenClawIdAuthority> => {
+    const current = await createdAuthority();
     if (!stopAuthorityChanges) {
-      stopAuthorityChanges = authority.onPeopleChanged(() => {
+      stopAuthorityChanges = current.onPeopleChanged(() => {
         peopleChanged();
         armPeopleExpiry();
       });
       const observing = stopAuthorityChanges;
-      await authority.load();
+      await current.load();
       if (observing === stopAuthorityChanges) {
         armPeopleExpiry();
       }
     }
-    return authority;
+    return current;
   };
 
   const stopRuntime = async () => {
@@ -431,18 +438,16 @@ export function createOpenClawIdService(params: {
     });
   };
 
+  const tokenBindings = createTokenBindingPublisher({
+    authority: createdAuthority,
+    log: params.log,
+  });
+
   // Publishes the device-token binding owner while remote access runs.
   const publishTokenBindings = async () => {
     const owner = await getAuthority();
     await owner.load();
-    setDeviceTokenBindingOwner({
-      lookup: (deviceId, role) => owner.tokenBinding(deviceId, role),
-      record: (deviceId, role, peerKey) => owner.bindToken(deviceId, role, peerKey),
-      reportMismatch: (event) =>
-        params.log.warn(
-          `openclaw-id: security: refused device token for ${event.deviceId} (${event.role}) presented from ${event.presentedFrom ?? "a non-tunnel connection"}; bound to ${event.boundTo ?? "no tunnel key"}`,
-        ),
-    });
+    tokenBindings.publish(owner);
   };
 
   // Reads the Discovery mailbox once the claw is registered there.
@@ -743,6 +748,11 @@ export function createOpenClawIdService(params: {
         await applyEvents(result.events);
       }
       return result;
+    },
+
+    /** Reads the saved device-token bindings; device-token checks wait for it. */
+    loadTokenBindings(): Promise<void> {
+      return tokenBindings.loadAtStart();
     },
 
     /** Stops everything this owner started. */

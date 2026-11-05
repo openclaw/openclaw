@@ -46,7 +46,11 @@ describe("OpenClaw ID lifecycle with a stalled Discovery", () => {
       log: { info: vi.fn(), warn: vi.fn() },
       createAuthority: async () => claw.authority,
     });
-    service.bindEffects(async () => undefined);
+    service.bindEffects(async () => ({
+      captureConnections: () => [],
+      closeConnections: () => {},
+      revokeDeviceTokens: async (tokens) => [...tokens],
+    }));
     await service.reconcileRuntimePolicy();
     await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
 

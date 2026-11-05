@@ -3,6 +3,7 @@ import {
   checkDeviceTokenPeer,
   recordDeviceTokenPeer,
   setDeviceTokenBindingOwner,
+  setDeviceTokenBindingsLoading,
   type DeviceTokenBindingOwner,
 } from "./device-token-binding.js";
 
@@ -22,11 +23,14 @@ function owner(bindings: Record<string, string> = {}) {
   return { reportMismatch, bindings };
 }
 
-afterEach(() => setDeviceTokenBindingOwner(undefined));
+afterEach(() => {
+  setDeviceTokenBindingOwner(undefined);
+  setDeviceTokenBindingsLoading(Promise.resolve());
+});
 
 describe("device tokens bound to the authenticated endpoint key", () => {
-  it("changes nothing while OpenClaw ID is off", () => {
-    expect(checkDeviceTokenPeer({ deviceId: "d", role: "operator", peerKey: W2 })).toEqual({
+  it("changes nothing while no bindings are published", async () => {
+    expect(await checkDeviceTokenPeer({ deviceId: "d", role: "operator", peerKey: W2 })).toEqual({
       ok: true,
     });
   });
@@ -35,15 +39,15 @@ describe("device tokens bound to the authenticated endpoint key", () => {
     const { bindings } = owner();
     await recordDeviceTokenPeer({ deviceId: "d", role: "operator", peerKey: W1 });
     expect(bindings).toEqual({ "d/operator": W1 });
-    expect(checkDeviceTokenPeer({ deviceId: "d", role: "operator", peerKey: W1 })).toEqual({
+    expect(await checkDeviceTokenPeer({ deviceId: "d", role: "operator", peerKey: W1 })).toEqual({
       ok: true,
     });
   });
 
   // Spec section 11 #5: a token replayed from a different W is refused and logged.
-  it("refuses and reports a token presented from another key", () => {
+  it("refuses and reports a token presented from another key", async () => {
     const { reportMismatch } = owner({ "d/operator": W1 });
-    expect(checkDeviceTokenPeer({ deviceId: "d", role: "operator", peerKey: W2 })).toEqual({
+    expect(await checkDeviceTokenPeer({ deviceId: "d", role: "operator", peerKey: W2 })).toEqual({
       ok: false,
       reason: "device-token-peer-mismatch",
     });
@@ -55,14 +59,36 @@ describe("device tokens bound to the authenticated endpoint key", () => {
     });
   });
 
-  it("refuses a tunnel-bound token outside the tunnel, and an unbound token over it", () => {
+  it("refuses a tunnel-bound token outside the tunnel, and an unbound token over it", async () => {
     owner({ "d/operator": W1 });
-    expect(checkDeviceTokenPeer({ deviceId: "d", role: "operator", peerKey: undefined }).ok).toBe(
-      false,
+    const ok = async (deviceId: string, peerKey: string | undefined) =>
+      (await checkDeviceTokenPeer({ deviceId, role: "operator", peerKey })).ok;
+    expect(await ok("d", undefined)).toBe(false);
+    expect(await ok("e", W1)).toBe(false);
+    expect(await ok("e", undefined)).toBe(true);
+  });
+
+  it("holds checks until the Gateway-start binding read settles", async () => {
+    let finish = () => {};
+    setDeviceTokenBindingsLoading(
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
     );
-    expect(checkDeviceTokenPeer({ deviceId: "e", role: "operator", peerKey: W1 }).ok).toBe(false);
-    expect(checkDeviceTokenPeer({ deviceId: "e", role: "operator", peerKey: undefined }).ok).toBe(
-      true,
-    );
+    const check = checkDeviceTokenPeer({ deviceId: "d", role: "operator", peerKey: undefined });
+    owner({ "d/operator": W1 });
+    finish();
+    await expect(check).resolves.toEqual({ ok: false, reason: "device-token-peer-mismatch" });
+  });
+
+  it("refuses every device token while the saved bindings are unreadable", async () => {
+    setDeviceTokenBindingOwner("unreadable");
+    expect(
+      await checkDeviceTokenPeer({ deviceId: "e", role: "operator", peerKey: undefined }),
+    ).toEqual({
+      ok: false,
+      reason: "device-token-bindings-unreadable",
+    });
+    await recordDeviceTokenPeer({ deviceId: "e", role: "operator", peerKey: W1 });
   });
 });
