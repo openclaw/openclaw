@@ -1,0 +1,2 @@
+12
+# Validate directory symlink project inputs and preserve the fixed golden artifact digest.
