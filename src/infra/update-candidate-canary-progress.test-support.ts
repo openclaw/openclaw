@@ -219,7 +219,7 @@ export function registerCanaryProgressWorkerTests(
             expect.objectContaining({
               step: "candidate-state-snapshot",
               status: "in_progress",
-              detail: expect.stringContaining("completed, attempt 1, 920445/920445 pages"),
+              detail: expect.stringContaining("copying, attempt 1, 460222/920445 pages"),
             }),
           );
           expect(onStepComplete).toHaveBeenCalledWith(
@@ -316,154 +316,133 @@ export function registerCanaryUncertainReceiptTests({
   canaryStateOptions: (timeoutMs?: number) => Parameters<typeof validateUpdateCandidateCanary>[0];
   setRuntimeError: (value: boolean) => void;
 }) {
-  it.each([
-    "operation-failed",
-    "cancelled",
-    "authority-revoked",
-    "earlier-progress-failed",
-  ] as const)("retains snapshot uncertainty after settled IO is %s", async (ordering) => {
-    const options = canaryStateOptions(3_000);
-    const receipt = createDeferredCore();
-    const earlierReceipt = createDeferredCore();
-    const operationSettled = createDeferredCore();
-    const caller = new AbortController();
-    const uncertain = new CommandProcessCleanupError();
-    const operationFailure = new Error("snapshot worker failed before progress settled");
-    const earlierFailure = new Error("earlier snapshot progress recording failed");
-    let current = true;
-    let retained: string | undefined;
-    let progressEmitted = false;
-    const snapshot = mocks.snapshot.getMockImplementation()!;
-    mocks.snapshot.mockImplementation(
-      async (
-        command,
-        commandOptions: {
-          input: string;
-          onOutputChunk?: (chunk: Buffer, stream: "stdout" | "stderr") => void;
+  it.each(["operation-failed", "cancelled", "authority-revoked"] as const)(
+    "retains snapshot uncertainty after settled IO is %s",
+    async (ordering) => {
+      const options = canaryStateOptions(3_000);
+      const receipt = createDeferredCore();
+      const operationSettled = createDeferredCore();
+      const caller = new AbortController();
+      const uncertain = new CommandProcessCleanupError();
+      const operationFailure = new Error("snapshot worker failed before progress settled");
+      let current = true;
+      let retained: string | undefined;
+      let progressEmitted = false;
+      const snapshot = mocks.snapshot.getMockImplementation()!;
+      mocks.snapshot.mockImplementation(
+        async (
+          command,
+          commandOptions: {
+            input: string;
+            onOutputChunk?: (chunk: Buffer, stream: "stdout" | "stderr") => void;
+          },
+        ) => {
+          const request: unknown = JSON.parse(commandOptions.input);
+          if (isRecord(request) && request.mode === "snapshot") {
+            if (typeof request.targetStateDir !== "string") {
+              throw new Error("Snapshot fixture requires its owned target directory");
+            }
+            retained = request.targetStateDir;
+            await fs.writeFile(path.join(retained, "pending-snapshot-copy"), "synthetic copy");
+            progressEmitted = true;
+            for (const status of ["copying"]) {
+              commandOptions.onOutputChunk?.(
+                Buffer.from(
+                  `State schema progress: ${JSON.stringify({
+                    phase: "database snapshot",
+                    path: path.join(options.stateDir, "state", "openclaw.sqlite"),
+                    snapshot: {
+                      status,
+                      copiedPages: 1,
+                      totalPages: 2,
+                      elapsedMs: 1,
+                    },
+                  })}\n`,
+                ),
+                "stderr",
+              );
+            }
+            if (ordering === "operation-failed") {
+              throw operationFailure;
+            }
+          }
+          return snapshot(command, commandOptions);
         },
-      ) => {
-        const request: unknown = JSON.parse(commandOptions.input);
-        if (isRecord(request) && request.mode === "snapshot") {
-          if (typeof request.targetStateDir !== "string") {
-            throw new Error("Snapshot fixture requires its owned target directory");
+      );
+      const runBudget = candidateIo.withUpdateCandidateIoBudget;
+      const budget = vi
+        .spyOn(candidateIo, "withUpdateCandidateIoBudget")
+        .mockImplementation(async (...args) => {
+          try {
+            return await runBudget(...args);
+          } finally {
+            if (progressEmitted) {
+              operationSettled.resolve();
+            }
           }
-          retained = request.targetStateDir;
-          await fs.writeFile(path.join(retained, "pending-snapshot-copy"), "synthetic copy");
-          progressEmitted = true;
-          for (const status of ordering === "earlier-progress-failed"
-            ? ["copying", "completed"]
-            : ["copying"]) {
-            commandOptions.onOutputChunk?.(
-              Buffer.from(
-                `State schema progress: ${JSON.stringify({
-                  phase: "database snapshot",
-                  path: path.join(options.stateDir, "state", "openclaw.sqlite"),
-                  snapshot: {
-                    status,
-                    copiedPages: status === "completed" ? 2 : 1,
-                    totalPages: 2,
-                    elapsedMs: 1,
-                  },
-                })}\n`,
-              ),
-              "stderr",
-            );
+        });
+      const onStep = vi.fn();
+      const onProgress = vi
+        .fn((step: { step: string }) =>
+          step.step === "candidate-state-snapshot" ? receipt.promise : undefined,
+        )
+        .mockImplementationOnce(() => undefined);
+      const pending = validateUpdateCandidateCanary({
+        ...options,
+        signal: caller.signal,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("snapshot authority revoked");
           }
-          if (ordering === "operation-failed") {
-            throw operationFailure;
-          }
-        }
-        return snapshot(command, commandOptions);
-      },
-    );
-    const runBudget = candidateIo.withUpdateCandidateIoBudget;
-    const budget = vi
-      .spyOn(candidateIo, "withUpdateCandidateIoBudget")
-      .mockImplementation(async (...args) => {
-        try {
-          return await runBudget(...args);
-        } finally {
-          if (progressEmitted) {
-            operationSettled.resolve();
-          }
-        }
+        },
+        onStep,
+        onProgress,
       });
-    const onStep = vi.fn();
-    const onProgress = vi
-      .fn((step: { step: string }) =>
-        step.step === "candidate-state-snapshot" ? receipt.promise : undefined,
-      )
-      .mockImplementationOnce(() => undefined);
-    if (ordering === "earlier-progress-failed") {
-      onProgress.mockImplementationOnce(() => earlierReceipt.promise);
-    }
-    const pending = validateUpdateCandidateCanary({
-      ...options,
-      signal: caller.signal,
-      assertCurrent: () => {
-        if (!current) {
-          throw new Error("snapshot authority revoked");
+      const observed = pending.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await operationSettled.promise;
+        expect(onProgress).toHaveBeenCalledTimes(2);
+        expect(onStep).not.toHaveBeenCalled();
+        expect(mocks.spawn).not.toHaveBeenCalled();
+        if (ordering === "cancelled") {
+          caller.abort(new Error("cancelled after snapshot IO settled"));
+        } else if (ordering === "authority-revoked") {
+          current = false;
         }
-      },
-      onStep,
-      onProgress,
-    });
-    const observed = pending.then(
-      (value) => ({ value }),
-      (error: unknown) => ({ error }),
-    );
-    try {
-      await operationSettled.promise;
-      expect(onProgress).toHaveBeenCalledTimes(ordering === "earlier-progress-failed" ? 3 : 2);
-      expect(onStep).not.toHaveBeenCalled();
-      expect(mocks.spawn).not.toHaveBeenCalled();
-      if (ordering === "cancelled") {
-        caller.abort(new Error("cancelled after snapshot IO settled"));
-      } else if (ordering === "authority-revoked") {
-        current = false;
-      } else if (ordering === "earlier-progress-failed") {
-        earlierReceipt.reject(earlierFailure);
-        await earlierReceipt.promise.catch(() => undefined);
+        receipt.reject(uncertain);
+        const result = await observed;
+        const failure = "error" in result ? result.error : undefined;
+        expect(hasCommandProcessCleanupError(failure)).toBe(true);
+        const errors = collectNestedErrorCandidates(failure);
+        expect(errors).toContain(uncertain);
+        if (ordering === "operation-failed") {
+          expect(errors).toContain(operationFailure);
+          expect(errors).toContainEqual(
+            expect.objectContaining({
+              errors: [operationFailure, uncertain],
+              cause: operationFailure,
+            }),
+          );
+        }
+        expect(onStep).not.toHaveBeenCalled();
+        expect(mocks.spawn).not.toHaveBeenCalled();
+        expect(retained).toBeDefined();
+        await expect(
+          fs.readFile(path.join(retained!, "pending-snapshot-copy"), "utf8"),
+        ).resolves.toBe("synthetic copy");
+      } finally {
+        receipt.resolve();
+        await observed;
+        budget.mockRestore();
+        if (retained) {
+          await fs.rm(retained, { recursive: true, force: true });
+        }
       }
-      receipt.reject(uncertain);
-      const result = await observed;
-      const failure = "error" in result ? result.error : undefined;
-      expect(hasCommandProcessCleanupError(failure)).toBe(true);
-      const errors = collectNestedErrorCandidates(failure);
-      expect(errors).toContain(uncertain);
-      if (ordering === "operation-failed") {
-        expect(errors).toContain(operationFailure);
-        expect(errors).toContainEqual(
-          expect.objectContaining({
-            errors: [operationFailure, uncertain],
-            cause: operationFailure,
-          }),
-        );
-      } else if (ordering === "earlier-progress-failed") {
-        expect(errors).toContain(earlierFailure);
-        expect(errors).toContainEqual(
-          expect.objectContaining({
-            errors: [earlierFailure, uncertain],
-            cause: earlierFailure,
-          }),
-        );
-      }
-      expect(onStep).not.toHaveBeenCalled();
-      expect(mocks.spawn).not.toHaveBeenCalled();
-      expect(retained).toBeDefined();
-      await expect(
-        fs.readFile(path.join(retained!, "pending-snapshot-copy"), "utf8"),
-      ).resolves.toBe("synthetic copy");
-    } finally {
-      earlierReceipt.resolve();
-      receipt.resolve();
-      await observed;
-      budget.mockRestore();
-      if (retained) {
-        await fs.rm(retained, { recursive: true, force: true });
-      }
-    }
-  });
+    },
+  );
 
   it.each(["completed-step", "failed-step"] as const)(
     "retains rehearsal artifacts when the %s write has an uncertain outcome",

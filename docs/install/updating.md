@@ -686,6 +686,8 @@ verification run only after all file copies succeed. Stored state and recovery b
 retain their existing durability guarantees. An older installed updater keeps
 its initial snapshot behavior until you launch an update from the newer version.
 
+Snapshot progress keeps one history write in flight and coalesces pending observations to the latest progress. A worker queue-capacity refusal before dispatch may skip advisory progress with a warning; required recovery and terminal records and uncertain write outcomes remain failures.
+
 Runtime retention looks for hoisted dependencies within the package manager's
 owning installation. Missing optional peers do not cause it to copy unrelated
 ancestor installations. Explicitly linked dependencies retain their own resolution.
