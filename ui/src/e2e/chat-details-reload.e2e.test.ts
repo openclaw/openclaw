@@ -1,5 +1,8 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -9,6 +12,7 @@ import { createControlUiTeamScaleFixture } from "../test-helpers/control-ui-team
 import { openChatDetails } from "./chat-details.test-support.ts";
 import { dashboardLayout } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { sessionsListResponse } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Details progress warm reload" });
 suite.define(() => {
@@ -25,11 +29,11 @@ suite.define(() => {
           const fixture = createControlUiTeamScaleFixture({
             baseUrl: suite.server.baseUrl,
             transcriptMessages: 15,
-            archivedSession: archived,
             paneChromeFacts: true,
             detailsSessionFacts: true,
           });
           const sessionKey = fixture.selectedSessionKey;
+          const selectedSession = fixture.scenario.sessions!.find((row) => row.key === sessionKey)!;
           await page.addInitScript(
             ({ key, settings }) => {
               for (const [name, value] of Object.entries(settings.sidebarPrefs)) {
@@ -56,7 +60,32 @@ suite.define(() => {
           });
           const gateway = await installMockGateway(
             page,
-            { ...fixture.scenario, deferredMethods: ["connect"] },
+            {
+              ...fixture.scenario,
+              featureMethods: [...fixture.scenario.featureMethods!, "sessions.processes.list"],
+              methodResponses: {
+                ...fixture.scenario.methodResponses,
+                "sessions.processes.list": {
+                  sessionId: selectedSession.sessionId,
+                  processes: archived
+                    ? []
+                    : [
+                        {
+                          processId: "verification",
+                          instanceId: "verification-1",
+                          name: "Synthetic verifier",
+                          status: "running",
+                          startedAt: 1,
+                          tail: "ready",
+                          truncated: false,
+                          canStop: true,
+                        },
+                      ],
+                  truncated: false,
+                },
+              },
+              deferredMethods: ["connect"],
+            },
             {
               requestHandlers: {
                 "cron.list": (params) => fixture.listCronJobs(isRecord(params) ? params : {}),
@@ -68,9 +97,7 @@ suite.define(() => {
           await gateway.resolveDeferred("connect");
           const details = await openChatDetails(page);
           const progress = details.locator('[data-progress-card-placement="details"]');
-          if (!archived) {
-            await progress.getByText("Synthetic project verification is in progress.").waitFor();
-          }
+          await progress.getByText("Synthetic project verification is in progress.").waitFor();
           await page.waitForFunction(() => {
             const pane = document.querySelector(".chat-pane-cache__pane--active");
             const cache = pane && Reflect.get(pane, "state")?.chatMessagesBySession;
@@ -81,8 +108,38 @@ suite.define(() => {
               )
             );
           });
+          if (archived) {
+            const archivedSession = { ...selectedSession, archived: true };
+            await gateway.setSessionsListResponse(
+              sessionsListResponse(
+                fixture.scenario.sessions!.map((row) =>
+                  row.key === sessionKey ? archivedSession : row,
+                ),
+              ),
+            );
+            await gateway.emitGatewayEvent("sessions.changed", {
+              ...archivedSession,
+              reason: "patch",
+              sessionKey,
+            });
+            await progress.waitFor({ state: "hidden" });
+            await page.waitForFunction(() => {
+              const pane = document.querySelector(".chat-pane-cache__pane--active");
+              const cache = pane && Reflect.get(pane, "state")?.chatMessagesBySession;
+              return (
+                cache &&
+                [...cache.values()].some(
+                  ({ snapshot }) =>
+                    snapshot.sessionState?.archived === true && snapshot.progressCard,
+                )
+              );
+            });
+          }
           const loaded = archived ? null : await progress.textContent();
           await details.getByText("feature/verification", { exact: true }).waitFor();
+          if (!archived) {
+            await details.locator('[data-details-group="processes"]').waitFor();
+          }
           await page.evaluate(() => document.fonts.ready.then(() => undefined));
           await page.evaluate(async () => {
             await Reflect.get(
@@ -128,11 +185,28 @@ suite.define(() => {
           });
           await page.reload();
           await gateway.waitForRequest("connect");
+          await details.locator("section.chat-details-session").waitFor();
+          if (archived) {
+            expect(await progress.count()).toBe(0);
+          }
           if (!archived) {
             await progress.getByText("Synthetic project verification is in progress.").waitFor();
+            expect(await details.locator(".chat-details-processes__stop").count()).toBe(0);
+            if (face === "chat" && process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+              const capture = await takeControlUiScreenshotFrame(page, details, [], {
+                elements: [details],
+              });
+              await writeFile(
+                path.join(suite.artifactDir, "active-warm-details.png"),
+                capture.elements[0]!.png,
+              );
+            }
           }
           await gateway.resolveDeferred("connect");
           await details.getByText("feature/verification", { exact: true }).waitFor();
+          if (!archived) {
+            await details.locator('[data-details-group="processes"]').waitFor();
+          }
           await page.waitForFunction(() => {
             const panel = document.querySelector(".chat-pane-cache__pane--active .chat-details");
             return (
@@ -171,6 +245,54 @@ suite.define(() => {
             });
           }
           expect(new Set(frames.map((frame) => frame.progress))).toEqual(new Set([loaded]));
+          if (!archived && face === "chat") {
+            await details.locator(".chat-details-processes__stop").waitFor();
+            await gateway.deferNext("sessions.processes.list");
+            await gateway.emitGatewayEvent("sessions.processes.changed", { sessionKey });
+            await gateway.rejectDeferred("sessions.processes.list", {
+              code: "FORBIDDEN",
+              message: "Process access removed",
+            });
+            await details.getByRole("alert").getByText("Process access removed").waitFor();
+            expect(await details.locator('[data-details-group="processes"]').count()).toBe(0);
+            await gateway.deferNext("sessions.processes.list");
+            await page.evaluate(() => {
+              Object.defineProperty(document, "visibilityState", {
+                configurable: true,
+                value: "hidden",
+              });
+              document.dispatchEvent(new Event("visibilitychange"));
+              Object.defineProperty(document, "visibilityState", {
+                configurable: true,
+                value: "visible",
+              });
+              document.dispatchEvent(new Event("visibilitychange"));
+            });
+            await gateway.waitForRequest("sessions.processes.list");
+            await details.getByRole("alert").getByText("Process access removed").waitFor();
+            expect(await details.locator('[data-details-group="processes"]').count()).toBe(0);
+            await page.evaluate(() => {
+              Reflect.deleteProperty(document, "visibilityState");
+              document.dispatchEvent(new Event("visibilitychange"));
+            });
+            await gateway.resolveDeferred("sessions.processes.list");
+            await details.locator(".chat-details-processes__stop").waitFor();
+            await gateway.setMethodResponse("sessions.processes.list", {
+              sessionId: selectedSession.sessionId,
+              processes: [],
+              truncated: false,
+            });
+            await gateway.emitGatewayEvent("sessions.processes.changed", { sessionKey });
+            await page.waitForFunction(() => {
+              const pane = document.querySelector(".chat-pane-cache__pane--active");
+              const cache = pane && Reflect.get(pane, "state")?.chatMessagesBySession;
+              return (
+                cache &&
+                [...cache.values()].some(({ snapshot }) => snapshot.details?.processes?.total === 0)
+              );
+            });
+            expect(await details.locator('[data-details-group="processes"]').count()).toBe(0);
+          }
           if (archived) {
             return;
           }
