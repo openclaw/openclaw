@@ -209,7 +209,8 @@ export async function prepareCodexAttemptContext(
     }),
     agentWorkspaceDeveloperInstructions,
   );
-  // The thread lifecycle pins this render as the native base; reports and budgets count it too.
+  // Pre-startup estimate of the base the thread lifecycle places, for history budgets and
+  // early reports. Reports adopt the lifecycle's own render once the thread is ready.
   const startupBinding = connection.mutable.startupBinding;
   const openClawBaseInstructions = resolveCodexOpenClawBaseInstructions(runtimeParams, {
     dynamicTools: toolBridge.specs,

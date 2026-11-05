@@ -31,6 +31,7 @@ import type { CodexAttemptContext } from "./run-attempt-context.js";
 import { estimateCodexAppServerProjectedTurnTokens } from "./run-attempt-lifecycle.js";
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
+import type { CodexAppServerThreadLifecycleBinding } from "./thread-lifecycle-types.js";
 import { resolveCodexProjectionStartupBinding } from "./thread-restricted-resume.js";
 import { buildCodexHistoryProvenancePrefix, buildTurnCollaborationMode } from "./turn-params.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
@@ -468,9 +469,16 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           buildTurnCollaborationMode(params).settings.developer_instructions ?? undefined,
         );
   // Reports, hooks, trajectory, and history budgets also count the pinned base. The
-  // rotation fuse does not: native token counts already include it.
+  // rotation fuse does not: native token counts already include it. Until the thread
+  // lifecycle reports the base it placed, this is the pre-startup estimate.
+  let reportedOpenClawBaseInstructions = firstPromptBuild.systemPromptReplaced
+    ? undefined
+    : openClawBaseInstructions;
   const buildRenderedCodexInstructions = () =>
-    joinPresentSections(openClawBaseInstructions, buildRenderedCodexDeveloperInstructions());
+    joinPresentSections(
+      reportedOpenClawBaseInstructions,
+      buildRenderedCodexDeveloperInstructions(),
+    );
   const rebuildCodexPromptBuildFromCurrentProjection = async (preserveInstructions = false) => {
     const nextPromptBuild = await buildPromptFromCurrentInputs();
     turnState.promptBuild = preserveInstructions
@@ -689,6 +697,11 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     setInferenceInstructions: (instructions: string) => {
       inferenceInstructions = instructions;
       parentLocalEgress = !usesSupervisionConnection;
+      Object.assign(systemPromptReport, buildSystemPromptReport(!workspaceReferencesIncluded));
+    },
+    /** Pending supervision probes its native model during startup, after the estimate. */
+    adoptThreadBaseInstructions: (thread: CodexAppServerThreadLifecycleBinding) => {
+      reportedOpenClawBaseInstructions = thread.preparedOpenClawBaseInstructions;
       Object.assign(systemPromptReport, buildSystemPromptReport(!workspaceReferencesIncluded));
     },
     buildRenderedCodexInstructions,

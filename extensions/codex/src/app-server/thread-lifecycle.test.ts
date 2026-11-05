@@ -1591,6 +1591,9 @@ describe("Codex app-server supervised branch lifecycle", () => {
       dynamicTools,
       environments: [{ environmentId: "local", cwd: workspaceDir }],
     });
+    // Reports adopt the base rendered for the probed native model, not the pre-probe estimate.
+    expect(startParams.baseInstructions).toEqual(expect.stringContaining("## Codex Runtime"));
+    expect(materialized.preparedOpenClawBaseInstructions).toBe(startParams.baseInstructions);
     for (const config of [forkParams.config, startParams.config] as Array<
       Record<string, unknown>
     >) {

@@ -53,6 +53,7 @@ import {
   withCodexThreadWriteCurrent,
   type CodexThreadRequestContext,
 } from "./thread-lifecycle-preflight.js";
+import { recordCodexThreadReady } from "./thread-lifecycle-timing.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
@@ -88,31 +89,6 @@ export type CodexStartThreadContext = CodexThreadRequestContext & {
   rotatedContextEngineBinding: boolean;
   replacementPredecessor?: CodexAppServerThreadBinding;
 };
-
-function recordCodexThreadReady(
-  params: CodexStartOrResumeThreadParams,
-  context: Pick<CodexResumeThreadContext, "contextEngineBinding" | "lifecycleTiming">,
-  threadId: string,
-  action: "resumed" | "rotated" | "started",
-): void {
-  const { contextEngineBinding, lifecycleTiming } = context;
-  const event = {
-    sessionId: params.params.sessionId,
-    sessionKey: params.params.sessionKey,
-    threadId,
-    action,
-  };
-  if (contextEngineBinding) {
-    embeddedAgentLog.info("codex app-server wrote context-engine thread binding", {
-      ...event,
-      engineId: contextEngineBinding.engineId,
-      epoch: contextEngineBinding.projection?.epoch,
-      fingerprint: contextEngineBinding.projection?.fingerprint,
-    });
-  }
-  lifecycleTiming.mark("thread-ready");
-  lifecycleTiming.logSummary({ runId: params.params.runId, ...event });
-}
 
 export async function resumeExistingCodexThread(
   params: CodexStartOrResumeThreadParams,
@@ -391,6 +367,7 @@ export async function resumeExistingCodexThread(
         },
         params,
       ),
+      preparedOpenClawBaseInstructions: context.resolveOpenClawBaseInstructions(resumeBinding),
       lifecycle: {
         action: "resumed",
         ...(activeTurnIds.length ? { activeTurnIds } : {}),
@@ -708,21 +685,19 @@ export async function startFreshCodexThread(
     response.thread.id,
     rotatedContextEngineBinding ? "rotated" : "started",
   );
+  // An authored native base moves OpenClaw's base into the developer carrier.
+  const baseInstructions = context.resolveOpenClawBaseInstructions();
   return {
     ...startedBinding,
     // Stored native-auth bindings omit redundant provider attribution; this
     // turn still reports the provider selected by the native runtime.
     modelProvider:
       response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,
+    preparedOpenClawBaseInstructions: baseInstructions,
     // Restricted ephemeral threads also need creation policy for fenced warm reuse.
     liveThreadEphemeralPolicy: startParams.ephemeral
       ? createCodexEphemeralThreadPolicy(
-          {
-            ...params,
-            // An authored native base moves OpenClaw's base into the developer carrier.
-            baseInstructions: context.resolveOpenClawBaseInstructions(),
-            config: startParams.config,
-          },
+          { ...params, baseInstructions, config: startParams.config },
           context.effectiveConfig.config,
         )
       : undefined,

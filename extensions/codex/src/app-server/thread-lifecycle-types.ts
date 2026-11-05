@@ -35,6 +35,8 @@ export type CodexAppServerThreadLifecycleBinding = CodexAppServerThreadBinding &
   clearInheritedServiceTier?: true;
   /** Tier admitted with this attempt's native compaction configuration. */
   preparedServiceTier?: CodexServiceTier | null;
+  /** OpenClaw base this lifecycle rendered for the thread, for reports; never persisted. */
+  preparedOpenClawBaseInstructions?: string;
 };
 
 export type CodexThreadFinalConfigPatchDecision = (

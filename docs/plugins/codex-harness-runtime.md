@@ -116,7 +116,9 @@ history scrub. See [Workspace bootstrap files](/plugins/codex-harness-reference#
 
 Trajectory `context.compiled`, the system-prompt report (`/context`),
 `llm_input`, and context-engine history budgets count OpenClaw's base instructions and
-thread instructions. After a managed parent turn registers its inference
+thread instructions. Reports use the base the thread lifecycle placed, including the
+one a supervised thread renders for its probed native model; history budgets run
+before startup and use an estimate. After a managed parent turn registers its inference
 context, they also include that exact registered text. Codex's own additions,
 such as an operator `model_instructions_file`, are not counted. This diagnostic
 projection is not the complete native/provider prompt and is never sent back
