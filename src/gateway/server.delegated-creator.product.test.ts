@@ -225,9 +225,8 @@ it(
     const child = receipt!;
     const entry = () => loadSessionEntryReadOnly({ agentId: "main", sessionKey: child.sessionKey });
     expect(entry()?.createdActor).toEqual({
-      type: "human",
-      source: "profile",
-      id: people.selected!.id,
+      type: "agent",
+      id: "main",
       delegatedBy: { type: "human", source: "profile", id: people.causal!.id },
     });
     const shareParams = { sessionKey: child.sessionKey, expectedSessionId: child.sessionId };

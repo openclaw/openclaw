@@ -81,14 +81,13 @@ const ACCENT_PRESETS = [
 ] as const;
 
 /* Builtin cards preview their real palette (chip colors live in config.css,
-   mirrored from the base.css theme blocks). The custom card only has real
-   colors while active — its chips read the live CSS variables — so it falls
-   back to the download icon otherwise. */
+   mirrored from the base.css theme blocks). Plugin cards use the live palette.
+   Only the inactive custom import card falls back to the download icon. */
 function ThemeCardVisual(props: { id: ThemeName; activeTheme: ThemeName; selected: boolean }) {
   return (
     <span class="settings-theme-card__swatch" aria-hidden="true">
       <Show
-        when={(props.id !== "custom" && !props.id.includes("/")) || props.activeTheme === props.id}
+        when={props.id !== "custom" || props.activeTheme === props.id}
         fallback={
           <span class="settings-theme-card__icon">
             <Icon name="download" />
@@ -144,7 +143,8 @@ export function AppearanceSection(props: ConfigProps) {
   }
   const importMessage = () => {
     importResult();
-    return props.customThemeImportMessage;
+    const message = props.customThemeImportMessage;
+    return message?.kind === "error" ? message : null;
   };
   let focusFrame = 0;
   const showCustomThemeImport = () =>
@@ -447,7 +447,8 @@ export function AppearanceSection(props: ConfigProps) {
                       class="settings-theme-import__message settings-theme-import__message--error"
                       role="alert"
                     >
-                      {formatThemeValidationError(error())}
+                      <div>{t("configView.appearance.importFailed")}</div>
+                      <div>{formatThemeValidationError(error())}</div>
                     </div>
                   )}
                 >

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { SKILL_RESOURCE_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/skill-resources.js";
 import { WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
+import { readAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { createOpenClawCodingToolsInternalAsync } from "../../agents/agent-tools.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
@@ -376,10 +377,11 @@ export async function executeWorkerTurn(
                     modelId: modelRef.model,
                     modelContextWindowTokens: toolPolicy.modelContextWindowTokens,
                     runtimeToolAllowlist: turn.toolsAllow,
-                    skillWorkshop: undefined,
                     // Suppresses Workshop; the skill_library adapter replaces this tool by name.
                     skillLibraryAuthoring,
                     computerTransport: null,
+                    // Plugin tools recheck the turn's tool surface, as worker gateway tools do.
+                    assertInvocationCurrent: assertToolSurfaceCurrent,
                   },
                   undefined,
                   undefined,
@@ -547,6 +549,7 @@ export async function executeWorkerTurn(
       // Project the wire handshake; the receipt also carries storage-only provenance.
       const { bundleHash, openclawVersion, protocolFeatures } = bootstrapReceipt;
       githubGrant = await bindWorkerGitHubTurn({
+        operatorAuthority: readAdmittedRunOperatorAuthority(admittedRunContext),
         session: placement,
         fact: readGitHubPublicationFact(placement),
         sessionTarget: transcriptTarget,

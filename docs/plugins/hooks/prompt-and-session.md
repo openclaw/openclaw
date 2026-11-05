@@ -438,7 +438,7 @@ runtime or Codex. Legacy V1 runtimes, including Copilot, return
 without queueing the guidance. The API does not automatically enqueue a later
 turn; use the explicit fallback below when needed.
 
-Steering requires `plugins.entries.<id>.hooks.allowPromptInjection` (enabled
+Steering requires `plugins.entries.<id>.hooks.allowPromptModification` (enabled
 unless explicitly set to `false`) and a live plugin instance. Disabled prompt
 injection returns `steered: false`; an expired plugin instance cannot dispatch.
 The host and guarded runtime recheck the plugin instance before dispatch,
