@@ -69,6 +69,7 @@ export function insertJsoncOcPath(
     ) {
       throw new OcPathEditError("unresolved");
     }
+    guardSentinel(indexOrKey, `oc://${parentPath.file}/${[...target.path, indexOrKey].join("/")}`);
   } else if (target.value.kind !== "array") {
     throw new OcPathEditError("unresolved");
   }

@@ -963,6 +963,8 @@ describe("openclaw path CLI", () => {
     it.each([
       ["gateway.jsonc", '{ "token": "x" }', "token", "__OPENCLAW_REDACTED__"],
       ["data.jsonc", '{"items":[]}', "items/+", '{"__OPENCLAW_REDACTED__":1}'],
+      ["data.jsonc", '{"items":{}}', "items/+__OPENCLAW_REDACTED__", "1"],
+      ["data.jsonc", '{"items":{}}', "items/+pre__OPENCLAW_REDACTED__post", "1"],
       ["data.jsonl", '{"old":1}\n', "+", '{"__OPENCLAW_REDACTED__":1}'],
       ["data.yaml", "items: []\n", "items/+", '{"__OPENCLAW_REDACTED__":1}'],
     ])("CLI-S03 refuses sentinel content for %s at %s", async (file, before, suffix, value) => {
