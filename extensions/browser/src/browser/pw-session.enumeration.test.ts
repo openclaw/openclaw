@@ -128,12 +128,6 @@ describe("pw-session page enumeration", () => {
     const fixture = makePageEnumerationBrowser([healthy]);
     connectOverCdpSpy.mockResolvedValue(fixture.browser);
     getChromeWebSocketUrlSpy.mockResolvedValue("ws://127.0.0.1:9222/cdp");
-    vi.mocked(fixture.browser.newBrowserCDPSession).mockResolvedValue({
-      send: vi.fn(async () => ({
-        targetInfos: [{ targetId: healthy.targetId, type: "page", url: healthy.url }],
-      })),
-      detach: vi.fn(async () => {}),
-    });
     await expect(
       listPagesViaPlaywright({
         cdpUrl,

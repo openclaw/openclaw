@@ -632,7 +632,7 @@ it("bounds target enumeration when one debugger attachment never replies", async
   sendCommand(cdp, 1, "Target.getTargets");
   await vi.advanceTimersByTimeAsync(4_001);
   expect(response(client, 1)?.error).toBeUndefined();
-  expect(response(client, 1)?.result?.targetInfos).toEqual([
+  expect(asOptionalRecord(response(client, 1)?.result)?.targetInfos).toEqual([
     expect.objectContaining({ targetId: "target-2" }),
   ]);
   await vi.advanceTimersByTimeAsync(7_001);
@@ -645,7 +645,7 @@ it("bounds target enumeration when one debugger attachment never replies", async
   blocked = false;
   sendCommand(cdp, 2, "Target.getTargets");
   await vi.advanceTimersByTimeAsync(0);
-  expect(response(client, 2)?.result?.targetInfos).toHaveLength(2);
+  expect(asOptionalRecord(response(client, 2)?.result)?.targetInfos).toHaveLength(2);
 });
 
 it("keeps explicit attachment alive after a discovery claimant expires", async () => {
@@ -686,7 +686,7 @@ it("does not lose healthy targets when another tab has an active debugger", asyn
   const { client, cdp } = connectClient(bridge);
   await dispatch(cdp, 1, "Target.getTargets");
   expect(response(client, 1)?.error).toBeUndefined();
-  expect(response(client, 1)?.result?.targetInfos).toEqual([
+  expect(asOptionalRecord(response(client, 1)?.result)?.targetInfos).toEqual([
     expect.objectContaining({ targetId: "target-2" }),
   ]);
 });
