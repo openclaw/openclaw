@@ -17,6 +17,7 @@ import {
 } from "../../config/sessions/transcript-write-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import {
   isCompetingSessionControllerWorkActive,
@@ -44,7 +45,10 @@ import {
   resolveChatSendRequestConflict,
   respondChatSendRetry,
 } from "./chat-send-pre-admission.js";
-import type { ChatSendPreAdmissionParams } from "./chat-send-pre-admission.types.js";
+import type {
+  ChatSendAdmissionParams,
+  ChatSendPreAdmissionParams,
+} from "./chat-send-pre-admission.types.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { readChatSendDedupeResponse } from "./chat-send-reservation.js";
 import type { ChatSendRetryComparison } from "./chat-send-retry-comparison.js";
@@ -121,42 +125,53 @@ export function consumeChatSendAdmissionRetry(
 
 /** An awaited retry comparison must return to current rows before admission can consume it. */
 export async function withCurrentChatSendRetry(
-  params: ChatSendPreAdmissionParams & {
-    session: PreparedChatSendSession;
-    withPreparedCurrent?: SessionMutationAuthorization["withPreparedCurrent"];
-  },
+  params: ChatSendAdmissionParams,
   ownPendingAttemptId: string,
   consume: (
     session: Parameters<Parameters<typeof withCurrentChatSendSession>[0]["consume"]>[0],
     comparison: ChatSendRetryComparison | undefined,
   ) => void,
 ) {
-  const withCurrent = <T>(read: (session: Parameters<typeof consume>[0]) => T) =>
-    withCurrentChatSendSession({
-      session: params.session,
-      getRuntimeConfig: params.context.getRuntimeConfig,
-      includeMembership: Boolean(params.withPreparedCurrent),
-      includeActivePath: params.request.p.queueMode !== "steer",
-      consume: (latest, membership, assertSourceCurrent) => {
-        const consumeCurrent = () => read(latest);
-        if (params.withPreparedCurrent) {
-          return params.withPreparedCurrent(
-            {
-              agentId: latest.agentId,
-              storePath: latest.storePath,
-              sessionKey: latest.canonicalKey,
-              entry: latest.entry,
-              readSource: latest.capturedReadSource,
-              members: membership.get(latest.legacyKey ?? latest.canonicalKey) ?? [],
-            },
-            consumeCurrent,
-            assertSourceCurrent,
-          );
-        }
-        assertSourceCurrent();
-        return consumeCurrent();
-      },
-    });
+  const withCurrent = <T>(read: (session: Parameters<typeof consume>[0]) => T) => {
+    const run = () =>
+      withCurrentChatSendSession({
+        session: params.session,
+        getRuntimeConfig: params.context.getRuntimeConfig,
+        includeMembership: Boolean(params.withPreparedCurrent),
+        includeActivePath: params.request.p.queueMode !== "steer",
+        consume: (latest, membership, assertSourceCurrent) => {
+          const consumeCurrent = () => read(latest);
+          if (params.withPreparedCurrent) {
+            return params.withPreparedCurrent(
+              {
+                agentId: latest.agentId,
+                storePath: latest.storePath,
+                sessionKey: latest.canonicalKey,
+                entry: latest.entry,
+                readSource: latest.capturedReadSource,
+                members: membership.get(latest.legacyKey ?? latest.canonicalKey) ?? [],
+              },
+              consumeCurrent,
+              assertSourceCurrent,
+            );
+          }
+          assertSourceCurrent();
+          return consumeCurrent();
+        },
+      });
+    const observe = params.diagnostics?.observeSpan;
+    return observe
+      ? withDiagnosticsTimelineObserver(
+          (name, attributes, durationMs) =>
+            observe(
+              name.replace(/^session\.entry\.read\./u, "admission.current_session."),
+              attributes,
+              durationMs,
+            ),
+          run,
+        )
+      : run();
+  };
   const pending = await withCurrent((session) => {
     const comparison = prepareChatSendRetryComparison(
       { ...params, session: { ...params.session, entry: session.entry } },
