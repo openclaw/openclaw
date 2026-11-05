@@ -1,0 +1,2 @@
+# Bound locked append payload reads while preserving exact snapshot and replay bytes.
+98
