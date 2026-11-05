@@ -24,15 +24,15 @@ const performanceSources = [
   "ui/config/control-ui-startup-assets.ts",
   "src/gateway/control-ui-route-preloads.ts",
   "src/shared/non-packaged-plugin-dirs.ts",
-  ...[
-    "check-limits.mts",
-    "control-ui-i18n-config.ts",
-    "control-ui-i18n-config.json",
-    "control-ui-module-attribution.mts",
-    "control-ui-optional-assets.ts",
-    "record-shared.mjs",
-    "regexp.mjs",
-  ].map((name) => `scripts/lib/${name}`),
+  "scripts/lib/check-limits.mts",
+  "scripts/lib/control-ui-i18n-config.ts",
+  "scripts/lib/control-ui-i18n-config.json",
+  "scripts/lib/control-ui-module-attribution.mts",
+  "scripts/lib/control-ui-optional-assets.ts",
+  "scripts/lib/record-shared.mjs",
+  "scripts/lib/regexp.mjs",
+  "scripts/lib/release-context.mjs",
+  "scripts/lib/release-version.mjs",
 ].map((file): [string, string] => [file, fs.readFileSync(path.resolve(file), "utf8")]);
 function compileFixture(root: string, entry: string[], options: Parameters<typeof build>[0] = {}) {
   return build({
