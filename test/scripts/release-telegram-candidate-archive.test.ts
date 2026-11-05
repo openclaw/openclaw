@@ -435,7 +435,12 @@ describe("release Telegram candidate archive guard", () => {
 
   it("rejects compressed archives over the member-count cap and cleans up", () => {
     const root = tempDirs.make("openclaw-archive-guard-");
-    const archive = makeCompressedArchive(root);
+    // Count real members independently of the host tar's optional PAX headers.
+    const archive = makeTarArchive(
+      root,
+      "members",
+      '\n    archive.addfile(tarfile.TarInfo("candidate/payload.bin"))\n',
+    );
     const destination = path.join(root, "member-limit");
 
     expectFailure(

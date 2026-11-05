@@ -131,7 +131,7 @@ describe("check-changelog-attributions", () => {
     const text = "- Fix. Authored by @steipete. Thanks @external-contributor.";
     expect(findForbiddenChangelogThanks(text)).toStrictEqual([]);
     expect(
-      findForbiddenChangelogThanks("- Fix. Thanks @external-contributor and @steipete."),
+      findForbiddenChangelogThanks("- Fix. Thanks @external-contributor and @tideclaw-bot."),
     ).toHaveLength(1);
   });
 

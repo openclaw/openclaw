@@ -313,7 +313,9 @@ it.runIf(process.platform !== "win32")(
     });
 
     try {
-      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
       const address = server.address();
       if (!address || typeof address === "string") {
         throw new Error("installer fixture did not bind a TCP port");
@@ -340,9 +342,9 @@ it.runIf(process.platform !== "win32")(
       expect(freshShell.versionOutput).toContain("OpenClaw proof-target");
       expect(readFileSync(startupMarker, "utf8")).toBe("login\nbashrc\n");
     } finally {
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
     }
   },
   15_000,

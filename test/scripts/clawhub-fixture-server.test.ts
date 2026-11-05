@@ -507,10 +507,11 @@ ${runner.slice(boundary)}
       `${whatsappPath}/versions/${version}/artifact`,
       `${whatsappPath}/versions/${version}/security`,
       `${whatsappPath}/versions/${version}/artifact/download`,
+      `${whatsappPath}/detail`,
     ];
     for (const requestPath of completeRequestPaths) {
       const response = await fetch(`${baseUrl}${requestPath}`);
-      expect(response.status).toBe(200);
+      expect(response.status).toBe(requestPath.endsWith("/detail") ? 404 : 200);
       await response.arrayBuffer();
     }
     expect(
@@ -520,7 +521,7 @@ ${runner.slice(boundary)}
     for (let attempt = 2; attempt < 4; attempt += 1) {
       for (const requestPath of completeRequestPaths) {
         const response = await fetch(`${baseUrl}${requestPath}`);
-        expect(response.status).toBe(200);
+        expect(response.status).toBe(requestPath.endsWith("/detail") ? 404 : 200);
         await response.arrayBuffer();
       }
     }
@@ -550,7 +551,7 @@ ${runner.slice(boundary)}
     expect(partial.status).toBe(1);
 
     expect((await fetch(`${baseUrl}/api/v1/packages/%40openclaw%2Fforeign`)).status).toBe(404);
-    for (const requestPath of completeRequestPaths.slice(1, 3)) {
+    for (const requestPath of completeRequestPaths.slice(1, 4)) {
       expect((await fetch(`${baseUrl}${requestPath}`)).status).toBe(200);
     }
     const foreign = runPrepublishAssertion(
@@ -574,7 +575,7 @@ ${runner.slice(boundary)}
     for (let attempt = 0; attempt < 17; attempt += 1) {
       for (const requestPath of completeRequestPaths) {
         const response = await fetch(`${maximumBaseUrl}${requestPath}`);
-        expect(response.status).toBe(200);
+        expect(response.status).toBe(requestPath.endsWith("/detail") ? 404 : 200);
         await response.arrayBuffer();
       }
     }
