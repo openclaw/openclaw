@@ -336,7 +336,7 @@ export async function executeWorkspaceManifestComputation(
         command.input.currentRef,
         command.input.buildCacheInputs,
       );
-      const compared = parseChangedWorkspaceResult(base, current);
+      const compared = parseChangedWorkspaceResult(base, current, false);
       return { base, current, ...compared, paths: compared.entries.map((entry) => entry.path) };
     }
   }

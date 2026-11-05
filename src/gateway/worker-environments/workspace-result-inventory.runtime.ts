@@ -123,11 +123,10 @@ export async function loadStagedWorkerWorkspace(
   ) {
     throw new Error("Cloud workspace staged Git history is invalid");
   }
-  // Shipped v1 refs carry a complete tree and predate the changed-path limit.
-  // Recovery validates their manifests, tree shape, and payload bytes;
-  // the apply owner still caps actual rollback records.
+  // Stored receipts predate admission limits. Keep accepted work recoverable;
+  // manifests, payload bytes, and the apply owner's rollback records stay bounded.
   const nodes = { baseNodes: manifestNodes(base), currentNodes: manifestNodes(current) };
-  const changedResult = parseChangedWorkspaceResult(base, current, version !== 1, nodes);
+  const changedResult = parseChangedWorkspaceResult(base, current, false, nodes);
   const changedEntries = changedResult.entries;
   const treeEntries =
     version === 1

@@ -6,11 +6,16 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
+import { resolveGitHubPublicationFailure } from "../github-publication-failure.js";
 import {
   emptyJournal,
   workspaceManifest as makeManifest,
 } from "./workspace-manifest-fixtures.test-support.js";
-import { loadStagedWorkspaceManifest } from "./workspace-manifest-worker.js";
+import {
+  computeWorkspaceManifest,
+  loadStagedWorkspaceManifest,
+  parseWorkspaceManifestPair,
+} from "./workspace-manifest-worker.js";
 import {
   parseWorkerWorkspaceReconciliationPlan,
   serializeWorkerWorkspaceManifest,
@@ -21,8 +26,10 @@ import {
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
   applyStagedWorkerWorkspaceResult,
+  withStagedWorkerWorkspaceManifest,
   workerWorkspaceResultRef,
   workerWorkspaceResultStaging,
+  workerWorkspaceTransferPaths,
 } from "./workspace-result-staging.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -73,7 +80,7 @@ async function workspaceFixture(
     stage: async (historical = false, nextBase = base, nextCurrent = current, nextRef = ref) => {
       if (historical) {
         await git(root, "init", "--quiet");
-        return stageHistoricalV1Result(root, payload, nextRef, nextBase, nextCurrent);
+        return stageHistoricalResult(root, payload, nextRef, nextBase, nextCurrent);
       }
       return workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
         root,
@@ -97,12 +104,13 @@ async function workspaceFixture(
 }
 
 type EncodedManifest = ReturnType<typeof encodeManifest>;
-async function stageHistoricalV1Result(
+async function stageHistoricalResult(
   root: string,
   resultRoot: string,
   ref: string,
   base: EncodedManifest,
   current: EncodedManifest,
+  version: 1 | 2 | 3 = 1,
 ): Promise<void> {
   const blobs = await Promise.all(
     current.manifest.entries.map(async (entry, index) => ({
@@ -111,8 +119,12 @@ async function stageHistoricalV1Result(
       content: await fs.readFile(path.join(resultRoot, entry.path)),
     })),
   );
+  const history =
+    version === 3
+      ? `\ngit-history ${JSON.stringify({ baseCommit: base.manifest.baseCommit, headCommit: base.manifest.baseCommit, descendsFromBase: false, unavailableReason: "Historical checkpoint without a Git export" })}`
+      : "";
   const message = Buffer.from(
-    `OpenClaw worker workspace result\nversion 1\nbase-ref ${base.ref}\ncurrent-ref ${current.ref}\nbase-bytes ${Buffer.byteLength(base.raw)}\ncurrent-bytes ${Buffer.byteLength(current.raw)}\n\n${base.raw}${current.raw}`,
+    `OpenClaw worker workspace result\nversion ${version}\nbase-ref ${base.ref}\ncurrent-ref ${current.ref}\nbase-bytes ${Buffer.byteLength(base.raw)}\ncurrent-bytes ${Buffer.byteLength(current.raw)}${history}\n\n${base.raw}${current.raw}`,
   );
   const chunks: Uint8Array[] = blobs.flatMap((blob) => [
     Buffer.from(`blob\nmark :${blob.mark}\ndata ${blob.content.byteLength}\n`),
@@ -134,6 +146,80 @@ async function stageHistoricalV1Result(
   });
   expect(result.code, result.stderr).toBe(0);
 }
+
+it.each([2, 3] as const)(
+  "restores a previously accepted v%i checkpoint above the new admission limit",
+  async (version) => {
+    const root = tempDirs.make("workspace-accepted-large-");
+    const payload = tempDirs.make("workspace-accepted-payload-");
+    const baseCommit = "a".repeat(40);
+    const base = encodeManifest({
+      ...fileManifest(numberedPaths("deleted", 50_000), "a"),
+      baseCommit,
+    });
+    const current = encodeManifest({
+      ...makeManifest({ "saved.txt": "retained guest work\n" }),
+      baseCommit,
+    });
+    const ref = workerWorkspaceResultRef("previously-accepted");
+    await fs.writeFile(path.join(payload, "saved.txt"), "retained guest work\n");
+    const source = {
+      root,
+      stagingRoot: payload,
+      stagedResultRef: ref,
+      baseManifestRaw: base.raw,
+      baseManifestRef: base.ref,
+      currentManifestRaw: current.raw,
+      currentManifestRef: current.ref,
+    };
+    const failure: unknown = await workerWorkspaceResultStaging
+      .stageWorkerWorkspaceResult(source)
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    expect(failure).toMatchObject({
+      code: "WORKSPACE_RESULT_LIMIT",
+      message: expect.stringContaining("50001"),
+    });
+    expect(resolveGitHubPublicationFailure(failure)).toMatchObject({
+      code: "workspace_changed",
+      nextAction: expect.stringContaining(".gitignore"),
+    });
+    await stageHistoricalResult(root, payload, ref, base, current, version);
+    await withStagedWorkerWorkspaceManifest({ root, stagedResultRef: ref }, async (snapshot) => {
+      expect(await fs.readFile(path.join(snapshot.stagingRoot, "saved.txt"), "utf8")).toBe(
+        "retained guest work\n",
+      );
+      expect(workerWorkspaceTransferPaths(snapshot.current, snapshot.base)).toEqual(["saved.txt"]);
+    });
+    await expect(
+      computeWorkspaceManifest({
+        type: "workspace.manifest.result",
+        input: { root, ref, verifyContents: true },
+      }),
+    ).resolves.toMatchObject({
+      changed: true,
+      changedEntryCount: 1,
+      currentManifestRef: current.ref,
+    });
+    const artifacts = await runGitWorkerOperation({
+      type: "workspace.artifacts",
+      input: { root, ref, previewPath: "saved.txt" },
+    });
+    expect(artifacts.changes).toHaveLength(50_001);
+    expect(Buffer.from(artifacts.preview!).toString()).toBe("retained guest work\n");
+    await expect(
+      parseWorkspaceManifestPair({
+        baseRaw: base.raw,
+        baseRef: base.ref,
+        currentRaw: current.raw,
+        currentRef: current.ref,
+      }),
+    ).resolves.toMatchObject({ changed: true, paths: ["saved.txt"] });
+  },
+  30_000,
+);
 
 it("recovers the shipped v1 full tree while applying only changed entries", async () => {
   const baseContents = { "changed.txt": "base\n", "keep.txt": "keep\n" };

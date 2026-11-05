@@ -55,9 +55,9 @@ export function workerWorkspaceTransferPaths(
   base: WorkerWorkspaceManifest,
   signal?: AbortSignal,
 ): string[] {
-  // Staging is directory-agnostic because it transfers file and symlink bytes only.
+  // Recovery also transfers previously admitted bytes; new results are capped at staging.
   signal?.throwIfAborted();
-  return parseChangedWorkspaceResult(base, current).entries.map((entry) => entry.path);
+  return parseChangedWorkspaceResult(base, current, false).entries.map((entry) => entry.path);
 }
 
 function requireWorkerResultRef(ref: string): string {
