@@ -11,6 +11,7 @@ describe("publishSidebarSessionList", () => {
     sessionsAgentId: null as string | null,
     sessionsLoading: false,
     sessionMutationError: null,
+    sessionListError: null,
     expandedAgentId: () => "main",
     sessionListQuery: (agentId: string) => ({ agentId }),
     requestSessionDataUpdate: () => undefined,

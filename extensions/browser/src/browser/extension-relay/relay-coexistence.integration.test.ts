@@ -333,6 +333,8 @@ it.each(["port", "name"] as const)(
         await startBrowserControlServiceFromConfig();
         const oldProfile = createBrowserControlContext().forProfile("chrome");
         const oldRelay = getBrowserControlState()?.extensionRelays?.get("chrome");
+        expect(oldRelay?.ownership).toBe("borrowed");
+        await expect(oldProfile.isTransportAvailable()).resolves.toBe(true);
         const replacementPort = change === "port" ? await getFreePort() : port;
         const replacementName = change === "name" ? "other-profile" : "chrome";
         const config = {
@@ -345,7 +347,8 @@ it.each(["port", "name"] as const)(
         setRuntimeConfigSnapshot(config, config);
         const current = createBrowserControlContext().forProfile(replacementName);
         expect(current.profile.cdpPort).toBe(replacementPort);
-        await expect(oldProfile.isTransportAvailable()).rejects.toThrow();
+        // Status is passive; explicit use must refuse the superseded profile.
+        await expect(oldProfile.ensureBrowserAvailable()).rejects.toThrow();
         await expect
           .poll(() => getBrowserControlState()?.extensionRelays?.get("chrome") !== oldRelay)
           .toBe(true);

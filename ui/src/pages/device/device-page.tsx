@@ -27,6 +27,7 @@ import {
   SettingsStatus,
   SettingsToggleRow,
   SettingsValue,
+  SettingsUnavailable,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerAppsEnglish } from "../../i18n/locales/en-apps.ts";
@@ -690,7 +691,11 @@ export function DevicePage() {
         <SettingsPage>
           <Show
             when={capability}
-            fallback={<SettingsEmpty message={t("configPage.deviceSettings.appOnly")} />}
+            fallback={
+              <SettingsSection>
+                <SettingsUnavailable message={t("configPage.deviceSettings.appOnly")} />
+              </SettingsSection>
+            }
           >
             <Show
               when={Boolean(snapshot())}

@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.10.9",
+  "version": "2026.10.10",
   "openclaw": {
     "updateAdmissionProtocol": 1,
     "updatePreflightProtocol": 1,
@@ -17,7 +17,7 @@
     ],
     "schemaVersions": {
       "state": 39,
-      "agent": 39
+      "agent": 40
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
@@ -500,7 +500,9 @@
     "!dist/plugin-sdk/provider-auth-markers.d.ts",
     "!dist/plugin-sdk/terminal-safe-text.d.ts",
     "!dist/plugin-sdk/memory-core-host-transcript-stats.d.ts",
-    "!dist/plugin-sdk/skill-authoring-runtime.d.ts"
+    "!dist/plugin-sdk/skill-authoring-runtime.d.ts",
+    "!dist/plugin-sdk/skill-workshop-host-runtime.d.ts",
+    "!dist/plugin-sdk/skill-workshop-host-cli.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -1518,6 +1520,12 @@
     "./plugin-sdk/skill-authoring-runtime": {
       "default": "./dist/plugin-sdk/skill-authoring-runtime.js"
     },
+    "./plugin-sdk/skill-workshop-host-cli": {
+      "default": "./dist/plugin-sdk/skill-workshop-host-cli.js"
+    },
+    "./plugin-sdk/skill-workshop-host-runtime": {
+      "default": "./dist/plugin-sdk/skill-workshop-host-runtime.js"
+    },
     "./plugin-sdk/skill-commands-runtime": {
       "types": "./dist/plugin-sdk/skill-commands-runtime.d.ts",
       "default": "./dist/plugin-sdk/skill-commands-runtime.js"
@@ -1832,7 +1840,7 @@
     "check:deprecated-jsdoc": "node --import ./scripts/tsx.mjs scripts/check-deprecated-jsdoc.mts",
     "check:doctor-deprecation-registry": "node --import ./scripts/tsx.mjs scripts/check-doctor-deprecation-registry.ts",
     "check:docs": "bash scripts/ci-collect-checks.sh 'pnpm format:docs:check' 'pnpm check:docs:content'",
-    "check:docs:content": "bash scripts/ci-collect-checks.sh 'pnpm lint:docs' 'pnpm lint:templates' 'pnpm docs:check-mdx' 'pnpm docs:check-i18n-glossary' 'pnpm docs:check-links' 'pnpm docs:check-config-examples' 'pnpm changelog:check'",
+    "check:docs:content": "bash scripts/ci-collect-checks.sh 'pnpm lint:docs' 'pnpm lint:templates' 'pnpm docs:check-mdx' 'pnpm docs:check-links' 'pnpm docs:check-config-examples' 'pnpm changelog:check'",
     "changelog:check": "node scripts/release-changelog.mjs check && node scripts/render-release-changelog.mjs --check",
     "changelog:split": "node scripts/release-changelog.mjs split",
     "changelog:from-docs": "node scripts/render-release-changelog.mjs",
@@ -1915,7 +1923,6 @@
     "dev": "node scripts/run-node.mjs",
     "dev:ui:mock": "node --import ./scripts/tsx.mjs scripts/control-ui-mock-dev.ts",
     "docs:check-config-examples": "node scripts/check-docs-config-examples.mjs",
-    "docs:check-i18n-glossary": "node --import ./scripts/tsx.mjs scripts/check-docs-i18n-glossary.mts",
     "docs:check-links": "node scripts/docs-link-audit.mjs",
     "docs:check-links:anchors": "node scripts/docs-link-audit.mjs --anchors",
     "docs:check-mdx": "node scripts/check-docs-mdx.mjs docs README.md",
@@ -2416,7 +2423,7 @@
     "@modelcontextprotocol/server": "2.3.1",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.27.0",
+    "@openclaw/fs-safe": "0.27.1",
     "@openclaw/proc-safe": "0.4.2",
     "@openclaw/proxyline": "0.4.0",
     "@opentelemetry/semantic-conventions": "1.43.0",
