@@ -132,11 +132,11 @@ function isStableAbsolutePath(value, pathApi, platform) {
   return root !== "\\" && root !== "/";
 }
 
-function stripBunLifecyclePathPrefix(pathEntries, cwd, pathApi, platform) {
-  const expectedPrefix = [];
+function stripBunLifecyclePaths(pathEntries, cwd, pathApi, platform, dependencyLifecycle) {
+  const lifecyclePaths = [];
   let directory = pathApi.resolve(cwd);
   while (true) {
-    expectedPrefix.push(pathApi.join(directory, "node_modules", ".bin"));
+    lifecyclePaths.push(pathApi.join(directory, "node_modules", ".bin"));
     const parent = pathApi.dirname(directory);
     if (parent === directory) {
       break;
@@ -144,18 +144,34 @@ function stripBunLifecyclePathPrefix(pathEntries, cwd, pathApi, platform) {
     directory = parent;
   }
 
-  if (pathEntries.length < expectedPrefix.length) {
+  if (pathEntries.length < lifecyclePaths.length) {
     return null;
   }
-  for (const [index, expected] of expectedPrefix.entries()) {
+  const matches = (entry, expected) =>
+    normalizePathForComparison(entry, pathApi, platform) ===
+    normalizePathForComparison(expected, pathApi, platform);
+  for (
+    let prefixLength = dependencyLifecycle ? 1 : lifecyclePaths.length;
+    prefixLength <= lifecyclePaths.length;
+    prefixLength++
+  ) {
     if (
-      normalizePathForComparison(pathEntries[index], pathApi, platform) !==
-      normalizePathForComparison(expected, pathApi, platform)
+      !lifecyclePaths
+        .slice(0, prefixLength)
+        .every((expected, index) => matches(pathEntries[index], expected))
     ) {
       return null;
     }
+    const suffixStart = pathEntries.length - (lifecyclePaths.length - prefixLength);
+    const suffixMatches = lifecyclePaths
+      .slice(prefixLength)
+      .every((expected, index) => matches(pathEntries[suffixStart + index], expected));
+    if (suffixMatches) {
+      // Dependency lifecycles can include private-store bins before inherited PATH.
+      return pathEntries.slice(prefixLength, suffixStart);
+    }
   }
-  return pathEntries.slice(expectedPrefix.length);
+  return null;
 }
 
 function stripBunPostinstallPathLayout(pathEntries, cwd, pathApi, platform) {
@@ -208,6 +224,7 @@ function stripBunPostinstallPathLayout(pathEntries, cwd, pathApi, platform) {
  *   platform?: NodeJS.Platform;
  *   cwd?: string;
  *   execPath?: string;
+ *   bunVersion?: string | null;
  *   access?: (path: string, mode: number) => void;
  *   realpath?: (path: string) => string;
  *   run?: PackageCliNodeProbeRun;
@@ -222,6 +239,7 @@ export function probePackageCliNodeRuntime(options = {}) {
     platform = process.platform,
     cwd = process.cwd(),
     execPath = process.execPath,
+    bunVersion = process.versions.bun ?? null,
     access = accessSync,
     realpath = realpathSync,
     run = spawnSync,
@@ -231,12 +249,27 @@ export function probePackageCliNodeRuntime(options = {}) {
   const delimiter = platform === "win32" ? ";" : ":";
   const executableName = platform === "win32" ? "node.exe" : "node";
   const seen = new Set();
-  // Bun either prepends the cwd-to-root node_modules/.bin paths or wraps the
-  // original PATH between the package bin and an exact generated shim suffix.
-  // The relaxed layout is accepted only by packaged postinstall recovery.
+  // Bun 1.4.4 moved dependency ancestor bins after inherited PATH. Root scripts
+  // and older Bun keep the full prefix. PATH alone cannot distinguish them when
+  // inherited entries also name ancestor bins; use the runtime and package root.
+  const reorderedLifecycle = isNodeVersionAtLeast(parseNodeReleaseVersion(bunVersion), {
+    major: 1,
+    minor: 4,
+    patch: 4,
+  });
+  const localPrefix = normalizeEnvValue(env.npm_config_local_prefix);
+  const validLocalPrefix = isStableAbsolutePath(localPrefix, pathApi, platform);
+  if (reorderedLifecycle && !validLocalPrefix && !allowUnavailableNodeFallback) {
+    return null;
+  }
+  const dependencyLifecycle =
+    reorderedLifecycle &&
+    validLocalPrefix &&
+    normalizePathForComparison(localPrefix, pathApi, platform) !==
+      normalizePathForComparison(pathApi.resolve(cwd), pathApi, platform);
   const rawPathEntries = pathEnv.split(delimiter);
   const pathEntries =
-    stripBunLifecyclePathPrefix(rawPathEntries, cwd, pathApi, platform) ??
+    stripBunLifecyclePaths(rawPathEntries, cwd, pathApi, platform, dependencyLifecycle) ??
     (allowUnavailableNodeFallback
       ? stripBunPostinstallPathLayout(rawPathEntries, cwd, pathApi, platform)
       : null);

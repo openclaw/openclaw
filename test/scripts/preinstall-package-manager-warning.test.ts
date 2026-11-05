@@ -4,6 +4,7 @@ import { copyFileSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import lifecyclePaths from "../../scripts/e2e/lib/bun-only-runtime/preinstall-lifecycle-paths.json" with { type: "json" };
 import {
   detectLifecyclePackageManager,
   enforceSupportedNodeRuntime,
@@ -21,7 +22,37 @@ const EXPECTED_NODE_ENGINE_RANGE = ">=24.16.0 <25 || >=26.1.0";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
 
+const lifecyclePrefix = [
+  "/work/openclaw/node_modules/.bin",
+  "/work/node_modules/.bin",
+  "/node_modules/.bin",
+];
+const probe = (options: Parameters<typeof probePackageCliNodeRuntime>[0]) =>
+  probePackageCliNodeRuntime({
+    cwd: "/work/openclaw",
+    access: () => {},
+    platform: "linux",
+    bunVersion: "1.4.3",
+    ...options,
+  });
+function expectRejectedProbe(options: Parameters<typeof probe>[0]) {
+  const run = vi.fn();
+  expect(probe({ ...options, run })).toBeNull();
+  expect(run).not.toHaveBeenCalled();
+}
+
 describe("install runtime enforcement", () => {
+  it.each([undefined, "relative", "."])(
+    "requires a stable local prefix for Bun 1.4.4 preinstall: %s",
+    (localPrefix) => {
+      expectRejectedProbe({
+        bunVersion: "1.4.4",
+        env: { npm_config_local_prefix: localPrefix },
+        pathEnv: [...lifecyclePrefix, "/opt/node/bin"].join(":"),
+      });
+    },
+  );
+
   it("reads the canonical package engine range", () => {
     expect(readPackageNodeEngine()).toBe(EXPECTED_NODE_ENGINE_RANGE);
   });
@@ -482,6 +513,100 @@ describe("install runtime enforcement", () => {
       }),
     ).toBeNull();
     expect(run).not.toHaveBeenCalled();
+  });
+
+  it.each(lifecyclePaths)("checks a duplicate inherited entry: $name", (layout) => {
+    const candidates: string[] = [];
+    const runtime = probe({
+      bunVersion: layout.bunVersion,
+      env: layout.env,
+      pathEnv: [
+        ...layout.prefix,
+        "/work/openclaw/node_modules/.bin",
+        "/opt/node/bin",
+        ...layout.suffix,
+      ].join(":"),
+      run: (command) => {
+        candidates.push(command);
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            version: "24.14.1",
+            bunVersion: null,
+            execPath: command,
+          }),
+        };
+      },
+    });
+
+    expect(candidates).toEqual(["/work/openclaw/node_modules/.bin/node"]);
+    expect(runtime?.version).toBe("24.14.1");
+  });
+
+  it.each([["/work/node_modules/.bin"], ["/work/node_modules/.bin", "/node_modules/.bin"]])(
+    "preserves inherited ancestor bins before later Node paths: %j",
+    (...inherited) => {
+      const run = vi.fn((command: string) => ({
+        status: 0,
+        stdout: JSON.stringify({ version: "24.14.1", bunVersion: null, execPath: command }),
+      }));
+      const runtime = probe({
+        bunVersion: "1.4.4",
+        env: { npm_config_local_prefix: "/work" },
+        pathEnv: [
+          "/work/openclaw/node_modules/.bin",
+          ...inherited,
+          "/opt/node/bin",
+          "/work/node_modules/.bin",
+          "/node_modules/.bin",
+        ].join(":"),
+        run,
+      });
+      expect(run.mock.calls.map(([command]) => command)).toEqual(["/work/node_modules/.bin/node"]);
+      expect(
+        nodeVersionSatisfiesPackageEngine(runtime?.version ?? null, EXPECTED_NODE_ENGINE_RANGE),
+      ).toBe(false);
+    },
+  );
+
+  it.each(["1.4.3", "1.4.4"])(
+    "preserves an inherited ancestor suffix in a prefix-only Bun %s lifecycle",
+    (bunVersion) => {
+      const run = vi.fn((command: string) => ({
+        status: 0,
+        stdout: JSON.stringify({
+          version: command === "/opt/node/bin/node" ? "24.16.0" : "24.14.1",
+          bunVersion: null,
+          execPath: command,
+        }),
+      }));
+      const runtime = probe({
+        bunVersion,
+        env: { npm_config_local_prefix: "/work/openclaw" },
+        pathEnv: [
+          ...lifecyclePrefix,
+          "/opt/node/bin",
+          "/work/node_modules/.bin",
+          "/node_modules/.bin",
+        ].join(":"),
+        run,
+      });
+      expect(run.mock.calls.map(([command]) => command)).toEqual(["/opt/node/bin/node"]);
+      expect(runtime?.version).toBe("24.16.0");
+    },
+  );
+
+  it.each([
+    ["/unproven/node_modules/.bin", "/opt/node/bin"],
+    ["/work/openclaw/node_modules/.bin", "/opt/node/bin", "/node_modules/.bin"],
+    [
+      "/work/openclaw/node_modules/.bin",
+      "/opt/node/bin",
+      "/node_modules/.bin",
+      "/work/node_modules/.bin",
+    ],
+  ])("fails closed when the lifecycle directories cannot be proven: %j", (...entries) => {
+    expectRejectedProbe({ pathEnv: entries.join(":") });
   });
 
   it.each(["."])("fails closed before a relative PATH component %j", (relativeEntry) => {
