@@ -9,6 +9,12 @@ title: "PR preparation"
 
 Use focused local checks before publication and PR CI for broad proof. Open a ready PR as soon as the change builds and its focused tests pass; do not hold it for pre-PR suite runs. The optional completed-evidence modes below describe supported mechanisms, not a requirement to run broad suites before a PR. ClawSweeper reviews are advisory; merge admission does not wait for a bot comment.
 
+Contributor credit remains source-backed editorial work, not a username policy
+maintained by PR preparation. The preparation and release-candidate gates do not
+reject `Thanks` entries by handle or require a special credit format for selected
+accounts. Release ownership, changelog structure, frozen contribution records,
+provenance, exact-head review and publication checks remain unchanged.
+
 Review transitions recognize conflict metadata retained after committed merge or rebase resolutions, including renamed files. Each stage must match its source commit's exact mode and blob at the same path or a unique Git-detected rename source leading to the committed resolution path. Ambiguous or undetected renames still refuse without changing the index; preserve the transition journal for native recovery.
 
 Unknown working-file bytes remain refused, even when empty. Explicitly authorized

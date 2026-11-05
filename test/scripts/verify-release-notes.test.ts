@@ -376,12 +376,12 @@ describe("release-note verification", () => {
     expect(readFileSync(join(cwd, "CHANGELOG.md"), "utf8")).toBe(index);
   });
 
-  it("credits human maintainers but excludes automation identities", () => {
-    expect(isEligibleHandle("human-contributor")).toBe(true);
-    expect(isEligibleHandle("steipete")).toBe(true);
-    for (const handle of ["steipete-oai", "hugin-bot", "roboclaw-bot", "tideclaw-bot"]) {
-      expect(isEligibleHandle(handle)).toBe(false);
+  it("does not maintain a named contributor exclusion list", () => {
+    for (const handle of ["human-contributor", "steipete", "steipete-oai", "hugin-bot"]) {
+      expect(isEligibleHandle(handle)).toBe(true);
     }
+    expect(isEligibleHandle("github-actions[bot]")).toBe(false);
+    expect(isEligibleHandle(undefined)).toBe(false);
   });
 
   it("accepts only canonical commit PR suffixes", () => {
@@ -1175,11 +1175,9 @@ console.log(JSON.stringify({ data }));
     const entryPath = join(cwd, "CHANGELOG/2026.7.1.md");
     const section = readFileSync(entryPath, "utf8");
     expect(section).toContain(
-      "- **PR #21** Related #20. Authored by @steipete. Thanks @original-helper and @reporter.",
+      "- **PR #21** Related #20. Thanks @steipete, @original-helper, and @reporter.",
     );
-    expect(section).toContain(
-      "(#21) Authored by @steipete. Thanks @original-helper and @reporter.",
-    );
+    expect(section).toContain("(#21) Thanks @steipete, @original-helper, and @reporter.");
     expect(section).not.toContain("@RomneyDa");
     expect(section).not.toContain("@release-operator");
     const checked = run(false);
@@ -1187,7 +1185,7 @@ console.log(JSON.stringify({ data }));
     writeReleaseChangelog({
       rootDir: cwd,
       version: "2026.7.1",
-      section: section.replaceAll("Authored by @steipete", "Authored by @RomneyDa and @steipete"),
+      section: section.replaceAll("Thanks @steipete", "Thanks @RomneyDa and @steipete"),
     });
     const rejected = run(false);
     expect(rejected.status).toBe(1);

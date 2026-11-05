@@ -560,14 +560,11 @@ prepare_gates() {
       echo "Use release/<version>-main-closeout with the documented title and only that origin-tagged release's artifacts and necessary index update, or set OPENCLAW_ALLOW_ROOT_CHANGELOG_PR=1 for explicit release automation."
       exit 1
     fi
-    # Release artifacts retain their approved text, including historical PR references.
-    validate_changelog_attribution_policy
   fi
 
   if [ "$changelog_required" = "true" ]; then
-    local contrib="${PR_AUTHOR:-}"
     validate_changelog_merge_hygiene
-    validate_changelog_entry_for_pr "$pr" "$contrib"
+    validate_changelog_entry_for_pr "$pr"
   else
     echo "Changelog not required for this changed-file set."
   fi

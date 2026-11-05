@@ -35,16 +35,6 @@ const repo = "openclaw/openclaw";
 const githubSnapshotSchemaVersion = 1;
 const githubSnapshotCheckpointInterval = 25;
 const commitAssociationQueryBatchSize = 20;
-const excludedHandles = new Set([
-  "openclaw",
-  "clawsweeper",
-  "claude",
-  "codex",
-  "hugin-bot",
-  "roboclaw-bot",
-  "tideclaw-bot",
-  "steipete-oai",
-]);
 const nonEditorialTypes = new Set([
   "build",
   "chore",
@@ -450,10 +440,7 @@ function escapeRegExp(value) {
 
 export function isEligibleHandle(handle) {
   return (
-    typeof handle === "string" &&
-    handle.toLowerCase() !== "undefined" &&
-    !handle.endsWith("[bot]") &&
-    !excludedHandles.has(handle.toLowerCase())
+    typeof handle === "string" && handle.toLowerCase() !== "undefined" && !handle.endsWith("[bot]")
   );
 }
 
@@ -2102,16 +2089,7 @@ function formatThanks(handles) {
 }
 
 function formatInitialCredits(handles) {
-  const authors = handles.filter((handle) => handle.toLowerCase() === "steipete");
-  const thanked = handles.filter((handle) => handle.toLowerCase() !== "steipete");
-  const parts = [];
-  if (authors.length > 0) {
-    parts.push(`Authored by ${formatThanks(authors)}.`);
-  }
-  if (thanked.length > 0) {
-    parts.push(`Thanks ${formatThanks(thanked)}.`);
-  }
-  return parts.join(" ");
+  return handles.length > 0 ? `Thanks ${formatThanks(handles)}.` : "";
 }
 
 function directCommitTitleTokens(subject) {

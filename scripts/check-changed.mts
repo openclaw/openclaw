@@ -819,7 +819,6 @@ export function createChangedCheckPlan(
       options.base ?? (options.staged ? "HEAD" : "origin/main"),
     ]);
   }
-  add("changelog attributions", ["check:changelog-attributions"]);
   add("doctor deprecation registry", ["check:doctor-deprecation-registry"]);
   add("guarded extension wildcard re-exports", ["lint:extensions:no-guarded-wildcard-reexports"]);
   add("plugin-sdk wildcard re-exports", ["lint:extensions:no-plugin-sdk-wildcard-reexports"]);
