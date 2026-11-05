@@ -118,6 +118,10 @@ it("preserves a partially visible retained message rather than overscan across m
   anchor.messageKeys = messages("older", "above", "visible");
   anchor.capture(scroller, false);
   scroller.scrollTop = 200;
+  bubble.getBoundingClientRect = () => rect(130, 180);
+  expect(anchor.update(instance, false)).toBe(false);
+  expect(scroller.scrollTop).toBe(200);
+  bubble.getBoundingClientRect = () => rect(90, 180);
   expect(anchor.update(instance, true)).toBe(true);
   expect(scroller.scrollTop).toBe(200);
   const committed = bubble.cloneNode() as HTMLElement;

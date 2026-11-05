@@ -68,10 +68,10 @@ export class TranscriptPrependAnchor {
     this.firstMessageKey = this.messageKeys.keys().next().value;
   }
 
-  /** Keep the message fixed while newly mounted viewport rows replace their estimates. */
+  /** Restore the message only from the native sizes used by the committed range. */
   update(virtualizer: Virtualizer<HTMLDivElement, HTMLElement>, rowsMeasured: boolean): boolean {
     const anchor = this.pending;
-    if (!anchor) {
+    if (!anchor || !rowsMeasured) {
       return false;
     }
     const moved = restoreTranscriptPrependAnchor(
@@ -81,11 +81,11 @@ export class TranscriptPrependAnchor {
       this.messageElements.values(),
       this.onLayoutCorrection,
     );
-    if (anchor.measured && rowsMeasured && !moved) {
+    if (anchor.measured && !moved) {
       this.pending = null;
     }
-    anchor.measured ||= rowsMeasured;
-    return rowsMeasured || moved;
+    anchor.measured = true;
+    return true;
   }
 
   /** Carry the viewport target with native reader movement, not layout growth. */
