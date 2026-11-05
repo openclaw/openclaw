@@ -10,6 +10,7 @@ import { findUninspectedPluginDiagnostic } from "../../../plugins/discovery-avai
 import { discoverConfiguredPluginLoadPaths } from "../../../plugins/discovery.js";
 import { applyPluginDoctorCompatibilitySequence } from "../../../plugins/doctor-compatibility-migration.js";
 import type { PluginDoctorCompatibilityNormalizer } from "../../../plugins/doctor-contract-module.js";
+import type { PluginManifestRegistry } from "../../../plugins/manifest-registry.types.js";
 import {
   applyPluginDoctorCompatibilityMigrations,
   collectDoctorConfigRepairPluginIds,
@@ -121,10 +122,19 @@ function resolveBundledChannelCompatibilityNormalizer(
   return getBootstrapChannelPlugin(channelId)?.doctor?.normalizeCompatibilityConfig;
 }
 
+export type ChannelDoctorCompatibilityOptions = {
+  pluginContracts?: boolean;
+  historicalWebhookListeners?: boolean;
+  pluginCompatibility?: {
+    pluginIds: readonly string[];
+    manifestRegistry: PluginManifestRegistry;
+  };
+};
+
 /** Apply bundled and plugin channel compatibility migrations to a legacy config object. */
 export function applyChannelDoctorCompatibilityMigrations(
   cfg: Record<string, unknown>,
-  options?: { pluginContracts?: boolean; historicalWebhookListeners?: boolean },
+  options?: ChannelDoctorCompatibilityOptions,
 ): {
   next: Record<string, unknown>;
   changes: string[];
@@ -162,9 +172,8 @@ export function applyChannelDoctorCompatibilityMigrations(
   const pluginIds =
     options?.pluginContracts === false
       ? []
-      : [
-          ...new Set([...unresolvedChannelIds, ...collectDoctorConfigRepairPluginIds(cfg)]),
-        ].toSorted();
+      : (options?.pluginCompatibility?.pluginIds ??
+        [...new Set([...unresolvedChannelIds, ...collectDoctorConfigRepairPluginIds(cfg)])].toSorted());
   const plugins: ReturnType<typeof applyPluginDoctorCompatibilityMigrations> =
     pluginIds.length || options?.historicalWebhookListeners
       ? applyPluginDoctorCompatibilityMigrations(bundled.config, {
@@ -173,6 +182,7 @@ export function applyChannelDoctorCompatibilityMigrations(
             ? [...new Set([...pluginIds, ...HISTORICAL_WEBHOOK_CHANNELS])]
             : pluginIds,
           historicalWebhookListeners: options?.historicalWebhookListeners,
+          manifestRegistry: options?.pluginCompatibility?.manifestRegistry,
         })
       : { config: bundled.config, changes: [] };
   // Bundled and installed contract views can report the same warning-only condition.
