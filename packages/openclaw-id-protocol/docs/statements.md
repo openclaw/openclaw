@@ -65,8 +65,11 @@ additive change. v1-draft accepts only `ed25519`.
   fingerprint"): a verifier that pinned only fp(R) must still be able to check R's signature.
 - There is no certificate chain. A statement signed by an owner device is checked against
   the claw's **current owner devices** (its allowlist), which only the Gateway holds.
-- `sig` is unpadded base64url. Unknown envelope or body fields are rejected in v1-draft
-  (an envelope that still carries a `chain` member is malformed).
+- `sig` is unpadded base64url. Unknown envelope or body fields are rejected (an envelope
+  that still carries a `chain` member is malformed); a new signed field needs a new envelope
+  version.
+- `v` selects the schema and the signing domain. A well-formed `v` this build does not
+  implement is refused as `unsupported_version`, not `malformed` (versioning.md).
 - Timestamps are unix **seconds** (integers).
 
 ## Statement types
