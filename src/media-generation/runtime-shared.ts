@@ -106,7 +106,10 @@ export async function runMediaGenerationCandidates<TProvider extends object, TRe
     try {
       return await prepared(attempts);
     } catch (error) {
-      if (params.capability === "music" && isRecordedModelFallbackStop(error)) {
+      if (
+        (params.capability === "music" || params.capability === "video") &&
+        isRecordedModelFallbackStop(error)
+      ) {
         throw error;
       }
       lastError = error;

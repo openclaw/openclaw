@@ -499,6 +499,7 @@ export function createVideoGenerateTool(
                       autoProviderFallback: explicitModelConfig ? false : undefined,
                       providerOptions,
                       timeoutMs,
+                      signal,
                     },
                     createCapabilityProviderRuntimeDeps(providers),
                   );

@@ -106,6 +106,7 @@ export async function generateVideo(
   params: GenerateVideoParams,
   deps: VideoGenerationRuntimeDeps = {},
 ): Promise<GenerateVideoRuntimeResult> {
+  params.signal?.throwIfAborted();
   if (deps.getProvider && deps.listProviders) {
     return runVideoGeneration(params, deps);
   }
@@ -149,11 +150,13 @@ async function runVideoGeneration(
     capability: "video",
     getProvider: (providerId) => getProvider(providerId, params.cfg),
     onFailure: (attempt) => {
+      params.signal?.throwIfAborted();
       logger.warn(
         `video-generation candidate failed: ${attempt.provider}/${attempt.model}: ${attempt.error}`,
       );
     },
     async prepareCandidate(candidate, provider) {
+      params.signal?.throwIfAborted();
       const timeoutMs = resolveMediaProviderRequestTimeoutMs({
         timeoutMs: requestedTimeoutMs,
         providerDefaultTimeoutMs: provider.defaultTimeoutMs,
@@ -314,6 +317,7 @@ async function runVideoGeneration(
       }
 
       return async (attempts): Promise<GenerateVideoRuntimeResult> => {
+        params.signal?.throwIfAborted();
         const sanitized = resolveMediaGeometryOverrides({
           size: params.size,
           aspectRatio: params.aspectRatio,
@@ -365,6 +369,7 @@ async function runVideoGeneration(
           cfg: params.cfg,
           agentDir: params.agentDir,
           authStore: params.authStore,
+          signal: params.signal,
           size: sanitized.size,
           aspectRatio: sanitized.aspectRatio,
           resolution: sanitized.resolution,
@@ -381,6 +386,7 @@ async function runVideoGeneration(
           generationRequest[SUPPORTED_DURATIONS_HINT] = supportedDurations;
         }
         const result: VideoGenerationResult = await provider.generateVideo(generationRequest);
+        params.signal?.throwIfAborted();
         if (!Array.isArray(result.videos) || result.videos.length === 0) {
           throw new Error("Video generation provider returned no videos.");
         }

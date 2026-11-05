@@ -18,6 +18,7 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "./provider-http.js";
 
+export { recordModelFallbackStop } from "../agents/model-fallback-stop.js";
 export {
   normalizeVideoGenerationDuration,
   selectSupportedVideoDuration,

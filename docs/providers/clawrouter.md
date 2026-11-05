@@ -484,6 +484,34 @@ does not decide billing: a completed upstream operation can remain spent when
 delivery is cancelled later. Unknown native dollar charges remain unknown;
 separately authorized `policy_fixed` accounting stays a Worker policy.
 
+## Video generation
+
+The existing `video_generate` tool supports catalog-qualified
+`clawrouter/alibaba/wan2.6-t2v` text-to-video requests. Discovery requires a fresh
+proxy-key catalog with the exact `media.predict` model, `dashscope.video_create`
+request and `dashscope.video` response, plus the original-task GET declaration.
+These format requirements do not activate a model or grant a budget.
+
+Creation uses the advertised native Alibaba video-synthesis route or
+`/v1/proxy/alibaba/video` with `{ body }`. Subsequent reads use the same router
+origin and proxy credential, returned original job selector, and original task
+ID. Manifest reads use GET `/v1/proxy/alibaba/task?task_id=...` without a body.
+There is no qualified cancel or authenticated file-download operation for this
+contract. Reference assets and provider-specific options are not supported.
+
+Only `SUCCEEDED` with one HTTPS video URL produces an attachment. The URL is
+returned as an opaque remote attachment, without fetching it or forwarding the
+proxy credential. Router-hosted URLs are rejected because they require a
+separately qualified authenticated delivery contract. Partial URLs during polling
+are not final results.
+
+Caller cancellation stops discovery, creation, polling and response reads.
+Once creation starts, uncertain transport, unknown observations or unusable
+results stop automatic replay and provider fallback. Cancellation does not prove
+the remote task stopped, and missing delivery does not establish a refund.
+Unknown native prices remain unknown; separately authorized `policy_fixed`
+accounting stays with the Worker.
+
 ## Image generation
 
 The bundled plugin also registers ClawRouter with the native image runtime,
