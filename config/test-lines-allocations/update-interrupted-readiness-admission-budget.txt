@@ -1,2 +1,2 @@
 # Regressions: a cancelled command scope ends the readiness wait; candidate admission follows measured state.
-40
+6

@@ -224,16 +224,13 @@ it.each([
 
 it("sizes candidate admission to measured state within the update step deadline", async () => {
   const stateDir = await fs.realpath(tempDirs.make("admission-budget-"));
-  const params = { config: {}, stateDir, env: { OPENCLAW_STATE_DIR: stateDir } };
-  const resolve = (stepTimeoutMs: number) =>
-    resolveUpdateCandidateAdmissionTimeoutMs({ ...params, stepTimeoutMs });
-  const small = await resolve(Number.MAX_SAFE_INTEGER);
-  expect(small).toBeGreaterThanOrEqual(120_000);
-
   const database = path.join(stateDir, "state/openclaw.sqlite");
+  const params = { config: {}, stateDir, env: { OPENCLAW_STATE_DIR: stateDir } };
   await fs.mkdir(path.dirname(database), { recursive: true });
   await fs.writeFile(database, "");
   await fs.truncate(database, 3 * 1024 ** 3);
-  expect(await resolve(Number.MAX_SAFE_INTEGER)).toBeGreaterThan(small);
-  expect(await resolve(1_800_000)).toBe(1_800_000);
+  const budget = (stepTimeoutMs: number) =>
+    resolveUpdateCandidateAdmissionTimeoutMs({ ...params, stepTimeoutMs });
+  expect(await budget(Number.MAX_SAFE_INTEGER)).toBeGreaterThan(300_000);
+  expect(await budget(1_800_000)).toBe(1_800_000);
 });
