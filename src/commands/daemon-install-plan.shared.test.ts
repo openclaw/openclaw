@@ -2,6 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  resolveGatewayProgramArguments,
+  resolveNodeProgramArguments,
+} from "../daemon/program-args.js";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../infra/update-npm-prefix.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
@@ -65,6 +69,7 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
 describe("durable CLI for an npx copy", () => {
   const plan = () =>
     resolveDaemonInstallPlanInputs({
+      service: "gateway",
       env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
       runtime: "node",
       runtimePath: "/custom/node",
@@ -81,6 +86,42 @@ describe("durable CLI for an npx copy", () => {
     await expect(plan()).resolves.toMatchObject({ cliEntrypoint: undefined });
     expect(fs.existsSync(path.join(root, "state", "npm"))).toBe(false);
   });
+
+  it.each([
+    ["gateway", ["dist", "index.js"]],
+    ["node", ["openclaw.mjs"]],
+  ] as const)(
+    "plans a first %s install with the real argument builder before the copy exists",
+    async (service, entry) => {
+      const npxPackage = path.dirname(process.argv[1] ?? "");
+      fs.writeFileSync(
+        path.join(npxPackage, "package.json"),
+        '{"name":"openclaw","version":"1.2.3"}',
+      );
+      fs.mkdirSync(path.join(npxPackage, "dist"));
+      fs.writeFileSync(path.join(npxPackage, "dist", "index.js"), "");
+      const inputs = await resolveDaemonInstallPlanInputs({
+        service,
+        env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
+        runtime: "node",
+        runtimePath: "/custom/node",
+        devMode: false,
+        installDurableCli: true,
+      });
+      const { programArguments } =
+        service === "gateway"
+          ? await resolveGatewayProgramArguments({ ...inputs, port: 18789 })
+          : await resolveNodeProgramArguments({ ...inputs, host: "127.0.0.1", port: 18789 });
+
+      const durableRoot = path.join(
+        resolveNpmGlobalPrefixLayoutFromPrefix(path.join(root, "state", "npm")).globalRoot,
+        "openclaw",
+      );
+      expect(programArguments).toContain(path.join(durableRoot, ...entry));
+      expect(inputs.durableCliReplacement?.entrypoint).toBe(path.join(durableRoot, ...entry));
+      expect(fs.existsSync(durableRoot)).toBe(false);
+    },
+  );
 });
 
 describe("resolveDaemonServicePathDirs", () => {

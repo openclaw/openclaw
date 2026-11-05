@@ -255,6 +255,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   // Planning validates the runtime and wrapper; a durable-copy replacement waits for install.
   const { devMode, runtime, runtimePath, cliEntrypoint, durableCliReplacement } =
     await resolveDaemonInstallPlanInputs({
+      service: "node",
       env: installEnv,
       runtime: retainedRuntime?.runtime ?? runtimeRaw,
       runtimeExplicit: opts.runtime !== undefined || opts.runtimePath !== undefined,

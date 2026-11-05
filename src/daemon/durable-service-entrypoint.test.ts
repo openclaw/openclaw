@@ -58,6 +58,8 @@ describe("resolveDurableServiceCli", () => {
       '{"name":"openclaw","version":"1.2.3"}',
     );
     fs.writeFileSync(path.join(npxPackage, "openclaw.mjs"), "");
+    fs.mkdirSync(path.join(npxPackage, "dist"));
+    fs.writeFileSync(path.join(npxPackage, "dist", "index.js"), "");
     return path.join(npxPackage, "openclaw.mjs");
   };
   const durableCopy = () => {
@@ -74,7 +76,7 @@ describe("resolveDurableServiceCli", () => {
     installedCopyErrors.mockResolvedValueOnce(["expected version 1.2.3, found 1.0.0"]);
 
     await expect(
-      resolveDurableServiceCli(stateEnv(), { install: false }, entrypoint),
+      resolveDurableServiceCli(stateEnv(), { install: false, service: "gateway" }, entrypoint),
     ).rejects.toThrow(/found 1\.0\.0.*npx openclaw@1\.2\.3 gateway install --force/u);
     expect(installedCopyErrors).toHaveBeenCalledWith(
       expect.objectContaining({ expectedVersion: "1.2.3" }),
@@ -88,14 +90,18 @@ describe("resolveDurableServiceCli", () => {
     installedCopyErrors.mockResolvedValueOnce([]);
 
     await expect(
-      resolveDurableServiceCli(stateEnv(), { install: true }, entrypoint),
+      resolveDurableServiceCli(stateEnv(), { install: true, service: "gateway" }, entrypoint),
     ).resolves.toEqual({ entrypoint: durable });
     expect(runGlobalPackageUpdateSteps).not.toHaveBeenCalled();
   });
 
   it("runs npm lifecycle scripts with this Node, not an older one first on PATH", async () => {
     const env = { ...stateEnv(), PATH: path.resolve("/run/current-system/sw/bin") };
-    const durable = await resolveDurableServiceCli(env, { install: true }, npxEntrypoint());
+    const durable = await resolveDurableServiceCli(
+      env,
+      { install: true, service: "gateway" },
+      npxEntrypoint(),
+    );
     expect(durable?.replacement).toMatchObject({ version: "1.2.3" });
     expect(runGlobalPackageUpdateSteps).not.toHaveBeenCalled();
 

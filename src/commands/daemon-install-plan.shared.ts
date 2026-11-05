@@ -7,6 +7,7 @@ import {
   resolveDurableServiceCli,
   type DurableServiceCliReplacement,
 } from "../daemon/durable-service-entrypoint.js";
+import type { PlannedCliEntrypoint } from "../daemon/program-args.js";
 import {
   resolveBunRuntimeInfo,
   resolvePinnedDaemonRuntimePath,
@@ -127,12 +128,14 @@ function runsCliEntrypoint(params: { runtime: GatewayDaemonRuntime; wrapperPath?
  */
 export async function resolveDaemonInstallPlanInputs(
   params: Parameters<typeof resolveDaemonInstallRuntimeInputs>[0] & {
+    /** Which service runs the CLI; gateway and node services enter it differently. */
+    service: "gateway" | "node";
     serviceCli?: { entrypoint: string | null };
     installDurableCli?: boolean;
   },
 ): Promise<
   Awaited<ReturnType<typeof resolveDaemonInstallRuntimeInputs>> & {
-    cliEntrypoint?: string;
+    cliEntrypoint?: string | PlannedCliEntrypoint;
     durableCliReplacement?: DurableServiceCliReplacement;
   }
 > {
@@ -144,7 +147,10 @@ export async function resolveDaemonInstallPlanInputs(
   const durable =
     retained || inputs.devMode || !runsCliEntrypoint({ ...inputs, wrapperPath: params.wrapperPath })
       ? undefined
-      : await resolveDurableServiceCli(params.env, { install: params.installDurableCli === true });
+      : await resolveDurableServiceCli(params.env, {
+          install: params.installDurableCli === true,
+          service: params.service,
+        });
   return {
     ...inputs,
     cliEntrypoint: retained ?? durable?.entrypoint,

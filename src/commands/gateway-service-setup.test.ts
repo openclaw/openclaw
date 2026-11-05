@@ -12,7 +12,6 @@ import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { prepareGatewayServiceInstall } from "./gateway-service-setup.js";
 
 const mocks = vi.hoisted(() => ({
-  resolveGatewayProgramArguments: vi.fn(),
   resolvePreferredBunPath: vi.fn(),
   runGlobalPackageUpdateSteps: vi.fn(),
 }));
@@ -41,12 +40,6 @@ vi.mock("../daemon/runtime-paths.js", async (importOriginal) => ({
   }),
 }));
 
-// mock-isolation: records the planned entrypoint; the durable copy is not on disk yet.
-vi.mock("../daemon/program-args.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../daemon/program-args.js")>()),
-  resolveGatewayProgramArguments: mocks.resolveGatewayProgramArguments,
-}));
-
 // mock-isolation: service-env planning must not read operator secrets from the host auth store.
 vi.mock("./daemon-install-auth-profiles-source.runtime.js", () => ({
   hasAnyAuthProfileStoreSourceAsync: async () => false,
@@ -54,8 +47,16 @@ vi.mock("./daemon-install-auth-profiles-source.runtime.js", () => ({
 
 afterEach(() => vi.resetAllMocks());
 
+const writePackageFiles = (root: string, files = ["openclaw.mjs", "dist/index.js"]) => {
+  for (const file of files) {
+    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    fs.writeFileSync(path.join(root, file), "");
+  }
+};
+
 describe("Gateway service planned from a disposable npx CLI", () => {
   const events: string[] = [];
+  let stagedFiles: string[] | undefined;
   let root: string;
   let argv: string[];
   beforeEach(() => {
@@ -66,20 +67,27 @@ describe("Gateway service planned from a disposable npx CLI", () => {
       path.join(npxPackage, "package.json"),
       '{"name":"openclaw","version":"1.2.3"}',
     );
-    fs.writeFileSync(path.join(npxPackage, "openclaw.mjs"), "");
+    writePackageFiles(npxPackage);
     argv = process.argv;
     process.argv = ["node", path.join(npxPackage, "openclaw.mjs"), "gateway", "install"];
     events.length = 0;
-    mocks.resolveGatewayProgramArguments.mockResolvedValue({
-      programArguments: ["node", "gateway"],
-    });
-    // Stage first, wait at the activation gate, then register the swap transaction.
+    stagedFiles = undefined;
+    // Stage and validate first, wait at the activation gate, then register the swap transaction.
     mocks.runGlobalPackageUpdateSteps.mockImplementation(
       async (params: {
+        validateCandidate?: (root: string) => Promise<Array<{ exitCode: number | null }>>;
         beforeActivate?: () => Promise<void>;
         onTransaction?: (transaction: PackageUpdateTransaction) => Promise<void> | void;
       }) => {
+        const candidate = path.join(root, "stage", "openclaw");
+        writePackageFiles(candidate, stagedFiles);
         events.push("staged");
+        const rejected = (await params.validateCandidate?.(candidate))?.find(
+          (step) => step.exitCode !== 0,
+        );
+        if (rejected) {
+          return { steps: [rejected], failedStep: rejected };
+        }
         await params.beforeActivate?.();
         await params.onTransaction?.({
           backupRoot: path.join(root, "backup"),
@@ -121,6 +129,11 @@ describe("Gateway service planned from a disposable npx CLI", () => {
   const durableLayout = () =>
     resolveNpmGlobalPrefixLayoutFromPrefix(path.join(root, "state", "npm"));
   const durableEntrypoint = () => path.join(durableLayout().globalRoot, "openclaw", "openclaw.mjs");
+  // The real argument builder picks the package's dist entry; the durable copy gets the same one.
+  const durableRuntimeEntry = () =>
+    path.join(durableLayout().globalRoot, "openclaw", "dist", "index.js");
+  const installedArguments = (gateway: GatewayService) =>
+    vi.mocked(gateway.install).mock.calls[0]?.[0].programArguments;
   const olderCopy = () => {
     const durablePackage = path.dirname(durableEntrypoint());
     fs.mkdirSync(durablePackage, { recursive: true });
@@ -188,9 +201,8 @@ describe("Gateway service planned from a disposable npx CLI", () => {
         installDurableCli: true,
       });
 
-      expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledWith(
-        expect.objectContaining({ wrapperPath: undefined, cliEntrypoint: durableEntrypoint() }),
-      );
+      expect(plan.programArguments).toContain(durableRuntimeEntry());
+      expect(plan.environment.OPENCLAW_WRAPPER).toBeUndefined();
       // Planning only decides; the replacement waits for the service install.
       expect(plan.durableCliReplacement).toMatchObject({ version: "1.2.3" });
       expect(mocks.runGlobalPackageUpdateSteps).not.toHaveBeenCalled();
@@ -212,14 +224,13 @@ describe("Gateway service planned from a disposable npx CLI", () => {
     "swaps the copy inside the service install and %s",
     async (_name, failure, settled) => {
       olderCopy();
-      const installation = await prepare(service(failure));
+      const gateway = service(failure);
+      const installation = await prepare(gateway);
       expect(events).toEqual([]);
 
       await installation.install();
 
-      expect(mocks.resolveGatewayProgramArguments).toHaveBeenCalledWith(
-        expect.objectContaining({ cliEntrypoint: durableEntrypoint() }),
-      );
+      expect(installedArguments(gateway)).toContain(durableRuntimeEntry());
       expect(events).toEqual([
         "staged",
         "service-admitted",
@@ -229,6 +240,16 @@ describe("Gateway service planned from a disposable npx CLI", () => {
       ]);
     },
   );
+
+  it("refuses a staged copy without the entry the service will run, before the service", async () => {
+    stagedFiles = ["openclaw.mjs"];
+    const gateway = service();
+    const installation = await prepare(gateway);
+
+    await expect(installation.install()).rejects.toThrow(/dist[/\\]index\.js/u);
+    expect(events).toEqual(["staged"]);
+    expect(gateway.install).not.toHaveBeenCalled();
+  });
 
   it.each([
     ["refuses before its mutation hook", "refused", true, ["staged", "service-admitted"]],

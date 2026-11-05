@@ -450,6 +450,8 @@ describe("runDaemonInstall", () => {
       '{"name":"openclaw","version":"1.2.3"}',
     );
     fs.writeFileSync(path.join(npxPackage, "openclaw.mjs"), "");
+    fs.mkdirSync(path.join(npxPackage, "dist"));
+    fs.writeFileSync(path.join(npxPackage, "dist", "index.js"), "");
     const durablePackage = path.join(
       resolveNpmGlobalPrefixLayoutFromPrefix(path.join(root, ".openclaw", "npm")).globalRoot,
       "openclaw",

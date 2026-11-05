@@ -634,6 +634,7 @@ export async function buildGatewayInstallPlan(params: {
   const { devMode, runtime, runtimePath, cliEntrypoint, durableCliReplacement } =
     await resolveDaemonInstallPlanInputs({
       ...params,
+      service: "gateway",
       env,
       wrapperPath,
     });

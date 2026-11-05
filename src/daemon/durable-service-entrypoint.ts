@@ -5,6 +5,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { PackageUpdateTransaction } from "../infra/package-update-swap-contract.js";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../infra/update-npm-prefix.js";
+import type { PlannedCliEntrypoint } from "./program-args.js";
 
 const realpathOrResolve = (target: string) => fs.realpath(target).catch(() => path.resolve(target));
 
@@ -74,6 +75,8 @@ export type DurableServiceCliReplacement = {
   packageRoot: string;
   /** An earlier copy exists; only then can a failed install restore something. */
   replacesExisting: boolean;
+  /** The entrypoint the service will run; the staged copy must contain it. */
+  entrypoint: string;
 };
 
 /**
@@ -88,9 +91,12 @@ export type DurableServiceCliReplacement = {
  */
 export async function resolveDurableServiceCli(
   env: NodeJS.ProcessEnv,
-  options: { install: boolean },
+  options: { install: boolean; service: "gateway" | "node" },
   entrypoint = process.argv[1],
-): Promise<{ entrypoint: string; replacement?: DurableServiceCliReplacement } | undefined> {
+): Promise<
+  | { entrypoint: string | PlannedCliEntrypoint; replacement?: DurableServiceCliReplacement }
+  | undefined
+> {
   if (!entrypoint || !(await isDisposableEntrypoint(entrypoint))) {
     return undefined;
   }
@@ -118,7 +124,7 @@ export async function resolveDurableServiceCli(
     argv1: await realpathOrResolve(entrypoint),
   });
   const version = sourceRoot ? await readPackageVersion(sourceRoot) : null;
-  if (!version) {
+  if (!sourceRoot || !version) {
     throw new Error("Cannot determine the running OpenClaw version for service installation.");
   }
   const errors = exists
@@ -139,9 +145,24 @@ export async function resolveDurableServiceCli(
       `The background service's OpenClaw copy at ${packageRoot} cannot be reused (${errors.slice(0, 2).join("; ")}). Reinstall it with: ${formatDurableInstallCommand(version, "gateway install --force", env)}`,
     );
   }
+  // The copy is published only inside the service install, so plan its entry from this
+  // CLI's own files: the same version has the same layout.
+  const { planCliEntrypoint } = await import("./program-args.js");
+  const planned = await planCliEntrypoint({
+    sourceEntrypoint: entrypoint,
+    sourceRoot,
+    packageRoot,
+    service: options.service,
+  });
   return {
-    entrypoint: durableEntrypoint,
-    replacement: { version, globalRoot: layout.globalRoot, packageRoot, replacesExisting: exists },
+    entrypoint: planned,
+    replacement: {
+      version,
+      globalRoot: layout.globalRoot,
+      packageRoot,
+      replacesExisting: exists,
+      entrypoint: planned.planned,
+    },
   };
 }
 
@@ -254,6 +275,28 @@ async function stageDurableCopy(env: NodeJS.ProcessEnv, replacement: DurableServ
     requirePackageReplacement: true,
     packageName: "openclaw",
     packageRoot: replacement.packageRoot,
+    // Refuse before the swap a candidate without the entry the planned service runs.
+    validateCandidate: async (candidateRoot) => {
+      const entry = path.join(
+        candidateRoot,
+        path.relative(replacement.packageRoot, replacement.entrypoint),
+      );
+      return (await fs.access(entry).then(
+        () => true,
+        () => false,
+      ))
+        ? []
+        : [
+            {
+              name: "durable-cli-entrypoint",
+              command: `verify ${entry}`,
+              cwd: candidateRoot,
+              durationMs: 0,
+              exitCode: 1,
+              stderrTail: `The staged copy has no ${path.relative(candidateRoot, entry)}, which the service would run.`,
+            },
+          ];
+    },
     runCommand: runCommandWithTimeout,
     runStep: (step) =>
       runStep({
