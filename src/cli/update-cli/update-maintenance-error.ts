@@ -3,7 +3,8 @@ import { GatewayStateOwnerContentionError } from "../../infra/gateway-state-owne
 import { formatCliCommand } from "../command-format.js";
 
 export function updateMaintenanceError(error: unknown): unknown {
-  const message = `Stop the Gateway first (${formatCliCommand("openclaw gateway stop")}), then retry.`;
+  // Contention can precede handoff discovery; it does not establish a safe stop scope.
+  const message = `Maintenance requires exclusive Gateway state access. An independent operator outside triage and the Gateway service must stop the Gateway first (${formatCliCommand("openclaw gateway stop")}), then retry. Do not stop it from this fixing subtree; preserve ownership refusals and later operator stops.`;
   return error instanceof GatewayStateOwnerContentionError ||
     error instanceof DoctorSqliteMaintenanceLockUnavailableError
     ? new Error(message, { cause: error })
