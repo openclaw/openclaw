@@ -226,6 +226,11 @@ it.each([
     tables: ["config_machine_state"],
     result: { demand: undefined },
   },
+  {
+    command: { type: "sandboxRegistry.list", input: {} },
+    tables: ["sandbox_registry_entries"],
+    result: { entries: [] },
+  },
 ] as const)(
   "reads startup $command.type without loading unrelated handlers",
   async ({ command, tables, result }) => {
