@@ -74,7 +74,7 @@ Omitting the option preserves prompt statistics for interested subscribers.
 - `openclaw.session.stuck`
   - `openclaw.state`, `openclaw.ageMs`, `openclaw.queueDepth`
 - `openclaw.context.assembled`
-  - `openclaw.prompt.size`, `openclaw.history.size`, `openclaw.context.tokens`, `openclaw.errorCategory` (no prompt, history, or response content; session identity only with `captureContent: true`, see [Session identity](#session-identity) below)
+  - `openclaw.prompt.size`, `openclaw.history.size`, `openclaw.context.tokens`, `openclaw.errorCategory` (no prompt, history, or response content; session identity only with `captureContent: true`, see [Session identity](/gateway/opentelemetry/privacy-and-trace-context#session-identity))
 - `openclaw.tool.loop`
   - `openclaw.toolName`, `openclaw.loop.level`, `openclaw.loop.action`, `openclaw.loop.detector`, `openclaw.loop.count`, optional `openclaw.loop.paired_tool`, optional `openclaw.agent` (no loop messages, params, or tool output)
 - `openclaw.memory.pressure`
@@ -216,7 +216,7 @@ diagnostics-otel plugin converts them to metrics such as `openclaw.tokens` and
 `openclaw.cost.usd` and to `openclaw.model.usage` spans; those usage metrics
 intentionally omit session identifiers, and the spans omit them unless
 `diagnostics.otel.captureContent` is `true` (see
-[Session identity](#session-identity)).
+[Session identity](/gateway/opentelemetry/privacy-and-trace-context#session-identity)).
 
 Completed memory-flush and Skill Workshop review inference records its own usage
 and available cost estimate. These internal runs do not add their usage to the
