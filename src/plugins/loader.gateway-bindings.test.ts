@@ -9,6 +9,7 @@ import {
   GatewayOperatorAccessDeniedError,
   resolveGatewayOperatorAccessAuthority as resolveAccess,
 } from "../gateway/operator-access-policy.js";
+import type { RepositoryPublicationProvider } from "../gateway/repository-publication-contract.js";
 import {
   RepositoryPublicationFailureError,
   RepositoryPublicationRequesterUnavailableError,
@@ -490,6 +491,82 @@ module.exports = { id: "gateway-service-owner-probe", register(api) {
       lifetime.abort();
       try {
         await publicationHost.close();
+      } finally {
+        await params.runtime.scheduler.stop();
+      }
+    }
+  });
+});
+
+it("allows a healthy publisher install after identity subscription setup fails", async () => {
+  await withOpenClawTestState({ label: "publisher-install-rollback" }, async () => {
+    const params = makeContextParams();
+    const { createWorkspacePublicationHost } =
+      await import("../gateway/workspace-publication-provider.js");
+    const { createWorkerSessionPlacementStore } =
+      await import("../gateway/worker-environments/placement-store.js");
+    const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
+    const { loadWorkerPlacementSessionRuntimeModule } =
+      await import("../gateway/server-worker-placement-startup.js");
+    const host = createWorkspacePublicationHost({
+      placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
+      scheduler: params.runtime.scheduler,
+      getCommittedRuntimeConfig: () => ({}),
+      loadSessionRuntime: loadWorkerPlacementSessionRuntimeModule,
+      managedByPlacement: true,
+      warn() {},
+    });
+    const owner = new AbortController();
+    const failure = new Error("Identity subscription setup failed");
+    const stopSubscription = vi.fn();
+    const unexpected = () => {
+      throw new Error("Installation must not perform remote publication work");
+    };
+    const provider: RepositoryPublicationProvider = {
+      id: "fixture-publisher",
+      assertCurrent: () => owner.signal.throwIfAborted(),
+      supportsOrigin: (origin) => origin === "https://example.test/owner/repository.git",
+      subscribeWorkerIdentityChanges: vi
+        .fn(() => stopSubscription)
+        .mockImplementationOnce(() => {
+          throw failure;
+        }),
+      formatReport: unexpected,
+      preparePublisher: unexpected,
+      bindPersonal: unexpected,
+      readOptionsIdentity: unexpected,
+      preparePersonalAccountStatus: unexpected,
+      isPublicationSuperseded: unexpected,
+      readPersonalSelection: unexpected,
+      performPullRequestAction: unexpected,
+      inspectPullRequest: unexpected,
+      prepareBoundPublication: unexpected,
+      prepareTarget: unexpected,
+      preparePublishedTarget: unexpected,
+      readBase: unexpected,
+      observeBranch: unexpected,
+      findPullRequest: unexpected,
+      createPullRequest: unexpected,
+      reconcile: unexpected,
+      formatContent: unexpected,
+      prepareChangeGuard: unexpected,
+      executeRepository: unexpected,
+      resolveFailure: unexpected,
+      isDefinitiveFailure: unexpected,
+    };
+    try {
+      await host.ready;
+      await expect(host.install(provider, owner.signal)).rejects.toBe(failure);
+      const installed = await host.install(provider, owner.signal);
+      expect(installed.api.supportsOrigin("https://example.test/owner/repository.git")).toBe(true);
+      expect(host.readApi()).toBe(installed.api);
+      installed.uninstall();
+      expect(host.readApi()).toBeUndefined();
+      expect(stopSubscription).toHaveBeenCalledTimes(1);
+    } finally {
+      owner.abort();
+      try {
+        await host.close();
       } finally {
         await params.runtime.scheduler.stop();
       }

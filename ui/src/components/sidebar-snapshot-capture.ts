@@ -160,26 +160,29 @@ export function captureSidebarSnapshotModel(
       ...previous.sections.flatMap((section) => section.rows),
     ]);
   }
-  const presentation = (row: SidebarRecentSession) => ({
-    childrenDisplayMode: host.sessionProjection.children.capture(row.key),
-    snapshotSubtitle: row.snapshot
-      ? row.snapshotSubtitle
-      : resolveSidebarSessionRowSubtitle(host, row),
-    state: {
-      ...sidebarSessionBadgeFacts(host.sessionPullRequests, row),
-      badges: readSessionBadges(
-        context.plugins,
-        {
-          sessionKey: row.key,
-          agentId: row.agentId,
-          worktreeId: row.worktreeId,
-          artifact: row.pullRequest,
-        },
-        previousBadges.get(scopedSessionArtifactKey(row.key, row.agentId)),
-        badges,
-      ),
-    },
-  });
+  const presentation = (row: SidebarRecentSession) => {
+    const facts = sidebarSessionBadgeFacts(host.sessionPullRequests, row);
+    return {
+      childrenDisplayMode: host.sessionProjection.children.capture(row.key),
+      snapshotSubtitle: row.snapshot
+        ? row.snapshotSubtitle
+        : resolveSidebarSessionRowSubtitle(host, row),
+      state: {
+        ...facts,
+        badges: readSessionBadges(
+          context.plugins,
+          {
+            sessionKey: row.key,
+            agentId: row.agentId,
+            worktreeId: row.worktreeId,
+            artifact: facts.pullRequest,
+          },
+          previousBadges.get(scopedSessionArtifactKey(row.key, row.agentId)),
+          badges,
+        ),
+      },
+    };
+  };
   return parseSidebarSnapshot({
     routingDefaults: {
       mainKey: agents.mainKey,

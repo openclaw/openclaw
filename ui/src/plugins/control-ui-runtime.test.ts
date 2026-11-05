@@ -8,7 +8,14 @@ import type { GatewaySessionRow } from "../api/types.ts";
 import { createApplicationConfigCapability } from "../app/config.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { createGatewayEvent } from "../app/gateway-store.test-support.ts";
-import { observeSessionMenuActions } from "./control-ui-action-observation.solid.ts";
+import { EMPTY_SESSION_MENU_DATA } from "../components/session-menu-data.ts";
+import { SessionMenu } from "../components/session-menu-solid.tsx";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { menuItem, menuItemLabels, menuPanel } from "../test-helpers/session-menu.ts";
+import {
+  createSessionMenuActionsProjection,
+  observeSessionMenuActions,
+} from "./control-ui-action-observation.solid.ts";
 import { pluginSessionMenuActions, runControlUiPluginAction } from "./control-ui-actions.ts";
 import { controlUiPluginAssetUrls } from "./control-ui-assets.ts";
 import type { ControlUiPluginDistribution } from "./control-ui-distribution.ts";
@@ -129,10 +136,10 @@ function initializeWith(
   );
 }
 
-it("completes an unavailable catalog without requests or diagnostics for a limited connection", async () => {
+it("completes an unavailable catalog without requests or diagnostics without read authority", async () => {
   const request = vi.fn();
   const context = connectedContext(clientFor(request));
-  context.gateway.snapshot.hello!.auth!.scopes = ["operator.sessions.read"];
+  context.gateway.snapshot.hello!.auth!.scopes = [];
   const runtime = runtimeFor(context);
   runtime.start();
   await runtime.refresh();
@@ -852,3 +859,74 @@ it.each(["review", "reader"])(
     expect(releases).toBe(4);
   },
 );
+
+it("isolates two failing plugin resolvers while the native session menu remains usable", async () => {
+  const context = connectedContext({
+    gatewayUrl: localGateway(),
+    request: async (method) =>
+      method === "plugins.controlUi.list" ? catalog([pluginDescriptor()]) : { ok: true },
+  });
+  const resolves = [vi.fn(), vi.fn()];
+  vi.mocked(controlUiLoader.initializeControlUiPlugin).mockImplementation(
+    async (getContext, runtime, owner) => {
+      const host = createControlUiPluginHost(getContext, runtime, owner);
+      for (const [index, resolve] of resolves.entries()) {
+        host.ui.registerAction({
+          id: `broken-${index}`,
+          label: `Broken ${index}`,
+          placement: "session",
+          resolve() {
+            resolve();
+            // Keep the regression bounded even if diagnostic publication recursively resolves actions.
+            if (resolve.mock.calls.length > 12) {
+              return { hidden: true };
+            }
+            throw new Error(`Synthetic action failure ${index}`);
+          },
+          run() {},
+        });
+      }
+      host.ui.registerAction({
+        id: "healthy",
+        label: "Healthy plugin action",
+        placement: "session",
+        run() {},
+      });
+      return Object.assign(owner, { host });
+    },
+  );
+  const runtime = runtimeFor(context);
+  runtime.start();
+  await runtime.refresh();
+  const selected = {
+    key: "agent:main:review",
+    agentId: "main",
+    kind: "direct",
+    updatedAt: 1,
+  } satisfies GatewaySessionRow;
+  const onAction = vi.fn();
+  const mounted = mountSolid(() => {
+    const actions = createSessionMenuActionsProjection(() => ({ runtime, session: selected }));
+    return SessionMenu({
+      session: { ...EMPTY_SESSION_MENU_DATA, ...selected },
+      get pluginActions() {
+        return actions();
+      },
+      archiveAllowed: true,
+      onAction,
+    });
+  });
+  const menu = mounted.container.querySelector("openclaw-session-menu")!;
+  await menu.updateComplete;
+  await vi.waitFor(() => expect(menuItemLabels(menu)).toContain("Healthy plugin action"));
+  expect(menuPanel(menu).matches(":popover-open")).toBe(true);
+  expect(menuItemLabels(menu)).not.toContain("Broken 0");
+  expect(menuItemLabels(menu)).not.toContain("Broken 1");
+  expect(runtime.errors.length).toBeLessThanOrEqual(20);
+  expect(runtime.errors).toContainEqual(diagnostic("Synthetic action failure 1"));
+  for (const resolve of resolves) {
+    expect(resolve.mock.calls.length).toBeLessThanOrEqual(6);
+  }
+  menuItem(menu, "Archive session").click();
+  expect(onAction).toHaveBeenCalledWith({ kind: "toggle-archived" });
+});

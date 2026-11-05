@@ -1,9 +1,16 @@
+import { IDBFactory } from "fake-indexeddb";
 /* @vitest-environment jsdom */
 import { expect, it, vi } from "vitest";
+import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { ApplicationContext } from "../app/context.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
-import "../test-helpers/app-sidebar-suite.ts";
+import { createGatewayBrowserClientFixture } from "../pages/chat/chat-application-context.test-support.ts";
+import { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
+import { createControlUiPluginHost } from "../plugins/control-ui-host.ts";
+import * as pluginLoader from "../plugins/control-ui-loader.ts";
+import { ControlUiPluginRuntime } from "../plugins/control-ui-runtime.ts";
 import {
   createGatewayHarness,
   createContext,
@@ -11,9 +18,12 @@ import {
   createSessionsHarness,
   mountSidebar,
 } from "../test-helpers/app-sidebar.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
+import "../test-helpers/app-sidebar-suite.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import { disposeRoster, mountRoster } from "./app-sidebar-freshness.test-support.ts";
+import { parseSidebarSnapshot } from "./sidebar-snapshot-model.ts";
 
 it.each(["pin", "group"] as const)(
   "keeps an off-page personal %s current and releases its observations",
@@ -228,4 +238,131 @@ it("hides unused sections but retains deliberately empty sections", async () => 
   context.navigation.update({ personalSessionGroups: [] });
   await settleLitElement(sidebar);
   expect(sidebar.querySelector(".personal-session-groups")).toBeNull();
+});
+
+it("persists the same newer indicator artifact that the live plugin badge presents", async () => {
+  const key = "agent:main:review";
+  const stale: SessionCatalogPullRequestSummary = { numbers: [1], state: "open" };
+  const current: SessionCatalogPullRequestSummary = { numbers: [2, 3], state: "merged" };
+  const row = { key, sessionId: "review", kind: "direct" as const, pullRequest: stale };
+  const client = createGatewayBrowserClientFixture({
+    gatewayUrl: location.origin.replace(/^http/u, "ws"),
+    request: async (method: string) =>
+      method === "plugins.controlUi.list"
+        ? {
+            revision: "one",
+            diagnostics: [],
+            plugins: [
+              {
+                pluginId: "review",
+                name: "Review",
+                revision: "one",
+                entryUrl: "/review.js",
+                styles: [],
+                uiCapabilities: ["accessory"],
+              },
+            ],
+          }
+        : method === "sessions.list"
+          ? sessionsResult([row])
+          : { ok: true },
+  });
+  const harness = createGatewayHarness(client);
+  harness.publish({
+    hello: gatewayHelloForMethods([
+      "plugins.controlUi.list",
+      "plugins.controlUi.report",
+      "sessions.list",
+      "sessions.subscribe",
+    ]),
+  });
+  const sessionHarness = createSessionsHarness("main", [key]);
+  const sessions = sessionHarness.sessions;
+  const base = createContext(harness.gateway, sessions, {
+    defaultId: "main",
+    mainKey: "main",
+    scope: "per-sender",
+    agents: [{ id: "main" }],
+  });
+  let context: ApplicationContext = base;
+  const runtime = new ControlUiPluginRuntime(() => context);
+  context = {
+    ...base,
+    config: {
+      ...base.config,
+      refresh: async () => ({
+        ...base.config.current,
+        pluginAssetsRequireAuth: false,
+        pluginFrameGrants: [],
+      }),
+    },
+    plugins: runtime,
+  };
+  const initialize = vi
+    .spyOn(pluginLoader, "initializeControlUiPlugin")
+    .mockImplementation(async (getContext, ownerRuntime, owner) => {
+      const host = createControlUiPluginHost(getContext, ownerRuntime, owner);
+      host.ui.registerAccessory({
+        id: "summary",
+        placement: "session-row",
+        presentation: "badge",
+        resolve(target) {
+          const artifact = target.artifact;
+          return {
+            status: "ready",
+            badge: { icon: "gitPullRequest", label: JSON.stringify(artifact ?? null) },
+          };
+        },
+      });
+      return Object.assign(owner, { host });
+    });
+  const store = new SessionSnapshotStore();
+  const indexedDB = globalThis.indexedDB;
+  vi.stubGlobal("indexedDB", new IDBFactory());
+  let provider: HTMLElement | undefined;
+  try {
+    runtime.start();
+    await runtime.refresh();
+    const mounted = await mountSidebarContext(context);
+    provider = mounted.provider;
+    const sidebar = mounted.sidebar;
+    sidebar.connected = true;
+    sidebar.sidebarEntries = [`session:${key}`];
+    vi.spyOn(sessions, "captureBootRoster").mockReturnValue({
+      agentId: "main",
+      result: sessionsResult([row]),
+      groups: [],
+      groupSettings: [],
+      sectionOrder: [],
+    });
+    vi.spyOn(sidebar.sessionPullRequests, "summary").mockReturnValue(current);
+    sessions.setPullRequestSummary(key, stale);
+    sessionHarness.publishList({ result: sessionsResult([row]) });
+    await settleLitElement(sidebar);
+    await waitForFast(() =>
+      expect(
+        [...sidebar.querySelectorAll('[role="img"]')].map((element) =>
+          element.getAttribute("aria-label"),
+        ),
+      ).toContain(JSON.stringify(current)),
+    );
+    expect(sidebar.reconciledSidebarZone().sessionRows.get(key)?.pullRequest).toEqual(stale);
+    const saved = sidebar.captureSidebarSnapshot();
+    expect(saved).not.toBeNull();
+    store.connect();
+    const snapshotKey = `scope:["ws://synthetic","account"]\u0000sidebar:"operator"`;
+    expect(await store.writeSidebar(snapshotKey, saved, parseSidebarSnapshot)).toBe(true);
+    const persisted = await store.readSidebar(snapshotKey, parseSidebarSnapshot);
+    expect(persisted?.pinnedSessions[0]?.state?.badges).toEqual([
+      { pluginId: "review", id: "summary", icon: "gitPullRequest", label: JSON.stringify(current) },
+    ]);
+    expect(persisted?.pinnedSessions[0]?.state?.pullRequest).toEqual(current);
+  } finally {
+    provider?.remove();
+    runtime.dispose();
+    initialize.mockRestore();
+    store.disconnect();
+    await store.whenIdle();
+    vi.stubGlobal("indexedDB", indexedDB);
+  }
 });
