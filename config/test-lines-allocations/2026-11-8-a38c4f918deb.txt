@@ -1,0 +1,2 @@
+17
+# Retain required plugin runtime APIs through both AOT trim inputs and support-build consumer.
