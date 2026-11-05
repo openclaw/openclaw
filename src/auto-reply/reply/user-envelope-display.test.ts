@@ -1,14 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { stripUserEnvelopeForDisplay } from "./user-envelope-display.js";
 
-const context =
+const legacyContext =
   "[Subagent Context] You are running as a subagent (depth 1/5). Complete the current [Subagent Task]; inherited conversation is background context, not your assignment.";
+const currentContext =
+  "[Subagent Context] Subagent session (depth 1/5). The work for this session is the [Subagent Task]; earlier conversation is shared for background.";
 const persistent =
   "[Subagent Context] This subagent session is persistent and remains available for thread follow-up messages.";
 const suffix = "Begin. Execute the assigned task to completion.";
 
 describe("stored subagent task display", () => {
-  it.each([false, true])("hides only the generated envelope (persistent=%s)", (session) => {
+  it.each([
+    [legacyContext, false],
+    [legacyContext, true],
+    [currentContext, false],
+    [currentContext, true],
+  ])("hides only the generated envelope (%s, persistent=%s)", (context, session) => {
     const task =
       "Investigate [Subagent Context] as literal task text.\n  preserve indentation\n\n" + suffix;
     const raw = [context, ...(session ? [persistent] : []), "[Subagent Task]", task, suffix].join(
@@ -24,8 +31,8 @@ describe("stored subagent task display", () => {
   it.each([
     "[Subagent Context] quoted by a user\n\n[Subagent Task]\n\nkeep this",
     "[Subagent Task]\n\nkeep this",
-    "Quotation:\n" + context + "\n\n[Subagent Task]\n\nkeep this",
-    context + "\n\nnot a generated task",
+    "Quotation:\n" + legacyContext + "\n\n[Subagent Task]\n\nkeep this",
+    legacyContext + "\n\nnot a generated task",
     suffix,
     "Normal task text",
   ])("preserves ordinary and incomplete lookalike text: %s", (text) => {

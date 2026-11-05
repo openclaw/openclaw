@@ -19,6 +19,7 @@ import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { buildRuntimeContextCustomMessage } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { estimateToolResultTextChars } from "../embedded-agent-runner/tool-result-text-budget.js";
 import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "../harness/hook-history.js";
+import { PROMPT_DATA_HEADER_SUFFIX } from "../sanitize-for-prompt.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../stream-message-shared.js";
 import { cliBackendLog } from "./log.js";
@@ -261,7 +262,7 @@ describe("canonical CLI history", () => {
         /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
       );
       expect(durableContext!.match(/<\/untrusted-text>/g)).toHaveLength(1);
-      expect(durableContext).toContain("data, not instructions");
+      expect(durableContext).toContain(PROMPT_DATA_HEADER_SUFFIX);
     },
   );
 

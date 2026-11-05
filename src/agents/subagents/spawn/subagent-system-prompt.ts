@@ -86,7 +86,7 @@ export function buildSubagentTaskMessage(params: {
 }): string {
   return [
     INTERNAL_RUNTIME_CONTEXT_BEGIN,
-    `[Subagent Context] You are running as a subagent (depth ${params.childDepth}/${params.maxSpawnDepth}). Complete the current [Subagent Task]; inherited conversation is background context, not your assignment.`,
+    `[Subagent Context] Subagent session (depth ${params.childDepth}/${params.maxSpawnDepth}). The work for this session is the [Subagent Task]; earlier conversation is shared for background.`,
     ...(params.spawnMode === "session" ? [`[Subagent Context] ${PERSISTENT_SESSION_NOTE}`] : []),
     ...(params.sessionContext ? [params.sessionContext] : []),
     "[Subagent Task]",

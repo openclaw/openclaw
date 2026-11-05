@@ -6,9 +6,17 @@ import { sparseAssistant } from "../agents/test-helpers/sparse-transcript.test-s
 import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
 
 describe("stripEnvelopeFromMessages", () => {
-  test.each(["text"])("projects stored subagent instructions out of user %s blocks", (type) => {
-    const text =
-      "[Subagent Context] You are running as a subagent (depth 1/5). Complete the current [Subagent Task]; inherited conversation is background context, not your assignment.\n\n[Subagent Task]\n\nInvestigate Side chat.\n\nBegin. Execute the assigned task to completion.";
+  test.each([
+    [
+      "text",
+      "[Subagent Context] You are running as a subagent (depth 1/5). Complete the current [Subagent Task]; inherited conversation is background context, not your assignment.",
+    ],
+    [
+      "text",
+      "[Subagent Context] Subagent session (depth 1/5). The work for this session is the [Subagent Task]; earlier conversation is shared for background.",
+    ],
+  ])("projects stored subagent instructions out of user %s blocks: %s", (type, context) => {
+    const text = `${context}\n\n[Subagent Task]\n\nInvestigate Side chat.\n\nBegin. Execute the assigned task to completion.`;
     const input = { role: "user", content: [{ type, text }] };
     expect(stripEnvelopeFromMessages([input])[0]).toEqual({
       role: "user",

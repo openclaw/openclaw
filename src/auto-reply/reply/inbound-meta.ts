@@ -473,7 +473,7 @@ export function buildInboundUserContextPrefix(
       : undefined,
     // Inside the marked block so display, history and memory strippers drop it with the rest.
     requester_profile_hint: requester
-      ? 'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.'
+      ? "requester_profile is the verified linked requester. For assign-to-me requests, use sessions assign_owner with ownerType human and ownerId=requester_profile.id, if available."
       : undefined,
     chat_id: shouldIncludeConversationInfo ? normalizeOptionalString(ctx.OriginatingTo) : undefined,
     message_id: shouldIncludeConversationInfo ? resolvedMessageId : undefined,

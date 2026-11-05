@@ -251,7 +251,7 @@ export function extractMockSubagentContext(input: ResponsesInputItem[]) {
   }
   const { current, history } = splitMockConversationContext(turn.text);
   const task =
-    /\[Subagent Context\] You are running as a subagent\b[\s\S]*?\[Subagent Task\]\s+([\s\S]*?)\s+Begin\. Execute the assigned task to completion\.$/.exec(
+    /\[Subagent Context\] (?:You are running as a subagent|Subagent session)\b[\s\S]*?\[Subagent Task\]\s+([\s\S]*?)\s+Begin\. Execute the assigned task to completion\.$/.exec(
       current,
     )?.[1];
   if (!task) {
