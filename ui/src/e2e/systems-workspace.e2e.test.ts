@@ -84,43 +84,6 @@ function installSystemsGateway(
 }
 
 suite.define(() => {
-  it("reports the source and geometry of a layout shift", async () => {
-    await suite.withPage({}, async ({ page }) => {
-      await page.setContent(
-        '<div id="moving" style="position:absolute;left:8px;top:8px;width:100px;height:40px">Probe</div>',
-      );
-      const paint = () =>
-        page.evaluate(
-          () =>
-            new Promise((resolve) => {
-              requestAnimationFrame(() => requestAnimationFrame(resolve));
-            }),
-        );
-      await paint();
-      const shifts = await observeLayoutShifts(page);
-      await page.locator("#moving").evaluate((element) => {
-        element.style.top = "28px";
-      });
-      await paint();
-      const result = await shifts.evaluate((probe) => probe.read());
-      expect(result.entries[0]?.value).toBeGreaterThan(0);
-      expect(result.entries).toContainEqual({
-        startTime: expect.any(Number),
-        value: expect.any(Number),
-        hadRecentInput: expect.any(Boolean),
-        sources: [
-          {
-            node: "div#moving",
-            previousRect: { x: 8, y: 8, width: 100, height: 40 },
-            currentRect: { x: 8, y: 28, width: 100, height: 40 },
-          },
-        ],
-      });
-      await shifts.evaluate((probe) => probe.stop());
-      await shifts.dispose();
-    });
-  });
-
   it.each(
     [400, 820, 1280].flatMap((width) =>
       [1, 4, 12].flatMap((diskCount) =>
@@ -716,5 +679,41 @@ suite.define(() => {
     } finally {
       await context.close();
     }
+  });
+  it("reports the source and geometry of a layout shift", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      await page.setContent(
+        '<div id="moving" style="position:absolute;left:8px;top:8px;width:100px;height:40px">Probe</div>',
+      );
+      const paint = () =>
+        page.evaluate(
+          () =>
+            new Promise((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(resolve));
+            }),
+        );
+      await paint();
+      const shifts = await observeLayoutShifts(page);
+      await page.locator("#moving").evaluate((element) => {
+        element.style.top = "28px";
+      });
+      await paint();
+      const result = await shifts.evaluate((probe) => probe.read());
+      expect(result.entries[0]?.value).toBeGreaterThan(0);
+      expect(result.entries).toContainEqual({
+        startTime: expect.any(Number),
+        value: expect.any(Number),
+        hadRecentInput: expect.any(Boolean),
+        sources: [
+          {
+            node: "div#moving",
+            previousRect: { x: 8, y: 8, width: 100, height: 40 },
+            currentRect: { x: 8, y: 28, width: 100, height: 40 },
+          },
+        ],
+      });
+      await shifts.evaluate((probe) => probe.stop());
+      await shifts.dispose();
+    });
   });
 });
