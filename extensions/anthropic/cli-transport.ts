@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { relocateClaudeCliAllowlist } from "./cli-allowlist.js";
 import {
   createClaudeCliProcessOwner,
   type ClaudeCliProcessContext,
@@ -33,18 +34,35 @@ export async function createClaudeCliTransport(params: {
 }): Promise<ClaudeCliTransport> {
   const owner = createClaudeCliProcessOwner(params.currentContext, params.secretInput);
   let child: Awaited<ReturnType<typeof owner.spawn>>;
+  let relocated: Awaited<ReturnType<typeof relocateClaudeCliAllowlist>>;
   try {
     const env = { ...params.context.env };
     delete env.NODE_OPTIONS;
     delete env.DEBUG;
-    child = await owner.spawn({
-      ...params.context,
-      args: params.args,
-      env,
-      signal: params.context.abortSignal,
-    });
+    const spawn = (args: string[]) =>
+      owner.spawn({
+        ...params.context,
+        args,
+        env,
+        signal: params.context.abortSignal,
+      });
+    try {
+      child = await spawn(params.args);
+    } catch (error) {
+      // Try the unchanged command first: fitting turns must not depend on a file write.
+      if (process.platform !== "win32" || !isRecord(error) || error.code !== "ENAMETOOLONG") {
+        throw error;
+      }
+      relocated = await relocateClaudeCliAllowlist(params.args);
+      if (!relocated) {
+        throw error;
+      }
+      // The process owner rechecks current authority after the awaited settings write.
+      child = await spawn(relocated.args);
+    }
   } catch (error) {
     owner[Symbol.dispose]();
+    await relocated?.cleanup();
     throw error;
   }
   const requests = new Map<string, AbortController>();
@@ -163,7 +181,10 @@ export async function createClaudeCliTransport(params: {
     if (process.platform !== "win32" || !closed) {
       child.kill("SIGKILL");
     }
-    resolveExit();
+    // The private settings file belongs to this child, including its warm turns.
+    void Promise.resolve(relocated?.cleanup())
+      .catch(() => {})
+      .then(() => resolveExit());
   };
   child.onExit((code, signal) => {
     if (code !== 0) {

@@ -39,8 +39,13 @@ const CLAUDE_NO_SESSION_PERSISTENCE_ARG = "--no-session-persistence";
 const CLAUDE_MAX_TURNS_ARG = "--max-turns";
 const CLAUDE_SAFE_SETTING_SOURCES = "user";
 const CLAUDE_DENY_MCP_TOOLS_VALUE = "mcp__*";
-const CLAUDE_RESTRICTED_SETTINGS =
-  '{"disableAllHooks":true,"enabledPlugins":{},"autoMemoryEnabled":false,"claudeMdExcludes":["**/CLAUDE.md","**/CLAUDE.local.md","**/.claude/rules/**"]}';
+// Keep this projection path-independent: the Windows transport can move it to a private file.
+export const CLAUDE_RESTRICTED_SETTINGS = {
+  disableAllHooks: true,
+  enabledPlugins: {},
+  autoMemoryEnabled: false,
+  claudeMdExcludes: ["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"],
+} as const;
 
 export function isClaudeCliProvider(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === CLAUDE_CLI_BACKEND_ID;
@@ -414,7 +419,7 @@ function resolveClaudeCliRestrictedExecutionArgs(
     CLAUDE_SETTING_SOURCES_ARG,
     "",
     CLAUDE_SETTINGS_ARG,
-    CLAUDE_RESTRICTED_SETTINGS,
+    JSON.stringify(CLAUDE_RESTRICTED_SETTINGS),
     CLAUDE_DISABLE_SLASH_COMMANDS_ARG,
     CLAUDE_NO_CHROME_ARG,
     CLAUDE_STRICT_MCP_CONFIG_ARG,
