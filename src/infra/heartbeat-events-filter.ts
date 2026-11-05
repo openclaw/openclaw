@@ -154,6 +154,10 @@ export function formatExecCompletionPrompt(
 
 const HEARTBEAT_OK_PREFIX = normalizeLowercaseStringOrEmpty(HEARTBEAT_TOKEN);
 
+export function isHeartbeatWakeEvent(text: string): boolean {
+  return /^heartbeat (?:poll|wake)/i.test(text.trimStart());
+}
+
 function isHeartbeatNoiseEvent(evt: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(evt);
   if (!lower) {
@@ -163,8 +167,7 @@ function isHeartbeatNoiseEvent(evt: string): boolean {
     isHeartbeatAcknowledgementText(evt, 0) ||
     (lower.startsWith(HEARTBEAT_OK_PREFIX) &&
       !/[a-z0-9_]/.test(lower.charAt(HEARTBEAT_OK_PREFIX.length))) ||
-    lower.includes("heartbeat poll") ||
-    lower.includes("heartbeat wake")
+    isHeartbeatWakeEvent(evt)
   );
 }
 
