@@ -621,3 +621,18 @@ MCP, or session-resume behavior.
 - [Plugin SDK overview](/plugins/sdk-overview) - registration API reference
 - [Plugin manifest](/plugins/manifest) - `cliBackends` and setup descriptors
 - [Agent harness](/plugins/sdk-agent-harness) - full external agent runtimes
+
+## Native goal lifetime
+
+Agent execution contexts may expose `prepareNativeGoal()`. This optional capability
+returns the exact active session goal under the admitted run, not permission to
+create another task. A native adapter must keep that run alive across its own goal
+iterations, honor the goal cancellation signal, revalidate `assertCurrent()` at
+effect boundaries, and report only observed native status with `onStatus()`.
+A normal model turn or successful process result is not proof of goal completion.
+If `readToolStatus?.()` returns a verdict, this same execution already committed it
+through the real Goal tool. Finish the response without replacing that verdict with
+stale native metadata or restarting pursuit. The host still revokes on external edits
+and Stop; this fact grants no authority after the run closes.
+Do not retain these methods beyond the host run or serialize them for recovery.
+The host owns continuation; adapters own only their live native pursuit.

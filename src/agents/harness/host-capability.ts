@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { buildActiveNodeContextText } from "../../infra/active-node-context.js";
 import { emitAgentRunOutputTokens } from "../../infra/agent-events.js";
 import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
@@ -16,7 +15,6 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
-import { bindUserTurnTranscriptAnnotation } from "../../sessions/user-turn-transcript-annotation.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { loadSkillLibrarySelection } from "../../skills/library/selection.js";
 import { resolveSkillResourceCandidates } from "../../skills/runtime/resource-candidates.js";
@@ -59,6 +57,7 @@ import {
 } from "./host-capability-workspace.js";
 import { normalizeNativeOperationCwd, prepareAgentHarnessEnvironment } from "./host-environment.js";
 import { bindHarnessMedia } from "./host-media.js";
+import { bindHostNativeGoal } from "./host-native-goal.js";
 import {
   registerAgentHarnessBeforeToolCallRetention,
   registerAgentHarnessScheduledToolProjectionCapability,
@@ -77,6 +76,7 @@ import {
   retainHarnessSource,
 } from "./host-source-authority.js";
 import { bindHarnessTrajectory } from "./host-trajectory.js";
+import { bindHostUserTurnAnnotation } from "./host-user-turn-annotation.js";
 import { formatHarnessApprovalPresentation } from "./native-hook-relay-approval-presentation.js";
 import { createSessionNodeAuthorities } from "./node-execution-authority.js";
 
@@ -195,45 +195,12 @@ export function createAgentHarnessHostCapabilities(params: {
     assertActive,
     signal: capabilityAbortController.signal,
   });
-  const recorder = attempt.userTurnTranscriptRecorder;
-  const sessionTarget = attempt.sessionTarget ? cloneSnapshot(attempt.sessionTarget) : undefined;
-  const annotateCurrentUserTurn =
-    attempt.userTurnTranscriptRecorder &&
-    attempt.sessionTarget &&
-    attempt.agentId &&
-    attempt.sessionId &&
-    attempt.sessionKey &&
-    attempt.sessionTarget.storePath &&
-    !attempt.suppressNextUserMessagePersistence &&
-    attempt.trigger !== "memory"
-      ? bindUserTurnTranscriptAnnotation({
-          recorder: attempt.userTurnTranscriptRecorder,
-          target: {
-            ...attempt.sessionTarget,
-            agentId: attempt.agentId,
-            sessionId: attempt.sessionId,
-            sessionKey: attempt.sessionKey,
-            storePath: attempt.sessionTarget.storePath,
-          },
-          runId: attempt.runId,
-          config,
-          abortSignal: bindAbortSignal(attempt.abortSignal),
-          assertCurrent: () => {
-            assertActive();
-            if (
-              attempt.userTurnTranscriptRecorder !== recorder ||
-              !isDeepStrictEqual(attempt.sessionTarget, sessionTarget) ||
-              (sessionTarget?.agentId !== undefined && sessionTarget.agentId !== attempt.agentId) ||
-              (sessionTarget?.sessionId !== undefined &&
-                sessionTarget.sessionId !== attempt.sessionId) ||
-              (sessionTarget?.sessionKey !== undefined &&
-                sessionTarget.sessionKey !== attempt.sessionKey)
-            ) {
-              throw new Error("native prompt annotation lost its source execution claim");
-            }
-          },
-        })
-      : undefined;
+  const annotateCurrentUserTurn = bindHostUserTurnAnnotation(
+    attempt,
+    config,
+    assertActive,
+    bindAbortSignal,
+  );
   const skillsSnapshot = attempt.skillsSnapshot ? cloneSnapshot(attempt.skillsSnapshot) : undefined;
   const getInstalledSkills = bindHostSkillCatalog({
     snapshot: skillsSnapshot,
@@ -461,6 +428,21 @@ export function createAgentHarnessHostCapabilities(params: {
     kind: "agent-harness-host-capability" as const,
     version: 1 as const,
     assertActive,
+    ...(!attempt.modelRun && attempt.sessionPersistence !== "detached" && attempt.sessionTarget
+      ? {
+          prepareNativeGoal: bindHostNativeGoal(
+            {
+              ...attempt.sessionTarget,
+              agentId: attempt.sessionTarget.agentId ?? attempt.agentId,
+              sessionKey: attempt.sessionTarget.sessionKey ?? attempt.sessionKey,
+              sessionId: attempt.sessionTarget.sessionId ?? attempt.sessionId,
+            },
+            assertActive,
+            bindAbortSignal(attemptSignal),
+            operationalRunInstance,
+          ),
+        }
+      : {}),
     ...bindHostContinuationRetryCount(prepareContinuationRetryCount, assertActive),
     captureRequestCustody: () => {
       assertActive();

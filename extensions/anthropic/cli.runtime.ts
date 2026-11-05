@@ -11,75 +11,29 @@ import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { OwnedStdioCleanupError } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { prepareClaudeNativeGoal, prepareClaudeNativeGoalArgs } from "./cli-native-goal.js";
 import { hasClaudeRawToolInvocation } from "./cli-output.js";
 import type { ClaudeCliSecretInput } from "./cli-process.js";
 import { prepareClaudeCliTransportArgs } from "./cli-runtime-args.js";
+import {
+  carriesTurnContext,
+  createUserInput,
+  privateInputHolds,
+  resolveUserPromptSubmitResponse,
+} from "./cli-runtime-input.js";
 import { createClaudeTurnStatus } from "./cli-runtime-status.js";
 import * as tasks from "./cli-runtime-tasks.js";
+import type {
+  ClaudeCliExecuteContext,
+  ClaudeCliSession,
+  ClaudeCliTurn,
+} from "./cli-runtime.types.js";
+import { supportsClaudeNativeGoals } from "./cli-shared.js";
 import { createClaudeCliTransport } from "./cli-transport.js";
 import { createClaudeCliUserInputAuthorizer } from "./cli-user-input.js";
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
 
-/**
- * Host-internal, like the forwarded auth credential and not part of the plugin SDK: a host
- * whose history owner can change while the run lasts (a native login) passes a check for
- * where saved turn context leaves after startup, the prompt send and the prompt hook answer.
- */
-export type ClaudeCliExecuteContext = CliBackendExecuteContext & {
-  assertPrivateInputCurrent?: () => void;
-};
-type ClaudeCliTurn = {
-  context: ClaudeCliExecuteContext;
-  controller: AbortController;
-  userInput: ReturnType<typeof createClaudeCliUserInputAuthorizer>;
-  events: PassThrough;
-  inputUuid: string;
-  /** Replayed user text is never a task receipt, even after its input lifecycle ends. */
-  submittedInputUuids: Set<string>;
-  inputStarted: boolean;
-  promptSubmitted: boolean;
-  /** Hook reruns carry no input UUID and may rewrite text; retain their native input owner. */
-  promptInputUuid: string;
-  sawTerminalResult: boolean;
-  interrupted: boolean;
-  foregroundTaskIds: Set<string>;
-  foregroundBashToolUseIds: Set<string>;
-  pendingBackgroundTaskIds: Set<string>;
-  taskNotifications: Map<string, "queued" | "replayed">;
-  /** Same-turn inputs written to native, keyed by UUID until their lifecycle completes. */
-  injectedInputs: Map<
-    string,
-    {
-      text: string;
-      promptContext?: CliBackendExecuteContext["promptContext"];
-      started: ReturnType<typeof createDeferred<void>>;
-    }
-  >;
-  /**
-   * A successful result withheld until every injected input has completed. It is
-   * released as terminal on completion, or as interim when native opens another
-   * turn for the input first.
-   */
-  heldResult?: Record<string, unknown>;
-  error?: Error;
-};
-type ClaudeCliSession = {
-  handle: CliBackendLiveSessionHandle;
-  capability?: CliBackendLiveSessionCapability;
-  transport?: Awaited<ReturnType<typeof createClaudeCliTransport>>;
-  transportStartup?: ReturnType<typeof createClaudeCliTransport>;
-  currentTurn?: ClaudeCliTurn;
-  idleTimer?: ReturnType<typeof setTimeout>;
-  hasInputLifecycle: boolean;
-  closed: boolean;
-  // Tasks outlive inputs; false marks subagent work with no parent-stream query.
-  taskOwners: Map<string, string | false>;
-  // Native notification results identify task runs rather than task IDs.
-  taskRuns: Map<string, string>;
-  // Running Agent/Workflow tasks and subagent-owned work, with their launching task.
-  runningDescendants: Map<string, string | undefined>;
-};
 const sessions = new WeakMap<CliBackendLiveSessionHandle, ClaudeCliSession>();
 
 function activeTurn(session: ClaudeCliSession): ClaudeCliTurn | undefined {
@@ -102,24 +56,6 @@ function activeTurn(session: ClaudeCliSession): ClaudeCliTurn | undefined {
   } catch {
     return undefined;
   }
-}
-
-function privateInputHolds(turn: ClaudeCliTurn): boolean {
-  try {
-    turn.context.assertPrivateInputCurrent?.();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function carriesTurnContext(request: Record<string, unknown>, response: unknown): boolean {
-  return (
-    request.callback_id === "UserPromptSubmit" &&
-    isRecord(response) &&
-    isRecord(response.hookSpecificOutput) &&
-    response.hookSpecificOutput.additionalContext !== undefined
-  );
 }
 
 async function authorizeTool(
@@ -168,20 +104,6 @@ async function authorizeTool(
   }
 }
 
-function resolvePromptContext(turn: ClaudeCliTurn, prompt: unknown) {
-  if (turn.promptInputUuid !== turn.inputUuid) {
-    return turn.injectedInputs.get(turn.promptInputUuid)?.promptContext;
-  }
-  // Some native versions submit hooks before the started receipt. Match only the
-  // first pass; subsequent passes belong to that UUID even when text is rewritten.
-  const injected = [...turn.injectedInputs].find(([, input]) => input.text === prompt);
-  if (!injected) {
-    return turn.context.promptContext;
-  }
-  turn.promptInputUuid = injected[0];
-  return injected[1].promptContext;
-}
-
 async function handleRequest(
   session: ClaudeCliSession,
   request: Record<string, unknown>,
@@ -194,20 +116,16 @@ async function handleRequest(
     throw new Error("Unsupported Claude CLI control request.");
   }
   const input = request.input;
+  if (request.callback_id === "Stop" && input.hook_event_name === "Stop") {
+    // The verdict is read at the transport's final write, not before an await.
+    return {};
+  }
   const turn = activeTurn(session);
   if (request.callback_id === "UserPromptSubmit" && input.hook_event_name === "UserPromptSubmit") {
     if (!turn || signal.aborted) {
       return {};
     }
-    turn.promptSubmitted = true;
-    const promptContext = resolvePromptContext(turn, input.prompt);
-    const additionalContext = [promptContext?.prependContext, promptContext?.appendContext]
-      .filter(Boolean)
-      .join("\n\n");
-    // Native can rewrite the prompt and rerun hooks; only its final pass is persisted.
-    return additionalContext
-      ? { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext } }
-      : {};
+    return resolveUserPromptSubmitResponse(turn, input.prompt);
   }
   if (request.callback_id === "PreToolUse" && input.hook_event_name === "PreToolUse") {
     if (
@@ -240,23 +158,6 @@ async function handleRequest(
     };
   }
   throw new Error("Unknown Claude CLI hook callback.");
-}
-
-function createUserInput(
-  context: CliBackendExecuteContext,
-  text: string,
-  uuid: string,
-  hostGenerated = false,
-) {
-  return {
-    type: "user",
-    message: { role: "user", content: text },
-    parent_tool_use_id: null,
-    uuid,
-    // Claude saves synthetic input as a meta row: the model reads it, history never shows it.
-    ...(hostGenerated ? { isSynthetic: true } : {}),
-    ...(context.sessionId ? { session_id: context.sessionId } : {}),
-  };
 }
 
 function rejectInjectedInputs(turn: ClaudeCliTurn, error: Error) {
@@ -338,7 +239,7 @@ function completeTurn(session: ClaudeCliSession, turn: ClaudeCliTurn) {
   );
   turn.controller.abort();
   turn.events.end();
-  if (!session.capability || holdsBackgroundTasks || orphanedInput) {
+  if (turn.nativeGoal || !session.capability || holdsBackgroundTasks || orphanedInput) {
     // A failed parent does not stop native background continuations. Never lend them a new turn.
     // Input written into a turn that ended unanswered is the same kind of debt.
     session.handle.close(holdsBackgroundTasks || orphanedInput ? "abort" : "idle");
@@ -360,6 +261,12 @@ async function emitHeldInterimResult(turn: ClaudeCliTurn) {
 }
 
 async function acceptMessage(session: ClaudeCliSession, message: Record<string, unknown>) {
+  // Native can flush its final verdict after result. Retain only metadata custody
+  // through process exit; tool and prompt authority still retire with the turn.
+  session.nativeGoal?.observe(message);
+  if (message.type === "transcript_mirror") {
+    return;
+  }
   if (message.type === "system" && message.subtype === "init") {
     const openClawServer = Array.isArray(message.mcp_servers)
       ? message.mcp_servers.find(
@@ -461,7 +368,9 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
         turn.pendingBackgroundTaskIds.size === 0
       ) {
         turn.heldResult = undefined;
-        if (!turn.events.write(heldResult)) {
+        if (turn.nativeGoal) {
+          turn.nativeGoalResult = heldResult;
+        } else if (!turn.events.write(heldResult)) {
           await once(turn.events, "drain", { signal: turn.controller.signal });
         }
         completeTurn(session, turn);
@@ -570,6 +479,11 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
     turn.heldResult = message;
     return;
   }
+  if (completesTurn && turn.nativeGoal) {
+    turn.nativeGoalResult = message;
+    completeTurn(session, turn);
+    return;
+  }
   // The transport owns continuation lifetime; the completed answer can be
   // delivered through normal reply hooks without waiting for the children.
   const outputMessage =
@@ -612,15 +526,28 @@ function createSession(capability?: CliBackendLiveSessionCapability): ClaudeCliS
 }
 
 export async function* executeClaudeCli(
-  context: ClaudeCliExecuteContext,
+  inputContext: ClaudeCliExecuteContext,
   secretInput?: ClaudeCliSecretInput,
 ): AsyncIterable<Record<string, unknown>> {
-  context.assertCurrent?.();
-  context.abortSignal?.throwIfAborted();
+  inputContext.assertCurrent?.();
+  inputContext.abortSignal?.throwIfAborted();
+  const nativeGoal = await prepareClaudeNativeGoal(inputContext);
+  const context = nativeGoal
+    ? {
+        ...inputContext,
+        abortSignal: AbortSignal.any([
+          nativeGoal.signal,
+          ...(inputContext.abortSignal ? [inputContext.abortSignal] : []),
+        ]),
+      }
+    : inputContext;
+  if (nativeGoal) {
+    context.abortSignal?.throwIfAborted();
+  }
   const capability = context.liveSession;
   const existing = capability?.current();
   const reusable =
-    existing && existing.fingerprint === capability?.fingerprint
+    !nativeGoal && existing && existing.fingerprint === capability?.fingerprint
       ? sessions.get(existing)
       : undefined;
   if (!reusable && capability) {
@@ -629,6 +556,7 @@ export async function* executeClaudeCli(
   context.assertCurrent?.();
   const session = reusable ?? createSession(capability);
   session.capability = capability;
+  session.nativeGoal = nativeGoal;
   if (session.closed || session.currentTurn) {
     throw new Error("Claude CLI live session is closed or already handling another turn.");
   }
@@ -651,6 +579,7 @@ export async function* executeClaudeCli(
     pendingBackgroundTaskIds: new Set(),
     injectedInputs: new Map(),
     taskNotifications: new Map(),
+    nativeGoal,
   };
   session.currentTurn = turn;
   const abort = () => session.handle.close("abort", context.abortSignal?.reason);
@@ -667,7 +596,7 @@ export async function* executeClaudeCli(
         const { args, excludeDynamicSections } = prepareClaudeCliTransportArgs(context);
         session.transportStartup = createClaudeCliTransport({
           context,
-          args,
+          args: nativeGoal ? prepareClaudeNativeGoalArgs(args) : args,
           secretInput,
           currentContext: () => session.currentTurn?.context,
           initialize: {
@@ -678,6 +607,7 @@ export async function* executeClaudeCli(
             hooks: {
               UserPromptSubmit: [{ hookCallbackIds: ["UserPromptSubmit"] }],
               PreToolUse: [{ hookCallbackIds: ["PreToolUse"] }],
+              ...(nativeGoal ? { Stop: [{ hookCallbackIds: ["Stop"] }] } : {}),
             },
           },
           onMessage: (message) => acceptMessage(session, message),
@@ -691,6 +621,14 @@ export async function* executeClaudeCli(
             // The transport invokes this synchronously at its final write, after all awaits.
             return () => {
               if (admittedTurn && activeTurn(session) === admittedTurn && !signal.aborted) {
+                if (
+                  request.subtype === "hook_callback" &&
+                  request.callback_id === "Stop" &&
+                  isRecord(request.input) &&
+                  request.input.hook_event_name === "Stop"
+                ) {
+                  return admittedTurn.nativeGoal?.stop() ?? {};
+                }
                 // Saved turn context leaves here, so it takes the private-input check too.
                 return carriesTurnContext(request, response) && !privateInputHolds(admittedTurn)
                   ? {}
@@ -723,7 +661,21 @@ export async function* executeClaudeCli(
         if (session.closed) {
           throw turn.error ?? new Error("Claude CLI closed during startup.");
         }
-        await transport.initialize();
+        const initialized = await transport.initialize();
+        // Qualify the exact process before sending any user input, not a cached
+        // version of a different executable found on the Gateway's PATH.
+        if (
+          nativeGoal &&
+          !supportsClaudeNativeGoals(
+            typeof initialized.claude_code_version === "string"
+              ? initialized.claude_code_version
+              : undefined,
+          )
+        ) {
+          throw new Error(
+            "Native goal following requires Claude Code 2.1.318 or newer with a verified initialization version.",
+          );
+        }
       }
       context.assertCurrent?.();
       context.assertPrivateInputCurrent?.();
@@ -761,7 +713,14 @@ export async function* executeClaudeCli(
         },
       });
       const hostGenerated = context.promptOrigin === "host";
-      await transport.send(createUserInput(context, context.prompt, turn.inputUuid, hostGenerated));
+      await transport.send(
+        createUserInput(
+          context,
+          nativeGoal?.input ?? context.prompt,
+          turn.inputUuid,
+          hostGenerated,
+        ),
+      );
       context.registerMessageInjection?.({
         isAvailable: () => canInjectInput(session, turn),
         queueMessage: (text, withCurrent, options) =>
@@ -774,6 +733,14 @@ export async function* executeClaudeCli(
     await startup;
     if (turn.error) {
       throw turn.error;
+    }
+    if (nativeGoal && turn.nativeGoalResult) {
+      await session.handle.waitForExit();
+      await session.transport?.waitForOutput();
+      context.assertCurrent?.();
+      context.abortSignal?.throwIfAborted();
+      await nativeGoal.finish(turn.nativeGoalResult);
+      yield turn.nativeGoalResult;
     }
     if (!turn.sawTerminalResult) {
       throw new Error("Claude CLI exited without a terminal result.");

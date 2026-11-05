@@ -57,6 +57,10 @@ export type AgentHarnessHostCapabilities = Readonly<{
   version: 1;
   /** Fails closed unless this exact admitted run capability remains active. */
   assertActive: () => void;
+  /** One exact goal under this admitted run; native adapters retain custody until terminal. */
+  prepareNativeGoal?: () => Promise<
+    import("./native-goal.types.js").AgentHarnessNativeGoal | undefined
+  >;
   /** Prepare history only when a native thread must be freshly seeded, under this run's authority. */
   prepareBoundedSeed?: (
     request: Readonly<{

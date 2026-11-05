@@ -18,6 +18,8 @@ export type PreparedSessionEntryPredicate = {
   revision: number;
   pending: Set<object>;
   projection?: SessionEntryProjection;
+  /** One-shot revocation notification; never interrupts committed publication. */
+  onInvalidated?: () => void;
 };
 
 /** Missing optional full facts cannot certify a predicate that selected snapshots. */
@@ -96,6 +98,18 @@ export type SessionSharingRetentionRequest = {
   | (CommittedSessionSharingFacts & { generation?: PreparedSessionSharingRead["generation"] })
 );
 
+export function notifySessionEntryPredicateInvalidated(
+  predicate: PreparedSessionEntryPredicate,
+): void {
+  const notify = predicate.onInvalidated;
+  predicate.onInvalidated = undefined;
+  try {
+    notify?.();
+  } catch {
+    // A consumer cannot strand sibling publication after the durable commit.
+  }
+}
+
 /** Unknown postimages require a fresh read; observed mismatches cannot be restored. */
 export function publishRetainedSessionEntryPredicate(
   read: PreparedSessionSharingRead,
@@ -119,6 +133,7 @@ export function publishRetainedSessionEntryPredicate(
     predicate.revision += 1;
     if (!postimageKnown) {
       predicate.state = "unknown";
+      notifySessionEntryPredicateInvalidated(predicate);
     }
     return;
   }
@@ -131,18 +146,22 @@ export function publishRetainedSessionEntryPredicate(
   if (matches === undefined) {
     predicate.revision += 1;
     predicate.state = "unknown";
+    notifySessionEntryPredicateInvalidated(predicate);
   } else if (!matches) {
     predicate.revision += 1;
     predicate.state = "changed";
+    notifySessionEntryPredicateInvalidated(predicate);
   } else if (!options?.preserveMatchingEntry) {
     predicate.entry = postimage.entry;
   }
 }
 
 export function revokePreparedSessionEntryPredicate(read: PreparedSessionSharingRead): void {
-  if (read.predicate) {
-    read.predicate.state = "changed";
-    read.predicate.revision += 1;
+  const predicate = read.predicate;
+  if (predicate) {
+    predicate.state = "changed";
+    predicate.revision += 1;
+    notifySessionEntryPredicateInvalidated(predicate);
   }
 }
 

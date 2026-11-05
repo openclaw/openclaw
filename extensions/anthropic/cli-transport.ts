@@ -16,6 +16,7 @@ const KILL_GRACE_MS = 1_000;
 export type ClaudeCliTransport = {
   close(): void;
   waitForExit(): Promise<void>;
+  waitForOutput(): Promise<void>;
   send(message: Record<string, unknown>): Promise<void>;
   initialize(): Promise<Record<string, unknown>>;
 };
@@ -308,9 +309,18 @@ export async function createClaudeCliTransport(params: {
     close,
     waitForExit: async () => {
       await exited;
-      await Promise.all([child.wait().catch(() => undefined), child.waitForExtinction?.()]);
+      await Promise.all([
+        child.wait().catch(() => undefined),
+        child.waitForExtinction?.(),
+        // Native metadata can follow its terminal result. Join stdout projection,
+        // not just OS exit, before an owner reconciles the final goal verdict.
+        reading.catch(() => undefined),
+      ]);
       child.dispose();
     },
+    // Cleanup joins the reader without masking the caller's original error. A
+    // native verdict additionally requires successful, complete output projection.
+    waitForOutput: () => reading,
     send,
     async initialize() {
       await send({
