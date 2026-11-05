@@ -177,7 +177,15 @@ describe("config io audit helpers", () => {
     const home = await suiteRootTracker.make("append-redacted");
     const record = finalizeConfigWriteAuditRecord({
       base: {
-        ...createAuditRecordBase(path.join(home, ".openclaw", "openclaw.json")),
+        ...createAuditRecordBase(path.join(home, ".openclaw", "openclaw.json"), [
+          "openclaw",
+          "config",
+          "set",
+          "--expect-current-json",
+          "null",
+          "channels.slack.token",
+          "audit-password",
+        ]),
         suspicious: [
           "provider returned ya29.fake-access-token-with-enough-length",
           "plugin returned AIzaSyD-very-real-looking-google-api-key-123",
@@ -202,6 +210,7 @@ describe("config io audit helpers", () => {
     expect(raw).not.toContain("AIzaSyD-very-real-looking");
     expect(raw).not.toContain("ya29.fake-access-token");
     expect(raw).not.toContain("abcd-efgh-ijkl-mnop");
+    expect(raw).not.toContain("audit-password");
   });
 
   it("caps caller-supplied processInfo argv at 8 entries before redaction", () => {
@@ -293,6 +302,34 @@ describe("config io audit helpers", () => {
     ],
   ])("redacts $0 in persisted audit process info", (_name, argv, expected) => {
     expect(createAuditRecordBase("/tmp/openclaw.json", argv).argv).toEqual(expected);
+  });
+
+  it.each([
+    { options: ["--json"] },
+    { options: ["--strict-json"] },
+    { options: ["--expect-current-json", "null"] },
+    { options: ["--expect-current-json=null"] },
+    { options: ["--json", "--expect-current-json", "null"] },
+  ])("classifies config set values by path with options $options in every order", ({ options }) => {
+    for (const [configPath, value, expected] of [
+      ["channels.slack.token", '"synthetic-secret"', "***"],
+      ["gateway.port", "19002", "19002"],
+      ["agents.defaults.maxTokens", "2000", "2000"],
+    ] as const) {
+      for (const index of [0, 1, 2]) {
+        const args: string[] = [configPath, value];
+        const redacted: string[] = [configPath, expected];
+        args.splice(index, 0, ...options);
+        redacted.splice(index, 0, ...options);
+        const record = createAuditRecordBase("/tmp/openclaw.json", [
+          "openclaw",
+          "config",
+          "set",
+          ...args,
+        ]);
+        expect(record.argv).toEqual(["openclaw", "config", "set", ...redacted]);
+      }
+    }
   });
 
   it("redacts historical config audit entries while preserving file and directory modes", async () => {
