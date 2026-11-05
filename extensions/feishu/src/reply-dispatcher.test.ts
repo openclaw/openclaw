@@ -1071,6 +1071,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["two throws", ["X.", ["X."], 3, "X. X.", ["X."], 3, "X. X. D."], ["X.", "X.", "X. D."]],
     ["next message", [["X."], 2, 3, "X. Y.", ["X."], 3, "X. Y. Z."], ["X.", "X. Y.", "X. Y. Z."]],
     ["same message", [["X."], 3, "X.", ["X."], 3, "X. Z."], ["X.", "X.", "X. Z."]],
+    ["catch msg", [["F."], 3, 2, "F. Y.", ["F."], 3, "F. Y. Z."], ["F.", "F. Y.", "F. Y. Z."]],
+    ["gap msg", ["A2.X.", ["A2."], ["X."], 3, 2, "X.", ["X."], 3, "X.Z."], ["A2.X.", "X.", "X.Z."]],
     ["fence", ["~~~a\nx", null, "~~~a\nxy", null, "~~~a\nxy\n~~~\nD"], ["~~~a\nx", "~~~a\ny", "D"]],
     ["fence cut", ["~~~\nx\n~~", null, "~~~\nx\n~~~\nD"], ["~~~\nx\n~~", "D"]],
   ] as const)("streams %s", async (name, events, cards) => {
@@ -1205,7 +1207,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       audioAsVoice: true,
     });
   });
-
   it("preserves the no-provider-dispatch marker for media preparation failures", async () => {
     useNonStreamingAutoAccount();
     const marker = Object.assign(
@@ -1219,7 +1220,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       .catch((caught: unknown) => caught);
     expect(error).toBe(marker);
   });
-
   it("never sends media fallback text after an accepted attachment loses its receipt", async () => {
     useNonStreamingAutoAccount();
     const acceptedError = createChannelPartialDeliveryError(
