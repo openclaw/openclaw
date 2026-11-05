@@ -506,7 +506,7 @@ describe("successful update finalization ordering", () => {
       expect(mocks.printResult).toHaveBeenCalledOnce();
       expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({
         status: "error",
-        steps: expect.arrayContaining([retained]),
+        steps: expect.arrayContaining([{ ...retained, durationMs: expect.any(Number) }]),
       });
       expect(mocks.writeSentinel).toHaveBeenCalledOnce();
       expectFailureReport(mocks.printResult, "wrapper-retirement-failed");
@@ -953,7 +953,9 @@ process.exitCode = 1;
       );
 
       expect(events).toEqual(["restart"]);
-      const steps = mocks.printResult.mock.lastCall?.[0].steps;
+      const steps = mocks.printResult.mock.lastCall?.[0].steps.filter(
+        (step: { name: string }) => !step.name.endsWith("-timing"),
+      );
       if (!runs) {
         await expect(fs.stat(lintLog)).rejects.toThrow();
         expect(steps).toEqual(initialSteps);

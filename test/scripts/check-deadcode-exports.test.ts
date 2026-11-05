@@ -238,6 +238,7 @@ test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}! src/plugin-sdk/api-baseline.ts!`.
         "vitest.{workspace,projects}.{js,mjs,ts,cjs,mts,cts,json}",
         "scripts/control-ui-parity/vitest.config.ts",
         "scripts/control-ui-retention/vitest.config.ts",
+        "test/vitest.codex-worker-authority.config.ts",
       ],
     });
   });
@@ -695,6 +696,7 @@ function other(lineageCompletion: typeof lineageWriter) {
       "publishDependencyCache",
       "privateDependencyDonor",
       "withDependencyCacheLock",
+      "recoverDependencyCache",
     ];
     const compileWithSources = createDynamicConsumerCompiler();
     const compile = (source: string) => {
@@ -723,7 +725,31 @@ function other(lineageCompletion: typeof lineageWriter) {
         '  # node --input-type=module - "$1"',
       ),
     ]) {
-      expect(compile(disconnected)).toEqual([]);
+      expect(compile(disconnected)).toEqual(["recoverDependencyCache"]);
+    }
+    for (const disconnected of [
+      replaceFixture(wrapper, '"$script_parent_dir/pr-lib/cache-lifetime.mjs"', '""'),
+      replaceFixture(wrapper, "pathToFileURL(process.argv[2])", "pathToFileURL(process.argv[3])"),
+      replaceFixture(
+        wrapper,
+        "const { recoverDependencyCache }",
+        "// const { recoverDependencyCache }",
+      ),
+      replaceFixture(
+        wrapper,
+        '  node --input-type=module - "$script_parent_dir/pr-lib/cache-lifetime.mjs"',
+        '  # node --input-type=module - "$script_parent_dir/pr-lib/cache-lifetime.mjs"',
+      ),
+      replaceFixture(
+        wrapper,
+        'import { pathToFileURL } from "node:url";',
+        '// import { pathToFileURL } from "node:url";',
+      ),
+      replaceFixture(wrapper, "<<'EOF_CACHE_RECOVERY'", "<<'EOF_OTHER'"),
+    ]) {
+      expect(compile(disconnected)).toEqual(
+        expected.filter((name) => name !== "recoverDependencyCache"),
+      );
     }
   });
 

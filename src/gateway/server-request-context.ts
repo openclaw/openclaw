@@ -26,6 +26,7 @@ import {
 } from "./server/client-presence.js";
 import type { GatewayClientRegistry } from "./server/client-registry.js";
 import { getHealthCache } from "./server/health-state.js";
+import { disconnectDisallowedGatewayPolicyClients } from "./server/ws-origin-policy.js";
 import { invalidateGatewayPolicyClient } from "./server/ws-policy-close.js";
 import { resolveSessionRequestTargets } from "./session-request-targets.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
@@ -444,6 +445,10 @@ export function createGatewayRequestContext(
       if (presenceChanged) {
         runtime.publishPresence();
       }
+      disconnectDisallowedGatewayPolicyClients(
+        clients.authorityClients,
+        context.getCommittedRuntimeConfig?.() ?? getRuntimeConfig(),
+      );
     },
     invalidateClientsForDevice: (deviceId: string, opts?: { role?: string; reason?: string }) => {
       const reason = opts?.reason ?? "device-invalidated";

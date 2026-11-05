@@ -151,13 +151,6 @@ const CHAT_DROPDOWN_KEYS = new Set([
   "Escape",
 ]);
 
-export const NEW_SESSION_ACTIVE_RUN_MESSAGE =
-  "Start a new session after the active run or queued messages finish.";
-export const NEW_SESSION_LIST_LOADING_MESSAGE =
-  "Session list is still refreshing. Try New Chat again in a moment.";
-export const NEW_SESSION_CREATE_FAILED_MESSAGE =
-  "New Chat could not create a new thread. Try again in a moment.";
-
 // Expanded questions own only their advertised, enabled numeric shortcuts.
 function questionOwnsNumericShortcut(target: HTMLElement, key: string): boolean {
   return (

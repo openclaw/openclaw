@@ -1,5 +1,6 @@
 import * as acorn from "acorn";
 import { describe, expect, it, vi } from "vitest";
+import type { BoardWidgetDataQuery } from "../../packages/gateway-protocol/src/index.js";
 import { WidgetHtmlInputError } from "../plugin-sdk/widget-html.js";
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
 import {
@@ -58,12 +59,30 @@ describe("show_widget current-channel presentation", () => {
   it.each(["pending", "rejected", "granted"] as const)(
     "reports the owner's %s capability outcome",
     async (grantState) => {
-      createBoardPutCaller(grantState);
+      const { mock: put } = createBoardPutCaller(grantState);
+      const query: BoardWidgetDataQuery = {
+        name: "main-ci",
+        bindingId: "github.actions.runs",
+        params: {
+          repository: "owner/repo",
+          workflow: "ci.yml",
+          branch: "main",
+          status: null,
+          created: null,
+          perPage: 5,
+          excludePullRequests: true,
+        },
+        fields: ["conclusion", "status"],
+      };
       const tool = createTool({ agentSessionKey: "agent:main:approval", inlineHostEnabled: false });
       const result = await run(tool, {
         pin: true,
-        capabilities: { tools: ["github.actions.runs:owner/repo"] },
+        capabilities: { queries: [query] },
       });
+      expect(put).toHaveBeenCalledWith(
+        "board.widget.put",
+        expect.objectContaining({ declared: { queries: [query] } }),
+      );
       const parsed = payload(result);
       expect(parsed).toMatchObject({ boardWidgetName: "status", capabilityState: grantState });
       expect(parsed.text).toContain(grantState);

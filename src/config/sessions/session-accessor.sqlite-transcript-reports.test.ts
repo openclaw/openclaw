@@ -4,6 +4,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { afterEach, describe, expect, it as baseIt, onTestFinished, vi } from "vitest";
+import { expectBytesEqual } from "../../../test/helpers/file-snapshots.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
@@ -203,7 +204,7 @@ describe("SQLite report payload selection", () => {
     try {
       await Promise.all([blocker, rejected]);
       expect(selectReport).not.toHaveBeenCalled();
-      expect(readFileSync(databasePath)).toEqual(readFileSync(retired));
+      expectBytesEqual(readFileSync(databasePath), readFileSync(retired), "replacement database");
     } finally {
       release.resolve();
       await Promise.allSettled([blocker, report]);

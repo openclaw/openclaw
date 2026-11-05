@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import * as lazyElements from "../app/lazy-custom-element.ts";
 import {
   agentIds,
@@ -31,6 +31,8 @@ import {
 } from "./session-organizer-menu.runtime.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import "../lib/toast-host.tsx";
+
+beforeEach(() => document.body.append(document.createElement("openclaw-toast-host")));
 
 function failModalPreparation(error: Error, pending?: Promise<void>) {
   const get = customElements.get.bind(customElements);
@@ -67,7 +69,7 @@ it.each<[string, DialogAction]>([
   ["group create", (owner) => createSessionGroup(owner)],
   ["group rename", (owner) => renameGroup(owner, "Drafts")],
   ["group defaults", (owner) => editDefaults(owner, "Drafts")],
-])("reports %s dialog preparation failure in the sidebar", async (_kind, run) => {
+])("toasts %s dialog preparation failure at the top right", async (_kind, run) => {
   const request = createGatewayRequestMock();
   const gateway = createGatewayHarness(createTestGatewayClient(request));
   gateway.publish({
@@ -93,13 +95,16 @@ it.each<[string, DialogAction]>([
       method: "sessions.reclaim" as const,
       requiredScope: "operator.write" as const,
       blocksActiveRun: true,
+      copyKey: "sessionsView.stopCloudWorker" as const,
     },
   };
   const failure = new Error("Synthetic dialog preparation failed");
   failModalPreparation(failure);
   await expect(run(organizer, row)).resolves.toBeUndefined();
   await vi.waitFor(() =>
-    expect(sidebar.querySelector('[role="alert"]')?.textContent).toContain(failure.message),
+    expect(
+      document.querySelector(".app-toast-lane--top-right [role=alert]")?.textContent,
+    ).toContain(failure.message),
   );
   expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
   expect(sessions.deleteSession).not.toHaveBeenCalled();
@@ -114,7 +119,6 @@ it.each<[string, DialogAction]>([
 });
 
 it("reports agent-delete dialog preparation failure and permits a safe retry", async () => {
-  document.body.append(document.createElement("openclaw-toast-host"));
   const { sidebar, context, gatewayHarness, request } = await mountRoster(roster, []);
   context.agents.refreshList = vi.fn(async () => context.agents.state.agentsList);
   gatewayHarness.publish({
@@ -164,6 +168,6 @@ it("does not publish a retired group dialog preparation error to a replacement c
   await sidebar.updateComplete;
   preparation.reject(failure);
   await expect(pending).resolves.toBeUndefined();
-  expect(sidebar.querySelector('[role="alert"]')).toBeNull();
+  expect(document.querySelector(".app-toast[role=alert]")).toBeNull();
   expect(sessions.groupsPut).not.toHaveBeenCalled();
 });

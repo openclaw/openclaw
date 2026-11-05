@@ -1,9 +1,10 @@
 import { resolveMutableAgentEntry } from "../agents/agent-scope-config.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
+import { resolveConfiguredModelPolicyAllow } from "../agents/model-selection-shared.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { applyModelAllowlist } from "../flows/model-picker-allowlist.js";
 import {
-  applyModelAllowlist,
   applyModelFallbacksFromSelection,
   promptDefaultModel,
   promptModelAllowlist,
@@ -182,6 +183,11 @@ export async function promptAuthConfig(
     break;
   }
 
+  // Configure never creates a model allowlist. Judge from the saved config: wizard steps
+  // add model metadata that an unmarked in-memory config would read as a legacy allowlist.
+  const hasAllowlist =
+    resolveConfiguredModelPolicyAllow({ cfg, agentId: target.agentId }).refs.length > 0;
+
   if (authChoice !== "custom-api-key") {
     const config = next;
     const workspaceDir = target.workspaceDir;
@@ -241,6 +247,7 @@ export async function promptAuthConfig(
       preferredProvider: promptProvider,
       providerScopedCatalog: useProviderScopedCatalog,
       loadCatalog: shouldLoadModelCatalog,
+      restrictsPicker: hasAllowlist,
     });
     if (allowlistSelection.models) {
       const selectedModels = allowlistSelection.models;
@@ -252,15 +259,21 @@ export async function promptAuthConfig(
       if (canonicalPrimary) {
         next = applyOnboardingPrimaryModel(next, target, canonicalPrimary);
       }
-      next = applyAgentModelDefaults(next, target, (projected) =>
-        applyModelAllowlist(
-          applyModelFallbacksFromSelection(projected, selectedModels, {
-            scopeKeys: allowlistSelection.scopeKeys,
-          }),
-          selectedModels,
-          { scopeKeys: allowlistSelection.scopeKeys },
-        ),
-      );
+      const { scopeKeys } = allowlistSelection;
+      next = applyAgentModelDefaults(next, target, (projected) => {
+        // An unscoped selection edits the saved policy as a whole; its entries can be
+        // wildcards, which are not fallback models.
+        const withFallbacks =
+          hasAllowlist && !scopeKeys
+            ? projected
+            : applyModelFallbacksFromSelection(projected, selectedModels, {
+                scopeKeys,
+                fallbacksOnly: !hasAllowlist,
+              });
+        return hasAllowlist
+          ? applyModelAllowlist(withFallbacks, selectedModels, { scopeKeys })
+          : withFallbacks;
+      });
     }
   }
 

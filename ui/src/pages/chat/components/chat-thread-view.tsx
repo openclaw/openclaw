@@ -89,7 +89,21 @@ export function ChatThread(input: {
   const paneId = createMemo(() => input.props.paneId);
   onSettled(() => {
     const element = root();
-    return element && registerTranscriptElement(paneId(), element);
+    const unregister = element && registerTranscriptElement(paneId(), element);
+    const searchState = getTranscriptState(paneId()).search;
+    let query = searchState.snapshot.query.trim();
+    const stopSearch = searchState.subscribe(() => {
+      const nextQuery = searchState.snapshot.query.trim();
+      if (nextQuery && nextQuery !== query) {
+        // A live reply remains below the matches; end-follow must not hide them.
+        input.transcript.scrollToOffset(0);
+      }
+      query = nextQuery;
+    });
+    return () => {
+      stopSearch();
+      unregister?.();
+    };
   });
   const isPresented = usePanePresentation(() => input.props.transcriptVisible ?? true);
   const search = createMemo(() =>
@@ -252,13 +266,13 @@ export function ChatThread(input: {
           },
         ]}
         role="log"
+        data-restoring={input.props.restoring ? "" : undefined}
         aria-label={t("chat.sidePanel.conversation")}
         aria-live="off"
         aria-relevant="additions"
         tabindex={0}
         onFocusIn={(event) => current().session.handleFocusIn(event)}
         onFocusOut={(event) => current().session.handleFocusOut(event)}
-        onScroll={(event) => input.props.onChatScroll?.(event)}
         onKeyDown={(event) => {
           if (
             !event.defaultPrevented &&

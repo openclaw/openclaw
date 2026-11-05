@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -27,6 +27,68 @@ const invalidReports = [
 ];
 const invalidApks = ["missing-abi", "wrong-variant", "ambiguous-output", "outside-output"];
 
+it.skipIf(process.platform === "win32").each(["offline", "responsive"])(
+  "disposes the owned emulator after boot failure with %s ADB",
+  (mode) => {
+    const root = tempDirs.make("openclaw-android-cleanup-");
+    const lines = step.run.split("\n");
+    const cleanup = lines
+      .slice(
+        lines.findIndex((line: string) => line.includes("emulator -avd openclaw-access")),
+        lines.indexOf("trap cleanup EXIT") + 1,
+      )
+      .join("\n");
+    const fixture = String.raw`
+from pathlib import Path
+import json, os, shutil, signal, subprocess, sys
+root = Path(sys.argv[1])
+mode = sys.argv[2]
+timeout = shutil.which('gtimeout') or shutil.which('timeout')
+assert timeout, 'GNU timeout is required for the Linux workflow fixture'
+for directory in ('bin', 'scripts'): (root / directory).mkdir()
+def executable(name, source):
+    target = root / name
+    target.write_text(source)
+    target.chmod(0o755)
+# Shorten unavailable-ADB deadlines; healthy commands keep their production budgets.
+executable('bin/timeout', '#!/usr/bin/env python3\nimport os,sys\na=["--kill-after=0.1s" if s.startswith("--kill-after=") else "0.5s" if ' + repr(mode) + ' == "offline" and s in ("10s","60s") else s for s in sys.argv[1:]]\nos.execv(' + repr(timeout) + ', [' + repr(timeout) + ']+a)\n')
+executable('bin/emulator', '#!/usr/bin/env python3\nimport os,signal\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\nprint("emulator boot diagnostic", flush=True)\nwith open(os.environ["RUNNER_TEMP"]+"/device.pid","w") as f: f.write(str(os.getpid()))\nwith open(os.environ["FIXTURE_READY"],"w") as f: f.write("ready\\n")\nsignal.pause()\n')
+executable('bin/adb', '#!/usr/bin/env python3\nimport signal,sys\nif ' + repr(mode) + ' == "responsive": sys.exit(0)\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\nsignal.pause()\n')
+executable('scripts/android-native-tls-trust.sh', '#!/bin/bash\nexec adb trust-cleanup\n')
+executable('bin/avdmanager', '#!/bin/bash\nprintf deleted > "$RUNNER_TEMP/deleted"\n')
+os.mkfifo(root / 'ready')
+body = 'set -euo pipefail\n' + sys.argv[3].replace('/usr/bin/timeout', str(root / 'bin/timeout'))
+body += '\nprintf "%s\\n" "$emulator_pid" > "$RUNNER_TEMP/monitor.pid"\nread -r ready < "$FIXTURE_READY"\nexit 124\n'
+env = {**os.environ, 'RUNNER_TEMP': str(root), 'FIXTURE_READY': str(root / 'ready'), 'PATH': str(root / 'bin') + ':' + os.environ['PATH']}
+process = subprocess.Popen([sys.argv[4], '-c', body], cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+try:
+    out, err = process.communicate(timeout=4)
+    sys.stderr.write(err.decode())
+    state = root / 'android-native-tls-trust'
+    device = (root / 'device.pid').read_text()
+    remaining = subprocess.run(['ps', '-o', 'stat=', '-p', device], capture_output=True, text=True).stdout.strip()
+    print(json.dumps({'status': process.returncode, 'deleted': (root / 'deleted').exists(), 'diagnostic': (state / 'access-emulator.log').read_text(), 'cleanupFailed': (state / 'CLEANUP-FAILED.txt').exists(), 'disposed': not remaining or remaining.startswith('Z')}))
+finally:
+    for pid in [process.pid] + ([int((root / 'monitor.pid').read_text())] if (root / 'monitor.pid').exists() else []):
+        try: os.killpg(pid, signal.SIGKILL)
+        except ProcessLookupError: pass
+    process.communicate()
+`;
+    const result = spawnSync("python3", ["-c", fixture, root, mode, cleanup, workflowBash], {
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout), result.stderr).toEqual({
+      status: mode === "offline" ? 1 : 124,
+      deleted: true,
+      diagnostic: "emulator boot diagnostic\n",
+      cleanupFailed: mode === "offline",
+      disposed: true,
+    });
+  },
+);
+
 function rootAdmission(
   rootStatus: number,
   rootOutput: string,
@@ -47,10 +109,17 @@ set -euo pipefail
 [[ "$1/$2" == -s/emulator-5554 ]]
 shift 2
 printf '%s\\n' "$*" >> "$ADB_TEST_CALLS"
+if [[ "$*" == wait-for-device ]]; then
+  rm -f "$ADB_TEST_OFFLINE"
+  exit "$ADB_TEST_WAIT_STATUS"
+fi
+if [[ -f "$ADB_TEST_OFFLINE" ]]; then
+  echo 'error: device offline' >&2
+  exit 1
+fi
 case "$*" in
   'shell getprop ro.kernel.qemu') echo 1 ;;
   root) printf '%s\\n' "$ADB_TEST_ROOT_OUTPUT" >&2; exit "$ADB_TEST_ROOT_STATUS" ;;
-  wait-for-device) exit "$ADB_TEST_WAIT_STATUS" ;;
   'shell id -u') printf '%s\\r\\n' "$ADB_TEST_UID"; exit "$ADB_TEST_UID_STATUS" ;;
   'shell getprop ro.build.fingerprint') exit 91 ;;
   'shell am force-stop ai.openclaw.app.debug' | uninstall*) ;;
@@ -67,6 +136,7 @@ esac
     ADB_TEST_ROOT_OUTPUT: rootOutput,
     ADB_TEST_ROOT_STATUS: String(rootStatus),
     ADB_TEST_WAIT_STATUS: String(waitStatus),
+    ADB_TEST_OFFLINE: path.join(root, "offline"),
     ADB_TEST_UID: uid,
     ADB_TEST_UID_STATUS: String(uidStatus),
   };
@@ -76,7 +146,7 @@ esac
       encoding: "utf8",
       timeout: 5_000,
     });
-  return { result: run("prepare"), run, state, calls };
+  return { result: run("prepare"), run, state, calls, offline: env.ADB_TEST_OFFLINE };
 }
 
 it.each([
@@ -105,15 +175,28 @@ it.each([
   },
 );
 
-it("can clean up a rejected root admission without a trust baseline", () => {
-  const fixture = rootAdmission(1, "adb: unable to connect for root: closed", 0, "2000");
-  expect(fixture.result.status).toBe(1);
-  const cleanup = fixture.run("cleanup");
-  expect(cleanup.status, cleanup.stderr).toBe(0);
-  expect(readFileSync(path.join(fixture.state, "CLEANUP.txt"), "utf8")).toBe(
-    "No trust baseline captured; no trust mutation attempted.\n",
-  );
-});
+it.each([0, 43])(
+  "requires reconnecting before trust cleanup (readiness status %s)",
+  (waitStatus) => {
+    const fixture = rootAdmission(
+      1,
+      "adb: unable to connect for root: closed",
+      0,
+      "2000",
+      waitStatus,
+    );
+    expect(fixture.result.status).toBe(waitStatus || 1);
+    writeFileSync(fixture.offline, "disconnected\n");
+    const cleanup = fixture.run("cleanup");
+    expect(cleanup.status, cleanup.stderr).toBe(waitStatus);
+    expect(existsSync(path.join(fixture.state, "CLEANUP.txt"))).toBe(waitStatus === 0);
+    if (waitStatus === 0) {
+      expect(readFileSync(path.join(fixture.state, "CLEANUP.txt"), "utf8")).toBe(
+        "No trust baseline captured; no trust mutation attempted.\n",
+      );
+    }
+  },
+);
 
 function verifyReports(mode: string) {
   const root = tempDirs.make("openclaw-access-reports-");

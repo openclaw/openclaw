@@ -126,10 +126,10 @@ if (cpuThrottle !== 1 && engines.includes("webkit")) {
   );
 }
 const networkProfiles = values["network-profiles"].split(",").map((name) => {
-  if (name !== "localhost" && name !== "rtt-100ms") {
+  if (name !== "localhost" && name !== "rtt-100ms" && name !== "rtt-250ms") {
     throw new Error(`Unsupported network profile: ${name}`);
   }
-  const latencyMs = name === "localhost" ? 0 : 100;
+  const latencyMs = name === "localhost" ? 0 : name === "rtt-100ms" ? 100 : 250;
   return { name, httpLatencyMs: latencyMs, gatewayLatencyMs: latencyMs };
 });
 type NetworkProfile = (typeof networkProfiles)[number];

@@ -21,6 +21,10 @@
   --list-row-min-height: 48px;
   --list-row-padding: var(--space-3) var(--space-4);
   --list-row-icon-size: 15px;
+  --chrome-icon-size: 14px;
+  /* Lucide draws on a 24 grid, so these strokes render at 1px at their icon size. */
+  --list-row-icon-stroke: 1.6px;
+  --chrome-icon-stroke: calc(12px / 7);
   --list-row-title-weight: 500;
   --surface-hover-amount: 6%;
   --surface-selected-amount: 8%;
@@ -40,6 +44,8 @@
   --popover: #191c24;
   --popover-foreground: #f0f0f2;
   --chat-send-foreground: var(--primary-foreground);
+  --chat-send-hover-bg: color-mix(in srgb, var(--primary) 86%, var(--text-strong));
+  --chat-send-active-bg: var(--primary-active);
   --chat-composer-surface: var(--popover);
   /* Composer controls take their ink from the composer's own surface rather
      than the canvas. Built-in dark themes lift that surface well above the
@@ -86,7 +92,7 @@
   --sidebar-toolbar-action-opacity: 1;
   --sidebar-rail-action-bg: var(--accent);
   --sidebar-rail-action-hover-bg: var(--accent-hover);
-  --sidebar-rail-action-active-bg: color-mix(in srgb, var(--accent) 90%, var(--text));
+  --sidebar-rail-action-active-bg: var(--accent-active);
 
   /* GitHub references share an opaque neutral surface; only their ink carries status. */
   --github-item-bg: color-mix(in srgb, var(--text) 6%, var(--bg));
@@ -111,12 +117,9 @@
   --rail-header-action-disabled-opacity: 0.4;
   --rail-header-action-gap: 2px;
   --rail-header-background: var(--bg);
-  --session-header-sharing-surface: color-mix(in srgb, var(--text) 4%, transparent);
-  --session-header-control-surface: color-mix(in srgb, var(--text) 5%, transparent);
+  --session-header-control-surface: var(--surface-selected);
   --session-header-control-hover-bg: var(--surface-hover);
-  --session-header-control-active-hover-bg: color-mix(in srgb, var(--text) 10%, transparent);
-  --session-header-sharing-hover-bg: var(--surface-hover);
-  --session-header-sharing-active-bg: var(--session-header-control-active-hover-bg);
+  --session-header-control-active-hover-bg: var(--surface-selected-hover);
   --session-header-control-active-color: var(--icon-active);
   --rail-header-title-size: var(--control-ui-text-sm);
   --rail-header-title-weight: 600;
@@ -137,6 +140,7 @@
   --accent-muted: #ff5c5c;
   --accent-subtle: rgba(255, 92, 92, 0.1);
   --accent-foreground: #0e1015;
+  --accent-active: var(--accent);
   --accent-glow: rgba(255, 92, 92, 0.2);
   --inbox-attention: #e5243b;
   --inbox-attention-foreground: #ffffff;
@@ -167,6 +171,7 @@
   /* Imported palettes supply a fill/ink pair, not a hover pair. Keep their
      contrast intact; built-in palettes override with audited hover colors. */
   --primary-hover: var(--primary);
+  --primary-active: var(--primary);
   --primary-foreground: #ffffff;
 
   --secondary: #161920;
@@ -253,6 +258,8 @@
   --danger-muted: rgba(248, 113, 113, 0.75);
   --danger-subtle: rgba(248, 113, 113, 0.08);
   --info: #60a5fa;
+  /* A run in progress: the accent, unless a theme's accent reads as waiting or as plain text. */
+  --status-running: var(--accent);
   --info-subtle: rgba(96, 165, 250, 0.08);
   --pr-merged: #a78bfa;
   /* Categorical chart series: distinct hues validated for color-vision separation on this surface. */
@@ -304,6 +311,13 @@
   --control-ui-text-md: calc(14px * var(--control-ui-text-scale));
   --control-ui-text-lg: calc(16px * var(--control-ui-text-scale));
   --control-ui-input-text-size: max(16px, calc(14px * var(--control-ui-text-scale)));
+  --field-padding-inline: 10px;
+  --field-radius: calc(10px * var(--openclaw-corner-radius-scale));
+  --composer-radius: calc(20px * var(--openclaw-corner-radius-scale));
+  --field-font-size: var(--control-ui-text-sm);
+  --field-bg: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  --field-border: color-mix(in srgb, var(--border) 70%, transparent);
+  --field-focus-border: color-mix(in srgb, var(--accent) 85%, var(--text));
   --chat-text-size: var(--control-ui-text-md);
   --chat-block-gap: var(--chat-text-size);
 
@@ -355,6 +369,15 @@
   --radius-full: 9999px;
   --radius: 10px;
 
+  /* Every spinner: a closed ring at 20% with a short round-capped arc on top.
+     A mask paints currentColor, and each stroke stays the same px at any size. */
+  --spinner-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='2'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 1.0px)}%3C/style%3E%3Ccircle opacity='.2'/%3E%3Ccircle pathLength='100' stroke-dasharray='26 74' stroke-linecap='round'/%3E%3C/svg%3E");
+  --spinner-mask-small: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='1.5'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 0.75px)}%3C/style%3E%3Ccircle opacity='.2'/%3E%3Ccircle pathLength='100' stroke-dasharray='26 74' stroke-linecap='round'/%3E%3C/svg%3E");
+  --spinner-mask-avatar: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='1.75'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 0.875px)}%3C/style%3E%3Ccircle opacity='.2'/%3E%3Ccircle pathLength='100' stroke-dasharray='26 74' stroke-linecap='round'/%3E%3C/svg%3E");
+  --spinner-mask-large: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='2.5'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 1.25px)}%3C/style%3E%3Ccircle opacity='.2'/%3E%3Ccircle pathLength='100' stroke-dasharray='26 74' stroke-linecap='round'/%3E%3C/svg%3E");
+  --spinner-trace-stroke: 1.75px;
+  --spinner-trace-dash: 26 74;
+
   /* One profile for every scroll surface: 12px hit target, 6px visible thumb
      (transparent border + content-box clip). Derived from --muted so every
      theme family and both modes follow with no override. scrollbar-color is a
@@ -380,14 +403,22 @@
   /* Menu steps sit on the --radius-* chain so themes keep their corner character;
      near-square themes pin them. Shared knobs keep transient menus from drifting. */
   --radius-menu: calc(var(--radius-md) * 1.6 * var(--openclaw-corner-radius-scale));
-  --radius-menu-item: calc(var(--radius-sm) * 2 * var(--openclaw-corner-radius-scale));
+  --radius-menu-item: calc(var(--radius-md) * var(--openclaw-corner-radius-scale));
   --radius-tooltip: calc(var(--radius-sm) * 1.25 * var(--openclaw-corner-radius-scale));
   --menu-radius: var(--radius-menu);
+  --menu-radius-large: 22px;
   --menu-item-radius: var(--radius-menu-item);
   --menu-item-height: 28px;
   --menu-padding: 4px;
+  --menu-item-gap: 2px;
   --menu-selected: var(--surface-selected);
-  --menu-surface: color-mix(in srgb, var(--popover) 90%, transparent);
+  /* Half the selected fill: an unchosen choice row must not read as the chosen one. */
+  --menu-hover: color-mix(
+    in srgb,
+    var(--text) calc(var(--surface-selected-amount) / 2),
+    transparent
+  );
+  --menu-surface: color-mix(in srgb, var(--popover) 95%, transparent);
   --menu-backdrop: blur(8px);
   /* Hairlines are spread shadows so they never consume the panel's box. */
   --menu-shadow:
@@ -405,6 +436,18 @@
   --duration-fast: 100ms;
   --duration-normal: 180ms;
   --duration-slow: 300ms;
+  /* Loading placeholder sweep: `.skeleton::after`. */
+  --skeleton-duration: 2s;
+  --skeleton-easing: ease-in-out;
+  --skeleton-highlight-strength: 12%;
+  --skeleton-sweep-width: 50%;
+  /* Sits past the surface in both modes, so the sweep never passes through the surface color. */
+  --skeleton-base-raised: color-mix(in srgb, var(--muted) 15%, transparent);
+  /* Running label sweep: `.text-shimmer`. */
+  --text-shimmer-duration: 2.4s;
+  --text-shimmer-easing: ease-in-out;
+  --text-shimmer-highlight-strength: 100%;
+  --text-shimmer-sweep-width: 30%;
   /* Sheet spring from ui/src/lib/motion/spring.ts (SwiftUI duration/bounce model:
      0.3 s, no bounce, fitted to the iOS sheet curve). spring.test.ts keeps it in sync. */
   --motion-sheet-duration: 441ms;
@@ -451,10 +494,26 @@
   color-scheme: dark;
 }
 
-/* Menu actions follow the platform 44px touch-target contract for coarse pointers. */
+/* Touch menu rows sit one step above the 38px touch controls; phones keep their taller rows. */
 @media (pointer: coarse) {
   :root {
+    --menu-item-height: 40px;
+  }
+}
+
+@media (pointer: coarse) and (max-width: 640px) {
+  :root {
     --menu-item-height: 44px;
+  }
+}
+
+/* A still spinner shows the full ring, so it reads as a status and not a frozen arc. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --spinner-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='2'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 1.0px)}%3C/style%3E%3Ccircle/%3E%3C/svg%3E");
+    --spinner-mask-small: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='1.5'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 0.75px)}%3C/style%3E%3Ccircle/%3E%3C/svg%3E");
+    --spinner-mask-avatar: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='1.75'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 0.875px)}%3C/style%3E%3Ccircle/%3E%3C/svg%3E");
+    --spinner-mask-large: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100%25' height='100%25' fill='none' stroke='%23000' stroke-width='2.5'%3E%3Cstyle%3Ecircle{cx:50%25;cy:50%25;r:calc(50%25 - 1.25px)}%3C/style%3E%3Ccircle/%3E%3C/svg%3E");
   }
 }
 
@@ -498,7 +557,6 @@
   .exec-approval-list.exec-approval-list,
   .login-gate__card.login-gate__card,
   .card.card,
-  .settings-group.settings-group,
   .option-card__choice.option-card__choice {
     border-radius: calc(14px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
@@ -513,10 +571,7 @@
   .sidebar-recent-session.sidebar-recent-session,
   .plugin-catalog-detail__security-score.plugin-catalog-detail__security-score,
   .settings-sidebar__item.settings-sidebar__item,
-  .btn.btn,
-  .agent-select__trigger.agent-select__trigger,
-  .settings-input.settings-input,
-  .field.field :is(input, textarea, select) {
+  .btn.btn {
     border-radius: calc(10px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
   }
@@ -536,8 +591,9 @@
     corner-shape: superellipse(1.5);
   }
 
-  .option-card.option-card {
-    border-radius: calc(20px * var(--openclaw-corner-radius-scale));
+  .option-card.option-card,
+  .settings-group.settings-group {
+    border-radius: var(--composer-radius);
     corner-shape: superellipse(1.5);
   }
 
@@ -548,24 +604,11 @@
     corner-shape: superellipse(1.5);
   }
 
-  /* Menu panels and items get the same direct-property treatment: item
-     radius is computed inline as panel-minus-padding rather than read from
-     --menu-item-radius, so nothing here is inheritable either. */
+  /* Menu panels take their radius from --menu-radius in their home rules; only
+     the shape is added here. Menu rows get theirs in overlay.css. */
   .slash-menu.slash-menu,
   .chat-reply-context-menu.chat-reply-context-menu,
   .chat-selection-popup.chat-selection-popup {
-    border-radius: calc(10px * var(--openclaw-corner-radius-scale));
-    corner-shape: superellipse(1.5);
-  }
-
-  /* Items pick up corner-shape too, not just the scaled radius: corner-shape
-     doesn't inherit, and a bigger round radius sitting inside a squircle
-     panel with no shape of its own reads as an unrelated smaller circle
-     poking out of a superellipse, not a coherent nested row. */
-  .slash-menu-item.slash-menu-item,
-  .chat-reply-context-menu.chat-reply-context-menu button,
-  .chat-selection-popup.chat-selection-popup button {
-    border-radius: calc(10px * var(--openclaw-corner-radius-scale) - 4px);
     corner-shape: superellipse(1.5);
   }
 }
@@ -615,9 +658,6 @@
   --surface-hover-amount: 4%;
   --surface-selected-amount: 6%;
   --surface-selected-hover-amount: 9%;
-  --session-header-sharing-surface: color-mix(in srgb, var(--text) 3%, transparent);
-  --session-header-control-surface: var(--surface-selected);
-  --session-header-control-active-hover-bg: var(--surface-selected-hover);
   --subagent-avatar-ink: 45% 36%;
   --subagent-avatar-tint: 45% 94%;
   --subagent-avatar-tint-strength: 100%;
@@ -958,14 +998,6 @@ summary,
   }
 }
 
-/* iOS Safari shows the document canvas around its browser chrome. The system
-   chrome owner selects it where the exposed narrow route canvas or the open
-   navigation drawer's backdrop differs from the page surface. */
-html.control-ui-system-chrome-canvas,
-.control-ui-system-chrome-canvas body {
-  background: var(--control-ui-system-chrome-background, var(--bg));
-}
-
 /* iOS Safari zooms the viewport when a focused text control is under 16px;
    important keeps feature-local typography from silently dropping this floor.
    Controls that manage their own touch size declare it via
@@ -1062,7 +1094,6 @@ a:where(
     .settings-row__value,
     .memory-page__link,
     .portals-preview__notice-url,
-    .settings-account,
     .transcripts-back,
     .chat-text a,
     .chat-thinking a,
@@ -1205,14 +1236,39 @@ textarea,
 }
 
 /* Sweep a 200%-wide text-clipped gradient with matching end stops one full
-   period per cycle so the loop wraps seamlessly. Consumers set the gradient,
-   duration, and easing. */
+   period per cycle so the loop wraps seamlessly. `.text-shimmer` owns the
+   gradient, duration, and easing. */
 @keyframes text-shimmer {
   from {
     background-position: 100% 0;
   }
   to {
     background-position: -100% 0;
+  }
+}
+
+/* Running labels. Add the class only while the work is active. Accessibility modes
+   and browsers without text clipping keep the element's own static text. */
+@supports (background-clip: text) or (-webkit-background-clip: text) {
+  @media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
+    /* Doubled so a surface's own `background` reset cannot leave transparent text unpainted. */
+    .text-shimmer.text-shimmer {
+      background-image: linear-gradient(
+        90deg,
+        var(--muted) 0%,
+        var(--muted) calc(50% - var(--text-shimmer-sweep-width) / 2),
+        color-mix(in srgb, var(--text) var(--text-shimmer-highlight-strength), var(--muted)) 50%,
+        var(--muted) calc(50% + var(--text-shimmer-sweep-width) / 2),
+        var(--muted) 100%
+      );
+      background-size: 200% 100%;
+      background-repeat: repeat-x;
+      -webkit-background-clip: text;
+      background-clip: text;
+      /* Inherited, so nested syntax tokens and names paint through the gradient too. */
+      -webkit-text-fill-color: transparent;
+      animation: text-shimmer var(--text-shimmer-duration) var(--text-shimmer-easing) infinite;
+    }
   }
 }
 
@@ -1228,14 +1284,14 @@ textarea,
   inset: 0;
   background: linear-gradient(
     90deg,
-    transparent 25%,
-    var(--skeleton-highlight, var(--bg-hover)) 50%,
-    transparent 75%
+    transparent calc(50% - var(--skeleton-sweep-width) / 2),
+    color-mix(in srgb, var(--text) var(--skeleton-highlight-strength), transparent) 50%,
+    transparent calc(50% + var(--skeleton-sweep-width) / 2)
   );
   content: "";
-  /* Keep the highlight offscreen when reduced motion disables the sweep. */
+  /* Keep the highlight offscreen when accessibility modes disable the sweep. */
   transform: translateX(-100%);
-  animation: shimmer var(--skeleton-duration, 1.5s) ease-in-out infinite;
+  animation: shimmer var(--skeleton-duration) var(--skeleton-easing) infinite;
   will-change: transform;
 }
 
@@ -1262,11 +1318,13 @@ textarea,
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
+@media (prefers-reduced-motion: reduce), (forced-colors: active) {
   .skeleton::after {
     animation: none !important;
   }
+}
 
+@media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
@@ -1280,7 +1338,7 @@ textarea,
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--ring);
   outline-offset: 2px;
 }
 

@@ -230,6 +230,11 @@ transcription, xAI's Grok Voice Agent WebSocket for Talk realtime sessions,
 and the Responses API for chat, search, and code-execution tools.
 </Note>
 
+For vision input, inline GIFs are sent to xAI as first-frame JPEG images, including
+images retained from `view_image` on later turns. Stored image bytes are unchanged.
+PNG, JPEG, and WebP inputs keep their existing formats. Encoding errors use the
+existing request failure handling.
+
 ### Legacy fast-mode compatibility
 
 `/fast on` or `agents.defaults.models["xai/<model>"].params.fastMode: true`

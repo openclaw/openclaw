@@ -41,6 +41,8 @@ import {
   type SessionEntryPair,
 } from "./session-list-order.js";
 import { bindSessionListRowRead } from "./session-list-read-result.js";
+import { retainCurrentSessionListPartitions } from "./session-list-view-cache.js";
+import { resolveProfileActivityViewerId } from "./session-profile-activity-policy.js";
 import type { SessionRowGeneration } from "./session-row-identity.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import {
@@ -65,7 +67,7 @@ export function selectSessionEntries(
   params: SessionListFilterParams & {
     defaultLimit?: number;
     partitions?: ReturnType<ReturnType<typeof createSessionRowSelection>["read"]>["partitions"];
-    retained?: WeakMap<object, SessionListFilteredEntries>;
+    retained?: Map<object, SessionListFilteredEntries>;
   },
 ): SessionEntrySelection {
   const limit = resolveOptionalIntegerOption(params.opts.limit, { min: 1 }) ?? params.defaultLimit;
@@ -84,6 +86,7 @@ export function selectSessionEntries(
     !params.opts.includeOwnerSessionCounts;
   let filteredResult: SessionListFilteredEntries;
   if (incremental) {
+    retainCurrentSessionListPartitions(params.retained!, params.partitions!);
     const pages: SessionEntryPair[][] = [];
     const ownerPages: SessionEntryPair[][] = [];
     const owners = new Map<string, SessionListFilteredEntries["ownerFacet"][number]>();
@@ -470,6 +473,11 @@ export function prepareProjectedSessionList(params: {
     involvingActorId: opts.involvingMe ? identity : undefined,
     ownerFirstActorId: opts.ownerFirst ? identity : undefined,
     restrictProfileReferences: client !== undefined,
+    profileActivityViewerId: resolveProfileActivityViewerId(
+      client,
+      presentation.sharing.policy?.scopes,
+      identity,
+    ),
     projectActiveRun: context ? (key) => active(getTarget(key)!)! : undefined,
     entryFilter:
       (client === undefined || !presentation.sharing.entryFilter) &&
@@ -508,17 +516,15 @@ export function prepareProjectedSessionList(params: {
             );
           },
   };
-  const ownerRunningCandidateKeys = () =>
-    prepared.candidateKeys(
-      new Set([
-        ...(projectRun?.candidateSessionIdsOrKeys() ?? []),
-        ...[...presentation.rowContext.subagentRuns.requesterSessionKeys()].filter(
-          (key) => presentation.rowContext.subagentRuns.countActiveDescendantRuns(key) > 0,
-        ),
-        ...(presentation.rowContext.projectedSubagentActivity ?? []),
-      ]),
-    );
-  return { prepared, presentation, filters, ownerRunningCandidateKeys };
+  return {
+    prepared,
+    presentation,
+    filters,
+    activeRunCandidateKeys: () => {
+      const identities = projectRun?.candidateSessionIdsOrKeys();
+      return identities?.size ? prepared.candidateKeys(identities) : undefined;
+    },
+  };
 }
 
 /** Prepare selected rows, then authorize and present them in one synchronous boundary. */
@@ -564,7 +570,7 @@ export async function listProjectedSessions(params: {
       try {
         diagnostics?.mark("storeLoad");
         const now = Date.now();
-        const { presentation, prepared, filters, ownerRunningCandidateKeys } =
+        const { presentation, prepared, filters, activeRunCandidateKeys } =
           prepareProjectedSessionList({
             projection,
             opts,
@@ -576,7 +582,7 @@ export async function listProjectedSessions(params: {
             metadataPrepared: true,
           });
         diagnostics?.mark("filterSetup");
-        const select = (retained?: WeakMap<object, SessionListFilteredEntries>) =>
+        const select = (retained?: Map<object, SessionListFilteredEntries>) =>
           withAgentRosterFactsBatch(prepared.cfg, () =>
             selectSessionEntries({
               ...filters,
@@ -593,11 +599,7 @@ export async function listProjectedSessions(params: {
           now,
           presentation,
           prepared,
-          selection: projectSessionOwnerRunningCounts(
-            filters,
-            selection,
-            ownerRunningCandidateKeys,
-          ),
+          selection: projectSessionOwnerRunningCounts(filters, selection, activeRunCandidateKeys),
         };
       } finally {
         diagnostics?.finishSyncCpu("prepareThreadCpuMs", syncCpu);

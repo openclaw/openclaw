@@ -85,6 +85,24 @@ export function captureAgentToolSourceExecutionGuard(signal?: AbortSignal): Sess
   });
 }
 
+const pluginToolInvocationSources = resolveGlobalSingleton(
+  Symbol.for("openclaw.pluginToolInvocationSource"),
+  () => new AsyncLocalStorage<SessionSourceAssertion>(),
+);
+
+/**
+ * Plugin tools are built before their call; freeze the invoking caller's source authority at
+ * call entry, before the first await, so the plugin's invocation guard rechecks that caller.
+ */
+export function runWithPluginToolInvocationSource<T>(run: () => Promise<T>): Promise<T> {
+  return pluginToolInvocationSources.run(captureAgentToolSourceExecutionGuard(), run);
+}
+
+/** The invocation guard's caller part; outside a plugin tool call there is none to check. */
+export function assertPluginToolInvocationSourceCurrent(): void {
+  pluginToolInvocationSources.getStore()?.();
+}
+
 /** Prepare storage authority for one effect; its final callback checks the retained receipt. */
 export function runWithAgentToolSourceExecutionScope<T>(
   source: SessionSourceAssertion | undefined,

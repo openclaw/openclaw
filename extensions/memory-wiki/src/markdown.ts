@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import YAML from "yaml";
+import { FRONTMATTER_PATTERN, renderWikiFrontmatter } from "./frontmatter-source.js";
 import { extractWikiLinks, maskMarkdownCode } from "./markdown-links.js";
 import { WIKI_PAGE_GROUPS, type WikiPageKind } from "./wiki-page-kinds.js";
 
@@ -76,7 +77,6 @@ type WikiPageSummaryScanResult =
   | { status: "invalid-frontmatter"; error: WikiPageFrontmatterError }
   | { status: "ignored" };
 
-const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 const MAX_WIKI_SEGMENT_BYTES = 240;
 const MAX_WIKI_FILENAME_COMPONENT_BYTES = 255;
 const FS_SAFE_PINNED_WRITE_TEMP_SUFFIX = ".00000000-0000-4000-8000-000000000000.fallback.tmp";
@@ -151,14 +151,25 @@ export function parseWikiMarkdown(content: string): ParsedWikiMarkdown {
 export function renderWikiMarkdown(params: {
   frontmatter: Record<string, unknown>;
   body: string;
+  /** Current page text; ordinary mappings preserve untouched source, other graphs render values. */
+  original?: string;
 }): string {
-  const frontmatter = YAML.stringify(params.frontmatter).trimEnd();
+  const frontmatter = renderWikiFrontmatter(params.frontmatter, params.original);
   return `---\n${frontmatter}\n---\n\n${params.body.trimStart()}`;
 }
 
 function extractTitleFromMarkdown(body: string): string | undefined {
-  const match = body.match(/^#\s+(.+?)\s*$/m);
-  return normalizeOptionalString(match?.[1]);
+  // Masking keeps offsets: "# comment" lines in code cannot match, and the title is
+  // read from the unmasked line so inline code in a real heading survives.
+  for (const heading of maskMarkdownCode(body).matchAll(/^#[ \t].*$/gm)) {
+    const title = normalizeOptionalString(
+      body.slice(heading.index + 1, heading.index + heading[0].length),
+    );
+    if (title) {
+      return title;
+    }
+  }
+  return undefined;
 }
 
 function normalizeOptionalStringFields<K extends string>(
@@ -316,18 +327,20 @@ function findNotesHumanBlock(
   page: string,
   producerMarkdown = false,
 ): { start: number; end: number } | null {
-  const bodyOffset = producerMarkdown ? (page.match(FRONTMATTER_PATTERN)?.[0].length ?? 0) : 0;
-  const searchable = producerMarkdown ? maskMarkdownCode(page.slice(bodyOffset), true) : page;
-  const searchFrom = producerMarkdown ? 0 : afterSourceContentFence(page);
-  const start = searchable.indexOf(HUMAN_START_MARKER, searchFrom);
+  const bodyOffset = producerMarkdown
+    ? (page.match(FRONTMATTER_PATTERN)?.[0].length ?? 0)
+    : afterSourceContentFence(page);
+  // Code examples belong to the transcript/producer, never to the local Notes slot.
+  const searchable = maskMarkdownCode(page.slice(bodyOffset), true);
+  const start = searchable.indexOf(HUMAN_START_MARKER);
   const endMarker = searchable.lastIndexOf(HUMAN_END_MARKER);
-  if (start === -1 && endMarker < searchFrom) {
+  if (start === -1 && endMarker < 0) {
     // Raw producer documents can have their own unmarked Notes heading.
     if (producerMarkdown) {
       return null;
     }
     const notesSection = /(?:^|\r?\n)## Notes[\t ]*(?:\r?\n|$)([\s\S]*)/u.exec(
-      page.slice(searchFrom),
+      page.slice(bodyOffset),
     );
     if (!notesSection?.[1]?.trim()) {
       return null;
@@ -454,7 +467,9 @@ export function formatWikiLink(params: {
   const destination = /[\s()<>]/.test(linkTarget)
     ? `<${linkTarget.replace(/[<>]/g, "\\$&")}>`
     : linkTarget;
-  return `[${params.title}](${destination})`;
+  // Titles are metadata: unmatched brackets or a trailing backslash must not break the link.
+  const label = params.title.replace(/[\\[\]`]/g, "\\$&");
+  return `[${label}](${destination})`;
 }
 
 export function renderMarkdownFence(content: string, infoString = "text"): string {
