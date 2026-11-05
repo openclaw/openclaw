@@ -66,8 +66,12 @@ async function refreshFixture(failRefresh = false) {
     OPENCLAW_STATE_DIR: path.join(directory, "state"),
   };
   const runtime = new NodeWorkerPreparedWorkspaceRuntime(source.home, { env }, new Map(), true);
-  onTestFinished(() => closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env)));
-  const provision = vi.fn(async () => ({ leaseId: "unexpected-new-lease" }));
+  onTestFinished(async () => {
+    await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
+  });
+  const provision = vi.fn<WorkerProvider["provision"]>(async () => {
+    throw new Error("Unexpected new lease during reserve adoption");
+  });
   const refresh = vi.fn<NonNullable<WorkerProvider["refreshPreparedProject"]>>(
     async (_lease, project) => {
       if (failRefresh) {
