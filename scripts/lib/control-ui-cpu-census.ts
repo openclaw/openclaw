@@ -11,12 +11,13 @@ type Entry = {
   flows: Map<string, number>;
 };
 
-function sourceOwner(file: string): Owner {
+function sourceOwner(file: string, name: string, line: number): Owner {
   if (/(?:solid-js|@solidjs)[/+.]/u.test(file)) {
     return "Solid";
   }
   if (!file) {
-    return "browser";
+    // Evaluated scripts may have source positions but no URL; do not call them native.
+    return line >= 0 && !/^\(.+\)$/u.test(name) ? "unmapped" : "browser";
   }
   if (
     /(?:playwright|__playwright|pptr:|utilityScript|injectedScript|test-helpers\/|scripts\/lib\/)/iu.test(
@@ -71,14 +72,14 @@ export function createControlUiCpuCensus() {
         file: row.url,
         line: row.lineNumber,
         column: row.columnNumber,
-        owner: sourceOwner(row.url),
+        owner: sourceOwner(row.url, row.functionName, row.lineNumber),
         selfMs: 0,
         flows: new Map(),
       };
       const functionKey = JSON.stringify([entry.file, entry.name, entry.line, entry.column]);
       for (const [table, key] of [
         [functions, functionKey],
-        [files, entry.file],
+        [files, JSON.stringify([entry.file, entry.owner])],
       ] as const) {
         const total = table.get(key) ?? { ...entry, flows: new Map<string, number>() };
         total.selfMs += selfMs;
