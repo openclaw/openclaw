@@ -9,8 +9,8 @@ export class SidebarChildExpansion {
   private readonly modes = new Map<string, SidebarExpansionMode>();
   private readonly observedChildKeys = new Map<string, readonly string[]>();
   private restoredPending = false;
-  private activeSessionKey: string | null = null;
-  private readonly revealedPaths = new Set<string>();
+  #activeSessionKey: string | null = null;
+  readonly #revealedPaths = new Set<string>();
   selectedRootKey: string | null = null;
 
   constructor(private readonly onChange: () => void) {}
@@ -27,9 +27,9 @@ export class SidebarChildExpansion {
       previous !== null &&
       (previous.agentId !== input.agentId ||
         previous.connectionIdentity !== input.connectionIdentity);
-    if (scopeChanged || this.activeSessionKey !== input.selectedSessionKey) {
-      this.activeSessionKey = input.selectedSessionKey;
-      this.revealedPaths.clear();
+    if (scopeChanged || this.#activeSessionKey !== input.selectedSessionKey) {
+      this.#activeSessionKey = input.selectedSessionKey;
+      this.#revealedPaths.clear();
     }
     if (scopeChanged && !this.restoredPending) {
       this.modes.clear();
@@ -52,10 +52,10 @@ export class SidebarChildExpansion {
   }
 
   revealOnce(key: string): boolean {
-    if (this.revealedPaths.has(key)) {
+    if (this.#revealedPaths.has(key)) {
       return false;
     }
-    this.revealedPaths.add(key);
+    this.#revealedPaths.add(key);
     return true;
   }
 
@@ -103,7 +103,7 @@ export class SidebarChildExpansion {
   }
 
   restore(rows: readonly { key: string; childrenDisplayMode?: SidebarExpansionMode }[]): void {
-    this.revealedPaths.clear();
+    this.#revealedPaths.clear();
     this.modes.clear();
     this.observedChildKeys.clear();
     for (const row of rows) {
