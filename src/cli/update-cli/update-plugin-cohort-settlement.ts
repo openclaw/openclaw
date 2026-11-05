@@ -1,4 +1,10 @@
+import fs from "node:fs";
 import { readPackageVersion } from "../../infra/package-json.js";
+import {
+  resolvePackageActivationAnchor,
+  resolvePackageActivationControl,
+  resolvePackageActivationJournalPath,
+} from "../../infra/package-update-activation-paths.js";
 import { assertNoPendingPackageActivation } from "../../infra/package-update-activation.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
@@ -15,8 +21,18 @@ import {
   withUpdateCommandExecutor,
 } from "./update-command-executor.js";
 
-function hasPendingPackageRecovery(installKey: string): boolean {
+/** Any package activation record keeps its own authority to restore the original core. */
+function hasPackageRecoveryAuthority(installKey: string): boolean {
+  const anchor = resolvePackageActivationAnchor(installKey);
+  if (
+    [anchor, resolvePackageActivationControl(anchor), resolvePackageActivationJournalPath(anchor)]
+      .map((file) => fs.lstatSync(file, { throwIfNoEntry: false }))
+      .some(Boolean)
+  ) {
+    return true;
+  }
   try {
+    // Also covers a released receipt recorded outside the activation anchor.
     assertNoPendingPackageActivation(installKey, { dryRun: true });
     return false;
   } catch {
@@ -64,14 +80,14 @@ export async function settleInterruptedUpdatePluginCohort(params: {
   // verified serving and the original core is no longer installed, rollback would
   // only be converged forward again, and it refuses obligations a later Doctor
   // decided. A rollback that has settled no publication has not changed state.
-  // Pending package recovery could still restore the original core.
+  // Package activation records keep their own authority to restore the original core.
   const verification = getUpdateRun(current.cohort.runId, options)?.verification;
   const forward =
     current.cohort.disposition !== "commit" &&
     current.cohort.settledPublications === 0 &&
     version !== null &&
     !installed(from) &&
-    !hasPendingPackageRecovery(current.cohort.installKey) &&
+    !hasPackageRecoveryAuthority(current.cohort.installKey) &&
     verification?.serviceRunning === true &&
     verification.versionMatch === true &&
     verification.runningVersion === to.version &&

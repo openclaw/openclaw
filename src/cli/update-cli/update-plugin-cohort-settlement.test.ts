@@ -62,7 +62,7 @@ async function supersededCohort(params: {
   const root = path.join(dirs.make("cohort-settlement-install-"), "openclaw");
   installCore(root, params.installed);
   if (params.pendingPackageRecovery) {
-    // Package recovery artifacts without a settled journal block the next mutable update.
+    // A package activation record keeps its own authority to restore the original core.
     fs.mkdirSync(resolvePackageActivationAnchor(root));
   }
   const options = { env: { HOME: stateDir, OPENCLAW_STATE_DIR: stateDir } };
@@ -180,7 +180,7 @@ it.each([
   ["the original core is installed", { installed: original, servedCandidate: true }],
   ["the candidate never verified serving", { installed: candidate, servedCandidate: false }],
   [
-    "package recovery is still pending",
+    "a package activation record remains",
     { installed: candidate, servedCandidate: true, pendingPackageRecovery: true },
   ],
   [
