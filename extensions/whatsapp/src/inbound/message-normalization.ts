@@ -64,6 +64,10 @@ export function createWhatsAppInboundMessageNormalizer(options: {
     const participantJid = msg.key?.participant ?? undefined;
     const from = group ? remoteJid : await socketSession.resolveInboundJid(remoteJid);
     if (!from) {
+      if (remoteJid.endsWith("@lid") || remoteJid.endsWith("@hosted.lid")) {
+        // Missing LID mappings must retry instead of completing the durable claim.
+        throw new Error("WhatsApp inbound LID identity unavailable");
+      }
       return null;
     }
     const senderE164 = group
