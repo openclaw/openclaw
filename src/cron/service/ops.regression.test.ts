@@ -393,6 +393,7 @@ it("keeps a queued quiet schedule event separate from its one terminal event", a
       "scheduled",
     ]);
     const finished = terminal.events.filter((event) => event.action === "finished");
+    expect(finished[0]?.triggerFired).toBe(false);
     expectSingleEvent(finished, {
       jobId: job.id,
       runId,
