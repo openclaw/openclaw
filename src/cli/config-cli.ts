@@ -116,11 +116,13 @@ async function runConfigMutation(
         ...(target === "config"
           ? {}
           : { recoveryCommand: `openclaw config get ${quoteCliArg(target)}` }),
-        ...(prepared.operations.some(({ setPath }) => setPath[0] === "database")
+        ...(opts.cliOptions.allowSizeDrop ||
+        prepared.operations.some(({ setPath }) => setPath[0] === "database")
           ? {
               onForeignOwner: "refuse" as const,
-              onlineAlternative:
-                "Database settings select the state database the running Gateway holds open, so they change only offline.",
+              onlineAlternative: opts.cliOptions.allowSizeDrop
+                ? "Intentional size-drop config writes require the Gateway stopped. Stop it through its service owner, wait for it to exit, then retry."
+                : "Database settings select the state database the running Gateway holds open, so they change only offline.",
             }
           : {
               // The Gateway stays the single config writer: this process prepares the same
@@ -406,6 +408,11 @@ export function registerConfigCli(program: Command) {
   cmd
     .command("patch")
     .description(CONFIG_PATCH_DESCRIPTION)
+    .option(
+      "--allow-size-drop",
+      "Offline only: allow an intentional config size reduction while retaining other write guards",
+      false,
+    )
     .option("--file <path>", "Read a JSON5 config patch object from file")
     .option("--stdin", "Read a JSON5 config patch object from stdin", false)
     .option(

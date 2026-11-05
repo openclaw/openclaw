@@ -169,7 +169,7 @@ export async function observeConfigSnapshot(
 export type ConfigHealthBaselineCompensation = {
   configPath: string;
   candidate: ConfigHealthFingerprint;
-  previousLastKnownGood: ConfigHealthFingerprint;
+  previousLastKnownGood: ConfigHealthFingerprint | undefined;
   previousSuspiciousSignature: string | null;
 };
 
@@ -181,7 +181,8 @@ export type ConfigHealthBaselineCompensation = {
  */
 export type ConfigHealthBaselineCapture = {
   configPath: string;
-  previousLastKnownGood: ConfigHealthFingerprint;
+  previousLastKnownGood: ConfigHealthFingerprint | undefined;
+  comparisonBaseline: ConfigHealthFingerprint | undefined;
   previousSuspiciousSignature: string | null;
 };
 
@@ -218,14 +219,20 @@ export async function captureConfigHealthBaselineForWrite(
   try {
     const store = captureConfigHealthStateStore(deps, configPath);
     const snapshot = await store.read();
+    if (snapshot.basis === null) {
+      return null;
+    }
     const entry = readConfigHealthEntry(snapshot.state, configPath);
-    return entry.lastKnownGood
-      ? {
-          configPath,
-          previousLastKnownGood: entry.lastKnownGood,
-          previousSuspiciousSignature: entry.lastObservedSuspiciousSignature ?? null,
-        }
-      : null;
+    return {
+      configPath,
+      previousLastKnownGood: entry.lastKnownGood,
+      // Backup fingerprints detect inherited anomalies without becoming accepted baselines.
+      comparisonBaseline:
+        entry.lastKnownGood ??
+        (await readConfigFingerprintForPath(deps, `${configPath}.bak`)) ??
+        undefined,
+      previousSuspiciousSignature: entry.lastObservedSuspiciousSignature ?? null,
+    };
   } catch (error) {
     deps.logger.warn(
       `Config last-known-good baseline capture failed: ${formatErrorMessage(error)}`,
@@ -263,7 +270,7 @@ export async function advanceConfigHealthBaselineForAcceptedWrite(
       bytes: current.bytes,
       gatewayMode: current.gatewayMode,
       parsed: params.parsed,
-      lastKnownGood: baseline.previousLastKnownGood,
+      lastKnownGood: baseline.comparisonBaseline,
     });
     if (suspicious.some((reason) => !reason.startsWith("size-drop-vs-last-good:"))) {
       return null;
@@ -291,7 +298,7 @@ export async function advanceConfigHealthBaselineForAcceptedWrite(
       resolveConfigObserveSuspiciousReasons({
         ...before,
         parsed: source.parsed,
-        lastKnownGood: baseline.previousLastKnownGood,
+        lastKnownGood: baseline.comparisonBaseline,
         lastObservedSuspiciousSignature: baseline.previousSuspiciousSignature,
       }).length > 0;
     const nextBaseline = preserveBaseline ? baseline.previousLastKnownGood : current;
@@ -308,13 +315,13 @@ export async function advanceConfigHealthBaselineForAcceptedWrite(
         // candidate is a newer, valid decision: preserve it untouched.
         if (
           persisted &&
-          persisted.hash !== baseline.previousLastKnownGood.hash &&
+          persisted.hash !== baseline.previousLastKnownGood?.hash &&
           persisted.hash !== current.hash
         ) {
           return { status: "applied" };
         }
         if (
-          persisted?.hash === nextBaseline.hash &&
+          persisted?.hash === nextBaseline?.hash &&
           (entry.lastObservedSuspiciousSignature ?? null) === nextSignature
         ) {
           return { status: "applied" };
@@ -361,7 +368,7 @@ export async function restoreConfigHealthBaselineForRolledBackWrite(
           createInheritedConfigAnomalySignature(record.candidate.hash);
         if (
           entry.lastKnownGood?.hash !== record.candidate.hash &&
-          !(entry.lastKnownGood?.hash === record.previousLastKnownGood.hash && inheritedMarker)
+          !(entry.lastKnownGood?.hash === record.previousLastKnownGood?.hash && inheritedMarker)
         ) {
           return { status: "applied" };
         }

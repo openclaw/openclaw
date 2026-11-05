@@ -65,7 +65,7 @@ const grownConfig = (config: OpenClawConfig, count = 400): OpenClawConfig => ({
     trustedProxies: Array.from({ length: count }, (_, index) => `192.0.2.${index}`),
   },
 });
-const verboseConfig = () => ({
+const verboseConfig = (): OpenClawConfig => ({
   meta: { lastTouchedVersion: "2026.4.23" },
   gateway: { mode: "local" },
   channels: {
@@ -222,6 +222,70 @@ describe("last-known-good promotion after accepted writes", () => {
       expect(fs.readFileSync(configPath, "utf8")).toBe(healthyRaw);
     },
   );
+
+  it.each([false, true])(
+    "settles a first accepted write without blessing prior truncation (truncated=%s)",
+    async (truncated) => {
+      const { configPath, env, io, root } = acceptedWriteFixture();
+      const healthyRaw = seedConfig(configPath, verboseConfig());
+      if (truncated) {
+        fs.writeFileSync(`${configPath}.bak`, healthyRaw);
+        seedConfig(configPath, { gateway: { mode: "local", port: 19187 } });
+      }
+      const deps = { env, homedir: () => root, logger: console };
+      expect(readConfigHealthStateFromStore(deps).entries?.[configPath]).toBeUndefined();
+      const before = await io.readConfigFileSnapshot();
+      await io.writeConfigFile(
+        { gateway: { mode: "local", port: 19188 } },
+        { allowConfigSizeDrop: true, baseSnapshot: before },
+      );
+      const current = await io.readConfigFileSnapshot();
+      const entry = readConfigHealthStateFromStore(deps).entries?.[configPath];
+      if (truncated) {
+        expect(entry?.lastKnownGood).toBeUndefined();
+        expect(entry?.lastObservedSuspiciousSignature).toContain("inherited-config-anomaly");
+        await expectPromotion(io, current, false);
+      } else {
+        expect(entry?.lastKnownGood?.bytes).toBe(Buffer.byteLength(current.raw!));
+        await expect(io.prepareConfigRecovery(current)).resolves.toBeNull();
+        await expectRaw(`${configPath}.bak`, before.raw);
+      }
+    },
+  );
+
+  it("restores an absent health baseline when a first accepted write rolls back", async () => {
+    const initialConfig = verboseConfig();
+    await withTempHomeConfig(initialConfig, async ({ home, configPath }) => {
+      const originalRaw = await fsp.readFile(configPath, "utf8");
+      const io = createConfigIO({ observe: false });
+      const deps = { env: io.env, homedir: () => home, logger: console };
+      expect(
+        readConfigHealthStateFromStore(deps).entries?.[configPath]?.lastKnownGood,
+      ).toBeUndefined();
+      const failure = new Error("synthetic overlay failure");
+      const unsubscribe = registerFailingRuntimeOverlay(configPath, failure);
+      try {
+        setRuntimeConfigSnapshot(initialConfig, initialConfig);
+        await expect(
+          writeConfigFile(
+            { gateway: { mode: "local" } },
+            { allowConfigSizeDrop: true, observe: false },
+          ),
+        ).rejects.toMatchObject({
+          name: "ConfigWritePostCommitError",
+          rollbackStatus: "restored",
+          cause: failure,
+        });
+      } finally {
+        unsubscribe();
+        resetConfigRuntimeState();
+      }
+      await expectRaw(configPath, originalRaw);
+      expect(
+        readConfigHealthStateFromStore(deps).entries?.[configPath]?.lastKnownGood,
+      ).toBeUndefined();
+    });
+  });
 
   it("advances last-known-good after an accepted intentional size-drop write", async () => {
     const { configPath, io } = acceptedWriteFixture();
