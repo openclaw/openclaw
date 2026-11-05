@@ -3,7 +3,10 @@ import { getPostgresPool } from "../infra/postgres-sync/pool.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
+import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type {
   DoctorDatabaseEngineInspection,
   DoctorDatabaseEngineInspectionInput,
@@ -30,7 +33,12 @@ export async function inspectDoctorDatabaseEngines(
     maxWorkers: 1,
   });
   try {
-    return await pool.run({ ...input, env: { ...input.env } }, {});
+    return await pool.run(
+      { ...input, env: { ...input.env } },
+      {
+        signal: resolveCommandProcessSignal(resolveSqliteInspectionSignal(getAsyncWorkSignal())),
+      },
+    );
   } finally {
     await pool.close();
   }

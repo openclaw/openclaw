@@ -434,27 +434,19 @@ it("keeps persisted tool-step reasoning visible until its run finishes", async (
     container.querySelectorAll<HTMLButtonElement>(
       ".chat-work-group > .chat-activity-group__summary",
     );
-  const rawDetails = () =>
-    [...container.querySelectorAll<HTMLButtonElement>(".chat-activity-group__summary")].find(
-      (button) => button.textContent?.includes("Raw details"),
-    )!;
   expect(worked()).toHaveLength(1);
   worked()[0]!.click();
   show();
-  await waitForSolid(() => expect(rawDetails()?.getAttribute("aria-expanded")).toBe("false"));
-  await waitForSolid(expectSteps);
+  await waitForSolid(() => expect(thinkingNodes()).toHaveLength(5));
   worked()[0]!.click();
   show();
+  await waitForSolid(expectSteps);
 
   final("The answer is 42.", ++seq);
   show();
   expect(worked()).toHaveLength(2);
-  expect(thinkingNodes()).toHaveLength(0);
-  worked()[1]!.click();
-  show();
-  expect(rawDetails().getAttribute("aria-expanded")).toBe("false");
   expect(thinkingNodes()).toHaveLength(1);
-  rawDetails().click();
+  worked()[1]!.click();
   showReasoning(3);
 });
 

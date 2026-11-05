@@ -19,6 +19,9 @@ active-path row outside the current view opens that original closed interval and
 not mix later post-reset turns.
 
 Anchored reads use `limit` to bound the surrounding messages. Omit `offset` when using an anchor.
+Large transcript windows may return fewer messages to stay within the source byte limit.
+Jump-to-message reads retain the requested message, and directional history cursors continue
+through adjacent large messages without skipping them or reporting a false end of history.
 For SQLite transcript history, a missing or off-path message returns empty history rather than
 the newest tail; a `sessionId` that does not belong to the selected session key is rejected.
 These rules also apply in local embedded mode, without a running Gateway.
@@ -100,6 +103,16 @@ word, phrase, and prefix matching. Its native ranking is engine-local, so scores
 and result order can differ from SQLite. See
 [PostgreSQL search](/reference/database-engines#search-on-postgresql) for extension
 requirements and supported modes.
+
+If a durable transcript search returns no word matches, Chinese, Japanese, and
+Korean terms are retried as literal substrings. Other terms keep their word or
+prefix matching. This retry scans text in the selected scope, so narrow the session
+selection for large histories. It does not expand searches that already found hits.
+
+Agent namespace prefixes are literal, including underscores in agent IDs.
+The default-agent PostgreSQL RPC search uses a planner-selective prefix predicate
+so selective text queries can start from the full-text index. Explicit session
+selections and other search scopes can use different plans.
 
 ## Session search vs. memory search
 

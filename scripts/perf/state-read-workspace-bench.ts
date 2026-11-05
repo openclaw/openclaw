@@ -12,7 +12,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { hostname, loadavg } from "node:os";
 import { resolve } from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -25,6 +25,7 @@ import {
   runSqliteReadOperationSync,
 } from "../../src/infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../../src/infra/sqlite-schema-sql.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -91,9 +92,6 @@ function run(count: number) {
   }
   return found;
 }
-function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
-}
 await nextTurn();
 global.gc();
 const memoryBefore = process.memoryUsage();
@@ -112,7 +110,9 @@ try {
       includeObjectsCollectedByMinorGC: true,
     });
     found = run(iterations);
-    allocatedBytes = allocated((await inspector.post("HeapProfiler.stopSampling")).profile.head);
+    allocatedBytes = sumSampledHeapBytes(
+      (await inspector.post("HeapProfiler.stopSampling")).profile.head,
+    );
   } else {
     const cpuBefore = process.threadCpuUsage();
     const started = performance.now();

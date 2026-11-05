@@ -27,12 +27,7 @@ export function deriveGatewaySessionLifecycleProjectionPatch(params: {
   entry?: Parameters<typeof derivePersistedSessionLifecyclePatch>[0]["entry"];
   event: LifecycleEventLike;
 }): ReturnType<typeof deriveGatewaySessionLifecycleSnapshot> {
-  const {
-    restartRecoveryRuns: _restartRecoveryRuns,
-    restartRecoveryForceSafeTools: _restartRecoveryForceSafeTools,
-    lifecycleRunId: _lifecycleRunId,
-    ...patch
-  } = derivePersistedSessionLifecyclePatch({
+  const { lifecycleRunId: _lifecycleRunId, ...patch } = derivePersistedSessionLifecyclePatch({
     ...params,
     currentLifecycleGeneration: getAgentRunLifecycleGeneration(),
     lastRunError: resolveLifecycleFailureSummary(params.event),

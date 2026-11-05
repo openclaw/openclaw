@@ -20,6 +20,13 @@ export type WorkspaceComputationHashes = {
   entries: Array<[string, string]>;
 };
 
+export type WorkspaceManifestHostEffects = {
+  "workspace.manifest.read": {
+    input: { knownTreeRoot?: string };
+    output: Uint8Array<ArrayBuffer>;
+  };
+};
+
 export type WorkspaceComputationHashResult<T> = {
   value: T;
   hashes: Array<[string, string]>;
@@ -76,6 +83,8 @@ export type WorkspaceStageInputSource<Raw = Uint8Array<ArrayBuffer>> =
       currentManifestRef: string;
       baseManifestRaw: Raw;
       currentManifestRaw: Raw;
+      /** Immutable blob facts supplied by the accepted checkpoint owner, never the worker. */
+      existingObjects?: Array<[string, string]>;
     }
   | {
       publication: {
@@ -123,7 +132,7 @@ export type WorkspaceManifestComputationOperations = {
   };
 } & {
   "workspace.manifest.local": {
-    input: { snapshot: Uint8Array<ArrayBuffer> };
+    input: { owner: string };
     output: LocalWorkspaceManifestValue;
   };
   "workspace.manifest.base-refresh": {
@@ -172,6 +181,7 @@ export type WorkspaceManifestComputationOperations = {
   };
   "workspace.manifest.pair": {
     input: {
+      buildCacheInputs?: string[];
       baseRaw: Uint8Array<ArrayBuffer>;
       baseRef: string;
       currentRaw: Uint8Array<ArrayBuffer>;

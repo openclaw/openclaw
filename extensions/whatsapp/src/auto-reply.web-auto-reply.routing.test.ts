@@ -71,7 +71,7 @@ describe("web auto-reply routing", () => {
     await handler(
       createTestWebInboundMessage({
         event: { id: "g1", timestamp: now },
-        payload: { body: "hello +2000" },
+        payload: { body: "hello @+2000" },
         platform: {
           chatJid: "123@g.us",
           recipientJid: "+2000",

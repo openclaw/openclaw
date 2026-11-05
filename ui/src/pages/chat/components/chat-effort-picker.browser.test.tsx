@@ -12,6 +12,7 @@ import { emulateOverlayMedia } from "../../../test-helpers/overlay-browser-media
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import "../../../styles/base.css";
 import "../../../styles/chat/composer.css";
+import "../../../styles/chat/composer-surface.css";
 import type { ChatAccessProgramControlProps } from "./chat-access-program-control.tsx";
 import { focusComposerFromChrome } from "./chat-composer-dom.ts";
 import { ChatEffortPicker } from "./chat-effort-picker.tsx";
@@ -228,12 +229,39 @@ describe("effort selection", () => {
     expect(standardOnly.onFastModeSelect).not.toHaveBeenCalled();
     expect(standardOnly.input.disabled).toBe(false);
     expect(host!.querySelector(".chat-controls__effort-zap")).toBeNull();
+    await speedFixture(speedState(true, undefined, false, true));
+    expect(summary().getAttribute("data-chat-fast-mode")).toBe("false");
+    expect(host!.querySelector(".chat-controls__effort-zap")).toBeNull();
+    expect(host!.querySelector(".chat-controls__effort-fast-badge")).toBeNull();
+    expect(host!.querySelector(".chat-controls__effort-gauge-needle")).not.toBeNull();
+    expect(summary().title).toBe("High");
     await speedFixture(speedState("ultrafast"));
     expect(speed("ultrafast").disabled).toBe(true);
     expect(summary().getAttribute("aria-label")).toContain("Ultrafast");
     expect(speed("ultrafast").getAttribute("aria-checked")).toBe("true");
     expect(speed("off").getAttribute("tabindex")).toBe("0");
     expect(speed("ultrafast").getAttribute("tabindex")).toBe("-1");
+  });
+
+  it("draws the composer lightning inside its own icon box", async () => {
+    const composer = document.body.appendChild(document.createElement("div"));
+    onTestFinished(() => composer.remove());
+    composer.innerHTML = '<div class="agent-chat__input"><div class="agent-chat__composer-footer">';
+    host = composer.querySelector<HTMLDivElement>(".agent-chat__composer-footer")!;
+    await speedFixture(speedState(true));
+    const zap = host.querySelector(".chat-controls__effort-zap")!;
+    const glyph = zap.querySelector("svg")!.getBoundingClientRect();
+    expect([glyph.width, glyph.height]).toEqual([zap.clientWidth, zap.clientHeight]);
+  });
+
+  it("shows the effective level without a default badge", async () => {
+    await fixture(["low", "medium", "high"], "high", true);
+    expect(summary().textContent?.trim()).toBe("High");
+    expect(summary().getAttribute("aria-label")).toBe("Effort: Default (High)");
+    expect(host!.querySelector("[data-chat-thinking-preview-committed]")?.textContent?.trim()).toBe(
+      "High",
+    );
+    expect(host!.querySelector(".chat-controls__permission-default-badge")).toBeNull();
   });
 
   it("previews effort without committing and restores the committed level on cancel or blur", async () => {

@@ -45,21 +45,29 @@ it("updates a keyed job row from a replacement owner snapshot", () => {
   );
 });
 
-it("does not reread retained jobs while typing and still dispatches current row actions", () => {
+it("checks each retained row's permission once while typing and dispatches current actions", () => {
   const job = createCronViewJob("retained");
   const state = job.state;
   const readState = vi.fn(() => state);
+  const canManageJob = vi.fn(() => true);
   Object.defineProperty(job, "state", { get: readState });
   const [props, setProps] = createSignal(
-    createCronViewProps({ jobs: [job, createCronViewJob("sibling")], jobsTotal: 2 }),
+    createCronViewProps({
+      jobs: [job, createCronViewJob("sibling")],
+      jobsTotal: 2,
+      canManageJob,
+      canCreate: true,
+    }),
   );
   const view = mountSolid(() => <CronView {...props()} />);
   const row = view.container.querySelector<HTMLElement>('[data-test-id="cron-row-retained"]')!;
   const onSelectJob = vi.fn();
   readState.mockClear();
+  canManageJob.mockClear();
   setProps((previous) => ({ ...previous, jobsQuery: "daily", loading: true, onSelectJob }));
   flush();
   expect(readState).not.toHaveBeenCalled();
+  expect(canManageJob).toHaveBeenCalledTimes(2);
   expect(view.container.querySelector('[data-test-id="cron-row-retained"]')).toBe(row);
   row.click();
   expect(onSelectJob).toHaveBeenCalledExactlyOnceWith(job);
@@ -187,10 +195,16 @@ it("retains history controls and forwards the current transcript target after re
 
 it("keeps retained row controls current across pending queries and access changes", () => {
   const job = createCronViewJob("retained-actions");
+  let canManage = true;
   const initialRun = vi.fn();
   const currentRun = vi.fn();
   const [props, setProps] = createSignal(
-    createCronViewProps({ jobs: [job], jobsTotal: 1, onRun: initialRun }),
+    createCronViewProps({
+      jobs: [job],
+      jobsTotal: 1,
+      onRun: initialRun,
+      canManageJob: () => canManage,
+    }),
   );
   const view = mountSolid(() => <CronView {...props()} />);
   const row = getElement(view.container, ".cron-table__row", HTMLDivElement);
@@ -229,7 +243,8 @@ it("keeps retained row controls current across pending queries and access change
   expect(currentRun).toHaveBeenCalledExactlyOnceWith(job, "force");
   expect(initialRun).not.toHaveBeenCalled();
 
-  setProps((previous) => ({ ...previous, canManage: false }));
+  canManage = false;
+  setProps((previous) => ({ ...previous }));
   flush();
   expect(view.container.querySelector(".cron-table__row")).toBe(row);
   expect(row.querySelector(".cron-table__actions")).toBeNull();

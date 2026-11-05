@@ -30,14 +30,6 @@ export function selectSessionColdBatch(input: SessionColdBatchInput) {
             admissionIdentities: [...input.admissionIdentities, ...input.liveSessionKeys],
           });
           const cooled = new Set(input.cooledSessionIds);
-          const excluded = readSessionColdStorageProtection(
-            database,
-            input.beforeMs,
-            new Set(input.liveSessionKeys),
-          );
-          for (const id of [...admissions, ...cooled]) {
-            excluded.add(id);
-          }
           const externalizations = executeSqliteQuerySync(
             database.db,
             db
@@ -54,36 +46,44 @@ export function selectSessionColdBatch(input: SessionColdBatchInput) {
             const archive = readSessionColdTranscript(database.db, row.session_id);
             return archive ? [archive] : [];
           });
-          const candidates =
-            externalizations.length < input.maxTranscripts
-              ? executeSqliteQuerySync(
-                  database.db,
-                  db
-                    .selectFrom("session_windows as window")
-                    .leftJoin(
-                      "session_transcript_cold_archives as cold",
-                      "cold.session_id",
-                      "window.session_id",
-                    )
-                    .select("window.session_id")
-                    .where("cold.session_id", "is", null)
-                    .$if(excluded.size > 0, (query) =>
-                      query.where("window.session_id", "not in", sqliteStringSet([...excluded])),
-                    )
-                    .where("window.transcript_updated_at", "<", input.beforeMs)
-                    .where((eb) =>
-                      eb.exists(
-                        eb
-                          .selectFrom("transcript_events as event")
-                          .select("event.seq")
-                          .whereRef("event.session_id", "=", "window.session_id"),
-                      ),
-                    )
-                    .orderBy("window.transcript_updated_at")
-                    .orderBy("window.session_id")
-                    .limit(input.maxTranscripts - externalizations.length),
-                ).rows
-              : [];
+          let candidates: { session_id: string }[] = [];
+          if (externalizations.length < input.maxTranscripts) {
+            const excluded = readSessionColdStorageProtection(
+              database,
+              input.beforeMs,
+              new Set(input.liveSessionKeys),
+            );
+            for (const id of [...admissions, ...cooled]) {
+              excluded.add(id);
+            }
+            candidates = executeSqliteQuerySync(
+              database.db,
+              db
+                .selectFrom("session_windows as window")
+                .leftJoin(
+                  "session_transcript_cold_archives as cold",
+                  "cold.session_id",
+                  "window.session_id",
+                )
+                .select("window.session_id")
+                .where("cold.session_id", "is", null)
+                .$if(excluded.size > 0, (query) =>
+                  query.where("window.session_id", "not in", sqliteStringSet([...excluded])),
+                )
+                .where("window.transcript_updated_at", "<", input.beforeMs)
+                .where((eb) =>
+                  eb.exists(
+                    eb
+                      .selectFrom("transcript_events as event")
+                      .select("event.seq")
+                      .whereRef("event.session_id", "=", "window.session_id"),
+                  ),
+                )
+                .orderBy("window.transcript_updated_at")
+                .orderBy("window.session_id")
+                .limit(input.maxTranscripts - externalizations.length),
+            ).rows;
+          }
           const plans = candidates.flatMap(({ session_id: sessionId }) => {
             const snapshot = readSessionStateDeleteSnapshot(database.db, sessionId);
             return snapshot.generation && snapshot.lastSeq !== null

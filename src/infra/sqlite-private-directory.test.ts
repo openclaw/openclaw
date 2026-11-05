@@ -11,6 +11,7 @@ import {
 } from "./windows-private-directory.js";
 
 afterEach(() => vi.restoreAllMocks());
+const selectionDirs = useAutoCleanupTempDirTracker(afterEach);
 function captureFailure(create: () => unknown): unknown {
   try {
     return create();
@@ -28,26 +29,44 @@ it.each([
 ] as const)(
   "selects the Windows cache for XDG=%s and LOCALAPPDATA=%s",
   (xdgCacheHome, localAppData, expectedRoot) => {
+    const base = selectionDirs.make("sqlite-cache-selection-");
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const resolveTempRoot = vi
       .spyOn(tmpOpenClawDir, "resolvePreferredOpenClawTmpDir")
       .mockImplementation((options) => options?.preferredDir ?? "");
 
     const resolveRoot = (root: string | undefined) =>
-      root?.startsWith("sqlite-") ? path.resolve(root) : root;
-    expect(
-      resolvePrivateSqliteSnapshotStagingRoot({
-        HOME: path.resolve("sqlite-home"),
-        LOCALAPPDATA: resolveRoot(localAppData),
-        XDG_CACHE_HOME: resolveRoot(xdgCacheHome),
-      }),
-    ).toBe(path.join(path.resolve(expectedRoot), "openclaw"));
-    expect(resolveTempRoot.mock.calls[0]?.[0]?.tmpdir?.()).toBe(path.resolve(expectedRoot));
+      root?.startsWith("sqlite-") ? path.join(base, root) : root;
+    const selected = resolvePrivateSqliteSnapshotStagingRoot({
+      HOME: path.join(base, "sqlite-home"),
+      LOCALAPPDATA: resolveRoot(localAppData),
+      XDG_CACHE_HOME: resolveRoot(xdgCacheHome),
+    });
+    expect(path.dirname(selected)).toBe(path.join(base, expectedRoot, "openclaw"));
+    expect(path.basename(selected)).toMatch(/^sqlite-[a-f0-9]{24}$/u);
+    expect(resolveTempRoot.mock.calls[0]?.[0]?.tmpdir?.()).toBe(path.join(base, expectedRoot));
   },
 );
 
 describe.skipIf(process.platform === "win32")("private creation adapter on the native host", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it("isolates installations sharing a cache and keeps each namespace stable", () => {
+    const root = tempDirs.make("sqlite-install-cache-");
+    const env = { XDG_CACHE_HOME: path.join(root, "cache") };
+    const firstEnv = { ...env, OPENCLAW_STATE_DIR: path.join(root, "first") };
+    const first = resolvePrivateSqliteSnapshotStagingRoot(firstEnv);
+    const second = resolvePrivateSqliteSnapshotStagingRoot({
+      ...env,
+      OPENCLAW_STATE_DIR: path.join(root, "second"),
+    });
+    expect(first).not.toBe(second);
+    expect(path.dirname(first)).toBe(path.dirname(second));
+    expect(resolvePrivateSqliteSnapshotStagingRoot(firstEnv)).toBe(first);
+    for (const directory of [first, second]) {
+      expect(fs.statSync(directory).mode & 0o777).toBe(0o700);
+    }
+  });
 
   it.each(["parent-file", "existing-directory"] as const)(
     "preserves the semantic %s error and records a confirmed refusal",

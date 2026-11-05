@@ -141,13 +141,16 @@ export function SidebarFile(props: {
         },
       ]}
     >
-      <Show when={desktop() && !props.controls?.workspace?.showingFolder && props.controls}>
+      {/* Folder navigation hides the chrome; its retiring children still need valid controls. */}
+      <Show when={props.controls}>
         {(controls) => (
-          <DesktopFileChrome
-            content={props.content}
-            controls={controls()}
-            runtime={props.runtime}
-          />
+          <Show when={desktop() && !controls().workspace?.showingFolder}>
+            <DesktopFileChrome
+              content={props.content}
+              controls={controls()}
+              runtime={props.runtime}
+            />
+          </Show>
         )}
       </Show>
       <Show when={mobile() && props.controls}>

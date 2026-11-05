@@ -343,6 +343,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
         readMode: "writable",
         getSessionEntry: () => params.sessionEntry,
         classifyResult: params.classifyResult,
+        onCompactionAccounting: params.onCompactionAccounting,
       },
       async ({ sessionEntry, cliSessionBinding, assertSettlementCurrent, settleResult }) => {
         const accessProgram = params.cyberAccessProgram ?? sessionEntry?.cyberAccessProgram;
@@ -675,8 +676,6 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     disableMessageTool: params.opts.disableMessageTool,
     swarmCollector: params.opts.swarmCollector,
     swarmOutputSchema: params.opts.swarmOutputSchema,
-    forceRestartSafeTools: params.opts.forceRestartSafeTools,
-    forceCodeModeTools: params.opts.forceCodeModeTools,
     codeModeOverride: params.opts.codeModeOverride,
     agentDir: params.agentDir,
     allowGatewaySubagentBinding: params.opts.allowGatewaySubagentBinding,
