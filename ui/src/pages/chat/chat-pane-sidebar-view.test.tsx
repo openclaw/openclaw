@@ -6,6 +6,7 @@ import { PRESENTATION_CHANGED_EVENT, type PresentationBinding } from "../../lib/
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createNoopSidebarRegionCallbacks } from "../../test-helpers/sidebar-region-callbacks.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createChatMobileHostFixture } from "./chat-mobile-host.test-support.ts";
 import type { ChatMobileHost } from "./chat-mobile-host.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
@@ -209,4 +210,74 @@ it("releases region refs when the panel column or its containing view unmounts",
   expect(regionView).toBeNull();
   expect(regionElement).toBeNull();
   expect(headerElement).toBeNull();
+});
+
+it("routes portalled mobile panel events after child controls without capturing the conversation", async () => {
+  const mobileHost = createChatMobileHostFixture("portalled-events", { open: true });
+  const primary = document.createElement("textarea");
+  const mounted = mountSolid(() => (
+    <SidebarRegionView
+      presentationId="portalled-events"
+      panelIdPrefix="chat-portalled-events"
+      availableWidth={400}
+      narrow
+      mobileHost={mobileHost}
+      layout={openSlot({ columns: [] }, "workspace")}
+      panelDefinitions={sidebarPanelDefinitions().map((definition) =>
+        definition.slot === "workspace"
+          ? Object.assign(definition, {
+              content: (
+                <>
+                  <input
+                    aria-label="Panel search"
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape" && event.currentTarget.value === "nested") {
+                        event.preventDefault();
+                      }
+                    }}
+                  />
+                  <input aria-label="Read-only preview" readonly />
+                </>
+              ),
+            })
+          : definition,
+      )}
+      callbacks={createNoopSidebarRegionCallbacks()}
+      primary={primary}
+    />
+  ));
+  await waitForSolid(() => expect(mounted.queryByLabelText("Panel search")).not.toBeNull());
+  const input = mounted.getByLabelText<HTMLInputElement>("Panel search");
+  expect(input.closest(".chat-mobile-host")).not.toBeNull();
+  input.focus();
+  expect(mobileHost.toggleExpanded).toHaveBeenCalledOnce();
+  mounted.getByLabelText("Read-only preview").focus();
+  primary.focus();
+  primary.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  expect(mobileHost.toggleExpanded).toHaveBeenCalledOnce();
+  expect(mobileHost.close).not.toHaveBeenCalled();
+  for (const control of [{ isComposing: true }, { keyCode: 229 }]) {
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true, ...control }),
+    );
+    expect(mobileHost.close).not.toHaveBeenCalled();
+  }
+  input.value = "nested";
+  const nestedEscape = new KeyboardEvent("keydown", {
+    key: "Escape",
+    bubbles: true,
+    cancelable: true,
+  });
+  input.dispatchEvent(nestedEscape);
+  expect(nestedEscape.defaultPrevented).toBe(true);
+  expect(mobileHost.close).not.toHaveBeenCalled();
+  input.value = "";
+  const escape = new KeyboardEvent("keydown", {
+    key: "Escape",
+    bubbles: true,
+    cancelable: true,
+  });
+  input.dispatchEvent(escape);
+  expect(escape.defaultPrevented).toBe(true);
+  expect(mobileHost.close).toHaveBeenCalledOnce();
 });
