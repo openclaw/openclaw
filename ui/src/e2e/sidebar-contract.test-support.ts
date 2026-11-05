@@ -21,16 +21,10 @@ export const sidebarSessionList = (sessions: unknown[], defaults: object, owners
 export const style = (locator: Locator, property: string) =>
   locator.evaluate((element, key) => getComputedStyle(element).getPropertyValue(key), property);
 
-export const isFocused = (locator: Locator) =>
+const isFocused = (locator: Locator) =>
   locator.evaluate((element) => element === document.activeElement);
 export const expectFocused = async (locator: Locator) =>
   expect(await isFocused(locator)).toBe(true);
-
-export async function expectCounts(root: Locator, counts: Record<string, number>) {
-  for (const [selector, count] of Object.entries(counts)) {
-    expect(await root.locator(selector).count(), selector).toBe(count);
-  }
-}
 
 export async function expectHorizontalBounds(locator: Locator, width: number) {
   const bounds = (await locator.boundingBox())!;

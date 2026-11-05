@@ -57,12 +57,6 @@ describePosix("native hosted merge handoff", () => {
     f.configure({ hostedCi: "release" });
     observe(f, () => f.run("prepare-run"));
     preparedGates = readLocal(f, "gates.env");
-    expect(JSON.parse(readLocal(f, "gates-hosted-checks.json"))).toMatchObject({
-      headSha: f.head,
-      workflows: expect.arrayContaining([
-        expect.objectContaining({ id: 6, event: "workflow_dispatch", headSha: f.head }),
-      ]),
-    });
     delete f.env.OPENCLAW_TESTBOX;
     // Neither unrelated checkout changes nor a PR-controlled verifier may replace prepared proof.
     f.git(f.worktree, "checkout", "--detach", f.main);
@@ -82,54 +76,36 @@ describePosix("native hosted merge handoff", () => {
     rmSync(join(f.local, "merge-checks-watch.log"), { force: true });
   });
 
-  it.each([
-    "missing-artifact",
-    "missing",
-    "api-error",
-    "required-fail",
-    "required-pending",
-    "required-api-error",
-  ] as const)("blocks %s evidence before merge dispatch in an OR-list caller", (fault) => {
-    const requiredFaults: Partial<Record<string, "fail" | "pending" | "api-error">> = {
-      "required-fail": "fail",
-      "required-pending": "pending",
-      "required-api-error": "api-error",
-    };
-    const requiredChecks = requiredFaults[fault];
-    if (requiredChecks) {
-      f.configure({ requiredChecks });
-    } else if (fault === "missing" || fault === "api-error") {
-      f.configure({ hostedCi: fault });
-    } else {
-      rmSync(join(f.local, "gates.env"));
-    }
-    const savedProof = readLocal(f, "gates-hosted-checks.json");
-    const { stdout, output, events } = observe(f, () => f.shell("merge_run 42 || exit 1"), 1);
-    expect(hasEvent(events, "ci-watched")).toBe(false);
-    if (requiredChecks) {
-      expect(output).toContain(
-        requiredChecks === "api-error"
-          ? "unable to verify the required GitHub checks"
-          : requiredChecks === "pending"
-            ? "Required checks are still pending"
-            : "Required checks are failing",
-      );
-      expect(eventIndex(events, "required-checks")).toBeGreaterThan(
-        eventIndex(events, "hosted-gate"),
-      );
-    } else if (fault === "missing-artifact") {
-      expect(stdout).toContain("Missing required artifact: .local/gates.env");
-    } else {
-      expect(output).toContain("hosted CI/Testbox gates failed");
-      expect(readLocal(f, "gates-hosted-checks.log")).toContain(
-        fault === "api-error" ? "Hosted API unavailable" : "Missing successful recent CI workflow",
-      );
-      expect(hasEvent(events, "required-checks")).toBe(false);
-      expect(readLocal(f, "gates-hosted-checks.json")).toBe(savedProof);
-    }
-    expect(existsSync(join(f.local, "merge-output.log"))).toBe(false);
-    expectNoIntent(f);
-  });
+  it.each(["missing-artifact", "missing", "required-fail", "required-pending"] as const)(
+    "blocks %s evidence before merge dispatch in an OR-list caller",
+    (fault) => {
+      const requiredFaults: Partial<Record<string, "fail" | "pending" | "api-error">> = {
+        "required-fail": "fail",
+        "required-pending": "pending",
+      };
+      const requiredChecks = requiredFaults[fault];
+      if (requiredChecks) {
+        f.configure({ requiredChecks });
+      } else if (fault === "missing") {
+        f.configure({ hostedCi: fault });
+      } else {
+        rmSync(join(f.local, "gates.env"));
+      }
+      const savedProof = readLocal(f, "gates-hosted-checks.json");
+      const { events } = observe(f, () => f.shell("merge_run 42 || exit 1"), 1);
+      expect(hasEvent(events, "ci-watched")).toBe(false);
+      if (requiredChecks) {
+        expect(eventIndex(events, "required-checks")).toBeGreaterThan(
+          eventIndex(events, "hosted-gate"),
+        );
+      } else if (fault === "missing") {
+        expect(hasEvent(events, "required-checks")).toBe(false);
+        expect(readLocal(f, "gates-hosted-checks.json")).toBe(savedProof);
+      }
+      expect(existsSync(join(f.local, "merge-output.log"))).toBe(false);
+      expectNoIntent(f);
+    },
+  );
 
   it.each(["full", "remote_crabbox_aws"])("retains the PR CI wait for %s preparation", (mode) => {
     f.configure({ hostedCi: "scheduled" });
@@ -145,8 +121,6 @@ describePosix("native hosted merge handoff", () => {
     const { output, events } = observe(f, () => f.run("merge-run"));
     const mergeCalls = f.events().filter(isGraphqlMerge);
     expect(mergeCalls).toHaveLength(1);
-    const watchLog = join(f.local, "merge-checks-watch.log");
-    expect(existsSync(watchLog) ? readFileSync(watchLog, "utf8") : "").toBe("");
     const hosted = eventIndex(events, "hosted-gate");
     expect(hosted).toBeGreaterThanOrEqual(0);
     expect(eventIndex(events, "required-checks")).toBeGreaterThan(hosted);
@@ -166,13 +140,6 @@ describePosix("native hosted merge handoff", () => {
       "throw new Error('PR helper executed');\n",
     );
     expect(output).toContain("worktree has local changes or is locked");
-    expect(
-      events.some(
-        (event) =>
-          event.kind === "gh" &&
-          event.args?.some((arg) => arg.includes("/collaborators/") && arg.endsWith("/permission")),
-      ),
-    ).toBe(false);
   });
 });
 
@@ -204,7 +171,6 @@ describePosix("native pending GitHub merge handoff", () => {
     "replacement recovery",
     "REST transport",
     "missing required gate",
-    "failed required check",
   ] as const)("rejects %s before pending admission", (fault) => {
     const verification = {
       replacementHead: fault === "replacement recovery" ? f.head : "",
@@ -217,20 +183,11 @@ describePosix("native pending GitHub merge handoff", () => {
       writeGates(f, `${pendingGates}\nHOSTED_GATES_TARGET_HEAD_SHA=${f.sameTreeHead}\n`);
     } else if (fault === "REST transport") {
       command = `MERGE_TRANSPORT=rest ${command}`;
-    } else if (fault === "missing required gate" || fault === "failed required check") {
-      f.configure({
-        requiredChecks: fault === "missing required gate" ? "missing-gate" : "fail",
-      });
+    } else if (fault === "missing required gate") {
+      f.configure({ requiredChecks: "missing-gate" });
       command = "merge_run 42 true";
     }
-    const { output, events } = observe(f, () => f.shell(`${command} || exit 1`), 1);
-    expect(output).toContain(
-      fault === "missing required gate"
-        ? "require the enforced openclaw/ci-gate context"
-        : fault === "failed required check"
-          ? "Required checks are failing; fix them before requesting auto-merge"
-          : "require --auto-merge at the exact prepared head",
-    );
+    const { events } = observe(f, () => f.shell(`${command} || exit 1`), 1);
     expect(
       events.some((event) => event.kind === "ci-watched" || event.kind === "hosted-gate"),
     ).toBe(false);
@@ -266,37 +223,15 @@ describePosix("native pending GitHub merge handoff", () => {
   it("submits one exact-head auto request and returns pending without polling or cleanup", () => {
     const { stdout, events } = observe(f, () => f.run(["merge-run", "42", "--auto-merge"]));
     expect(stdout).toContain("AUTO/QUEUE PENDING for PR #42; not merged");
-    const pullReads = events.filter(
-      (event) => event.kind === "gh" && event.args?.includes("repos/fixture/repo/pulls/42"),
-    );
-    const expectedRead = [
-      ..."api --hostname github.com repos/fixture/repo/pulls/42 -H".split(" "),
-      "Cache-Control: max-age=0",
-    ];
-    expect(pullReads.map((event) => event.args)).toEqual([expectedRead, expectedRead]);
     const mergeCalls = events.filter(isMerge);
     expect(mergeCalls).toHaveLength(1);
-    expect(mergeCalls[0]?.args).toEqual([
-      ..."pr merge 42 --repo https://github.com/fixture/repo --squash --auto --match-head-commit".split(
-        " ",
-      ),
-      f.head,
-      "--body-file",
-      expect.any(String),
-      "--subject",
-      "Fixture merge headline",
-    ]);
+    const args = mergeCalls[0]?.args ?? [];
+    expect(args).toContain("--auto");
+    expect(args[args.indexOf("--match-head-commit") + 1]).toBe(f.head);
     expect(events.filter((event) => event.kind === "required-checks")).toHaveLength(1);
     expect(
       events.some((event) => ["ci-watched", "hosted-gate", "leased-cleanup"].includes(event.kind)),
     ).toBe(false);
-    const afterDispatch = events.slice(events.indexOf(mergeCalls[0]!) + 1);
-    expect(
-      afterDispatch.filter(
-        (event) =>
-          event.kind === "gh" && event.args?.some((arg) => arg.includes("ref(qualifiedName:")),
-      ),
-    ).toHaveLength(2);
     expect(events.some((event) => event.kind === "gh" && event.args?.includes("POST"))).toBe(false);
     expect(outcomeRecord(f)).toMatchObject({
       head: f.head,

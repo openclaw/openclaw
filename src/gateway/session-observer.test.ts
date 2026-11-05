@@ -19,6 +19,8 @@ import {
 } from "./session-observer.test-utils.js";
 
 const { createHarness, activeHarnesses } = useObserverSuite();
+const message = (headline: string, health: "on-track" | "done" = "on-track") =>
+  modelMessage({ headline, health });
 
 async function preamble(harness: Harness, progressText: string, route: EventRoute = {}) {
   await emitEvent(harness, "item", { kind: "preamble", phase: "update", progressText }, route);
@@ -33,40 +35,36 @@ async function addToolNotes(harness: Harness, runId = "run-1") {
 it("keeps global observer streams scoped to their owning agents", async () => {
   vi.setSystemTime(1_000);
   const harness = createHarness({ subscribe: false });
-  harness.subscribers.subscribe("conn-main", "agent:main:global")?.commit();
-  harness.subscribers.subscribe("conn-legacy", "global")?.commit();
-  harness.subscribers.subscribe("conn-work", "agent:work:global")?.commit();
-  harness.subscribers.subscribe("conn-work-raw", "global")?.commit();
-  declareObserverVisibility(harness.observer, "conn-main");
-  declareObserverVisibility(harness.observer, "conn-legacy");
-  declareObserverVisibility(harness.observer, "conn-work");
-  declareObserverVisibility(harness.observer, "conn-work-raw");
-
-  await preamble(harness, "Main agent work", {
-    runId: "run-main",
-    sessionKey: "global",
-    agentId: "main",
-  });
-  await preamble(harness, "Work agent task", {
-    runId: "run-work",
-    sessionKey: "global",
-    agentId: "work",
-  });
+  for (const [conn, key] of [
+    ["main", "agent:main:global"],
+    ["legacy", "global"],
+    ["work", "agent:work:global"],
+    ["work-raw", "global"],
+  ] as const) {
+    harness.subscribers.subscribe(`conn-${conn}`, key)?.commit();
+    declareObserverVisibility(harness.observer, `conn-${conn}`);
+  }
+  for (const agentId of ["main", "work"]) {
+    await preamble(harness, `${agentId} work`, {
+      runId: `run-${agentId}`,
+      sessionKey: "global",
+      agentId,
+    });
+  }
   await flushObserver();
-
+  const delivery = (agentId: string, recipients: string[], sessionKeys: string[]) => [
+    "session.observer",
+    expect.objectContaining({ agentId, revision: 1, sessionKey: "global" }),
+    new Set(recipients),
+    expect.objectContaining({ sessionKeys }),
+  ];
   expect(harness.broadcastToConnIds.mock.calls).toEqual([
-    [
-      "session.observer",
-      expect.objectContaining({ agentId: "main", revision: 1, sessionKey: "global" }),
-      new Set(["conn-main", "conn-legacy", "conn-work-raw"]),
-      expect.objectContaining({ sessionKeys: ["agent:main:global", "global"] }),
-    ],
-    [
-      "session.observer",
-      expect.objectContaining({ agentId: "work", revision: 1, sessionKey: "global" }),
-      new Set(["conn-work"]),
-      expect.objectContaining({ sessionKeys: ["agent:work:global"] }),
-    ],
+    delivery(
+      "main",
+      ["conn-main", "conn-legacy", "conn-work-raw"],
+      ["agent:main:global", "global"],
+    ),
+    delivery("work", ["conn-work"], ["agent:work:global"]),
   ]);
 });
 
@@ -95,7 +93,7 @@ it("terminalizes a preamble-only digest without a utility model", async () => {
 
 it("synthesizes terminal health when the final model request becomes stale", async ({ signal }) => {
   const config = { agents: { defaults: { utilityModel: "openai/gpt-a" } } };
-  const model = createDeferred<ReturnType<typeof modelMessage>>();
+  const model = createDeferred<ReturnType<typeof message>>();
   const harness = createHarness({
     config,
     completeModel: vi.fn(() => model.promise),
@@ -108,7 +106,7 @@ it("synthesizes terminal health when the final model request becomes stale", asy
   const terminalBroadcast = createDeferred();
   harness.broadcastToConnIds.mockImplementationOnce(() => terminalBroadcast.resolve());
   config.agents.defaults.utilityModel = "openai/gpt-b";
-  model.resolve(modelMessage({ headline: "Stale final model", health: "done" }));
+  model.resolve(message("Stale final model", "done"));
   await withinTest(terminalBroadcast.promise, signal);
 
   expectBroadcast(harness, { headline: "Running tests", health: "done", revision: 2 });
@@ -151,10 +149,10 @@ it("omits tool result bodies while preserving summarized tool arguments", async 
 it("coalesces live completions and cancels in-flight work for the terminal digest", async ({
   signal,
 }) => {
-  const first = createDeferred<ReturnType<typeof modelMessage>>();
-  const second = createDeferred<ReturnType<typeof modelMessage>>();
+  const first = createDeferred<ReturnType<typeof message>>();
+  const second = createDeferred<ReturnType<typeof message>>();
   const completeModel = vi
-    .fn(async () => modelMessage({ headline: "Continuing the work", health: "on-track" }))
+    .fn(async () => message("Continuing the work"))
     .mockImplementationOnce(() => first.promise)
     .mockImplementationOnce(() => second.promise);
   const harness = createHarness({ completeModel });
@@ -169,7 +167,7 @@ it("coalesces live completions and cancels in-flight work for the terminal diges
     await vi.advanceTimersByTimeAsync(9_000);
     expect(completeModel).toHaveBeenCalledOnce();
 
-    first.resolve(modelMessage({ headline: "Starting the work", health: "on-track" }));
+    first.resolve(message("Starting the work"));
     await flushObserver();
     expect(completeModel).toHaveBeenCalledOnce();
     await advance(3_000);
@@ -180,13 +178,13 @@ it("coalesces live completions and cancels in-flight work for the terminal diges
     expect(harness.completeModel.mock.calls[1]?.[0]?.abortSignal?.aborted).toBe(true);
     await flushObserver();
     expect(completeModel).toHaveBeenCalledTimes(2);
-    second.resolve(modelMessage({ headline: "Canceled live result", health: "on-track" }));
+    second.resolve(message("Canceled live result"));
     await withinTest(terminalPublished.promise, signal);
     expect(completeModel).toHaveBeenCalledTimes(3);
     expectBroadcast(harness, { health: "done" });
   } finally {
-    first.resolve(modelMessage({ headline: "Cleanup", health: "on-track" }));
-    second.resolve(modelMessage({ headline: "Cleanup", health: "on-track" }));
+    first.resolve(message("Cleanup"));
+    second.resolve(message("Cleanup"));
     await harness.observer.disposeAsync();
     activeHarnesses.delete(harness);
   }
@@ -220,22 +218,16 @@ it("widens only critical health transitions to hidden session-list subscribers",
   const harness = createHarness({ completeModel });
   harness.sessionEventSubscribers.subscribe("conn-background");
 
-  const publishNext = async (initial = false) => {
-    if (initial) {
-      await startAndAddToolNotes(harness.observer);
-    } else {
+  await startAndAddToolNotes(harness.observer);
+  for (const [index, critical] of [true, false, false, true, false, false].entries()) {
+    if (index) {
       await addToolNotes(harness);
     }
     await advance(12_000);
-    return harness.broadcastToConnIds.mock.calls.at(-1)?.[2] as ReadonlySet<string>;
-  };
-
-  expect(await publishNext(true)).toEqual(new Set(["conn-1", "conn-background"]));
-  expect(await publishNext()).toEqual(new Set(["conn-1"]));
-  expect(await publishNext()).toEqual(new Set(["conn-1"]));
-  expect(await publishNext()).toEqual(new Set(["conn-1", "conn-background"]));
-  expect(await publishNext()).toEqual(new Set(["conn-1"]));
-  expect(await publishNext()).toEqual(new Set(["conn-1"]));
+    expect(harness.broadcastToConnIds.mock.calls.at(-1)?.[2]).toEqual(
+      new Set(critical ? ["conn-1", "conn-background"] : ["conn-1"]),
+    );
+  }
   expect(completeModel).toHaveBeenCalledTimes(6);
 });
 
@@ -307,7 +299,7 @@ it("preserves revisions across active and dormant run rollover", async () => {
   expect(revisions).toEqual([1, 2, 3, 4]);
 });
 it("accepts a model digest after the preamble generation advances", async () => {
-  const model = createDeferred<ReturnType<typeof modelMessage>>();
+  const model = createDeferred<ReturnType<typeof message>>();
   const completeModel = vi.fn(() => model.promise);
   const harness = createHarness({ completeModel });
   await emitEvent(harness, "lifecycle", { phase: "start" });
@@ -320,7 +312,7 @@ it("accepts a model digest after the preamble generation advances", async () => 
 
   await vi.advanceTimersByTimeAsync(100);
   await preamble(harness, "Running focused tests");
-  model.resolve(modelMessage({ headline: "Stale model summary", health: "on-track" }));
+  model.resolve(message("Stale model summary"));
   await flushObserver();
   expectBroadcast(harness, { headline: "Stale model summary" });
   await vi.advanceTimersByTimeAsync(1_900);
@@ -329,16 +321,13 @@ it("accepts a model digest after the preamble generation advances", async () => 
 
 it("stops live model attempts at the budget when requests are superseded", async () => {
   const config = { agents: { defaults: { utilityModel: "openai/gpt-a" } } };
-  const attempts: ReturnType<typeof createDeferred<ReturnType<typeof modelMessage>>>[] = [];
+  const attempts: ReturnType<typeof createDeferred<ReturnType<typeof message>>>[] = [];
   const completeModel = vi.fn(() => {
-    const attempt = createDeferred<ReturnType<typeof modelMessage>>();
+    const attempt = createDeferred<ReturnType<typeof message>>();
     attempts.push(attempt);
     return attempt.promise;
   });
-  const harness = createHarness({
-    config,
-    completeModel,
-  });
+  const harness = createHarness({ config, completeModel });
   await startAndAddToolNotes(harness.observer);
   await vi.advanceTimersByTimeAsync(12_000);
   expect(completeModel).toHaveBeenCalledOnce();
@@ -348,7 +337,7 @@ it("stops live model attempts at the budget when requests are superseded", async
     await emitEvent(harness, "tool", { phase: "start", name: "read", args: { attempt } });
     config.agents.defaults.utilityModel = "openai/gpt-a";
     await emitEvent(harness, "tool", { phase: "start", name: "read", args: { attempt } });
-    attempts.at(-1)?.resolve(modelMessage({ headline: "Superseded", health: "on-track" }));
+    attempts.at(-1)?.resolve(message("Superseded"));
     await flushObserver();
     if (attempt === 39) {
       break;
@@ -363,7 +352,7 @@ it("stops live model attempts at the budget when requests are superseded", async
   await startAndAddToolNotes(harness.observer, { count: 4 });
   await vi.advanceTimersByTimeAsync(24_000);
   expect(completeModel).toHaveBeenCalledTimes(39);
-  completeModel.mockResolvedValue(modelMessage({ headline: "Finished", health: "done" }));
+  completeModel.mockResolvedValue(message("Finished", "done"));
   await emitEvent(harness, "lifecycle", { phase: "end", startedAt: 0, endedAt: Date.now() });
   await flushObserver();
   expect(completeModel).toHaveBeenCalledTimes(40);

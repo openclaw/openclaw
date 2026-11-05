@@ -6,7 +6,7 @@ import type { RuntimeMsgContext as MsgContext } from "../auto-reply/templating.j
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { normalizeMediaFacts } from "../media/media-facts.js";
-import { isAudioAttachment } from "./attachments.js";
+import { isAudioAttachment } from "./attachments.normalize.js";
 import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
 import {
   buildProviderRegistry,

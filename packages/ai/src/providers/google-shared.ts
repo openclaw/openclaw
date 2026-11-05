@@ -15,6 +15,7 @@ import { clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
 import { googleFlashSupportsMinimalThinking } from "../transports/google-thinking-level.js";
 import {
+  awaitProviderLifecycleCallback,
   failTransportStream,
   notifyProviderStreamOpened,
   transportAbortError,
@@ -24,7 +25,6 @@ import type {
   Context,
   Model,
   SimpleStreamOptions,
-  ThinkingBudgets,
   ThinkingLevel as AgentThinkingLevel,
   StreamOptions,
 } from "../types.js";
@@ -41,18 +41,15 @@ import { adjustMaxTokensForThinking } from "./simple-options.js";
 
 export type GoogleApiType = "google-generative-ai" | "google-vertex" | "google-interactions";
 
-type GoogleThinkingLevel = `${ThinkingLevel}`;
-
-type GoogleToolChoice = "auto" | "none" | "any";
-
 type GoogleThinkingOptions = {
   enabled: boolean;
   budgetTokens?: number;
-  level?: GoogleThinkingLevel;
+  level?: `${ThinkingLevel}`;
 };
 
 export type GoogleProviderOptions = StreamOptions & {
-  toolChoice?: GoogleToolChoice;
+  topP?: number;
+  toolChoice?: "auto" | "none" | "any";
   thinking?: GoogleThinkingOptions;
 };
 
@@ -66,30 +63,11 @@ export type GoogleGenerateContentClient = {
 
 type ClampedGoogleThinkingLevel = Exclude<AgentThinkingLevel, "xhigh" | "max">;
 
-function convertMessages<T extends GoogleApiType>(model: Model<T>, context: Context): Content[] {
-  return projectGoogleMessages({
-    model,
-    messages: transformMessages(context.messages, model, (id) =>
-      requiresGoogleToolCallId(model.id) ? id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) : id,
-    ),
-    replay: "signed-parts",
-    requiresToolCallSignature:
-      model.provider !== "google-gemini-cli" && isGoogleGemini3ThinkingLevelModel(model.id),
-  });
-}
-
-function mapToolChoice(choice: string): FunctionCallingConfigMode {
-  return choice === "none"
-    ? FunctionCallingConfigMode.NONE
-    : choice === "any"
-      ? FunctionCallingConfigMode.ANY
-      : FunctionCallingConfigMode.AUTO;
-}
-
 export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>(params: {
   stream: AssistantMessageEventStream;
   model: Model<T>;
   output: AssistantMessage;
+  tools?: Context["tools"];
   options?: Pick<StreamOptions, "signal" | "onPayload">;
   createClient: () => GoogleGenerateContentClient;
   buildParams: () => GenerateContentParameters;
@@ -100,7 +78,10 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
   try {
     const client = params.createClient();
     let requestParams = params.buildParams();
-    const nextParams = await options?.onPayload?.(requestParams, model);
+    const nextParams = await awaitProviderLifecycleCallback(
+      options?.onPayload ? () => options.onPayload?.(requestParams, model) : undefined,
+      options?.signal,
+    );
     if (nextParams !== undefined) {
       requestParams = nextParams as GenerateContentParameters;
     }
@@ -116,6 +97,7 @@ export async function runGoogleGenerateContentLifecycle<T extends GoogleApiType>
       chunks: { [Symbol.asyncIterator]: () => googleIterator },
       model,
       output,
+      tools: params.tools,
       stream,
       signal: options?.signal,
       nextToolCallId: params.nextToolCallId,
@@ -131,10 +113,20 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
   context: Context,
   options: GoogleProviderOptions = {},
 ): Omit<GenerateContentParameters, "contents"> & { contents: Content[] } {
-  const contents = convertMessages(model, context);
+  const contents: Content[] = projectGoogleMessages({
+    model,
+    messages: transformMessages(context.messages, model, (id) =>
+      requiresGoogleToolCallId(model.id) ? id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) : id,
+    ),
+    tools: context.tools,
+    replay: "signed-parts",
+    requiresToolCallSignature:
+      model.provider !== "google-gemini-cli" && isGoogleGemini3ThinkingLevelModel(model.id),
+  });
 
   const config: GenerateContentConfig = {
     ...(options.temperature !== undefined && { temperature: options.temperature }),
+    ...(options.topP !== undefined && { topP: options.topP }),
     ...buildGoogleGenerationConfig(model, options.thinking, options.maxTokens),
     ...(options.stop !== undefined && options.stop.length > 0 && { stopSequences: options.stop }),
     ...(context.systemPrompt && {
@@ -144,9 +136,15 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
   };
 
   if (context.tools && context.tools.length > 0 && options.toolChoice) {
+    const choice = options.toolChoice;
     config.toolConfig = {
       functionCallingConfig: {
-        mode: mapToolChoice(options.toolChoice),
+        mode:
+          choice === "none"
+            ? FunctionCallingConfigMode.NONE
+            : choice === "any"
+              ? FunctionCallingConfigMode.ANY
+              : FunctionCallingConfigMode.AUTO,
       },
     };
   } else {
@@ -282,10 +280,23 @@ function buildGoogleThinking(
     };
   }
 
-  return {
-    enabled: true,
-    budgetTokens: getGoogleBudget(model, effort, options.thinkingBudgets),
-  };
+  const customBudgets = options.thinkingBudgets;
+  let budgetTokens: number | undefined;
+  if (customBudgets?.[effort] !== undefined) {
+    budgetTokens = customBudgets[effort];
+  } else {
+    const isPro = model.id.includes("2.5-pro");
+    if (isPro || model.id.includes("2.5-flash")) {
+      const budgets: Record<ClampedGoogleThinkingLevel, number> = {
+        minimal: !isPro && model.id.includes("2.5-flash-lite") ? 512 : 128,
+        low: 2048,
+        medium: 8192,
+        high: isPro ? 32768 : 24576,
+      };
+      budgetTokens = budgets[effort];
+    }
+  }
+  return { enabled: true, budgetTokens };
 }
 
 export function buildGoogleSimpleThinking(
@@ -353,27 +364,4 @@ function getGoogleThinkingLevel(
       return ThinkingLevel.HIGH;
   }
   return ThinkingLevel.HIGH;
-}
-
-function getGoogleBudget(
-  model: Model,
-  effort: ClampedGoogleThinkingLevel,
-  customBudgets?: ThinkingBudgets,
-): number | undefined {
-  if (customBudgets?.[effort] !== undefined) {
-    return customBudgets[effort];
-  }
-
-  const isPro = model.id.includes("2.5-pro");
-  if (isPro || model.id.includes("2.5-flash")) {
-    const budgets: Record<ClampedGoogleThinkingLevel, number> = {
-      minimal: !isPro && model.id.includes("2.5-flash-lite") ? 512 : 128,
-      low: 2048,
-      medium: 8192,
-      high: isPro ? 32768 : 24576,
-    };
-    return budgets[effort];
-  }
-
-  return undefined;
 }

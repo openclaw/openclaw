@@ -103,7 +103,7 @@ async function resetArchiveHeaderMatchesSessionId(
   // would silently drop every compressed archive from fallback history.
   try {
     await using opened = await openLocalFileSafely({
-      filePath: materializeSessionArchiveForRead(archivePath),
+      filePath: await materializeSessionArchiveForRead(archivePath),
     });
     const buffer = Buffer.alloc(64 * 1024);
     const bytesRead = await readFileWindowFully(opened.handle, buffer, 0);
@@ -117,7 +117,10 @@ async function resetArchiveHeaderMatchesSessionId(
       return isRecord(record) && record.type === "session" && record.id === sessionId;
     }
     return false;
-  } catch {
+  } catch (error) {
+    if (hasErrnoCode(error, "ERR_BUFFER_TOO_LARGE")) {
+      throw error;
+    }
     return false;
   }
 }
@@ -277,7 +280,6 @@ export function archiveSessionTranscriptsDetailed(opts: {
   sessionId: string;
   storePath: string | undefined;
   sessionFile?: string;
-  agentId?: string;
   reason: "reset" | "deleted";
   /**
    * When true, only archive files resolved under the session store directory.
@@ -299,7 +301,6 @@ export function archiveSessionTranscriptsDetailed(opts: {
     opts.sessionId,
     opts.storePath,
     opts.sessionFile,
-    opts.agentId,
   )) {
     const candidatePath = canonicalizePathForComparison(candidate);
     if (storeDir) {
@@ -376,8 +377,9 @@ async function ignoreMissingArchivePath<T>(operation: () => Promise<T>, fallback
 // listing per reason would multiply READDIR load on networked filesystems.
 export async function cleanupArchivedSessionTranscripts(opts: {
   directories: string[];
-  rules: SessionArchiveCleanupRule[];
+  rules: readonly SessionArchiveCleanupRule[];
   nowMs?: number;
+  removeFile?: (filePath: string) => Promise<void>;
 }): Promise<void> {
   const rules = opts.rules.filter(
     (rule) => Number.isFinite(rule.olderThanMs) && rule.olderThanMs >= 0,
@@ -400,7 +402,10 @@ export async function cleanupArchivedSessionTranscripts(opts: {
           const fullPath = path.join(dir, entry);
           const stat = await ignoreMissingArchivePath(() => fs.promises.stat(fullPath), null);
           if (stat?.isFile()) {
-            await ignoreMissingArchivePath(() => fs.promises.rm(fullPath), undefined);
+            await ignoreMissingArchivePath(
+              () => opts.removeFile?.(fullPath) ?? fs.promises.rm(fullPath),
+              undefined,
+            );
           }
         }
         // An archive name carries exactly one `.{reason}.{timestamp}` suffix,

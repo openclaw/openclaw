@@ -6,7 +6,7 @@ import {
   collectMessagingMediaUrlsFromRecord,
   collectMessagingMediaUrlsFromToolResult,
 } from "../embedded-agent-tool-media.js";
-import { stripOpenClawMcpToolPrefix } from "./tool-policy.js";
+import { stripOpenClawMcpToolPrefix } from "../tool-display-call.js";
 import type { PreparedCliRunContext } from "./types.js";
 
 export const CLI_MESSAGING_EVIDENCE_MAX_CALLS = 64;

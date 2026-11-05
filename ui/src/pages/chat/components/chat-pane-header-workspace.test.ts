@@ -23,65 +23,62 @@ const repo = "/src/openclaw";
 const checkout = "/tmp/worktrees/title-bar";
 const worktree = { id: "wt-1", branch: "title-bar", repoRoot: repo };
 const agentWorkspace = "/local/default";
+const remote = { execNode: "build-mac", execCwd: "/remote/build" };
+const botWorkspace = "/local/workspace/bot-stable-id";
+const botSession = row({ key: "agent:bot-stable-id:main" });
+function headerWorkspace(overrides: Partial<Parameters<typeof resolveChatPaneWorkspace>[0]>) {
+  return resolveChatPaneWorkspace({
+    session: row(),
+    agentWorkspace,
+    worktreePaths: new Map(),
+    branches: new Map(),
+    methodAdvertised: true,
+    hasAdminAccess: true,
+    ...overrides,
+  });
+}
 type WorkspaceCase = [
   Partial<GatewaySessionRow>,
-  ReturnType<typeof resolveSessionWorkspace>,
+  string | null,
+  string | null,
   Omit<Parameters<typeof resolveSessionWorkspace>[0], "session">?,
 ];
 it.each<WorkspaceCase>([
-  [
-    { spawnedCwd: checkout, worktree },
-    { root: checkout, label: "openclaw" },
-  ],
-  [{ worktree }, { root: null, label: "openclaw" }, { agentWorkspace, worktreePath: null }],
-  [
-    { spawnedWorkspaceDir: repo, spawnedCwd: `${repo}/packages/nested` },
-    { root: repo, label: "openclaw" },
-  ],
-  [
-    { execCwd: "/remote/stale", spawnedCwd: repo },
-    { root: repo, label: "openclaw" },
-  ],
-  [
-    { execNode: "build-mac", execCwd: "/remote/build" },
-    { root: "/remote/build", label: "build" },
-    { agentWorkspace },
-  ],
+  [{ spawnedCwd: checkout, worktree }, checkout, "openclaw"],
+  [{ worktree }, null, "openclaw", { agentWorkspace, worktreePath: null }],
+  [{ spawnedWorkspaceDir: repo, spawnedCwd: `${repo}/packages/nested` }, repo, "openclaw"],
+  [{ execCwd: "/remote/stale", spawnedCwd: repo }, repo, "openclaw"],
+  [remote, remote.execCwd, "build", { agentWorkspace }],
   [
     { execNode: "build-mac", spawnedCwd: "/local/spawned" },
-    { root: null, label: null },
+    null,
+    null,
     { agentWorkspace, worktreePath: "/local/worktree" },
   ],
-  [{}, { root: repo, label: "openclaw" }, { agentWorkspace: repo }],
-  [
-    { key: "agent:bot-stable-id:main" },
-    { root: "/local/workspace/bot-stable-id", label: "Workspace" },
-    { agentWorkspace: "/local/workspace/bot-stable-id" },
-  ],
-])("resolves workspace from %j", (session, expected, options) => {
-  expect(resolveSessionWorkspace({ session: row(session), ...options })).toEqual(expected);
+  [{}, repo, "openclaw", { agentWorkspace: repo }],
+  [botSession, botWorkspace, "Workspace", { agentWorkspace: botWorkspace }],
+])("resolves workspace from %j", (session, root, label, options) => {
+  expect(resolveSessionWorkspace({ session: row(session), ...options })).toEqual({ root, label });
 });
 
-it.each(["Workspace", "openclaw"])(
-  "keeps the %s workspace breadcrumb free of a tooltip",
-  (workspaceLabel) => {
-    const containers: HTMLElement[] = [];
-    const { container } = mountChatPaneHeader(containers, {
-      session: row({ key: "agent:bot-stable-id:main" }),
-      workspaceRoot: "/local/workspace/bot-stable-id",
-      workspaceLabel,
-    });
-    onTestFinished(() => containers.forEach((mounted) => mounted.remove()));
-    const crumb = container.querySelector<HTMLElement>(".chat-pane__workspace-chip");
-    expect(crumb?.textContent).toContain(workspaceLabel);
-    expect(crumb?.getAttribute("aria-label")).toContain(workspaceLabel);
-    expect(crumb?.hasAttribute("title")).toBe(false);
-  },
-);
+it("keeps the workspace breadcrumb free of a tooltip", () => {
+  const workspaceLabel = "Workspace";
+  const containers: HTMLElement[] = [];
+  const { container } = mountChatPaneHeader(containers, {
+    session: botSession,
+    workspaceRoot: botWorkspace,
+    workspaceLabel,
+  });
+  onTestFinished(() => containers.forEach((mounted) => mounted.remove()));
+  const crumb = container.querySelector<HTMLElement>(".chat-pane__workspace-chip");
+  expect(crumb?.textContent).toContain(workspaceLabel);
+  expect(crumb?.getAttribute("aria-label")).toContain(workspaceLabel);
+  expect(crumb?.hasAttribute("title")).toBe(false);
+});
 
 it.each<Partial<Parameters<typeof resolveChatPaneWorkspace>[0]>>([
   {
-    session: row({ execNode: "build-mac", execCwd: "/remote/build" }),
+    session: row(remote),
   },
   {
     session: row({ placement: { state: "requested" } as GatewaySessionRow["placement"] }),
@@ -89,15 +86,20 @@ it.each<Partial<Parameters<typeof resolveChatPaneWorkspace>[0]>>([
   { methodAdvertised: false },
   { hasAdminAccess: false },
 ])("disables reveal for unavailable or unauthorized workspaces: %j", (overrides) => {
-  expect(
-    resolveChatPaneWorkspace({
-      session: row(),
-      agentWorkspace: repo,
-      worktreePaths: new Map(),
-      branches: new Map(),
-      methodAdvertised: true,
-      hasAdminAccess: true,
-      ...overrides,
-    }).canReveal,
-  ).toBe(false);
+  expect(headerWorkspace({ agentWorkspace: repo, ...overrides }).canReveal).toBe(false);
+});
+
+it("omits the default agent workspace from header identity", () => {
+  const workspace = headerWorkspace({});
+  expect(workspace).toEqual({ root: agentWorkspace, label: null, branch: null, canReveal: true });
+});
+
+it("preserves a real project even when it uses the agent workspace directory", () => {
+  const workspace = headerWorkspace({
+    session: row({
+      spawnedCwd: agentWorkspace,
+      worktree: { id: "project", repoRoot: agentWorkspace, branch: "feature" },
+    }),
+  });
+  expect(workspace.label).toBe("default");
 });

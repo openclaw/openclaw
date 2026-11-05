@@ -57,6 +57,7 @@ import {
   refreshPluginCacheStat,
   readPluginCacheFile,
 } from "./plugin-cache-files.js";
+import type { PluginDirectoryEntry } from "./plugin-cache-files.types.js";
 import { getPluginCache } from "./plugin-cache.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -194,11 +195,6 @@ function shouldIgnoreScannedDirectory(dirName: string): boolean {
     normalized.includes(".backup-") ||
     normalized.includes(".disabled")
   );
-}
-
-function resolveScannedEntryType(entry: fs.Dirent, fullPath: string): "file" | "directory" | null {
-  const type = entry.isSymbolicLink() ? pluginCacheStatSync(fullPath) : entry;
-  return type?.isFile() ? "file" : type?.isDirectory() ? "directory" : null;
 }
 
 function resolvesToSameDirectory(left: string | undefined, right: string | undefined): boolean {
@@ -732,7 +728,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv) {
     if (!pluginCacheExistsSync(params.dir)) {
       return;
     }
-    let entries: fs.Dirent[];
+    let entries: PluginDirectoryEntry[];
     try {
       entries = readPluginCacheDirectory(params.dir).toSorted((left, right) =>
         left.name < right.name ? -1 : left.name > right.name ? 1 : 0,
@@ -752,7 +748,8 @@ function createPluginScanner(env: NodeJS.ProcessEnv) {
 
     for (const entry of entries) {
       const fullPath = path.join(params.dir, entry.name);
-      const entryType = resolveScannedEntryType(entry, fullPath);
+      const type = entry.isSymbolicLink() ? pluginCacheStatSync(fullPath) : entry;
+      const entryType = type?.isFile() ? "file" : type?.isDirectory() ? "directory" : null;
       if (entryType === "file") {
         const shouldScanFile = params.scanFiles ?? params.origin === "bundled";
         if (!shouldScanFile || !isExtensionFile(fullPath)) {

@@ -1,10 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { findFenceSpanAt, parseFenceSpans } from "../../../packages/markdown-core/src/fences.js";
 import { resolveAgentContextLimits } from "../../agents/agent-scope.js";
@@ -197,7 +194,7 @@ export async function appendPostCompactionRefreshPrompt(params: {
     return;
   }
 
-  const existingPrompt = normalizeOptionalString(params.followupRun.run.extraSystemPrompt);
+  const existingPrompt = params.followupRun.run.extraSystemPrompt;
   if (existingPrompt?.includes(refreshPrompt)) {
     return;
   }

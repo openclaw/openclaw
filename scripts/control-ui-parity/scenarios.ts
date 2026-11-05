@@ -27,7 +27,7 @@ import {
 
 export { fixedTime };
 export const baseScenario = parityBaseScenario;
-export type Profile = {
+type Profile = {
   id: string;
   width: number;
   height: number;
@@ -570,7 +570,10 @@ export const scenes: Scene[] = [
       await page.locator('[data-chat-model-select="true"]').click();
       const picker = page.locator(".chat-controls__model-picker");
       await picker.waitFor();
-      await picker.locator("[data-chat-model-more-toggle]").click();
+      const more = picker.locator("[data-chat-model-more-toggle]");
+      if (await more.isVisible()) {
+        await more.click();
+      }
       const list = picker.locator("[data-chat-model-window]");
       await expect
         .poll(() => list.evaluate((element) => element.scrollHeight > element.clientHeight))

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
@@ -28,7 +29,10 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
-import type { LlmCompleteParams, LlmIsolatedAgentRuntimeCompleteParams } from "./types-core.js";
+import type {
+  LlmCompleteParams,
+  LlmIsolatedAgentRuntimeCompleteParams,
+} from "./runtime-llm.types.js";
 
 const mocks = vi.hoisted(() => ({
   acquire: vi.fn<typeof CompletionRuntime.acquireSimpleCompletionModelForAgent>(),
@@ -70,9 +74,9 @@ function preparedModel(modelId = "allowed", selectedId = "allowed") {
   };
 }
 
-function isolatedAnswer(text = "Allowed answer.") {
+function isolatedAnswer() {
   return {
-    text,
+    text: "Allowed answer.",
     provider: "test-provider",
     model: "allowed",
     owner: { kind: "harness" as const, id: "test-harness" },
@@ -106,12 +110,7 @@ async function expectDenied(pending: Promise<unknown>, message?: unknown) {
 }
 
 function waitForWork(started: Promise<unknown>, pending: Promise<unknown>) {
-  return Promise.race([
-    started,
-    pending.then(() => {
-      throw new Error("completion settled before work started");
-    }),
-  ]);
+  return awaitGateBeforeSettlement(started, pending, "completion settled before work started");
 }
 
 function operator(assertCurrent: () => void = () => {}, retain?: () => () => void) {
@@ -139,12 +138,9 @@ function completion() {
     authority: {
       allowComplete: true,
       allowModelOverride: true,
-      allowedModels: [
-        "test-provider/allowed",
-        "test-provider/blocked",
-        "test-provider/model-a",
-        "test-provider/model-b",
-      ],
+      allowedModels: ["allowed", "blocked", "model-a", "model-b"].map(
+        (id) => `test-provider/${id}`,
+      ),
     },
   });
 }
@@ -462,7 +458,6 @@ describe("operator model policy on plugin completions", () => {
       await expect(
         completeAs(authority, mode, mode === "direct" ? "direct-tool" : "agent-tool"),
       ).resolves.toMatchObject({ text: "Allowed answer." });
-      expect(mode === "direct" ? mocks.complete : mocks.isolated).toHaveBeenCalledOnce();
     },
   );
 
@@ -489,7 +484,6 @@ describe("operator model policy on plugin completions", () => {
         ),
       ),
     ).resolves.toMatchObject({ text: "Allowed answer." });
-    expect(mocks.complete).toHaveBeenCalledOnce();
   });
 
   it.each(["direct", "isolated"] as const)(

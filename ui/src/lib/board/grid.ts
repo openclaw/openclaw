@@ -1,4 +1,5 @@
-export const BOARD_GRID_COLUMNS = 12;
+import { BOARD_GRID_COLUMNS } from "./grid-constants.ts";
+
 export const BOARD_GRID_ROW_HEIGHT = 56;
 export const BOARD_GRID_GAP = 12;
 export const BOARD_DOCUMENT_AUTO_MAX_ROWS = 240;
@@ -87,6 +88,15 @@ export function layout(
 }
 
 function layoutCanonicalItems(items: readonly BoardGridItem[]): BoardGridRect[] {
+  if (items.every((item) => item.w === BOARD_GRID_COLUMNS)) {
+    // Full-width widgets leave no gaps for later widgets to fill.
+    let y = 0;
+    return items.map((item) => {
+      const rect = { name: item.name, x: 0, y, w: item.w, h: item.h };
+      y += item.h;
+      return rect;
+    });
+  }
   const occupied: number[] = [];
   return items.map((item) => placeFirstFit(occupied, item));
 }

@@ -6,6 +6,7 @@ import type { ConfigSnapshot } from "../../api/types.ts";
 import { coerceConfigFormNumberString } from "../../components/config-form.numeric.ts";
 import { t } from "../../i18n/index.ts";
 import {
+  copyWithPathPatch,
   removePathValue,
   pruneEmptyConfigForm,
   schemaMayAcceptString,
@@ -60,6 +61,9 @@ export function applyConfigSnapshot(
   const currentRevisionHash = snapshot.configRevisionHash ?? snapshot.hash ?? null;
   if (snapshot.appliedConfigHash !== undefined) {
     state.configNeedsApply = currentRevisionHash !== snapshot.appliedConfigHash;
+    if (state.configNeedsApply && Date.now() >= state.configApplyPromptAfter) {
+      state.configApplyPromptHeld = false;
+    }
   }
   const draftBaseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash ?? null;
   setConfigSnapshot(state, snapshot);
@@ -95,16 +99,16 @@ function coerceFormString(value: string, type: string | undefined) {
   return value;
 }
 
-function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
+export function coerceConfigFormValues(value: unknown, schema: JsonSchema): unknown {
   if (value === null || value === undefined) {
     return value;
   }
 
   if (schema.allOf && schema.allOf.length > 0) {
     const { allOf, ...baseSchema } = schema;
-    let next: unknown = coerceFormValues(value, baseSchema);
+    let next: unknown = coerceConfigFormValues(value, baseSchema);
     for (const segment of allOf) {
-      next = coerceFormValues(next, segment);
+      next = coerceConfigFormValues(next, segment);
     }
     return next;
   }
@@ -121,7 +125,7 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
 
     if (variants.length === 1) {
       const variant = variants[0];
-      return variant ? coerceFormValues(value, variant) : value;
+      return variant ? coerceConfigFormValues(value, variant) : value;
     }
     if (typeof value === "string") {
       // Editors commit branch-validated types (including boolean literals),
@@ -143,7 +147,7 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
         (variantType === "object" && isRecord(value)) ||
         (variantType === "array" && Array.isArray(value))
       ) {
-        return coerceFormValues(value, variant);
+        return coerceConfigFormValues(value, variant);
       }
     }
     return value;
@@ -164,7 +168,7 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
     return Object.fromEntries(
       Object.entries(value).flatMap(([key, val]) => {
         const propSchema = Object.hasOwn(props, key) ? props[key] : additional;
-        const coerced = propSchema ? coerceFormValues(val, propSchema) : val;
+        const coerced = propSchema ? coerceConfigFormValues(val, propSchema) : val;
         return coerced === undefined ? [] : [[key, coerced]];
       }),
     );
@@ -174,11 +178,13 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
     if (Array.isArray(items)) {
       return value.map((item, index) => {
         const itemSchema = index < items.length ? items[index] : undefined;
-        return itemSchema ? coerceFormValues(item, itemSchema) : item;
+        return itemSchema ? coerceConfigFormValues(item, itemSchema) : item;
       });
     }
     return items
-      ? value.map((item) => coerceFormValues(item, items)).filter((item) => item !== undefined)
+      ? value
+          .map((item) => coerceConfigFormValues(item, items))
+          .filter((item) => item !== undefined)
       : value;
   }
   return value;
@@ -201,7 +207,7 @@ export function configFormForSubmit(state: RuntimeConfigState): Record<string, u
   }
   const schema = isRecord(state.configSchema) ? (state.configSchema as JsonSchema) : null;
   const form = schema
-    ? (coerceFormValues(state.configForm, schema) as Record<string, unknown>)
+    ? (coerceConfigFormValues(state.configForm, schema) as Record<string, unknown>)
     : state.configForm;
   // The draft original is include-resolved source; raw only describes the root file.
   return pruneEmptyConfigForm(form, state.configFormOriginal);
@@ -320,14 +326,51 @@ export function adoptConfigWriteAck(
   return state.configAutoSaveStatus;
 }
 
+function configFormValuesEqual(left: unknown, right: unknown): boolean {
+  const before = typeof left === "number" && !Number.isFinite(left) ? null : left;
+  const after = typeof right === "number" && !Number.isFinite(right) ? null : right;
+  if (before === after) {
+    return true;
+  }
+  if (Array.isArray(before) && Array.isArray(after)) {
+    if (before.length !== after.length) {
+      return false;
+    }
+    for (let index = 0; index < before.length; index += 1) {
+      if (!configFormValuesEqual(before[index] ?? null, after[index] ?? null)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (!isRecord(before) || !isRecord(after)) {
+    return false;
+  }
+  // Match JSON's omitted fields and key order without formatting unchanged branches.
+  const beforeKeys = Object.keys(before).filter((key) => before[key] !== undefined);
+  const afterKeys = Object.keys(after).filter((key) => after[key] !== undefined);
+  return (
+    beforeKeys.length === afterKeys.length &&
+    beforeKeys.every(
+      (key, index) => key === afterKeys[index] && configFormValuesEqual(before[key], after[key]),
+    )
+  );
+}
+
+export function configRawForDisplay(state: RuntimeConfigState): string {
+  return state.configFormMode === "form" && state.configFormDirty && state.configForm
+    ? serializeConfigForm(state.configForm)
+    : state.configRaw;
+}
+
 function syncConfigDraft(state: RuntimeConfigState, nextForm: Record<string, unknown>) {
   const original =
     state.configFormOriginal ?? resolveEditableSnapshotConfig(state.configSnapshot) ?? {};
-  const nextRaw = serializeConfigForm(nextForm);
-  const originalRaw = serializeConfigForm(original);
   state.configForm = nextForm;
-  state.configRaw = nextRaw;
-  state.configFormDirty = nextRaw !== originalRaw;
+  state.configFormDirty = !configFormValuesEqual(original, nextForm);
+  if (!state.configFormDirty) {
+    state.configRaw = state.configRawOriginal;
+  }
   // configFormMode tracks which draft is authoritative for submission; a form
   // edit supersedes any earlier raw-text draft.
   state.configFormMode = "form";
@@ -403,6 +446,8 @@ function setConfigRawOriginal(state: RuntimeConfigState, raw: string) {
 function mutateConfigForm(
   state: RuntimeConfigState,
   mutate: (draft: Record<string, unknown>) => void,
+  path?: Array<string | number>,
+  value?: unknown,
 ) {
   let base: Record<string, unknown>;
   if (state.configFormDirty && state.configFormMode === "raw") {
@@ -423,9 +468,15 @@ function mutateConfigForm(
     base = parsedRawDraft;
   } else {
     // Saved receipts and clean drafts share a tree; this is the mutation boundary.
-    base = structuredClone(
-      state.configForm ?? resolveEditableSnapshotConfig(state.configSnapshot) ?? {},
-    );
+    const current = state.configForm ?? resolveEditableSnapshotConfig(state.configSnapshot) ?? {};
+    base = path ? current : structuredClone(current);
+  }
+  if (path) {
+    const next = copyWithPathPatch(base, path, value, "copy-set");
+    if (!next.ok || !isRecord(next.value)) {
+      return;
+    }
+    base = next.value;
   }
   mutate(base);
   syncConfigDraft(state, base);
@@ -495,14 +546,18 @@ export function updateConfigFormValue(
   path: Array<string | number>,
   value: unknown,
 ) {
-  mutateConfigForm(state, (draft) => {
-    setPathValue(draft, path, value);
-    if (path[0] === "plugins" && path[1] === "allow") {
-      autoAllowlistedPluginIdsByState.delete(state);
-      return;
-    }
-    syncEnabledPluginAllowlist(state, draft, path, value);
-  });
+  mutateConfigForm(
+    state,
+    (draft) => {
+      if (path[0] === "plugins" && path[1] === "allow") {
+        autoAllowlistedPluginIdsByState.delete(state);
+        return;
+      }
+      syncEnabledPluginAllowlist(state, draft, path, value);
+    },
+    path,
+    value,
+  );
 }
 
 export function updateConfigRawValue(

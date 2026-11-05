@@ -11,8 +11,7 @@ import {
 } from "../../test/helpers/promise.js";
 import { readAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { getEmbeddedRunAttachment } from "../agents/embedded-agent-runner/run-state.js";
-import { createAttemptNestedToolActivityState } from "../agents/embedded-agent-runner/run/attempt-nested-tool-activity.js";
-import { prepareEmbeddedAttemptStream } from "../agents/embedded-agent-runner/run/attempt-stream-prepare.js";
+import { prepareCatalogExecutor } from "../agents/embedded-agent-runner/run/attempt-stream-prepare.test-support.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -29,12 +28,11 @@ import { makeEmbeddedRunnerAttempt } from "../agents/test-helpers/embedded-agent
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { getRuntimeConfig, writeConfigFile } from "../config/config.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
-import { createDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { rawDataToString } from "../infra/ws.js";
 import { createDiagnosticEmbeddedRunOwner } from "../logging/diagnostic-run-activity.js";
-import { getSessionControllerOperation } from "../sessions/session-controller.js";
 import * as messageInjection from "../sessions/session-controller.message-injection.js";
 import { closeSkillsWatchers } from "../skills/runtime/refresh.js";
+import { captureGatewayKernel } from "./server.capture-kernel.test-support.js";
 import {
   agentCommandMock,
   connectOk,
@@ -67,13 +65,7 @@ let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGate
 installGatewayTestHooks({
   scope: "suite",
   setup: async () => {
-    const module = await import("./server-kernel.js");
-    const create = module.createGatewayKernel;
-    const capture = vi.spyOn(module, "createGatewayKernel").mockImplementation(async (...args) => {
-      kernel = await create(...args);
-      return kernel;
-    });
-    try {
+    kernel = await captureGatewayKernel(async () => {
       testState.gatewayControlUi = { allowedOrigins: [browserOrigin] };
       harness = await startServerWithClient(gatewayToken, {
         controlUiEnabled: true,
@@ -86,9 +78,7 @@ installGatewayTestHooks({
         client: { id: "openclaw-control-ui", version: "test", platform: "web", mode: "webchat" },
         scopes: ["operator.read", "operator.write", "operator.admin"],
       });
-    } finally {
-      capture.mockRestore();
-    }
+    });
   },
   cleanup: async () => {
     harness?.ws.close();
@@ -98,15 +88,16 @@ installGatewayTestHooks({
   },
 });
 
-it.for([
-  { source: "browser", disposition: "steered" },
-  { source: "system", disposition: "followup" },
-] as const)(
-  "routes browser corrections to a $source direct command as $disposition",
-  async ({ source, disposition: expectedDisposition }, { signal }) => {
+it.for(["browser", "system"] as const)(
+  "keeps caller custody for browser corrections to a %s direct command",
+  async (source, { signal }) => {
+    const steered = source === "browser";
+    const expectedReply = steered ? "result-required" : "optional";
+    const expectedAnswer = steered ? "Correction applied." : "Completed.";
     const sessionKey = `agent:main:direct-steering-${source}`;
     const sessionId = `direct-steering-session-${source}`;
     const runId = `announce:direct-steering-${source}`;
+    const correction = "Stop waiting and use the corrected approach.";
     const model = makeProviderModelFixture<"openai-responses">({
       id: "mock-1",
       name: "Steering fixture",
@@ -158,7 +149,6 @@ it.for([
           updatedAt: Date.now(),
           agentHarnessId: "openclaw",
           permissionMode: "full",
-          restartRecoveryTerminalRunIds: ["unrelated-completed-source"],
         },
       },
     });
@@ -187,27 +177,23 @@ it.for([
         ) {
           return persist;
         }
-        return async () => {
-          try {
-            await persist();
-            startCommitted.resolve();
-          } catch (error) {
-            startCommitted.reject(error);
-            throw error;
-          }
+        return () => {
+          const committed = persist();
+          void committed.then(startCommitted.resolve, startCommitted.reject);
+          return committed;
         };
       });
     onTestFinished(() => lifecycleSpy.mockRestore());
     const ownerReady = createDeferred<{
       attempt: EmbeddedRunAttemptParams;
-      handle: ReturnType<typeof prepareEmbeddedAttemptStream>["queueHandle"];
+      handle: ReturnType<typeof prepareCatalogExecutor>["queueHandle"];
     }>();
     const disposition = createDeferred<"steered" | "followup">();
     dispatchInboundMessageMock.mockImplementation(async () => {
       disposition.resolve("followup");
       return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
     });
-    runAttempt.mockImplementation(async (attempt) => {
+    runAttempt.mockReset().mockImplementation(async (attempt) => {
       const modelStream = createAssistantMessageEventStream();
       streamMocks.streamSimple
         .mockImplementation(() =>
@@ -225,38 +211,19 @@ it.for([
         return result;
       });
       const controller = new AbortController();
-      const prepared = prepareEmbeddedAttemptStream({
+      const prepared = prepareCatalogExecutor({
         attempt,
-        agentSession: {
-          activeSession: session,
-          hookRunner: null,
-          clientToolCallSlots: [],
-          hasDeliveredSourceReply: () => false,
-          markSourceReplyDelivered: vi.fn(),
-          builtinToolNames: new Set(),
-          coreBuiltinToolNames: new Set(),
-          replaySafeToolNames: new Set(),
-          codeModeExecToolNames: new Set(),
-          sourceReplyCapableToolNames: new Set(),
-          sideEffectToolOwners: new Map(),
-          trustedLocalMediaToolNames: new Set(),
-        },
-        hookAgentId: attempt.agentId ?? "main",
-        diagnosticTrace: createDiagnosticTraceContext(),
+        activeSession: session,
         diagnosticOwner: createDiagnosticEmbeddedRunOwner({ sessionId, runId }),
-        nestedToolActivityState: createAttemptNestedToolActivityState(),
-        isReplaySafeTool: () => false,
         runAbortController: controller,
         abortRun: (_timeout, reason) => controller.abort(reason),
-        markExternalAbort: vi.fn(),
         getRunState: () => ({
           aborted: controller.signal.aborted,
           promptError: undefined,
           timedOut: false,
           yieldDetected: false,
         }),
-        onBlockReply: undefined,
-        onBlockReplyFlush: undefined,
+        streamReplies: false,
       });
       embeddedRunMock.activeIds.add(sessionId);
       const prompt = session.prompt(attempt.prompt);
@@ -268,10 +235,17 @@ it.for([
         modelStream.push({ type: "done", reason: "stop", message: assistant });
         modelStream.end();
         await prompt;
+        const lastAssistant = session.messages.at(-1);
+        if (lastAssistant?.role !== "assistant") {
+          throw new Error("Steered command did not produce an assistant answer");
+        }
+        expect(JSON.stringify(session.messages).includes(correction)).toBe(steered);
+        expect(lastAssistant.content).toEqual([{ type: "text", text: expectedAnswer }]);
+        expect(session.getSteeringMessages()).toEqual([]);
         return makeEmbeddedRunnerAttempt({
           sessionIdUsed: sessionId,
-          lastAssistant: assistant,
-          assistantTexts: ["Completed."],
+          lastAssistant,
+          assistantTexts: [expectedAnswer],
           messagesSnapshot: session.messages,
         });
       } finally {
@@ -362,7 +336,6 @@ it.for([
         signal,
       );
       const registration = getEmbeddedRunAttachment(handle);
-      expect(getSessionControllerOperation(sessionKey)).toBeDefined();
       expect(registration?.toolAuthority?.source).toBe("reply");
       expect(readAdmittedRunOperatorAuthority(attempt.admittedRunContext) !== undefined).toBe(
         source === "browser",
@@ -372,15 +345,11 @@ it.for([
       );
       expect(registration?.delegatedAuthority).toBeDefined();
       expect(getAgentRunContext(runId)?.isControlUiVisible).toBe(true);
-      expect(handle).toMatchObject({
-        terminalReplyExpectation: "result-required",
-        messageInjectionV2: { version: 2 },
-        supportsTranscriptCommitWait: true,
-      });
+      expect(handle.terminalReplyExpectation).toBe(expectedReply);
       const response = await rpcReq(harness.ws, "chat.send", {
         sessionKey,
         sessionId,
-        message: "Stop waiting and use the corrected approach.",
+        message: correction,
         idempotencyKey: `browser-direct-command-correction-${source}`,
         queueMode: "steer",
       });
@@ -390,10 +359,9 @@ it.for([
           (result) => result.type === "return" && result.value?.runId === runId,
         )?.value,
       ).toMatchObject({ runId, sourceTurnId: runId });
-      expect(await withinTest(disposition.promise, signal)).toBe(expectedDisposition);
-      if (expectedDisposition === "steered") {
-        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      }
+      expect(await withinTest(disposition.promise, signal)).toBe(steered ? "steered" : "followup");
+      expect(handle.terminalReplyExpectation).toBe(expectedReply);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(steered ? 0 : 1);
     } finally {
       // The fixture prevents completion until release; only then does its response budget begin.
       const settled =
@@ -404,5 +372,12 @@ it.for([
       const outcomes = await settled;
       expect.soft(outcomes.filter((outcome) => outcome.status === "rejected")).toEqual([]);
     }
+    const terminal = await original;
+    expect(isGatewayResponseFrame(terminal) ? terminal.payload : terminal).toMatchObject({
+      status: "ok",
+    });
+    expect(JSON.stringify(terminal)).toContain(expectedAnswer);
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(steered ? 0 : 1);
+    expect(runAttempt).toHaveBeenCalledOnce();
   },
 );

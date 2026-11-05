@@ -10,6 +10,7 @@ import net, { type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import tls from "node:tls";
+import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as proxyCa from "../../proxy-capture/ca.js";
@@ -22,7 +23,7 @@ import {
 } from "./proxy-server.js";
 
 vi.mock("node:https", { spy: true });
-vi.mock("node:http", { spy: true });
+vi.mock("node:http", async (importOriginal) => ({ ...(await importOriginal<typeof http>()) }));
 
 const value = "synthetic-lifecycle-credential";
 const seedDirs = createTempDirTracker();
@@ -98,6 +99,22 @@ async function sendCredential(socket: tls.TLSSocket, body?: string): Promise<voi
     `${body === undefined ? "GET" : "POST"} / HTTP/1.1\r\nHost: localhost:${originPort}\r\nConnection: close\r\nAuthorization: Bearer ${sentinel}\r\n${body === undefined ? "" : `Content-Length: ${Buffer.byteLength(body)}\r\n`}\r\n${body ?? ""}`,
   );
   await closed;
+}
+
+function writeUpload(
+  socket: tls.TLSSocket,
+  length: number,
+  headers: Record<string, string> = {},
+  body = "",
+): void {
+  const lines = Object.entries({
+    Host: `localhost:${originPort}`,
+    ...headers,
+    "Content-Length": String(length),
+  })
+    .map(([name, headerValue]) => `${name}: ${headerValue}\r\n`)
+    .join("");
+  socket.write(`POST / HTTP/1.1\r\n${lines}\r\n${body}`);
 }
 
 function register(): SecretEgressProcessGrant {
@@ -180,9 +197,7 @@ afterEach(async () => {
   sockets.clear();
   await proxy?.stop();
   if (origin) {
-    await new Promise<void>((resolve) => {
-      origin.close(() => resolve());
-    });
+    await promisify(origin.close.bind(origin))();
   }
   fs.rmSync(caDir, { recursive: true, force: true });
 });
@@ -370,18 +385,12 @@ describe("secret egress registration lifecycle", () => {
 
   it("hardening: bounds aggregate reservations without blocking mixed small uploads", async () => {
     const held = await openTlsTunnel();
-    held.write(
-      "POST / HTTP/1.1\r\nHost: localhost:" +
-        originPort +
-        "\r\nX-Upload-Proof: large\r\nContent-Length: 104857600\r\n\r\nx",
-    );
+    writeUpload(held, 104857600, { "X-Upload-Proof": "large" }, "x");
     await vi.waitFor(() => expect(bodyReceived.has("large")).toBe(true));
     const rejected = await openTlsTunnel(register().env);
     const received: Buffer[] = [];
     rejected.on("data", (chunk: Buffer) => received.push(chunk));
-    rejected.write(
-      "POST / HTTP/1.1\r\nHost: localhost:" + originPort + "\r\nContent-Length: 41943040\r\n\r\nx",
-    );
+    writeUpload(rejected, 41943040, {}, "x");
     await vi.waitFor(() => expect(Buffer.concat(received).toString()).toContain("503"));
     const small = await Promise.all(Array.from({ length: 8 }, () => openTlsTunnel()));
     await Promise.all(small.map((socket) => sendCredential(socket, "ok")));
@@ -395,11 +404,7 @@ describe("secret egress registration lifecycle", () => {
     const socket = await openTlsTunnel();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const closed = onClose(socket);
-    socket.write(
-      "POST / HTTP/1.1\r\nHost: localhost:" +
-        originPort +
-        "\r\nX-Upload-Proof: deadline\r\nContent-Length: 104857600\r\n\r\nx",
-    );
+    writeUpload(socket, 104857600, { "X-Upload-Proof": "deadline" }, "x");
     await vi.waitFor(() => expect(bodyReceived.has("deadline")).toBe(true));
     await vi.advanceTimersByTimeAsync(300_000);
     vi.useRealTimers();
@@ -423,11 +428,7 @@ describe("secret egress registration lifecycle", () => {
     const closed = onClose(socket);
     const received: Buffer[] = [];
     socket.on("data", (chunk: Buffer) => received.push(chunk));
-    socket.write(
-      "POST / HTTP/1.1\r\nHost: localhost:" +
-        originPort +
-        "\r\nConnection: close\r\nX-Upload-Proof: policy\r\nContent-Length: 2\r\n\r\na",
-    );
+    writeUpload(socket, 2, { Connection: "close", "X-Upload-Proof": "policy" }, "a");
     await vi.waitFor(() => expect(bodyReceived.has("policy")).toBe(true));
     const sibling = proxy.registerProcess();
     socket.write("b");
@@ -442,13 +443,7 @@ describe("secret egress registration lifecycle", () => {
   it("hardening: bounds tiny-request count and releases all aborted reservations", async () => {
     const held = await Promise.all(Array.from({ length: 65 }, () => openTlsTunnel()));
     for (const [index, socket] of held.entries()) {
-      socket.write(
-        "POST / HTTP/1.1\r\nHost: localhost:" +
-          originPort +
-          "\r\nX-Upload-Proof: count-" +
-          index +
-          "\r\nContent-Length: 2\r\n\r\nx",
-      );
+      writeUpload(socket, 2, { "X-Upload-Proof": `count-${index}` }, "x");
     }
     await vi.waitFor(() => expect(bodyReceived.size).toBe(65));
     expect([...responses.values()].filter((response) => response.statusCode === 503)).toHaveLength(
@@ -464,11 +459,7 @@ describe("secret egress registration lifecycle", () => {
       expect([...incoming.values()].every((request) => request.destroyed)).toBe(true),
     );
     const next = await openTlsTunnel();
-    next.write(
-      "POST / HTTP/1.1\r\nHost: localhost:" +
-        originPort +
-        "\r\nX-Upload-Proof: count-reused\r\nContent-Length: 104857600\r\n\r\nx",
-    );
+    writeUpload(next, 104857600, { "X-Upload-Proof": "count-reused" }, "x");
     await vi.waitFor(() => expect(bodyReceived.has("count-reused")).toBe(true));
     expect(responses.get("count-reused")?.headersSent).toBe(false);
   });
@@ -494,11 +485,7 @@ describe("secret egress registration lifecycle", () => {
       const connected = once(stalled, "connection");
       const received: Buffer[] = [];
       socket.on("data", (chunk: Buffer) => received.push(chunk));
-      socket.write(
-        "POST / HTTP/1.1\r\nHost: localhost:" +
-          originPort +
-          "\r\nConnection: close\r\nContent-Length: 5\r\n\r\nhello",
-      );
+      writeUpload(socket, 5, { Connection: "close" }, "hello");
       const [peer] = await connected;
       expect(auditEvents).toEqual([]);
       await vi.advanceTimersByTimeAsync(300_000);
@@ -515,9 +502,7 @@ describe("secret egress registration lifecycle", () => {
       for (const peer of peers) {
         peer.destroy();
       }
-      await new Promise<void>((resolve) => {
-        stalled.close(() => resolve());
-      });
+      await promisify(stalled.close.bind(stalled))();
     }
     await sendCredential(await openTlsTunnel());
     expect(observed).toHaveLength(1);
@@ -552,11 +537,7 @@ describe("secret egress registration lifecycle", () => {
     });
     const socket = await openTlsTunnel();
     const closed = onClose(socket);
-    socket.write(
-      "POST / HTTP/1.1\r\nHost: localhost:" +
-        originPort +
-        "\r\nConnection: close\r\nContent-Length: 104857600\r\n\r\n",
-    );
+    writeUpload(socket, 104857600, { Connection: "close" });
     const chunk = Buffer.alloc(64 * 1024, 165);
     for (let i = 0; i < 1600; i++) {
       expectedHash.update(chunk);
@@ -573,11 +554,7 @@ describe("secret egress registration lifecycle", () => {
     });
     // Completing send releases the full-size reservation, not just collection slots.
     const next = await openTlsTunnel();
-    next.write(
-      "POST / HTTP/1.1\r\nHost: localhost:" +
-        originPort +
-        "\r\nX-Upload-Proof: cap-reused\r\nContent-Length: 104857600\r\n\r\nx",
-    );
+    writeUpload(next, 104857600, { "X-Upload-Proof": "cap-reused" }, "x");
     await vi.waitFor(() => expect(bodyReceived.has("cap-reused")).toBe(true));
     expect(responses.get("cap-reused")?.headersSent).toBe(false);
   });
@@ -690,9 +667,7 @@ describe("secret egress registration lifecycle", () => {
     const socket = await openTlsTunnel();
     const firstChunk = createDeferredCore<IncomingMessage>();
     origin.once("request", (request) => request.once("data", () => firstChunk.resolve(request)));
-    socket.write(
-      `POST / HTTP/1.1\r\nHost: localhost:${originPort}\r\nConnection: close\r\nContent-Length: ${Number.MAX_SAFE_INTEGER}\r\n\r\n`,
-    );
+    writeUpload(socket, Number.MAX_SAFE_INTEGER, { Connection: "close" });
     const prefix = "safe-prefix".repeat(100);
     const split = Math.floor(sentinel.length / 2);
     socket.write(prefix + sentinel.slice(0, split));
@@ -718,9 +693,7 @@ describe("secret egress registration lifecycle", () => {
       const clientClosed = onClose(socket);
       const upstream = vi.spyOn(https, "request").mockClear();
       const prefix = "safe-prefix".repeat(100) + sentinel.slice(0, Math.floor(sentinel.length / 2));
-      socket.write(
-        `POST / HTTP/1.1\r\nHost: localhost:${originPort}\r\nConnection: close\r\nX-Upload-Proof: cleanup\r\nContent-Length: 104857600\r\n\r\n${prefix}`,
-      );
+      writeUpload(socket, 104857600, { Connection: "close", "X-Upload-Proof": "cleanup" }, prefix);
       await vi.waitFor(() => expect(bodyReceived.has("cleanup")).toBe(true));
       expect(upstream).not.toHaveBeenCalled();
       expect(auditEvents).toEqual([]);
@@ -744,11 +717,7 @@ describe("secret egress registration lifecycle", () => {
       expect(observed).toEqual([]);
       if (action !== "stop") {
         const next = await openTlsTunnel(register().env);
-        next.write(
-          "POST / HTTP/1.1\r\nHost: localhost:" +
-            originPort +
-            "\r\nX-Upload-Proof: reused\r\nContent-Length: 104857600\r\n\r\nx",
-        );
+        writeUpload(next, 104857600, { "X-Upload-Proof": "reused" }, "x");
         await vi.waitFor(() => expect(bodyReceived.has("reused")).toBe(true));
         expect(responses.get("reused")?.headersSent).toBe(false);
         next.destroy();

@@ -9,6 +9,8 @@ import {
   readPositiveIntegerParam,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { DecisionRuntimeV2 } from "openclaw/plugin-sdk/decisions";
 import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   asNullableRecord,
@@ -207,16 +209,22 @@ export function createBrowserTool(
   opts?: BrowserScreenshotOptions & {
     sandboxBridgeUrl?: string;
     allowHostControl?: boolean;
+    allowLocalLoopback?: boolean;
+    assertLocalLoopbackCurrent?: () => void;
+    assertInvocationCurrent?: () => void;
     agentSessionKey?: string;
     agentId?: string;
+    decisions?: DecisionRuntimeV2;
     runToolBinding?: unknown;
     toolCapabilities?: BrowserToolCapabilities;
   },
+  getConfig: () => OpenClawConfig = getRuntimeConfig,
 ): AnyAgentTool {
-  const { binding, capabilities, metadata } = createBrowserToolDefinition(opts, getRuntimeConfig);
+  const { binding, capabilities, metadata } = createBrowserToolDefinition(opts, getConfig);
   return {
     ...metadata,
     execute: async (_toolCallId, args, signal) => {
+      opts?.assertInvocationCurrent?.();
       let params = binding
         ? applyBrowserTabToolBinding(args as Record<string, unknown>, binding)
         : (args as Record<string, unknown>);
@@ -346,6 +354,7 @@ export function createBrowserTool(
             { isHostFallbackActive: () => false, route: () => undefined },
           );
           const result = await executeBrowserTabAction({
+            getConfig,
             action,
             params,
             actRequest: action === "act" ? readActRequestParam(params) : undefined,
@@ -376,7 +385,7 @@ export function createBrowserTool(
       const requestedNode = readStringParam(params, "node");
       const requestedTimeoutMs = readToolTimeoutMs(params);
       let target = readStringParam(params, "target") as "sandbox" | "host" | "node" | undefined;
-      const runtimeConfig = getRuntimeConfig();
+      const runtimeConfig = getConfig();
       const resolvedBrowser = resolveBrowserConfig(runtimeConfig.browser, runtimeConfig);
       const effectiveProfile = requestedProfile ?? resolvedBrowser.defaultProfile;
       const resolvedProfile = resolveProfile(resolvedBrowser, effectiveProfile);
@@ -412,14 +421,17 @@ export function createBrowserTool(
 
       let nodeTarget: Awaited<ReturnType<typeof resolveBrowserToolNodeTarget>> = null;
       try {
-        nodeTarget = await resolveBrowserToolNodeTarget({
-          requestedNode: requestedNode ?? undefined,
-          profile: requestedProfile,
-          target,
-          sandboxBridgeUrl: opts?.sandboxBridgeUrl,
-          allowHostControl: opts?.allowHostControl,
-          signal,
-        });
+        nodeTarget = await resolveBrowserToolNodeTarget(
+          {
+            requestedNode: requestedNode ?? undefined,
+            profile: requestedProfile,
+            target,
+            sandboxBridgeUrl: opts?.sandboxBridgeUrl,
+            allowHostControl: opts?.allowHostControl,
+            signal,
+          },
+          getConfig,
+        );
       } catch (error) {
         signal?.throwIfAborted();
         // Keep the logged-in user browser usable on the host when auto-discovery
@@ -435,11 +447,14 @@ export function createBrowserTool(
       const resolvedTarget = target === "node" ? undefined : target;
       const baseUrl = nodeTarget
         ? undefined
-        : resolveBrowserBaseUrl({
-            target: resolvedTarget,
-            sandboxBridgeUrl: opts?.sandboxBridgeUrl,
-            allowHostControl: opts?.allowHostControl,
-          });
+        : resolveBrowserBaseUrl(
+            {
+              target: resolvedTarget,
+              sandboxBridgeUrl: opts?.sandboxBridgeUrl,
+              allowHostControl: opts?.allowHostControl,
+            },
+            getConfig,
+          );
 
       const allowAutomaticHostFallback = Boolean(
         nodeTarget &&
@@ -459,7 +474,7 @@ export function createBrowserTool(
       if (
         !proxyRequest &&
         isUserBrowserProfile &&
-        ["requests", "errors", "text", "emulate"].includes(action)
+        ["requests", "errors", "text", "judge", "emulate"].includes(action)
       ) {
         throw new Error(
           `action=${action} is not supported for existing-session profiles; use action=snapshot to inspect this page, or select a managed browser profile for ${action}.`,
@@ -563,6 +578,7 @@ export function createBrowserTool(
       }
       const dispatchTabAction = () =>
         executeBrowserTabAction({
+          getConfig,
           action,
           actRequest: action === "act" ? readActRequestParam(params) : undefined,
           params,
@@ -577,6 +593,10 @@ export function createBrowserTool(
           requestedTimeoutMs,
           signal,
           opts,
+          judgment:
+            opts?.decisions && opts.agentId
+              ? { decisions: opts.decisions, agentId: opts.agentId }
+              : undefined,
           boundTargetId: binding
             ? binding.targetId
             : dashboardName
@@ -618,21 +638,39 @@ export function createBrowserTool(
           },
         });
       const dashboardTarget = browserDashboard;
-      const result = dashboardTarget
-        ? await withBrowserRequestScope(
-            {
-              managedOnly: true,
-              assertCurrent: async (admittedProfile) =>
-                (await import("./browser-dashboard.js")).assertBrowserDashboardTargetCurrent(
-                  dashboardTarget,
-                  opts?.agentId,
-                  { signal },
-                  admittedProfile,
-                ),
-            },
-            dispatchTabAction,
-          )
-        : await dispatchTabAction();
+      const result = await withBrowserRequestScope(
+        {
+          allowLocalLoopback: opts?.allowLocalLoopback === true && !baseUrl && !proxyRequest,
+          assertLocalLoopbackCurrent: opts?.assertLocalLoopbackCurrent,
+          ...(opts?.assertInvocationCurrent
+            ? {
+                assertInvocationCurrent: opts.assertInvocationCurrent,
+                assertCurrent: opts.assertInvocationCurrent,
+              }
+            : {}),
+          ...(dashboardTarget
+            ? {
+                managedOnly: true as const,
+                assertCurrent: async (
+                  admittedProfile?: Parameters<
+                    typeof import("./browser-dashboard.js").assertBrowserDashboardTargetCurrent
+                  >[3],
+                ) => {
+                  const { assertBrowserDashboardTargetCurrent } =
+                    await import("./browser-dashboard.js");
+                  await assertBrowserDashboardTargetCurrent(
+                    dashboardTarget,
+                    opts?.agentId,
+                    { signal },
+                    admittedProfile,
+                  );
+                  opts?.assertInvocationCurrent?.();
+                },
+              }
+            : {}),
+        },
+        dispatchTabAction,
+      );
       if (browserDashboard) {
         // Dashboard presentation owns this tab; ordinary preview metadata would steal its panel.
         return { ...result, details: { ...asNullableRecord(result.details), browserDashboard } };
@@ -644,6 +682,7 @@ export function createBrowserTool(
         "screenshot",
         "snapshot",
         "text",
+        "judge",
         "requests",
         "errors",
         "console",

@@ -62,10 +62,8 @@ it("updates a mounted widget and replaces it when its session or document change
   expect(widget(host)).toBe(element);
   expect(element).toMatchObject(updated);
 
-  for (const changed of [
-    { ...updated, sessionKey: "agent:main:other" },
-    { ...updated, docId: "cv_other" },
-  ]) {
+  const moved = { ...updated, sessionKey: "agent:main:other" };
+  for (const changed of [moved, { ...moved, docId: "cv_other" }]) {
     const previous = widget(host);
     setCurrent(changed);
     flush();

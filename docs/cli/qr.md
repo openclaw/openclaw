@@ -31,6 +31,8 @@ openclaw devices list
 openclaw devices approve <requestId>
 ```
 
+The printed approval commands preserve the active profile or container context.
+
 ## Options
 
 - `--remote`: prefer `gateway.remote.url` and remote credentials; fall back to Tailscale Serve/Funnel when the remote URL is unset. Ignores `device-pair` plugin `publicUrl`; explicit `--url` or `--public-url` still takes precedence.

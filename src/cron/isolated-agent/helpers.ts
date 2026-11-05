@@ -4,6 +4,10 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import {
+  readAgentTerminalPayloadSnapshot,
+  type AgentTerminalSnapshot,
+} from "../../agents/agent-terminal-snapshot.js";
 import { isExecLikeToolName } from "../../agents/tool-error-summary.js";
 import {
   getReplyPayloadMetadata,
@@ -19,6 +23,7 @@ type DeliveryPayload = Pick<
 
 /** Normalized cron run payload state used for summaries, delivery, and failure classification. */
 type CronPayloadOutcome = {
+  agentTerminal?: AgentTerminalSnapshot;
   summary?: string;
   outputText?: string;
   synthesizedText?: string;
@@ -304,6 +309,9 @@ export function resolveCronPayloadOutcome(params: {
       : deliveryPayloadHasStructuredContent,
     hasFatalErrorPayload,
     hasFatalStructuredErrorPayload,
+    agentTerminal: hasFatalStructuredErrorPayload
+      ? readAgentTerminalPayloadSnapshot(lastErrorPayload)
+      : undefined,
     embeddedRunError: structuredErrorText
       ? structuredErrorText
       : failureSignal

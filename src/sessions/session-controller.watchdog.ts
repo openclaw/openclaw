@@ -1,4 +1,9 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { createAbortError } from "../infra/abort-signal.js";
+import {
+  createWatchdogAssessment,
+  type WatchdogAssessmentBackend,
+} from "./session-controller.watchdog-assessment.js";
 import {
   decideSessionWatchdog,
   SESSION_WATCHDOG_ABORT_FLOOR_MS,
@@ -12,7 +17,12 @@ import {
 } from "./session-controller.watchdog-state.js";
 
 type SessionWatchdogProgress = "semantic" | "transport" | "source_arrival" | "finalization";
-type OwnedWait = { kind: SessionWatchdogWaitKind; deadlineAtMs?: number; isCurrent: () => boolean };
+type OwnedWait = {
+  kind: SessionWatchdogWaitKind;
+  deadlineAtMs?: number;
+  rateLimitStopMessage?: string;
+  isCurrent: () => boolean;
+};
 type OwnedExecution = {
   deadlineAtMs?: number;
   getDeadlineAtMs?: () => number | undefined;
@@ -42,7 +52,10 @@ export type SessionControllerWatchdogAttempt = {
     toolName: string;
     deadlineAtMs?: number;
   }): void;
-  beginRequest(params: { deadlineAtMs?: number; requestTimeoutMs?: number }): () => void;
+  beginRequest(params: {
+    deadlineAtMs?: number;
+    requestTimeoutMs?: number;
+  }): (recoveryDeadlineAtMs?: number) => void;
   requestEvent(event: { phase: "start" | "end"; callId: string; requestTimeoutMs?: number }): void;
   setExecutionDeadline(deadlineAtMs: number | undefined): void;
   close(): void;
@@ -65,6 +78,7 @@ export type SessionControllerWatchdog = {
   progress(kind: SessionWatchdogProgress, reason?: string): boolean;
   beginWait(wait: OwnedWait): SessionWatchdogWait;
   attachAttempt(params: { assertCurrent: () => void }): SessionControllerWatchdogAttempt;
+  describeStop(): { staleReason: "no_activity" | "rate_limited"; error: Error };
   beginFinalization(): void;
   beginTerminal(deadlineAtMs?: number): void;
   beginExecution(
@@ -92,6 +106,7 @@ export function createSessionControllerWatchdog(params: {
   startedAtMs: number;
   isCurrent: () => boolean;
   readPhase: () => SessionWatchdogPhase;
+  readBackend?: () => WatchdogAssessmentBackend | undefined;
   requestStop: (
     effect: SessionWatchdogEffect,
   ) => SessionWatchdogEffectResult | Promise<SessionWatchdogEffectResult>;
@@ -116,6 +131,7 @@ export function createSessionControllerWatchdog(params: {
   const progressOrigin = (at: number) =>
     stagnationCurrent(at) ? stagnation!.startedAtMs : semanticAt;
   let retryAllowanceAt: number | undefined;
+  let requestRecoveryAt: number | undefined;
   let cleanupAt: number | undefined;
   let executionAt: number | undefined;
   let attempt: SessionControllerWatchdogAttempt | undefined;
@@ -137,8 +153,21 @@ export function createSessionControllerWatchdog(params: {
   const semanticDeadline = (at = now()) =>
     Math.max(
       progressOrigin(at) + abortMs,
+      requestRecoveryAt ?? 0,
       ...[...requests].map((request) => request.deadlineAtMs ?? 0),
     );
+
+  const assessment = createWatchdogAssessment(
+    () => ({
+      current: current() && params.readPhase() === "active",
+      attempt,
+      backend: params.readBackend?.(),
+      sequence: semanticSequence,
+    }),
+    () => {
+      void tick().catch(() => {});
+    },
+  );
 
   const beginWait = (input: OwnedWait, valid = current): SessionWatchdogWait => {
     if (!valid()) {
@@ -178,6 +207,7 @@ export function createSessionControllerWatchdog(params: {
     if (kind === "semantic") {
       semanticAt = transportAt;
       semanticSequence += 1;
+      assessment.clear();
       if (!stagnationCurrent(transportAt)) {
         retryAllowanceAt = undefined;
       }
@@ -205,6 +235,10 @@ export function createSessionControllerWatchdog(params: {
               ? Math.min(wait.deadlineAtMs!, retryAllowanceAt!)
               : wait.deadlineAtMs,
       }));
+    const pendingAssessment = assessment.pendingWait();
+    if (pendingAssessment) {
+      liveWaits.push(pendingAssessment);
+    }
     return {
       current: isCurrent && current(),
       phase: closed ? "settled" : params.readPhase(),
@@ -245,6 +279,7 @@ export function createSessionControllerWatchdog(params: {
   };
   const decide = (at = now()) => decideSessionWatchdog(snapshot(at), at);
   const tick = async (at = now()): Promise<SessionWatchdogDecision> => {
+    assessment.check(at);
     const cleanupDeadlineAtMs = snapshot(at).cleanupDeadlineAtMs;
     const phase = params.readPhase();
     if (
@@ -276,6 +311,17 @@ export function createSessionControllerWatchdog(params: {
       return decision;
     }
     const targetAttempt = attempt;
+    if (
+      decision.reason === "semantic_stall" &&
+      tools.size === 0 &&
+      assessment.begin(at, snapshot(at).executionDeadlineAtMs)
+    ) {
+      return assessment.result() ? tick(at) : decide(at);
+    }
+    if (decision.reason !== "semantic_stall") {
+      assessment.clear();
+    }
+    const assessed = assessment.captureCurrent();
     const matchingExecutions =
       decision.reason === "execution_deadline"
         ? [...executions].filter(
@@ -295,8 +341,14 @@ export function createSessionControllerWatchdog(params: {
       reason: decision.reason,
       attempt: targetAttempt,
       isCurrent: () => {
-        if (!current() || attempt !== targetAttempt) {
+        if (!current() || attempt !== targetAttempt || (assessed && !assessed())) {
           return false;
+        }
+        if (assessed) {
+          const latest = decideSessionWatchdog({ ...snapshot(), recovery: undefined }, now());
+          if (latest.action !== decision.action || latest.reason !== decision.reason) {
+            return false;
+          }
         }
         if (decision.reason !== "execution_deadline") {
           return true;
@@ -341,6 +393,11 @@ export function createSessionControllerWatchdog(params: {
           if (recovery === ownedRecovery && current()) {
             recovery = undefined;
             recoveryAction = undefined;
+            if (!effect.isCurrent()) {
+              assessment.clear();
+            } else {
+              assessment.check(now());
+            }
             blockedWarning = false;
             const resumedPhase = params.readPhase();
             if (resumedPhase === "finishing" || resumedPhase === "terminal") {
@@ -391,6 +448,7 @@ export function createSessionControllerWatchdog(params: {
     timer.unref?.();
   };
   const beginCleanup = () => {
+    assessment.clear();
     if (current()) {
       cleanupAt ??= now() + SESSION_WATCHDOG_CLEANUP_MS;
     }
@@ -409,6 +467,7 @@ export function createSessionControllerWatchdog(params: {
       pendingTick?.resolve(pendingTick.decision);
       pendingTick = undefined;
       closed = true;
+      assessment.clear();
       recoveryAction = undefined;
       started = false;
       clearTimeout(timer);
@@ -425,6 +484,29 @@ export function createSessionControllerWatchdog(params: {
     tick,
     progress,
     beginWait: (input) => beginWait(input),
+    describeStop() {
+      // A stop during a rate-limit backoff reports the limit, not a stall.
+      const rateLimitMessage = [...waits].find(
+        (wait) =>
+          wait.kind === "retry" && wait.rateLimitStopMessage !== undefined && live(wait.isCurrent),
+      )?.rateLimitStopMessage;
+      const result = assessment.result();
+      return {
+        staleReason: rateLimitMessage === undefined ? "no_activity" : "rate_limited",
+        error: Object.assign(
+          createAbortError(
+            rateLimitMessage ??
+              (result?.state === "closed"
+                ? "Reply backend closed before completing"
+                : "Reply operation stalled"),
+          ),
+          {
+            code: "OPENCLAW_SESSION_WATCHDOG",
+            ...(result ? { assessment: result } : {}),
+          },
+        ),
+      };
+    },
     beginFinalization: beginCleanup,
     beginTerminal(deadlineAtMs) {
       beginCleanup();
@@ -572,14 +654,19 @@ export function createSessionControllerWatchdog(params: {
             emittedTools.delete(event.toolCallId);
           }
         },
-        beginRequest({ deadlineAtMs, requestTimeoutMs }) {
+        beginRequest(request) {
           if (!valid()) {
             return noop;
           }
-          const request = { requestTimeoutMs, deadlineAtMs };
+          // Keep the request owner's live deadline rather than a start-time copy.
           requests.add(request);
-          const close = () => {
-            requests.delete(request);
+          const close = (recoveryDeadlineAtMs?: number) => {
+            if (!requests.delete(request)) {
+              return;
+            }
+            if (recoveryDeadlineAtMs !== undefined) {
+              requestRecoveryAt = Math.max(requestRecoveryAt ?? 0, recoveryDeadlineAtMs);
+            }
             ownedReleases.delete(close);
           };
           ownedReleases.add(close);
@@ -616,6 +703,7 @@ export function createSessionControllerWatchdog(params: {
           emittedTools.clear();
           emittedRequests.clear();
           if (attempt === next) {
+            assessment.clear();
             attempt = undefined;
             executionAt = undefined;
           }

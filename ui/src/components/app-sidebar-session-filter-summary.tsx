@@ -1,16 +1,13 @@
 import { createMemo, Show } from "solid-js";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
-import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { sessionParticipantIdentityKey } from "../lib/chat/sender-label.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
+import { SidebarPanelFilter, SidebarPanelHeader } from "./app-sidebar-panel-headers.tsx";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
-import { SidebarCollapseToggle } from "./sidebar-collapse-toggle.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Picker } from "./solid/select-picker.tsx";
 import { renderSessionOwnerAvatar } from "./solid/session-presentation.tsx";
-
-type SessionFilterHost = Pick<SessionListHost, "sessionsStatusFilter">;
 
 /** The Sessions title owns the sidebar owner choice. */
 function SidebarOwnerPicker(props: { host: SessionListHost }) {
@@ -45,46 +42,51 @@ function SidebarOwnerPicker(props: { host: SessionListHost }) {
       : []),
   ];
   const picker = createMemo(
-    () => ({
-      keys: [
-        ownerId(),
-        selfId(),
-        props.host.sessionInvolvingMeFilterActive,
-        Boolean(props.host.sidebarSnapshot),
-        isMobileNavLayout(),
-        getLocale(),
-        ...owners().flatMap((entry) => [
-          entry.id,
-          entry.label,
-          entry.avatarUrl,
-          entry.identity ? sessionParticipantIdentityKey(entry.identity) : null,
-        ]),
-      ],
-      params: {
-        id: "sidebar-session-owner-title",
-        class: "sidebar-session-owner-filter",
-        label: t("sessionsView.owners"),
-        value: props.host.sessionInvolvingMeFilterActive
-          ? "involving-me"
-          : ownerId()
-            ? `owner:${ownerId()}`
-            : "all",
-        disabled: Boolean(props.host.sidebarSnapshot),
-        searchable: "always" as const,
-        sheet: isMobileNavLayout(),
-        showOptionTooltips: false,
-        renderLeading: (option: { value: string }) => {
-          const owner = owners().find((entry) => `owner:${entry.id}` === option.value);
-          return owner ? renderSessionOwnerAvatar(owner) : undefined;
+    () => {
+      // Leading content belongs to these compared picker facts, not the live sidebar revision.
+      const staticOwners = owners();
+      return {
+        keys: [
+          ownerId(),
+          selfId(),
+          props.host.sessionInvolvingMeFilterActive,
+          Boolean(props.host.sidebarSnapshot),
+          isMobileNavLayout(),
+          getLocale(),
+          ...staticOwners.flatMap((entry) => [
+            entry.id,
+            entry.label,
+            entry.avatarUrl,
+            entry.identity ? sessionParticipantIdentityKey(entry.identity) : null,
+          ]),
+        ],
+        params: {
+          id: "sidebar-session-owner-title",
+          class: "sidebar-session-owner-filter",
+          triggerIcon: "chevronsUpDown" as const,
+          label: t("sessionsView.owners"),
+          value: props.host.sessionInvolvingMeFilterActive
+            ? "involving-me"
+            : ownerId()
+              ? `owner:${ownerId()}`
+              : "all",
+          disabled: Boolean(props.host.sidebarSnapshot),
+          searchable: "always" as const,
+          sheet: isMobileNavLayout(),
+          showOptionTooltips: false,
+          renderLeading: (option: { value: string }) => {
+            const owner = staticOwners.find((entry) => `owner:${entry.id}` === option.value);
+            return owner ? renderSessionOwnerAvatar(owner) : undefined;
+          },
+          options: options(),
+          onChange: (value: string) =>
+            props.host.setSessionOwnerFilter(
+              value.startsWith("owner:") ? value.slice("owner:".length) : null,
+              value === "involving-me",
+            ),
         },
-        options: options(),
-        onChange: (value: string) =>
-          props.host.setSessionOwnerFilter(
-            value.startsWith("owner:") ? value.slice("owner:".length) : null,
-            value === "involving-me",
-          ),
-      },
-    }),
+      };
+    },
     {
       equals: (previous, next) =>
         previous.keys.length === next.keys.length &&
@@ -94,9 +96,7 @@ function SidebarOwnerPicker(props: { host: SessionListHost }) {
   return (
     <Show
       when={owners().length > 0 || ownerId() !== null || props.host.sessionInvolvingMeFilterActive}
-      fallback={
-        <span class="sidebar-recent-sessions__label-text">{t("chat.sidebar.threads")}</span>
-      }
+      fallback={<span class="sidebar-panel-header__title">{t("chat.sidebar.threads")}</span>}
     >
       <Picker {...picker().params} />
     </Show>
@@ -104,57 +104,43 @@ function SidebarOwnerPicker(props: { host: SessionListHost }) {
 }
 
 /** Only the panel's Status choice contributes to its filter indicator. */
-export function countSidebarSessionFilters(host: SessionFilterHost) {
+export function countSidebarSessionFilters(host: Pick<SessionListHost, "sessionsStatusFilter">) {
   return Number(host.sessionsStatusFilter !== "active");
 }
 
 export function renderSessionListToolbar(host: SessionListHost & { onToggleSidebar?: () => void }) {
-  const count = createMemo(() => countSidebarSessionFilters(host));
+  const statusLabel = () =>
+    host.sessionsStatusFilter === "active"
+      ? t("common.active")
+      : t(`sessionsView.${host.sessionsStatusFilter}`);
   return (
-    <div class="sidebar-session-toolbar sidebar-panel-header" onMouseDown={beginNativeWindowDrag}>
+    <SidebarPanelHeader class="sidebar-session-toolbar" onToggleSidebar={host.onToggleSidebar}>
       <SidebarOwnerPicker host={host} />
-      <button
-        type="button"
-        class={[
-          "sidebar-session-toolbar__button sidebar-session-sort",
-          { "sidebar-session-sort--filtered": count() > 0 },
-        ]}
+      <SidebarPanelFilter
+        menus={host.sidebarMenus}
+        menu="sessionSort"
+        expanded={host.sidebarMenus.sessionSortMenuPosition !== null}
+        filtered={countSidebarSessionFilters(host) > 0}
         title={t("chat.sidebar.sortSessions")}
-        aria-label={t("chat.sidebar.sortSessions")}
-        aria-description={
-          count() > 0
-            ? t("chat.sidebar.activeFilterCount", {
-                count: String(count()),
-              })
-            : undefined
-        }
-        aria-haspopup="dialog"
-        aria-expanded={host.sidebarMenus.sessionSortMenuPosition !== null ? "true" : "false"}
-        onClick={(event: MouseEvent) => {
-          if (event.currentTarget instanceof HTMLElement) {
-            host.sidebarMenus.togglePositionedMenu("sessionSort", event.currentTarget);
-          }
-        }}
-      >
-        <Icon name="listFilter" />
-      </button>
-      <SidebarCollapseToggle onToggle={() => host.onToggleSidebar?.()} />
-    </div>
+        label={`${t("chat.sidebar.sortSessions")} · ${statusLabel()}`}
+        description={`${t("sessionsView.status")}: ${statusLabel()}`}
+      />
+    </SidebarPanelHeader>
   );
 }
-export function renderSessionMutationError(host: Pick<SessionListHost, "sessionData">) {
-  return host.sessionData.sessionMutationError ? (
+export function renderSessionListError(host: Pick<SessionListHost, "sessionData">) {
+  return host.sessionData.sessionListError ? (
     <div
       class="sidebar-session-error callout danger callout--dismissible"
       role="alert"
       data-sidebar-session-error=""
     >
-      <span class="callout__content">{host.sessionData.sessionMutationError}</span>
+      <span class="callout__content">{host.sessionData.sessionListError}</span>
       <openclaw-tooltip prop:content={t("chat.actions.dismissError")}>
         <button
           class="callout__dismiss"
           type="button"
-          onClick={() => host.sessionData.dismissSessionMutationError()}
+          onClick={() => host.sessionData.dismissSessionListError()}
           aria-label={t("chat.actions.dismissError")}
         >
           <Icon name="x" />

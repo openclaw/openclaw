@@ -29,7 +29,7 @@ type ZalouserIngressPayload = {
   rawMessage: string;
 };
 
-export type ZalouserIngressLifecycle = ReturnType<
+type ZalouserIngressLifecycle = ReturnType<
   typeof bindIngressLifecycleToReplyOptions
 >["turnAdoptionLifecycle"];
 

@@ -9,9 +9,7 @@ import {
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-// Slack helper module supports monitor helpers behavior.
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -26,26 +24,10 @@ import type { sendMessageSlack } from "./send.js";
 
 type SlackHandler = (args: unknown) => Promise<void>;
 type SlackMiddleware = (args: { next: () => Promise<void> } & Record<string, unknown>) => unknown;
-type SlackProviderMonitor = (params: {
-  scheduler: PluginServiceSchedulerV1;
-  botToken: string;
-  appToken: string;
-  abortSignal: AbortSignal;
-  config?: Record<string, unknown>;
-  channelRuntime?: ChannelRuntimeSurface;
-  runtime?: RuntimeEnv;
-  setStatus?: (next: Record<string, unknown>) => void;
-  onDurableIngress?: (ingress: { waitForIdle: () => Promise<void> }) => void;
-}) => Promise<unknown>;
+type SlackProviderMonitor = typeof import("./monitor/provider.js").monitorSlackProvider;
 type SlackStartupAuthClientFactory = typeof import("./client.js").createSlackStartupAuthClient;
 
-const createSlackTestEvent = vi.hoisted(() => () => {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-});
+const createSlackTestEvent = vi.hoisted(() => () => Promise.withResolvers<void>());
 
 const SLACK_INGRESS_LIFECYCLE_CONTEXT_KEY = "openclawIngressLifecycle";
 
@@ -107,7 +89,6 @@ type SlackTestState = {
   socketModeClient?: EventEmitter;
   createSlackStartupAuthClientMock: Mock<SlackStartupAuthClientFactory>;
   dispatches: Set<{ controller: AbortController; run: Promise<void> }>;
-  ingressIdle?: Promise<void>;
 };
 
 // The runner resets this module between files, retiring Bolt clients and their mocks together.
@@ -118,7 +99,6 @@ const { state: slackTestState, transport: slackTestTransport } = vi.hoisted(
   } => ({
     state: {
       config: {},
-      appConstructorArgs: undefined,
       appConstructed: createSlackTestEvent(),
       appStarted: createSlackTestEvent(),
       appStartMock: vi.fn(),
@@ -134,11 +114,8 @@ const { state: slackTestState, transport: slackTestTransport } = vi.hoisted(
       readAllowFromStoreMock: vi.fn(),
       upsertPairingRequestMock: vi.fn(),
       resolveSlackUserAllowlistMock: vi.fn(),
-      socketModeLogger: undefined,
-      socketModeReceiverArgs: undefined,
       createSlackStartupAuthClientMock: vi.fn(),
       dispatches: new Set(),
-      ingressIdle: undefined,
     },
     transport: {},
   }),
@@ -184,9 +161,6 @@ export async function runSlackHandlerWithDispatch(
   handler: SlackHandler,
   args: unknown,
 ): Promise<void> {
-  // Ingress can still be reading state when the Bolt handler is registered.
-  // Starting the handler first lets that read begin under the startup lease.
-  await slackTestState.ingressIdle;
   const controller = new AbortController();
   const dispatch = {
     controller,
@@ -314,10 +288,6 @@ export function startSlackMonitor(
   },
 ) {
   const controller = new AbortController();
-  let markIngressIdle = () => {};
-  slackTestState.ingressIdle = new Promise<void>((resolve) => {
-    markIngressIdle = resolve;
-  });
   const run = monitorSlackProvider({
     scheduler: createTestPluginServiceScheduler(),
     botToken: opts?.botToken ?? "bot-token",
@@ -327,11 +297,7 @@ export function startSlackMonitor(
     channelRuntime: opts?.channelRuntime,
     runtime: opts?.runtime,
     setStatus: opts?.setStatus,
-    onDurableIngress: (ingress) => {
-      void ingress.waitForIdle().then(markIngressIdle, markIngressIdle);
-    },
   });
-  void run.then(markIngressIdle, markIngressIdle);
   return { controller, run };
 }
 
@@ -356,14 +322,13 @@ export async function stopSlackMonitor(params: {
   slackTestTransport.handlers?.clear();
 }
 
-async function runSlackEventOnce(
+export async function runSlackMessageOnce(
   monitorSlackProvider: SlackProviderMonitor,
-  name: string,
   args: unknown,
   opts?: SlackRunOnceOptions,
 ) {
   const { controller, run } = startSlackMonitor(monitorSlackProvider, opts);
-  const handler = await getSlackHandlerOrThrow(name);
+  const handler = await getSlackHandlerOrThrow("message");
   // Normal Bolt handlers return after queue admission. Terminal-state tests use the
   // durable-ingress lifecycle so this helper can await the actual dispatch boundary.
   try {
@@ -375,14 +340,6 @@ async function runSlackEventOnce(
   } finally {
     await stopSlackMonitor({ controller, run });
   }
-}
-
-export async function runSlackMessageOnce(
-  monitorSlackProvider: SlackProviderMonitor,
-  args: unknown,
-  opts?: SlackRunOnceOptions,
-) {
-  await runSlackEventOnce(monitorSlackProvider, "message", args, opts);
 }
 
 export const defaultSlackTestConfig = () => ({
@@ -501,17 +458,15 @@ export async function resetSlackTestState(
   getSlackHandlers()?.clear();
 }
 
-vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/session-store-runtime")>(
-    "openclaw/plugin-sdk/session-store-runtime",
-  );
+vi.mock("openclaw/plugin-sdk/session-store-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/session-store-runtime")>();
   return {
     ...actual,
     readSessionUpdatedAtAsync: vi.fn(async () => undefined),
     getSessionEntryAsync: vi.fn(async () => undefined),
     recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
     resolveStorePath: vi.fn(() => "/tmp/openclaw-sessions.json"),
-    updateLastRoute: (...args: unknown[]) => slackTestState.updateLastRouteMock(...args),
+    updateLastRoute: slackTestState.updateLastRouteMock,
   };
 });
 
@@ -533,37 +488,28 @@ vi.mock("./resolve-channels.js", () => ({
     entries.map((input) => ({ input, resolved: false })),
 }));
 
+// mock-isolation: Keep monitor user resolution offline and controlled by each fixture.
 vi.mock("./resolve-users.js", () => ({
-  resolveSlackUserAllowlist: (params: { entries: string[] }) =>
-    slackTestState.resolveSlackUserAllowlistMock(params),
+  resolveSlackUserAllowlist: slackTestState.resolveSlackUserAllowlistMock,
 }));
 
-vi.mock("./client.js", async () => {
-  const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
+vi.mock("./client.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./client.js")>();
   return {
     ...actual,
-    createSlackStartupAuthClient: (...args: Parameters<SlackStartupAuthClientFactory>) =>
-      slackTestState.createSlackStartupAuthClientMock(...args),
+    createSlackStartupAuthClient: slackTestState.createSlackStartupAuthClientMock,
   };
 });
 
-vi.mock("./send.js", () => {
-  return {
-    sendMessageSlack: (...args: Parameters<typeof sendMessageSlack>) =>
-      slackTestState.sendMock(...args),
-  };
-});
+// mock-isolation: Capture monitor replies without invoking the Slack outbound transport.
+vi.mock("./send.js", () => ({ sendMessageSlack: slackTestState.sendMock }));
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
-    "openclaw/plugin-sdk/conversation-runtime",
-  );
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>();
   return {
     ...actual,
-    readChannelAllowFromStore: (...args: unknown[]) =>
-      slackTestState.readAllowFromStoreMock(...args),
-    upsertChannelPairingRequest: (...args: unknown[]) =>
-      slackTestState.upsertPairingRequestMock(...args),
+    readChannelAllowFromStore: slackTestState.readAllowFromStoreMock,
+    upsertChannelPairingRequest: slackTestState.upsertPairingRequestMock,
   };
 });
 

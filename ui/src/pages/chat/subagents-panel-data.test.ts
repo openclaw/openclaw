@@ -3,6 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { childSessionListQuery } from "../../lib/sessions/child-session-data.ts";
 import {
   createTestSessionCapability,
   sessionsResult,
@@ -91,47 +92,33 @@ function fixture(
 ) {
   const subscriptions = new Set<string>();
   const released = createDeferred();
-  const request = vi.fn((method: string, params?: unknown): unknown => {
-    const values = asOptionalRecord(params) ?? {};
-    if (method === "sessions.messages.subscribe") {
+  const methods: Record<string, (values: Record<string, unknown>) => unknown> = {
+    "sessions.messages.subscribe": (values) => {
       subscriptions.add(String(values.key));
       return { key: values.key, agentId: values.agentId };
-    }
-    if (method === "sessions.messages.unsubscribe") {
+    },
+    "sessions.messages.unsubscribe": (values) => {
       subscriptions.delete(String(values.key));
       released.resolve();
       return {};
+    },
+    "sessions.subscribe": () => ({}),
+    "sessions.unsubscribe": () => ({}),
+    "sessions.abort": () => ({ aborted: true }),
+    "sessions.list": list,
+    "sessions.describe": readNative,
+    "chat.history": readHistory,
+  };
+  const request = vi.fn((method: string, params?: unknown): unknown => {
+    if (!Object.hasOwn(methods, method)) {
+      throw new Error(`Unexpected method: ${method}`);
     }
-    if (method === "sessions.subscribe" || method === "sessions.unsubscribe") {
-      return {};
-    }
-    if (method === "sessions.abort") {
-      return { aborted: true };
-    }
-    if (method === "sessions.list") {
-      return list(values);
-    }
-    if (method === "sessions.describe") {
-      return readNative(values);
-    }
-    if (method === "chat.history") {
-      return readHistory(values);
-    }
-    throw new Error(`Unexpected method: ${method}`);
+    return methods[method]!(asOptionalRecord(params) ?? {});
   });
   const client = createTestGatewayClient(request);
   const connection = createGatewayHarness(client);
   connection.publish({
-    hello: gatewayHelloForMethods([
-      ...SESSION_MUTATION_TEST_METHODS,
-      "sessions.list",
-      "sessions.describe",
-      "sessions.subscribe",
-      "sessions.unsubscribe",
-      "sessions.messages.subscribe",
-      "sessions.messages.unsubscribe",
-      "chat.history",
-    ]),
+    hello: gatewayHelloForMethods([...SESSION_MUTATION_TEST_METHODS, ...Object.keys(methods)]),
   });
   const sessions = createTestSessionCapability(connection.gateway);
   const context = createContext(connection.gateway, sessions);
@@ -178,7 +165,18 @@ function fixture(
       ...rest,
     });
   };
-  return { data, when, open, request, connection, subscriptions, released, changed, publish };
+  return {
+    data,
+    when,
+    open,
+    request,
+    connection,
+    sessions,
+    subscriptions,
+    released,
+    changed,
+    publish,
+  };
 }
 
 const view = (f: ReturnType<typeof fixture>) => f.data.rows[0];
@@ -192,6 +190,67 @@ async function ready(
 }
 
 describe("Subagents panel data ownership", () => {
+  it("keeps descendant reads, rows, and Stop within the visible tab tree", async () => {
+    const reviewer = runningChild("reviewer", { spawnedBy: "agent:worker:subagent:coordinator" });
+    let coordinator = child("coordinator", {
+      hasActiveSubagentRun: true,
+      childSessions: [reviewer.key],
+    });
+    const f = fixture(
+      (params) => page(params.spawnedBy === parentKey ? [coordinator] : [reviewer]),
+      (params) => history(params.sessionKey === reviewer.key ? reviewer : coordinator),
+    );
+    // Details/mobile remain direct-child views; the desktop tab opts into its tree.
+    await ready(f);
+    expect(f.data.rows.map((row) => row.session.key)).toEqual([coordinator.key]);
+    expect(
+      f.request.mock.calls.filter(
+        ([method, params]) =>
+          method === "sessions.list" && asOptionalRecord(params)?.spawnedBy === coordinator.key,
+      ),
+    ).toHaveLength(0);
+
+    f.data.sync({
+      sessionKey: parentKey,
+      agentId: "main",
+      presented: true,
+      includeDescendants: true,
+    });
+    await f.data.readResult;
+    expect(f.data.rows.map((row) => [row.session.key, row.depth])).toEqual([
+      [coordinator.key, 0],
+      [reviewer.key, 1],
+    ]);
+    const nested = f.data.rows[1]!;
+    await f.data.stop(nested);
+    expect(f.request).toHaveBeenCalledWith(
+      "sessions.abort",
+      expect.objectContaining({
+        key: reviewer.key,
+        runId: "run-1",
+      }),
+    );
+
+    coordinator = { ...coordinator, hasActiveSubagentRun: false, childSessions: [] };
+    f.connection.publishEvent("sessions.changed", {
+      sessionKey: coordinator.key,
+      reason: "run-end",
+      ts: Date.now(),
+      session: coordinator,
+    });
+    await f.when(() => f.data.rows.length === 1);
+    f.request.mockClear();
+    await f.data.stop(nested);
+    expect(f.request.mock.calls.some(([method]) => method === "sessions.abort")).toBe(false);
+    f.data.sync({
+      sessionKey: parentKey,
+      agentId: "main",
+      presented: false,
+      includeDescendants: true,
+    });
+    expect(f.data.rows).toEqual([]);
+  });
+
   it.each(["parent", "connection"])(
     "rejects late history after %s retirement",
     async (retirement) => {
@@ -259,43 +318,43 @@ describe("Subagents panel data ownership", () => {
     expect(f.data.rows).toEqual([]);
     expect(f.data.error).toContain("Session read access denied");
     expect(f.subscriptions.has(row.key)).toBe(false);
+
+    denied = false;
+    // A shared roster refresh recovers the view without explicitly refreshing this panel.
+    await f.sessions.refreshList(childSessionListQuery(parentKey));
+    await f.when(() => view(f)?.session.key === row.key);
+    expect(f.data.error).toBeNull();
   });
 
-  it.each([undefined, "parallel-audits"])(
-    "loads older running children beyond the first page (%s)",
-    async (swarmGroupId) => {
-      const finished = Array.from({ length: 20 }, (_, index) => child(`finished-${index}`));
-      const last = child("last", {
-        key: "agent:research:subagent:last",
-        agentId: "research",
-        swarmGroupId,
-        status: "running",
-        hasActiveRun: true,
-        activeRunIds: ["run-1"],
-      });
-      const persistent = child("persistent", {
-        key: "agent:main:dashboard:persistent",
-        classification: undefined,
-      });
-      const f = fixture(
-        (params) =>
-          !params.spawnedBy
-            ? page([])
-            : params.offset === 21
-              ? page([last], { offset: 21, totalCount: 22 })
-              : page([...finished, persistent], { hasMore: true, nextOffset: 21, totalCount: 22 }),
-        (params) => history(params.sessionKey === last.key ? last : finished[0]!),
-      );
-      f.open();
-      await f.data.refresh();
-      expect(f.data.rows.map((row) => row.session.key)).toEqual([
-        ...finished.map((row) => row.key),
-        last.key,
-      ]);
-      expect(f.data.rows.at(-1)?.canStop).toBe(true);
-      expect(f.data.loading).toBe(false);
-    },
-  );
+  it("loads older running children beyond the first page", async () => {
+    const finished = Array.from({ length: 20 }, (_, index) => child(`finished-${index}`));
+    const last = runningChild("last", {
+      key: "agent:research:subagent:last",
+      agentId: "research",
+      swarmGroupId: "parallel-audits",
+    });
+    const persistent = child("persistent", {
+      key: "agent:main:dashboard:persistent",
+      classification: undefined,
+    });
+    const f = fixture(
+      (params) =>
+        !params.spawnedBy
+          ? page([])
+          : params.offset === 21
+            ? page([last], { offset: 21, totalCount: 22 })
+            : page([...finished, persistent], { hasMore: true, nextOffset: 21, totalCount: 22 }),
+      (params) => history(params.sessionKey === last.key ? last : finished[0]!),
+    );
+    f.open();
+    await f.data.refresh();
+    expect(f.data.rows.map((row) => row.session.key)).toEqual([
+      ...finished.map((row) => row.key),
+      last.key,
+    ]);
+    expect(f.data.rows.at(-1)?.canStop).toBe(true);
+    expect(f.data.loading).toBe(false);
+  });
 
   it("rejects a stale Stop target while allowing the current run to be stopped exactly", async () => {
     let row = runningChild("stop", { activeRunIds: ["original-run"] });
@@ -427,16 +486,19 @@ describe("native observations in the Subagents panel owner", () => {
     truncated: false,
   };
   const nativeParent = { key: parentKey, sessionId: "parent-session", kind: "direct" };
-
-  it("keeps native observations separate from managed sessions and controls", async () => {
-    const f = fixture(
+  const nativeResult = (children = nativeSnapshot.children) => ({
+    session: nativeParent,
+    nativeSubagents: { ...nativeSnapshot, children },
+  });
+  const nativeFixture = (read: Parameters<typeof fixture>[2] = () => nativeResult()) =>
+    fixture(
       () => page([]),
       () => ({}),
-      () => ({
-        session: nativeParent,
-        nativeSubagents: nativeSnapshot,
-      }),
+      read,
     );
+
+  it("keeps native observations separate from managed sessions and controls", async () => {
+    const f = nativeFixture();
     f.open();
     await f.when(() => f.data.nativeSnapshot?.children.length === 1);
     expect(f.data.rows).toEqual([]);
@@ -449,58 +511,50 @@ describe("native observations in the Subagents panel owner", () => {
     expect(f.request.mock.calls.some(([method]) => method === "sessions.abort")).toBe(false);
   });
 
-  it.each(["parent", "connection"])("drops a late native read after %s changes", async (change) => {
-    const blocked = createDeferred<unknown>();
-    let reads = 0;
-    const f = fixture(
-      () => page([]),
-      () => ({}),
-      () => {
-        reads += 1;
-        return reads === 1
-          ? blocked.promise
-          : {
-              session: nativeParent,
-              nativeSubagents: {
-                ...nativeSnapshot,
-                children: [],
-              },
-            };
-      },
-    );
-    f.open();
-    await vi.waitFor(() => expect(reads).toBe(1));
-    if (change === "parent") {
-      f.open(otherParentKey);
-    } else {
-      f.connection.publish({ phase: "reconnecting" });
-      expect(f.data.nativeSnapshot?.children).toBeUndefined();
-      f.connection.publish({ phase: "connected" });
-    }
-    await vi.waitFor(() => expect(reads).toBe(2));
-    blocked.resolve({ session: nativeParent, nativeSubagents: nativeSnapshot });
-    await blocked.promise;
-    await Promise.resolve();
-    expect(f.data.nativeSnapshot?.children).toEqual([]);
-  });
+  it.each(["parent", "connection", "disposal"])(
+    "drops a late native read after %s",
+    async (change) => {
+      const blocked = createDeferred<unknown>();
+      let reads = 0;
+      const f = nativeFixture(() => (++reads === 1 ? blocked.promise : nativeResult([])));
+      f.open();
+      await vi.waitFor(() => expect(reads).toBe(1));
+      if (change === "parent") {
+        f.open(otherParentKey);
+      } else if (change === "connection") {
+        f.connection.publish({ phase: "reconnecting" });
+        expect(f.data.nativeSnapshot?.children).toBeUndefined();
+        f.connection.publish({ phase: "connected" });
+      } else {
+        f.data.dispose();
+      }
+      if (change !== "disposal") {
+        await vi.waitFor(() => expect(reads).toBe(2));
+      }
+      blocked.resolve(nativeResult());
+      await blocked.promise;
+      await Promise.resolve();
+      if (change === "disposal") {
+        expect(f.data.nativeSnapshot).toBeUndefined();
+      } else {
+        expect(f.data.nativeSnapshot?.children).toEqual([]);
+      }
+    },
+  );
 
   it.each(["missing", "denied"])(
     "clears prior contents when the parent becomes %s",
     async (outcome) => {
       let allowed = true;
-      const f = fixture(
-        () => page([]),
-        () => ({}),
-        () => {
-          if (allowed) {
-            return { session: nativeParent, nativeSubagents: nativeSnapshot };
-          }
-          if (outcome === "denied") {
-            throw new Error("Access denied");
-          }
-          return { session: null };
-        },
-      );
+      const f = nativeFixture(() => {
+        if (allowed) {
+          return nativeResult();
+        }
+        if (outcome === "denied") {
+          throw new Error("Access denied");
+        }
+        return { session: null };
+      });
       f.open();
       await f.when(() => f.data.nativeSnapshot?.children.length === 1);
       allowed = false;
@@ -510,40 +564,12 @@ describe("native observations in the Subagents panel owner", () => {
     },
   );
 
-  it("does not publish an in-flight native response after disposal", async () => {
-    const blocked = createDeferred<unknown>();
-    const f = fixture(
-      () => page([]),
-      () => ({}),
-      () => blocked.promise,
-    );
-    f.open();
-    await vi.waitFor(() =>
-      expect(f.request).toHaveBeenCalledWith(
-        "sessions.describe",
-        expect.objectContaining({ includeNativeSubagents: true }),
-      ),
-    );
-    f.data.dispose();
-    blocked.resolve({ session: nativeParent, nativeSubagents: nativeSnapshot });
-    await blocked.promise;
-    await Promise.resolve();
-    expect(f.data.nativeSnapshot).toBeUndefined();
-  });
-
   it("polls only while visible and retires pending reads on disposal", async () => {
     vi.useFakeTimers();
     onTestFinished(() => {
       vi.useRealTimers();
     });
-    const f = fixture(
-      () => page([]),
-      () => ({}),
-      () => ({
-        session: nativeParent,
-        nativeSubagents: nativeSnapshot,
-      }),
-    );
+    const f = nativeFixture();
     f.open();
     await vi.advanceTimersByTimeAsync(0);
     const reads = () =>

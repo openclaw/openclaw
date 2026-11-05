@@ -98,6 +98,7 @@ function skipRequest(
     error,
   });
   if (job) {
+    delete job.state.admissionDeferred;
     if (job.state.queuedAtMs === handle.startedAtMs) {
       delete job.state.queuedAtMs;
     }
@@ -186,6 +187,8 @@ function requestCronRunsInDatabase(
     } else if (!job || job.state.queuedAtMs !== undefined || job.state.runningAtMs !== undefined) {
       reason = job ? "already-running" : "job-removed";
     } else if (
+      (request.mode === "scheduled" &&
+        input.nowMs < (job.state.admissionDeferred?.retryAtMs ?? 0)) ||
       resolveCronJobConfigRevision(job) !== request.configRevision ||
       // Disabling a command schedule withdraws its unattended authority, including force runs.
       (!isJobEnabled(job) && (request.mode !== "force" || isPluginCommandCronJob(job))) ||
@@ -234,6 +237,13 @@ function requestCronRunsInDatabase(
             startedAtMs: input.nowMs,
           },
           requestRunId: request.requestRunId,
+          replaceDeferred:
+            deferred && existing
+              ? {
+                  receiptId: existing.receipt_id,
+                  receiptSchema: prepareCronRunReceiptWriteSchema(db),
+                }
+              : undefined,
         });
       }
     }
@@ -333,32 +343,31 @@ function drainCronQueueInDatabase(
 ): CronRunQueueOperations["cron.drainQueue"]["output"] {
   const contexts = new Map(input.requests.map((request) => [request.receiptId, request]));
   const jobOrder = new Map([...jobs.keys()].map((jobId, index) => [jobId, index]));
-  const cancelled =
-    input.requests.length === 0
-      ? []
-      : executeSqliteQuerySync(
-          db,
-          query(db)
-            .selectFrom("cron_run_receipts")
-            .selectAll()
-            .where("store_key", "=", input.storeKey)
-            .where("status", "=", "skipped")
-            .where("receipt_id", "in", [...contexts.keys()]),
-        ).rows.map((row) => ({
-          job: jobs.get(row.job_id),
-          runReceipt: receiptHandle(receiptFromRow(row)),
-          error: row.error_text ?? "cron: queued request was cancelled",
-        }));
-  const receipts = executeSqliteQuerySync(
+  const rows = executeSqliteQuerySync(
     db,
     query(db)
       .selectFrom("cron_run_receipts")
       .selectAll()
       .where("store_key", "=", input.storeKey)
-      .where("status", "=", "running")
+      .where((eb) =>
+        contexts.size === 0
+          ? eb("status", "=", "running")
+          : eb.or([
+              eb("status", "=", "running"),
+              eb.and([eb("status", "=", "skipped"), eb("receipt_id", "in", [...contexts.keys()])]),
+            ]),
+      )
       .orderBy("started_at_ms")
       .orderBy("job_id"),
-  ).rows.map(receiptFromRow);
+  ).rows;
+  const cancelled = rows
+    .filter((row) => row.status === "skipped")
+    .map((row) => ({
+      job: jobs.get(row.job_id),
+      runReceipt: receiptHandle(receiptFromRow(row)),
+      error: row.error_text ?? "cron: queued request was cancelled",
+    }));
+  const receipts = rows.filter((row) => row.status === "running").map(receiptFromRow);
   let activeCount = receipts.filter((receipt) => {
     const state = jobs.get(receipt.jobId)?.state;
     return state?.runningReceiptId === receipt.receiptId && state.runningAtMs !== undefined;

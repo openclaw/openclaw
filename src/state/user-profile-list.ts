@@ -26,6 +26,7 @@ import {
   profileCatalogPath,
   projectHasMultipleSessionSharingIdentities,
   readCatalogUserProfileAuthority,
+  readCatalogGitHubEmailIdentity,
   resolveUserProfileReferenceInCatalog,
 } from "./user-profile-identity.read.js";
 import type { UserProfileEmailBindingChange } from "./user-profile-mutation.js";
@@ -121,15 +122,14 @@ export function captureResidentUserProfileAccess(
   }
   const { rows, assertCurrent: guard } = catalog;
   const assertCurrent = () => {
-    if (profileCatalogs.get(pathname) !== catalog || catalog.rows !== rows) {
-      throw new UserProfileNotFoundError(profileId);
-    }
     guard(profileId);
     const profile = resolveCatalogProfile(rows, profileId);
-    if (!profile) {
+    if (!profile || profileCatalogs.get(pathname) !== catalog || catalog.rows !== rows) {
       throw new UserProfileNotFoundError(profileId);
     }
-    guard(profile.id);
+    if (profile.id !== profileId) {
+      guard(profile.id);
+    }
     return profile;
   };
   assertCurrent();
@@ -189,13 +189,7 @@ export function listResidentUserProfileDisplayFacts(options: OpenClawStateDataba
   }
   return [...catalog.rows.values()].map((profile) => ({
     id: profile.id,
-    label:
-      profile.display_name?.trim() ||
-      profile.githubLogin ||
-      [...(bindings.emailsByProfile.get(profile.id) ?? [])].toSorted((left, right) =>
-        Buffer.compare(Buffer.from(left), Buffer.from(right)),
-      )[0] ||
-      profile.id,
+    label: projectUserProfileDisplay(profile).displayName || profile.id,
     hasAvatar: profile.has_avatar === 1,
     updatedAt: profile.updated_at,
   }));
@@ -655,6 +649,7 @@ export async function prepareUserProfileCatalog(options: OpenClawStateDatabaseOp
     readCurrentAuthority(this: void, profileId: string, includeProfile = false) {
       return readCatalogUserProfileAuthority(catalog, profileId, includeProfile);
     },
+    readCurrentGitHubEmailIdentity: readCatalogGitHubEmailIdentity.bind(undefined, catalog),
     release: catalog.release,
   };
 }

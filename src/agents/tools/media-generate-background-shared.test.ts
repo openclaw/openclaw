@@ -20,10 +20,17 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../config/sessions/transcript-write-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import { createContext as createGatewayContext } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayContextResolver,
+} from "../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { hasPendingGeneratedMediaTaskForSessionKey } from "../media-generation-activity.js";
+import { createRequesterTranscriptWriter } from "../test-helpers/requester-transcript-writer.test-support.js";
 
 const subagentAnnounceDeliveryMocks = vi.hoisted(() => ({
   deliverSubagentAnnouncement: vi.fn(),
@@ -48,7 +55,12 @@ const sessionMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../subagents/announce/subagent-announce-delivery.js", () => subagentAnnounceDeliveryMocks);
+// mock-isolation: Keep requester routing fixtures outside the session database.
 vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: async (_scope: unknown, assertCurrent: () => void) => {
+    assertCurrent();
+    return sessionMocks.loadSessionEntry();
+  },
   withSessionEntryReadOnlyInWorker: async (
     _scope: unknown,
     assertCurrent: () => void,
@@ -220,19 +232,57 @@ describe("media generation detachment admission", () => {
 });
 
 describe("scheduleMediaGenerationTaskCompletion", () => {
+  it("keeps detached completion bound to its original live Gateway instance", async () => {
+    const gateway = createGatewayContext();
+    let currentGateway: GatewayRequestContext | undefined = gateway;
+    const lifecycle = createImageMediaLifecycle();
+    const handle = await withPluginRuntimeGatewayContextResolver(
+      () => currentGateway,
+      () => lifecycle.createTaskRun({ sessionKey: "agent:main:media", prompt: "proof image" }),
+    );
+    assert(handle);
+    const completed = createDeferredCore();
+    const onWakeFailure = vi.fn();
+    const onCrash = vi.fn((error: string) => completed.reject(new Error(error)));
+    subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockImplementationOnce(
+      async (params: { resolveGatewayContext?: () => GatewayRequestContext | undefined }) => {
+        expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
+        expect(params.resolveGatewayContext?.()).toBe(gateway);
+        currentGateway = createGatewayContext();
+        expect(params.resolveGatewayContext?.()).toBeUndefined();
+        return { delivered: true, path: "direct" };
+      },
+    );
+
+    scheduleImageCompletion({
+      lifecycle: {
+        ...lifecycle,
+        completeTaskRun: (params) => {
+          lifecycle.completeTaskRun(params);
+          completed.resolve();
+        },
+      },
+      handle,
+      onWakeFailure,
+      scheduleBackgroundWork: createDefaultMediaGenerateBackgroundScheduler({
+        toolName: "image_generate",
+        onCrash,
+      }),
+    });
+    await completed.promise;
+
+    expect(subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledOnce();
+    expect(onWakeFailure).not.toHaveBeenCalled();
+    expect(onCrash).not.toHaveBeenCalled();
+  });
+
   it("runs detached completion outside a disposed requester transcript owner", async () => {
     const sessionKey = "agent:qa:image-generate";
     let disposed = false;
     const backgroundReady = createDeferredCore();
     let scheduled: Promise<void> | undefined;
-    const requesterTranscriptWrite = vi.fn();
-    const withRequesterTranscriptWrite = async <T>(operation: () => Promise<T> | T): Promise<T> => {
-      requesterTranscriptWrite();
-      if (disposed) {
-        throw new Error("attempt disposed before transcript write");
-      }
-      return await operation();
-    };
+    const { requesterTranscriptWrite, withRequesterTranscriptWrite } =
+      createRequesterTranscriptWriter(() => disposed);
     const freshTranscriptWrite = vi.fn(async () => {});
     const wakeTaskCompletion = vi.fn(async () => {
       await runWithOwnedSessionTranscriptWrite({ sessionKey }, freshTranscriptWrite);
@@ -464,29 +514,44 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     expect(onWakeFailure).not.toHaveBeenCalled();
   });
 
-  it("stops pending handoff retries at the completion deadline", async () => {
-    vi.useFakeTimers();
-    const { lifecycle, onWakeFailure, scheduled, schedule } = completionFixture(
-      imageHandle("orphaned", {
-        requesterSessionKey: "agent:main:cron:job:run:run-id",
-      }),
-    );
-    lifecycle.wakeTaskCompletion.mockResolvedValue({ status: "pending" });
-    schedule();
+  it.each([-60_000, 0, 60_000])(
+    "stops pending handoff retries at the completion deadline when the wall clock jumps %i ms",
+    async (wallClockJumpMs) => {
+      vi.useFakeTimers();
+      const { lifecycle, onWakeFailure, scheduled, schedule } = completionFixture(
+        imageHandle("orphaned", {
+          requesterSessionKey: "agent:main:cron:job:run:run-id",
+        }),
+      );
+      lifecycle.wakeTaskCompletion.mockResolvedValue({ status: "pending" });
+      schedule();
 
-    const backgroundWork = scheduled[0]?.();
-    await vi.advanceTimersByTimeAsync(120_000);
-    await backgroundWork;
+      const backgroundWork = scheduled[0]?.();
+      assert(backgroundWork, "expected scheduled media work");
+      await vi.advanceTimersByTimeAsync(0);
+      vi.setSystemTime(Date.now() + wallClockJumpMs);
 
-    expect(lifecycle.wakeTaskCompletion.mock.calls.length).toBeLessThan(70);
-    expectCall(lifecycle.completeTaskRun, {
-      terminalResult: expect.objectContaining({ terminalOutcome: "blocked" }),
-    });
-    expect(onWakeFailure).toHaveBeenCalledWith(
-      "Image generation completion wake failed after successful generation",
-      expect.objectContaining({ taskId: "task-image-orphaned" }),
-    );
-  });
+      await vi.advanceTimersByTimeAsync(119_999);
+      expect(lifecycle.completeTaskRun).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      const settlement = await Promise.race([
+        backgroundWork.then(() => "settled" as const),
+        Promise.resolve().then(() => "pending" as const),
+      ]);
+      expect(settlement).toBe("settled");
+      expectCall(lifecycle.completeTaskRun, {
+        terminalResult: expect.objectContaining({ terminalOutcome: "blocked" }),
+      });
+      expect(onWakeFailure).toHaveBeenCalledWith(
+        "Image generation completion wake failed after successful generation",
+        expect.objectContaining({ taskId: "task-image-orphaned" }),
+      );
+      expect(lifecycle.wakeTaskCompletion.mock.calls.length).toBeLessThan(70);
+
+      await backgroundWork;
+    },
+  );
 
   it("completes a generated media task when completion delivery cannot be confirmed", async () => {
     const { lifecycle, onWakeFailure, scheduled, schedule } = completionFixture(imageHandle("456"));

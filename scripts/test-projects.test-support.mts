@@ -2,10 +2,11 @@
 // scripts/test-projects.mts, and focused tests. Exports are intentionally
 // granular so project selection stays testable without spawning Vitest.
 import { spawnSync, type SpawnSyncOptionsWithStringEncoding } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import adaptiveMarkdownQualification from "../config/ci-adaptive-markdown.json" with { type: "json" };
 import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
@@ -91,6 +92,7 @@ import {
   detectChangedLanes,
   listChangedPathsFromGit as listChangedPathsFromGitSource,
 } from "./changed-lanes.mts";
+import { isGitWorktreeRoot } from "./check-file-utils.ts";
 import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
 import {
   getChangedPathFacts,
@@ -98,6 +100,7 @@ import {
   isTestOnlyPath,
   isTestSupportFileTarget,
 } from "./lib/changed-path-facts.mjs";
+import { createAdaptiveMarkdownFilter } from "./lib/ci-adaptive-markdown.mjs";
 import {
   createExtensionTestProcessTargetChunks,
   listTrackedTestPlanFiles,
@@ -106,10 +109,7 @@ import {
   splitExtensionTestJobTargets,
   splitExtensionTestProcessTargets,
 } from "./lib/extension-test-plan.mts";
-import {
-  createGatewayServerTestTargetChunks,
-  splitTestTargetChunks as splitTargetChunks,
-} from "./lib/gateway-server-test-plan.mts";
+import { createGatewayServerTestTargetChunks } from "./lib/gateway-server-test-plan.mts";
 import { GIT_LS_FILES_MAX_BUFFER_BYTES } from "./lib/list-test-files.mts";
 import {
   readRuntimeWorkerDescriptorReads,
@@ -118,6 +118,7 @@ import {
   readTestSelectorSourceFacts,
   runtimeWorkerSpecifier,
 } from "./lib/test-selector-source-facts.mts";
+import { splitTestTargetChunks as splitTargetChunks } from "./lib/test-target-chunks.mts";
 // CI imports planning before dependency installation; execution owners stay outside this closure.
 import { resolveVitestCliEntry } from "./lib/vitest-build-prerequisites.mts";
 import { resolveVitestCacheRoot, resolveVitestCacheSlotPath } from "./lib/vitest-cache-slots.mts";
@@ -129,6 +130,7 @@ import {
 } from "./lib/vitest-cli-mode.mts";
 import {
   isCiLikeEnv,
+  parseOptionalPositiveInt,
   resolveLocalFullSuiteProfile,
   type VitestHostInfo,
 } from "./lib/vitest-local-scheduling.mts";
@@ -175,6 +177,7 @@ type ChangedTestTargetOptions = {
   combineSiblingWithImportGraph?: boolean;
   boundedOwners?: boolean;
   aggressive?: { maxDirectImporters: number; maxDirectoryTests: number };
+  adaptiveMarkdown?: boolean;
   onSelection?: (selection: { rule: string; input: string; targets: string[] }) => void;
   forceFullImportGraph?: boolean;
   resolveAliases?: boolean;
@@ -639,7 +642,7 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
     ["src/agents/bash-tools.process.liveness.test.ts"],
   ],
   [
-    "patches/vitest@5.0.3.patch",
+    "patches/vitest@5.0.5.patch",
     [
       "test/scripts/run-vitest-profile.test.ts",
       "test/scripts/run-vitest-state-cleanup.test.ts",
@@ -657,10 +660,7 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
     "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
   ].map<[string, string[]]>((sourcePath) => [
     sourcePath,
-    [
-      "src/agents/embedded-agent-runner/run.overflow-compaction.loop.test.ts",
-      "src/commands/onboard-guided.inference.e2e.test.ts",
-    ],
+    ["src/agents/embedded-agent-runner/run.overflow-compaction.loop.test.ts"],
   ]),
   [
     "src/plugins/contracts/tts-contract-suites.ts",
@@ -775,7 +775,6 @@ const MERMAID_RENDERER_TEST_TARGETS = [
 const MARKDOWN_RENDER_CHUNKING_TEST_TARGETS = [
   "packages/markdown-core/src/ir.test.ts",
   "packages/markdown-core/src/render-aware-chunking.test.ts",
-  "packages/markdown-core/src/render.annotations.test.ts",
   "src/plugin-sdk/format-capabilities.test.ts",
   "src/plugin-sdk/text-chunking.test.ts",
   "extensions/googlechat/src/format.test.ts",
@@ -1452,6 +1451,9 @@ let cachedExplicitTestTargetFiles: string[] | null = null;
 let cachedExplicitTestTargetFilesCwd: string | null = null;
 
 function listExplicitTestTargetFilesFromGit(cwd: string) {
+  if (!isGitWorktreeRoot(cwd)) {
+    return null;
+  }
   const result = spawnSync(
     "git",
     [
@@ -2230,7 +2232,7 @@ function listImportGraphGrepMatches(
   // Git's fixed-string prefilter rescans for each term. Large frontiers use the
   // source reader's single-pass multi-term matcher over the same inventory.
   const result =
-    missing.length <= 64
+    missing.length <= 64 && isGitWorktreeRoot(cwd)
       ? spawnSync(
           "git",
           ["grep", "-l", "-z", "--fixed-strings", "-f", "-", "--", ...grepPaths],
@@ -2796,6 +2798,56 @@ export function resolveImportGraphDependents(
   return [...seen]
     .filter((file) => !roots.has(file))
     .toSorted((left, right) => left.localeCompare(right));
+}
+
+/** Fingerprint current workspace inputs from the same graph that selects their consumers. */
+export function createTestInputFingerprint(cwd = process.cwd()) {
+  let dependencies: Map<string, string[]> | undefined;
+  const hashes = new Map<string, string | null>();
+  return (roots: string[]): string | null => {
+    try {
+      if (!dependencies) {
+        dependencies = new Map();
+        const graph = getImportGraph(cwd, {
+          tooling: true,
+          resolveAliases: true,
+          runtimeOnly: true,
+        });
+        for (const [dependency, importers] of graph.reverseImports) {
+          for (const importer of importers) {
+            const inputs = dependencies.get(importer) ?? [];
+            inputs.push(dependency);
+            dependencies.set(importer, inputs);
+          }
+        }
+      }
+      const inputs = new Set(roots);
+      for (const file of inputs) {
+        for (const dependency of dependencies.get(file) ?? []) {
+          inputs.add(dependency);
+        }
+      }
+      const rows = [...inputs].toSorted().map((file) => {
+        if (!hashes.has(file)) {
+          const absolute = path.join(cwd, file);
+          hashes.set(
+            file,
+            fs.lstatSync(absolute).isFile()
+              ? createHash("sha256").update(fs.readFileSync(absolute)).digest("hex")
+              : null,
+          );
+        }
+        const hash = hashes.get(file);
+        if (!hash) {
+          throw new Error("Unqualified test input");
+        }
+        return [file, hash];
+      });
+      return createHash("sha256").update(JSON.stringify(rows)).digest("hex");
+    } catch {
+      return null;
+    }
+  };
 }
 
 /** Changed resolved dependencies enter the same graph at their literal import consumers. */
@@ -3371,7 +3423,6 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
     ["test/e2e/qa-lab/runtime/openai-web-search-minimal.e2e.test.ts"],
   ],
   ["scripts/e2e/qr-import-docker.sh", [dockerBuild]],
-  ["scripts/bundle-a2ui.mts", ["bundled-plugin-assets"]],
 ]);
 
 const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
@@ -3413,6 +3464,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       "src/plugins/contracts/deprecated-internal-config-api.test.ts",
     ],
   ],
+  [/^scripts\/ci-check-plan\.mts$/u, ["ci-check-plan", workflowPlanning]],
   [
     /^\.github\/workflows\/ci\.yml$/u,
     [
@@ -4649,6 +4701,14 @@ function resolveBoundedChangedTestTargetPlan(
   const targets: string[] = [];
   const ownerTargets: string[] = [];
   const ownerAreas: string[] = [];
+  const adaptiveMarkdown =
+    options.aggressive && options.adaptiveMarkdown
+      ? createAdaptiveMarkdownFilter(
+          changedPaths,
+          createTestInputFingerprint(cwd),
+          adaptiveMarkdownQualification,
+        )
+      : (owners: string[]) => owners;
   const graphOptions = {
     tooling: true,
     resolveAliases: options.resolveAliases,
@@ -4681,11 +4741,18 @@ function resolveBoundedChangedTestTargetPlan(
           )
         : [];
     const explicitOwners = uniqueOrdered([...(mappedOwners ?? []), ...pluginPackageOwner]);
-    const conventionalOwners = resolveConventionalChangedOwnerTargets(
+    const conventionalCandidates = resolveConventionalChangedOwnerTargets(
       changedPath,
       cwd,
       options.aggressive?.maxDirectoryTests,
     );
+    const conventionalOwners = adaptiveMarkdown(conventionalCandidates);
+    const retainedConventional = new Set(conventionalOwners);
+    options.onSelection?.({
+      rule: "adaptive-qualified-unchanged",
+      input: changedPath,
+      targets: conventionalCandidates.filter((file) => !retainedConventional.has(file)),
+    });
     const owners = options.aggressive
       ? uniqueOrdered([
           ...explicitOwners,
@@ -5215,7 +5282,7 @@ function shouldUseWholeConfigTarget(kind: string, targetArg: string, cwd: string
   return isControlUiSourcePath(relative);
 }
 
-function createVitestArgs(
+export function createVitestArgs(
   params: Pick<VitestRunPlan, "config" | "forwardedArgs" | "watchMode"> & {
     env?: NodeJS.ProcessEnv;
   },
@@ -5713,7 +5780,7 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
       },
     ];
   }
-  const parallelShardCount = parsePositiveInt(
+  const parallelShardCount = parseOptionalPositiveInt(
     process.env.OPENCLAW_TEST_PROJECTS_PARALLEL,
     "OPENCLAW_TEST_PROJECTS_PARALLEL",
   );
@@ -5829,23 +5896,8 @@ export function buildFullSuiteVitestRunPlans(args: string[], cwd = process.cwd()
   });
 }
 
-function parsePositiveInt(value: string | undefined, label: string) {
-  const text = value?.trim();
-  if (!text) {
-    return null;
-  }
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`${label} must be a positive integer; got: ${value}`);
-  }
-  const parsed = Number(text);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new Error(`${label} must be a positive integer; got: ${value}`);
-  }
-  return parsed;
-}
-
 function hasConservativeVitestWorkerBudget(env: NodeJS.ProcessEnv) {
-  const workerBudget = parsePositiveInt(
+  const workerBudget = parseOptionalPositiveInt(
     env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS,
     env.OPENCLAW_VITEST_MAX_WORKERS === undefined
       ? "OPENCLAW_TEST_WORKERS"
@@ -5903,7 +5955,7 @@ export function resolveParallelFullSuiteConcurrency(
 ) {
   let env = envInput;
   env ??= process.env;
-  const override = parsePositiveInt(
+  const override = parseOptionalPositiveInt(
     env.OPENCLAW_TEST_PROJECTS_PARALLEL,
     "OPENCLAW_TEST_PROJECTS_PARALLEL",
   );
@@ -6099,7 +6151,7 @@ export function createVitestRunSpecs(
           : baseEnv,
       includeFilePath,
       includePatterns: plan.includePatterns,
-      pnpmArgs: createVitestArgs(plan),
+      pnpmArgs: createVitestArgs({ ...plan, env: baseEnv }),
       preflightPnpmArgs: createVitestPreflightPnpmArgs(plan.config),
       watchMode: plan.watchMode,
     };

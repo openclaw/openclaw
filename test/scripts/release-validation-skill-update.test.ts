@@ -116,8 +116,7 @@ test.each([".clawhub", ".clawdhub"])(
     }
 
     await writeFile(path.join(skillDirectory, "assets", "worksheet.md"), "locally edited\n");
-    const modified = await check();
-    expect(modified).toMatchObject({
+    expect(await check()).toMatchObject({
       localModifications: true,
       status: "update-available",
       update: { command: [...updateCommand, "--force"] },
@@ -128,23 +127,20 @@ test.each([".clawhub", ".clawdhub"])(
       registry: " https://clawhub.ai/ ",
       ownerHandle: " OpenClaw ",
     });
-    const normalized = await check();
-    expect(normalized.status).toBe("update-available");
-    expect(normalized.update).toBeDefined();
+    expect(await check()).toMatchObject({
+      status: "update-available",
+      update: expect.any(Object),
+    });
 
-    const { ownerHandle: _ownerHandle, ...ownerlessOrigin } = origin;
-    await writeJson(originPath, ownerlessOrigin);
-    expectNoUpdate(await check(), "different-source");
-
-    await writeJson(originPath, origin);
-    await writeLock({ ...lockEntry, ownerHandle: "other-owner" });
-    expectNoUpdate(await check(), "untracked");
-
-    const { fileTreeSha256: _tree, skillFile: _skillFile, ...legacyLockEntry } = lockEntry;
-    await writeLock(legacyLockEntry);
-    expectNoUpdate(await check(), "untracked");
-
-    await writeJson(originPath, origin);
+    for (const [originOverride, lockOverride, status] of [
+      [{ ownerHandle: undefined }, {}, "different-source"],
+      [{}, { ownerHandle: "other-owner" }, "untracked"],
+      [{}, { fileTreeSha256: undefined, skillFile: undefined }, "untracked"],
+    ] as const) {
+      await writeJson(originPath, { ...origin, ...originOverride });
+      await writeLock({ ...lockEntry, ...lockOverride });
+      expectNoUpdate(await check(), status);
+    }
     await writeLock(lockEntry);
     const primaryOriginPath = path.join(skillDirectory, ".clawhub", "origin.json");
     await mkdir(path.dirname(primaryOriginPath), { recursive: true });

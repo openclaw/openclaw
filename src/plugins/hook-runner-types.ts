@@ -32,12 +32,6 @@ export type ModifyingHookPolicy<K extends PluginHookName> = {
   onHandlerError?: (hook: PluginHookRegistration<K>, failOpen: boolean) => void;
 };
 
-type HookRunnerLogger = {
-  debug?: (message: string) => void;
-  warn: (message: string) => void;
-  error: (message: string) => void;
-};
-
 export type HookFailurePolicy = "fail-open" | "fail-closed";
 
 export type VoidHookRunOptions = {
@@ -56,7 +50,11 @@ export type BeforeAgentFinalizeResultWithRetryCandidates = PluginHookBeforeAgent
 };
 
 export type HookRunnerOptions = {
-  logger?: HookRunnerLogger;
+  logger?: {
+    debug?: (message: string) => void;
+    warn: (message: string) => void;
+    error: (message: string) => void;
+  };
   /** If true, errors in hooks will be caught and logged instead of thrown */
   catchErrors?: boolean;
   failurePolicyByHook?: Partial<Record<PluginHookName, HookFailurePolicy>>;

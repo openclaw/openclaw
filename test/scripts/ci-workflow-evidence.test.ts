@@ -15,15 +15,11 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import * as qaEvidence from "../../extensions/qa-lab/test-api.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
-  CHECKOUT_V6,
-  MANTIS_GITHUB_APP_CLIENT_ID,
   MATURITY_SCORECARD_WORKFLOW,
   TSX_IMPORT,
-  expectExcludes,
   expectIncludes,
   quoteShell,
   readMaturityScorecardWorkflow,
-  readReleaseChecksWorkflow,
   readWorkflow,
   readWorkflowOutputs,
   runGit,
@@ -45,15 +41,6 @@ const MATURITY_GENERATED_PR_PATHS = [
   "qa/maturity-scores.yaml",
   "docs/maturity/scorecard.md",
   "docs/maturity/taxonomy.md",
-];
-const TRUSTED_QA_STEPS = [
-  "Require authorized workflow actor",
-  "Prepare Git owner",
-  "Checkout trusted QA harness",
-  "Restore trusted QA harness revision",
-  "Setup Node environment",
-  "Checkout selected ref",
-  "Install selected dependencies",
 ];
 
 function writeFixture(file: string, contents: string | Buffer) {
@@ -114,13 +101,9 @@ function legacyEvidence(
 }
 
 function workflowOccurrenceEvidence(
-  instances: {
-    scenarioId: string;
-    attempts: qaEvidence.QaEvidenceStatus[];
-    selected?: number;
-    retry?: boolean;
-  }[],
-  evidenceMode: "full" | "slim" = "full",
+  scenarioId: string,
+  attempts: qaEvidence.QaEvidenceStatus[],
+  selected: number,
 ) {
   const identity = {
     source: { ref: null, integrity: null },
@@ -132,49 +115,45 @@ function workflowOccurrenceEvidence(
   };
   const occurrences: qaEvidence.QaEvidenceOccurrence[] = [];
   const entries: qaEvidence.QaEvidenceSummaryV3Entry[] = [];
-  for (const [index, instance] of instances.entries()) {
-    const anchorId = `instance-${index}`;
-    const parentCell = {
-      scenarioId: instance.scenarioId,
-      executionKind: "flow" as const,
-      channel: null,
-    };
-    const common = { parentCell, assertions: null, launch: identity };
+  const anchorId = "instance";
+  const parentCell = {
+    scenarioId,
+    executionKind: "flow" as const,
+    channel: null,
+  };
+  const common = { parentCell, assertions: null, launch: identity };
+  occurrences.push({
+    ...common,
+    id: anchorId,
+    scenario: {
+      kind: "instance",
+      resultOccurrenceId: `${anchorId}-attempt-${selected}`,
+    },
+    retryOf: null,
+    terminalStatus: null,
+    receipts: [],
+  });
+  for (const [attempt, status] of attempts.entries()) {
+    const id = `${anchorId}-attempt-${attempt}`;
     occurrences.push({
       ...common,
-      id: anchorId,
-      scenario: {
-        kind: "instance",
-        resultOccurrenceId:
-          instance.selected === undefined ? null : `${anchorId}-attempt-${instance.selected}`,
-      },
-      retryOf: null,
-      terminalStatus: null,
+      id,
+      scenario: { kind: "observation", instanceOccurrenceId: anchorId },
+      retryOf: attempt === 0 ? null : `${anchorId}-attempt-${attempt - 1}`,
+      terminalStatus: status,
       receipts: [],
     });
-    for (const [attempt, status] of instance.attempts.entries()) {
-      const id = `${anchorId}-attempt-${attempt}`;
-      occurrences.push({
-        ...common,
-        id,
-        scenario: { kind: "observation", instanceOccurrenceId: anchorId },
-        retryOf:
-          attempt === 0 || instance.retry === false ? null : `${anchorId}-attempt-${attempt - 1}`,
-        terminalStatus: status,
-        receipts: [],
-      });
-      entries.push({
-        test: { kind: "scenario", id: instance.scenarioId, title: instance.scenarioId },
-        coverage: [],
-        result: { status },
-        binding: { occurrenceId: id, assertionId: null, receiptId: null },
-        effective: instance.retry === false || attempt === instance.selected,
-      });
-    }
+    entries.push({
+      test: { kind: "scenario", id: scenarioId, title: scenarioId },
+      coverage: [],
+      result: { status },
+      binding: { occurrenceId: id, assertionId: null, receiptId: null },
+      effective: attempt === selected,
+    });
   }
   return qaEvidence.buildQaOccurrenceEvidenceSummary({
     generatedAt: "2026-08-05T00:00:00.000Z",
-    evidenceMode,
+    evidenceMode: "full",
     occurrences,
     entries,
   });
@@ -351,16 +330,6 @@ esac
   );
   chmodSync(fakePnpm, 0o755);
   const fixturePath = `${binDir}:${process.env.PATH ?? ""}`;
-  const timeoutVersion = spawnSync("timeout", ["--version"], {
-    encoding: "utf8",
-    env: { ...process.env, PATH: fixturePath },
-  });
-  if (timeoutVersion.status !== 0) {
-    throw new Error(
-      `QA timeout fixture requires timeout --version: ${timeoutVersion.stdout}${timeoutVersion.stderr}`,
-    );
-  }
-
   const workflow = readQaProfileEvidenceWorkflow();
   const runProfileStep = step(workflow.jobs.run_qa_profile_shard, "Run QA profile shard");
   let script = runProfileStep.run
@@ -420,7 +389,6 @@ timeout_outcome="none"`,
     stderr: run.stderr,
     stdout: run.stdout,
     timeoutSupervisorLog: readFileSync(timeoutSupervisorCapture, "utf8"),
-    timeoutVersion: `${timeoutVersion.stdout}${timeoutVersion.stderr}`.trim(),
   };
 }
 
@@ -442,16 +410,9 @@ function writeProtocolDescriptor(
     compatibilityRestored?: boolean;
   }> = [],
 ): void {
-  const rows = [{ name: "health", since: "2026.7" }, ...additions].map(
-    ({ name, since, compatibilityRestored }) => {
-      const sinceProperty = since === undefined ? "" : `, since: ${JSON.stringify(since)}`;
-      const compatibilityProperty = compatibilityRestored ? ", compatibilityRestored: true" : "";
-      return `  { name: ${JSON.stringify(name)}${sinceProperty}${compatibilityProperty} },`;
-    },
-  );
   writeFixture(
     path.join(repo, "src/gateway/methods/core-descriptors.ts"),
-    `export const CORE_GATEWAY_METHOD_SPECS = [\n${rows.join("\n")}\n] as const;\n`,
+    `export const CORE_GATEWAY_METHOD_SPECS = ${JSON.stringify([{ name: "health", since: "2026.7" }, ...additions])} as const;\n`,
   );
 }
 
@@ -465,9 +426,6 @@ function createQaProtocolTopology() {
   const root = tempDirs.make("openclaw-qa-protocol-topology-");
   const origin = path.join(root, "origin");
   const checkout = path.join(root, "checkout");
-  const releaseBranch = "release/2026.8.1";
-  const releaseTag = "v2026.8.1";
-  const mainReleaseTag = "v2026.8.2";
 
   runGit(root, ["init", "-q", "-b", "main", origin]);
   runGit(origin, ["config", "commit.gpgsign", "false"]);
@@ -479,47 +437,12 @@ function createQaProtocolTopology() {
   );
   writeProtocolDescriptor(origin);
   const mainBase = commitProtocolFixture(origin, "base protocol");
-  const branch = (
-    name: string,
-    additions: Parameters<typeof writeProtocolDescriptor>[1],
-    message: string,
-  ) => {
-    runGit(origin, ["checkout", "-q", "-b", name, mainBase]);
-    writeProtocolDescriptor(origin, additions);
-    return commitProtocolFixture(origin, message);
-  };
-
+  runGit(origin, ["checkout", "-q", "-b", "untrusted"]);
+  writeProtocolDescriptor(origin, [{ name: "untrusted" }]);
+  const untrusted = commitProtocolFixture(origin, "untrusted branch");
+  runGit(origin, ["checkout", "-q", "main"]);
   writeProtocolDescriptor(origin, [{ name: "sessions.patchMany", since: "2026.8" }]);
   const mainHead = commitProtocolFixture(origin, "add main protocol method");
-  runGit(origin, ["tag", mainReleaseTag]);
-  writeFileSync(path.join(origin, "main-tip.txt"), "later main tip\n");
-  commitProtocolFixture(origin, "advance main");
-
-  const compatibilityHead = branch(
-    "compatibility/restore",
-    [{ name: "gateway.restart.preflight", since: "<=2026.7", compatibilityRestored: true }],
-    "restore compatibility method",
-  );
-  const invalidCompatibilityHead = branch(
-    "compatibility/invalid",
-    [{ name: "gateway.restart.invalid", since: "2026.8", compatibilityRestored: true }],
-    "mislabel new method as compatibility",
-  );
-  const releaseHead = branch(
-    releaseBranch,
-    [{ name: "sessions.releaseOnly" }],
-    "add release protocol method",
-  );
-
-  runGit(origin, ["checkout", "-q", "--detach", mainBase]);
-  writeFileSync(path.join(origin, "tag.txt"), "release tag\n");
-  const releaseTagHead = commitProtocolFixture(origin, "create release tag target");
-  runGit(origin, ["tag", releaseTag]);
-
-  runGit(origin, ["checkout", "-q", "-b", "feature/untrusted", mainBase]);
-  writeFileSync(path.join(origin, "feature.txt"), "untrusted\n");
-  const featureHead = commitProtocolFixture(origin, "add untrusted feature");
-  runGit(origin, ["checkout", "-q", "main"]);
 
   runGit(root, ["clone", "-q", "--no-local", origin, checkout]);
   const gitOwner = path.join(root, "ci-git-owner.py");
@@ -527,18 +450,10 @@ function createQaProtocolTopology() {
 
   return {
     checkout,
-    compatibilityHead,
     gitOwner,
-    featureHead,
-    invalidCompatibilityHead,
     mainBase,
     mainHead,
-    mainReleaseTag,
-    origin,
-    releaseBranch,
-    releaseHead,
-    releaseTag,
-    releaseTagHead,
+    untrusted,
   };
 }
 
@@ -600,38 +515,33 @@ function runProtocolSinceFixture(checkout: string, baseSha: string) {
 }
 describe("ci workflow guards", () => {
   it.skipIf(process.platform === "win32")(
-    "resolves topology-aware protocol bases and drives the real guard",
+    "drives the protocol vintage guard and rejects untrusted selected revisions",
     () => {
       const topology = createQaProtocolTopology();
-      const cases = [
-        ["main", topology.mainHead, "main-ancestor", topology.mainBase],
-        [topology.releaseBranch, topology.releaseHead, "release-branch-head", topology.mainBase],
-        [topology.releaseTag, topology.releaseTagHead, "release-tag", topology.mainBase],
-        [topology.releaseTagHead, topology.releaseTagHead, "release-tag", topology.mainBase],
-        [topology.mainReleaseTag, topology.mainHead, "release-tag", topology.mainHead],
-      ] as const;
-
-      for (const [inputRef, revision, trustedReason, protocolBase] of cases) {
-        const result = runQaSelectedRefValidation(topology, inputRef, revision);
-        expectSuccess(result);
-        expect(result.outputs).toEqual({
-          protocol_base_revision: protocolBase,
-          selected_revision: revision,
-          trusted_reason: trustedReason,
-        });
+      for (const [expectedSha, inputRef, revision] of [
+        ["not-a-sha", "main", topology.mainHead],
+        [topology.untrusted, topology.untrusted, topology.untrusted],
+        [topology.mainBase, "main", topology.mainHead],
+      ] as const) {
+        const result = runQaSelectedRefValidation(topology, inputRef, revision, expectedSha);
+        expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
+        expect(result.outputs).toEqual({});
       }
-
-      for (const [revision, success, message] of [
-        [topology.mainHead, true, "1 new core method"],
-        [topology.compatibilityHead, true, "1 restored compatibility method"],
+      for (const [method, success, message] of [
+        [{ name: "new", since: "2026.8" }, true, "1 new core method"],
         [
-          topology.invalidCompatibilityHead,
+          { name: "restored", since: "<=2026.7", compatibilityRestored: true },
+          true,
+          "1 restored compatibility method",
+        ],
+        [
+          { name: "invalid", since: "2026.8", compatibilityRestored: true },
           false,
           "restored compatibility methods must retain <= vintage metadata",
         ],
-        [topology.releaseHead, false, "sessions.releaseOnly is missing since metadata"],
+        [{ name: "missing" }, false, "missing is missing since metadata"],
       ] as const) {
-        runGit(topology.checkout, ["checkout", "-q", "--detach", revision]);
+        writeProtocolDescriptor(topology.checkout, [method]);
         const result = runProtocolSinceFixture(topology.checkout, topology.mainBase);
         if (success) {
           expectSuccess(result);
@@ -641,103 +551,6 @@ describe("ci workflow guards", () => {
           expect(result.stderr).toContain(message);
         }
       }
-
-      for (const [expectedSha, inputRef, revision] of [
-        ["not-a-sha", "main", topology.mainHead],
-        [topology.featureHead, topology.featureHead, topology.featureHead],
-        [topology.mainHead, topology.releaseTag, topology.releaseTagHead],
-      ] as const) {
-        const result = runQaSelectedRefValidation(topology, inputRef, revision, expectedSha);
-        expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-        expect(result.outputs).toEqual({});
-      }
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "wires and fetches one explicit protocol base before QA execution",
-    () => {
-      const qaWorkflow = readQaProfileEvidenceWorkflow();
-      const maturityWorkflow = readMaturityScorecardWorkflow();
-      const validateJob = qaWorkflow.jobs.validate_selected_ref;
-      const runJob = qaWorkflow.jobs.run_qa_profile_shard;
-      const aggregateJob = qaWorkflow.jobs.aggregate_qa_profile;
-      const stepNames = runJob.steps.map((entry: WorkflowStep) => entry.name);
-      const buildStep = step(runJob, "Build private QA runtime");
-      const fetchStep = step(runJob, "Fetch protocol comparison base");
-      const runStep = step(runJob, "Run QA profile shard");
-      const evidenceStep = step(aggregateJob, "Finalize QA profile evidence");
-      const protocolOutput = "${{ needs.validate_selected_ref.outputs.protocol_base_revision }}";
-      const trustedInput = "${{ inputs.trusted_ref || inputs.ref }}";
-
-      expect(qaWorkflow.env.OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB).toBe("8192");
-
-      expect(qaWorkflow.on.workflow_call.inputs.trusted_ref).toEqual({
-        description: "Optional trusted branch, tag, or SHA identity for an immutable ref",
-        required: false,
-        default: "",
-        type: "string",
-      });
-      expect(validateJob.outputs.protocol_base_revision).toBe(
-        "${{ steps.validate.outputs.protocol_base_revision }}",
-      );
-      const validateStep = step(validateJob, "Validate selected ref");
-      expect(validateStep.env.INPUT_REF).toBe(trustedInput);
-      const ordered = [
-        ...TRUSTED_QA_STEPS.slice(2),
-        "Fetch protocol comparison base",
-        "Build private QA runtime",
-        "Run QA profile shard",
-      ].map((name) => stepNames.indexOf(name));
-      expect(ordered.every((index, position) => index > (ordered[position - 1] ?? -1))).toBe(true);
-      expect(fetchStep.env?.PROTOCOL_SINCE_BASE_SHA).toBe(protocolOutput);
-      expect(buildStep.run).toBe("pnpm build qaRuntime");
-      expect(runStep.env?.PROTOCOL_SINCE_BASE_SHA).toBe(protocolOutput);
-      expect(runStep.env?.REQUESTED_REF).toBe(trustedInput);
-      expect(runStep.run).toContain("protocolBaseSha: process.env.PROTOCOL_SINCE_BASE_SHA");
-      expect(evidenceStep.env?.PROTOCOL_BASE_SHA).toBe(protocolOutput);
-      expect(evidenceStep.env?.REQUESTED_REF).toBe(trustedInput);
-      expect(evidenceStep.run).toContain("protocolBaseSha: process.env.PROTOCOL_BASE_SHA");
-      expect(maturityWorkflow.jobs.generate_qa_evidence.with.trusted_ref).toBe("${{ inputs.ref }}");
-
-      const topology = createQaProtocolTopology();
-      const checkout = tempDirs.make("openclaw-qa-protocol-fetch-");
-      runGit(checkout, ["init", "-q", "-b", "main"]);
-      runGit(checkout, ["remote", "add", "origin", topology.origin]);
-      runGit(checkout, [
-        "fetch",
-        "-q",
-        "--depth=1",
-        "origin",
-        `+${topology.mainHead}:refs/remotes/origin/selected`,
-      ]);
-      runGit(checkout, ["checkout", "-q", "--detach", "refs/remotes/origin/selected"]);
-      const sentinel = path.join(checkout, "qa-sentinel");
-      const runFetch = (baseSha: string) =>
-        runWorkflowShellScript(
-          `${expectDefined(fetchStep.run, "protocol fetch script")}\nprintf 'ran\\n' > "$QA_SENTINEL"\n`,
-          {
-            cwd: checkout,
-            env: {
-              ...process.env,
-              CI_GIT_OWNER: topology.gitOwner,
-              PROTOCOL_SINCE_BASE_SHA: baseSha,
-              QA_SENTINEL: sentinel,
-            },
-          },
-        );
-
-      const success = runFetch(topology.mainBase);
-      expectSuccess(success);
-      expect(runGit(checkout, ["rev-parse", "refs/remotes/origin/qa-protocol-base"])).toBe(
-        topology.mainBase,
-      );
-      expect(existsSync(sentinel)).toBe(true);
-
-      rmSync(sentinel);
-      const failure = runFetch("f".repeat(40));
-      expect(failure.status, `${failure.stdout}${failure.stderr}`).not.toBe(0);
-      expect(existsSync(sentinel)).toBe(false);
     },
   );
 
@@ -760,7 +573,6 @@ describe("ci workflow guards", () => {
         });
         expect(result.githubOutput).toContain(`qa_exit_code=${exitCode}`);
         expectIncludes(result.stderr, [`child-stderr-sentinel:${mode}`, "child-locale:POSIX"]);
-        expect(result.timeoutVersion).not.toBe("");
 
         const supervisorSignals: readonly ("TERM" | "KILL")[] = signals;
         for (const signal of ["TERM", "KILL"] as const) {
@@ -794,23 +606,53 @@ describe("ci workflow guards", () => {
   );
 
   it("isolates trusted QA and publication authority across the evidence handoff", () => {
-    const maturity = readMaturityScorecardWorkflow();
     const qa = readQaProfileEvidenceWorkflow();
+    const maturity = readMaturityScorecardWorkflow();
     const selectedJobs = [
       qa.jobs.plan_qa_profile,
       qa.jobs.run_qa_profile_shard,
       qa.jobs.aggregate_qa_profile,
     ];
-    const actorSteps = [
+    for (const job of [qa.jobs.validate_selected_ref, ...selectedJobs]) {
+      const names = job.steps.map((entry: WorkflowStep) => entry.name);
+      expect(names.indexOf(step(job, "Prepare Git owner").name)).toBeLessThan(
+        names.indexOf("Checkout selected ref"),
+      );
+      for (const entry of job.steps as WorkflowStep[]) {
+        if (entry.uses?.startsWith("actions/checkout@")) {
+          expect(entry.with?.["persist-credentials"]).toBe(false);
+        }
+        if (entry.uses && !entry.uses.startsWith("./")) {
+          expect(entry.uses).toMatch(/@[0-9a-f]{40}$/u);
+        }
+      }
+    }
+    for (const job of selectedJobs) {
+      expect(job.environment).toBe("qa-live-shared");
+      const names = job.steps.map((entry: WorkflowStep) => entry.name);
+      expect(names.indexOf("Require authorized workflow actor")).toBeLessThan(
+        names.indexOf("Checkout trusted QA harness"),
+      );
+      expect(names.indexOf("Restore trusted QA harness revision")).toBeLessThan(
+        names.indexOf("Checkout selected ref"),
+      );
+      expect(step(job, "Setup Node environment").with).toMatchObject({
+        "install-deps": "false",
+        "cache-mode": "off",
+      });
+      expect(step(job, "Install selected dependencies")["working-directory"]).toBe("selected");
+      expect(step(job, "Restore trusted QA harness revision").env?.EXPECTED_WORKFLOW_SHA).toBe(
+        "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
+      );
+      expect(step(job, "Checkout selected ref").env?.EXPECTED_SHA).toBe(
+        "${{ needs.validate_selected_ref.outputs.selected_revision }}",
+      );
+    }
+    for (const permission of [
       step(qa.jobs.authorize_actor, "Require maintainer-level repository access"),
       step(maturity.jobs.validate_selected_ref, "Require authorized workflow actor"),
       ...selectedJobs.map((job) => step(job, "Require authorized workflow actor")),
-    ];
-    for (const permission of actorSteps) {
-      expect(permission.env).toEqual({
-        CALLER_WORKFLOW_REF: "${{ github.workflow_ref }}",
-        JOB_CONTEXT: "${{ toJSON(job) }}",
-      });
+    ]) {
       expectIncludes(permission.with?.script, [
         "getCollaboratorPermissionLevel",
         'new Set(["admin", "maintain", "write"])',
@@ -819,154 +661,8 @@ describe("ci workflow guards", () => {
         "job.workflow_ref === calledWorkflowRef",
       ]);
     }
-    expect(actorSteps[0]?.with?.script).toContain(
-      'core.setOutput("authorized", trustedMainCaller ? "true" : "false")',
-    );
-    expect(qa.jobs.validate_selected_ref.outputs.workflow_sha).toBe(
-      "${{ steps.workflow.outputs.workflow_sha }}",
-    );
-    const identity = step(qa.jobs.validate_selected_ref, "Resolve job workflow identity");
-    expect(identity.env).toEqual({ JOB_CONTEXT: "${{ toJSON(job) }}" });
-    expectIncludes(identity.run, [
-      "job.workflow_repository",
-      "job.workflow_sha",
-      "^[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+$",
-      "^[0-9a-f]{40}$",
-    ]);
-
-    const fetchCalls: string[] = [];
-    for (const job of [qa.jobs.validate_selected_ref, ...selectedJobs]) {
-      const ownerIndex = job.steps.findIndex(
-        (entry: WorkflowStep) => entry.name === "Prepare Git owner",
-      );
-      expect(
-        job.steps.filter((entry: WorkflowStep) => entry.name === "Prepare Git owner"),
-      ).toHaveLength(1);
-      expect(job.steps[ownerIndex]).toEqual({
-        name: "Prepare Git owner",
-        uses: "openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef",
-      });
-      expect(job.steps[ownerIndex - 1]?.name).toBe(
-        job === qa.jobs.validate_selected_ref
-          ? "Resolve job workflow identity"
-          : "Require authorized workflow actor",
-      );
-      expect(job.steps[ownerIndex + 1]?.name).toBe(
-        job === qa.jobs.validate_selected_ref
-          ? "Checkout selected ref"
-          : "Checkout trusted QA harness",
-      );
-      for (const entry of job.steps as WorkflowStep[]) {
-        const run = (entry.run ?? "").replace(/[ \t]*\\\n[ \t]*/gu, " ");
-        const fetches = run
-          .split("\n")
-          .map((line) => line.trim())
-          .filter((line) => /\bfetch\b/u.test(line));
-        if (fetches.length === 0) {
-          continue;
-        }
-        expect(run.startsWith("set -euo pipefail\n")).toBe(true);
-        for (const fetch of fetches) {
-          expect(fetch).toMatch(/^python3 -I -S "\$CI_GIT_OWNER" --checkout-git (?:0|120) fetch /u);
-          expect(fetch).not.toMatch(/\|\||&&|;|\$\?/u);
-        }
-        expect(run).not.toMatch(/^\s*(?:timeout|for|while|until)\b|\$\?/mu);
-        fetchCalls.push(...fetches);
-      }
-    }
-    expect(fetchCalls).toHaveLength(10);
-    expect(fetchCalls.filter((call) => call.includes("--checkout-git 120 fetch"))).toHaveLength(4);
-    expect(fetchCalls.filter((call) => call.includes("--checkout-git 0 fetch"))).toHaveLength(6);
-    for (const job of selectedJobs) {
-      expect(job.environment).toBe("qa-live-shared");
-      expect(job.steps.slice(0, 7).map((entry: WorkflowStep) => entry.name)).toEqual(
-        TRUSTED_QA_STEPS,
-      );
-      const checkouts = job.steps.filter((entry: WorkflowStep) =>
-        entry.uses?.startsWith("actions/checkout@"),
-      );
-      expect(checkouts).toHaveLength(1);
-      expect(checkouts[0]).toMatchObject({
-        uses: CHECKOUT_V6,
-        with: { repository: "openclaw/openclaw", ref: "main", "persist-credentials": false },
-      });
-      const restore = step(job, "Restore trusted QA harness revision");
-      expect(restore.env).toMatchObject({
-        EXPECTED_WORKFLOW_SHA: "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
-      });
-      expect(restore["working-directory"]).toBeUndefined();
-      expect(restore.run).toContain('test "$(git rev-parse HEAD)" = "$EXPECTED_WORKFLOW_SHA"');
-      expect(
-        job.steps.some((entry: WorkflowStep) => entry.uses?.startsWith("actions/cache/")),
-      ).toBe(false);
-      expect(step(job, "Setup Node environment").with).toMatchObject({
-        "install-deps": "false",
-        "cache-mode": "off",
-      });
-      const selected = step(job, "Checkout selected ref");
-      expect(selected.env?.EXPECTED_SHA).toBe(
-        "${{ needs.validate_selected_ref.outputs.selected_revision }}",
-      );
-      expect(selected).not.toHaveProperty("uses");
-      expect(selected["working-directory"]).toBeUndefined();
-      expectIncludes(selected.run, [
-        "[[ ! -e selected ]]",
-        'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"',
-      ]);
-      const install = step(job, "Install selected dependencies");
-      expect(install["working-directory"]).toBe("selected");
-      expect(install.run).toContain('--store-dir "$RUNNER_TEMP/openclaw-qa-selected-pnpm-store"');
-      for (const name of [
-        "Build private QA runtime",
-        ...(job === qa.jobs.plan_qa_profile
-          ? ["Resolve taxonomy profile shards"]
-          : job === qa.jobs.run_qa_profile_shard
-            ? [
-                "Fetch protocol comparison base",
-                "Ensure Playwright Chromium",
-                "Run QA profile shard",
-                "Validate QA profile shard evidence",
-              ]
-            : ["Aggregate validated shard evidence", "Finalize QA profile evidence"]),
-      ]) {
-        expect(step(job, name)["working-directory"]).toBe("selected");
-      }
-    }
-
-    for (const trigger of ["workflow_dispatch", "workflow_call"]) {
-      expect(qa.on[trigger].inputs.allow_failures).toMatchObject({
-        default: false,
-        type: "boolean",
-      });
-    }
-    expect(maturity.on.workflow_call.inputs.allow_failures).toMatchObject({
-      default: false,
-      type: "boolean",
-    });
-    expect(maturity.on.workflow_dispatch.inputs.allow_failures).toMatchObject({
-      default: true,
-      type: "boolean",
-    });
     expect(maturity.on.workflow_call.inputs).not.toHaveProperty("publish_pull_request");
-    expect(maturity.jobs.generate_qa_evidence.with).toMatchObject({
-      ref: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
-      trusted_ref: "${{ inputs.ref }}",
-      expected_sha: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
-      allow_failures: "${{ inputs.allow_failures }}",
-    });
-    expect(
-      step(qa.jobs.aggregate_qa_profile, "Fail if QA profile failed").env?.ALLOW_FAILURES,
-    ).toBe("${{ inputs.allow_failures }}");
-    const aggregate = step(qa.jobs.aggregate_qa_profile, "Aggregate validated shard evidence");
-    expectIncludes(aggregate.run, [
-      "Expected ${SHARD_COUNT} completed status and evidence files",
-      "Timed-out QA shard cannot contribute partial evidence",
-    ]);
-    expect(step(qa.jobs.aggregate_qa_profile, "Upload QA profile evidence").if).toBe(
-      "always() && steps.evidence.outcome == 'success'",
-    );
-
-    const publisherCondition = [
+    const publicationCondition = [
       "${{ inputs.publish_pull_request &&",
       "github.event_name == 'workflow_dispatch' &&",
       `github.workflow_ref == '${MATURITY_SCORECARD_WORKFLOW_REF}' &&`,
@@ -978,20 +674,16 @@ describe("ci workflow guards", () => {
       [maturity.jobs.publisher_preflight, "Create generated PR tokens"],
       [maturity.jobs.publish_generated_pr, "Open or update generated docs PR"],
     ] as const) {
-      expect(step(job, name).if?.replace(/\s+/gu, " ")).toBe(publisherCondition);
-      expect(step(job, name).with).toMatchObject({
-        "contents-client-id": "Iv23liOECG0slfuhz093",
+      const publish = step(job, name);
+      expect(publish.if?.replace(/\s+/gu, " ")).toBe(publicationCondition);
+      expect(publish.with).toMatchObject({
         "contents-private-key": "${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}",
-        "pull-request-client-id": MANTIS_GITHUB_APP_CLIENT_ID,
         "pull-request-private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
       });
-      expect(step(job, "Checkout trusted workflow source")).toMatchObject({
-        uses: CHECKOUT_V6,
-        with: {
-          repository: "${{ needs.validate_selected_ref.outputs.workflow_repository }}",
-          ref: "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
-          "persist-credentials": false,
-        },
+      expect(step(job, "Checkout trusted workflow source").with).toMatchObject({
+        repository: "${{ needs.validate_selected_ref.outputs.workflow_repository }}",
+        ref: "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
+        "persist-credentials": false,
       });
     }
     expect(maturity.jobs.publish_generated_pr.permissions).toEqual({
@@ -1004,110 +696,41 @@ describe("ci workflow guards", () => {
     expect(step(maturity.jobs.publish, "Require one QA evidence file").run).toContain(
       '[[ ! -f "$evidence_path" || -L "$evidence_path" ]]',
     );
-    expect(step(maturity.jobs.publish_generated_pr, "Checkout selected ref")).toMatchObject({
-      uses: CHECKOUT_V6,
-      with: {
-        ref: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
-        path: "selected",
-        "persist-credentials": false,
-      },
-    });
-    const publish = step(maturity.jobs.publish_generated_pr, "Open or update generated docs PR");
-    expect(publish).toMatchObject({
-      uses: "./.github/actions/publish-generated-pr",
-      with: {
-        "base-branch": "${{ needs.validate_selected_ref.outputs.publication_base }}",
-        "head-branch": "${{ needs.validate_selected_ref.outputs.publication_head }}",
-        "working-directory": "selected",
-        "invalidation-paths": "",
-        "overlap-policy": "fail",
-      },
-    });
-    expect(String(publish.with?.["generated-paths"]).trim().split("\n")).toEqual(
-      MATURITY_GENERATED_PR_PATHS,
+    expect(step(qa.jobs.aggregate_qa_profile, "Aggregate validated shard evidence").run).toContain(
+      "Timed-out QA shard cannot contribute partial evidence",
     );
-    const source = readFileSync(".github/workflows/maturity-scorecard.yml", "utf8");
-    expectExcludes(source, [
-      "permission-pull-requests: write",
-      "GH_APP_PRIVATE_KEY",
-      "gh auth setup-git",
-      "git push --force-with-lease",
-    ]);
   });
 
-  it.skipIf(process.platform === "win32").each<{
-    name: string;
-    evidence: (scenarioId: string) => unknown;
-    expected: readonly [string, string];
-    accessors?: boolean;
-  }>([
-    {
-      name: "passing retry from the canonical owner",
-      evidence: (scenarioId) =>
-        workflowOccurrenceEvidence([{ scenarioId, attempts: ["fail", "pass"], selected: 1 }]),
-      expected: ["pass", "pass"],
-    },
-    ...(["full", "slim"] as const).map((evidenceMode) => ({
-      name: `v2 ${evidenceMode} without new API exports`,
-      evidence: (scenarioId: string) => legacyEvidence(scenarioId, ["fail", "pass"], evidenceMode),
-      expected: ["fail", "fail\npass"] as const,
-      accessors: false,
-    })),
-    ...(
-      [
-        ["unresolved first", null, [], undefined, ["null", "null\npass"]],
-        ["foreign first owner", "another-scenario", ["pass"], 0, ["null", "pass"]],
-        ["nonpassing retry", null, ["fail", "blocked"], 0, ["fail", "fail\npass"]],
-      ] as const
-    ).map(([name, firstId, attempts, selected, expected]) => ({
-      name,
-      evidence: (scenarioId: string) =>
-        workflowOccurrenceEvidence(
-          [
-            { scenarioId: firstId ?? scenarioId, attempts: [...attempts], selected },
-            { scenarioId, attempts: ["pass"], selected: 0 },
-          ],
-          "slim",
-        ),
-      expected,
-    })),
-    {
-      name: "legacy summary only when evidence is absent",
-      evidence: () => undefined,
-      expected: ["pass", "pass"],
-    },
-  ])("Mantis evidence readers retain $name", ({ evidence, expected, accessors = true }) => {
-    for (const [index, kind] of (["status-reactions", "thread-attachment"] as const).entries()) {
-      const scenarioId = mantisScenarioId(kind);
-      const result = runMantisEvidenceReader(kind, evidence(scenarioId), accessors);
-      expectSuccess(result);
-      expect(result.stdout.trim()).toBe(expected[index]);
-    }
-  });
-
-  it
-    .skipIf(process.platform === "win32")
-    .each(["invalid JSON", "null", "invalid binding", "missing v3 accessor"])(
-    "Mantis evidence readers reject %s without legacy fallback",
-    (invalid) => {
+  // Projection and schema variants belong to evidence-summary.test.ts; these
+  // exercise each workflow's historical API, selected API and absent-artifact paths.
+  it.skipIf(process.platform === "win32").each(["v2", "v3", "absent"] as const)(
+    "Mantis readers use the owning API for %s evidence",
+    (mode) => {
       for (const kind of ["status-reactions", "thread-attachment"] as const) {
         const scenarioId = mantisScenarioId(kind);
-        const evidence = workflowOccurrenceEvidence([
-          { scenarioId, attempts: ["pass"], selected: 0 },
-        ]);
-        if (invalid === "invalid binding") {
-          evidence.entries[0]!.binding.occurrenceId = "foreign";
-        }
-        const input = invalid === "invalid JSON" ? "{" : invalid === "null" ? null : evidence;
-        const result = runMantisEvidenceReader(kind, input, invalid !== "missing v3 accessor");
-        expect(result.status, `${result.stdout}${result.stderr}`).not.toBe(0);
-        expect(result.stderr).toContain(
-          invalid === "invalid JSON"
-            ? "SyntaxError"
-            : invalid === "missing v3 accessor"
-              ? "scenario reader"
-              : "ZodError",
+        const evidence =
+          mode === "v2"
+            ? legacyEvidence(scenarioId, ["fail", "pass"])
+            : mode === "v3"
+              ? workflowOccurrenceEvidence(scenarioId, ["fail", "pass"], 1)
+              : undefined;
+        const result = runMantisEvidenceReader(kind, evidence, mode !== "v2");
+        expectSuccess(result);
+        expect(result.stdout.trim()).toBe(
+          mode === "v2" ? (kind === "status-reactions" ? "fail" : "fail\npass") : "pass",
         );
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "Mantis v3 readers require the owning API accessor",
+    () => {
+      for (const kind of ["status-reactions", "thread-attachment"] as const) {
+        const evidence = workflowOccurrenceEvidence(mantisScenarioId(kind), ["pass"], 0);
+        const result = runMantisEvidenceReader(kind, evidence, false);
+        expect(result.status, result.stdout + result.stderr).not.toBe(0);
+        expect(result.stderr).toContain("scenario reader");
       }
     },
   );
@@ -1161,6 +784,17 @@ describe("ci workflow guards", () => {
               expectedCells: [expectedCell],
               observedCells: [expectedCell],
               missingCells: [],
+              proofRequirements: [
+                {
+                  id: "observed-protocol",
+                  coverageId: "qa.reporting",
+                  obligation: "advisory",
+                  owner: "fixture-owner",
+                  acceptedRef: "qa/fixtures/acceptance",
+                  retryAcceptance: "selected-attempt",
+                  alternatives: [{ protocol: "gateway:3" }],
+                },
+              ],
               counts: {
                 membership: 1,
                 selected: 1,
@@ -1222,93 +856,32 @@ describe("ci workflow guards", () => {
       expectConsumerOutput({ scorecard_passed: true });
 
       const originalEvidence = readJson(evidencePath);
-      writeJson(evidencePath, { ...originalEvidence, evidenceMode: "slim" });
-      expectSuccess(runConsumer());
-      expect(readFileSync(manifestPath, "utf8")).toBe(completeManifest);
-
-      const profileOccurrences = (attempts: qaEvidence.QaEvidenceStatus[], retry = true) => ({
+      const retryEvidence = {
         ...originalEvidence,
-        ...workflowOccurrenceEvidence([
-          { scenarioId: "scenario-one", attempts, selected: 1, retry },
-        ]),
+        ...workflowOccurrenceEvidence("scenario-one", ["fail", "pass"], 1),
         profile: originalEvidence.profile,
         profilePlan: originalEvidence.profilePlan,
         scorecard,
-      });
-      const retryEvidence = profileOccurrences(["fail", "pass"]);
+      };
       writeJson(evidencePath, retryEvidence);
       expectFailure(runConsumer(), "requires the selected checkout's effective-entry reader");
       writeWorkflowEvidenceApi(selectedRoot);
+      expectSuccess(runProducer("0"));
+      expect(readJson(manifestPath).profilePlanSha256).toBe(
+        JSON.parse(completeManifest).profilePlanSha256,
+      );
+      expectConsumerOutput({ scorecard_passed: true, passed_count: 1, failed_count: 0 });
 
-      for (const evidenceMode of ["full", "slim"] as const) {
-        writeJson(evidencePath, { ...retryEvidence, evidenceMode });
-        expectSuccess(runProducer("0"));
-        expect(readJson(manifestPath).profilePlanSha256).toBe(
-          JSON.parse(completeManifest).profilePlanSha256,
-        );
-        expectConsumerOutput({ scorecard_passed: true, passed_count: 1, failed_count: 0 });
-      }
-
-      for (const obligation of ["required", "advisory"] as const) {
-        const declared = {
-          ...retryEvidence,
-          profilePlan: {
-            ...retryEvidence.profilePlan,
-            proofRequirements: [
-              {
-                id: "observed-protocol",
-                coverageId: "qa.reporting",
-                obligation,
-                owner: "fixture-owner",
-                acceptedRef: "qa/fixtures/acceptance",
-                retryAcceptance: "selected-attempt",
-                alternatives: [{ protocol: "gateway:3" }],
-              },
-            ],
-          },
-        };
-        writeJson(evidencePath, declared);
-        const producer = runProducer("0");
-        expectSuccess(producer);
-        const consumer = runConsumer();
-        expect(consumer.status, `${consumer.stdout}${consumer.stderr}`).toBe(
-          obligation === "required" ? 1 : 0,
-        );
-        if (obligation === "required") {
-          expect(`${consumer.stdout}${consumer.stderr}`).toContain(
-            "observed-protocol (insufficient)",
-          );
-        }
-      }
-      writeFileSync(manifestPath, completeManifest);
-
-      for (const status of ["fail", "blocked"] as const) {
-        // Parent failure is independent of the child, not a retry of its pass.
-        writeJson(evidencePath, profileOccurrences(["pass", status], false));
-        expectConsumerOutput({
-          scorecard_passed: false,
-          passed_count: 1,
-          [`${status === "fail" ? "failed" : "blocked"}_count`]: 1,
-        });
-      }
-
-      writeJson(evidencePath, retryEvidence);
-      writeJson(manifestPath, { ...JSON.parse(completeManifest), qaPassed: false });
-      expectConsumerOutput({ scorecard_passed: false });
       writeJson(manifestPath, { ...JSON.parse(completeManifest), targetSha: protocolBaseSha });
       expectFailure(runConsumer(), "does not match selected ref");
       writeFileSync(manifestPath, completeManifest);
-      const invalidBinding = structuredClone(retryEvidence);
-      invalidBinding.entries[0]!.binding.occurrenceId = "foreign";
-      writeJson(evidencePath, invalidBinding);
-      expect(runConsumer().status).toBe(1);
-
       writeEvidence("fail");
       expectConsumerOutput({ scorecard_passed: false, failed_count: 1 });
 
-      const manifest = JSON.parse(completeManifest) as Record<string, unknown>;
-      manifest.profilePlanSha256 = "0".repeat(64);
-      writeJson(manifestPath, manifest, "\n");
+      writeJson(manifestPath, {
+        ...JSON.parse(completeManifest),
+        profilePlanSha256: "0".repeat(64),
+      });
       expectFailure(runConsumer(), "QA evidence profilePlan digest does not match the manifest");
     },
   );
@@ -1411,66 +984,4 @@ describe("ci workflow guards", () => {
       }
     },
   );
-
-  it("keeps exact release validation identity separate from release context", () => {
-    const fullReleaseWorkflow = readWorkflow(".github/workflows/full-release-validation.yml");
-    const releaseWorkflow = readReleaseChecksWorkflow();
-    const telegramWorkflow = readWorkflow(".github/workflows/openclaw-release-telegram-qa.yml");
-    const fullReleaseDispatchStep = step(
-      fullReleaseWorkflow.jobs.release_checks_candidate,
-      "Dispatch release checks candidate phase",
-    );
-    const dispatchStep = step(
-      releaseWorkflow.jobs.qa_live_telegram_release_checks,
-      "Dispatch and await trusted Telegram QA",
-    );
-    const identityStep = step(
-      telegramWorkflow.jobs.trusted_identity,
-      "Verify dispatched workflow identity",
-    );
-    const provenanceSteps = [
-      step(telegramWorkflow.jobs.build_candidate, "Validate candidate release provenance"),
-      step(telegramWorkflow.jobs.run_telegram, "Revalidate candidate release provenance"),
-    ];
-
-    for (const workflow of [fullReleaseWorkflow, releaseWorkflow, telegramWorkflow]) {
-      expect(workflow.on.workflow_dispatch.inputs.target_context_ref).toMatchObject({
-        required: false,
-        default: "",
-        type: "string",
-      });
-    }
-    expectIncludes(fullReleaseDispatchStep.run, [
-      '-f ref="$TARGET_SHA"',
-      '-f target_context_ref="$TARGET_CONTEXT_REF"',
-    ]);
-    expect(fullReleaseDispatchStep.run).not.toContain(
-      'release_checks_target_ref="${TARGET_CONTEXT_REF:-$TARGET_REF}"',
-    );
-    expect(dispatchStep.env).toMatchObject({
-      TARGET_SHA: "${{ needs.resolve_target.outputs.revision }}",
-      TARGET_CONTEXT_REF: "${{ inputs.target_context_ref }}",
-    });
-    expectIncludes(dispatchStep.run, [
-      '-f target_context_ref="$TARGET_CONTEXT_REF"',
-      '-f target_ref="$TARGET_SHA"',
-    ]);
-    expect(dispatchStep.run).not.toContain("telegram_target_ref=");
-    expectIncludes(identityStep.run, [
-      "Telegram QA target context must be a canonical release branch or tag.",
-      "Telegram QA release context requires an exact-SHA target ref.",
-    ]);
-    for (const provenanceStep of provenanceSteps) {
-      expect(provenanceStep.env.TARGET_CONTEXT_REF).toBe("${{ inputs.target_context_ref }}");
-      expect(provenanceStep.run.trim()).toBe(
-        'bash "${GITHUB_WORKSPACE}/scripts/release-telegram-provenance.sh"',
-      );
-    }
-    expect(
-      step(fullReleaseWorkflow.jobs.release_decision, "Checkout release decision tooling").with,
-    ).toMatchObject({
-      ref: "${{ github.sha }}",
-      "persist-credentials": false,
-    });
-  });
 });

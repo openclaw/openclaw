@@ -54,8 +54,8 @@ export function assertFaceTimeNativeAction(
 ): void {
   const results = requireCompleteTopology(result);
   const present = results.filter((entry) => entry.outcome !== "absent");
-  // FaceTime and Phone can both proxy the same system TUCall. Accept shared
-  // visibility only when every helper that found the exact call proves the postcondition.
+  // FaceTime and its conversation service can both proxy the same system TUCall.
+  // Every helper that found the exact call must prove the postcondition.
   if (present.length === 0) {
     throw new FaceTimeHelperAmbiguousError(`FaceTime ${action} carrier owner is missing`, result);
   }

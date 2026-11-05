@@ -5,7 +5,7 @@ import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-ru
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { DIAL_BUNDLES } from "./helper-results.js";
 
-type FaceTimeHelperTarget = "FaceTime" | "Phone";
+type FaceTimeHelperTarget = "FaceTime";
 
 type HelperSupervisorTargetState = {
   target: FaceTimeHelperTarget;
@@ -28,16 +28,12 @@ type HelperSupervisorParams = {
   connectedBundles: () => string[];
 };
 
-const TARGET_BUNDLES: Record<FaceTimeHelperTarget, ReadonlySet<string>> = {
-  FaceTime: DIAL_BUNDLES,
-  Phone: new Set(["com.apple.mobilephone", "com.apple.TelephonyUtilities"]),
-};
-const FACETIME_HELPER_TARGETS = ["FaceTime", "Phone"] as const;
+const FACETIME_HELPER_TARGETS = ["FaceTime"] as const;
 
 const RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000] as const;
 
 function targetForBundle(bundleIdentifier: string): FaceTimeHelperTarget | undefined {
-  return FACETIME_HELPER_TARGETS.find((target) => TARGET_BUNDLES[target].has(bundleIdentifier));
+  return DIAL_BUNDLES.has(bundleIdentifier) ? "FaceTime" : undefined;
 }
 
 export class FaceTimeHelperSupervisor {
@@ -152,10 +148,9 @@ export class FaceTimeHelperSupervisor {
   #refreshConnections(): void {
     const bundles = new Set(this.params.connectedBundles());
     for (const target of FACETIME_HELPER_TARGETS) {
-      const acceptedBundles = TARGET_BUNDLES[target];
       const state = this.#states.get(target);
       if (state) {
-        state.connected = [...acceptedBundles].some((bundle) => bundles.has(bundle));
+        state.connected = [...DIAL_BUNDLES].some((bundle) => bundles.has(bundle));
       }
     }
   }
@@ -173,8 +168,7 @@ export class FaceTimeHelperSupervisor {
     const timer = setTimeout(() => {
       this.#timers.delete(target);
       this.#enqueueInjection(target);
-    }, delayMs);
-    timer.unref?.();
+    }, delayMs).unref();
     this.#timers.set(target, timer);
   }
 
@@ -209,8 +203,7 @@ export class FaceTimeHelperSupervisor {
       state.attempts = 0;
       state.lastError = undefined;
       this.#schedule(target, 0);
-    }, 2_000);
-    timer.unref?.();
+    }, 2_000).unref();
     this.#timers.set(target, timer);
   }
 
@@ -230,8 +223,8 @@ export class FaceTimeHelperSupervisor {
   }
 
   async #waitForAuthenticatedConnection(target: FaceTimeHelperTarget): Promise<void> {
-    const deadline = Date.now() + 10_000;
-    while (this.#started && Date.now() < deadline) {
+    const deadline = performance.now() + 10_000;
+    while (this.#started && performance.now() < deadline) {
       this.#refreshConnections();
       const state = this.#states.get(target);
       if (!state || state.connected || state.stale) {

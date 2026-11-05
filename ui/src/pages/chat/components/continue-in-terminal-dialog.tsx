@@ -1,9 +1,9 @@
 import { ConnectCommand } from "../../../components/solid/connect-command.tsx";
 import "../../../components/modal-dialog.tsx";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 export type ContinueInTerminalDialogProps = { command: string; onClose: () => void };
 

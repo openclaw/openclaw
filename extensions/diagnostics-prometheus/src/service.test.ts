@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import type { DiagnosticEventPayload } from "../api.js";
 import { createDiagnosticsPrometheusExporter } from "./service.js";
@@ -362,37 +363,34 @@ openclaw_gateway_rpc_outcomes_total{outcome="ok",phase="response"} 1`);
       ["run-should-not-export", "session-should-not-export", "matched secret prompt"],
     ));
 
-  it("separates request and turn model-call metrics by observation unit", () => {
-    using metrics = createMetricsHarness();
-
-    metrics.record({
-      type: "model.call.completed",
-      runId: "run-1",
-      callId: "call-1",
-      provider: "openai",
-      model: "gpt-5.4",
-      api: "openai-responses",
-      transport: "http",
-      durationMs: 250,
-    });
-    metrics.record({
-      type: "model.call.completed",
-      runId: "run-1",
-      callId: "call-2",
-      provider: "anthropic",
-      model: "claude-opus-4-7",
-      api: "claude-code",
-      transport: "stdio-live",
-      observationUnit: "turn",
-      durationMs: 2500,
-    });
-
-    const rendered = metrics.render();
-    expectMetrics(
-      rendered,
-    )(`openclaw_model_call_total{api="openai-responses",error_category="none",model="gpt-5.4",observation_unit="request",outcome="completed",provider="openai",transport="http"} 1
-openclaw_model_call_duration_seconds_sum{api="claude-code",error_category="none",model="claude-opus-4-7",observation_unit="turn",outcome="completed",provider="anthropic",transport="stdio-live"} 2.5`);
-  });
+  it("separates request and turn model-call metrics by observation unit", () =>
+    expectRecordedMetrics(
+      [
+        {
+          type: "model.call.completed",
+          runId: "run-1",
+          callId: "call-1",
+          provider: "openai",
+          model: "gpt-5.4",
+          api: "openai-responses",
+          transport: "http",
+          durationMs: 250,
+        },
+        {
+          type: "model.call.completed",
+          runId: "run-1",
+          callId: "call-2",
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          api: "claude-code",
+          transport: "stdio-live",
+          observationUnit: "turn",
+          durationMs: 2500,
+        },
+      ],
+      `openclaw_model_call_total{api="openai-responses",error_category="none",model="gpt-5.4",observation_unit="request",outcome="completed",provider="openai",transport="http"} 1
+openclaw_model_call_duration_seconds_sum{api="claude-code",error_category="none",model="claude-opus-4-7",observation_unit="turn",outcome="completed",provider="anthropic",transport="stdio-live"} 2.5`,
+    ));
 
   it("records sanitized async diagnostic queue drop summaries from core diagnostics", () =>
     expectRecordedMetrics(
@@ -576,45 +574,42 @@ openclaw_skill_used_total{activation="read",agent="main",skill="tiny-llm-brainst
       ["run-should-not-export", "session-should-not-export", "SKILL.md"],
     ));
 
-  it("bounds messaging labels without exporting raw chat identifiers", () => {
-    using metrics = createMetricsHarness();
-
-    metrics.record({
-      type: "message.delivery.started",
-      channel: "matrix",
-      deliveryKind: "text",
-      sessionKey: "session-should-not-export",
-    });
-    metrics.record({
-      type: "message.processed",
-      channel: "telegram/custom",
-      chatId: "chat-should-not-export",
-      messageId: "message-should-not-export",
-      outcome: "completed",
-      reason: "progress draft / message tool 123",
-      durationMs: 25,
-    });
-    metrics.record({
-      type: "message.delivery.error",
-      channel: "discord/custom",
-      deliveryKind: "progress draft" as never,
-      durationMs: 50,
-      errorCategory: "TimeoutError",
-    });
-    const rendered = metrics.render();
-    expectMetrics(
-      rendered,
-    )(`openclaw_message_delivery_started_total{channel="matrix",delivery_kind="text"} 1
+  it("bounds messaging labels without exporting raw chat identifiers", () =>
+    expectRecordedMetrics(
+      [
+        {
+          type: "message.delivery.started",
+          channel: "matrix",
+          deliveryKind: "text",
+          sessionKey: "session-should-not-export",
+        },
+        {
+          type: "message.processed",
+          channel: "telegram/custom",
+          chatId: "chat-should-not-export",
+          messageId: "message-should-not-export",
+          outcome: "completed",
+          reason: "progress draft / message tool 123",
+          durationMs: 25,
+        },
+        {
+          type: "message.delivery.error",
+          channel: "discord/custom",
+          deliveryKind: "progress draft" as never,
+          durationMs: 50,
+          errorCategory: "TimeoutError",
+        },
+      ],
+      `openclaw_message_delivery_started_total{channel="matrix",delivery_kind="text"} 1
 openclaw_message_processed_total{channel="unknown",outcome="completed",reason="none"} 1
-openclaw_message_delivery_total{channel="unknown",delivery_kind="other",error_category="TimeoutError",outcome="error"} 1`);
-    expectExcludes(
-      rendered,
-      "chat-should-not-export",
-      "message-should-not-export",
-      "session-should-not-export",
-      "progress draft",
-    );
-  });
+openclaw_message_delivery_total{channel="unknown",delivery_kind="other",error_category="TimeoutError",outcome="error"} 1`,
+      [
+        "chat-should-not-export",
+        "message-should-not-export",
+        "session-should-not-export",
+        "progress draft",
+      ],
+    ));
 
   it("records inbound dispatch and session turn telemetry", () =>
     expectRecordedMetrics(
@@ -662,49 +657,46 @@ openclaw_session_turn_created_total{agent="agent.default",channel="telegram",tri
       ["run-should-not-export"],
     ));
 
-  it("records session recovery and talk metrics without exporting raw ids or content", () => {
-    using metrics = createMetricsHarness();
-
-    metrics.record({
-      type: "session.recovery.completed",
-      sessionId: "session-should-not-export",
-      sessionKey: "key-should-not-export",
-      state: "processing",
-      stateGeneration: 2,
-      ageMs: 12_000,
-      queueDepth: 1,
-      reason: "startup-sweep",
-      activeWorkKind: "tool_call",
-      allowActiveAbort: true,
-      status: "released",
-      action: "abort-active-run",
-    });
-    metrics.record({
-      type: "talk.event",
-      sessionId: "talk-session-should-not-export",
-      turnId: "turn-should-not-export",
-      talkEventType: "input.audio.delta",
-      mode: "realtime",
-      transport: "gateway-relay",
-      brain: "agent-consult",
-      provider: "openai",
-      byteLength: 320,
-    });
-    const rendered = metrics.render();
-    expectMetrics(
-      rendered,
-    )(`openclaw_session_recovery_total{action="abort-active-run",active_work_kind="tool_call",state="processing",status="released"} 1
+  it("records session recovery and talk metrics without exporting raw ids or content", () =>
+    expectRecordedMetrics(
+      [
+        {
+          type: "session.recovery.completed",
+          sessionId: "session-should-not-export",
+          sessionKey: "key-should-not-export",
+          state: "processing",
+          stateGeneration: 2,
+          ageMs: 12_000,
+          queueDepth: 1,
+          reason: "startup-sweep",
+          activeWorkKind: "tool_call",
+          allowActiveAbort: true,
+          status: "released",
+          action: "abort-active-run",
+        },
+        {
+          type: "talk.event",
+          sessionId: "talk-session-should-not-export",
+          turnId: "turn-should-not-export",
+          talkEventType: "input.audio.delta",
+          mode: "realtime",
+          transport: "gateway-relay",
+          brain: "agent-consult",
+          provider: "openai",
+          byteLength: 320,
+        },
+      ],
+      `openclaw_session_recovery_total{action="abort-active-run",active_work_kind="tool_call",state="processing",status="released"} 1
 openclaw_session_recovery_age_seconds_sum{action="abort-active-run",active_work_kind="tool_call",state="processing",status="released"} 12
 openclaw_talk_event_total{brain="agent-consult",event_type="input.audio.delta",mode="realtime",provider="openai",transport="gateway-relay"} 1
-openclaw_talk_audio_bytes_sum{brain="agent-consult",event_type="input.audio.delta",mode="realtime",provider="openai",transport="gateway-relay"} 320`);
-    expectExcludes(
-      rendered,
-      "session-should-not-export",
-      "key-should-not-export",
-      "talk-session-should-not-export",
-      "turn-should-not-export",
-    );
-  });
+openclaw_talk_audio_bytes_sum{brain="agent-consult",event_type="input.audio.delta",mode="realtime",provider="openai",transport="gateway-relay"} 320`,
+      [
+        "session-should-not-export",
+        "key-should-not-export",
+        "talk-session-should-not-export",
+        "turn-should-not-export",
+      ],
+    ));
 
   it("subscribes to internal diagnostics and renders scrape text", () => {
     const listeners: Parameters<TrustedExporterInternalDiagnostics["onEvent"]>[0][] = [];
@@ -813,6 +805,30 @@ openclaw_talk_audio_bytes_sum{brain="agent-consult",event_type="input.audio.delt
 });
 
 describe("metrics HTTP handler", () => {
+  it.each([
+    { outcome: "completed", error: undefined },
+    { outcome: "failed", error: new Error("socket closed") },
+  ])("keeps bytes until a $outcome response settles", ({ error }) => {
+    using metrics = createMetricsHarness();
+    metrics.record({ type: "queue.lane.enqueue", lane: "main", queueSize: 2 });
+    const response = createMockServerResponse();
+    response.req.method = "GET";
+    response.flushHeaders = () => {};
+    const end = vi.spyOn(response, "end");
+    expect(metrics.handler(response.req, response)).toBe(true);
+    const body: unknown = end.mock.calls[0]?.[0];
+    const complete: unknown = end.mock.calls[0]?.[1];
+    if (!Buffer.isBuffer(body) || typeof complete !== "function") {
+      throw new Error("expected an owned byte response and completion callback");
+    }
+    const before = body.toString();
+    expect(before).toContain('openclaw_queue_lane_size{lane="main"} 2\n');
+    complete(error);
+    expect(body.toString()).toBe(error ? before : "");
+    // Releasing a response must leave the store's prepared prefixes intact.
+    metrics.record({ type: "queue.lane.enqueue", lane: "main", queueSize: 3 });
+    expect(metrics.render()).toContain('openclaw_queue_lane_size{lane="main"} 3\n');
+  });
   it("sends byte-accurate representation metadata on HEAD", async () => {
     using metrics = createMetricsHarness();
     metrics.record({

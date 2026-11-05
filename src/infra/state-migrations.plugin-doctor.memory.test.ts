@@ -7,8 +7,15 @@ import type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationEntry,
 } from "../plugins/doctor-contract-module.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { recordAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { runPluginDoctorStateMigrationPlans } from "./state-migrations.plugin-doctor.js";
@@ -60,8 +67,11 @@ async function fixture() {
   const migration = stateMigrations.find(
     (entry) => entry.id === "memory-core-legacy-sidecar-index-to-agent-sqlite",
   );
-  if (!migration) {
-    throw new Error("Missing Memory Core legacy sidecar migration");
+  const independentMigration = stateMigrations.find(
+    (entry) => entry.id === "memory-core-qmd-workspace-retired",
+  );
+  if (!migration || !independentMigration) {
+    throw new Error("Missing Memory Core doctor migrations");
   }
   registry.entries = [{ pluginId: "memory-core", channelIds: [], migration }];
   return {
@@ -72,12 +82,51 @@ async function fixture() {
     env: { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_HOME: root },
     config: { agents: { entries: { main: { workspace: path.dirname(memoryPath) } } } },
     detected: { stateDir, oauthDir: path.join(stateDir, "oauth"), doctorOnlyStateMigrations: true },
+    independentMigration,
+    preserveFiles() {
+      const files = [legacyPath, agentPath, memoryPath];
+      const originals = files.map((file) => fs.readFileSync(file));
+      return () => expect(files.map((file) => fs.readFileSync(file))).toEqual(originals);
+    },
   };
 }
 
+it("keeps held memory sidecars advisory while completing independent repairs", async () => {
+  const state = await fixture();
+  openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+  runOpenClawStateWriteTransaction(
+    (database) =>
+      recordAgentDeletionRecoveryHolds(database, [{ agentId: "main", path: state.agentPath }]),
+    { env: state.env },
+  );
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  const expectPreserved = state.preserveFiles();
+  const retiredWorkspace = path.join(state.stateDir, "agents", "main", "qmd");
+  fs.mkdirSync(retiredWorkspace);
+  registry.entries.push({
+    pluginId: "memory-core",
+    channelIds: [],
+    migration: state.independentMigration,
+  });
+
+  const result = await runPluginDoctorStateMigrationPlans(state);
+
+  expect(result).toMatchObject({
+    warningDisposition: "recoverable",
+    warnings: [expect.stringContaining("held after deletion journal reconstruction")],
+    changes: expect.arrayContaining([
+      `Removed empty retired Memory Core QMD workspace: ${retiredWorkspace}`,
+    ]),
+  });
+  expect(fs.existsSync(retiredWorkspace)).toBe(false);
+  expectPreserved();
+  expect(fs.existsSync(`${state.legacyPath}.migrated`)).toBe(false);
+});
+
 it("retains a legacy memory sidecar without opening the PostgreSQL agent anchor", async () => {
   const state = await fixture();
-  const { legacyPath, agentPath, memoryPath } = state;
+  const { legacyPath, agentPath } = state;
   {
     using anchor = new DatabaseSync(agentPath);
     anchor.exec(`
@@ -85,9 +134,7 @@ it("retains a legacy memory sidecar without opening the PostgreSQL agent anchor"
       INSERT INTO openclaw_engine_anchor VALUES ('fixture-agent', 'postgres', 'fixture_agent');
     `);
   }
-  const originals = [legacyPath, agentPath, memoryPath].map(
-    (file) => [file, fs.readFileSync(file)] as const,
-  );
+  const expectPreserved = state.preserveFiles();
   const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation(() => {
     throw new Error("The skipped migration must not open SQLite");
   });
@@ -107,9 +154,7 @@ it("retains a legacy memory sidecar without opening the PostgreSQL agent anchor"
   expect(result.notices?.[0]).toContain("sidecar is retained unchanged");
   expect(result.notices?.[0]).toContain("may re-embed");
   expect(open).not.toHaveBeenCalled();
-  for (const [file, bytes] of originals) {
-    expect(fs.readFileSync(file)).toEqual(bytes);
-  }
+  expectPreserved();
   expect(fs.readdirSync(path.dirname(legacyPath))).toEqual(["main.sqlite"]);
 });
 

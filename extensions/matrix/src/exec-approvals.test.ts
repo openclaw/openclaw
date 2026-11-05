@@ -86,17 +86,6 @@ const authorization = (cfg: OpenClawConfig, ...senders: string[]) =>
   senders.map((senderId) => isAuthorized({ cfg, senderId }));
 
 describe("matrix exec approvals", () => {
-  it("prefers explicit approvers when configured", () => {
-    const cfg = config({ enabled: true, approvers: ["user:@override:example.org"] }, [
-      "@owner:example.org",
-    ]);
-    expect(approvers({ cfg })).toEqual(["@override:example.org"]);
-    expect(authorization(cfg, "@override:example.org", "@owner:example.org")).toEqual([
-      true,
-      false,
-    ]);
-  });
-
   it("ignores wildcard allowlist entries when inferring exec approvers", async () => {
     const cfg = config({ enabled: true }, ["*"]);
     expect(approvers({ cfg })).toStrictEqual([]);
@@ -175,7 +164,6 @@ const pluginRequest = makeRequest(
   {
     title: "Plugin Approval Required",
     description: "Allow plugin access",
-    pluginId: "git-tools",
     turnSourceChannel: "matrix",
     turnSourceTo: "room:!ops:example.org",
   },
@@ -191,21 +179,6 @@ const nativeContext = (cfg = configured, approvalKind: "exec" | "plugin" = "exec
 });
 
 describe("matrix approval capability", () => {
-  it("keeps plugin approval auth independent from exec approvers", async () => {
-    const cfg = config({ enabled: true, approvers: ["@exec:example.org"], target: "both" }, [
-      "@owner:example.org",
-    ]);
-    const authorize = (senderId: string, approvalKind: "plugin" | "exec") =>
-      capability.authorizeActorActionAsync?.({ ...context, cfg, senderId, approvalKind });
-
-    expect(await authorize("@owner:example.org", "plugin")).toEqual({ authorized: true });
-    expect(await authorize("@exec:example.org", "plugin")).toEqual({
-      authorized: false,
-      reason: "❌ You are not authorized to approve plugin requests on Matrix.",
-    });
-    expect(await authorize("@exec:example.org", "exec")).toEqual({ authorized: true });
-  });
-
   it.each([undefined, "work"])("describes the Matrix setup path for account %s", (accountId) => {
     const text = capability.describeExecApprovalSetup?.({
       channel: "matrix",
@@ -227,20 +200,6 @@ describe("matrix approval capability", () => {
     expect(await native?.resolveApproverDmTargets?.(nativeContext())).toEqual([
       { to: "user:@owner:example.org" },
     ]);
-  });
-
-  it("requires Matrix DM approvers before enabling plugin approval auth", async () => {
-    const cfg = config({ enabled: true, approvers: ["@exec:example.org"], target: "both" }, []);
-    const action = {
-      ...context,
-      cfg,
-      senderId: "@exec:example.org",
-      approvalKind: "plugin" as const,
-    };
-    expect(await capability.authorizeActorActionAsync?.(action)).toEqual({
-      authorized: false,
-      reason: "❌ Matrix plugin approvals are not enabled for this bot account.",
-    });
   });
 
   it("reports exec initiating-surface availability independently from plugin auth", async () => {

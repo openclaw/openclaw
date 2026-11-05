@@ -4,13 +4,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { createChatMobileHostFixture } from "../chat-mobile-host.test-support.ts";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { offlineDeviceSession } from "../chat-pane.test-support.ts";
-import {
-  chatPaneHeaderSessionMenu,
-  mountChatPaneHeader,
-  selectNativeMenu,
-} from "./chat-pane-header.test-support.ts";
+import { mountChatPaneHeader } from "./chat-pane-header.test-support.ts";
 import type { ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 
 const containers: HTMLElement[] = [];
@@ -23,53 +20,6 @@ afterEach(() => {
 function mountHeader(patch: Partial<ChatPaneHeaderProps> = {}) {
   return mountChatPaneHeader(containers, patch);
 }
-
-it("retains the focused mobile Actions trigger while session commands become available", async () => {
-  const mobileHost: ChatMobileHost = {
-    scopeKey: "menu-retention",
-    open: false,
-    suspended: false,
-    mode: "dock",
-    height: undefined,
-    reservedHeight: 0,
-    destination: { area: "panels" },
-    detailsMount: null,
-    setDetailsMount: vi.fn(),
-    navigate: vi.fn(),
-    reveal: vi.fn(),
-    close: vi.fn(),
-    back: vi.fn(),
-    toggleExpanded: vi.fn(),
-    resize: vi.fn(),
-    keyboardVisible: false,
-    onComposerEditingChange: vi.fn(),
-  };
-  const mounted = mountHeader({
-    mergedChrome: true,
-    detailsControl: {
-      chat: undefined,
-      elements: {},
-      mobile: true,
-      mobileHost,
-      presentation: true,
-      setRef: vi.fn(),
-    },
-  });
-  const trigger = mounted.container.querySelector<HTMLButtonElement>(
-    ".chat-header-session-menu__trigger",
-  )!;
-  trigger.focus();
-  mounted.update({ sessionMenuAction: chatPaneHeaderSessionMenu() });
-  await waitForSolid(() => {
-    expect(mounted.container.querySelector(".chat-header-session-menu__trigger")).toBe(trigger);
-    expect(document.activeElement).toBe(trigger);
-  });
-  mounted.update({ gatewayStatus: { kind: "offline", onRetry: vi.fn() } });
-  await waitForSolid(() => {
-    expect(mounted.container.querySelector(".chat-header-session-menu__trigger")).toBe(trigger);
-    expect(document.activeElement).toBe(trigger);
-  });
-});
 
 it("clears the device name while replacing its request and ignores retired results", async () => {
   const first = createDeferred<string | undefined>();
@@ -109,29 +59,14 @@ it("retains the People page and lookup across native host replacement and deskto
     request: async () => {},
     insert: () => false,
   };
-  const mobileHost: ChatMobileHost = {
-    scopeKey: "people-retention",
-    open: false,
-    suspended: false,
+  const mobileHost: ChatMobileHost = createChatMobileHostFixture("people-retention", {
     mode: "expanded",
-    height: undefined,
-    reservedHeight: 0,
-    destination: { area: "panels" },
-    detailsMount: null,
-    setDetailsMount: vi.fn(),
     navigate: (destination) => {
       mobileHost.open = true;
       mobileHost.destination = destination;
       refreshHost();
     },
-    reveal: vi.fn(),
-    close: vi.fn(),
-    back: vi.fn(),
-    toggleExpanded: vi.fn(),
-    resize: vi.fn(),
-    keyboardVisible: false,
-    onComposerEditingChange: vi.fn(),
-  };
+  });
   const detailsControl = {
     chat: undefined,
     elements: {},
@@ -146,6 +81,7 @@ it("retains the People page and lookup across native host replacement and deskto
     mobilePeople: {
       header: [
         { key: "ada", sender: { name: "Ada" }, label: "Ada", firstName: "Ada", viewing: true },
+        { key: "sam", sender: { name: "Sam" }, label: "Sam", firstName: "Sam", viewing: true },
       ],
       viewers: [],
       participants: [],
@@ -153,14 +89,16 @@ it("retains the People page and lookup across native host replacement and deskto
       participantsComplete: false,
     },
     mobilePeopleMentions: mentions,
-    sessionMenuAction: chatPaneHeaderSessionMenu(),
   });
   function refreshHost() {
     mounted.update({ detailsControl: { ...detailsControl, mobileHost: { ...mobileHost } } });
   }
-  const menu = mounted.container.querySelector("openclaw-chat-header-session-menu")!;
+  await waitForSolid(() =>
+    expect(mounted.container.querySelector(".chat-mobile-people-grid")).not.toBeNull(),
+  );
+  const trigger = mounted.container.querySelector<HTMLButtonElement>(".chat-mobile-people-grid")!;
   expect(mentions.activate).not.toHaveBeenCalled();
-  await selectNativeMenu(menu, "quick:header-people");
+  trigger.click();
   const renderPage = mobileHost.destination.page!.render!;
   const mountPage = () =>
     mountSolid(() => {
@@ -183,7 +121,7 @@ it("retains the People page and lookup across native host replacement and deskto
     detailsControl: { ...detailsControl, mobileHost: undefined },
   });
   mounted.update({ mergedChrome: true, detailsControl });
-  expect(mounted.container.querySelector("openclaw-chat-header-session-menu")).toBe(menu);
+  expect(mounted.container.querySelector(".chat-mobile-people-grid")).toBe(trigger);
   expect(mentions.activate).toHaveBeenCalledOnce();
   expect(release).not.toHaveBeenCalled();
   firstPage.unmount();

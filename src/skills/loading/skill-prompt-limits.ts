@@ -1,3 +1,4 @@
+import { largestFittingValue } from "../../shared/largest-fitting-value.js";
 import {
   COMPACT_DESCRIPTION_MAX_CHARS,
   formatSkillsCompactForPrompt,
@@ -10,20 +11,6 @@ const DEFAULT_MAX_SKILLS_IN_PROMPT = 150;
 const DEFAULT_MAX_SKILLS_PROMPT_CHARS = 18_000;
 
 type SkillsPromptFormat = { kind: "full" } | { kind: "compact"; descriptionMaxChars: number };
-
-function largestFittingValue(min: number, max: number, fits: (value: number) => boolean): number {
-  let lo = min;
-  let hi = max;
-  while (lo < hi) {
-    const mid = Math.ceil((lo + hi) / 2);
-    if (fits(mid)) {
-      lo = mid;
-    } else {
-      hi = mid - 1;
-    }
-  }
-  return lo;
-}
 
 type SkillsPromptParams = {
   skills: Skill[];

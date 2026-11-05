@@ -122,8 +122,6 @@ async function postNativePdfJson(params: NativePdfJsonRequest): Promise<Record<s
   }
 }
 
-type AnthropicResponseContent = Array<{ type: string; text?: string }>;
-
 export async function anthropicAnalyzePdf(
   params: NativePdfAnalysisParams & { maxTokens?: number },
 ): Promise<string> {
@@ -134,8 +132,12 @@ export async function anthropicAnalyzePdf(
 
   const request = params.requestConfig?.request;
   const headers = new Headers(params.requestConfig?.headers);
-  for (const [name, value] of new Headers(request?.headers)) {
-    headers.set(name, value);
+  for (const [name, value] of Object.entries(request?.headers ?? {})) {
+    if (value === null) {
+      headers.delete(name);
+    } else {
+      headers.set(name, value);
+    }
   }
   const hasExplicitAuthOverride =
     (request?.auth?.mode !== undefined && request.auth.mode !== "provider-default") ||
@@ -193,14 +195,16 @@ export async function anthropicAnalyzePdf(
     signal: params.signal,
   });
 
-  const responseContent = json.content as AnthropicResponseContent | undefined;
+  const responseContent = json.content;
   if (!Array.isArray(responseContent)) {
     throw new Error("Anthropic PDF response missing content array.");
   }
 
   const text = responseContent
     .flatMap((block) =>
-      block.type === "text" && typeof block.text === "string" ? [block.text] : [],
+      isRecord(block) && block.type === "text" && typeof block.text === "string"
+        ? [block.text]
+        : [],
     )
     .join("");
 
@@ -210,10 +214,6 @@ export async function anthropicAnalyzePdf(
 
   return text.trim();
 }
-
-type GeminiCandidate = {
-  content?: { parts?: Array<{ text?: string }> };
-};
 
 export async function geminiAnalyzePdf(params: NativePdfAnalysisParams): Promise<string> {
   const apiKey = normalizeSecretInput(params.apiKey);
@@ -256,13 +256,15 @@ export async function geminiAnalyzePdf(params: NativePdfAnalysisParams): Promise
     signal: params.signal,
   });
 
-  const candidates = json.candidates as GeminiCandidate[] | undefined;
+  const candidates = json.candidates;
   const candidate = Array.isArray(candidates) ? candidates[0] : undefined;
   if (!candidate) {
     throw new Error("Gemini PDF returned no candidates.");
   }
-  const text = (candidate.content?.parts ?? [])
-    .flatMap((part) => (typeof part.text === "string" ? [part.text] : []))
+  const content = isRecord(candidate) ? candidate.content : undefined;
+  const parts = isRecord(content) && Array.isArray(content.parts) ? content.parts : [];
+  const text = parts
+    .flatMap((part) => (isRecord(part) && typeof part.text === "string" ? [part.text] : []))
     .join("");
 
   if (!text.trim()) {

@@ -114,12 +114,6 @@ describe("tool search gateway e2e lane result", () => {
   afterEach(async () => {
     await Promise.all(roots.splice(0).map((root) => fs.rm(root, { force: true, recursive: true })));
   });
-  const jsonResponse = (body: unknown, init?: ResponseInit) =>
-    new Response(JSON.stringify(body), {
-      headers: { "content-type": "application/json" },
-      ...init,
-    });
-
   async function createLaneHarness(logs?: () => string) {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tool-search-lane-"));
     roots.push(tempRoot);
@@ -169,10 +163,10 @@ describe("tool search gateway e2e lane result", () => {
     const toolOutput = `${"o".repeat(3_999)}😀tail`;
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ cursor: 0 }))
-      .mockResolvedValueOnce(jsonResponse({ output: [], status: "completed" }))
+      .mockResolvedValueOnce(Response.json({ cursor: 0 }))
+      .mockResolvedValueOnce(Response.json({ output: [], status: "completed" }))
       .mockResolvedValueOnce(
-        jsonResponse([
+        Response.json([
           { plannedToolName: "tool_search" },
           {
             plannedToolName: targetTool,
@@ -230,7 +224,7 @@ describe("tool search gateway e2e lane result", () => {
         const url =
           typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
         if (url.endsWith("/debug/request-cursor")) {
-          return jsonResponse({ cursor: 0 });
+          return Response.json({ cursor: 0 });
         }
         if (url.endsWith("/v1/responses")) {
           logs.push(
@@ -245,10 +239,10 @@ describe("tool search gateway e2e lane result", () => {
             '{"message":{"role":"assistant","content":"dispatch_action tool_describe fake_plugin_tool_17-variant"}}\n',
             "utf8",
           );
-          return jsonResponse({ error: { message: responseSecret } }, { status: 502 });
+          return Response.json({ error: { message: responseSecret } }, { status: 502 });
         }
         if (url.includes("/debug/requests?after=0")) {
-          return jsonResponse([
+          return Response.json([
             {
               body: { tools: [{ type: "function", name: "dispatch_action" }] },
               plannedToolName: "dispatch_action",

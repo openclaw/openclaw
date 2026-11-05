@@ -124,22 +124,6 @@ function sanitizeAuditField(value: string): string {
   });
 }
 
-function matchedPolicyRules(params: {
-  policy: ToolPolicyLike;
-  ruleKind: ToolPolicyRuleKind;
-  tools: readonly string[];
-}): string[] {
-  const rules = new Set<string>();
-  const matchRule = createMatchedPolicyRuleForTool(params.policy, params.ruleKind);
-  for (const toolName of params.tools) {
-    const rule = matchRule(toolName);
-    if (rule) {
-      rules.add(sanitizeAuditField(rule));
-    }
-  }
-  return [...rules].toSorted();
-}
-
 /** Log tools removed by an allow/deny policy filter step. */
 export function auditToolPolicyFilter(params: {
   stepLabel: string;
@@ -152,11 +136,16 @@ export function auditToolPolicyFilter(params: {
     const rule = sanitizeAuditField(labelForRuleKind(params.stepLabel, ruleKind));
     const { toolNames, truncated } = boundedToolNames(removed);
     const matchedRuleSourceTools = removed.slice(0, MAX_AUDIT_TOOL_NAMES);
-    const matchedRules = matchedPolicyRules({
-      policy: params.policy,
-      ruleKind,
-      tools: matchedRuleSourceTools,
-    });
+    const policy = params.policy;
+    const rules = new Set<string>();
+    const matchRule = createMatchedPolicyRuleForTool(policy, ruleKind);
+    for (const toolName of matchedRuleSourceTools) {
+      const matchedRule = matchRule(toolName);
+      if (matchedRule) {
+        rules.add(sanitizeAuditField(matchedRule));
+      }
+    }
+    const matchedRules = [...rules].toSorted();
     const matchedRuleSuffix = matchedRules.length > 0 ? `; matched ${matchedRules.join(", ")}` : "";
     const message = `tool policy removed ${removed.length} tool(s) via ${rule}: ${toolNames.join(", ")}${matchedRuleSuffix}`;
     const metadata = {

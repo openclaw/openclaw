@@ -1,8 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -50,11 +47,19 @@ suite.define(() => {
       const sidebar = page.locator("openclaw-app-sidebar");
       const more = sidebar.getByRole("button", { name: "Load more sessions", exact: true });
       if (retry) {
-        await gateway.deferNext("sessions.list", { offset: limit * 2 });
+        // Child lists share these cursors; keep their competing read ahead of the roster request.
+        await gateway.deferNext("sessions.list", { offset: limit * 2, includeGlobal: true });
+        await gateway.waitForRequest("sessions.list", {
+          match: { offset: limit * 2, includeGlobal: false },
+        });
       }
       await more.click();
-      await gateway.waitForRequest("sessions.list", { match: { offset: limit } });
-      await gateway.waitForRequest("sessions.list", { match: { offset: limit * 2 } });
+      await gateway.waitForRequest("sessions.list", {
+        match: { offset: limit, includeGlobal: true },
+      });
+      await gateway.waitForRequest("sessions.list", {
+        match: { offset: limit * 2, includeGlobal: true },
+      });
       if (retry) {
         await gateway.resolveDeferred("sessions.list", {
           __mockError: { code: "UNAVAILABLE", message: "Older sessions temporarily unavailable" },
@@ -68,15 +73,77 @@ suite.define(() => {
       await sidebar.locator('[data-session-key="agent:main:thread-' + limit * 2 + '"]').waitFor();
       expect(await more.count()).toBe(0);
       expect(await sidebar.locator(".sidebar-recent-session").count()).toBe(8);
-      if (!retry && process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          sidebar.locator(".sidebar"),
-          [sidebar.getByText("Conversation " + limit * 2, { exact: true })],
-          { elements: [sidebar.locator(".sidebar")], animations: "disabled" },
-        );
-        await writeFile(path.join(suite.artifactDir, "after.png"), frame.elements[0]!.png);
-      }
     });
   });
+
+  it.each([
+    ["none", true],
+    ["category", false],
+  ] as const)(
+    "auto-loads at the sidebar end only in flat view (%s)",
+    async (grouping, autoLoads) => {
+      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const pageSize = 40;
+        // The chat pane follows the mocked cursor too; only sidebar pages count here.
+        const sidebarOlderPage = { offset: pageSize, source: "sidebar" };
+        const rows = Array.from({ length: pageSize + 1 }, (_, index) =>
+          sessionRow("agent:main:thread-" + index, "Conversation " + index, 1000 - index),
+        );
+        const gateway = await installMockGateway(page, {
+          sessions: rows,
+          sessionKey: rows[0]!.key,
+          methodResponses: {
+            "sessions.list": {
+              cases: [
+                {
+                  match: { offset: pageSize },
+                  response: sessionsListResponse(rows.slice(pageSize), {
+                    offset: pageSize,
+                    totalCount: rows.length,
+                    hasMore: false,
+                    nextOffset: null,
+                  }),
+                },
+                {
+                  response: sessionsListResponse(rows.slice(0, pageSize), {
+                    offset: 0,
+                    totalCount: rows.length,
+                    hasMore: true,
+                    nextOffset: pageSize,
+                  }),
+                },
+              ],
+            },
+          },
+        });
+        await page.addInitScript((value) => {
+          localStorage.setItem("openclaw:sidebar:sessions:grouping", value);
+        }, grouping);
+        await page.setViewportSize({ width: 1280, height: 600 });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, rows[0]!.key));
+        const sidebar = page.locator("openclaw-app-sidebar");
+        const more = sidebar.getByRole("button", { name: "Load more sessions", exact: true });
+        await more.waitFor();
+        const olderPageRequests = () => gateway.getRequests("sessions.list", sidebarOlderPage);
+        expect(await olderPageRequests()).toEqual([]);
+
+        await more.scrollIntoViewIfNeeded();
+        if (autoLoads) {
+          await gateway.waitForRequest("sessions.list", { match: sidebarOlderPage });
+          await more.waitFor({ state: "detached" });
+          return;
+        }
+        // Let the observer deliver before proving grouped views stay manual.
+        await page.evaluate(
+          () =>
+            new Promise((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(resolve));
+            }),
+        );
+        expect(await olderPageRequests()).toEqual([]);
+        await more.click();
+        await gateway.waitForRequest("sessions.list", { match: sidebarOlderPage });
+      });
+    },
+  );
 });

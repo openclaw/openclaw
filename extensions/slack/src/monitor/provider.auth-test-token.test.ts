@@ -227,12 +227,23 @@ describe("auth.test boot call", () => {
     client.conversations.info.mockResolvedValueOnce(generalChannel);
     replyMock.mockResolvedValue({ text: "unexpected" });
 
-    const monitor = startSlackMonitor(monitorSlackProvider, { botToken: "xoxp-user-token" });
-    await runSlackHandlerWithDispatch(await getSlackHandlerOrThrow("message"), {
-      event: messageEvent("USENDER", "<@UUSER> status", "100.000", "C1", "channel"),
-    });
-    await stopSlackMonitor(monitor);
-    expect(replyMock).not.toHaveBeenCalled();
+    const createIngress = vi.spyOn(await import("./ingress.js"), "createSlackDurableIngress");
+    try {
+      const monitor = startSlackMonitor(monitorSlackProvider, { botToken: "xoxp-user-token" });
+      await waitForSlackTestApp(monitor, "started");
+      const [created] = createIngress.mock.results;
+      if (created?.type !== "return") {
+        throw new Error("Slack durable ingress was not created");
+      }
+      await created.value.waitForIdle();
+      await runSlackHandlerWithDispatch(await getSlackHandlerOrThrow("message"), {
+        event: messageEvent("USENDER", "<@UUSER> status", "100.000", "C1", "channel"),
+      });
+      await stopSlackMonitor(monitor);
+      expect(replyMock).not.toHaveBeenCalled();
+    } finally {
+      createIngress.mockRestore();
+    }
   });
 
   describe("stalled startup auth", () => {

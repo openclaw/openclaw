@@ -1,6 +1,5 @@
 import { afterEach, expect, it } from "vitest";
 import { resolveChangedNodeTestTargets } from "../../scripts/lib/ci-changed-node-test-plan.mts";
-import { resolveCiCheckFamilyScope } from "../../scripts/lib/ci-check-family-scope.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeFiles } from "./ci-changed-node-test-plan.test-support.js";
 
@@ -15,36 +14,41 @@ function fixture(files: Record<string, string> | string[]) {
 const select = (cwd: string, paths: string[], selectionMode: Mode = "aggressive") =>
   resolveChangedNodeTestTargets(paths, { cwd, selectionMode });
 
-it.each(["added", "renamed", "deleted", "import-edge"])(
-  "retains non-import inventories and architecture for %s source modules",
-  (change) => {
-    const source = "src/infra/new-module.ts";
-    const guards = [
-      "test/scripts/pr-wrapper-source-closure.test.ts",
-      "test/scripts/pr-worktree-provision.test.ts",
-      "test/scripts/eager-import-closure.test.ts",
-      "test/scripts/update-restart-module-outcome.test.ts",
-      "test/scripts/type-suppression-inventory.test.ts",
-      "test/scripts/plugin-sdk-surface-report.test.ts",
-      "test/scripts/lint-suppressions.test.ts",
-    ];
-    const testOnly = "src/infra/own.test.ts";
-    const cwd = fixture([...guards, ...(change === "deleted" ? [] : [source])]);
-    if (change === "import-edge") {
-      writeFiles(cwd, {
-        [source]: 'import "./dependency.js";\n',
-        "src/infra/dependency.ts": "export {};\n",
-      });
-    }
-    const paths = change === "renamed" ? ["src/infra/old-module.ts", source] : [source];
-    expect(select(cwd, paths)).toEqual(guards.toSorted());
-    writeFiles(cwd, [testOnly]);
-    expect(select(cwd, [testOnly])).toEqual(
-      [testOnly, "test/scripts/lint-suppressions.test.ts"].toSorted(),
+it.each(["aggressive", "full"] as const)(
+  "retains indirect workflow fixture consumers beside a busy hub in %s mode",
+  (selectionMode) => {
+    const helper = "test/scripts/ci-workflow.test-support.ts";
+    const bridge = "test/scripts/ci-workflow-manifest.test-support.ts";
+    const indirect = ["ci-workflow-native-generated", "ci-workflow-ui-full"].map(
+      (name) => `test/scripts/${name}.test.ts`,
     );
-    expect(resolveCiCheckFamilyScope(paths).additionalGroups).toContain(
-      "runtime-topology-architecture",
+    const family = [
+      "ci-workflow-complete",
+      "ci-workflow-cost",
+      "ci-workflow-evidence",
+      "ci-workflow-guards",
+      "ci-workflow-planning",
+      "ci-workflow.test-support",
+      "ci-swift-cache-lifetime",
+    ].map((name) => `test/scripts/${name}.test.ts`);
+    const direct = Array.from({ length: 30 }, (_, i) => `test/scripts/other-${i}.test.ts`);
+    const native = "test/scripts/macos-native-test-launch.test.ts";
+    const cwd = fixture({
+      [helper]: "export {};",
+      [bridge]: 'import "./ci-workflow.test-support.js";',
+      [native]: "export {};",
+      ...Object.fromEntries(
+        [...family, ...direct].map((file) => [file, 'import "./ci-workflow.test-support.js";']),
+      ),
+      ...Object.fromEntries(
+        indirect.map((file) => [file, 'import "./ci-workflow-manifest.test-support.js";']),
+      ),
+    });
+    const files = select(cwd, [helper], selectionMode);
+    expect(files.toSorted()).toEqual(
+      [...family, ...direct, ...indirect, ...(selectionMode === "full" ? [native] : [])].toSorted(),
     );
+    expect(select(cwd, [family[0]!], selectionMode)).toEqual([family[0]]);
   },
 );
 
@@ -145,5 +149,24 @@ it.each([30, 31])(
     expect(selected).toEqual((count <= 30 ? [...matching, ...unrelated] : matching).toSorted());
     expect(selected).not.toContain(nested);
     expect(select(cwd, [source, unrelated[0]!])).toContain(unrelated[0]);
+  },
+);
+
+it.each(["aggressive", "full"] as const)(
+  "keeps opt-in tests outside PR test roots out of %s selection",
+  (selectionMode) => {
+    // #182101: the retention census imports this helper but has its own opt-in config.
+    const helper = "ui/src/test-helpers/control-ui-e2e.ts";
+    const optIn = "scripts/control-ui-retention/dependency-retention.test.ts";
+    const consumer = "ui/src/test-helpers/control-ui-e2e.test.ts";
+    const cwd = fixture({
+      [helper]: "export const helper = 1;\n",
+      [optIn]: 'import "../../ui/src/test-helpers/control-ui-e2e.ts";\n',
+      [consumer]: 'import "./control-ui-e2e.ts";\n',
+    });
+    const selected = select(cwd, [helper], selectionMode);
+    expect(selected).toContain(consumer);
+    expect(selected).not.toContain(optIn);
+    expect(select(cwd, [optIn], selectionMode)).not.toContain(optIn);
   },
 );

@@ -1,5 +1,5 @@
 import { setImmediate } from "node:timers/promises";
-import type { OpenClawPluginApi, PluginJsonValue } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi as Api, PluginJsonValue } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -10,44 +10,30 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime
 import { expect, it, vi } from "vitest";
 import plugin, { DEFAULT_REVIEW_INSTRUCTIONS } from "./index.js";
 
-type AgentEventSubscription = Parameters<OpenClawPluginApi["registerAgentEventSubscription"]>[0];
+type AgentEventSubscription = Parameters<Api["registerAgentEventSubscription"]>[0];
 type EventContext = Parameters<AgentEventSubscription["handle"]>[1];
 type Hook = (event: Record<string, unknown>, ctx: Record<string, unknown>) => unknown;
 
-function setup(pluginConfig: Record<string, unknown>, reply = "NO_CHANGE") {
+async function startAdvisor(everyToolCalls = 1, reply = "NO_CHANGE", runTrigger = "user") {
   const runContexts = new Map<string, PluginJsonValue>();
-  let subscription: AgentEventSubscription | undefined;
-  let beforeReply: Hook | undefined;
-  const registerService = vi.fn<OpenClawPluginApi["registerService"]>();
-  const forkSession = vi.fn<OpenClawPluginApi["runtime"]["subagent"]["forkSession"]>(async () => ({
-    text: reply,
-  }));
-  const steer = vi.fn<OpenClawPluginApi["session"]["workflow"]["steerActiveRun"]>(async () => ({
-    steered: true,
-  }));
-  const warn = vi.fn();
-  const logger = { info: vi.fn(), warn, error: vi.fn(), debug: vi.fn() };
+  const subscribe = vi.fn<Api["registerAgentEventSubscription"]>();
+  const on = vi.fn<Api["on"]>();
+  const registerService = vi.fn<Api["registerService"]>();
+  const runtime = createPluginRuntimeMock();
+  const forkSession = vi.spyOn(runtime.subagent, "forkSession").mockResolvedValue({ text: reply });
   const api = createTestPluginApi({
     id: "advisor",
-    pluginConfig,
-    logger,
-    runtime: createPluginRuntimeMock({
-      subagent: { forkSession },
-      config: {
-        current: () => ({ plugins: { entries: { advisor: { config: pluginConfig } } } }),
-      },
-    }),
+    pluginConfig: { everyToolCalls, everyMinutes: 0 },
+    runtime,
     registerService,
-    on: (name, handler) => {
-      if (name === "before_agent_reply") {
-        beforeReply = handler as Hook;
-      }
-    },
-    registerAgentEventSubscription: (registered) => {
-      subscription = registered;
-    },
+    on,
+    registerAgentEventSubscription: subscribe,
   });
-  api.session.workflow.steerActiveRun = steer;
+  const { logger } = api;
+  const warn = vi.spyOn(logger, "warn");
+  const steer = vi
+    .spyOn(api.session.workflow, "steerActiveRun")
+    .mockResolvedValue({ steered: true });
   api.runContext.setRunContext = ({ runId, namespace, value }) => {
     if (value !== undefined) {
       runContexts.set(`${runId}:${namespace}`, value);
@@ -55,19 +41,22 @@ function setup(pluginConfig: Record<string, unknown>, reply = "NO_CHANGE") {
     return true;
   };
   plugin.register(api);
-  const service = registerService.mock.calls
-    .map(([value]) => value)
-    .find((s) => s.apiVersion === 2);
+  const service = registerService.mock.calls.find(([s]) => s.apiVersion === 2)?.[0];
   const clock = createGatewaySchedulerClock();
   const scheduler = createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock));
   let calls = 0;
-  const emit = (
+  const flush = async () => {
+    await clock.wake();
+    await setImmediate();
+  };
+  const send = async (
     stream: "tool" | "lifecycle" | "codex_app_server.item",
     phase: string,
-    runId: string,
     data: Record<string, unknown> = {},
-  ) =>
-    subscription?.handle(
+    reviews?: number,
+    runId = "run-1",
+  ) => {
+    await subscribe.mock.calls[0]?.[0].handle(
       { runId, seq: 1, ts: Date.now(), stream, data: { phase, ...data } },
       {
         // SAFETY: Mirrors the host owner; run-context reads are caller-typed by namespace.
@@ -77,53 +66,32 @@ function setup(pluginConfig: Record<string, unknown>, reply = "NO_CHANGE") {
         clearRunContext: () => {},
       },
     );
-  const flush = async () => {
-    await clock.wake();
-    await setImmediate();
-  };
-  return {
-    forkSession,
-    steer,
-    warn,
-    service,
-    start: () => service?.start({ config: {}, stateDir: "/tmp/advisor-test", logger, scheduler }),
-    startRun: async (runId = "run-1", trigger = "user") => {
-      await beforeReply?.(
-        {},
-        { sessionKey: "agent:main:main", agentId: "main", runId, trigger, sessionId: "s" },
-      );
-      await emit("lifecycle", "start", runId);
-    },
-    tool: async (runId = "run-1") => {
-      const toolCallId = `call-${(calls += 1)}`;
-      await emit("tool", "start", runId, { toolCallId });
-      await emit("tool", "result", runId, { toolCallId });
-    },
-    emit,
-    item: (phase: string, itemId: string, type: string) =>
-      emit("codex_app_server.item", phase, "run-1", { itemId, type }),
-    endRun: (runId = "run-1", aborted = false) => emit("lifecycle", "end", runId, { aborted }),
-    flush,
-    expectReviewsAfter: async (action: ReturnType<typeof emit>, count: number) => {
-      await action;
+    if (reviews !== undefined) {
       await flush();
-      expect(forkSession).toHaveBeenCalledTimes(count);
-    },
+      expect(forkSession).toHaveBeenCalledTimes(reviews);
+    }
   };
+  const startRun = async (runId = "run-1", trigger = "user") => {
+    const beforeReply = on.mock.calls[0]?.[1] as Hook | undefined;
+    await beforeReply?.({}, { sessionKey: "agent:main:main", runId, trigger });
+    await send("lifecycle", "start", {}, undefined, runId);
+  };
+  const tool = async (reviews?: number) => {
+    const toolCallId = `call-${(calls += 1)}`;
+    await send("tool", "start", { toolCallId });
+    await send("tool", "result", { toolCallId }, reviews);
+  };
+  await service?.start({ config: {}, stateDir: "/tmp/advisor-test", logger, scheduler });
+  await startRun("run-1", runTrigger);
+  return { forkSession, steer, warn, service, send, flush, startRun, tool };
 }
 
-async function startAdvisor(everyToolCalls = 1, reply = "NO_CHANGE", trigger = "user") {
-  const run = setup({ everyToolCalls, everyMinutes: 0 }, reply);
-  await run.start();
-  await run.startRun("run-1", trigger);
-  return run;
-}
-
-it("steers an active run after N tool calls", async () => {
+it("reviews complete tools at the threshold, rechecking queued and native calls", async () => {
   const run = await startAdvisor(2, "CORRECTION\nStop polling.");
-  await run.expectReviewsAfter(run.tool(), 0);
+  await run.tool(0);
   await run.tool();
-  await run.flush();
+  await run.send("tool", "start", { toolCallId: "late" }, 0);
+  await run.send("tool", "result", { toolCallId: "late" }, 1);
   expect(run.forkSession).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({
       sessionKey: "agent:main:main",
@@ -131,55 +99,51 @@ it("steers an active run after N tool calls", async () => {
     }),
   );
   expect(run.steer).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ displayText: "Stop polling." }),
+    expect.objectContaining({ sessionKey: "agent:main:main", displayText: "Stop polling." }),
   );
-});
-
-it("waits for real tool results, including native tools after a completed review", async () => {
-  const run = await startAdvisor();
-  await run.expectReviewsAfter(run.emit("tool", "start", "run-1", { toolCallId: "call-1" }), 0);
-  await run.expectReviewsAfter(run.emit("tool", "result", "run-1", { toolCallId: "call-1" }), 1);
   const native = { toolCallId: "item-1", itemId: "item-1" };
-  await run.emit("tool", "start", "run-1", native);
-  await run.expectReviewsAfter(run.emit("tool", "result", "run-1", native), 1);
-  await run.expectReviewsAfter(run.emit("codex_app_server.item", "completed", "run-1", native), 2);
+  await run.send("tool", "start", native);
+  await run.tool(1);
+  await run.send("tool", "result", native, 1);
+  await run.send("codex_app_server.item", "completed", native, 2);
 });
 
 it.each([
-  ["outer", "child", "custom_tool_call", "custom_tool_call_output"],
-  ["x", "x", "function_call", "function_call_output"],
-])("keeps raw %s pending after native %s finishes", async (outer, child, call, output) => {
+  ["custom_tool_call", "outer", "child"],
+  ["function_call", "shared-id", "shared-id"],
+])("settles %s after its child", async (call, outerId, childId) => {
   const run = await startAdvisor();
-  await run.item("started", outer, call);
-  await run.emit("tool", "start", "run-1", { toolCallId: child, itemId: child });
-  await run.expectReviewsAfter(run.item("completed", child, "commandExecution"), 0);
-  await run.expectReviewsAfter(run.item("completed", outer, output), 1);
-});
-
-it("rechecks running calls when a queued review dispatches", async () => {
-  const run = await startAdvisor(2);
-  await run.tool();
-  await run.tool();
-  // A third call starts after the review is queued but before the scheduler runs it.
-  await run.expectReviewsAfter(run.emit("tool", "start", "run-1", { toolCallId: "late" }), 0);
-  await run.expectReviewsAfter(run.emit("tool", "result", "run-1", { toolCallId: "late" }), 1);
+  await run.send("codex_app_server.item", "started", { itemId: outerId, type: call });
+  await run.send("tool", "start", { toolCallId: childId, itemId: childId });
+  await run.send(
+    "codex_app_server.item",
+    "completed",
+    { itemId: childId, type: "commandExecution" },
+    0,
+  );
+  await run.send(
+    "codex_app_server.item",
+    "completed",
+    { itemId: outerId, type: `${call}_output` },
+    1,
+  );
 });
 
 it.each(["Looks fine to me.", "CORRECTION", "NO_CHANGE"])(
   "does not steer on a reply of %j",
   async (reply) => {
     const run = await startAdvisor(1, reply);
-    await run.expectReviewsAfter(run.tool(), 1);
+    await run.tool(1);
     expect(run.steer).not.toHaveBeenCalled();
   },
 );
 
 it("ignores non-user runs and does not review at run end", async () => {
   const run = await startAdvisor(1, "NO_CHANGE", "cron");
-  await run.tool("run-1");
-  await run.expectReviewsAfter(run.endRun("run-1"), 0);
+  await run.tool();
+  await run.send("lifecycle", "end", {}, 0);
   await run.startRun("run-2");
-  await run.expectReviewsAfter(run.endRun("run-2"), 0);
+  await run.send("lifecycle", "end", {}, 0, "run-2");
 });
 
 it.each([false, true])("cancels in-flight reviews at run end (aborted=%s)", async (aborted) => {
@@ -193,16 +157,17 @@ it.each([false, true])("cancels in-flight reviews at run end (aborted=%s)", asyn
   await run.tool();
   const review = run.flush();
   await vi.waitFor(() => expect(run.forkSession).toHaveBeenCalledOnce());
-  expect(run.forkSession.mock.calls[0]?.[0].signal?.aborted).toBe(false);
-  await run.endRun("run-1", aborted);
+  const signal = run.forkSession.mock.calls[0]?.[0].signal;
+  expect(signal?.aborted).toBe(false);
+  await run.send("lifecycle", "end", { aborted });
   await review;
-  expect(run.forkSession.mock.calls[0]?.[0].signal?.aborted).toBe(true);
+  expect(signal?.aborted).toBe(true);
   expect(run.steer).not.toHaveBeenCalled();
   expect(run.warn).not.toHaveBeenCalled();
 });
 
-it("registers nothing when both triggers are off", () => {
-  const run = setup({ everyToolCalls: 0, everyMinutes: 0 });
+it("registers nothing when both triggers are off", async () => {
+  const run = await startAdvisor(0);
   expect(run.service).toBeUndefined();
   expect(run.warn).toHaveBeenCalledOnce();
 });
