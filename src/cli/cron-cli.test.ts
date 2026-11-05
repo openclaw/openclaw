@@ -45,9 +45,7 @@ const defaultGatewayMock = async (method: string, _opts: unknown, params?: unkno
 };
 callGatewayFromCli.mockImplementation(defaultGatewayMock);
 
-afterEach(() => {
-  vi.useRealTimers();
-});
+afterEach(vi.useRealTimers);
 
 vi.mock("./gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
@@ -638,7 +636,9 @@ it.each(["add", "edit"])("%s uses the Gateway shell", async (mode) => {
 it.each([undefined, {}])("requires a Gateway platform (%j)", async (info) => {
   resetGatewayMock();
   answerSystemInfo(() => {
-    if (info) return info;
+    if (info) {
+      return info;
+    }
     throw new GatewayClientRequestError({
       code: "INVALID_REQUEST",
       message: "unknown method: system.info",
