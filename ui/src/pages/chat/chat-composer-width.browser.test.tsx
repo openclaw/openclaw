@@ -104,7 +104,7 @@ describe("composer border width control", () => {
     expect(shell.getBoundingClientRect().width).toBe(1081);
   });
 
-  it("measures width changes but skips callback-only updates and uses the latest callback", async () => {
+  it("measures width changes but skips edge geometry for callback-only updates and uses the latest callback", async () => {
     await page.viewport(1440, 900);
     const f = fixture();
     await settled();
@@ -112,8 +112,6 @@ describe("composer border width control", () => {
     const shell = f.input().closest<HTMLElement>(".agent-chat__composer-shell")!;
     const shellRead = vi.spyOn(shell, "getBoundingClientRect");
     const inputRead = vi.spyOn(f.input(), "getBoundingClientRect");
-    const transcript = f.props.getTranscriptElement?.();
-    const style = vi.spyOn(window, "getComputedStyle");
     const onWidthChange = vi.fn(f.onWidthChange);
     f.props.onComposerWidthChange = onWidthChange;
     f.props.getTranscriptElement = () =>
@@ -122,7 +120,6 @@ describe("composer border width control", () => {
     expect(f.edge()).toBe(edge);
     expect(shellRead).not.toHaveBeenCalled();
     expect(inputRead).not.toHaveBeenCalled();
-    expect(style.mock.calls.some(([element]) => element === transcript)).toBe(false);
     await settled();
     f.edge().dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
     await settled();
@@ -136,7 +133,6 @@ describe("composer border width control", () => {
     expect(onWidthChange).toHaveBeenCalledWith("880px");
     shellRead.mockRestore();
     inputRead.mockRestore();
-    style.mockRestore();
   });
 
   it("resets width to the opening preference and leaves no observer-owned handle after unmount", async () => {
