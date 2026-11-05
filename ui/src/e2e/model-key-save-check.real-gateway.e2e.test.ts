@@ -153,8 +153,13 @@ suite.define(() => {
           expect(text, key).not.toMatch(/API key saved\.(?! but)/u);
           expect(text, key).toMatch(reason);
           expect(ms, key).toBeLessThan(2_000);
-          // The field stays open so the user can paste a corrected key.
-          expect(await row.getByLabel("API key", { exact: true }).isEditable(), key).toBe(true);
+          // A rejected key stays open to correct; an unfinished check closes the saved key's form.
+          const fields = row.getByLabel("API key", { exact: true });
+          if (key === "sk-synthetic-servererror") {
+            expect(await fields.count(), key).toBe(0);
+          } else {
+            expect(await fields.isEditable(), key).toBe(true);
+          }
         }
 
         const good = await saveAndRead(row, () => replace("sk-synthetic-good"));
