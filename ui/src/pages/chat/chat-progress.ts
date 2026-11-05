@@ -136,6 +136,18 @@ export function buildCompactionDividerItem(
   };
 }
 
+export function currentResetBoundaryId(messages: readonly unknown[]): string | undefined {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const marker = asRecord(asRecord(messages[index])?.["__openclaw"]);
+    if (marker?.kind === "reset") {
+      return typeof marker.boundaryId === "string" && marker.boundaryId.trim()
+        ? marker.boundaryId
+        : undefined;
+    }
+  }
+  return undefined;
+}
+
 export function buildResetDividerItem(
   marker: Record<string, unknown>,
   timestamp: number,
@@ -147,6 +159,9 @@ export function buildResetDividerItem(
       typeof marker.id === "string"
         ? `divider:reset:${marker.id}`
         : `divider:reset:${timestamp}:${index}`,
+    ...(typeof marker.boundaryId === "string" && marker.boundaryId.trim()
+      ? { boundaryId: marker.boundaryId }
+      : {}),
     label: t("chat.sessionReset.label"),
     icon: "rotateCcw",
     description: t("chat.sessionReset.description"),

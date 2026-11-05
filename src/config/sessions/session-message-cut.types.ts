@@ -26,6 +26,7 @@ export type SessionMessageCutIntent = {
   creation?: SessionMessageCutMutationParams["creation"];
   forkWorkspace?: SessionMessageCutMutationParams["forkWorkspace"];
   entryId: string;
+  undoReset?: boolean;
   expectedState: SessionMessageCutExpectedState | undefined;
   mode: "fork" | "rewind" | "switch";
   repositoryWorkspaceId?: string;

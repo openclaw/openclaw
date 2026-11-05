@@ -158,6 +158,8 @@ export type ChatThreadProps = Omit<
     startupLabel?: string;
     retryAt?: number;
     onRetryRun?: (runId: string) => void;
+    onUndoReset?: (boundaryId: string) => void;
+    undoResetPending?: boolean;
     failedMessageEditSource?: FailedMessageEditSource;
     failureActionsRunId?: string;
     onDismissPendingInput?: (inputId: string) => void;

@@ -169,8 +169,6 @@ const enChatSession = {
       workboardCard: "Workboard card: {title}, {status}",
       defaultTab: "Main",
       mockPlaceholder: "Board view · {tabs} tabs · {widgets} widgets",
-      resetTitle: "Reset conversation?",
-      resetDescription: "The conversation context resets. Your dashboard stays.",
     },
     taskSuggestions: {
       adminRequired: "You need admin access to start suggested tasks.",

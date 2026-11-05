@@ -124,6 +124,7 @@ export async function mutateSqliteSessionAtMessage(
     creation: params.creation ? structuredClone(params.creation) : undefined,
     forkWorkspace: params.forkWorkspace ? structuredClone(params.forkWorkspace) : undefined,
     entryId: params.entryId,
+    undoReset: params.undoReset,
     expectedState: expectedState ? { ...expectedState } : undefined,
     mode,
     repositoryWorkspaceId: params.repositoryWorkspaceId,

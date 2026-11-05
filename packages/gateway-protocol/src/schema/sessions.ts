@@ -669,10 +669,14 @@ export const SessionsRewindParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),
   entryId: NonEmptyString,
+  /** Restore the active history immediately before the latest reset boundary. */
+  undoReset: Type.Optional(Type.Boolean()),
 });
 
 /** Creates a new session from the active-path state before one persisted user message. */
-export const SessionsForkParamsSchema = closedObject(SessionsRewindParamsSchema.properties);
+export const SessionsForkParamsSchema = closedObject(
+  Type.Omit(SessionsRewindParamsSchema, ["undoReset"]).properties,
+);
 
 const SessionEditorAttachmentSchema = closedObject({
   mimeType: Type.String(),
@@ -686,8 +690,7 @@ export const SessionsRewindResultSchema = closedObject({
 
 export const SessionsForkResultSchema = closedObject({
   sessionKey: NonEmptyString,
-  editorText: Type.Optional(Type.String()),
-  editorAttachments: Type.Optional(Type.Array(SessionEditorAttachmentSchema)),
+  ...SessionsRewindResultSchema.properties,
 });
 
 export const SessionBranchSchema = closedObject({
@@ -710,8 +713,7 @@ export const SessionsBranchesListResultSchema = closedObject({
 
 /** Repoints the active transcript path to one existing DAG tip. */
 export const SessionsBranchesSwitchParamsSchema = closedObject({
-  sessionKey: NonEmptyString,
-  agentId: Type.Optional(NonEmptyString),
+  ...Type.Omit(SessionsForkParamsSchema, ["entryId"]).properties,
   leafEntryId: NonEmptyString,
 });
 

@@ -255,6 +255,8 @@ export type ChatItem =
       key: string;
       compaction?: "active" | "complete";
       compactionId?: string;
+      /** Explicit reset entry; legacy dividers have none. */
+      boundaryId?: string;
       systemEvent?: "info";
       label: string;
       icon?: IconName;

@@ -1,4 +1,5 @@
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
+import { currentResetBoundaryId } from "../chat-progress.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import type { LoadedReplySource } from "./chat-reply-preview.ts";
 import type { ChatThreadProps, ChatThreadState } from "./chat-thread-interactions.ts";
@@ -52,9 +53,18 @@ export function transcriptContextDependencies(
   loadedSources: ReadonlyMap<string, LoadedReplySource>,
   props: Pick<
     ChatThreadProps,
-    "onRetryRun" | "failedMessageEditSource" | "failureActionsRunId" | "modelCatalog"
+    | "onRetryRun"
+    | "failedMessageEditSource"
+    | "failureActionsRunId"
+    | "modelCatalog"
+    | "messages"
+    | "onUndoReset"
+    | "undoResetPending"
   >,
 ): unknown[] {
+  if (item.kind === "divider") {
+    return [props.onUndoReset, props.undoResetPending, currentResetBoundaryId(props.messages)];
+  }
   if (item.kind === "notice") {
     return [
       props.onRetryRun,

@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { rewindChatHistory } from "./chat-history-actions.ts";
+import { rewindChatHistory, undoChatReset } from "./chat-history-actions.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
@@ -48,6 +48,30 @@ function createRewindHost(
 }
 
 describe("rewind composer ownership", () => {
+  it("restores reset history without replacing the unsent composer draft", async () => {
+    const restored = { role: "user", content: "Before the reset", __openclaw: { id: "before" } };
+    const history = vi.fn(() => ({ messages: [restored] }));
+    const state = createRewindHost(Promise.resolve({ editorText: "" }), undefined, history);
+    const undo = vi.spyOn(state.sessions, "undoReset").mockResolvedValue({});
+    state.chatMessage = "Keep this unsent draft";
+    expect(await undoChatReset(state, "reset-boundary")).toBe(true);
+    expect(undo).toHaveBeenCalledExactlyOnceWith("agent:main:session-a", "reset-boundary", {});
+    expect(state.chatMessages).toEqual([restored]);
+    expect(state.chatMessage).toBe("Keep this unsent draft");
+    expect(history).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not publish a late reset Undo failure into another session", async () => {
+    const state = createRewindHost(Promise.resolve({ editorText: "" }));
+    const response = createDeferred<{ editorText?: string }>();
+    vi.spyOn(state.sessions, "undoReset").mockReturnValue(response.promise);
+    const pending = undoChatReset(state, "reset-boundary");
+    state.sessionKey = "agent:main:another-session";
+    response.reject(new Error("The old session changed."));
+    expect(await pending).toBe(false);
+    expect(state.chatError).toBeNull();
+  });
+
   it("keeps the committed prefix visible while rewind history reloads, without retaining its removed tail", async () => {
     const history = createDeferred<ChatHistoryResult>();
     const started = createDeferred();

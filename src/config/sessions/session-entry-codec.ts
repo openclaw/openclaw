@@ -112,6 +112,7 @@ const opaqueLeafEntrySchema = z.object({
   id: z.string().min(1),
   parentId: z.union([z.string(), z.null()]),
   targetId: z.union([z.string(), z.null()]),
+  undoResetId: z.string().min(1).optional(),
   appendParentId: z.union([z.string(), z.null()]).optional(),
   appendMode: z.literal("side").optional(),
 });
@@ -199,6 +200,7 @@ export function parseOpaqueLeafEntry(record: unknown):
       id: string;
       parentId: string | null;
       targetId: string | null;
+      undoResetId?: string;
       appendParentId?: string | null;
       appendMode?: "side";
     }
@@ -212,6 +214,7 @@ export function parseOpaqueLeafEntry(record: unknown):
     id: leaf.id,
     parentId: leaf.parentId,
     targetId: leaf.targetId,
+    ...(leaf.undoResetId !== undefined ? { undoResetId: leaf.undoResetId } : {}),
     ...(leaf.appendParentId !== undefined ? { appendParentId: leaf.appendParentId } : {}),
     ...(leaf.appendMode === "side" ? { appendMode: leaf.appendMode } : {}),
   };

@@ -5,15 +5,7 @@ import {
   isSyntheticMissingToolResult,
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
-
-export const TRANSCRIPT_NAVIGATION_KEYS = [
-  "type",
-  "id",
-  "parentId",
-  "targetId",
-  "appendParentId",
-  "appendMode",
-] as const;
+import { TRANSCRIPT_NAVIGATION_KEYS } from "./transcript-navigation-fields.js";
 
 export const MODEL_CONTEXT_NAVIGATION_KEYS = [
   ...TRANSCRIPT_NAVIGATION_KEYS,

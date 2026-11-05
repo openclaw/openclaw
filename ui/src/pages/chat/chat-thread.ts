@@ -152,6 +152,7 @@ const CHAT_ITEM_FIELDS = {
     "repeatCount",
   ],
   divider: [
+    "boundaryId",
     "compaction",
     "compactionId",
     "label",

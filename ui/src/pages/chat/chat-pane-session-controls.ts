@@ -40,7 +40,7 @@ type SessionActionAccess = ReturnType<typeof readChatSessionActionAccess>;
 type SessionAction = keyof SessionActionAccess;
 type SessionActionCallbacks = Pick<
   ChatProps,
-  "onAbort" | "onCompact" | "onForkMessage" | "onRewindMessage"
+  "onAbort" | "onCompact" | "onForkMessage" | "onRewindMessage" | "onUndoReset" | "undoResetPending"
 >;
 
 type PendingPermissionChange = {
@@ -471,9 +471,12 @@ export function createChatPaneSessionActionCallbacks(params: {
   getSnapshot: () => ApplicationGatewaySnapshot;
   state: ChatPageHost;
   sessionParticipationBlocked: boolean;
+  sessionArchived?: boolean;
+  undoResetPending?: boolean;
   onDenied: (reason: string) => void;
   onAbort: () => void;
   onRewind: (entryId: string) => Promise<boolean>;
+  onUndoReset?: (boundaryId: string, ownsAction: () => boolean) => void;
   onFork: (entryId: string) => Promise<void>;
 }): SessionActionCallbacks {
   const { state } = params;
@@ -537,7 +540,10 @@ export function createChatPaneSessionActionCallbacks(params: {
     params.onDenied(current.reason);
     return false;
   };
+  const canRewind = () =>
+    !params.sessionArchived && !selectedChatSessionRow(state)?.archived && requireCurrent("rewind");
   return {
+    undoResetPending: params.undoResetPending,
     onAbort:
       params.sessionParticipationBlocked || !access.abort.allowed
         ? undefined
@@ -556,9 +562,14 @@ export function createChatPaneSessionActionCallbacks(params: {
             }
           }
         : undefined,
-    onRewindMessage: access.rewind.allowed
-      ? (entryId) => (requireCurrent("rewind") ? params.onRewind(entryId) : false)
-      : undefined,
+    onUndoReset:
+      !params.sessionArchived && access.rewind.allowed && params.onUndoReset
+        ? (boundaryId) => params.onUndoReset?.(boundaryId, canRewind)
+        : undefined,
+    onRewindMessage:
+      !params.sessionArchived && access.rewind.allowed
+        ? (entryId) => (canRewind() ? params.onRewind(entryId) : false)
+        : undefined,
     onForkMessage: access.fork.allowed
       ? (entryId) => (requireCurrent("fork") ? params.onFork(entryId) : undefined)
       : undefined,

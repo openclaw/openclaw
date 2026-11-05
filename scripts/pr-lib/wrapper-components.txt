@@ -2705,6 +2705,7 @@ src/config/sessions/session-history-visibility.ts
 src/config/sessions/session-memory-targets-policy.ts
 src/config/sessions/session-message-cut-content.ts
 src/config/sessions/session-message-cut-plan.ts
+src/config/sessions/reset-policy.ts
 src/config/sessions/session-pending-final-settlement.ts
 src/config/sessions/session-pending-input-value.ts
 src/config/sessions/session-reset-boundary-event.ts

@@ -17,6 +17,72 @@ function leaf(
 }
 
 describe("session transcript tree helpers", () => {
+  it("allows exact reset undo without letting ordinary controls escape the selected reset window", () => {
+    const entries = [
+      { type: "message", id: "older", parentId: null },
+      { type: "message", id: "before", parentId: "older" },
+      { type: "reset", id: "first-reset", parentId: "before" },
+      { type: "message", id: "kept", parentId: "first-reset" },
+      { type: "reset", id: "latest-reset", parentId: "kept" },
+      { type: "message", id: "later", parentId: "latest-reset" },
+    ];
+    const undo = leaf("undo", "later", "kept", { undoResetId: "latest-reset" });
+    expect(scanSessionTranscriptTree([...entries, undo]).leafId).toBe("kept");
+    expect(
+      scanSessionTranscriptTree([
+        ...entries,
+        leaf("stale-undo", "later", "kept", { undoResetId: "first-reset" }),
+      ]).leafId,
+    ).toBe("later");
+    expect(
+      scanSessionTranscriptTree([...entries, undo, leaf("escape", "undo", "before")]).leafId,
+    ).toBe("kept");
+    // Selecting the retained post-reset branch reinstates that branch's reset fence.
+    expect(
+      scanSessionTranscriptTree([
+        ...entries,
+        undo,
+        leaf("switch", "undo", "later"),
+        leaf("escape", "switch", "kept"),
+      ]).leafId,
+    ).toBe("later");
+    const ignored = [
+      ...entries,
+      undo,
+      leaf("ignored", "undo", "older", { undoResetId: "first-reset" }),
+    ];
+    expect(scanSessionTranscriptTree(ignored).leafId).toBe("kept");
+    expect(scanSessionTranscriptTree(ignored).reopenedResetIds.has("first-reset")).toBe(false);
+    expect(
+      scanSessionTranscriptTree([
+        ...ignored,
+        leaf("exact-older-undo", "ignored", "before", { undoResetId: "first-reset" }),
+      ]).leafId,
+    ).toBe("before");
+    const invalidSelection = scanSessionTranscriptTree([
+      ...entries,
+      leaf("invalid-selection", "later", "kept", {
+        undoResetId: "latest-reset",
+        appendParentId: "missing",
+      }),
+    ]);
+    expect(invalidSelection.leafId).toBe("later");
+    expect(invalidSelection.reopenedResetIds.size).toBe(0);
+    const restored = { type: "message", id: "restored", parentId: "kept" };
+    const switched = [...entries, undo, restored, leaf("switch", "restored", "later")];
+    const selectedBack = [
+      ...switched,
+      leaf("switch-back", "switch", "restored", { undoResetId: "latest-reset" }),
+    ];
+    expect(scanSessionTranscriptTree(selectedBack).leafId).toBe("restored");
+    expect(
+      scanSessionTranscriptTree([
+        ...selectedBack,
+        { type: "reset", id: "next-reset", parentId: "restored" },
+        leaf("stale-selection", "next-reset", "before", { undoResetId: "next-reset" }),
+      ]).leafId,
+    ).toBe("next-reset");
+  });
   it("recognizes only valid leaf controls", () => {
     expect(isSessionTranscriptLeafControl(leaf("leaf-control", "old-tail", null))).toBe(true);
     expect(

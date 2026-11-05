@@ -133,6 +133,18 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
       options.agentId,
     );
 
+  const undoReset = (key: string, boundaryId: string, options: { agentId?: string | null } = {}) =>
+    requestCommittedMutation<SessionsRewindResult>(
+      "Undoing a session reset requires an active Gateway connection",
+      "sessions.rewind",
+      {
+        ...buildTranscriptMutationParams(key, options.agentId),
+        entryId: boundaryId,
+        undoReset: true,
+      },
+      options.agentId,
+    );
+
   const forkAtMessage = (key: string, entryId: string, options: { agentId?: string | null } = {}) =>
     requestCommittedMutation<SessionsForkResult>(
       "Session fork requires an active Gateway connection",
@@ -184,6 +196,7 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     listBranches,
     listFiles,
     rewind,
+    undoReset,
     setFile,
     async subscribeMessages(
       key: string,

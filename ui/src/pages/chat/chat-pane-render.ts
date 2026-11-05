@@ -215,9 +215,12 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       getSnapshot: () => this.context.gateway.snapshot,
       state,
       sessionParticipationBlocked,
+      sessionArchived: selectedSessionArchived,
+      undoResetPending: this.history.undoResetPending,
       onDenied: (reason) => this.publishHeaderError(reason),
       onAbort: () => void state.handleAbortChat({ preserveDraft: true }),
       onRewind: (entryId) => this.rewindToMessage(entryId),
+      onUndoReset: (boundaryId, ownsAction) => void this.handleUndoReset(boundaryId, ownsAction),
       onFork: (entryId) => this.forkFromMessage(entryId),
     });
     const setReply = (target: ChatProps["replyTarget"]) => {
@@ -603,9 +606,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       }),
       ...createChatPaneRunRecoveryActions(state, {
         canSend: composerAvailability.canSend && !catalogKey && !suggestionViewer,
-        onRewindMessage: selectedSessionArchived
-          ? undefined
-          : sessionActionCallbacks.onRewindMessage,
+        onRewindMessage: sessionActionCallbacks.onRewindMessage,
         isCurrent: () =>
           this.state === state && this.connectionGeneration === selectionConnectionGeneration,
         latestFailedRunId: () =>
@@ -652,7 +653,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onClearReply: () => setReply(null),
       onSetReply: sessionDisabledBanner ? undefined : setReply,
       replyMessageAccess: catalogKey || selectedSessionArchived ? undefined : replyMessageAccess,
-      onRewindMessage: selectedSessionArchived ? undefined : sessionActionCallbacks.onRewindMessage,
       agentsList: state.agentsList,
       currentAgentId,
       loadFullAssistantMessage: createSidebarFullMessageLoader(state, this.context.gateway),

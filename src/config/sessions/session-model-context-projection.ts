@@ -25,9 +25,9 @@ import { projectSessionModelContextEntry } from "./session-model-context-entry.j
 import {
   MODEL_CONTEXT_NAVIGATION_KEYS,
   MODEL_MESSAGE_NAVIGATION_KEYS,
-  TRANSCRIPT_NAVIGATION_KEYS,
   projectSessionModelContextNavigation,
 } from "./session-model-context-navigation.js";
+import { TRANSCRIPT_NAVIGATION_KEYS } from "./transcript-navigation-fields.js";
 
 const registeredDeepProjectors = new WeakSet<DatabaseSync>();
 

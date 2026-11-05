@@ -23,6 +23,15 @@ function message(
 }
 
 describe("reset boundary planning", () => {
+  it("records preserve-tail context even when no user or assistant replay tail exists", () => {
+    const boundary = buildSessionResetBoundaryEvent({
+      events: [{ type: "custom", id: "metadata", parentId: null }],
+      context: "preserve-tail",
+      reason: "reset",
+    });
+    expect(boundary).toMatchObject({ context: "preserve-tail", parentId: "metadata" });
+    expect(boundary).not.toHaveProperty("firstKeptEntryId");
+  });
   it("counts a placed background result at its logical slot across repeated resets", () => {
     const pending = timedMessageEvent("pending", null, "2026-07-22T00:00:00.000Z", {
       ...createExactAssistantMessage({

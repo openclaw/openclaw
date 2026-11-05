@@ -1,6 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { TranscriptDisplayPosition } from "../chat/transcript-display-position.js";
+import { isManualSessionResetBoundary } from "../config/sessions/reset-policy.js";
 import type { SessionTranscriptMessageEvent } from "../config/sessions/session-accessor.sqlite-projection-read.js";
 import { isVisibleTranscriptRecord } from "../sessions/transcript-visible-record.js";
 
@@ -83,6 +84,9 @@ export function projectTranscriptEntryMessage(
     return null;
   }
   const kind = record.type;
+  const resetBoundaryId = isManualSessionResetBoundary(record)
+    ? readNonBlankString(record.id)
+    : undefined;
   const compactionIdentity =
     kind === "compaction" ? asOptionalRecord(record["__openclaw"]) : undefined;
   return {
@@ -92,6 +96,7 @@ export function projectTranscriptEntryMessage(
     __openclaw: {
       kind,
       id: typeof record.id === "string" ? record.id : undefined,
+      ...(resetBoundaryId ? { boundaryId: resetBoundaryId } : {}),
       ...(typeof compactionIdentity?.runId === "string" ? { runId: compactionIdentity.runId } : {}),
       ...(typeof compactionIdentity?.itemId === "string"
         ? { itemId: compactionIdentity.itemId }

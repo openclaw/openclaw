@@ -59,7 +59,12 @@ and Telegram, Slack argument menus, and Mattermost model pickers are also retain
 Later turns and chat history can read these exchanges.
 Login, pairing, and sensitive `/config set` or `/debug set` values are redacted before storage.
 `/new` and `/reset` put their confirmation exchange in the new session; they do not
-rewrite the old session. `/btw` and `/side` stay ephemeral, and message edits or
+rewrite the old session. In the Control UI, the latest **Session reset** divider
+offers **Undo** when the preceding conversation is still available. Confirming
+restores the conversation to just before that reset. Messages sent after the
+reset remain available on another conversation branch; they are not deleted or
+silently combined with the restored conversation. Undo restores history; it does
+not reverse tool actions or file changes. `/btw` and `/side` stay ephemeral, and message edits or
 deletions do not rewrite earlier transcript rows.
 
 ## How messages are routed

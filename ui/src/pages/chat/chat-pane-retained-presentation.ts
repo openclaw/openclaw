@@ -498,21 +498,21 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     }, COMPOSER_PREFILL_ATTENTION_DURATION_MS);
   }
 
-  protected confirmConversationReset(): Promise<boolean> {
+  protected confirmConversationReset(undoReset = false): Promise<boolean> {
     const board = this.resolveBoardView();
     const scopeKey = boardProviderCacheKey(this.resolveBoardConversation());
     const pending = this.resetConfirmation.pending;
-    if (pending && pending.scopeKey !== scopeKey) {
+    if (pending && (pending.scopeKey !== scopeKey || Boolean(pending.undoReset) !== undoReset)) {
       this.settleResetConfirmation(false);
     }
-    if (!board.hasBoard) {
+    if (!board.hasBoard && !undoReset) {
       return Promise.resolve(true);
     }
     if (this.resetConfirmation.pending) {
       return this.resetConfirmation.pending.promise;
     }
     const { promise, resolve } = createDeferredCore<boolean>();
-    this.resetConfirmation.pending = { scopeKey, promise, resolve };
+    this.resetConfirmation.pending = { scopeKey, undoReset, promise, resolve };
     return promise;
   }
 
@@ -533,10 +533,18 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
   }
 
   protected renderResetConfirmation() {
-    if (!this.resetConfirmation.pending) {
+    const pending = this.resetConfirmation.pending;
+    if (!pending) {
       return null;
     }
-    return { onResolve: (confirmed: boolean) => this.settleResetConfirmation(confirmed) };
+    return {
+      undoReset: pending.undoReset,
+      onResolve: (confirmed: boolean) => {
+        if (this.resetConfirmation.pending === pending) {
+          this.settleResetConfirmation(confirmed);
+        }
+      },
+    };
   }
 
   protected override activeChanged(active: boolean): void {

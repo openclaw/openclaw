@@ -302,6 +302,38 @@ export async function rewindChatHistory(
   }
 }
 
+export async function undoChatReset(
+  state: ChatHistoryHost &
+    Parameters<typeof scheduleChatScroll>[0] & { sessions: Pick<SessionCapability, "undoReset"> },
+  boundaryId: string,
+): Promise<boolean> {
+  if (!state.client || !state.connected) {
+    return false;
+  }
+  const { sessionKey, agentParams, connectionIsCurrent, viewMatches, viewIsCurrent } =
+    captureChatHistoryView(state);
+  setChatError(state, null);
+  try {
+    await state.sessions.undoReset(sessionKey, boundaryId, agentParams);
+    if (!connectionIsCurrent()) {
+      return false;
+    }
+    clearCachedChatMessagesForSession(state, sessionKey, agentParams.agentId);
+    if (!viewMatches()) {
+      return true;
+    }
+    resetChatHistoryProjection(state, agentParams.agentId);
+    await loadChatHistory(state);
+    return true;
+  } catch (error) {
+    if (viewIsCurrent()) {
+      setChatError(state, formatUiError(error));
+      scheduleChatScroll(state);
+    }
+    return false;
+  }
+}
+
 export async function switchChatHistoryBranch(
   state: SwitchChatHistoryBranchState,
   leafEntryId: string,
