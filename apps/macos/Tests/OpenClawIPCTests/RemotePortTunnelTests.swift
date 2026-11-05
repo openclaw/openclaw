@@ -23,21 +23,31 @@ struct RemotePortTunnelTests {
         Darwin.close(sandbox.fd)
         let remotePort = Int(sandbox.port) - 1
 
-        let options = RemotePortTunnel.sshOptions(localPort: 28789, remotePort: remotePort, hostKeyPolicy: .strict)
+        let forward = RemotePortTunnel.availableSandboxForwardPort(
+            localPort: 28789, remotePort: remotePort, reservedLocalPorts: [])
+        let options = RemotePortTunnel.sshOptions(
+            localPort: 28789, remotePort: remotePort, hostKeyPolicy: .strict, sandboxForwardPort: forward)
 
+        #expect(forward == sandbox.port)
         #expect(options.contains("28789:127.0.0.1:\(remotePort)"))
         #expect(options.contains("\(sandbox.port):127.0.0.1:\(sandbox.port)"))
     }
 
-    @Test func `occupied local sandbox port keeps only the control forward`() throws {
+    @Test func `occupied local sandbox port is unavailable until it is released`() throws {
         let sandbox = try Self.bindLoopbackPort()
-        defer { Darwin.close(sandbox.fd) }
         let remotePort = Int(sandbox.port) - 1
 
-        let options = RemotePortTunnel.sshOptions(localPort: 28789, remotePort: remotePort, hostKeyPolicy: .strict)
+        let busy = RemotePortTunnel.availableSandboxForwardPort(
+            localPort: 28789, remotePort: remotePort, reservedLocalPorts: [])
+        Darwin.close(sandbox.fd)
+        let released = RemotePortTunnel.availableSandboxForwardPort(
+            localPort: 28789, remotePort: remotePort, reservedLocalPorts: [])
 
-        #expect(options.contains("28789:127.0.0.1:\(remotePort)"))
-        #expect(options.count(where: { $0 == "-L" }) == 1)
+        #expect(busy == nil)
+        #expect(released == sandbox.port)
+        #expect(RemotePortTunnel.sshOptions(
+            localPort: 28789, remotePort: remotePort, hostKeyPolicy: .strict, sandboxForwardPort: busy)
+            .count(where: { $0 == "-L" }) == 1)
     }
 
     @Test func `hosted local Gateway keeps its ports from the sandbox forward`() throws {
@@ -48,12 +58,9 @@ struct RemotePortTunnelTests {
         let reserved = RemotePortTunnel.reservedLocalPorts(
             root: [:], hostsLocalGateway: true, localGatewayPort: Int(sandbox.port))
 
-        let options = RemotePortTunnel.sshOptions(
-            localPort: UInt16(remotePort), remotePort: remotePort, hostKeyPolicy: .strict,
-            reservedLocalPorts: reserved)
-
         #expect(reserved == [Int(sandbox.port), Int(sandbox.port) + 1])
-        #expect(options.count(where: { $0 == "-L" }) == 1)
+        #expect(RemotePortTunnel.availableSandboxForwardPort(
+            localPort: UInt16(remotePort), remotePort: remotePort, reservedLocalPorts: reserved) == nil)
     }
 
     @MainActor

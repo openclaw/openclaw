@@ -21,6 +21,8 @@ final class RemotePortTunnel: @unchecked Sendable {
     }
 
     let localPort: UInt16
+    /// The widget sandbox forward this SSH process opened, or nil when its port was unavailable.
+    let sandboxForwardPort: UInt16?
     var isRunning: Bool {
         self.process.isRunning
     }
@@ -35,12 +37,14 @@ final class RemotePortTunnel: @unchecked Sendable {
         process: ManagedProcess,
         processIdentifier: pid_t,
         localPort: UInt16,
+        sandboxForwardPort: UInt16?,
         stderrReader: PipeReadStream,
         guardianReceipt: PortGuardian.Record)
     {
         self.process = process
         self.processIdentifier = processIdentifier
         self.localPort = localPort
+        self.sandboxForwardPort = sandboxForwardPort
         self.stderrReader = stderrReader
         self.guardianReceipt = guardianReceipt
     }
@@ -139,11 +143,20 @@ final class RemotePortTunnel: @unchecked Sendable {
         Self.logger.debug(
             "ssh tunnel route host=\(sshHost, privacy: .public) " +
                 "remotePort=\(configuration.remotePort, privacy: .public)")
+        let sandboxForwardPort = Self.availableSandboxForwardPort(
+            localPort: localPort,
+            remotePort: configuration.remotePort,
+            reservedLocalPorts: configuration.reservedLocalPorts)
+        if sandboxForwardPort == nil {
+            Self.logger.info(
+                "opening SSH tunnel without the widget sandbox forward; its port is in use or reserved " +
+                    "on this Mac, and the tunnel is replaced once it is free")
+        }
         let options = Self.sshOptions(
             localPort: localPort,
             remotePort: configuration.remotePort,
             hostKeyPolicy: configuration.hostKeyPolicy,
-            reservedLocalPorts: configuration.reservedLocalPorts)
+            sandboxForwardPort: sandboxForwardPort)
         let args = CommandResolver.sshArguments(
             target: configuration.target,
             identity: configuration.identity,
@@ -250,6 +263,7 @@ final class RemotePortTunnel: @unchecked Sendable {
             process: process,
             processIdentifier: processIdentifier,
             localPort: localPort,
+            sandboxForwardPort: sandboxForwardPort,
             stderrReader: stderrReader,
             guardianReceipt: receipt)
     }
@@ -316,7 +330,7 @@ final class RemotePortTunnel: @unchecked Sendable {
         localPort: UInt16,
         remotePort: Int,
         hostKeyPolicy: CommandResolver.SSHHostKeyPolicy,
-        reservedLocalPorts: Set<Int> = []) -> [String]
+        sandboxForwardPort: UInt16? = nil) -> [String]
     {
         var options = ["-o", "BatchMode=yes"] + hostKeyPolicy.commandOptions + [
             "-o", "ExitOnForwardFailure=yes",
@@ -327,12 +341,19 @@ final class RemotePortTunnel: @unchecked Sendable {
             "-N",
             "-L", "\(localPort):127.0.0.1:\(remotePort)",
         ]
-        if let sandboxPort = self.sandboxForwardPort(
-            localPort: localPort, remotePort: remotePort, reservedLocalPorts: reservedLocalPorts)
-        {
-            options += ["-L", "\(sandboxPort):127.0.0.1:\(sandboxPort)"]
+        if let sandboxForwardPort {
+            options += ["-L", "\(sandboxForwardPort):127.0.0.1:\(sandboxForwardPort)"]
         }
         return options
+    }
+
+    /// A tunnel opened while its sandbox port was busy or reserved stays usable for the Gateway but
+    /// leaves widgets unreachable. Once that port is available, the manager replaces the tunnel.
+    func canAddSandboxForward(configuration: Configuration) -> Bool {
+        self.sandboxForwardPort == nil && Self.availableSandboxForwardPort(
+            localPort: self.localPort,
+            remotePort: configuration.remotePort,
+            reservedLocalPorts: configuration.reservedLocalPorts) != nil
     }
 
     /// Widgets load from the remote Gateway's sandbox listener (Gateway port + 1 unless the
@@ -340,20 +361,16 @@ final class RemotePortTunnel: @unchecked Sendable {
     /// the advertised port, so it must be forwarded to the same local port number.
     /// ExitOnForwardFailure would drop the control forward too, so an occupied port is skipped; if
     /// another process binds it between this check and ssh, the manager's restart skips it next time.
-    private static func sandboxForwardPort(
+    static func availableSandboxForwardPort(
         localPort: UInt16,
         remotePort: Int,
         reservedLocalPorts: Set<Int>) -> UInt16?
     {
         guard (1..<65535).contains(remotePort) else { return nil }
         let sandboxPort = UInt16(remotePort + 1)
-        guard sandboxPort != localPort else { return nil }
-        guard !reservedLocalPorts.contains(Int(sandboxPort)), self.portIsFree(sandboxPort) else {
-            self.logger.error(
-                "widget sandbox port \(sandboxPort, privacy: .public) is in use on this Mac; " +
-                    "widgets from the remote Gateway will not load until the SSH tunnel restarts with it free")
-            return nil
-        }
+        guard sandboxPort != localPort, !reservedLocalPorts.contains(Int(sandboxPort)),
+              self.portIsFree(sandboxPort)
+        else { return nil }
         return sandboxPort
     }
 

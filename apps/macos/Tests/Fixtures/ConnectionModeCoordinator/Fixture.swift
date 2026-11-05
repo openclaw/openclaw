@@ -120,6 +120,7 @@ final class GatewayProcessManager {
     func setActive(_ active: Bool) {
         if active { lifecycleEvents.append("local-start") }
     }
+
     func ensureLaunchAgentEnabledIfNeeded() async -> Bool {
         true
     }

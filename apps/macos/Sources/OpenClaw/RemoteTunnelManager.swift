@@ -119,6 +119,15 @@ actor RemoteTunnelManager {
             if (try? RemotePortTunnel.configuration()) != configuration {
                 return .staleConfiguration
             }
+            if isListening, current.tunnel.canAddSandboxForward(configuration: configuration) {
+                // Whatever held the sandbox port at creation (a hosted Gateway shutting down, a stale
+                // tunnel) has let go; a fresh SSH process can forward it, so widgets load again.
+                self.logger.info("widget sandbox port is free; replacing SSH tunnel to forward it")
+                let replacementGeneration = self.beginRetirement()
+                self.lastRestartAt = Date()
+                await self.waitForRetirement()
+                return .retired(replacementGeneration)
+            }
             if isListening {
                 self.logger.info("reusing active SSH tunnel localPort=\(local, privacy: .public)")
                 return .route(current.route)
