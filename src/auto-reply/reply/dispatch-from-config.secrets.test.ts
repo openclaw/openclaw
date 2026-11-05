@@ -3,7 +3,6 @@ import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSubscribedSessionHarness } from "../../agents/embedded-agent-subscribe.e2e-harness.js";
 import * as questionDispatch from "../../agents/harness/gateway-question-dispatch.js";
-import { claimPendingAgentQuestionAnswer } from "../../agents/harness/gateway-question.js";
 import { createMissingReplyNotice } from "../../agents/reply-completion.js";
 import { validArgs } from "../../agents/tools/ask-user-tool.gateway.test-fixture.js";
 import { createAskUserTool } from "../../agents/tools/ask-user-tool.js";
