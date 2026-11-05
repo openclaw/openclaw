@@ -44,4 +44,24 @@ describe("sentinel guard cross-kind", () => {
     ).toThrow(`sentinel literal at oc://config/${operation === "set" ? "x" : "x2"}/tokens/0`);
     expect(ast.raw).toBe('{ "x": "ok" }');
   });
+
+  it.each(["set", "insert"] as const)("rejects sentinel in object key during %s", (operation) => {
+    const ast = parseJsonc('{ "x": "ok" }');
+    const value = {
+      kind: "object" as const,
+      entries: [
+        {
+          key: REDACTED_SENTINEL,
+          line: 0,
+          value: { kind: "string" as const, value: "v" },
+        },
+      ],
+    };
+    expect(() =>
+      operation === "set"
+        ? setJsoncOcPath(ast, parseOcPath("oc://config/x"), value)
+        : insertJsoncOcPath(ast, parseOcPath("oc://config"), "x2", value),
+    ).toThrow(OcEmitSentinelError);
+    expect(ast.raw).toBe('{ "x": "ok" }');
+  });
 });

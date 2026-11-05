@@ -40,9 +40,13 @@ function renderJsoncValue(
     const parts = value.items.map((v, i) => renderJsoncValue(v, guardPath, [...walked, String(i)]));
     return `[${parts.join(",")}]`;
   }
-  const parts = value.entries.map(
-    (e) => `${JSON.stringify(e.key)}:${renderJsoncValue(e.value, guardPath, [...walked, e.key])}`,
-  );
+  const parts = value.entries.map((e) => {
+    // Guard the key against sentinel leakage.
+    if (e.key.includes(REDACTED_SENTINEL)) {
+      throw new OcEmitSentinelError(`${guardPath}/${walked.join("/")}`);
+    }
+    return `${JSON.stringify(e.key)}:${renderJsoncValue(e.value, guardPath, [...walked, e.key])}`;
+  });
   return `{${parts.join(",")}}`;
 }
 

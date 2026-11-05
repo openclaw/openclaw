@@ -133,9 +133,9 @@ function jsoncValueToJson(value: JsoncValue, guardPath: string): unknown {
     return value.items.map((item, index) => jsoncValueToJson(item, `${guardPath}/${index}`));
   }
   return Object.fromEntries(
-    value.entries.map((entry) => [
-      entry.key,
-      jsoncValueToJson(entry.value, `${guardPath}/${entry.key}`),
-    ]),
+    value.entries.map((entry) => {
+      guardSentinel(entry.key, `${guardPath}/`);
+      return [entry.key, jsoncValueToJson(entry.value, `${guardPath}/${entry.key}`)];
+    }),
   );
 }
