@@ -1,23 +1,20 @@
 // Proves unsupported /a2a/v1 descendants get the plugin JSON 404 instead of the
-// root Control UI document. Lives under test/ so the core type graph does not
-// import the bundled plugin and the plugin tests do not import core internals.
+// root Control UI document. Gateway HTTP fixtures come from the plugin SDK so
+// this suite does not import core internals.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resetPluginRuntimeStateForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, expect, it, vi } from "vitest";
-import { a2aChannelPlugin } from "../extensions/a2a/api.js";
-import { createA2aGatewayFixture } from "../extensions/a2a/src/gateway.test-support.js";
 import {
   AUTH_NONE,
-  sendRequest,
-  withGatewayServer,
-} from "../src/gateway/server-http.test-harness.js";
-import {
   createGatewayPluginRequestHandler,
+  sendRequest,
   shouldEnforceGatewayAuthForPluginPath,
-} from "../src/gateway/server/plugins-http.js";
-import type { createSubsystemLogger } from "../src/logging/subsystem.js";
-import { withTempDir } from "../src/test-utils/temp-dir.js";
+  withGatewayServer,
+} from "openclaw/plugin-sdk/gateway-http-testing";
+import { resetPluginRuntimeStateForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { afterEach, expect, it, vi } from "vitest";
+import { a2aChannelPlugin } from "./channel.js";
+import { createA2aGatewayFixture } from "./gateway.test-support.js";
 
 const CONTROL_UI_DOCUMENT = "<!doctype html><html>spa fallback</html>\n";
 const JSON_NOT_FOUND = JSON.stringify({ error: "Not found" });
@@ -29,7 +26,6 @@ afterEach(() => {
 
 it("returns JSON 404 for unsupported /a2a/v1 descendants instead of the Control UI", async () => {
   const fixture = createA2aGatewayFixture();
-  const log = { warn: vi.fn() } as unknown as ReturnType<typeof createSubsystemLogger>;
 
   await withTempDir("openclaw-a2a-namespace-", async (directory) => {
     const root = await fs.realpath(directory);
@@ -43,7 +39,7 @@ it("returns JSON 404 for unsupported /a2a/v1 descendants instead of the Control 
         controlUiRoot: { kind: "resolved", path: root },
         handlePluginRequest: createGatewayPluginRequestHandler({
           registry: fixture.registry,
-          log,
+          log: { warn: vi.fn() } as never,
         }),
         shouldEnforcePluginGatewayAuth: (pathContext) =>
           shouldEnforceGatewayAuthForPluginPath(fixture.registry, pathContext),
