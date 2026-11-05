@@ -31,6 +31,15 @@ vi.mock(
   },
 );
 
+vi.mock("../gateway/worker-environments/placement-lifecycle.worker.js", async (importOriginal) => {
+  loaded.push("placement-lifecycle");
+  return importOriginal();
+});
+vi.mock("../gateway/worker-environments/placement-turn-claim-events.js", async (importOriginal) => {
+  loaded.push("placement-turn-runtime");
+  return importOriginal();
+});
+
 import { stateWorkerRegistry } from "./openclaw-state-worker-registry.js";
 
 it("loads only the requested domain and routes exact operation names after preparation", async () => {
@@ -101,6 +110,25 @@ it("prepares exact operations before their namespace fallback", async () => {
   expect(registry.prepare("session.write")).toBe(refused);
   expect(loadWrite).toHaveBeenCalledOnce();
   expect(registry.has({ type: "session.write", input: "entry" })).toBe(false);
+});
+
+it("prepares placement recovery and reads without loading dispatch or turn execution", async () => {
+  for (const type of [
+    "workerPlacements.clearLocalTurnClaims",
+    "workerPlacements.readIdentities",
+    "workerPlacements.read",
+    "workerPlacements.readWithMove",
+    "workerPlacements.readMove",
+    "workerPlacements.readReconcile",
+  ]) {
+    await stateWorkerRegistry.prepare(type);
+    expect(stateWorkerRegistry.has({ type, input: undefined })).toBe(true);
+  }
+  expect(loaded).not.toContain("placement-lifecycle");
+  expect(loaded).not.toContain("placement-turn-runtime");
+  await stateWorkerRegistry.prepare("workerPlacements.startDispatch");
+  expect(stateWorkerRegistry.has({ type: "workerPlacements.startDispatch" })).toBe(true);
+  expect(loaded.filter((name) => name === "placement-lifecycle")).toHaveLength(1);
 });
 
 it("prepares session delivery recovery without loading subagent completion", async () => {
