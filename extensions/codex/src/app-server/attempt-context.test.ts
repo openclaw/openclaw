@@ -86,7 +86,7 @@ describe("Codex app-server attempt context", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("returns a run context report without deferred Codex dynamic tool schemas", () => {
+  it("reports native AGENTS.md status without reading deferred Codex tool schemas", () => {
     let deferredSchemaReads = 0;
     const tools = [
       makeTool("message", {
@@ -169,60 +169,39 @@ describe("Codex app-server attempt context", () => {
         truncated: null,
       },
     ]);
-  });
 
-  it("reports Codex-recorded base instructions and confirms native AGENTS.md", () => {
-    const agentsMd = "# Workspace rules\n\nKeep it short.";
-    const reportParams: Parameters<typeof buildCodexSystemPromptReport>[0] = {
-      attempt: { sessionId: "session-1" } as EmbeddedRunAttemptParams,
-      sessionKey: "agent:main:session-1",
-      workspaceDir: "/workspace",
-      developerInstructions: "developer policy",
-      workspaceBootstrapContext: {
-        bootstrapFiles: [
-          {
-            name: "AGENTS.md",
-            path: "/workspace/AGENTS.md",
-            content: `${agentsMd}\n`,
-            missing: false,
-          },
-        ],
-        contextFiles: [],
-        promptContextFiles: [],
-      },
-      skillsPrompt: "",
-      tools: [],
-    };
-    const nativeText = `# Parent rules\n\n${agentsMd}\n`;
+    // Codex's recorded base instructions and AGENTS.md fragment count toward the prompt.
+    const nativeText = "# Parent rules\n\nnative instructions\n";
     const fragment = `# AGENTS.md instructions for /workspace\n\n<INSTRUCTIONS>\n${nativeText}\n</INSTRUCTIONS>`;
-
-    const report = buildCodexSystemPromptReport({
+    const native = buildCodexSystemPromptReport({
       ...reportParams,
       nativeModelContext: {
         baseInstructions: "base policy",
         agentsMd: { directory: "/workspace", text: nativeText },
       },
     });
-    expect(report.systemPrompt).toMatchObject({
-      chars: "developer policy".length + "base policy".length + fragment.length,
+    const ownChars = reportParams.developerInstructions.length + "base policy".length;
+    expect(native.systemPrompt).toMatchObject({
+      chars: ownChars + fragment.length,
       projectContextChars: fragment.length,
-      nonProjectContextChars: "developer policy".length + "base policy".length,
+      nonProjectContextChars: ownChars,
     });
-    expect(report.injectedWorkspaceFiles).toEqual([
+    const agentsChars = "native instructions".length;
+    expect(native.injectedWorkspaceFiles).toEqual([
       expect.objectContaining({
-        rawChars: agentsMd.length,
-        injectedChars: agentsMd.length,
+        rawChars: agentsChars,
+        injectedChars: agentsChars,
         truncated: false,
       }),
     ]);
-    expect(report.injectedWorkspaceFiles[0]).not.toHaveProperty("injectionStatus");
+    expect(native.injectedWorkspaceFiles[0]).not.toHaveProperty("injectionStatus");
 
     // Codex recorded no AGENTS.md: confirmed absent, not unknown.
     const absent = buildCodexSystemPromptReport({
       ...reportParams,
       nativeModelContext: { agentsMd: { directory: null, text: null } },
     });
-    expect(absent.systemPrompt.chars).toBe("developer policy".length);
+    expect(absent.systemPrompt.chars).toBe(reportParams.developerInstructions.length);
     expect(absent.injectedWorkspaceFiles[0]).toMatchObject({ injectedChars: 0, truncated: false });
 
     // Content Codex did not record (edited since, or truncated) stays unverified.

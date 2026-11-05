@@ -1,0 +1,3 @@
+# Codex base-instruction and native AGENTS.md reporting: rollout world-state parsing
+# (appends, compaction, rollback, abort), report accounting, and non-blocking settlement.
+258
