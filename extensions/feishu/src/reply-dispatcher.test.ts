@@ -454,7 +454,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       }
     }
   });
-
   it("budgets full metadata on every static card chunk", async () => {
     const account = resolveFeishuAccountMock();
     resolveFeishuAccountMock.mockReturnValue({
@@ -1075,6 +1074,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["fence info", ["```a", null, "```a`b\nc"], ["```a", "`b\nc"]],
     ["fence inner", ["~~~\n```\n    ~", null, "~~~\n```\n    ~~~"], ["~~~\n```\n    ~", "~~~\n~~"]],
     ["fence text", ["````\n```\n``", null, "````\n```\n````y"], ["````\n```\n``", "````\n``y"]],
+    ["fence crlf", ["```\n```\r\n", null, "```\n```\r\n```\nD"], ["```\n```\r\n", "```\nD"]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
