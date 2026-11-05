@@ -132,6 +132,8 @@ if (values.flow === "retention") {
           },
           {
             type: "message" as const,
+            id: `msg_${session}_${turn}`,
+            status: "completed" as const,
             role: "assistant" as const,
             content: [
               { type: "output_text" as const, text: text("answer", 1024), annotations: [] },
