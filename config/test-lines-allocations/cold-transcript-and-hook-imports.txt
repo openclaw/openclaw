@@ -1,0 +1,2 @@
+# Regression proof for private transcript dispatch and unconfigured hook discovery imports.
+50
