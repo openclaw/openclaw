@@ -662,6 +662,11 @@ coverage also blocks. No lane or soak waiver applies.
 Use the maintainer [publication recovery guide](../release-openclaw-maintainer/references/publication-recovery.md)
 for publication ordering and prepared/direct recovery.
 
+- Watch every publish parent with one `pnpm release:watch --run <parent>`
+  ([contract](../../../docs/reference/RELEASING.md#watch-publication)), not a
+  hand-rolled monitor. It reports parent and child environment gates, failed
+  runs and failed `continue-on-error` jobs, and it backs off on rate limits.
+
 - `pnpm release:stable <version>` ([orchestrated stable release](../release-openclaw-maintainer/references/regular-release.md#orchestrated-stable-release))
   dispatches the parent once, approves the parent's `npm-release` gate, prints
   child-approval commands only for older tooling without `npm-publish` and
