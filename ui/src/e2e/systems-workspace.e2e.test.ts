@@ -128,20 +128,48 @@ suite.define(() => {
           await page.goto(suite.server.baseUrl + "new");
           await waitForControlUiRoute(page, { routeId: "new-session" });
           const shifts = await page.evaluateHandle(() => {
+            type LayoutShift = PerformanceEntry & {
+              hadRecentInput: boolean;
+              value: number;
+              sources: Array<{
+                node: Node | null;
+                previousRect: DOMRectReadOnly;
+                currentRect: DOMRectReadOnly;
+              }>;
+            };
+            const rect = ({ x, y, width, height }: DOMRectReadOnly) => ({ x, y, width, height });
+            const snapshot = (shift: LayoutShift) => ({
+              startTime: shift.startTime,
+              value: shift.value,
+              route: location.pathname,
+              inventoryReady: Boolean(document.querySelector(".systems-volume-summary")),
+              backupsLoading: document
+                .querySelector(".systems-backups")
+                ?.textContent?.includes("Loading backups…"),
+              sources: shift.sources.slice(0, 5).map(({ node, previousRect, currentRect }) => ({
+                node:
+                  node instanceof Element
+                    ? `${node.localName}.${[...node.classList].join(".")}`
+                    : (node?.nodeName ?? null),
+                previousRect: rect(previousRect),
+                currentRect: rect(currentRect),
+              })),
+            });
             let cls = 0;
+            const entries: ReturnType<typeof snapshot>[] = [];
             const observer = new PerformanceObserver((list) => {
               for (const entry of list.getEntries()) {
-                const shift = entry as PerformanceEntry & {
-                  hadRecentInput: boolean;
-                  value: number;
-                };
+                const shift = entry as LayoutShift;
                 if (!shift.hadRecentInput) {
                   cls += shift.value;
+                  if (entries.length < 20) {
+                    entries.push(snapshot(shift));
+                  }
                 }
               }
             });
             observer.observe({ type: "layout-shift", buffered: false });
-            return { read: () => cls, stop: () => observer.disconnect() };
+            return { read: () => ({ cls, entries }), stop: () => observer.disconnect() };
           });
           const inventoryReads = await gateway.deferNext("environments.list");
           const backupReads = await gateway.deferNext("backup.status");
@@ -207,7 +235,8 @@ suite.define(() => {
                 requestAnimationFrame(() => requestAnimationFrame(resolve));
               }),
           );
-          expect(await shifts.evaluate((probe) => probe.read())).toBe(0);
+          const observed = await shifts.evaluate((probe) => probe.read());
+          expect(observed.cls, JSON.stringify(observed.entries)).toBe(0);
           await shifts.evaluate((probe) => probe.stop());
           await shifts.dispose();
           const more = page.locator(".systems-volume-summary button");
