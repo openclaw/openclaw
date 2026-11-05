@@ -95,21 +95,21 @@ export const MEMORY_SEARCH_TOOL_CONTRACT = {
   parameters: MemorySearchSchema,
   prepareArguments: (args: unknown) => {
     const params = asToolParamsRecord(args);
-    if (!Object.hasOwn(params, "min_score") && !Object.hasOwn(params, "max_results")) {
+    const aliases = [
+      ["min_score", "minScore"],
+      ["max_results", "maxResults"],
+      ["limit", "maxResults"],
+    ] as const;
+    if (!aliases.some(([alias]) => Object.hasOwn(params, alias))) {
       return args;
     }
     const normalized = { ...params };
-    // Explicit camelCase values win, including invalid values that validation must reject.
-    for (const [alias, key] of [
-      ["min_score", "minScore"],
-      ["max_results", "maxResults"],
-    ] as const) {
-      if (Object.hasOwn(normalized, alias)) {
-        if (!Object.hasOwn(normalized, key)) {
-          normalized[key] = normalized[alias];
-        }
-        delete normalized[alias];
+    // Precedence: maxResults > max_results > limit, even for invalid values validation must reject.
+    for (const [alias, key] of aliases) {
+      if (Object.hasOwn(normalized, alias) && !Object.hasOwn(normalized, key)) {
+        normalized[key] = normalized[alias];
       }
+      delete normalized[alias];
     }
     return normalized;
   },
