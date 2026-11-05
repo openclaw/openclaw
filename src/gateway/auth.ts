@@ -455,6 +455,11 @@ async function authorizeGatewayConnectCore(
   const allowTailscaleHeaderAuth = shouldAllowTailscaleHeaderAuth(authSurface);
   const explicitSharedSecretAuth = hasExplicitSharedSecretAuth(connectAuth);
 
+  // Explicit tunnel attribution uses its own peer admission, never ambient Serve auth.
+  if (ingressAttribution?.kind === "openclaw-id-tunnel") {
+    return await authorizeOpenClawIdTunnel(ingressAttribution.peerKey);
+  }
+
   if (
     authSurface === "http-control-ui-read" &&
     auth.allowTailscale &&
@@ -474,10 +479,6 @@ async function authorizeGatewayConnectCore(
     if (originResult) {
       return originResult;
     }
-  }
-
-  if (ingressAttribution?.kind === "openclaw-id-tunnel") {
-    return await authorizeOpenClawIdTunnel(ingressAttribution.peerKey);
   }
 
   if (auth.mode === "trusted-proxy") {

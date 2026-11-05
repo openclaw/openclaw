@@ -2,9 +2,8 @@ import { StringDecoder } from "node:string_decoder";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { errorBackoffMs } from "../cron/service/jobs-scheduling.js";
-import { CRON_HOST_EXECUTION_DISABLED_MESSAGE } from "../cron/service/state.js";
 import { CronStreamSourceRetirementError, cronStreamScheduleKey } from "../cron/stream-schedule.js";
-import type { CronJobState, CronStoredJob } from "../cron/types.js";
+import type { CronJobState } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduledJob, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
@@ -19,50 +18,28 @@ import {
   type CronStreamLossReason,
   type CronStreamOwnerState,
 } from "./cron-stream-output.js";
+import {
+  sourceIdentityFor,
+  stoppedSourceState,
+  scopeKey,
+  stopRequiresSourceRetirement,
+  boundedCounter,
+} from "./cron-stream-owner-state.js";
 import type { CronStreamOwnerParams, CronStreamStopReason } from "./cron-stream-owner-types.js";
+import {
+  CRON_STREAM_SOURCE_CHANGED,
+  prepareCronStreamSourceAuthority,
+} from "./cron-stream-source-authority.js";
 import { assertCronStreamExtinction, stopCronStreamRun } from "./cron-stream-stop.js";
 
-const SCOPE_PREFIX = "cron-stream";
 const STABLE_RUN_MS = 60_000;
 const MAX_CONSECUTIVE_FAILURES = 5;
-const COUNTER_MAX = 2_147_483_647;
 const STOP_SETTLE_TIMEOUT_MS = 10_000;
 const OWNER_STOP_TIMEOUT_MS = STOP_SETTLE_TIMEOUT_MS * 2;
-const DISABLED_STREAM_ERRORS: Partial<Record<CronStreamStopReason, string>> = {
-  "trust-disabled":
-    "stream sources are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true",
-  "cron-disabled": "cron is disabled",
-  "host-execution-disabled": CRON_HOST_EXECUTION_DISABLED_MESSAGE,
-};
 
 export type { CronStreamOwnerParams, CronStreamStopReason } from "./cron-stream-owner-types.js";
 
-export function isCronStreamJob(job: CronStoredJob): job is CronStreamJob {
-  return job.schedule.kind === "stream";
-}
-
-function sourceIdentityFor(job: CronStreamJob): string {
-  const identity = job.state.streamSourceIdentity?.trim();
-  if (!identity) {
-    throw new Error(`stream job ${job.id} is missing its source identity`);
-  }
-  return identity;
-}
-
-const scopeKey = (jobId: string): string => `${SCOPE_PREFIX}:${jobId}`;
-
-function stopRequiresSourceRetirement(reason: CronStreamStopReason): boolean {
-  return (
-    reason === "removed" ||
-    reason === "shutdown" ||
-    reason === "trust-disabled" ||
-    reason === "cron-disabled"
-  );
-}
-
-function boundedCounter(value: number | undefined, increment = 0): number {
-  return Math.min(COUNTER_MAX, Math.max(0, Math.floor(value ?? 0)) + increment);
-}
+export { isCronStreamJob } from "./cron-stream-owner-state.js";
 
 /** Owns one stream job's serialized process lifecycle and durable counters. */
 export class CronStreamJobOwner {
@@ -75,6 +52,7 @@ export class CronStreamJobOwner {
   private requestEpoch = 0;
   private runningRequestEpoch?: number;
   private cleanupHostScope?: () => Promise<void>;
+  private sourceAuthority?: Awaited<ReturnType<typeof prepareCronStreamSourceAuthority>>;
   private opTail: Promise<void> = Promise.resolve();
   private job: CronStreamJob;
   private scheduleKey: string;
@@ -94,7 +72,11 @@ export class CronStreamJobOwner {
     private readonly spawnBroker: ReturnType<typeof getSpawnBroker>,
   ) {
     this.job = job;
-    this.scheduleKey = cronStreamScheduleKey(job.schedule, job.streamSandbox);
+    this.scheduleKey = cronStreamScheduleKey(
+      job.schedule,
+      job.streamSandbox,
+      job.streamOperatorSource,
+    );
     this.sourceIdentity = sourceIdentityFor(job);
     this.scheduler = params.scheduler.scope();
     this.consecutiveFailures = job.state.streamConsecutiveFailures ?? 0;
@@ -159,7 +141,11 @@ export class CronStreamJobOwner {
     if (this.removalRequested) {
       return;
     }
-    const nextScheduleKey = cronStreamScheduleKey(job.schedule, job.streamSandbox);
+    const nextScheduleKey = cronStreamScheduleKey(
+      job.schedule,
+      job.streamSandbox,
+      job.streamOperatorSource,
+    );
     const nextSourceIdentity = sourceIdentityFor(job);
     // Reconciliation can retain a live run, but cannot revive one fenced by an earlier request.
     const retainRunningSource =
@@ -338,13 +324,34 @@ export class CronStreamJobOwner {
     if (this.scheduler.signal.aborted) {
       this.scheduler = this.params.scheduler.scope();
     }
+    this.sourceAuthority?.release();
     const outputSignal = this.output.startSource(this.scheduler);
     const requestEpoch = this.requestEpoch;
-    const isCurrent = () =>
+    const ownsProcess = () =>
       !outputSignal.aborted &&
       this.desiredRunning &&
       requestEpoch === this.requestEpoch &&
       !this.removalRequested;
+    const sourceAuthority = await prepareCronStreamSourceAuthority({
+      job: this.job,
+      scheduleKey: this.scheduleKey,
+      sourceIdentity: this.sourceIdentity,
+      resolveGatewayContext: this.params.resolveGatewayContext,
+      assertCurrent: () => {
+        if (!ownsProcess()) {
+          throw new Error("Stream source admission is no longer current.");
+        }
+      },
+      revoked: () => {
+        // The existing stop owner fences output, cancels the exact process and joins cleanup.
+        void this.stop("restart-exhausted", undefined, CRON_STREAM_SOURCE_CHANGED).catch(() => {});
+      },
+    });
+    this.sourceAuthority = sourceAuthority;
+    if (!sourceAuthority) {
+      return;
+    }
+    const isCurrent = () => ownsProcess() && sourceAuthority.isCurrent();
     const decoders = { stdout: new StringDecoder("utf8"), stderr: new StringDecoder("utf8") };
     const onOutput = (channel: "stdout" | "stderr", chunk: Buffer) =>
       this.output.enqueueChunk(channel, decoders[channel].write(chunk), outputSignal);
@@ -363,6 +370,7 @@ export class CronStreamJobOwner {
       streamRestartExhausted: undefined,
     });
     if (!ownsPersistedJob || !isCurrent()) {
+      sourceAuthority.release();
       this.state = "stopped";
       return;
     }
@@ -530,9 +538,11 @@ export class CronStreamJobOwner {
     job?: CronStreamJob,
     extinctionFailure?: Error,
   ): Promise<void> {
+    this.sourceAuthority?.release();
+    this.sourceAuthority = undefined;
     this.output.cancelMatching();
     if (job) {
-      const key = cronStreamScheduleKey(job.schedule, job.streamSandbox);
+      const key = cronStreamScheduleKey(job.schedule, job.streamSandbox, job.streamOperatorSource);
       const identity = sourceIdentityFor(job);
       if (
         !this.ownsSource(key, identity) ||
@@ -619,20 +629,7 @@ export class CronStreamJobOwner {
       throw toErrorObject(stopError, "stream source failed to stop");
     }
     this.state = "stopped";
-    const disabledError = DISABLED_STREAM_ERRORS[reason];
-    const stoppedState: Partial<CronJobState> = disabledError
-      ? { streamStatus: "disabled", streamError: disabledError }
-      : (reason === "restart-exhausted" || reason === "shutdown") && this.restartExhausted
-        ? {
-            streamStatus: "error",
-            streamError: this.restartFailure,
-            streamRestartExhausted: true,
-          }
-        : { streamStatus: "stopped", streamError: undefined };
-    await this.persistState({
-      ...stoppedState,
-      ...(!this.restartExhausted ? { streamRestartExhausted: undefined } : {}),
-    });
+    await this.persistState(stoppedSourceState(reason, this.restartExhausted, this.restartFailure));
     if (retirementError !== undefined) {
       throw toErrorObject(retirementError, "stream source retirement failed");
     }

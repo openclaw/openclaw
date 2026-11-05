@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { createOpenClawIdAuthority } from "./authority.js";
 import type { OpenClawIdAuthority } from "./authority.js";
 import {
   checkDeviceTokenPeer,
@@ -7,8 +9,16 @@ import {
 } from "./device-token-binding.js";
 import { linkedClaw, serviceFor } from "./openclaw-id.test-support.js";
 import { createOpenClawIdService } from "./service.js";
+import {
+  prepareOpenClawIdTunnelPrincipal,
+  isOpenClawIdTunnelPrincipalCurrent,
+  setOpenClawIdTunnelPrincipalLookup,
+  setOpenClawIdTunnelPrincipalResolver,
+} from "./tunnel-principal.js";
 
 afterEach(() => {
+  setOpenClawIdTunnelPrincipalLookup(undefined);
+  setOpenClawIdTunnelPrincipalResolver(undefined);
   setDeviceTokenBindingOwner(undefined);
   setDeviceTokenBindingsLoading(Promise.resolve());
 });
@@ -82,4 +92,114 @@ describe("saved device-token bindings at Gateway start", () => {
       expect.stringContaining("could not read device-token bindings"),
     );
   });
+});
+
+it("hydrates recovery authority locally before tunnel startup and keeps it through an unconfigured relay", async () => {
+  const claw = await linkedClaw();
+  const principal = (await claw.authority.resolvePeer(claw.w1))!;
+  const before = structuredClone((await claw.authority.load())?.authority);
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const service = createOpenClawIdService({
+    getConfig: () => ({ enabled: true }),
+    getStateDir: () => "/nonexistent/openclaw-id-test",
+    getGatewayServer: () => {
+      throw new Error("recovery must not start a tunnel");
+    },
+    log: { info: () => {}, warn: () => {} },
+    createAuthority: async () => {
+      entered.resolve();
+      await release.promise;
+      return claw.authority;
+    },
+  });
+  try {
+    const pending = prepareOpenClawIdTunnelPrincipal(principal);
+    await entered.promise;
+    expect(isOpenClawIdTunnelPrincipalCurrent(principal)).toBe(false);
+    release.resolve();
+    await pending;
+    await service.reconcileRuntimePolicy();
+    expect(service.status()).toMatchObject({ state: "unconfigured" });
+    expect(isOpenClawIdTunnelPrincipalCurrent(principal)).toBe(true);
+    expect((await claw.authority.load())?.authority).toEqual(before);
+  } finally {
+    release.resolve();
+    await service.stop();
+  }
+  await expect(prepareOpenClawIdTunnelPrincipal(principal)).rejects.toThrow();
+});
+
+it("makes concurrent source recovery join the same pending authority load", async () => {
+  const claw = await linkedClaw();
+  const principal = (await claw.authority.resolvePeer(claw.w1))!;
+  const owner = createOpenClawIdAuthority(claw.store);
+  const load = owner.load;
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  vi.spyOn(owner, "load").mockImplementation(async () => {
+    entered.resolve();
+    await release.promise;
+    return await load();
+  });
+  const service = createOpenClawIdService({
+    getConfig: () => ({ enabled: true }),
+    getStateDir: () => "/nonexistent/openclaw-id-test",
+    getGatewayServer: () => undefined,
+    log: { info: () => {}, warn: () => {} },
+    createAuthority: async () => owner,
+  });
+  const first = prepareOpenClawIdTunnelPrincipal(principal);
+  const pending = [first];
+  try {
+    await entered.promise;
+    const second = prepareOpenClawIdTunnelPrincipal(principal);
+    // Attach before advancing microtasks; both callers must wait, not reject an empty resident view.
+    pending.push(second);
+    const joined = Promise.all(pending);
+    void joined.catch(() => {});
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    release.resolve();
+    await joined;
+  } finally {
+    release.resolve();
+    await Promise.allSettled(pending);
+    await service.stop();
+  }
+});
+
+it("keeps a stopped Gateway from observing or publishing after a late cold load", async () => {
+  const claw = await linkedClaw();
+  await claw.authority.bindToken("browser-a", "operator", claw.w1);
+  const principal = (await claw.authority.resolvePeer(claw.w1))!;
+  const owner = createOpenClawIdAuthority(claw.store);
+  const observe = vi.spyOn(owner, "onPeopleChanged");
+  const expiry = vi.spyOn(owner, "nextOwnerExpiry");
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const service = createOpenClawIdService({
+    getConfig: () => ({ enabled: true }),
+    getStateDir: () => "/nonexistent/openclaw-id-test",
+    getGatewayServer: () => undefined,
+    log: { info: () => {}, warn: () => {} },
+    createAuthority: async () => {
+      entered.resolve();
+      await release.promise;
+      return owner;
+    },
+  });
+  // Recovery and the startup binding read both wait on the first cold authority load.
+  const late = [prepareOpenClawIdTunnelPrincipal(principal), service.loadTokenBindings()];
+  await entered.promise;
+  await service.stop();
+  release.resolve();
+  await Promise.allSettled(late);
+  await service.reconcileRuntimePolicy();
+  expect(observe).not.toHaveBeenCalled();
+  expect(expiry).not.toHaveBeenCalled();
+  expect(isOpenClawIdTunnelPrincipalCurrent(principal)).toBe(false);
+  expect(await ordinary("browser-a")).toEqual({ ok: true });
+  expect(service.status()).toEqual({ state: "off" });
 });

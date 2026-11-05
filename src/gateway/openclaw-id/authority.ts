@@ -250,17 +250,36 @@ export function createOpenClawIdAuthority(
     if (!state || !isAdmitted(state, peerKey, now)) {
       return undefined;
     }
-    const isOwner = Object.values(state.owner_devices).some(
-      (device) => isOwnerDeviceActive(device, now) && device.cert.body.peer_keys.includes(peerKey),
+    const owner = Object.entries(state.owner_devices).find(
+      ([, device]) =>
+        isOwnerDeviceActive(device, now) && device.cert.body.peer_keys.includes(peerKey),
     );
-    if (isOwner) {
-      return { kind: "owner", peerKey };
+    const source = { clawId: state.claw_id, rootPub: state.anchor.root_pub };
+    if (owner) {
+      return {
+        kind: "owner",
+        peerKey,
+        authority: {
+          ...source,
+          ownerDevice: owner[0],
+          listedSeq: owner[1].peer_listed_seq?.[owner[1].cert.body.peer_keys.indexOf(peerKey)] ?? 0,
+        },
+      };
     }
     const member = Object.entries(state.members).find(([, entry]) =>
       entry.peer_keys.includes(peerKey),
     );
     return member
-      ? { kind: "member", peerKey, accountId: member[0], role: member[1].role }
+      ? {
+          kind: "member",
+          peerKey,
+          accountId: member[0],
+          role: member[1].role,
+          authority: {
+            ...source,
+            listedSeq: member[1].listed_seq?.[member[1].peer_keys.indexOf(peerKey)] ?? 0,
+          },
+        }
       : undefined;
   };
 

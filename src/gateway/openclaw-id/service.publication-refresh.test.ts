@@ -54,7 +54,12 @@ beforeEach(() => {
     return new Response(JSON.stringify(body), { status: 200 });
   });
   authority = createOpenClawIdAuthority(memoryStore());
-  service = createOpenClawIdService({
+  service = startService();
+});
+
+// A Gateway restart creates a new service over the same stored claw.
+function startService(): OpenClawIdService {
+  return createOpenClawIdService({
     getConfig: () => ({
       enabled: true,
       loaderDomain: "claws.test",
@@ -66,7 +71,7 @@ beforeEach(() => {
     log: { info: vi.fn(), warn: vi.fn() },
     createAuthority: async () => authority,
   });
-});
+}
 
 afterEach(async () => {
   await service.stop();
@@ -148,6 +153,7 @@ describe("service publication refresh scheduling", () => {
     async (scenario) => {
       await commitLink();
       await service.stop();
+      service = startService();
       const committed = authority.current()!;
       await authority.recordDiscovery({
         owner_account_id: null,
@@ -237,6 +243,7 @@ describe("service publication refresh scheduling", () => {
   it("arms at startup and again after direct publication", async () => {
     await commitLink();
     await service.stop();
+    service = startService();
     await service.reconcileRuntimePolicy();
     await vi.waitFor(expectArmed);
     await vi.advanceTimersByTimeAsync(PUBLICATION_REFRESH_MS / 2);

@@ -2,4 +2,7 @@
 # tunnel API, OIDC sign-in and the Gateway auth boundary for relayed devices, including saved
 # token bindings refused on HTTP after a start with the switch off, and HTTP requests that lose
 # authority when their device is removed or its role changes. No existing tests replaced.
-3248
+# Includes canonical OCID HTTP/WS profile, live admission/run-role and ambient-origin regressions.
+# Includes peer-bound restart, native/sandbox streams, HTTP roles, real condition effects and script-source retention.
+# Includes native-command source, Gateway-stop lifetime, cross-operator control and standing-ceiling regressions.
+4951

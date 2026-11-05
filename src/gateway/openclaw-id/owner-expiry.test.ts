@@ -12,18 +12,33 @@ import {
   signStatement,
   type StatementSigner,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
-import { linkedClaw, nowSeconds, TEST_K_SRV, type LinkedClaw } from "./openclaw-id.test-support.js";
+import { createOpenClawIdAuthority } from "./authority.js";
+import {
+  linkedClaw,
+  nowSeconds,
+  serviceFor,
+  TEST_K_SRV,
+  type LinkedClaw,
+} from "./openclaw-id.test-support.js";
 import { createOpenClawIdService, type OpenClawIdEffects } from "./service.js";
+import {
+  isOpenClawIdTunnelPrincipalCurrent,
+  onOpenClawIdTunnelPrincipalsChanged,
+  prepareOpenClawIdTunnelPrincipal,
+} from "./tunnel-principal.js";
 
-const runtime = vi.hoisted(() => ({ push: vi.fn() }));
+const runtime = vi.hoisted(() => ({ push: vi.fn(), start: vi.fn() }));
 // mock-isolation: the native tunnel runtime and Discovery mailbox loop stay out of these service tests.
 vi.mock("./tunnel-runtime.js", () => ({
-  startTunnelRuntime: async (params: { settings: unknown }) => ({
-    settings: params.settings,
-    supervisor: { status: () => ({ state: "running", endpointKey: TEST_K_SRV }) },
-    pushMembership: runtime.push,
-    stop: async () => {},
-  }),
+  startTunnelRuntime: async (params: { settings: unknown }) => {
+    runtime.start();
+    return {
+      settings: params.settings,
+      supervisor: { status: () => ({ state: "running", endpointKey: TEST_K_SRV }) },
+      pushMembership: runtime.push,
+      stop: async () => {},
+    };
+  },
 }));
 
 const START = Date.UTC(2026, 9, 31, 12, 0, 0);
@@ -85,6 +100,7 @@ async function settle(check: () => boolean) {
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"], now: START });
   runtime.push.mockClear();
+  runtime.start.mockReset();
 });
 
 afterEach(() => {
@@ -97,7 +113,7 @@ describe("owner certificate expiry at the Gateway", () => {
     const d1 = { signer: claw.device };
     const d2 = await enroll(claw, d1, { expires_at: nowSeconds() + 60 });
     expect(await claw.authority.submit(d2.change, "tunnel")).toMatchObject({ ok: true });
-    expect(await claw.authority.resolvePeer(d2.peerKey)).toEqual({
+    expect(await claw.authority.resolvePeer(d2.peerKey)).toMatchObject({
       kind: "owner",
       peerKey: d2.peerKey,
     });
@@ -216,6 +232,98 @@ describe("owner certificate expiry at the Gateway", () => {
       expect(await claw.authority.resolvePeer(claw.w1)).toBeUndefined();
       expect(await claw.authority.resolvePeer(d2.peerKey)).toMatchObject({ kind: "owner" });
       expect(runtime.push).toHaveBeenLastCalledWith(2, [d2.peerKey]);
+    } finally {
+      await service.stop();
+    }
+  });
+
+  it.each(["unconfigured", "failed"] as const)(
+    "expires recovered owner and member sources once while remote access is %s",
+    async (remoteState) => {
+      const claw = await linkedClaw();
+      const memberKey = formatIrohEndpointKey(randomBytes(32));
+      const add = await claw.sign({
+        op: "add",
+        account_id: "member",
+        role: "operator",
+        peer_keys: [memberKey],
+        invite_id: null,
+      });
+      expect(await claw.authority.submit(add, "tunnel")).toMatchObject({ ok: true });
+      const ownerSource = (await claw.authority.resolvePeer(claw.w1))!;
+      const memberSource = (await claw.authority.resolvePeer(memberKey))!;
+      const { service, effects } = serviceFor(createOpenClawIdAuthority(claw.store), {
+        enabled: true,
+        ownerDeviceInactivityDays: 1,
+        memberDeviceInactivityDays: 2,
+        ...(remoteState === "failed" ? { relayUrl: "https://relay.example.test" } : {}),
+      });
+      runtime.start.mockImplementation(() => {
+        throw new Error("relay unavailable");
+      });
+      const peopleChanged = vi.fn();
+      const sourceChanged = vi.fn();
+      let stopSources = () => {};
+      const stopPeople = service.onPeopleChanged(peopleChanged);
+      try {
+        // Recovery hydrates local authority without recording a fresh tunnel admission.
+        await prepareOpenClawIdTunnelPrincipal(ownerSource);
+        await prepareOpenClawIdTunnelPrincipal(memberSource);
+        await service.reconcileRuntimePolicy();
+        expect(service.status()).toMatchObject({ state: remoteState });
+        expect(runtime.start).toHaveBeenCalledTimes(remoteState === "failed" ? 1 : 0);
+        expect(isOpenClawIdTunnelPrincipalCurrent(ownerSource)).toBe(true);
+        expect(isOpenClawIdTunnelPrincipalCurrent(memberSource)).toBe(true);
+        stopSources = onOpenClawIdTunnelPrincipalsChanged(sourceChanged);
+
+        // The protocol drops only after the whole inactivity window has elapsed.
+        await vi.advanceTimersByTimeAsync(86_400_000);
+        expect(effects.closeConnections).not.toHaveBeenCalled();
+        expect(isOpenClawIdTunnelPrincipalCurrent(ownerSource)).toBe(true);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await settle(() => vi.mocked(effects.closeConnections).mock.calls.length === 1);
+        expect(effects.captureConnections).toHaveBeenNthCalledWith(1, [claw.w1]);
+        expect(isOpenClawIdTunnelPrincipalCurrent(ownerSource)).toBe(false);
+        expect(isOpenClawIdTunnelPrincipalCurrent(memberSource)).toBe(true);
+        expect(peopleChanged).toHaveBeenCalledOnce();
+        expect(sourceChanged).toHaveBeenCalledOnce();
+
+        // Upkeep must rearm without a runtime for the member's later, distinct deadline.
+        await vi.advanceTimersByTimeAsync(86_400_000);
+        await settle(() => vi.mocked(effects.closeConnections).mock.calls.length === 2);
+        expect(effects.captureConnections).toHaveBeenNthCalledWith(2, [memberKey]);
+        expect(isOpenClawIdTunnelPrincipalCurrent(memberSource)).toBe(false);
+        expect(peopleChanged).toHaveBeenCalledTimes(2);
+        expect(sourceChanged).toHaveBeenCalledTimes(2);
+        expect(runtime.push).not.toHaveBeenCalled();
+      } finally {
+        stopPeople();
+        stopSources();
+        await service.stop();
+      }
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it.each(["disabled", "stopped"] as const)("ends local expiry upkeep when %s", async (ending) => {
+    const claw = await linkedClaw();
+    const source = (await claw.authority.resolvePeer(claw.w1))!;
+    const config = { enabled: true, ownerDeviceInactivityDays: 1 };
+    const { service, effects } = serviceFor(claw.authority, config);
+    try {
+      await prepareOpenClawIdTunnelPrincipal(source);
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      if (ending === "disabled") {
+        config.enabled = false;
+        await service.reconcileRuntimePolicy();
+      } else {
+        await service.stop();
+      }
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(86_401_000);
+      expect(effects.closeConnections).not.toHaveBeenCalled();
+      expect(claw.authority.currentPeer(claw.w1)).toEqual(source);
+      expect(isOpenClawIdTunnelPrincipalCurrent(source)).toBe(false);
     } finally {
       await service.stop();
     }
