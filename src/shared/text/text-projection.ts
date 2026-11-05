@@ -1,25 +1,24 @@
-import { expectDefined } from "@openclaw/normalization-core";
-import { scanFenceSpans } from "../../../packages/markdown-core/src/fences.js";
 import { escapeRegExp } from "../regexp.js";
 import {
-  canReuseMarkdownOwnership,
-  findCodeOwnership,
+  createCodeOwnershipResolver,
   findCodeRegions,
   findTextCheckpoint,
 } from "./code-regions.js";
+import {
+  collapseDuplicateParagraphs,
+  createDuplicateParagraphProjector,
+} from "./duplicate-paragraphs.js";
 import { stripLeadingEmptyLines } from "./strip-leading-empty-lines.js";
+import type {
+  TextProjection,
+  TextProjectionUpdate,
+  TextProjector,
+} from "./text-projection-types.js";
 import { trimTextPreservingCode } from "./trim-code-text.js";
 
 export { trimTextPreservingCode };
+export type { TextProjection, TextProjector } from "./text-projection-types.js";
 
-export type TextProjection = { text: string; delta: string | null };
-type TextProjectionUpdate = TextProjection & {
-  // Producer-owned unchanged prefix, ending in non-whitespace, and mutable tail.
-  retained?: { prefix: string; tail: string };
-};
-export type TextProjector = ((input: TextProjectionUpdate) => TextProjectionUpdate) & {
-  canReplaceFrom?: (start: number) => boolean;
-};
 // Token absence must prove identity; activated syntax stays with the canonical transform.
 type TextCheckpoint = {
   text: string;
@@ -100,45 +99,7 @@ function createCheckpointTransform(project: CheckpointTransform) {
   const definitions = new Set<string>();
   let previousVisible: string | undefined;
   let previousReset = false;
-  let ownershipSource = "";
-  let openBlock = false;
-  let ownership: ReturnType<typeof findCodeOwnership> | undefined;
-  const resolveOwnership = (text: string) => {
-    const last = ownership?.regions.at(-1);
-    // A new line can advance settlement even when code ranges stay unchanged.
-    if (
-      ownership &&
-      !text.includes("\n", ownershipSource.length) &&
-      !text.includes("\r", ownershipSource.length) &&
-      (!last?.block || last.end !== ownershipSource.length || openBlock) &&
-      canReuseMarkdownOwnership(ownershipSource, text, ownership)
-    ) {
-      if (openBlock && last) {
-        ownership = {
-          ...ownership,
-          regions: [...ownership.regions.slice(0, -1), { ...last, end: text.length }],
-        };
-      }
-      ownershipSource = text;
-      return ownership;
-    }
-    ownership = findCodeOwnership(text);
-    ownershipSource = text;
-    const tail = ownership.regions.at(-1);
-    const lineStart = tail
-      ? Math.max(text.lastIndexOf("\n", tail.start - 1), text.lastIndexOf("\r", tail.start - 1)) + 1
-      : 0;
-    const topLevel = tail && /^ {0,3}$/u.test(text.slice(lineStart, tail.start));
-    openBlock = Boolean(
-      tail?.block &&
-      tail.end === text.length &&
-      ((topLevel && scanFenceSpans(text.slice(tail.start)).state.open) ||
-        /^(?: {4}|\t)/u.test(
-          text.slice(Math.max(text.lastIndexOf("\n"), text.lastIndexOf("\r")) + 1),
-        )),
-    );
-    return ownership;
-  };
+  const resolveOwnership = createCodeOwnershipResolver();
   const projector = (
     source: string,
     inputDelta: string | null,
@@ -512,183 +473,6 @@ export const leadingEmptyLinesTextFilter: TextFilter = {
     };
   },
 };
-
-function collapsePlainDuplicateParagraphs(text: string): string {
-  return createDuplicateParagraphProjector(false)({ text, delta: null }).text;
-}
-
-function collapseDuplicateParagraphs(
-  text: string,
-  protectedRegions?: ReturnType<typeof findCodeRegions>,
-): string {
-  const collapsed = collapsePlainDuplicateParagraphs(text);
-  if (collapsed === text) {
-    return text;
-  }
-  const regions = protectedRegions ?? findCodeRegions(text);
-  if (regions.length === 0) {
-    return collapsed;
-  }
-  // The marker is absent from source, so each indexed token is collision-free.
-  let marker = "\0";
-  while (text.includes(marker)) {
-    marker += "\0";
-  }
-  const inlineTokens = new Map<string, string>();
-  let masked = "";
-  let cursor = 0;
-  const protectedText = regions.map((region, index) => {
-    const source = text.slice(region.start, region.end);
-    let token = `${marker}${index}${marker}`;
-    if (!region.block) {
-      token = inlineTokens.get(source) ?? token;
-      inlineTokens.set(source, token);
-    }
-    masked += text.slice(cursor, region.start) + token;
-    cursor = region.end;
-    return source;
-  });
-  // Only our indexed tokens contain the marker; a callback preserves literal dollar sequences.
-  return collapsePlainDuplicateParagraphs(masked + text.slice(cursor)).replace(
-    new RegExp(`${marker}(\\d+)${marker}`, "g"),
-    (_token, index: string) => expectDefined(protectedText[Number(index)], "protected code text"),
-  );
-}
-
-function createDuplicateParagraphProjector(protectCode = true): TextProjector {
-  let sourceTail = "";
-  let activationTail = "";
-  let separator: string | undefined;
-  let text = "";
-  let completed = "";
-  let lastNormalized: string | null = null;
-  let pendingEmpty = 0;
-  let paragraph = "";
-  let pending = "";
-  let normalizedLength = 0;
-  let equal = false;
-  let newlines = 0;
-  let hasDuplicate = false;
-  let wasCollapsed = false;
-  let wasDuplicate = false;
-  let codeProtectionRequired = false;
-  let codeProbeTail: string | undefined;
-  return (input) => {
-    let appended = input.delta ?? input.text;
-    if (!separator) {
-      const probe = activationTail + appended;
-      const boundary = /\r?\n\r?\n/.exec(probe);
-      // Retain a CRLF paragraph boundary split across appends.
-      activationTail = probe.slice(-3);
-      if (!boundary) {
-        text = input.text;
-        if (protectCode) {
-          sourceTail = (sourceTail + appended).slice(-2048);
-        }
-        return input;
-      }
-      separator = boundary[0];
-      appended = input.text;
-    }
-    let completedParagraph = false;
-    let added = "";
-    for (const part of appended.matchAll(/\n+|[^\n]+/g)) {
-      if (part[0].startsWith("\n")) {
-        if (newlines < 2 && newlines + part[0].length >= 2) {
-          // One append can leave and re-enter duplicate state across this boundary.
-          completedParagraph = true;
-          if (!paragraph) {
-            if (lastNormalized !== null) {
-              pendingEmpty++;
-            }
-          } else if (equal && normalizedLength === lastNormalized?.length) {
-            hasDuplicate = true;
-          } else {
-            completed += (completed ? separator : "") + paragraph;
-            lastNormalized = paragraph.replace(/\s+/g, " ");
-          }
-          paragraph = "";
-          pending = "";
-          normalizedLength = 0;
-          equal = Boolean(lastNormalized);
-        } else if (newlines + part[0].length < 2 && paragraph) {
-          pending += part[0];
-        }
-        newlines += part[0].length;
-        continue;
-      }
-      // A CR between LF tokens can begin a split CRLF boundary.
-      if (part[0] !== "\r") {
-        newlines = 0;
-      }
-      const raw = paragraph ? part[0] : part[0].trimStart();
-      const content = raw.trimEnd();
-      if (!content) {
-        pending += raw;
-        continue;
-      }
-      const piece = pending + content;
-      pending = raw.slice(content.length);
-      if (!paragraph) {
-        const empty = separator.repeat(pendingEmpty);
-        if (pendingEmpty) {
-          completed += empty;
-          pendingEmpty = 0;
-          lastNormalized = "";
-          equal = false;
-        }
-        added += completed ? empty + separator : "";
-      }
-      paragraph += piece;
-      added += piece;
-      if (equal) {
-        const normalized = piece.replace(/\s+/g, " ");
-        equal = lastNormalized?.startsWith(normalized, normalizedLength) === true;
-        normalizedLength += normalized.length;
-      }
-    }
-    const duplicate = Boolean(paragraph) && equal && normalizedLength === lastNormalized?.length;
-    const collapsed = hasDuplicate || duplicate;
-    if (protectCode && !codeProtectionRequired && (collapsed || codeProbeTail !== undefined)) {
-      // An empty Markdown prefix has no code; retain split four-space indentation.
-      // Once syntax is ambiguous, the canonical transform keeps ownership of it.
-      const probe = codeProbeTail === undefined ? input.text : codeProbeTail + appended;
-      codeProtectionRequired = !canReuseMarkdownOwnership("", probe);
-      codeProbeTail = probe.slice(-3);
-    }
-    let delta = input.delta;
-    if (collapsed) {
-      // Code can expose pending whitespace; the plain suffix cannot safely append across it.
-      delta =
-        input.delta === null ||
-        !wasCollapsed ||
-        duplicate !== wasDuplicate ||
-        completedParagraph ||
-        (protectCode &&
-          (/\s$/.test(text) || !canReuseMarkdownOwnership(sourceTail, sourceTail + appended)))
-          ? null
-          : added;
-      text =
-        delta === null
-          ? codeProtectionRequired
-            ? collapseDuplicateParagraphs(input.text)
-            : completed + (paragraph && !duplicate ? (completed ? separator : "") + paragraph : "")
-          : text + delta;
-    } else {
-      text = input.text;
-      // A provisional duplicate can diverge, restoring every original separator, not just its own.
-      if (wasCollapsed) {
-        delta = null;
-      }
-    }
-    wasCollapsed = collapsed;
-    wasDuplicate = duplicate;
-    if (protectCode) {
-      sourceTail = (sourceTail + (input.delta ?? input.text)).slice(-2048);
-    }
-    return { text, delta };
-  };
-}
 
 export const duplicateParagraphTextFilter: TextFilter = {
   transform: collapseDuplicateParagraphs,

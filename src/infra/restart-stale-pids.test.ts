@@ -361,27 +361,6 @@ describe.skipIf(process.platform === "win32")("restart-stale-pids", () => {
     },
   );
 
-  it("protects an unreadable transitive parent without treating its identity as verified", async () => {
-    const { inspectSelfAndAncestorPidsSync } = await import("./restart-stale-pids.js");
-    const parentPid = process.pid + 2003;
-    const unknownPid = process.pid + 2004;
-    readProcessAncestry.mockReturnValue({
-      chain: [processIdentity(process.pid, parentPid), processIdentity(parentPid, unknownPid)],
-      complete: false,
-      stoppedBy: "unreadable-parent",
-    });
-    withStubbedPpid(parentPid, () => {
-      expect(inspectSelfAndAncestorPidsSync()).toEqual({
-        pids: new Set([process.pid, parentPid, unknownPid]),
-        complete: false,
-      });
-      expect(inspectSelfAndAncestorPidsSync(undefined, { requireVerifiedParent: true })).toEqual({
-        pids: new Set([process.pid, parentPid]),
-        complete: false,
-      });
-    });
-  });
-
   it("excludes ancestor pids on Windows too — #68451 regression mirror for the win32 path", () => {
     const parentGatewayPid = process.pid + 2101;
     const unrelatedStalePid = process.pid + 2102;

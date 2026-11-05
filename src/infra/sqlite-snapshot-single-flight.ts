@@ -5,10 +5,8 @@ import {
   type RetainedOperation,
 } from "@openclaw/worker-runtime/lifecycle";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import {
-  retainSnapshotWork,
-  SqliteSnapshotCleanupError,
-} from "./sqlite-readonly-location-cleanup.js";
+import { SqliteSnapshotCleanupError } from "./sqlite-lifecycle-errors.js";
+import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import type {
   PreparedSqliteReadOnlyLocation,
   RetainedPreparedSqliteReadOnlyLocation,

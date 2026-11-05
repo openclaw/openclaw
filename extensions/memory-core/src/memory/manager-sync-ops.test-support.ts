@@ -40,6 +40,10 @@ export abstract class MemorySyncTestHarness extends MemoryManagerSyncOps {
     }
   }
 
+  protected async syncPublishedIndexInBackground(params: { reason: string }): Promise<void> {
+    await this.sync(params);
+  }
+
   protected async retireCurrentProvider(): Promise<void> {
     throw new Error("Source sync harness does not own embedding providers");
   }

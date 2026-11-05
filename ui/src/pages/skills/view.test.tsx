@@ -220,7 +220,9 @@ describe("renderSkills", () => {
     ]);
     const onDetailOpen = vi.fn();
     render({ report, onDetailOpen });
-    await Promise.resolve();
+    await waitForFast(() =>
+      expect(container.querySelector('.skills-group[aria-busy="true"]')).toBeNull(),
+    );
     const groups = [...container.querySelectorAll<HTMLDetailsElement>("details.skills-group")];
     expect(groups).toHaveLength(3);
     expect(groups.every((group) => group.open)).toBe(true);
@@ -377,7 +379,9 @@ describe("renderSkills", () => {
     const report: SkillStatusReport = skillReport([passwordSkill, appleNotesSkill]);
 
     render({ report, statusFilter: "disabled", filter: "Cafe\u0301" });
-    await Promise.resolve();
+    await waitForFast(() =>
+      expect(container.querySelector('.skills-group[aria-busy="true"]')).toBeNull(),
+    );
 
     expect(container.querySelectorAll(".plugins-item [role=img]")).toHaveLength(2);
 

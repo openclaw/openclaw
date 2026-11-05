@@ -39,7 +39,7 @@ import {
 } from "../node-host/node-worker-process-identity.js";
 import { createNodeWorkerSupervisor } from "../node-host/node-worker-supervisor.js";
 import { NodeWorkerTurnStore } from "../node-host/node-worker-turn-store.js";
-import { createCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
+import { prepareCompiledSdkHost } from "../plugins/compiled-sdk-host.test-support.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import type { NodeWorkerLaunchInput } from "./node-supervisor-protocol.js";
@@ -100,15 +100,11 @@ export function registerWorkerBackgroundExecLifecycleTests({
           'setInterval(() => fs.appendFileSync("heartbeat.txt", "tick\\n"), 25);',
         ].join("\n"),
       );
-      const sdkHost = createCompiledSdkHost(
-        sdkEntrypoints,
-        (prefix) => {
-          const directory = path.join(workspaceDir, prefix);
-          mkdirSync(directory);
-          return directory;
-        },
-        { mode: "link" },
-      );
+      const sdkHost = prepareCompiledSdkHost(sdkEntrypoints, { mode: "link" })((prefix) => {
+        const directory = path.join(workspaceDir, prefix);
+        mkdirSync(directory);
+        return directory;
+      });
       if (sdkHost) {
         expect(realpathSync(path.join(sdkHost, "dist"))).toBe(
           realpathSync(path.dirname(path.dirname(fileURLToPath(workerProcessUrl)))),

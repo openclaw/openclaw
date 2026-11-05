@@ -86,6 +86,9 @@ const MAX_URL_LENGTH = 1024;
 const EXACT_TARGET_EVIDENCE_REUSE_POLICY = "exact-target-full-validation-v1";
 const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
 export const SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY = "split-changelog-release-v1";
+// GitHub can leave runnerless same-name copies after any rerun request; they never settle.
+export const GHOST_JOBS_ADVICE =
+  "GitHub ghost jobs detected; stop rerunning, cancel that attempt, and start a fresh all-group FRV";
 
 export function assertReleasePublicationKnownBudget(plan, context, reusedManifest) {
   serializeReleaseArtifact(plan);
@@ -654,7 +657,7 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
       if (identityNames.has(name)) {
         throw Object.assign(
           new Error(
-            `release child attempt ${expectedAttempt} is unsealable due to duplicate job identity: ${name || "(unnamed)"}`,
+            `release child attempt ${expectedAttempt} is unsealable due to duplicate job identity: ${name || "(unnamed)"}; ${GHOST_JOBS_ADVICE}`,
           ),
           { code: "FRV_DUPLICATE_JOB_IDENTITY", runAttempt: expectedAttempt },
         );
