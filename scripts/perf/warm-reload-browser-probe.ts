@@ -35,8 +35,12 @@ export function summarizeDetailsGeometry(
         const movement = Math.abs(to.top - from.top);
         topMovementPx += movement;
         sectionTopMovementPx[id] = (sectionTopMovementPx[id] ?? 0) + movement;
-        if (id === "outputs") outputsTopMovementPx += movement;
-        if (id === "automations") automationsTopMovementPx += movement;
+        if (id === "outputs") {
+          outputsTopMovementPx += movement;
+        }
+        if (id === "automations") {
+          automationsTopMovementPx += movement;
+        }
       } else if (to) {
         sectionInsertions++;
       } else {

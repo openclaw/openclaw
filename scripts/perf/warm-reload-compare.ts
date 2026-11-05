@@ -286,9 +286,8 @@ export async function createWarmReloadComparison(results: ComparisonResult[], di
     }
     const pairs: ComparisonPair[] = [];
     const cachedEnvironmentHeights = [base[0]!, candidate[0]!].map(
-      (result) =>
-        result.runs.find((run) => !run.warm)?.probe.detailsGeometry?.lastEnvironmentHeightPx ??
-        null,
+      (entry) =>
+        entry.runs.find((run) => !run.warm)?.probe.detailsGeometry?.lastEnvironmentHeightPx ?? null,
     );
     for (let index = 0; index < warm[0]!.length; index++) {
       const first = warm[0]![index]!;
