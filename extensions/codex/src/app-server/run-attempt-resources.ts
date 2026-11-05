@@ -6,7 +6,10 @@ import {
   closeCodexStartupClientBestEffort,
   unsubscribeCodexThreadBestEffort,
 } from "./attempt-client-cleanup.js";
-import { resolveCodexStartupTimeoutMs } from "./attempt-timeouts.js";
+import {
+  CODEX_ONE_SHOT_CLIENT_CLOSE_OPTIONS as oneShotShutdown,
+  resolveCodexStartupTimeoutMs,
+} from "./attempt-timeouts.js";
 import {
   isCodexAppServerLiveThreadProtected,
   protectCodexAppServerLiveThread,
@@ -172,13 +175,12 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     }
     state.sharedCodexClientRetiredForOneShotCleanup = true;
     const client = state.client;
-    const retired = clearSharedCodexAppServerClientIfCurrentAndUnclaimed(client);
+    // The first close starts the memoized transport shutdown; joining it cannot extend grace.
+    const retired = clearSharedCodexAppServerClientIfCurrentAndUnclaimed(client, oneShotShutdown);
     // Retained peers prevent retirement; preserve their client without treating
     // missing close evidence as a completed one-shot cleanup.
     const result =
-      client && retired.closed
-        ? await client.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 })
-        : undefined;
+      client && retired.closed ? await client.closeAndWait(oneShotShutdown) : undefined;
     if (!result || result.cleanup === "uncertain") {
       throw new Error("Codex one-shot client cleanup could not be confirmed");
     }
@@ -197,10 +199,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       const ownedClient = state.releaseSharedClientLease ? state.client : undefined;
       releaseSharedClientLeaseOnce();
       if (ownedClient) {
-        const result = await ownedClient.closeAndWait({
-          exitTimeoutMs: 2_000,
-          forceKillDelayMs: 250,
-        });
+        const result = await ownedClient.closeAndWait(oneShotShutdown);
         if (params.oneShotCliRun && result.cleanup === "uncertain") {
           throw new Error("Codex isolated client cleanup could not be confirmed");
         }

@@ -26,7 +26,11 @@ import {
   resolveOpenClawStateLeaseOperationError,
   OpenClawStateLeaseError,
 } from "./openclaw-state-lease-error.js";
-import { leaseHeartbeatState } from "./openclaw-state-lease-heartbeat-shared.js";
+import {
+  createLeaseHeartbeatState,
+  readLeaseHeartbeatExpiry,
+  leaseHeartbeatState,
+} from "./openclaw-state-lease-heartbeat-shared.js";
 import {
   startOpenClawStateLeaseHeartbeat,
   type startOpenClawStateLeaseTimer,
@@ -126,14 +130,7 @@ async function runStateLeaseOwnerInScope<T>(
   let startingHeartbeat: ReturnType<typeof startOpenClawStateLeaseHeartbeat> | undefined;
   let timerHeartbeat: ReturnType<typeof startOpenClawStateLeaseTimer> | undefined;
   let asyncOwnership: { verify(): Promise<number>; renew(): Promise<number> } | undefined;
-  const expiryObservation =
-    invocation.kind === "worker"
-      ? new BigInt64Array(
-          new SharedArrayBuffer(
-            (leaseHeartbeatState.ownerFence + 1) * BigInt64Array.BYTES_PER_ELEMENT,
-          ),
-        )
-      : undefined;
+  let expiryObservation = invocation.kind === "worker" ? createLeaseHeartbeatState() : undefined;
   const workerStorage =
     invocation.kind === "worker"
       ? createOpenClawStateLeaseWorkerStorage(invocation.context, validated.processBound)
@@ -165,9 +162,7 @@ async function runStateLeaseOwnerInScope<T>(
     }
   };
   const assertActive = () => {
-    if (leaseLost.signal.aborted) {
-      throw leaseLost.signal.reason;
-    }
+    leaseLost.signal.throwIfAborted();
     if (validated.signal?.aborted) {
       throw abortError(validated.signal, "operation", validated.leaseLabel);
     }
@@ -175,6 +170,7 @@ async function runStateLeaseOwnerInScope<T>(
       closed ||
       timerHeartbeat?.isExpired() ||
       (phase === "owned" &&
+        invocation.kind === "worker" &&
         expiryObservation !== undefined &&
         Number(Atomics.load(expiryObservation, leaseHeartbeatState.expiresAt)) <= Date.now())
     ) {
@@ -261,6 +257,8 @@ async function runStateLeaseOwnerInScope<T>(
     context: invocation.kind === "worker" ? invocation.context : undefined,
     nativeIdentity: () => nativeLeaseSource?.identity,
     workerOwner: () => workerOperations,
+    // finish joins renewal settlement before a contended release schedules a retry.
+    retryDeadline: () => readLeaseHeartbeatExpiry(expiryObservation, confirmedExpiresAt),
     revoke() {
       closed = true;
       abortLost(new Error("State lease resource owner is closing"));
@@ -512,6 +510,7 @@ async function runStateLeaseOwnerInScope<T>(
               heartbeatStopped = false;
             },
           });
+          expiryObservation ??= started.expiryObservation;
           startingHeartbeat = started;
           if (validated.signal?.aborted || leaseLost.signal.aborted) {
             stopWorker();

@@ -3,6 +3,14 @@ import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import { codexPrewriteRejectionCause } from "./rpc-error.js";
 
+export const CODEX_ONE_SHOT_CLIENT_CLOSE_OPTIONS = {
+  exitTimeoutMs: 6_000,
+  // A clean Codex shutdown can spend several seconds flushing its state database
+  // after stdin closes under release-path load. Preserve a bounded grace period
+  // so that work is not converted into a forced, uncertain cleanup receipt.
+  forceKillDelayMs: 5_000,
+} as const;
+
 const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
 // Startup issues several sequential app-server requests across up to three
 // attempts and may wait for a retired owner's exit. Observed startups take

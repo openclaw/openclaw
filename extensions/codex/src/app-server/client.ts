@@ -512,8 +512,8 @@ export class CodexAppServerClient {
     return () => this.child.off?.("exit", onExit);
   }
 
-  close(): void {
-    this.closeWithError(new Error("codex app-server client is closed"));
+  close(options?: { forceKillDelayMs?: number }): void {
+    this.closeWithError(new Error("codex app-server client is closed"), options);
   }
 
   async closeAndWait(options?: {
@@ -656,9 +656,10 @@ export class CodexAppServerClient {
     this.notificationDispatch.dispatch(notification);
   }
 
-  private closeWithError(error: Error): void {
+  private closeWithError(error: Error, options?: { forceKillDelayMs?: number }): void {
     if (this.markClosed(error)) {
       closeCodexAppServerTransport(this.child, {
+        ...options,
         drainStdio: !this.initialized && this.child.startupFailure !== undefined,
         gracefulExit: Boolean(this.child.pid) && !this.nativeExecutionObserved,
       });
