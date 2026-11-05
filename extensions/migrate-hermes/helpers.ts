@@ -51,10 +51,25 @@ export async function readText(filePath: string | undefined): Promise<string | u
     : undefined;
 }
 
+// Config and credentials must retain their exact text when imported.
+export async function readUtf8Text(filePath: string | undefined): Promise<string | undefined> {
+  if (!filePath) {
+    return undefined;
+  }
+  const resolvedPath = await fs.realpath(filePath);
+  const { buffer: content } = await readRegularFile({ filePath: resolvedPath });
+  if (!isUtf8(content)) {
+    throw new Error(
+      `Source file is not valid UTF-8: ${filePath}. Re-encode it as UTF-8 and retry migration.`,
+    );
+  }
+  return content.toString("utf8");
+}
+
 export async function readJsonObject(
   filePath: string | undefined,
 ): Promise<Record<string, unknown>> {
-  const raw = await readText(filePath);
+  const raw = await readUtf8Text(filePath);
   try {
     return raw ? asNonArrayRecord(JSON.parse(raw)) : {};
   } catch {
