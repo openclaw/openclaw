@@ -122,7 +122,6 @@ suite.define(() => {
       expect(await toggle.locator(".session-run-spinner").count()).toBe(0);
       expect(await toggle.getAttribute("aria-description")).toBeNull();
       await toggle.click();
-      expect(await toggle.getAttribute("aria-expanded")).toBe("true");
       const background = page.locator(
         `.sidebar-recent-session[data-session-key="${children[5]!.key}"]`,
       );

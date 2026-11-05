@@ -263,7 +263,6 @@ type EnglishCatalog = TranslationMap & {
   sessionsView: TranslationMap &
     Record<
       | "pullRequestCount"
-      | "mainSession"
       | "subagentPrefix"
       | "automationPrefix"
       | "actionRequiresConnection"
@@ -716,7 +715,6 @@ const startupEnglish = {
   },
   sessionsView: {
     pullRequestCount: "{count} pull requests",
-    mainSession: "Main session",
     subagentPrefix: "Subagent:",
     automationPrefix: "Automation:",
     actionRequiresConnection: "Connect to the Gateway to change sessions.",

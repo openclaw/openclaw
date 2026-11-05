@@ -667,6 +667,7 @@
   "ui/src/dev-gateway.ts",
   "ui/src/i18n/lib/locale-catalog.ts",
   "ui/src/i18n/lib/merge-catalog.ts",
+  "ui/src/i18n/lib/registry.ts",
   "ui/src/i18n/lib/translate.ts",
   "ui/src/i18n/locales/en-agents.ts",
   "ui/src/i18n/locales/en-chat-commands.ts",

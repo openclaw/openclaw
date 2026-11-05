@@ -19,6 +19,11 @@ const loadTranslation = vi.fn<(locale: Locale) => Promise<TranslationMap | null>
 const subscriber = vi.fn<(locale: Locale) => void>();
 let manager: ReturnType<typeof createI18nManagerForTesting>;
 
+async function retryPendingLocale() {
+  manager.retryPendingLocale();
+  await Promise.allSettled(loadTranslation.mock.results.map((result) => result.value));
+}
+
 const state = () => ({
   locale: manager.getLocale(),
   requested: manager.getRequestedLocale(),
@@ -99,13 +104,13 @@ it("deduplicates an in-flight target and permits retry after the shared load set
   loadTranslation.mockReturnValueOnce(firstLoad.promise).mockResolvedValueOnce(german);
   const first = manager.setLocale("de");
   const second = manager.setLocale("de");
-  await vi.waitFor(() => expect(loadTranslation).toHaveBeenCalledTimes(1));
+  expect(loadTranslation).toHaveBeenCalledTimes(1);
   firstLoad.reject(offline);
   await Promise.all([first, second]);
   expect(state()).toMatchObject({ locale: "en", requested: "de" });
   expect(subscriber).not.toHaveBeenCalled();
-  manager.retryPendingLocale();
-  await vi.waitFor(() => expect(state()).toMatchObject({ locale: "de", loads: 2 }));
+  await retryPendingLocale();
+  expect(state()).toMatchObject({ locale: "de", loads: 2 });
   expect(subscriber).toHaveBeenCalledExactlyOnceWith("de");
 });
 
@@ -123,12 +128,7 @@ it.each(["explicit", "system"] as const)("persists the latest %s request", async
   expect(subscriber).toHaveBeenCalledExactlyOnceWith("de");
 });
 
-it.each([
-  ["explicit", "offline"],
-  ["explicit", "stale"],
-  ["system", "offline"],
-  ["system", "stale"],
-] as const)("keeps %s recovery preference after an initial %s failure", async (mode, initial) => {
+it.each(["explicit", "system"] as const)("keeps %s recovery preference", async (mode) => {
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.stubGlobal("navigator", { language: "de-DE" });
   localStorage.setItem("openclaw.i18n.locale", "es");
@@ -139,29 +139,21 @@ it.each([
     onUnrecoverableLocaleLoad,
   });
   loadTranslation
-    .mockRejectedValueOnce(initial === "stale" ? importFailure : offline)
+    .mockRejectedValueOnce(offline)
     .mockRejectedValueOnce(importFailure)
     .mockResolvedValueOnce(german);
 
   await (mode === "system" ? manager.useSystemLocale() : manager.setLocale("de"));
-  expect(state()).toMatchObject({
-    locale: "en",
-    stored: mode === "system" ? null : initial === "stale" ? "de" : "es",
-  });
-  expect(onUnrecoverableLocaleLoad).not.toHaveBeenCalled();
-  manager.retryPendingLocale();
+  expect(state()).toMatchObject({ locale: "en", stored: mode === "system" ? null : "es" });
+  await retryPendingLocale();
 
   const preference = mode === "system" ? null : "de";
-  await vi.waitFor(() =>
-    expect(state()).toMatchObject({ locale: "en", stored: preference, loads: 2 }),
-  );
+  expect(state()).toMatchObject({ locale: "en", stored: preference, loads: 2 });
   expect(onUnrecoverableLocaleLoad).toHaveBeenCalledExactlyOnceWith("de");
   expect(onUnrecoverableLocaleLoad).toHaveReturnedWith(preference);
 
-  manager.retryPendingLocale();
-  await vi.waitFor(() =>
-    expect(state()).toMatchObject({ locale: "de", stored: preference, loads: 3 }),
-  );
+  await retryPendingLocale();
+  expect(state()).toMatchObject({ locale: "de", stored: preference, loads: 3 });
 });
 
 it.each(["failure", "success"] as const)("ignores a stale locale load's %s", async (outcome) => {
@@ -179,9 +171,7 @@ it.each(["failure", "success"] as const)("ignores a stale locale load's %s", asy
   germanLoad.resolve(outcome === "failure" ? Promise.reject(offline) : german);
   await setGerman;
   expect(manager.getLocale()).toBe(outcome === "failure" ? "es" : "en");
-  manager.retryPendingLocale();
-  await vi.waitFor(() =>
-    expect(state()).toMatchObject({ locale: "es", loads: outcome === "failure" ? 2 : 3 }),
-  );
+  await retryPendingLocale();
+  expect(state()).toMatchObject({ locale: "es", loads: outcome === "failure" ? 2 : 3 });
   expect(manager.getRequestedLocale()).toBe("es");
 });

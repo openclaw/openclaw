@@ -50,7 +50,6 @@ const enSessionOrganization = {
     personalGroupChanged: sharedSessions.personalGroupChanged,
     personalGroupCapacity: sharedSessions.personalGroupCapacity,
     pullRequestCount: en.sessionsView.pullRequestCount,
-    mainSession: en.sessionsView.mainSession,
     subagentPrefix: en.sessionsView.subagentPrefix,
     automationPrefix: en.sessionsView.automationPrefix,
     actionRequiresConnection: en.sessionsView.actionRequiresConnection,

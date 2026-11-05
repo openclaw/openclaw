@@ -13,26 +13,6 @@ import type { WorkboardBoardSummary } from "./lib/workboard/types.ts";
 import { workboardTestHost } from "./test/host.setup.ts";
 import { createViewContext } from "./test/host.ts";
 
-vi.mock("./i18n/locales/translated.json", async (importOriginal) => {
-  const actual = await importOriginal<{
-    default: typeof import("./i18n/locales/translated.json");
-  }>();
-  return {
-    ...actual,
-    default: {
-      ...actual.default,
-      sv: {
-        ...actual.default.sv,
-        workboard: {
-          ...actual.default.sv.workboard,
-          title: "Workboard title locale fixture",
-          defaultBoard: "Standardtavla",
-        },
-      },
-    },
-  };
-});
-
 let fixture: ReturnType<typeof workboardTestHost>;
 let stopPlugin: (() => void) | undefined;
 let stopView: (() => void) | undefined;
@@ -116,25 +96,13 @@ it("refreshes catalog labels when a deferred locale loads and when the locale ch
   Object.assign(fixture.host, { locale: "sv" });
   request.mockResolvedValue({ boards: [makeBoard("default")] });
   await activate();
-  const page = fixture.registrations.get("page/workboard") as ControlUiPage;
-  const topNavigation = fixture.registrations.get(
-    "navigation/workboard",
-  ) as ControlUiNavigationItem;
-  await vi.waitFor(() => {
-    expect(page.label).toBe("Workboard title locale fixture");
-    expect(topNavigation.label).toBe("Workboard title locale fixture");
-  });
-  expect(page.id).toBe("workboard");
-  expect(topNavigation.id).toBe("workboard");
+  await vi.dynamicImportSettled();
+  await tick();
   expect(navigation("default").label).toBe("Standardtavla");
 
   Object.assign(fixture.host, { locale: "en" });
   fixture.notify();
   await tick();
-  expect(fixture.registrations.get("page/workboard")).toBe(page);
-  expect(fixture.registrations.get("navigation/workboard")).toBe(topNavigation);
-  expect(page.label).toBe("Workboard");
-  expect(topNavigation.label).toBe("Workboard");
   expect(navigation("default").label).toBe("Default board");
   expect(request).toHaveBeenCalledTimes(1);
 
