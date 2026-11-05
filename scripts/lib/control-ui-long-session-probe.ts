@@ -725,7 +725,11 @@ export async function probeLongSession(options: {
               ?.getAttribute("aria-expanded") === "true",
           paneSelector,
         );
-        await entry(workload.firstOutputEntryId).waitFor({ state: "visible" });
+        await pane
+          .locator(
+            `.chat-bubble:not(.chat-bubble--tool-shell)[data-entry-id=${JSON.stringify(workload.firstOutputEntryId)}]`,
+          )
+          .waitFor({ state: "visible" });
       });
       disclosure = { expand, expandedMemory: await memory("expanded") };
       await page.screenshot({ path: path.join(artifactDir, `${prefix}.expanded.png`) });
