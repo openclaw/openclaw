@@ -253,9 +253,10 @@ const SELECTION_OWNERS = ["", "heartbeat", "subagents"] as const;
 /**
  * Refs whose runtime one migration pin decides. Migration pins a CLI ref's runtime on the
  * canonical ref in its scope's model map. That pin reaches every selection the scope runs,
- * including selections inherited from defaults, and a defaults pin reaches every agent. A
- * model map or allowlist naming both spellings also requests both routes; legacy entries
- * alone are a sign-in seed and still migrate.
+ * including selections inherited from defaults, and a defaults pin reaches every agent. An
+ * allowlist naming both spellings also requests both routes, as does a model map whose
+ * canonical key the scope selects or allows; canonical map keys alone are metadata, and
+ * legacy entries alone are a sign-in seed, so both still migrate.
  */
 function* routeGroups(
   agents: unknown,
@@ -271,14 +272,18 @@ function* routeGroups(
     const effective = selections(agent).flatMap((refs, index) =>
       refs.length || isDefaults ? refs : inherited[index]!,
     );
-    const allow = isRecord(agent.modelPolicy) ? agent.modelPolicy.allow : undefined;
+    const rawAllow = isRecord(agent.modelPolicy) ? agent.modelPolicy.allow : undefined;
+    const allow = stringRefs(Array.isArray(rawAllow) ? rawAllow : []);
+    const direct = new Set([...effective, ...allow].map(canonicalModelRef));
     yield {
       path,
       agentId,
       groups: [
         isDefaults ? effective : [...effective, ...inheritedLegacy],
-        Object.keys(isRecord(agent.models) ? agent.models : {}),
-        stringRefs(Array.isArray(allow) ? allow : []),
+        Object.keys(isRecord(agent.models) ? agent.models : {}).filter(
+          (ref) => migrate(ref) || direct.has(canonicalModelRef(ref)),
+        ),
+        allow,
       ],
     };
   }
