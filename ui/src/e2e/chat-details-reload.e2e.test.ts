@@ -12,6 +12,7 @@ import { createControlUiTeamScaleFixture } from "../test-helpers/control-ui-team
 import { openChatDetails } from "./chat-details.test-support.ts";
 import { dashboardLayout } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { sessionsListResponse } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Details progress warm reload" });
 suite.define(() => {
@@ -28,11 +29,11 @@ suite.define(() => {
           const fixture = createControlUiTeamScaleFixture({
             baseUrl: suite.server.baseUrl,
             transcriptMessages: 15,
-            archivedSession: archived,
             paneChromeFacts: true,
             detailsSessionFacts: true,
           });
           const sessionKey = fixture.selectedSessionKey;
+          const selectedSession = fixture.scenario.sessions!.find((row) => row.key === sessionKey)!;
           await page.addInitScript(
             ({ key, settings }) => {
               for (const [name, value] of Object.entries(settings.sidebarPrefs)) {
@@ -65,8 +66,7 @@ suite.define(() => {
               methodResponses: {
                 ...fixture.scenario.methodResponses,
                 "sessions.processes.list": {
-                  sessionId: fixture.scenario.sessions!.find((row) => row.key === sessionKey)!
-                    .sessionId,
+                  sessionId: selectedSession.sessionId,
                   processes: archived
                     ? []
                     : [
@@ -97,9 +97,7 @@ suite.define(() => {
           await gateway.resolveDeferred("connect");
           const details = await openChatDetails(page);
           const progress = details.locator('[data-progress-card-placement="details"]');
-          if (!archived) {
-            await progress.getByText("Synthetic project verification is in progress.").waitFor();
-          }
+          await progress.getByText("Synthetic project verification is in progress.").waitFor();
           await page.waitForFunction(() => {
             const pane = document.querySelector(".chat-pane-cache__pane--active");
             const cache = pane && Reflect.get(pane, "state")?.chatMessagesBySession;
@@ -110,6 +108,33 @@ suite.define(() => {
               )
             );
           });
+          if (archived) {
+            const archivedSession = { ...selectedSession, archived: true };
+            await gateway.setSessionsListResponse(
+              sessionsListResponse(
+                fixture.scenario.sessions!.map((row) =>
+                  row.key === sessionKey ? archivedSession : row,
+                ),
+              ),
+            );
+            await gateway.emitGatewayEvent("sessions.changed", {
+              ...archivedSession,
+              reason: "patch",
+              sessionKey,
+            });
+            await progress.waitFor({ state: "hidden" });
+            await page.waitForFunction(() => {
+              const pane = document.querySelector(".chat-pane-cache__pane--active");
+              const cache = pane && Reflect.get(pane, "state")?.chatMessagesBySession;
+              return (
+                cache &&
+                [...cache.values()].some(
+                  ({ snapshot }) =>
+                    snapshot.sessionState?.archived === true && snapshot.progressCard,
+                )
+              );
+            });
+          }
           const loaded = archived ? null : await progress.textContent();
           await details.getByText("feature/verification", { exact: true }).waitFor();
           if (!archived) {
@@ -160,6 +185,10 @@ suite.define(() => {
           });
           await page.reload();
           await gateway.waitForRequest("connect");
+          await details.locator("section.chat-details-session").waitFor();
+          if (archived) {
+            expect(await progress.count()).toBe(0);
+          }
           if (!archived) {
             await progress.getByText("Synthetic project verification is in progress.").waitFor();
             expect(await details.locator(".chat-details-processes__stop").count()).toBe(0);
@@ -249,8 +278,7 @@ suite.define(() => {
             await gateway.resolveDeferred("sessions.processes.list");
             await details.locator(".chat-details-processes__stop").waitFor();
             await gateway.setMethodResponse("sessions.processes.list", {
-              sessionId: fixture.scenario.sessions!.find((row) => row.key === sessionKey)!
-                .sessionId,
+              sessionId: selectedSession.sessionId,
               processes: [],
               truncated: false,
             });
