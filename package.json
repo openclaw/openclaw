@@ -1834,7 +1834,6 @@
     "check:base-config-schema": "node --import ./scripts/tsx.mjs scripts/generate-base-config-schema.ts --check",
     "check:bundled-channel-config-metadata": "node --import ./scripts/tsx.mjs scripts/generate-bundled-channel-config-metadata.ts --check",
     "check:changed": "node scripts/check-changed.mjs",
-    "check:changelog-attributions": "node --import ./scripts/tsx.mjs scripts/check-changelog-attributions.mts",
     "check:coercion-helpers": "node --import ./scripts/tsx.mjs scripts/check-coercion-helper-declarations.mts",
     "check:control-ui-controllers": "node --import ./scripts/tsx.mjs scripts/check-control-ui-controllers.mts",
     "check:database-first-legacy-stores": "node --import ./scripts/tsx.mjs scripts/check-database-first-legacy-stores.mts",

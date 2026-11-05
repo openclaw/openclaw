@@ -3656,7 +3656,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "test/scripts/changed-lanes-generated-extension-lint.test.ts",
   "test/scripts/changed-lanes.test.ts",
   "test/scripts/check-built-plugin-control-plane-modules.test.ts",
-  "test/scripts/check-changelog-attributions.test.ts",
   "test/scripts/check-cli-bootstrap-imports.test.ts",
   "test/scripts/check-extension-package-tsc-boundary.test.ts",
   "test/scripts/check-max-lines-ratchet.test.ts",

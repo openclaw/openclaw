@@ -1503,7 +1503,6 @@ describe("scripts/changed-lanes", () => {
     expectLanes(result.lanes, { docs: true });
     expect(commands).toEqual([
       "check:no-conflict-markers",
-      "check:changelog-attributions",
       "check:doctor-deprecation-registry",
       "lint:extensions:no-guarded-wildcard-reexports",
       "lint:extensions:no-plugin-sdk-wildcard-reexports",

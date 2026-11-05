@@ -576,10 +576,10 @@ describe("candidate-owned full release dispatch entry point", () => {
     }
   });
 
-  it("refuses publish qualification when the candidate changelog thanks an internal handle", () => {
+  it("qualifies candidate credits without a handle-specific thanks policy", () => {
     const fixture = createDispatchFixture({
       candidateOwned: true,
-      releaseNotes: "- Fixes: keep replies threaded. Thanks @steipete.",
+      releaseNotes: "- Fixes: keep replies threaded. Thanks @steipete and @codex.",
     });
     try {
       const result = fixture.run([
@@ -590,14 +590,8 @@ describe("candidate-owned full release dispatch entry point", () => {
         "-f",
         `publication_selection_json=${JSON.stringify(publicationSelectionFixture())}`,
       ]);
-      expectDispatchFailure(
-        result,
-        "Forbidden changelog thanks attribution (pnpm check:changelog-attributions): CHANGELOG.md:3 uses Thanks @steipete. Use verified human GitHub credits",
-      );
-      expect(
-        fixture.readCalls(fixture.ghCallsPath).filter((args) => ghApiMethod(args) !== "GET"),
-      ).toEqual([]);
-      expect(dispatches(fixture)).toEqual([]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(dispatches(fixture)).toEqual([P, Q]);
     } finally {
       fixture.cleanup();
     }

@@ -1,36 +1,8 @@
 # shellcheck source=scripts/pr-lib/host-tools.sh
 source "${BASH_SOURCE[0]%/*}/host-tools.sh" || return 1
 
-changelog_helper_root() {
-  cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd
-}
-
-changelog_attribution_script() {
-  printf '%s\n' "$(changelog_helper_root)/scripts/check-changelog-attributions.mjs"
-}
-
-
-validate_changelog_attribution_policy() {
-  node "$(changelog_attribution_script)" CHANGELOG.md
-}
-
-changelog_thanks_required_for_contributor() {
-  local contrib="${1:-}"
-  [ -n "$contrib" ] || return 1
-  node "$(changelog_attribution_script)" --is-forbidden-handle "$contrib" && return 1
-
-  return 0
-}
-
-changelog_explicit_human_thanks_required_for_contributor() {
-  local contrib="${1:-}"
-  [ -n "$contrib" ] || return 1
-  node "$(changelog_attribution_script)" --requires-explicit-human-thanks "$contrib"
-}
-
 validate_changelog_entry_for_pr() {
   local pr="$1"
-  local contrib="$2"
 
   local added_lines
   added_lines=$(pr_git diff --unified=0 "$PR_MAIN_SHA...HEAD" -- CHANGELOG.md | awk '
@@ -183,31 +155,7 @@ END {
   rm -f "$diff_file"
   echo "changelog placement validated: PR-linked entries are appended at section tail"
 
-  if changelog_thanks_required_for_contributor "$contrib"; then
-    local with_pr_and_thanks
-    with_pr_and_thanks=$(printf '%s\n' "$added_lines" | grep -Ein "$pr_pattern" | grep -Fi "thanks @$contrib" || true)
-    if [ -z "$with_pr_and_thanks" ]; then
-      echo "CHANGELOG.md update must include both PR #$pr and thanks @$contrib on the changelog entry line."
-      exit 1
-    fi
-    echo "changelog validated: found PR #$pr + thanks @$contrib"
-    return 0
-  fi
-
-  if ! changelog_explicit_human_thanks_required_for_contributor "$contrib"; then
-    echo "changelog validated: found PR #$pr (no eligible human contributor handle, skipping thanks check)"
-    return 0
-  fi
-
-  local with_pr_and_any_thanks
-  with_pr_and_any_thanks=$(printf '%s\n' "$added_lines" | grep -Ein "$pr_pattern" | grep -Ei '(^|[[:space:]])thanks[[:space:]]+@' || true)
-  if [ -z "$with_pr_and_any_thanks" ]; then
-    echo "CHANGELOG.md update for bot/app/non-creditable author $contrib must include an explicit human Thanks @handle on the PR #$pr entry line."
-    echo "Choose the credited original contributor, or stop for maintainer input if authorship is unclear."
-    exit 1
-  fi
-
-  echo "changelog validated: found PR #$pr + explicit thanks for bot/app/non-creditable author $contrib"
+  echo "changelog validated: found PR #$pr"
 }
 
 validate_changelog_merge_hygiene() {
