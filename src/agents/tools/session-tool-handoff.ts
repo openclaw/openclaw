@@ -5,7 +5,10 @@ import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
 } from "../../auto-reply/reply/session-event-handoff.js";
-import { prepareSessionEventTargetForHost } from "../../auto-reply/reply/session-event-target.js";
+import {
+  assertSessionEventSettingsCurrent,
+  prepareSessionEventTargetForHost,
+} from "../../auto-reply/reply/session-event-target.js";
 import {
   captureOperatorToolGatewayContinuationContext,
   captureOperatorToolGatewayRequestContinuationContext,
@@ -30,6 +33,9 @@ import { captureSessionTarget } from "../../sessions/session-controller.target.j
 import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
+import { isInternalRouteContext } from "../../utils/delivery-context.shared.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
+import { createToolTurnHandoff } from "../agent-tools.abort.js";
 import { jsonResult, ToolInputError } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import type { SessionsYieldCallback } from "./sessions-yield-tool.js";
@@ -47,6 +53,11 @@ export async function handoffSessionTool(
   params: HandoffWork & {
     name: string;
     fenceSuccessors?: true;
+    /** Retained sends may defer without stopping the current response. */
+    yield?: "conditional" | "after_turn";
+    /** Accepting this handoff must stop the initiating invocation, including a Code Mode guest. */
+    terminal?: true;
+    retainRequester?: true;
     sessionId?: string;
     runId?: string;
     operation?: ReplyOperation;
@@ -58,7 +69,11 @@ export async function handoffSessionTool(
     formatResult: (payload: Record<string, unknown>) => string;
   },
 ) {
-  if (getAgentToolExecutionContext()?.hasUnobservedAsyncToolResults) {
+  if (
+    !params.yield &&
+    !params.terminal &&
+    getAgentToolExecutionContext()?.hasUnobservedAsyncToolResults
+  ) {
     return jsonResult({
       status: "deferred",
       message: `Read earlier async results before handing off ${params.name}.`,
@@ -107,10 +122,18 @@ export async function handoffSessionTool(
         ? (text, options) => captured.enqueueSessionEvent(text, options)
         : undefined;
     } else {
-      const captured = await captureOperatorToolGatewayContinuationContext(gatewayTarget);
+      const captured = await captureOperatorToolGatewayContinuationContext(
+        gatewayTarget,
+        params.retainRequester ? { retainRequester: true } : undefined,
+      );
       const run = params.run;
       continuation = captured;
-      runDeferred = captured ? (scope) => captured.run(() => run(scope)) : undefined;
+      runDeferred = captured
+        ? (scope) =>
+            params.retainRequester
+              ? captured.runWithRequester(() => run(scope))
+              : captured.run(() => run(scope))
+        : undefined;
       enqueueDeferred = captured
         ? (text, options) =>
             captured.run(() =>
@@ -129,6 +152,15 @@ export async function handoffSessionTool(
     if (target.sessionId !== params.sessionId || !storePath) {
       throw new ToolInputError("The requesting session changed before handoff.");
     }
+    // An internal turn without an external recipient of its own (Control UI, internal source
+    // hints) has no external conversation to resume in; keep its resume from falling back to
+    // the session's recorded external route.
+    const resumeRoute =
+      isInternalRouteContext({ channel: caller.turnSourceChannel }) &&
+      (!caller.turnSourceTo || caller.turnSourceTo === caller.sessionKey) &&
+      target.deliveryContext?.channel
+        ? { channel: INTERNAL_MESSAGE_CHANNEL }
+        : undefined;
     continuation.assertCurrent();
     assertSessionControllerOperation(operation);
     params.signal?.throwIfAborted();
@@ -140,9 +172,26 @@ export async function handoffSessionTool(
         start: () => handoffSettled.promise,
       });
     }
-    await params.onYield(
-      `${params.name} handed off; resume with its result in this same conversation.`,
-    );
+    const handoffReceipt = {
+      status: "started",
+      async: true,
+      ...(params.yield ? {} : { yielded: true as const }),
+      message: `${params.name} will run after turn cleanup; its result will resume this session.`,
+    } as const;
+    const handoffResult = jsonResult(handoffReceipt);
+    const message = params.name + " handed off; resume with its result in this same conversation.";
+    if (params.terminal) {
+      await params.onYield(message, undefined, undefined, {
+        terminal: createToolTurnHandoff(
+          getAgentToolExecutionContext()?.toolCall.id,
+          handoffReceipt,
+        ),
+      });
+    } else if (params.yield === "conditional") {
+      await params.onYield(message, undefined, undefined, { conditional: true });
+    } else if (params.yield !== "after_turn") {
+      await params.onYield(message);
+    }
     const retained = continuation;
     const deferred = runDeferred;
     const enqueue = enqueueDeferred;
@@ -177,7 +226,16 @@ export async function handoffSessionTool(
                 const destination = await prepareSessionEventTargetForHost(target);
                 try {
                   result = await deferred({
-                    assertCurrent: destination.assertCurrent,
+                    assertCurrent: params.retainRequester
+                      ? () => {
+                          retained.assertCurrent();
+                          destination.assertCurrent();
+                          assertSessionEventSettingsCurrent(
+                            target.settings,
+                            destination.readSessionSettings(),
+                          );
+                        }
+                      : destination.assertCurrent,
                     signal: AbortSignal.any([retained.signal, signal]),
                   });
                 } finally {
@@ -231,6 +289,7 @@ export async function handoffSessionTool(
                     sourceRunId: params.runId,
                     contextKey,
                     expectedTarget: target,
+                    ...(resumeRoute ? { deliveryContext: resumeRoute } : {}),
                     assertCurrent: retained.assertCurrent,
                     abortSignal: signal,
                   },
@@ -242,7 +301,7 @@ export async function handoffSessionTool(
                 throw new Error(accepted.error);
               }
               const outcome = await receipt.settled;
-              // Once execution starts, the resumed turn owns its failure/restart recovery.
+              // Once execution starts, the ordinary turn owns its failure.
               // It is no longer an undelivered tool result.
               if (outcome.status === "failed" && !outcome.executionStarted) {
                 throw new Error(outcome.error ?? "Tool result resume failed");
@@ -284,12 +343,7 @@ export async function handoffSessionTool(
         }),
     );
     // The shared async-result receipt is also the yield owner's continuation evidence.
-    return jsonResult({
-      status: "started",
-      async: true,
-      yielded: true,
-      message: `${params.name} will run after turn cleanup; its result will resume this session.`,
-    });
+    return handoffResult;
   } catch (error) {
     handoffSettled.resolve(undefined);
     pending.delete(operation);

@@ -114,7 +114,14 @@ export type QueuedFollowupReplyBatch = {
   completion:
     | { kind: "progress" }
     | { kind: "completed"; stopReason?: string; allowCanvasOnly?: true }
-    | { kind: "failed"; error: string; stopReason?: string; errorKind?: "timeout" }
+    | {
+        kind: "failed";
+        error: string;
+        /** Host-authored failure copy with its next step; safe to keep in history. */
+        notice?: string;
+        stopReason?: string;
+        errorKind?: "timeout";
+      }
     | { kind: "aborted"; stopReason?: string };
 };
 
@@ -273,10 +280,6 @@ export type GetReplyOptions = {
   bootstrapContextMode?: "full" | "lightweight";
   /** If true, run the model without OpenClaw tools for this turn. */
   disableTools?: boolean;
-  /** @internal Preserve the recovery owner's replay-safe tool restriction for this turn. */
-  forceRestartSafeTools?: boolean;
-  /** @internal Retain restart-safe Code Mode controls for an interrupted continuation. */
-  forceCodeModeTools?: boolean;
   /** Runtime tool allow-list for this turn. Empty means no tools. */
   toolsAllow?: string[];
   /**
@@ -448,6 +451,8 @@ export type GetReplyOptions = {
     provider: string;
     model: string;
     thinkLevel: string | undefined;
+    agentRuntime?: string;
+    cliExecution?: boolean;
   }) => void;
   /**
    * Controls whether normal assistant replies are automatically delivered to

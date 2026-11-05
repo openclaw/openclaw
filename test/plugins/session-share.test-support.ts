@@ -16,8 +16,9 @@ type TranscriptPage = {
   nextCursor?: string;
 };
 
-export function commandFixture(groups: string[] = ["Team"]) {
+export function commandFixture(groups: string[] = ["Team"], agents?: OpenClawConfig["agents"]) {
   const config: OpenClawConfig = {
+    agents,
     plugins: { entries: { "session-share": { enabled: true, config: { share: { groups } } } } },
   };
   setRuntimeConfigSnapshot(config);

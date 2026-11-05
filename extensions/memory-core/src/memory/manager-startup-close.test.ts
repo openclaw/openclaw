@@ -213,7 +213,7 @@ describe("memory preparation shutdown", () => {
       if (cli) {
         await seed("new-offline-session");
       } else {
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
       }
       const barrier = pauseCorpusFilesystem();
       let syncing: Promise<void> | undefined;

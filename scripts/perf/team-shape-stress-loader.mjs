@@ -1,17 +1,35 @@
-// Load erasable TypeScript instrumentation without transforming built Gateway code.
+// Load TypeScript instrumentation without transforming built Gateway code.
 // This must be the first loader; package imports use the measured build's exports.
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { createRequire, registerHooks } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isMainThread } from "node:worker_threads";
+import { transformSync } from "esbuild";
 
-// Node strips types; only source instrumentation needs .js-to-.ts resolution.
+// Only source instrumentation needs TypeScript loading and .js-to-.ts resolution.
 const sourceRoots = [
   new URL("../../src/", import.meta.url).href,
   new URL("../", import.meta.url).href,
 ];
 registerHooks({
+  load(url, context, nextLoad) {
+    if (!url.endsWith(".ts") || !sourceRoots.some((root) => url.startsWith(root))) {
+      return nextLoad(url, context);
+    }
+    // Instrumentation can import parameter properties; strip-only mode rejects
+    // them. Built .mjs/.js stay byte-for-byte unchanged in every isolate.
+    return {
+      format: "module",
+      source: transformSync(readFileSync(new URL(url), "utf8"), {
+        loader: "ts",
+        format: "esm",
+        target: "esnext",
+        sourcefile: url,
+      }).code,
+      shortCircuit: true,
+    };
+  },
   resolve(specifier, context, nextResolve) {
     try {
       return nextResolve(specifier, context);

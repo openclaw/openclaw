@@ -35,7 +35,11 @@ import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-
 import { inspectManagedPlugin, listManagedPlugins } from "../../plugins/management-service.js";
 import { readManagedPluginSkill } from "../../plugins/management-skill-read.js";
 import { getPluginInstance } from "../../plugins/plugin-instance-scope.js";
-import { getPluginRegistryVersion } from "../../plugins/runtime-state.js";
+import { getPluginRegistryGatewayOwner } from "../../plugins/registry-lifecycle.js";
+import {
+  getPluginRegistryVersion,
+  getRetiringPluginRegistries,
+} from "../../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
 import { buildPluginSdkDeprecationNotices } from "../../plugins/sdk-deprecation-notices.js";
 import { listPluginServiceHealthFailures } from "../../plugins/service-health.js";
@@ -189,7 +193,6 @@ export const pluginsHandlers: GatewayRequestHandlers = {
         config: context.getRuntimeConfig(),
         ...target,
       });
-      const { inspectDecisionProviders } = await import("../../decisions/runtime.js");
       // Cross-session acquisition IDs are administrator diagnostics, not catalog metadata.
       // Recheck the connection after inventory/module I/O and immediately before disclosure.
       const canInspectRetentions =
@@ -203,18 +206,46 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       const registry = canInspectRetentions ? getPluginRegistryForContext() : undefined;
       const record = registry?.plugins.find((entry) => entry.id === inspected.plugin.id);
       const instance = record && getPluginInstance(record);
+      const gatewayOwner = registry && getPluginRegistryGatewayOwner(registry);
+      const predecessors = gatewayOwner
+        ? getRetiringPluginRegistries().flatMap((previous) => {
+            if (getPluginRegistryGatewayOwner(previous) !== gatewayOwner) {
+              return [];
+            }
+            const previousRecord = previous.plugins.find(
+              (entry) => entry.id === inspected.plugin.id,
+            );
+            const predecessor = previousRecord && getPluginInstance(previousRecord);
+            return predecessor &&
+              predecessor !== instance &&
+              predecessor.owner?.registry === previous
+              ? [
+                  {
+                    generation: getPluginRegistryVersion(previous),
+                    ...predecessor.retentionSnapshot(),
+                  },
+                ]
+              : [];
+          })
+        : [];
+      const runtimeRetention = instance?.retentionSnapshot();
+      const decisionConfig = remote ? undefined : context.getRuntimeConfig();
       respond(
         true,
         {
           ...inspected,
           ...(canInspectRetentions
-            ? { runtimeRetention: instance?.retentionSnapshot() ?? null }
+            ? {
+                runtimeRetention: predecessors.length
+                  ? { ...runtimeRetention, predecessors }
+                  : (runtimeRetention ?? null),
+              }
             : {}),
-          decisions: remote
-            ? []
-            : inspectDecisionProviders(context.getRuntimeConfig()).filter(
-                (entry) => entry.pluginId === inspected.plugin.id,
-              ),
+          decisions: decisionConfig
+            ? (getPluginRegistryForContext()
+                ?.decisionProviders.filter((entry) => entry.pluginId === inspected.plugin.id)
+                .map((entry) => entry.host.inspect(decisionConfig)) ?? [])
+            : [],
         },
         undefined,
       );

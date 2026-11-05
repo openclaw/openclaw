@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
@@ -246,7 +246,7 @@ it.each(["stopped", "throws", "refused"] as const)(
     } else {
       f.expectFailedManagedGitRestart(
         failure === "stopped"
-          ? "Gateway responded, but the managed service did not report running after restart."
+          ? "Managed Gateway service status: stopped."
           : "Gateway: restart failed: Error: restart unavailable",
       );
     }
@@ -534,17 +534,53 @@ it("recovers only an untouched package service after source publication fails", 
 });
 
 it("never starts the candidate after plugin post-update invalidates config", async () => {
-  const serviceEntrypoint = path.join(process.cwd(), "dist", "index.js");
-  const invalidPostUpdateSnapshot = f.configSnapshot(f.baseConfig, {
+  const packageManifest = manifest(process.cwd());
+  const originalManifest = await fs.readFile(packageManifest);
+  onTestFinished(() => fs.writeFile(packageManifest, originalManifest));
+  const previousVersion = "1.0.0";
+  const serviceEntrypoint = await packageFixture(process.cwd(), previousVersion, true);
+  const runtimeDirectory = path.dirname(serviceEntrypoint);
+  const previousRuntimeSource = "export const previousFixtureRuntime = true;\n";
+  f.tempDirsToCleanup.add(runtimeDirectory);
+  await fs.writeFile(serviceEntrypoint, previousRuntimeSource);
+  const previousRuntime = await fs.stat(runtimeDirectory);
+  const activateGateway = f.mockPackageGatewayLifecycle();
+  const restartedRuntimes: { dev: number; ino: number; source: string }[] = [];
+  const runFixtureCommand = checks.requireValue(
+    vi.mocked(cli.runCommandWithTimeout).getMockImplementation(),
+    "default command fixture",
+  );
+  vi.mocked(cli.runCommandWithTimeout).mockImplementation(async (argv, options) => {
+    if (argv[2] === "gateway" && argv[3] === "restart") {
+      const runtime = await fs.stat(runtimeDirectory);
+      restartedRuntimes.push({
+        dev: runtime.dev,
+        ino: runtime.ino,
+        source: await fs.readFile(serviceEntrypoint, "utf8"),
+      });
+    }
+    await activateGateway(argv);
+    return runFixtureCommand(argv, options);
+  });
+  await f.useFileBackedConfig();
+  const invalidPostUpdateSnapshot = {
+    ...(await cli.readConfigFileSnapshot()),
     valid: false,
     issues: [{ path: "plugins", message: "invalid plugin config" }],
-  });
+  };
   mocks.syncPluginsForUpdateChannel.mockImplementationOnce(async () => {
     vi.mocked(cli.readConfigFileSnapshot).mockResolvedValue(invalidPostUpdateSnapshot);
     return pluginSyncResult(f.baseConfig);
   });
   f.mockRunningManagedGateway(gatewayArgs(serviceEntrypoint));
-  cli.mockGitUpdateAfterMutation();
+  f.mockGatewayHealth(previousVersion, "previous-fixture-gateway");
+  cli.mockGitUpdateAfterMutation(
+    cli.makeOkUpdateResult({
+      root: process.cwd(),
+      before: { version: previousVersion },
+      after: { version: previousVersion },
+    }),
+  );
   vi.mocked(cli.runExec).mockImplementation(async (_file, args) => {
     if (args[1] === "config" && args[2] === "validate") {
       throw createConfigValidationFailure(
@@ -559,14 +595,22 @@ it("never starts the candidate after plugin post-update invalidates config", asy
 
   expect(mocks.serviceStop).toHaveBeenCalledTimes(1);
   checks.expectNoSideEffects(mocks.serviceRestart, cli.runDaemonRestart);
-  expect(checks.freshRestartCalls()).toHaveLength(0);
+  // A recovery restart must use the original directory restored by the retained
+  // transaction; matching script bytes alone cannot identify its generation.
+  expect(restartedRuntimes, checks.getLogOutput()).toEqual([
+    { dev: previousRuntime.dev, ino: previousRuntime.ino, source: previousRuntimeSource },
+  ]);
+  expect(checks.freshRestartCalls()).toHaveLength(1);
   expect(cli.defaultRuntime.exit).not.toHaveBeenCalled();
   expect(cli.runExec).toHaveBeenCalledExactlyOnceWith(
     expect.any(String),
     [serviceEntrypoint, "config", "validate", "--json"],
     expect.objectContaining({ env: { OPENCLAW_UPDATE_IN_PROGRESS: "0" } }),
   );
-  expect(checks.getLogOutput()).toContain("OpenClaw update failed: post-update-plugins.");
+  expect(checks.getLogOutput()).toContain(
+    `OpenClaw update rolled back to ${previousVersion}: post-update-plugins.`,
+  );
+  expect(checks.getLogOutput()).toContain("invalid plugin config");
   expect(checks.getErrorOutput()).not.toContain("Update failed during plugin post-update sync.");
 });
 

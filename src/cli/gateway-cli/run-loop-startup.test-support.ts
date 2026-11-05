@@ -83,6 +83,7 @@ export function registerGatewayStartupFailureTests(
           expect(close).toHaveBeenCalledExactlyOnceWith({
             reason: "gateway startup failed",
             retainSharedState: true,
+            exitAfterClose: false,
           });
           expect(releaseLock).toHaveBeenCalledOnce();
           expect(onRestartStartupFailure).not.toHaveBeenCalled();
@@ -365,6 +366,7 @@ export function registerGatewayStartupFailureTests(
             expect(close).toHaveBeenCalledExactlyOnceWith({
               reason: "gateway startup failed",
               retainSharedState: true,
+              exitAfterClose: false,
             });
             expect(releaseLock).toHaveBeenCalledOnce();
             expect(onRestartStartupFailure).toHaveBeenCalledOnce();
@@ -420,9 +422,11 @@ export function registerGatewayStartupFailureTests(
           .mockResolvedValueOnce({ release: releaseRestartLock });
         const start = vi
           .fn<Parameters<typeof runGatewayLoop>[0]["start"]>()
-          .mockImplementationOnce(async () =>
-            createGatewayServer(firstClose, Promise.reject(startupError)),
-          )
+          .mockImplementationOnce(async (options) => {
+            expect(options?.exitAfterStartupFailure?.(startupError)).toBe(false);
+            expect(options?.exitAfterStartupFailure?.(new Error("ordinary startup failure"))).toBe(true);
+            return createGatewayServer(firstClose, Promise.reject(startupError));
+          })
           .mockImplementationOnce(async () =>
             createGatewayServer(secondClose, secondStartup.promise),
           );
@@ -434,12 +438,19 @@ export function registerGatewayStartupFailureTests(
           expect(firstClose).toHaveBeenCalledExactlyOnceWith({
             reason: "gateway startup failed",
             retainSharedState: true,
+            exitAfterClose: false,
           });
           recoveryStarted.resolve();
           await allowRecovery.promise;
           return "completed" as const;
         });
-        const loop = runGatewayLoop({ start, beginBoot, completeBoot, onRestartStartupFailure });
+        const loop = runGatewayLoop({
+          start,
+          beginBoot,
+          completeBoot,
+          onRestartStartupFailure,
+          ownsProcessLifecycle: true,
+        });
         let loopFinished = false;
         void loop.then(
           () => {
@@ -657,6 +668,7 @@ export function registerGatewayStartupFailureTests(
         expect(close).toHaveBeenCalledExactlyOnceWith({
           reason: "gateway startup failed",
           retainSharedState: true,
+          exitAfterClose: false,
         });
         expect(onRestartStartupFailure).not.toHaveBeenCalled();
       });

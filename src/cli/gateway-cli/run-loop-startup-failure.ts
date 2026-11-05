@@ -5,7 +5,6 @@ import type { GatewayInstallationReplacement } from "../../gateway/stale-install
 import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
 import { findStartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
 import { TAILSCALE_BACKEND_AUTH_REQUIRED_REASON } from "../../infra/tailscale-backend-auth-required-error.js";
-import { isTailscaleServeAuthenticationRequiredError } from "../../infra/tailscale-backend-ready.js";
 import type { createGatewayRunCleanup } from "./run-loop-cleanup.js";
 import { formatStartupFailureCompletion } from "./run-loop-shutdown-format.js";
 import type { createGatewayRunSignals } from "./run-loop-signals.js";
@@ -19,9 +18,9 @@ export async function settleGatewayStartupFailure({
   error: err,
   failedServer,
   isStartupRecoveryRetry,
-  isRestartIteration,
-  supervised,
-  canRecover,
+  canWaitForTailscaleServe,
+  startupFailureEndsLoop,
+  ownsProcessLifecycle,
   cleanup,
   signals,
   startupOperations: iterationStartupOperations,
@@ -39,9 +38,9 @@ export async function settleGatewayStartupFailure({
   error: unknown;
   failedServer: GatewayServer | null;
   isStartupRecoveryRetry: boolean;
-  isRestartIteration: boolean;
-  supervised: boolean;
-  canRecover: boolean;
+  canWaitForTailscaleServe: boolean;
+  startupFailureEndsLoop: () => boolean;
+  ownsProcessLifecycle: boolean;
   cleanup: ReturnType<typeof createGatewayRunCleanup>;
   signals: Pick<ReturnType<typeof createGatewayRunSignals>, "settle" | "openStore">;
   startupOperations: ReturnType<typeof createGatewayStartupOperations>;
@@ -57,15 +56,6 @@ export async function settleGatewayStartupFailure({
   writeStabilityBundle: (reason: string, error: unknown) => void;
 }): Promise<"stop" | "retry" | "wait"> {
   const maintenanceRequired = findStartupMaintenanceRequiredError(err);
-  const canWaitForTailscaleServe =
-    !maintenanceRequired &&
-    !getInstallationReplacement() &&
-    !isStartupRecoveryRetry &&
-    !isShuttingDown() &&
-    !isTerminal() &&
-    supervised &&
-    canRecover &&
-    isTailscaleServeAuthenticationRequiredError(err);
   let bootFailureCompleted = false;
   const completeStartupFailure = (startupReason?: string, failure?: { error: unknown }) => {
     if (bootFailureCompleted) {
@@ -80,7 +70,11 @@ export async function settleGatewayStartupFailure({
   }
   try {
     await signals.settle();
-    await failedServer?.close({ reason: "gateway startup failed", retainSharedState: true });
+    await failedServer?.close({
+      reason: "gateway startup failed",
+      retainSharedState: true,
+      exitAfterClose: ownsProcessLifecycle && startupFailureEndsLoop(),
+    });
   } catch (closeError) {
     completeStartupFailure(maintenanceRequired?.code);
     throw new GatewayStartupCleanupError(err, closeError);
@@ -103,18 +97,12 @@ export async function settleGatewayStartupFailure({
   }
   // Keep TCC recovery after clean restart failures (#35862), but never reuse a
   // generation whose startup cleanup failed. The outer CLI exits nonzero.
-  if (
-    isTerminal() ||
-    maintenanceRequired ||
-    (!isRestartIteration && !canWaitForTailscaleServe) ||
-    (isStartupRecoveryRetry && supervised) ||
-    err instanceof GatewayStartupCleanupError
-  ) {
+  if (startupFailureEndsLoop() || err instanceof GatewayStartupCleanupError) {
     await cleanup.waitForCleanup();
     if (!cleanup.failed && !cleanup.drained) {
       try {
         try {
-          await iterationStartupOperations.drain();
+          await cleanup.waitForPersistence(iterationStartupOperations.drain());
         } catch (startupError) {
           // The admission scope remembers the original refusal as well as joining work.
           if (startupError !== err) {
@@ -147,7 +135,7 @@ export async function settleGatewayStartupFailure({
         });
       }
       try {
-        await iterationStartupOperations.drain();
+        await cleanup.waitForPersistence(iterationStartupOperations.drain());
       } catch (startupError) {
         if (startupError !== err) {
           additionalStartupFailure = startupError;
@@ -171,7 +159,7 @@ export async function settleGatewayStartupFailure({
     }
     iterationStartupOperations.acknowledgeHandledFailure(err);
     try {
-      await iterationStartupOperations.drain();
+      await cleanup.waitForPersistence(iterationStartupOperations.drain());
     } catch (startupError) {
       completeStartupFailure(undefined, { error: startupError });
       throw startupError;
@@ -185,7 +173,7 @@ export async function settleGatewayStartupFailure({
     const stopCompletion = iterationStartupOperations.getStopCompletion();
     if (stopCompletion) {
       completeStartupFailure();
-      await stopCompletion;
+      await cleanup.waitForStop(iterationStartupOperations);
       return "stop";
     }
     if (isTerminal() || isShuttingDown()) {

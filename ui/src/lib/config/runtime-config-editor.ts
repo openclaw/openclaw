@@ -3,6 +3,7 @@ import { registerListener } from "../../../../src/shared/listeners.js";
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
+import { listen } from "../reactive/listener.ts";
 import { showToast } from "../toast.ts";
 import { createAppliedConfigRefreshOwner } from "./applied-refresh.ts";
 import { applyConfigSnapshot, clearConfigDraftTracking } from "./config-draft-model.ts";
@@ -15,6 +16,7 @@ import {
   type ConfigMethod,
 } from "./config-gateway-operations.ts";
 import { canEnsureConfigRead } from "./config-gateway-read.ts";
+import { createConfigSavedNotice } from "./config-saved-notice.ts";
 import {
   agentConfigEntry,
   clearConfigRequestVersions,
@@ -44,14 +46,24 @@ export function createRuntimeConfigEditor(
   }
   // Raw edits never autosave; form edits and outstanding writes also remain
   // owned by this capability when a worker update or reconnect wants to reload.
-  const stopReloadGuard = registerControlUiReloadGuard(
-    () =>
-      !state.configFormDirty &&
-      !state.configSaving &&
-      !state.configApplying &&
-      !writes.hasUnacknowledgedDraftWrite(),
-    () => showToast({ message: t("configView.reloadBlocked") }),
+  const canReload = () =>
+    !state.configFormDirty &&
+    !state.configSaving &&
+    !state.configApplying &&
+    !writes.hasUnacknowledgedDraftWrite();
+  const stopReloadGuard = registerControlUiReloadGuard(canReload, () =>
+    showToast({ severity: "error", message: t("configView.reloadBlocked") }),
   );
+  // Browser reloads and tab closes bypass the managed guard; the draft lives only in memory.
+  const stopBeforeUnload =
+    typeof window === "undefined"
+      ? undefined
+      : listen(window, "beforeunload", (event) => {
+          if (!canReload()) {
+            event.preventDefault();
+            event.returnValue = "";
+          }
+        });
   const listeners = new Set<(state: RuntimeConfigState) => void>();
   const loads = new Map<"config" | "schema", Promise<unknown>>();
   let schemaRead: Promise<Result<void, string>> | null = null;
@@ -61,10 +73,12 @@ export function createRuntimeConfigEditor(
     if (disposed) {
       return;
     }
+    savedNotice.sync();
     for (const listener of listeners) {
       listener(state);
     }
   };
+  const savedNotice = createConfigSavedNotice(state, publish);
   // Bootstrap changes update the capability's fallback config before views read it.
   const stopBootstrap = bootstrap?.subscribe(publish);
   const run = async <T>(task: () => Promise<T>, loadKey?: "config" | "schema"): Promise<T> => {
@@ -242,6 +256,8 @@ export function createRuntimeConfigEditor(
     dispose() {
       stopBootstrap?.();
       stopReloadGuard();
+      stopBeforeUnload?.();
+      savedNotice.dispose();
       disposed = true;
       writes.dispose();
       listeners.clear();

@@ -106,8 +106,7 @@ openclaw-chat-context-panel {
 .chat-context-panel {
   overflow: hidden;
   container: context-panel / size;
-  .chat-context__refresh,
-  .chat-context__compact {
+  .chat-context__refresh {
     display: inline-flex;
     flex: none;
     align-items: center;
@@ -128,18 +127,15 @@ openclaw-chat-context-panel {
   }
   .chat-context__compact {
     width: 100px;
-    box-shadow: inset 0 0 0 1px var(--border-strong);
-    color: var(--text-strong);
+    height: 28px;
+    padding: 0;
+    font-size: 12px;
   }
+  /* Only the panel promotes Compact near the limit; the composer popover keeps it secondary. */
   .chat-context__compact--high {
     background: var(--primary);
     color: var(--primary-foreground);
     box-shadow: none;
-  }
-  .chat-context__compact:disabled {
-    color: var(--muted);
-    background: transparent;
-    box-shadow: inset 0 0 0 1px var(--border);
   }
   .chat-context__compact .btn__spinner {
     width: 13px;
@@ -424,9 +420,7 @@ openclaw-chat-context-panel {
   }
 }
 @media (hover: hover) {
-  .chat-context-panel .chat-context__refresh:not(:disabled):hover,
-  .chat-context-panel
-    .chat-context__compact:not(:disabled):not(.chat-context__compact--high):hover {
+  .chat-context-panel .chat-context__refresh:not(:disabled):hover {
     background: var(--bg-hover);
   }
   .chat-context-page {

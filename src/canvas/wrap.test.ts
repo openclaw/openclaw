@@ -107,8 +107,8 @@ it("keeps the wrapped document bytes stable", () => {
     '<SvG viewBox="0 0 10 10"><circle r="4" /></SvG>',
   );
 
-  expect(Buffer.byteLength(html)).toBe(17765);
+  expect(Buffer.byteLength(html)).toBe(17837);
   expect(createHash("sha256").update(html).digest("hex")).toBe(
-    "e8c709f66c308ddf94d310ad2a29375a1edff39b9d82328464146045640e72f0",
+    "30a203b6d327fbc31318e65ffc172510d584979f94e14ceb5fbf0bc4d33b956b",
   );
 });

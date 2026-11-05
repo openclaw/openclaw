@@ -2,6 +2,7 @@ import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-co
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ExternalPluginCompatibility } from "../../packages/plugin-package-contract/src/index.js";
 import {
+  ClawHubRequestError,
   fetchClawHubJson,
   readClawHubStringField,
   readRequiredClawHubBooleanField,
@@ -376,6 +377,24 @@ export async function fetchClawHubPackageDetail(
     token: params.token,
     timeoutMs: params.timeoutMs,
   });
+}
+
+/** An older registry can decline the bounded overview without hiding upstream failures. */
+export async function fetchClawHubTemplatesOverview(
+  params: ClawHubFetchOptions & { limit?: number },
+): Promise<unknown> {
+  try {
+    return await fetchClawHubJson<unknown>({
+      ...params,
+      path: "/api/v1/templates/overview",
+      search: { limit: String(params.limit ?? 8) },
+    });
+  } catch (error) {
+    if (error instanceof ClawHubRequestError && error.status === 404) {
+      return { complete: false };
+    }
+    throw error;
+  }
 }
 
 export async function listClawHubPackages(

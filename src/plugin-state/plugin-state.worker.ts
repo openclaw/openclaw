@@ -18,6 +18,7 @@ import type {
 } from "./plugin-state-operation-contract.js";
 import { executePluginStateOperation } from "./plugin-state-operation.kernel.js";
 import { withPluginStateWorkerReceipt } from "./plugin-state-publication.js";
+import { preparePluginStateReceiptInput } from "./plugin-state-receipt-input.js";
 import {
   compareAndApplyPluginStateEntry,
   observePluginStateEntry,
@@ -227,6 +228,7 @@ export function executePluginStateCommand(
   hasRetainedDatabase: boolean,
 ): PluginStateWriteOperations[keyof PluginStateWriteOperations]["output"] {
   const description = pluginStateWorkerOperations[command.type];
+  const submitted = preparePluginStateReceiptInput(command);
   // Initial grants may wait for the host, so request them before taking the writer.
   // Commit grants still recheck session authority inside the transaction.
   const admit = (stage: "transaction" | "commit") =>
@@ -301,6 +303,7 @@ export function executePluginStateCommand(
           (store) => {
             const result = withPluginStateWorkerReceipt(
               store.db,
+              submitted,
               () => executePluginStateOperation(store, command.input, handler),
               (): PluginStateOperationCommit => ({
                 pluginStateOperation: {
@@ -356,7 +359,7 @@ export function executePluginStateCommand(
       admit("transaction");
       runOpenClawStateWriteTransaction(
         (store) => {
-          withPluginStateWorkerReceipt(store.db, () =>
+          withPluginStateWorkerReceipt(store.db, submitted, () =>
             deletePluginStateEntry(store.db, command.input),
           );
           admit("commit");
@@ -368,7 +371,7 @@ export function executePluginStateCommand(
     return ok(
       runOpenClawStateWriteTransaction(
         (store) => {
-          const result = withPluginStateWorkerReceipt(store.db, () => {
+          const result = withPluginStateWorkerReceipt(store.db, submitted, () => {
             switch (command.type) {
               case "pluginState.appendJournal":
                 return registerPluginStateSequencedJournalEntryInDatabase(store, command.input);

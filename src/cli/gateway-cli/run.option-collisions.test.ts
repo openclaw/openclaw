@@ -282,6 +282,9 @@ vi.mock("../../gateway/net.js", async (importOriginal) => {
 // mock-isolation: Record stale-process recovery without signaling processes.
 vi.mock("../../infra/restart-stale-pids.js", () => ({
   cleanStaleGatewayProcessesSync: mocks.cleanStaleGatewayProcessesSync,
+  cleanStaleGatewayProcesses: async (
+    ...args: Parameters<typeof mocks.cleanStaleGatewayProcessesSync>
+  ) => mocks.cleanStaleGatewayProcessesSync(...args),
 }));
 
 // mock-isolation: Control restart decisions without reading service history.
@@ -292,6 +295,9 @@ vi.mock("../../daemon/restart-storm.js", () => ({
 // mock-isolation: Prevent real Gateway process discovery.
 vi.mock("../../infra/gateway-processes.js", () => ({
   findVerifiedGatewayListenerPidsOnPortSync: mocks.findVerifiedGatewayListenerPidsOnPortSync,
+  findVerifiedGatewayListenerPidsOnPort: async (
+    ...args: Parameters<typeof mocks.findVerifiedGatewayListenerPidsOnPortSync>
+  ) => mocks.findVerifiedGatewayListenerPidsOnPortSync(...args),
   formatGatewayPidList: (pids: number[]) => pids.join(", "),
 }));
 
@@ -1098,7 +1104,7 @@ describe("gateway run option collisions", () => {
               path: "/tmp/newer.sqlite",
               foundVersion: 999,
               supportedVersion: 998,
-              writerAppVersion: "2026.9.4",
+              writerAppVersion: "9999.1.1",
             },
           ])
         : readerError;
@@ -1119,8 +1125,8 @@ describe("gateway run option collisions", () => {
     expect(offerInvalidConfigRecovery).not.toHaveBeenCalled();
     if (error instanceof OpenClawDatabaseSchemaPreflightError) {
       expect(gatewayErrorMessages).toEqual([`${error.message} Parked the managed LaunchAgent.`]);
-      expect(gatewayErrorMessages[0]).toContain(
-        "uses schema 999; this build supports 998; writer build 2026.9.4",
+      expect(gatewayErrorMessages[0]).toMatch(
+        /schema 999;.*was written by OpenClaw 9999\.1\.1;.*openclaw update/s,
       );
       expect(runtimeErrors).toEqual([`Gateway failed to start: ${error.message}`]);
     } else {

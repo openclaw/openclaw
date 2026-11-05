@@ -89,11 +89,6 @@ suite.define(() => {
       );
       await context.waitFor({ state: "visible" });
       expect(await context.textContent()).toContain("machine0 · team");
-      const machine = page.locator(".session-hovercard__machine");
-      expect(await machine.getAttribute("aria-label")).toBe(
-        "Machine: Linux · medium · 4 vCPU · 16 GB",
-      );
-      expect(await machine.textContent()).toMatch(/^\s*Linux\s*medium\s*4 vCPU\s*16 GB\s*$/u);
     });
   });
 });

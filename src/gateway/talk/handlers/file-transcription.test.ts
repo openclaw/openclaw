@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.js";
@@ -5,6 +6,7 @@ import type {
   MediaUnderstandingCapabilityConfig,
   MediaUnderstandingModelConfig,
 } from "../../../config/types.tools.js";
+import * as providerExecution from "../../../media-understanding/provider-execution.js";
 import type {
   AudioTranscriptionConfigContext,
   AudioTranscriptionRequest,
@@ -14,6 +16,7 @@ import type { RealtimeTranscriptionProviderPlugin } from "../../../plugins/capab
 import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
+import { captureGatewayRootWorkReleaseObserver } from "../../../process/gateway-work-admission.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import type { GatewayRequestHandlers } from "../../server-methods/types.js";
 import { cleanupTalkConnection } from "../session-registry.js";
@@ -420,19 +423,62 @@ describe("configured file transcription through Talk RPCs", () => {
         if (reason === "missing credentials") {
           config.models = { providers: { "local-stt": localProvider } };
         }
-        const { call } = fileRpc(config, talkHandlers);
-        const result = expectRespondOk(await call("talk.catalog"));
-        expect(result).toMatchObject({ transcription: { ready: false } });
-        expect(result).not.toHaveProperty("transcription.activeProvider");
-        if (reason === "unknown provider" || reason === "missing credentials") {
-          expect(result).toMatchObject({
-            transcription: { providers: [expect.objectContaining({ configured: false })] },
-          });
+        const entered = createDeferred();
+        const release = createDeferred();
+        let catalogReleased: Promise<"settled" | "reset"> | undefined;
+        const available = providerExecution.isAudioModelEntryAvailable;
+        const readiness =
+          reason === "missing credentials"
+            ? vi
+                .spyOn(providerExecution, "isAudioModelEntryAvailable")
+                .mockImplementationOnce(async (params) => {
+                  const observeRelease = expectDefined(
+                    captureGatewayRootWorkReleaseObserver(),
+                    "real catalog readiness root",
+                  );
+                  catalogReleased = new Promise((resolve) => {
+                    observeRelease(resolve);
+                  });
+                  entered.resolve();
+                  await release.promise;
+                  return available(params);
+                })
+            : undefined;
+        if (readiness) {
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         }
-        expectRespondError(await call("talk.session.create", { mode: "transcription" }), {
-          message: expect.stringContaining("No configured audio transcription provider"),
-        });
-        expect(requests).toHaveLength(0);
+        const { call, start } = fileRpc(config, talkHandlers);
+        try {
+          const catalog = start("talk.catalog");
+          if (readiness) {
+            await awaitGateBeforeSettlement(
+              entered.promise,
+              catalog.completed,
+              "catalog settled before real readiness",
+            );
+            await vi.advanceTimersByTimeAsync(0);
+          }
+          release.resolve();
+          await catalog.completed;
+          const result = expectRespondOk(catalog.respond);
+          expect(result).toMatchObject({ transcription: { ready: false } });
+          expect(result).not.toHaveProperty("transcription.activeProvider");
+          if (reason === "unknown provider" || reason === "missing credentials") {
+            expect(result).toMatchObject({
+              transcription: { providers: [expect.objectContaining({ configured: false })] },
+            });
+          }
+          expectRespondError(await call("talk.session.create", { mode: "transcription" }), {
+            message: expect.stringContaining("No configured audio transcription provider"),
+          });
+          expect(requests).toHaveLength(0);
+        } finally {
+          release.resolve();
+          if (readiness) {
+            await catalogReleased;
+            readiness.mockRestore();
+          }
+        }
       });
     },
   );

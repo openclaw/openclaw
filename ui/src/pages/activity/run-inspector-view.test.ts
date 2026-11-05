@@ -75,7 +75,7 @@ it("labels a generic receipt's selected authority without claiming human intent 
 });
 
 it("renders the disconnected panel without retained evidence", () => {
-  expect(renderState({ status: "disconnected" }).textContent).toContain("Gateway disconnected");
+  expect(renderState({ status: "disconnected" }).textContent).toContain("Disconnected");
 });
 
 it("renders unsupported identity evidence without inferring expiry", () => {
