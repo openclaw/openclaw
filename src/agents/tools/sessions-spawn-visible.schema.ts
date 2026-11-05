@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { SessionMoveProfileTargetSchema } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
+import { WORKTREE_NAME_PATTERN } from "../worktrees/name.js";
 import { readToolStringParam } from "./common.js";
 
 export const SessionsSpawnPlacementSchema = Type.Union([
@@ -46,7 +47,11 @@ export const SESSIONS_SPAWN_SESSION_SCHEMA = {
     }),
   ),
   worktreeName: Type.Optional(
-    Type.String({ description: "Managed worktree name; requires worktree=true." }),
+    Type.String({
+      pattern: WORKTREE_NAME_PATTERN.source,
+      description:
+        "Managed worktree lowercase slug, 1–64 letters/digits/hyphens, starting with a letter or digit. Do not include a branch prefix such as codex/; OpenClaw supplies openclaw/. Requires worktree=true.",
+    }),
   ),
   worktreeBaseRef: Type.Optional(
     Type.String({ description: "Managed worktree base ref; requires worktree=true." }),

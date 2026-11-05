@@ -53,6 +53,7 @@ import {
 import { resolveRequesterPreferences } from "../subagents/spawn/subagent-spawn-requester-prefs.js";
 import { buildSubagentTaskMessage } from "../subagents/spawn/subagent-system-prompt.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
+import { validateName } from "../worktrees/name.js";
 import { normalizeToolModelOverride, readToolStringParam, ToolInputError } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
@@ -108,7 +109,17 @@ export async function maybeSpawnVisibleSession(params: {
       `Cloud placement requires visible=true and worktree=true. Corrected call: ${correctedVisibleSpawnCall(params.raw)}`,
     );
   }
-  const worktreeName = readToolStringParam(params.raw, "worktreeName");
+  const worktreeName = readToolStringParam(params.raw, "worktreeName", {
+    trim: false,
+    allowEmpty: true,
+  });
+  if (worktreeName !== undefined) {
+    try {
+      validateName(worktreeName);
+    } catch (error) {
+      throw new ToolInputError(error instanceof Error ? error.message : String(error));
+    }
+  }
   const worktreeBaseRef = readToolStringParam(params.raw, "worktreeBaseRef");
   const group = readToolStringParam(params.raw, "group");
   const projectId = readToolStringParam(params.raw, "projectId");
