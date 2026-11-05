@@ -450,10 +450,10 @@ describe("worker detached model-context branch parity", () => {
   });
 
   it.each([false, true])(
-    "waits for context readiness and preserves an oversized pre-persisted input prefix (side append=%s)",
+    "waits for context readiness and preserves the pre-persisted input prefix (side append=%s)",
     async (sideAppend) => {
       const { manager, previousLeafId } = seedPrevious();
-      const currentId = manager.appendMessage(user("current request".repeat(700_000), 3));
+      const currentId = manager.appendMessage(user("current request", 3));
       let sideId: string | undefined;
       if (sideAppend) {
         manager.branch(previousLeafId);

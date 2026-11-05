@@ -143,7 +143,6 @@ export async function prepareEmbeddedSessionForkContext(params: {
   const manager = await SessionManager.openModelContextAsync(target, {
     cwd: params.workspaceDir,
     signal: params.signal,
-    limits: null,
   });
   assertCurrent();
   const entries = manager.getBranch();

@@ -103,7 +103,7 @@ export async function readSessionManagerModelContextAsync<T>(
     admission?: UserTurnTranscriptAdmissionReceipt;
     signal?: AbortSignal;
     through?: TranscriptEntryAnchor;
-    limits?: SessionModelContextLimits | null;
+    limits?: SessionModelContextLimits;
   },
   consume: (context: ReturnType<typeof readSessionTranscriptModelContext>) => T,
   manager?: object,
@@ -112,7 +112,7 @@ export async function readSessionManagerModelContextAsync<T>(
   const receipt = options.admission ?? resolveSessionTranscriptReadFence(readTarget);
   const admission = receipt ? { ...receipt } : undefined;
   const through = options.through ? { ...options.through } : undefined;
-  const limits = options.limits ? { ...options.limits } : options.limits;
+  const limits = options.limits ? { ...options.limits } : undefined;
   options.signal?.throwIfAborted();
   const selected = captureSessionManagerIncognitoBinding(readTarget, manager);
   if (selected) {

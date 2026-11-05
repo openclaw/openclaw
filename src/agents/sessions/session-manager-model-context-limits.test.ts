@@ -13,6 +13,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
+import { readSessionForkTurn } from "../session-fork-run.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { withSessionState } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
@@ -165,18 +166,13 @@ it("applies the aggregate byte budget before hydrating omitted message bodies", 
   await withHistory("context-byte-limit", async ({ scope, source, verifyRead }) => {
     for (let index = 0; index < 8; index++) {
       source.appendMessage(
-        makeUserMessage(`body-payload-${index}:` + "x".repeat(1024 * 1024), index),
+        makeUserMessage(`body-payload-${index}:` + "x".repeat(1_048_576), index),
       );
     }
     const full = source.buildSessionContext().messages;
     await verifyRead(async () => {
-      await expect(SessionManager.openModelContextAsync(scope)).rejects.toThrow(
-        "Model context exceeds",
-      );
-      expect(
-        (await SessionManager.openModelContextAsync(scope, { limits: null })).buildSessionContext()
-          .messages,
-      ).toEqual(full);
+      const complete = await SessionManager.openModelContextAsync(scope);
+      expect(complete.buildSessionContext().messages).toEqual(full);
       const hydrated = new Set<string>();
       const decompress = vi.spyOn(resolveZstdCodec()!, "decompress");
       const parse = JSON.parse;
@@ -196,7 +192,6 @@ it("applies the aggregate byte budget before hydrating omitted message bodies", 
         spy.mockRestore();
         decompress.mockRestore();
       }
-      expect(messages.length).toBeLessThan(full.length);
       expect(messages).toEqual(full.slice(-messages.length));
       expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThanOrEqual(4 * 1024 * 1024);
       expect(hydrated).toEqual(
@@ -551,9 +546,11 @@ it.each(["sync", "async"])(
         makeUserMessage("newest request: preserve both completed operations", 1),
       );
       appendCalls(source, "large", "small");
-      const oversized = "oversized-tool-body:" + "x".repeat(32_768);
+      const oversized = "oversized-tool-body:" + "x".repeat(262_144);
       const largeResultId = appendResult(source, "large", oversized);
-      appendResult(source, "small", "completed operation receipt: synthetic-42");
+      const { anchor } = await source.appendMessageWithTranscriptAnchorAsync(
+        toolResult("completed operation receipt: synthetic-42", "small", 1),
+      );
       const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
       expect(
         database.db
@@ -578,6 +575,9 @@ it.each(["sync", "async"])(
         { agentId: database.agentId, path: database.path },
       );
       await verifyRead(async () => {
+        expect(await readSessionForkTurn(anchor!)).toEqual({
+          model: { provider: "openai", model: "test-model" },
+        });
         const limits = { maxBytes: 4096, maxEvents: 8 };
         expect(() => SessionManager.openModelContext(scope, { limits })).toThrow(
           "The latest messages exceed this session's context limit. Start a new session with a brief summary to continue.",

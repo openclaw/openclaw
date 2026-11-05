@@ -124,7 +124,7 @@ export type SessionModelContextWorkerInput = {
   target: SessionTranscriptRuntimeTarget;
   admission?: UserTurnTranscriptAdmissionReceipt;
   through?: TranscriptEntryAnchor;
-  limits?: SessionModelContextLimits | null;
+  limits?: SessionModelContextLimits;
   expectedIdentity?: DatabaseFileIdentity;
 };
 

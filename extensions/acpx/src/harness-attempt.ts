@@ -114,7 +114,6 @@ export async function runAcpHarnessAttempt(params: {
     const sessionContext = await SessionManager.openModelContextAsync(transcript, {
       cwd: input.workspaceDir,
       signal,
-      limits: null,
     });
     const entries = sessionContext.getBranch();
     messages = sessionContext.buildSessionContext().messages;
@@ -390,7 +389,6 @@ export async function runAcpHarnessAttempt(params: {
       await SessionManager.openModelContextAsync(transcript, {
         cwd: input.workspaceDir,
         through: written.result.anchor,
-        limits: null,
       })
     ).buildSessionContext().messages;
   } catch (error) {
