@@ -177,13 +177,16 @@ suite.define(() => {
             }
             if (document.querySelector(".agent-chat__input")) {
               const sampledRing = document.querySelector(".context-ring");
-              if (!Reflect.has(window, "firstComposerContext"))
+              if (!Reflect.has(window, "firstComposerContext")) {
                 Reflect.set(window, "firstComposerContext", {
                   label: sampledRing?.getAttribute("aria-label"),
                   opacity: sampledRing ? getComputedStyle(sampledRing).opacity : null,
                 });
+              }
             }
-            if (!Reflect.get(window, "composerControlFramesStopped")) requestAnimationFrame(sample);
+            if (!Reflect.get(window, "composerControlFramesStopped")) {
+              requestAnimationFrame(sample);
+            }
           };
           requestAnimationFrame(sample);
         });

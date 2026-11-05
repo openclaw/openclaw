@@ -1113,11 +1113,11 @@ try {
               // The catalog is demand-loaded: warm the controls through their real picker.
               await model.click();
               await page.waitForFunction(() => {
-                const model = document.querySelector("[data-chat-model-select]")?.textContent;
+                const modelText = document.querySelector("[data-chat-model-select]")?.textContent;
                 const effort = document.querySelector("[data-chat-thinking-select]")?.textContent;
                 return (
-                  model?.includes("Claude Haiku 5.5") &&
-                  model.includes("200K") &&
+                  modelText?.includes("Claude Haiku 5.5") &&
+                  modelText.includes("200K") &&
                   effort?.includes("High")
                 );
               });
