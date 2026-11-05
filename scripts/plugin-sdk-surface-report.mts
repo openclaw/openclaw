@@ -310,7 +310,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: accepted WorkerResourceReceipt type on plugin-entry (#189019).
       // +3: accepted WorkerRetention policy, operation, and observation types (#189346).
       // +1: accepted pluginCommandResultContinuesAgent for native command continuation.
-      3859,
+      // +3: type-only MemoryPluginDreaming{Provider,Status,PhaseStatus} for slot owners reporting dreaming status (#155860).
+      3862,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

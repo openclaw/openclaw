@@ -11,6 +11,8 @@ import type {
   MemoryFlushToolsPlan,
   MemoryPluginCapability,
   MemoryPluginCapabilityRegistration,
+  MemoryPluginDreamingProvider,
+  MemoryPluginDreamingStatus,
   MemoryProviderFlushPlanResolver,
   MemoryPluginPublicArtifact,
   MemoryPluginRuntime,
@@ -39,6 +41,9 @@ export type {
   MemoryFlushPlanResolver,
   MemoryFlushToolsPlan,
   MemoryPluginCapability,
+  MemoryPluginDreamingPhaseStatus,
+  MemoryPluginDreamingProvider,
+  MemoryPluginDreamingStatus,
   MemoryPluginPublicArtifact,
   MemoryPluginPublicArtifactsProvider,
   MemoryProviderFlushPlanResolver,
@@ -109,8 +114,10 @@ export function resolveMemoryCapabilityRegistration(
       };
       continue;
     }
+    // A later call that only adds providers (public artifacts, dreaming status)
+    // layers over the earlier runtime instead of replacing it.
     const preserveExisting =
-      Boolean(registration.capability.publicArtifacts) &&
+      Boolean(registration.capability.publicArtifacts || registration.capability.dreaming) &&
       !registration.capability.promptBuilder &&
       !registration.capability.flushPlanResolver &&
       !registration.capability.providerFlushPlanResolver &&
@@ -556,6 +563,31 @@ export async function listActiveMemoryPublicArtifacts(params: {
         left.agentIds.join("\0").localeCompare(right.agentIds.join("\0")) ||
         left.absolutePath.localeCompare(right.absolutePath),
     );
+}
+
+/**
+ * Asks the memory slot owner how its own dreaming is scheduled and how far
+ * consolidation has got. The report is an admitted plugin value and passes by
+ * reference (see the plugin value boundary in docs/plugins/sdk-runtime.md).
+ * Returns `null` when no provider is registered, when it declines, or when the
+ * call fails; callers then keep memory-core's resolution, so a failing provider
+ * can never blank out the page.
+ */
+export async function resolveActiveMemoryDreamingStatus(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): Promise<MemoryPluginDreamingStatus | null> {
+  const capability = getMemoryCapability();
+  const provider: MemoryPluginDreamingProvider | undefined = capability?.capability.dreaming;
+  if (!provider) {
+    return null;
+  }
+  try {
+    return (await provider.getStatus(params)) ?? null;
+  } catch (err) {
+    log.warn(`ignoring dreaming status from plugin "${capability?.pluginId}": ${String(err)}`);
+    return null;
+  }
 }
 
 export function clearMemoryPluginState(): void {

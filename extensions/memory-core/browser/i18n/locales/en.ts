@@ -65,6 +65,8 @@ const en = {
         shortTermCount: "Waiting for promotion",
         phaseHitCount: "Phase signals",
         phaseHitValue: "{light} light · {rem} REM",
+        ownerReported:
+          "Reported by {plugin} about its own dreaming. Phase signals are memory-core's own store.",
       },
       health: {
         provider: "Provider",

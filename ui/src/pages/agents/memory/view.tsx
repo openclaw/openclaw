@@ -85,7 +85,7 @@ function DreamingControls(props: DreamingProps) {
     const parts = [
       data().nextCycle ? `${t("dreaming.status.nextSweepPrefix")} ${data().nextCycle}` : null,
       data().timezone,
-      data().promotedCount > 0
+      (data().promotedCount ?? 0) > 0
         ? `${data().promotedCount} ${t("dreaming.status.promotedSuffix")}`
         : null,
     ].filter(Boolean);
@@ -96,12 +96,23 @@ function DreamingControls(props: DreamingProps) {
       <SettingsToggleRow
         title={t("dreaming.header.toggle")}
         description={
-          <span class="dreams-controls__status">
-            <DreamingRead on={props.selectedAgentId}>{description()}</DreamingRead>
-          </span>
+          <>
+            <span class="dreams-controls__status">
+              <DreamingRead on={props.selectedAgentId}>{description()}</DreamingRead>
+            </span>
+            <Show when={props.header.owner.hint}>
+              {(hint) => <span class="dreams-controls__status">{hint()}</span>}
+            </Show>
+          </>
         }
-        checked={props.active}
-        disabled={!props.header.canUpdateConfig || props.header.configuredDreaming.engineOff}
+        // The switch shows the host setting it writes; a slot owner that dreams
+        // on its own only lights the scene.
+        checked={props.header.dreamingOn}
+        disabled={
+          !props.header.canUpdateConfig ||
+          props.header.configuredDreaming.engineOff ||
+          props.header.owner.locksToggle
+        }
         saving={props.header.loading}
         // The owner asks for confirmation first; the switch moves once the write lands.
         onChange={(enabled) => {
@@ -494,6 +505,11 @@ function DreamingReview(props: DreamingProps) {
   return (
     <SettingsSection
       title={t("dreaming.advanced.eyebrow")}
+      description={
+        props.header.owner.pluginId
+          ? t("dreaming.advanced.descriptionOwner", { plugin: props.header.owner.pluginId })
+          : undefined
+      }
       actions={
         <>
           <Show when={props.dreamDiaryActionLoading}>

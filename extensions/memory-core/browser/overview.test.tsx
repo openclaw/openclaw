@@ -312,6 +312,47 @@ describe("MemoryOverview", () => {
     expect(container.textContent?.includes(diagnostic.error)).toBe(!neutral);
   });
 
+  it("schedules each phase by its own flags while a slot owner reports", () => {
+    const payload = fixturePayload();
+    payload.dreaming.enabled = false;
+    payload.dreaming.reportedByProvider = true;
+    payload.dreaming.phases.deep.enabled = false;
+    payload.dreaming.phases.rem.managedCronPresent = false;
+    const container = renderOverview(
+      { kind: "ready", payload },
+      { kind: "pinned", id: "acme-memory", availability: "enabled" },
+    );
+    const row = (name: RegExp) =>
+      [...container.querySelectorAll(".settings-row")].find((entry) =>
+        name.test(entry.textContent ?? ""),
+      );
+    // The host switch is off, yet the owner's running light phase is scheduled.
+    expectText(row(/Light phase/)!, ["Enabled"], ["Disabled"]);
+    expectText(row(/Deep phase/)!, ["Disabled"]);
+    expectText(row(/REM phase/)!, ["Not scheduled"]);
+  });
+
+  it.each([
+    [{ promotedToday: 4, promotedTotal: 139, shortTermCount: 6 }, ["4 today · 139 total", "6"]],
+    [undefined, ["n/a today · n/a total"]],
+  ] as const)("shows only the slot owner's reported counters (%o)", (reportedStats, expected) => {
+    const payload = fixturePayload();
+    payload.dreaming.reportedByProvider = true;
+    if (reportedStats) {
+      payload.dreaming.reportedStats = reportedStats;
+    }
+    const container = renderOverview(
+      { kind: "ready", payload },
+      { kind: "pinned", id: "acme-memory", availability: "enabled" },
+    );
+    expectText(container, [...expected, "Reported by acme-memory"], ["3 today · 21 total"]);
+  });
+
+  it("keeps memory-core's activity figures when no slot owner reports", () => {
+    const container = renderOverview({ kind: "ready", payload: fixturePayload() });
+    expectText(container, ["3 today · 21 total"], ["Reported by"]);
+  });
+
   it("states one sweep once when every phase shares its cadence", () => {
     const payload = fixturePayload();
     const dreaming = payload.dreaming!;

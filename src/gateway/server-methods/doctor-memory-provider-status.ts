@@ -1,3 +1,4 @@
+import type { DoctorMemoryDreamingPayload } from "../../../packages/gateway-protocol/src/doctor-memory.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import type { MemoryHealth } from "../../plugins/memory-provider-types.js";
@@ -18,6 +19,8 @@ type ProviderStatusRequest = Pick<
   cfg: OpenClawConfig;
   agentId: string;
   providerId: string;
+  /** Dreaming section composed from the slot owner's report, sent with every health reply. */
+  dreaming?: DoctorMemoryDreamingPayload;
 };
 
 /** Reads provider-native memory health under the current operator request authority. */
@@ -25,7 +28,13 @@ export async function respondProviderMemoryStatus(params: ProviderStatusRequest)
   const respondHealth = (health: MemoryHealth, provider = params.providerId) =>
     params.respond(
       true,
-      { agentId: params.agentId, provider, health, embedding: SKIPPED_MEMORY_EMBEDDING_PROBE },
+      {
+        agentId: params.agentId,
+        provider,
+        health,
+        embedding: SKIPPED_MEMORY_EMBEDDING_PROBE,
+        ...(params.dreaming ? { dreaming: params.dreaming } : {}),
+      },
       undefined,
     );
   let open = true;
