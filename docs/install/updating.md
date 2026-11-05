@@ -53,6 +53,21 @@ backup.
 
 ## Update implementation contract
 
+Candidate Doctor prepares plugin setup sources asynchronously before resolving
+legacy session migrations. Configured external channels can then finish
+post-plugin Doctor without an unprepared-source refusal blocking later state
+repairs. Existing plugin selection, activation, and source checks still apply.
+The candidate must contain this fix; published updaters need no new marker or
+schema change.
+
+Plugin updates preserve authored environment references when a replacement
+plugin moves their settings, including single-file includes. The candidate
+plugin-update command must contain this repair; the installed updater needs no
+new marker or schema migration. Existing config and plugin-index records remain
+readable. Previously flattened literals are preserved, not guessed back into
+references. Config publication, backup, rollback, and deferred data-migration
+guidance keep their existing owners.
+
 Candidate Gateway rehearsal can prepare strictly valid config in its complete
 private update namespace even when a newer release wrote the config. It preserves
 the source writer stamp for installed-updater capture checks; the target's normal
@@ -258,6 +273,13 @@ its matching binary for rollback rather than lowering version markers.
 
 PostgreSQL original-state captures acquire offline custody before using the exact
 database backup provider. The installed updater must contain this repair.
+
+The pre-migration database backup for PostgreSQL families needs exclusive state
+ownership, and it runs after activation replaces the install. When ownership is
+unavailable after the service stop, for example because a Gateway the updater does
+not manage is still serving, the update now refuses before activation, leaving
+the install unchanged and the Gateway running. Stop the Gateway through its service
+owner, then rerun the update. The installed updater must contain this repair.
 Update-history writes participate in PostgreSQL's generation handoff to Doctor;
 all other generation checks remain in force. Update status reads history and
 recovery outcomes through the configured database engine.
@@ -911,6 +933,18 @@ including Linux hosts without systemd, the update continues and records a warnin
 It leaves unverified service definitions unchanged and skips their automatic
 restart. Restart the Gateway you launched manually after the update, or use its
 actual supervisor. Doctor still checks for active state writers before migrations.
+
+Git updates also check persisted Gateway ownership before replacing checkout or
+runtime files. When native service discovery misses a live or unverifiable owner,
+the update continues with a warning in the terminal, JSON result, and update
+history. The warning names the PID and installation root when known: the Gateway
+keeps running the previous runtime and may fail to load lazily loaded chunks until
+restarted. A Gateway that detects replacement of its runtime may stop itself and
+require relaunch. Restart it through its actual service manager, or press Ctrl+C
+in its original terminal and rerun its Gateway command. Positively identified
+disjoint installations stay silent. Existing managed-service and database-capture
+refusals still apply. The installed update driver must contain this warning behavior; a
+newer candidate cannot change an older driver's publication behavior.
 
 On Linux, unmask a managed systemd unit before updating. A masked unit
 (`masked` or `masked-runtime`), `RefuseManualStart=yes`, or a disabled and inactive

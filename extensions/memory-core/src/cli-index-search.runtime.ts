@@ -195,7 +195,12 @@ export async function runMemoryForget(opts: MemoryForgetCommandOptions) {
       dryRun: Boolean(opts.dryRun),
     });
     if (opts.json) {
-      defaultRuntime.writeJson(report);
+      // The sidecar notice goes to stderr; record it in the report scripts keep, as status --json does.
+      defaultRuntime.writeJson(
+        slotOwner
+          ? { ...report, provider: slotOwner, memoryCore: "consolidation-sidecar" }
+          : report,
+      );
       return;
     }
     const lines = [

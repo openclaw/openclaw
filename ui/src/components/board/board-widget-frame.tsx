@@ -74,6 +74,7 @@ export function createBoardWidgetFrame(host: {
   let initialTheme = document.documentElement.dataset.themeMode === "light" ? "light" : "dark";
   let sandboxRequestUrl = "";
   let frameError = "";
+  let linkFailed = false;
   let frameElement: HTMLIFrameElement | undefined;
   let releaseTheme: (() => void) | undefined;
   let waiting = false;
@@ -222,6 +223,7 @@ export function createBoardWidgetFrame(host: {
 
   function resetFailures(notify = true): void {
     confirmation.cancel();
+    linkFailed = false;
     waiting = false;
     renderStalled = false;
     contentVisible = false;
@@ -317,6 +319,12 @@ export function createBoardWidgetFrame(host: {
             );
           },
         }),
+      onLinkResult: (ok) => {
+        if (linkFailed !== !ok) {
+          linkFailed = !ok;
+          changes.emit();
+        }
+      },
       onFrameUrl: (url) => {
         lastFrameUrl = url;
       },
@@ -597,6 +605,7 @@ export function createBoardWidgetFrame(host: {
         waiting,
         stalled: renderStalled,
         covered: host.loadingCovered?.(),
+        linkFailed,
       };
     },
     restoreFocus(event: Event) {
@@ -662,6 +671,11 @@ export function BoardWidgetFrame(props: {
     >
       <div class="board-widget__frame-pane">
         <McpAppConfirmation confirmation={props.state().confirmation} />
+        <Show when={view().linkFailed}>
+          <div class="board-widget__notice" role="status">
+            {t("board.widget.linkFailed")}
+          </div>
+        </Show>
         <Show when={!view().visible && !view().covered}>
           <Switch
             fallback={
