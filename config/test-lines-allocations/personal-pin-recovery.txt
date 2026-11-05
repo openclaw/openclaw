@@ -1,2 +1,2 @@
-# Catalog/runtime pin scoping, reconnect guidance, and same-session Gateway recovery.
-272
+# Personal account ownership, pin scoping, reconnect guidance, and Gateway recovery.
+296

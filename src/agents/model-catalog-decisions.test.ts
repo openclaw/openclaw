@@ -525,6 +525,30 @@ describe("captured model decisions", () => {
     },
   );
 
+  it("keeps a known personal account when the saved provider hint is stale", () => {
+    const profileId =
+      "personal:00000000-0000-4000-8000-000000000001:00000000-0000-4000-8000-000000000002";
+    const owner = decisions({
+      preferredProfileId: profileId,
+      pinnedProfileId: profileId,
+      profileProvider: "previous-provider",
+      preparedAuthStore: authStore({
+        "anthropic:shared": apiKey("anthropic"),
+        "previous:shared": apiKey("previous-provider"),
+      }),
+      preparedPersonalCatalog: {
+        profiles: { [profileId]: { credential: apiKey("anthropic") } },
+        links: [],
+        isCurrent: () => true,
+      },
+    });
+    expectAvailable(owner.evaluateEntry(model("anthropic", "claude-opus-5-5")), profileId);
+    expectAvailable(
+      owner.evaluateEntry(model("previous-provider", "available-model")),
+      "previous:shared",
+    );
+  });
+
   it("retains native provenance and mode without blessing a same-name bearer credential", () => {
     expect(
       resolveUsableAgentCredentialModes({
