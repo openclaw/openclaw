@@ -12,7 +12,10 @@ Read [shared conventions](references/conventions.md). This workflow is read-only
    default; try a concise variant, `any`, or `phrase` when useful. No embeddings,
    regex, graph traversal or server-side synthesis is available. Narrow by
    ontology type/kind when appropriate; use `knowledge_records` and pagination
-   for an inventory, not a ranked search pretending to be exhaustive.
+   for an inventory, not a ranked search pretending to be exhaustive. A hit with
+   `matches: ["superseded"]` is the current replacement of an earlier record the
+   query matched; `via` names that earlier revision. The words matched `via`,
+   not the returned record.
 2. Use `knowledge_lookup({query})` only for an already-known exact record ID,
    full title or declared alias. It does not perform keyword search. If it returns
    `missing`, fall back to `knowledge_grep` before concluding no relevant record

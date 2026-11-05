@@ -524,3 +524,89 @@ it("an index built before row tracking is repopulated, never left empty and read
   });
   expect(await f.total({ query: "lanternword" })).toBe(1);
 });
+
+it("an active search follows superseded wording to the current replacement after direct matches", async () => {
+  const f = await fixture();
+  const superseded = (by: string) => ({ lifecycle: "superseded", superseded_by: by });
+  // v1 → v2 → v3: only v1 holds the query's words; v3 is current.
+  await f.put("pilot_v1", "Pilot plan", "The garden pilot starts at the Harbor plot.\n", {
+    ...superseded("pilot_v2"),
+    revision: 3,
+  });
+  await f.put("pilot_v2", "Pilot plan", "Pilot pushed back a month.\n", superseded("pilot_v3"));
+  await f.put("pilot_v3", "Pilot plan", "Moved to June after the soil test.\n", { tags: ["kept"] });
+  // Already a direct match: listed once, as the direct hit.
+  await f.put("venue_v1", "Venue", "Harbor plot boathouse.\n", superseded("venue_v2"));
+  await f.put("venue_v2", "Venue", "Harbor plot library annex.\n");
+  // Chains ending in a withdrawn record or looping never surface a record.
+  await f.put("gone_old", "Gone", "Harbor plot shed.\n", superseded("gone_new"));
+  await f.put("gone_new", "Gone", "Withdrawn.\n", { lifecycle: "withdrawn" });
+  await f.put("loop_one", "Loop", "Harbor plot loop.\n", superseded("loop_two"));
+  await f.put("loop_two", "Loop", "Other loop.\n", superseded("loop_one"));
+
+  const full = await f.service.grep({ query: "harbor plot", detail: "full" }, f.owner);
+  expect(Check(contract.operations.grep.output, full)).toBeTruthy();
+  expect(ids(full)).toStrictEqual(["venue_v2", "pilot_v3"]);
+  expect(full.total).toBe(2);
+  const followed = full.hits[1]!;
+  if (!isFullHit(followed)) {
+    throw new Error("expected a full hit");
+  }
+  expect(followed).toMatchObject({
+    matches: ["superseded"],
+    score: null,
+    snippet: { matchLocated: false },
+    citation: { id: "pilot_v3" },
+    via: { id: "pilot_v1", title: "Pilot plan", revision: 3, path: "notes/pilot_v1.md" },
+  });
+  expect(followed.via!.hash).toMatch(/^[0-9a-f]{64}$/);
+  const compact = await f.service.grep({ query: "harbor plot" }, f.owner);
+  expect(Check(contract.operations.grep.output, compact)).toBeTruthy();
+  expect(compact.hits[1]!.via).toStrictEqual({ id: "pilot_v1", title: "Pilot plan", revision: 3 });
+
+  // Pagination spans direct and followed hits as one list.
+  const second = await f.service.grep({ query: "harbor plot", offset: 1, limit: 1 }, f.owner);
+  expect([ids(second), second.total, second.nextOffset]).toStrictEqual([["pilot_v3"], 2, null]);
+  // Filters apply to the current record; explicit history returns the earlier
+  // records themselves, including the eligible dead-end chains above.
+  expect(ids(await f.service.grep({ query: "harbor plot", tag: "kept" }, f.owner))).toStrictEqual([
+    "pilot_v3",
+  ]);
+  expect(await f.total({ query: "harbor plot", tag: "other" })).toBe(0);
+  const history = await f.service.grep({ query: "harbor plot", lifecycle: "superseded" }, f.owner);
+  expect(ids(history).toSorted()).toStrictEqual(["gone_old", "loop_one", "pilot_v1", "venue_v1"]);
+  expect(history.hits.some((hit) => hit.via)).toBe(false);
+});
+
+it("superseded-record edits update the persistent history index and the search snapshot", async () => {
+  const f = await fixture();
+  await f.put("plan_one", "Plan", "Original quillword wording.\n", {
+    lifecycle: "superseded",
+    superseded_by: "plan_two",
+  });
+  await f.put("plan_two", "Plan", "Current wording.\n");
+  const before = await f.service.grep({ query: "quillword" }, f.owner);
+  expect(ids(before)).toStrictEqual(["plan_two"]);
+
+  // Only the superseded record changes; the current-record corpus does not.
+  await f.put("plan_one", "Plan", "Revised inkword wording.\n", {
+    lifecycle: "superseded",
+    superseded_by: "plan_two",
+    revision: 2,
+  });
+  const after = await f.service.grep({ query: "inkword" }, f.owner);
+  expect(ids(after)).toStrictEqual(["plan_two"]);
+  expect(after.hits[0]!.via!.revision).toBe(2);
+  expect(after.index.snapshot).not.toBe(before.index.snapshot);
+  expect(await f.total({ query: "quillword" })).toBe(0);
+
+  // A dropped history index is rebuilt instead of served empty under a matching snapshot.
+  f.store.withDatabase((db) => {
+    for (const { name } of db
+      .prepare("SELECT name FROM sqlite_master WHERE name LIKE 'keyword_history_%'")
+      .all()) {
+      db.exec(`DROP TABLE IF EXISTS ${String(name)}`);
+    }
+  });
+  expect(ids(await f.service.grep({ query: "inkword" }, f.owner))).toStrictEqual(["plan_two"]);
+});

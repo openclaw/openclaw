@@ -250,62 +250,88 @@ export function keywordExpression(input: SearchInput): string {
     : tokens.map((t) => `"${t}"`).join(input.mode === "any" ? " OR " : " AND ");
 }
 
-/** Bring the scope's FTS table to exactly `records`. Rows are tracked by record
- * ID and content hash, so a change re-indexes only the records that changed;
- * the indexed set is always exactly the eligible records passed in. */
+const FTS_COLUMNS = "id UNINDEXED, title, aliases, body, tokenize='unicode61 remove_diacritics 2'";
+
+/** Superseded records naming their replacement: the corpus that lets a current-only
+ * search reach a current record through an earlier version's wording. */
+const replaced = (records: LoadedRecord[]) =>
+  records.filter((r) => r.lifecycle === "superseded" && r.metadata.superseded_by);
+
+/** Bring one tracked FTS table to exactly `records`. Rows are tracked by record ID
+ * and content hash, so a change re-indexes only the records that changed. */
+function syncFts(db: DatabaseSync, table: string, rows: string, records: LoadedRecord[]) {
+  const wanted = new Map(records.map((r) => [r.id, r]));
+  const remove = db.prepare(`DELETE FROM ${table} WHERE rowid=?`),
+    untrack = db.prepare(`DELETE FROM ${rows} WHERE id=?`);
+  for (const row of db.prepare(`SELECT id,hash,fts_rowid FROM ${rows}`).all()) {
+    const r = wanted.get(String(row.id));
+    if (r && r.hash === row.hash) {
+      wanted.delete(r.id);
+      continue;
+    }
+    remove.run(row.fts_rowid!);
+    untrack.run(row.id!);
+  }
+  const insert = db.prepare(`INSERT INTO ${table}(id,title,aliases,body) VALUES (?,?,?,?)`),
+    track = db.prepare(`INSERT INTO ${rows} VALUES (?,?,?)`);
+  for (const r of wanted.values()) {
+    track.run(
+      r.id,
+      r.hash,
+      insert.run(r.id, r.title, (r.metadata.aliases ?? []).join("\n"), r.body).lastInsertRowid,
+    );
+  }
+}
+
+/** Bring the scope's FTS tables to exactly the eligible `records` and the
+ * `replaced` subset of eligible `historical` records. One snapshot covers both
+ * tables, so an edit to a superseded record changes the token that pagination
+ * compares even when the current-record corpus is unchanged. */
 function reconcileKeywordIndex(
   db: DatabaseSync,
   data: Snapshot,
   records: LoadedRecord[],
+  historical: LoadedRecord[],
   binding: string,
   generation: string,
 ) {
   const suffix = digest(binding),
-    table = `keyword_fts_v1_${suffix}`,
-    rows = `keyword_rows_v1_${suffix}`;
+    history = replaced(historical);
+  const tables = [
+    { table: `keyword_fts_v1_${suffix}`, rows: `keyword_rows_v1_${suffix}`, records },
+    {
+      table: `keyword_history_fts_v1_${suffix}`,
+      rows: `keyword_history_rows_v1_${suffix}`,
+      records: history,
+    },
+  ] as const;
   const snapshot = digest(
     JSON.stringify([
       generation,
       data.ontology?.fingerprint,
       records.map((r) => [r.id, r.path, r.hash, r.revision]),
+      history.map((r) => [r.id, r.path, r.hash, r.revision]),
     ]),
   );
-  const tracked = tableExists(db, rows);
-  db.exec(
-    `CREATE VIRTUAL TABLE IF NOT EXISTS ${table} USING fts5(id UNINDEXED, title, aliases, body, tokenize='unicode61 remove_diacritics 2')`,
-  );
-  db.exec(
-    `CREATE TABLE IF NOT EXISTS ${rows} (id TEXT PRIMARY KEY, hash TEXT NOT NULL, fts_rowid INTEGER NOT NULL) STRICT`,
-  );
-  // An index built before row tracking has unknown contents: start it over once,
-  // and forget its recorded snapshot so this call repopulates it.
-  if (!tracked) {
-    db.exec(`DELETE FROM ${table}`);
-    db.prepare("DELETE FROM keyword_state_v1 WHERE binding=?").run(binding);
+  let untracked = false;
+  for (const { table, rows } of tables) {
+    const tracked = tableExists(db, rows);
+    db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS ${table} USING fts5(${FTS_COLUMNS})`);
+    db.exec(
+      `CREATE TABLE IF NOT EXISTS ${rows} (id TEXT PRIMARY KEY, hash TEXT NOT NULL, fts_rowid INTEGER NOT NULL) STRICT`,
+    );
+    // A table without row tracking (built before it existed, or partially
+    // dropped) has unknown contents: start it over and repopulate below.
+    if (!tracked) {
+      db.exec(`DELETE FROM ${table}`);
+      untracked = true;
+    }
   }
   const state = db.prepare("SELECT * FROM keyword_state_v1 WHERE binding=?").get(binding);
   let indexedAt = String(state?.indexed_at ?? new Date().toISOString());
-  if (state?.snapshot !== snapshot) {
-    const wanted = new Map(records.map((r) => [r.id, r]));
-    const remove = db.prepare(`DELETE FROM ${table} WHERE rowid=?`),
-      untrack = db.prepare(`DELETE FROM ${rows} WHERE id=?`);
-    for (const row of db.prepare(`SELECT id,hash,fts_rowid FROM ${rows}`).all()) {
-      const r = wanted.get(String(row.id));
-      if (r && r.hash === row.hash) {
-        wanted.delete(r.id);
-        continue;
-      }
-      remove.run(row.fts_rowid!);
-      untrack.run(row.id!);
-    }
-    const insert = db.prepare(`INSERT INTO ${table}(id,title,aliases,body) VALUES (?,?,?,?)`),
-      track = db.prepare(`INSERT INTO ${rows} VALUES (?,?,?)`);
-    for (const r of wanted.values()) {
-      track.run(
-        r.id,
-        r.hash,
-        insert.run(r.id, r.title, (r.metadata.aliases ?? []).join("\n"), r.body).lastInsertRowid,
-      );
+  if (untracked || state?.snapshot !== snapshot) {
+    for (const { table, rows, records: wanted } of tables) {
+      syncFts(db, table, rows, wanted);
     }
     indexedAt = new Date().toISOString();
     const indexed = { snapshot, indexed_at: indexedAt };
@@ -317,7 +343,70 @@ function reconcileKeywordIndex(
         .onConflict((oc) => oc.column("binding").doUpdateSet(indexed)),
     );
   }
-  return { table, snapshot, indexedAt };
+  return { table: tables[0].table, historyTable: tables[1].table, snapshot, indexedAt };
+}
+
+/** Superseded records whose wording matches `expression`, each resolved through
+ * its `superseded_by` chain to a record in `current` (the filtered current-record
+ * corpus). Chains step only through eligible superseded records; one that ends in
+ * a missing, withdrawn, ineligible or filtered-out record yields nothing. Results
+ * keep the history table's BM25 order (then ID); each target appears once, after
+ * every ID in `direct`, credited to its best-ranked earlier record. */
+function followReplacements(
+  db: DatabaseSync,
+  historyTable: string,
+  expression: string,
+  historical: LoadedRecord[],
+  current: LoadedRecord[],
+  direct: () => Set<string>,
+) {
+  const matched = db
+    .prepare(
+      `SELECT id FROM ${historyTable} WHERE ${historyTable} MATCH ? ORDER BY bm25(${historyTable},0,8,6,1),id`,
+    )
+    .all(expression)
+    .map((row) => String(row.id));
+  if (!matched.length) {
+    return [];
+  }
+  const byId = new Map(historical.map((r) => [r.id, r])),
+    now = new Map(current.map((r) => [r.id, r])),
+    resolved = new Map<string, LoadedRecord | null>();
+  const resolve = (from: string) => {
+    const path = new Set<string>();
+    let next: string | undefined = from,
+      found: LoadedRecord | null = null;
+    while (next !== undefined && !path.has(next)) {
+      const known = resolved.get(next);
+      if (known !== undefined) {
+        found = known;
+        break;
+      }
+      path.add(next);
+      const target = now.get(next);
+      if (target) {
+        found = target;
+        break;
+      }
+      const r = byId.get(next);
+      next = r?.lifecycle === "superseded" ? r.metadata.superseded_by : undefined;
+    }
+    for (const id of path) {
+      resolved.set(id, found);
+    }
+    return found;
+  };
+  const seen = direct(),
+    out: { record: LoadedRecord; via: LoadedRecord }[] = [];
+  for (const id of matched) {
+    const via = byId.get(id)!,
+      record = resolve(via.metadata.superseded_by!);
+    if (record && !seen.has(record.id)) {
+      seen.add(record.id);
+      out.push({ record, via });
+    }
+  }
+  return out;
 }
 
 /** Verification reconciles the same index without running a synthetic ranked search. */
@@ -336,6 +425,7 @@ export function verifyKeywordIndex(
           db,
           data,
           eligible(data, withdrawn, false),
+          eligible(data, withdrawn, true),
           binding,
           generation,
         );
@@ -372,20 +462,19 @@ export function keywordSearch(
     freshness: queryFreshness(data.checkedAt),
     coverage: coverage(data),
   };
-  const records = eligible(
-      data,
-      withdrawn,
-      input.lifecycle !== undefined && input.lifecycle !== "active",
-    ),
+  const current = (input.lifecycle ?? "active") === "active",
+    historical = eligible(data, withdrawn, true),
+    records = current ? eligible(data, withdrawn, false) : historical,
     selected = filtered(data, records, input);
   try {
     return runSqliteImmediateTransactionSync(
       db,
       (): SearchOutput => {
-        const { table, snapshot, indexedAt } = reconcileKeywordIndex(
+        const { table, historyTable, snapshot, indexedAt } = reconcileKeywordIndex(
           db,
           data,
           records,
+          historical,
           binding,
           generation,
         );
@@ -395,9 +484,7 @@ export function keywordSearch(
         const corpus = selected.length === records.length ? table : "keyword_query_v1";
         if (corpus !== table) {
           db.exec("DROP TABLE IF EXISTS temp.keyword_query_v1");
-          db.exec(
-            "CREATE VIRTUAL TABLE temp.keyword_query_v1 USING fts5(id UNINDEXED, title, aliases, body, tokenize='unicode61 remove_diacritics 2')",
-          );
+          db.exec(`CREATE VIRTUAL TABLE temp.keyword_query_v1 USING fts5(${FTS_COLUMNS})`);
           const insertQuery = db.prepare(
             "INSERT INTO temp.keyword_query_v1(id,title,aliases,body) VALUES (?,?,?,?)",
           );
@@ -458,16 +545,39 @@ export function keywordSearch(
             -Number(row.score),
           );
         });
+        // A current-record search also reaches current records through the wording
+        // of superseded versions it hides, listed after every direct match. The hit
+        // cites the current record; `via` pins the earlier revision that matched.
+        const followed = current
+          ? followReplacements(db, historyTable, expression, historical, selected, () => {
+              const ids = db.prepare(`SELECT id FROM ${corpus} WHERE ${corpus} MATCH ?`);
+              return new Set(ids.all(expression).map((r) => String(r.id)));
+            })
+          : [];
+        const from = Math.max(0, offset - total);
+        for (const { record, via } of followed.slice(from, from + limit - hits.length)) {
+          const result = hit(record, "body", 0, ["superseded"], null);
+          result.snippet.matchLocated = false;
+          result.via = {
+            id: via.id,
+            title: via.title,
+            path: via.path,
+            revision: via.revision,
+            hash: via.hash,
+          };
+          hits.push(result);
+        }
         if (corpus !== table) {
           db.exec("DROP TABLE temp.keyword_query_v1");
         }
+        const combined = total + followed.length;
         return {
           ...base,
           freshness: queryFreshness(data.checkedAt, indexedAt),
           hits,
           resultCount: hits.length,
-          total,
-          nextOffset: offset + limit < total ? offset + limit : null,
+          total: combined,
+          nextOffset: offset + limit < combined ? offset + limit : null,
           index: {
             state: "ready",
             lag: false,
