@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { isRetryableGatewayStartupUnavailableError } from "../../packages/gateway-protocol/src/startup-unavailable.js";
 import type { SessionAccessScope } from "../config/sessions/session-accessor.sqlite-contract.js";
 import {
   SessionQuestionCustodyRetiredError,
@@ -393,12 +394,13 @@ ${JSON.stringify({ id: questionId, status: question.record.status, answers: ques
     }
     if (
       !claimAttempted &&
-      hasSqliteWorkerErrorCodeInEnvelope(error, [
-        "closed",
-        "overloaded",
-        "unavailable",
-        "outcome-unknown",
-      ])
+      (isRetryableGatewayStartupUnavailableError(error) ||
+        hasSqliteWorkerErrorCodeInEnvelope(error, [
+          "closed",
+          "overloaded",
+          "unavailable",
+          "outcome-unknown",
+        ]))
     ) {
       // No native claim was attempted. Retry preparation only while the same
       // Gateway owns this exact custody; fresh policy still owns admission.

@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
+import { gatewayStartupUnavailableDetails } from "../../packages/gateway-protocol/src/startup-unavailable.js";
 import { SessionQuestionCustodyRetiredError } from "../config/sessions/session-questions-custody-error.js";
 import type { DurableQuestion } from "../config/sessions/session-questions.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -725,6 +727,48 @@ describe("pre-admission infrastructure recovery", () => {
         await scope.drain();
         await scheduler.stop();
       }
+    },
+  );
+
+  it.each(["startup", "unavailable", "claimed-startup"] as const)(
+    "retries only an unclaimed startup rejection, not %s execution",
+    async (kind) => {
+      const f = fixture();
+      const release = vi.fn();
+      state.restore.mockResolvedValue({ authority: f.authority, release });
+      const error = new GatewayClientRequestError({
+        code: "UNAVAILABLE",
+        message: "agent unavailable",
+        retryable: true,
+        ...(kind !== "unavailable" ? { details: gatewayStartupUnavailableDetails() } : {}),
+      });
+      f.dispatch.mockImplementation(async (request, options) => {
+        if (kind === "claimed-startup") {
+          await options.commitAdmission?.({
+            runId: request.idempotencyKey,
+            sessionId: "session",
+            sessionKey: "agent:main:test",
+            storePath: "/tmp/fixture.db",
+            lifecycleGeneration: "epoch",
+            assertCurrent() {},
+          });
+        }
+        throw error;
+      });
+      const pending = dispatchQuestionContinuation(f.params);
+      if (kind === "startup") {
+        await expect(pending).resolves.toEqual({
+          status: "admission_owed",
+          questionId: "ask_fixture",
+        });
+      } else {
+        await expect(pending).rejects.toBe(error);
+      }
+      expect(
+        state.operate.mock.calls.filter(([, op]) => op.kind !== "get").map(([, op]) => op.kind),
+      ).toEqual(kind === "startup" ? [] : kind === "unavailable" ? ["block"] : ["claim", "finish"]);
+      expect(release).toHaveBeenCalledOnce();
+      expect(f.dispatch).toHaveBeenCalledOnce();
     },
   );
 
