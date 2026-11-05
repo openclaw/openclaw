@@ -64,6 +64,21 @@ it("preserves each user projection and the timestamp when merging turns", () => 
   ).toEqual([{ ...user([text("before"), text("projected")]), timestamp: 1000 }]);
 });
 
+it.each([0, 1] as const)(
+  "retains original content with an unsupported projection on row %s",
+  (index) => {
+    const messages: [ReturnType<typeof user>, ReturnType<typeof user>] = [
+      user("before"),
+      user("after"),
+    ];
+    const invalid = { ...messages[index], __openclaw: { modelPromptProjection: { version: 99 } } };
+    messages[index] = invalid;
+    expect(validateAnthropicTurns(asMessages(messages))).toMatchObject([
+      { role: "user", content: [text("before"), text("after")] },
+    ]);
+  },
+);
+
 const legacy = [call("functionCall"), text("Checking")];
 const omitted = [text("[tool calls omitted]")];
 it.each<[string, unknown[], unknown[], unknown[], Record<string, unknown>?]>([

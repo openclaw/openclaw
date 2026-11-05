@@ -596,7 +596,7 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
         timestamp: differentLeaf ? 2 : 1,
       };
       const repairedMessages: AgentMessage[] = [currentUser];
-      const { activeSession } = createActiveSession([]);
+      const { activeSession } = createActiveSession(differentLeaf ? [] : [currentUser]);
       const branchAsync = vi.fn(async () => undefined);
       const resetLeafAsync = vi.fn(async () => undefined);
       const setNextUserMessagePersistence = vi.fn();
@@ -639,7 +639,7 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
         },
         getUserTranscriptContexts: () => undefined,
         isRawModelRun: false,
-        preparedUserTurnMessage: differentLeaf ? undefined : currentUser,
+        preparedUserTurnMessage: differentLeaf ? undefined : { ...currentUser, timestamp: 999 },
         sessionManager,
         setActiveSessionSystemPrompt: vi.fn(),
       });

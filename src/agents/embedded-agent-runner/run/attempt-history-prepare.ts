@@ -116,7 +116,13 @@ export async function prepareEmbeddedAttemptHistory(
     });
     input.setup.prepStages.mark("history-sanitize");
     cacheTrace?.recordStage("session:sanitized", { messages: prior });
-    const validated = await validateReplayTurns({ ...replayContext(), messages: prior });
+    // Keep each keyed user row intact until prompt() has resolved the current turn.
+    // The stream boundary merges projected rows for providers requiring alternation.
+    const validated = await validateReplayTurns({
+      ...replayContext(),
+      messages: prior,
+      preserveUserTurns: true,
+    });
     input.setup.prepStages.mark("history-validation");
 
     if (

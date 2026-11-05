@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { projectRecordedModelPrompt } from "../../sessions/user-turn-transcript.message.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { isThinkingLikeBlock } from "../thinking-block.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
@@ -287,8 +288,8 @@ function mergeConsecutiveUserTurns(
 ): Extract<AgentMessage, { role: "user" }> {
   // Materialize each row before merging so the newest projection cannot replace
   // the first text block of the combined turn on later replay.
-  const previousMessage = projectRecordedModelPrompt(previous);
-  const currentMessage = projectRecordedModelPrompt(current);
+  const previousMessage = projectUserTurnForMerge(previous);
+  const currentMessage = projectUserTurnForMerge(current);
   const mergedContent = [
     ...normalizeUserContentForMerge(previousMessage.content),
     ...normalizeUserContentForMerge(currentMessage.content),
@@ -299,6 +300,17 @@ function mergeConsecutiveUserTurns(
     content: mergedContent,
     timestamp: currentMessage.timestamp ?? previousMessage.timestamp,
   };
+}
+
+function projectUserTurnForMerge(message: PersistedUserTurnMessage) {
+  try {
+    return projectRecordedModelPrompt(message);
+  } catch {
+    // An unreadable old projection must not discard the row's original content.
+    const fallback = { ...message, __openclaw: { ...message["__openclaw"] } };
+    delete fallback["__openclaw"].modelPromptProjection;
+    return fallback;
+  }
 }
 
 function normalizeUserContentForMerge(content: unknown): UserContentBlock[] {
@@ -320,7 +332,7 @@ export const mergeConsecutiveUserMessages = (messages: AgentMessage[]): AgentMes
  */
 export function validateAnthropicTurns(
   messages: AgentMessage[],
-  options: { mergeConsecutiveTurns?: boolean } = {},
+  options: { mergeConsecutiveTurns?: boolean; mergeConsecutiveUserTurns?: boolean } = {},
 ): AgentMessage[] {
   // Direct Messages accepts consecutive roles; merging rewrites signed prefix bytes.
   if (options.mergeConsecutiveTurns === false) {
@@ -331,5 +343,8 @@ export function validateAnthropicTurns(
     role: "assistant",
     merge: mergeConsecutiveAssistantTurns,
   });
-  return mergeConsecutiveUserMessages(stripDanglingAnthropicToolUses(mergedAssistant));
+  const paired = stripDanglingAnthropicToolUses(mergedAssistant);
+  return options.mergeConsecutiveUserTurns === false
+    ? paired
+    : mergeConsecutiveUserMessages(paired);
 }

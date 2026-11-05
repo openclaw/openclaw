@@ -97,6 +97,7 @@ export function resolveOrphanRepairPlan(params: {
   prompt: string;
   preserveLeaf: boolean;
   currentTurnPersisted: boolean;
+  currentUserIdempotencyKey?: string;
 }): OrphanRepairPlan | undefined {
   const candidate = findTrailingMessageEntryForOrphanRepair(params.sessionManager);
   if (
@@ -115,6 +116,8 @@ export function resolveOrphanRepairPlan(params: {
   if (
     !params.preserveLeaf &&
     !params.currentTurnPersisted &&
+    (!params.currentUserIdempotencyKey ||
+      candidate.messageEntry.message.idempotencyKey !== params.currentUserIdempotencyKey) &&
     candidate.messageEntry.message.excludeFromContext !== true &&
     (provenance == null || normalizeInputProvenance(provenance)?.kind === "external_user")
   ) {
