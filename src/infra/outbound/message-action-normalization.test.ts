@@ -82,6 +82,28 @@ describe("normalizeMessageActionInput", () => {
       { target: "chat_id:42", to: "chat_id:42", chatId: 42 },
       [],
     ],
+    [makeInput("send", { target: "channel:C1", messageThreadId: 99 }), { threadId: "99" }, []],
+    [makeInput("send", { target: "channel:C1", message_thread_id: 99 }), { threadId: "99" }, []],
+    [makeInput("send", { target: "channel:C1", thread_id: "99" }), { threadId: "99" }, []],
+    [makeInput("send", { target: "channel:C1", threadId: 99 }), { threadId: "99" }, []],
+    [
+      makeInput("send", { target: "channel:C1", threadId: "99", messageThreadId: 99 }),
+      { threadId: "99" },
+      [],
+    ],
+    // Numeric ids join the string target contract instead of reaching a provider reader.
+    [
+      makeInput("topic-create", { target: "-1001234567890", channelId: -1009999999999 }),
+      { target: "-1001234567890", to: "-1001234567890" },
+      ["channelId"],
+    ],
+    [
+      makeInput("topic-create", { channelId: -1009999999999 }),
+      { target: "-1009999999999", to: "-1009999999999" },
+      ["channelId"],
+    ],
+    [makeInput("send", { to: -1009999999999 }), { to: "-1009999999999" }, []],
+    [makeInput("send", { target: -1009999999999 }), { to: "-1009999999999" }, []],
   ])("normalizes message action input for %j", (input, expected, absent) => {
     const normalized = normalizeMessageActionInput(input);
     expect(normalized).toMatchObject(expected);
@@ -139,6 +161,26 @@ describe("normalizeMessageActionInput", () => {
         },
       }),
     ).toThrow(/conflicting target and delivery alias/);
+  });
+
+  it.each<Record<string, unknown>>([{ channelId: 2 ** 60 }, { to: 1.5 }])(
+    "rejects a numeric target that is not an exact id %j",
+    (targetArgs) => {
+      expect(() => normalizeMessageActionInput(makeInput("topic-create", targetArgs))).toThrow(
+        /that is not an exact id/,
+      );
+    },
+  );
+
+  it.each<Record<string, unknown>>([
+    { threadId: "42", messageThreadId: "99" },
+    { threadId: "42", message_thread_id: "99" },
+    { thread_id: "42", messageThreadId: "99" },
+    { threadId: null, message_thread_id: "99" },
+  ])("rejects conflicting thread id spellings %j", (threadArgs) => {
+    expect(() =>
+      normalizeMessageActionInput(makeInput("send", { target: "channel:C1", ...threadArgs })),
+    ).toThrow(/conflicting thread id values/);
   });
 
   it("allows a trusted direct operator to use an opaque resource without a conversation", () => {

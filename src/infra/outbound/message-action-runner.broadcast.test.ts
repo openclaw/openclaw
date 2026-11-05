@@ -411,6 +411,41 @@ describe("broadcast send outcomes through native actions", () => {
     expect(new Set(attempts[0]).size).toBe(2);
     expect(attempts[1]).toEqual(attempts[0]);
   });
+  it.each([
+    { name: "every target by default", crossContext: {}, delivered: ["first", "second"] },
+    {
+      name: "only the current conversation when confined",
+      crossContext: { confineChatTypes: ["group" as const] },
+      delivered: ["first"],
+    },
+  ])("delivers a group turn's broadcast to $name", async ({ crossContext, delivered }) => {
+    const sendText = vi.fn(async ({ to }: { to: string }) => ({
+      channel,
+      messageId: `sent-${to}`,
+    }));
+    registerPlugin({ deliveryMode: "direct", sendText });
+    const result = await runMessageAction({
+      cfg: { tools: { message: { crossContext } } },
+      action: "broadcast",
+      params: { channel, targets: ["first", "second"], message: "hello" },
+      toolContext: {
+        currentChannelProvider: channel,
+        currentChannelId: "first",
+        currentChatType: "group",
+      },
+    });
+    expect(sendText.mock.calls.map(([call]) => call.to)).toEqual(delivered);
+    expectResults(result, [
+      { to: "first", ok: true },
+      delivered.includes("second")
+        ? { to: "second", ok: true }
+        : {
+            to: "second",
+            ok: false,
+            error: expect.stringContaining('target="second" while bound to "first"'),
+          },
+    ]);
+  });
   it("delivers media captions through core send", async () => {
     const receipt = { channel: "testchat", messageId: "m1", chatId: "c1" };
     const sendMedia = vi.fn().mockResolvedValue(receipt);
