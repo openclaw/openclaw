@@ -1,6 +1,7 @@
 // Provider access keeps account credentials and plan limits together in each row.
 import type { JSX } from "@solidjs/web";
 import { createSignal, For, onSettled, Show } from "solid-js";
+import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import type { ModelsProbeResult } from "../../api/types.ts";
 import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -11,8 +12,14 @@ import {
 } from "../../components/solid/provider-usage.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { formatUiExternalText } from "../../lib/format-error.ts";
+import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
+import { modelSettingFallbacks, modelSettingPrimary } from "../../lib/model-setting.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { ModelProviderCard, ModelProviderRemovalTarget } from "./data.ts";
+import {
+  modelCatalogRef,
+  type ModelProviderCard,
+  type ModelProviderRemovalTarget,
+} from "./data.ts";
 import { apiKeySource, profileIdentity, ProviderProfiles } from "./profiles-view.tsx";
 import {
   isProviderUsable,
@@ -294,7 +301,11 @@ function KeyForm(props: ProviderRowProps & { onCancel?: () => void }) {
           disabled={busy() || mutationDisabled() || authModeBlocked() || !props.keyDraft.trim()}
           onClick={() => props.onSaveKey(props.card.id, props.card.configKey ?? props.card.id)}
         >
-          {busy() ? t("modelProviders.saving") : t("common.save")}
+          {props.busy[`check:key:${props.card.id}`]
+            ? t("modelProviders.apiKey.checking")
+            : busy()
+              ? t("modelProviders.saving")
+              : t("common.save")}
         </button>
       </div>
     </div>
@@ -307,6 +318,26 @@ function KeyEditor(props: ProviderRowProps & { onCancel?: () => void }) {
       <KeyForm {...props} />
     </Show>
   );
+}
+
+/** Defaults for all agents served by this provider; removal keeps them selected. */
+function defaultModelsUsing(props: ProviderRowProps): string | undefined {
+  const { primary, fallbacks, utilityModel } = props.defaultModels;
+  const names = [
+    primary,
+    ...fallbacks,
+    modelSettingPrimary(utilityModel),
+    ...modelSettingFallbacks(utilityModel),
+  ].flatMap((ref) => {
+    const model = ref ? splitTrailingAuthProfile(ref).model : "";
+    // Aliases resolve through their catalog entry; other refs name the provider first.
+    const entry = props.configuredModels.find((candidate) => modelCatalogRef(candidate) === model);
+    const provider = entry?.provider ?? (model.includes("/") ? model.split("/", 1)[0] : "");
+    return provider && canonicalModelAuthProviderId(provider) === props.card.id
+      ? [entry?.name ?? model]
+      : [];
+  });
+  return names.length ? [...new Set(names)].join(", ") : undefined;
 }
 
 /** What "Remove provider" can delete, and the credential it has to leave behind. */
@@ -349,6 +380,7 @@ function removalPlan(card: ModelProviderCard): {
 
 function ProviderActions(props: ProviderRowProps) {
   const removal = () => removalPlan(props.card);
+  const defaultModels = () => defaultModelsUsing(props);
   const connected = () => isProviderUsable(props.card) || props.card.profiles.length > 0;
   const connectName = () =>
     t(connected() ? "modelProviders.profiles.addAccount" : "modelProviders.login.action");
@@ -376,6 +408,7 @@ function ProviderActions(props: ProviderRowProps) {
               cardId: props.card.id,
               label: providerName(props.card),
               ...removal(),
+              ...(defaultModels() ? { defaultModels: defaultModels() } : {}),
             })
           }
         >

@@ -105,7 +105,7 @@ describe("projects vitest config", () => {
         import { pathToFileURL } from "node:url";
         import { nonIsolatedRunnerPath, sharedVitestConfig } from "./test/vitest/vitest.shared.config.ts";
         import { fullSuiteVitestShards } from "./test/vitest/vitest.test-shards.mjs";
-        const shards = fullSuiteVitestShards.filter(shard => shard.name !== "core-unit-fast");
+        const shards = fullSuiteVitestShards.filter(shard => shard.name !== "core-unit-fast" && shard.projects[0] !== shard.config);
         assert.equal(shards.length, 11);
         for (const shard of shards) {
           process.env.OPENCLAW_VITEST_MAX_WORKERS = "8";

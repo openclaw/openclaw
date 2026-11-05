@@ -62,6 +62,7 @@ import { readPendingInputSource } from "./session-pending-input-source.js";
 import { preparePendingInputStore, type PendingInputScope } from "./session-pending-input-store.js";
 import {
   isFinalInputCompletion,
+  isSessionPendingInputRetiredByUser,
   parseSessionPendingInputMessage,
 } from "./session-pending-input-value.js";
 import {
@@ -216,6 +217,11 @@ type PendingInputStageOptions = PendingInputRequest & {
   trackCompletion?: boolean;
   /** A current explicit operation may retry its cancelled, unconsumed input. */
   retryCancelled?: boolean;
+  /**
+   * Durable channel redelivery mints a new run for the same source turn. It may
+   * reopen only its own byte-identical attempt that was cancelled before consumption.
+   */
+  reclaimCancelledSourceTurn?: boolean;
   assertCurrent: () => void;
   /** Fresh source acceptance only; recorded pending and transcript inputs keep their prior consent. */
   assertFreshInputCurrent?: SessionSourceAssertion;
@@ -359,10 +365,22 @@ async function stagePreparedPendingInput(
         );
       }
     };
+    // A channel retry after a pre-consumption failure carries a fresh run ID. Without
+    // reopening that dead attempt, every redelivery conflicts until ingress gives up.
+    const reclaimsCancelledSourceTurn =
+      options.reclaimCancelledSourceTurn === true &&
+      !previous &&
+      existing?.state === "cancelled" &&
+      existing.consumed_event_id == null &&
+      existing.request_hash === requestHash &&
+      !isSessionPendingInputRetiredByUser(existing.message_json);
+    const reopensCancelled =
+      existing?.state === "cancelled" &&
+      (options.retryCancelled === true || reclaimsCancelledSourceTurn);
     if (existing) {
       if (
         !matchesSessionPendingInputRequest(existing, stableMessage, requestHash) ||
-        existing.run_id !== options.runId
+        (existing.run_id !== options.runId && !reclaimsCancelledSourceTurn)
       ) {
         throw new Error("Pending input idempotency key conflicts with the accepted input");
       }
@@ -379,12 +397,11 @@ async function stagePreparedPendingInput(
       }
       assertUnowned();
       if (
-        (!options.requestFingerprint && !options.trackCompletion) ||
-        (existing.state !== "queued" &&
-          !(options.retryCancelled && existing.state === "cancelled")) ||
+        (!options.requestFingerprint && !options.trackCompletion && !reclaimsCancelledSourceTurn) ||
+        (existing.state !== "queued" && !reopensCancelled) ||
         (existing.lifecycle_generation === lifecycleGeneration &&
           !options.trackCompletion &&
-          !(options.retryCancelled && existing.state === "cancelled"))
+          !reopensCancelled)
       ) {
         throw new Error("Pending input ownership ended; submit a new turn to continue");
       }

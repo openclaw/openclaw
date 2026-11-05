@@ -17,6 +17,41 @@ export function registerTerminalReservationPublicationTests(fixture: {
   ) => void;
 }): void {
   const { createParams, start } = fixture;
+  it("persists a queued run start before its deferred chat mapping is registered", async () => {
+    const actual = await vi.importActual<typeof import("./server-chat.js")>("./server-chat.js");
+    const { persistGatewaySessionLifecycleEvent } = await import("./session-lifecycle-state.js");
+    fixture.installHandlerFactory(actual.createAgentEventHandler);
+    const params = createParams();
+    const runId = "queued-start-run";
+    const sessionKey = "agent:main:queued-start";
+    const sessionId = "queued-start-session";
+    registerSubscriptionChatRun(params, { runId, sessionKey, sessionId });
+    claimAgentRunContext(runId, { sessionKey, sessionId });
+    const subscriptions = start(params);
+    try {
+      emitAgentEvent({
+        runId,
+        sessionKey,
+        sessionId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 1_000 },
+      });
+      // Runtime start precedes the queued source's onAgentRunStart callback.
+      params.chatRunState.registry.add(runId, { sessionKey, clientRunId: runId });
+      await subscriptions.agentUnsub();
+      expect(persistGatewaySessionLifecycleEvent).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          sessionKey,
+          event: expect.objectContaining({ runId, data: { phase: "start", startedAt: 1_000 } }),
+        }),
+      );
+    } finally {
+      await subscriptions.agentUnsub();
+      subscriptions.transcriptUnsub();
+      subscriptions.lifecycleUnsub();
+    }
+  });
+
   it("keeps a newer terminal reservation when an older no-write dispatch fails", async () => {
     const params = createParams();
     const runId = "replaced-terminal-dispatch";

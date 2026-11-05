@@ -13,6 +13,7 @@ import {
   runSqliteImmediateTransactionSync,
   tableExists,
   withSqlitePostCommitPublications,
+  type SynchronousSqliteCallback,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { deleteMemoryEntryOriginsInDatabase } from "./memory-entry-origins-delete.js";
 import type {
@@ -36,7 +37,7 @@ export function bindSqliteWorkerBackend(
       commit();
     },
   };
-  const transact = <T>(run: () => T): T =>
+  const transact = <T>(run: SynchronousSqliteCallback<T>): T =>
     runSqliteImmediateTransactionSync(
       db,
       () => {
