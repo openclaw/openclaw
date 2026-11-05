@@ -300,7 +300,6 @@ function renderCatalogHostGroup(
             session={params.snapshot.toSidebarSession(liveRow())}
             display={{
               catalogIdentityKey: identityKey(),
-              catalogMenu: catalogMenu(),
               rowRef,
               pullRequest: readSession().pullRequest,
             }}
