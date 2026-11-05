@@ -146,6 +146,7 @@ function fixture(): Bounded {
       events,
       cacheTtlProjectionPrefixes: [],
       serializedBytes: residentRows.reduce((sum, row) => sum + row.serializedBytes, 0),
+      selectedEventCount: eventCount,
       totalEvents: eventCount,
       transcriptMutationAt: 1,
       truncated: mode !== "complete",

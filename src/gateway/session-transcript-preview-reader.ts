@@ -12,36 +12,8 @@ import type { SessionPreviewWorkerInput } from "../config/sessions/session-trans
 import type { OpenClawAgentReadOnlyDatabase } from "../state/openclaw-agent-db-readonly-open.js";
 import { withScopedOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-scope.js";
 import { buildSessionPreviewItems } from "./session-display-projection.js";
+import { readBoundedSessionPreviewItems } from "./session-transcript-preview-bounds.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
-
-type PreviewPage = { items: SessionPreviewItem[]; hasOlderEvents: boolean };
-
-function previewReadLimits(maxItems: number) {
-  // Tool-only and suppressed rows need headroom; keep recovery bounded too.
-  const initialMaxEvents = Math.min(256, Math.max(64, Math.ceil(maxItems) * 4));
-  return [
-    { maxEvents: initialMaxEvents, maxBytes: 1024 * 1024 },
-    {
-      maxEvents: Math.min(2048, Math.max(1024, initialMaxEvents * 8, Math.ceil(maxItems))),
-      maxBytes: 8 * 1024 * 1024,
-    },
-  ];
-}
-
-export async function readBoundedSessionPreviewItemsAsync(
-  maxItems: number,
-  readPage: (maxEvents: number, maxBytes: number) => Promise<PreviewPage>,
-): Promise<SessionPreviewItem[]> {
-  let items: SessionPreviewItem[] = [];
-  for (const { maxEvents, maxBytes } of previewReadLimits(maxItems)) {
-    const page = await readPage(maxEvents, maxBytes);
-    items = page.items;
-    if (items.length >= maxItems || !page.hasOlderEvents) {
-      break;
-    }
-  }
-  return items;
-}
 
 /** Native and worker display reads share widening, projection, and the older-page boundary. */
 function readSessionDisplayPreviewItems(
@@ -51,20 +23,18 @@ function readSessionDisplayPreviewItems(
     options: Parameters<typeof readRecentSessionTranscriptHistoryEventsFromProjection>[1],
   ) => ReturnType<typeof readRecentSessionTranscriptHistoryEventsFromProjection>,
 ): SessionPreviewItem[] {
-  let items: SessionPreviewItem[] = [];
-  for (const { maxEvents, maxBytes } of previewReadLimits(maxItems)) {
+  return readBoundedSessionPreviewItems(maxItems, ({ maxEvents, maxBytes }) => {
     const page = readPage({ maxBytes, maxLines: maxEvents, maxMessages: maxEvents });
-    items = buildSessionPreviewItems(
-      page.events.map((entry) => asOptionalRecord(entry.event)?.message),
-      maxItems,
-      maxChars,
-    );
-    const hasOlderEvents = page.totalMessages > page.events.length;
-    if (items.length >= maxItems || !hasOlderEvents) {
-      break;
-    }
-  }
-  return items;
+    return {
+      items: buildSessionPreviewItems(
+        page.events.map((entry) => asOptionalRecord(entry.event)?.message),
+        maxItems,
+        maxChars,
+      ),
+      hasOlderEvents: page.totalMessages > page.events.length,
+      scannedEvents: page.events.length,
+    };
+  });
 }
 
 /** Read the host-prepared target without importing transcript writers or model context. */
