@@ -179,11 +179,15 @@ export function evaluateReleaseChildPolicy({ child, targetVersion }) {
 
 // Aggregates also enforce integrity and dispatch identity. A waived test must
 // not excuse a second failure in that same aggregate job.
+export class ReleaseAggregateValidationError extends Error {}
+
 export async function validateReleaseWaiverAggregates({ policy, jobs, getJobLog }) {
   for (const aggregate of policy.aggregates) {
     const matches = jobs.filter((job) => job.name === aggregate.jobName);
     if (matches.length !== 1 || matches[0].status !== "completed") {
-      throw new Error(`Required release aggregate is missing or incomplete: ${aggregate.jobName}`);
+      throw new ReleaseAggregateValidationError(
+        `Required release aggregate is missing or incomplete: ${aggregate.jobName}`,
+      );
     }
     const job = matches[0];
     if (job.conclusion === "success") {
@@ -197,7 +201,9 @@ export async function validateReleaseWaiverAggregates({ policy, jobs, getJobLog 
       failedSteps?.length !== 1 ||
       failedSteps[0].name !== aggregate.stepName
     ) {
-      throw new Error(`Release aggregate has a non-policy failure: ${aggregate.jobName}`);
+      throw new ReleaseAggregateValidationError(
+        `Release aggregate has a non-policy failure: ${aggregate.jobName}`,
+      );
     }
     const log = String(await getJobLog(job.id));
     const causes = log
@@ -208,7 +214,9 @@ export async function validateReleaseWaiverAggregates({ policy, jobs, getJobLog 
         return match && match[1] !== "Process completed with exit code 1." ? [match[1]] : [];
       });
     if (causes.length === 0 || causes.some((cause) => !aggregate.causes.includes(cause))) {
-      throw new Error(`Release aggregate has an unwaived failure: ${aggregate.jobName}`);
+      throw new ReleaseAggregateValidationError(
+        `Release aggregate has an unwaived failure: ${aggregate.jobName}`,
+      );
     }
   }
 }
