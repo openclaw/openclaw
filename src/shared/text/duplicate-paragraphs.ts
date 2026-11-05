@@ -185,13 +185,16 @@ export function createDuplicateParagraphProjector(protectCode = true): TextProje
       codeProtectionRequired ||=
         ownership?.unresolvedImageCodeStart !== undefined ||
         Boolean(ownership?.unsettledDefinitionStarts.length) ||
-        /`{3,}/.test(probe) ||
+        /!\[|`{3,}/.test(probe) ||
         !canReuseMarkdownOwnership("", probe.replaceAll("`", ""));
       codeProbeTail = probe.slice(-3);
     }
     let delta = input.delta;
-    if (refreshOwnership) {
-      const projected = collapseDuplicateParagraphs(input.text, ownership?.regions);
+    if (refreshOwnership || (codeProtectionRequired && nonlocalMarkersSeen && backticksSeen)) {
+      const projected = collapseDuplicateParagraphs(
+        input.text,
+        refreshOwnership ? ownership?.regions : undefined,
+      );
       delta =
         input.delta !== null && projected.startsWith(text) ? projected.slice(text.length) : null;
       text = projected;

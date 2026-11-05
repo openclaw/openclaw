@@ -140,8 +140,8 @@ it.each([
   ["- `a  b`\n\n- `a  b`", "- `a  b`"],
   ["- `a b`\n\n- `a  b`", "- `a b`\n\n- `a  b`"],
   [
-    "![label `a  b`][id]\n\n![label `a b`][id]\n\n![label `a b`][id]\n\n[id]: /url",
-    "![label `a  b`][id]\n\n[id]: /url",
+    "![label `a  b`][id]\n\n![label `a b`][id]\n\n[id]: /url\n\nDone. More.",
+    "![label `a  b`][id]\n\n[id]: /url\n\nDone. More.",
   ],
   ["A\n\nA\n\n```text\ninside\n\ninside\n```", "A\n\n```text\ninside\n\ninside\n```"],
   ["A\n\nA\n\n    code\n\n    code", "A\n\n    code\n\n    code"],
