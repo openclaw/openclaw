@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -139,7 +139,8 @@ describe("prepareChatSendUserTurn audio", () => {
       const target = createSqliteTranscriptTarget({ dir: tempDirs.make() });
       await persistUserTurnTranscript({ ...target, input, updateMode: "none" });
       const [reloaded] = await readTranscriptMessages(target);
-      expect(reloaded?.content).toBe("raw message\nHeard: transcribed voice");
+      assert(reloaded, "canonical user turn must be persisted");
+      expect(reloaded.content).toBe("raw message\nHeard: transcribed voice");
       expect(reloaded).toMatchObject({
         __openclaw: {
           media: [
