@@ -203,7 +203,10 @@ browser state. They do not share a running Gateway or warmed profile.
 
 `--dashboard-mcp-app` replaces the HTML board with one full-width page-chrome
 MCP App using the official SDK and a local stdio MCP server. Its tool result
-supplies synthetic KPI tiles and two charts in a 1,400 px document. Use
+supplies synthetic KPI tiles and two charts in a 1,400 px document.
+The historical tool call/result is persisted through the existing transcript
+seeder before Gateway startup; normal view reconstruction admits the pinned app.
+The capture fails if the app never reports its content marker. Use
 `--init-script scripts/perf/board-widgets.init.js` for per-frame board/skeleton
 states and initialize/input/result milestones. The fixture's `paint` message
 is a font-ready/two-animation-frame DOM marker, not a protocol paint receipt;

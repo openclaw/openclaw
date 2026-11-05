@@ -477,6 +477,15 @@ async function captureReload(
       timeout: captureMs + 60000,
     });
     const probe = await readProbe(page);
+    if (
+      values["dashboard-mcp-app"] &&
+      route === "dashboard" &&
+      probe.firstDashboardContentDomMs === null
+    ) {
+      throw new Error(
+        "Synthetic MCP dashboard did not render its tool result; capture is not product proof",
+      );
+    }
     const finalDocumentTimeOrigin = probe.timeOrigin;
     const navigationOrigin = documents[0]?.epochMs ?? finalDocumentTimeOrigin;
     const documentOffsetMs = finalDocumentTimeOrigin - navigationOrigin;
