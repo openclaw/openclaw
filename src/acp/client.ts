@@ -22,7 +22,9 @@ import {
   resolveOpenClawCliInvocation,
 } from "../../cli-invocation.mjs";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { resolveOpenClawCliEntryPath } from "../infra/openclaw-cli-invocation.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "../infra/runtime-process-url.js";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
@@ -89,15 +91,18 @@ function resolveSelfEntryPath(): string | null {
   // Prefer a path relative to the built module location (dist/acp/client.js -> dist/entry.js).
   try {
     const here = fileURLToPath(import.meta.url);
-    const candidate = path.resolve(path.dirname(here), "..", "entry.js");
-    if (fs.existsSync(candidate)) {
+    const packageRoot = path.resolve(path.dirname(here), "..", "..");
+    const candidate = fileURLToPath(
+      resolveExternalPackageRuntimeEntrypointUrl("gatewayEntry", packageRoot),
+    );
+    if (path.basename(path.dirname(path.dirname(here))) === "dist" && fs.existsSync(candidate)) {
       return candidate;
     }
   } catch {
     // ignore
   }
 
-  const argv1 = normalizeOptionalString(process.argv[1]);
+  const argv1 = resolveOpenClawCliEntryPath(process.argv[1]);
   if (argv1) {
     return path.isAbsolute(argv1) ? argv1 : path.resolve(process.cwd(), argv1);
   }
@@ -248,6 +253,19 @@ async function createAcpClient(opts: AcpClientOptions = {}) {
   agent.on("error", (err) => {
     log(`agent error: ${String(err)}`);
   });
+  let startupSignalCode: number | undefined;
+  let termination: Promise<void> | undefined;
+  const terminate = () => (termination ??= terminateAcpServer(agent));
+  const interruptStartup = (code: number) => {
+    startupSignalCode ??= code;
+    permissions.abort();
+    // The handshake reader must settle before its owner can join shutdown.
+    void terminate().catch(() => {});
+  };
+  const onStartupSigint = () => interruptStartup(130);
+  const onStartupSigterm = () => interruptStartup(143);
+  process.on("SIGINT", onStartupSigint);
+  process.on("SIGTERM", onStartupSigterm);
 
   try {
     if (!agent.stdin || !agent.stdout) {
@@ -334,12 +352,18 @@ async function createAcpClient(opts: AcpClientOptions = {}) {
       },
       clientInfo: { name: "openclaw-acp-client", version: "1.0.0" },
     });
+    if (startupSignalCode !== undefined) {
+      permissions.signal.throwIfAborted();
+    }
 
     log("creating session");
     const session = await client.newSession({
       cwd,
       mcpServers: [],
     });
+    if (startupSignalCode !== undefined) {
+      permissions.signal.throwIfAborted();
+    }
 
     return {
       client,
@@ -350,15 +374,25 @@ async function createAcpClient(opts: AcpClientOptions = {}) {
     };
   } catch (error) {
     permissions.abort();
-    await terminateAcpServer(agent);
+    await terminate();
     await closed;
+    if (startupSignalCode !== undefined) {
+      return { exitCode: startupSignalCode };
+    }
     throw error;
+  } finally {
+    process.off("SIGINT", onStartupSigint);
+    process.off("SIGTERM", onStartupSigterm);
   }
 }
 
 /** Runs until the interactive session and its owned server have closed. */
 export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Promise<number> {
-  const { client, agent, sessionId, closed, cancelPermissions } = await createAcpClient(opts);
+  const connection = await createAcpClient(opts);
+  if (connection.exitCode !== undefined) {
+    return connection.exitCode;
+  }
+  const { client, agent, sessionId, closed, cancelPermissions } = connection;
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   let quitting = false;
   let shutdown: Promise<void> | undefined;

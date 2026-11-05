@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import path from "node:path";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { TranscriptNotContinuableError } from "../../packages/agent-core/src/errors.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -13,7 +12,6 @@ import {
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { GatewayDrainingError } from "../process/gateway-work-admission.js";
-import { resolveEffectiveModelFallbacks } from "./agent-scope.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import { createApiKeyCredential } from "./auth-profiles/credential-fixtures.test-support.js";
 import {
@@ -53,6 +51,7 @@ import { isFallbackSummaryError } from "./model-fallback-attempt.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
 import { runWithImageModelFallback } from "./model-fallback-image.js";
 import { runWithModelFallback as runWithModelFallbackBase } from "./model-fallback-runner.js";
+import { resolveEffectiveModelFallbacks } from "./model-selection-config.js";
 import {
   createAgentRunRestartAbortError,
   resolveAgentRunErrorLifecycleFields,
@@ -197,15 +196,12 @@ afterEach(() => {
   resetDiagnosticEventsForTest();
   cliBackendsTesting.resetDepsForTest();
   vi.unstubAllEnvs();
+  setLoggerOverride(null);
+  resetLogger();
 });
 
 beforeEach(() => {
   setLoggerOverride({ level: "silent", consoleLevel: "silent" });
-});
-
-afterEach(() => {
-  setLoggerOverride(null);
-  resetLogger();
 });
 
 function makeProviderFallbackCfg(provider: string): OpenClawConfig {
@@ -222,7 +218,7 @@ function configuredFallback(primary: string, fallbacks: string[]) {
 }
 
 function recoverAfter(error: unknown, result = "ok") {
-  return vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(result);
+  return failInOrder(error).mockResolvedValueOnce(result);
 }
 
 function failInOrder(...errors: unknown[]) {
@@ -242,7 +238,7 @@ function cooldown(cooldownUntil: number, cooldownModel: string) {
     cooldownUntil,
     cooldownModel,
     cooldownReason: "rate_limit" as const,
-    failureCounts: { rate_limit: 1 },
+    lastRateLimitAt: 1,
   };
 }
 
@@ -280,10 +276,7 @@ function makeProviderOrderFallbackCfg(
       providers: Object.fromEntries(
         entries.map(([provider, model]) => [
           provider,
-          {
-            baseUrl: `https://${provider}.example.test`,
-            models: [{ id: model }],
-          },
+          { baseUrl: `https://${provider}.example.test`, models: [{ id: model }] },
         ]),
       ),
     },
@@ -291,7 +284,7 @@ function makeProviderOrderFallbackCfg(
 }
 
 function installAuthStore(store: AuthProfileStore): string {
-  const dir = path.join("/tmp/openclaw-auth-suite-mock", `case-${++authTempCounter}`);
+  const dir = `/tmp/openclaw-auth-suite-mock/case-${++authTempCounter}`;
   setAuthRuntimeStore(dir, store);
   return dir;
 }
@@ -303,12 +296,11 @@ async function runWithStoredAuth(params: {
   run: (provider: string, model: string) => Promise<string>;
   userLockedAuthProfileId?: string;
 }) {
-  const tempDir = installAuthStore(params.store);
   return await runWithModelFallback({
     cfg: params.cfg ?? makeProviderFallbackCfg(params.provider),
     provider: params.provider,
     model: "m1",
-    agentDir: tempDir,
+    agentDir: installAuthStore(params.store),
     run: params.run,
     userLockedAuthProfileId: params.userLockedAuthProfileId,
   });
@@ -345,10 +337,7 @@ const INSUFFICIENT_QUOTA_PAYLOAD =
 
 type ModelFailoverDiagnostic = Extract<DiagnosticEventPayload, { type: "model.failover" }>;
 
-function captureModelFailoverDiagnostics(): {
-  events: ModelFailoverDiagnostic[];
-  stop: () => void;
-} {
+function captureModelFailoverDiagnostics() {
   const events: ModelFailoverDiagnostic[] = [];
   const stop = onTrustedInternalDiagnosticEvent((event) => {
     if (event.type === "model.failover") {
@@ -665,7 +654,7 @@ describe("runWithModelFallback", () => {
         "openai:default": {
           cooldownUntil: Date.now() + 60_000,
           cooldownReason: "rate_limit",
-          failureCounts: { rate_limit: 1 },
+          lastRateLimitAt: Date.now(),
         },
       }),
     );
@@ -696,7 +685,7 @@ describe("runWithModelFallback", () => {
           [`${provider}:default`]: {
             disabledUntil: Date.now() + 60_000,
             disabledReason: "billing",
-            failureCounts: { rate_limit: 4 },
+            failureCounts: { billing: 4 },
           },
         }),
       );
@@ -1176,8 +1165,8 @@ describe("runWithModelFallback", () => {
     const dir = installAuthStore(
       apiKeyStore(["anthropic"], {
         "anthropic:default": {
-          cooldownUntil: Date.now() + 300_000,
-          failureCounts: { rate_limit: 1 },
+          cooldownUntil: Date.now() + 60_000,
+          cooldownReason: "rate_limit",
         },
       }),
     );

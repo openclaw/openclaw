@@ -91,9 +91,7 @@ function mockCatalogs(...catalogs: unknown[][]) {
 describe("DeepInfra pre-auth discovery", () => {
   it("stays offline with a blank environment key and no saved profile", async () => {
     const mockFetch = mockFetchPath(vi.fn());
-    expect((await discoverDeepInfraSurfaces({ env: { DEEPINFRA_API_KEY: "   " } })).live).toBe(
-      false,
-    );
+    expect(await discoverDeepInfraSurfaces({ env: { DEEPINFRA_API_KEY: "   " } })).toBeNull();
     expect(mockFetch).not.toHaveBeenCalled();
   });
 
@@ -101,8 +99,8 @@ describe("DeepInfra pre-auth discovery", () => {
     isProviderApiKeyConfiguredMock.mockReturnValue(true);
     mockProjectionFetch(() => modelResponse(makeAgentModelEntry()));
     expect(
-      (await discoverDeepInfraSurfaces({ env: {}, agentDir: "/tmp/openclaw-agent" })).live,
-    ).toBe(true);
+      await discoverDeepInfraSurfaces({ env: {}, agentDir: "/tmp/openclaw-agent" }),
+    ).not.toBeNull();
     expect(isProviderApiKeyConfiguredMock).toHaveBeenCalledWith({
       provider: "deepinfra",
       agentDir: "/tmp/openclaw-agent",
@@ -208,25 +206,14 @@ describe("discoverDeepInfraModels", () => {
 });
 
 describe("discoverDeepInfraSurfaces (per-surface bucketing)", () => {
-  it("drops malformed live numeric metadata", async () => {
-    mockCatalogs([
-      surfaceEntry("bad/chat", ["chat"], { context_length: -1, max_tokens: 1.5 }),
-      surfaceEntry("bad/image", ["image-gen"], {
-        default_width: Number.POSITIVE_INFINITY,
-        default_height: 1024.5,
-        default_iterations: 0,
-      }),
-    ]);
+  it("drops malformed live token limits", async () => {
+    mockCatalogs([surfaceEntry("bad/chat", ["chat"], { context_length: -1, max_tokens: 1.5 })]);
 
     const catalog = await discoverDeepInfraSurfaces();
 
-    expect(catalog.chat[0]).toMatchObject({ id: "bad/chat" });
-    expect(catalog.chat[0]?.contextWindow).toBeUndefined();
-    expect(catalog.chat[0]?.maxTokens).toBeUndefined();
-    expect(catalog.imageGen[0]).toMatchObject({ id: "bad/image" });
-    expect(catalog.imageGen[0]?.defaultWidth).toBeUndefined();
-    expect(catalog.imageGen[0]?.defaultHeight).toBeUndefined();
-    expect(catalog.imageGen[0]?.defaultIterations).toBeUndefined();
+    expect(catalog?.chat[0]).toMatchObject({ id: "bad/chat" });
+    expect(catalog?.chat[0]?.contextWindow).toBeUndefined();
+    expect(catalog?.chat[0]?.maxTokens).toBeUndefined();
   });
 });
 

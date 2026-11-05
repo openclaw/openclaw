@@ -1,13 +1,15 @@
 import { isDeepStrictEqual } from "node:util";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
-import { readRetainedSessionEntryFacts } from "../../config/sessions/session-entry-read-facts.js";
-import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { prepareSessionFileWorkspace } from "../session-file-workspace.js";
-import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
-import { authorizeSessionAgentRun } from "../session-sharing-policy.js";
+import {
+  SessionFileWorkspaceChangedError,
+  SessionMutationAuthorizationChangedError,
+  sessionMutationForbiddenError,
+} from "../session-mutation-authorization-error.js";
+import { isSessionOwnRequester } from "../session-sharing-policy.js";
 import type { GatewaySessionEntryRead } from "../session-utils-store.js";
+import { authorizeSessionWorkspaceRead } from "../session-workspace-read-policy.js";
 import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
 import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
@@ -19,6 +21,8 @@ export type SessionFileReadPolicyTarget = {
   canonicalKey: string;
   entry?: InternalSessionEntry;
   unscopedHostRoot?: boolean;
+  /** The read serves files from before the conversation switched to its PR workspace. */
+  historical?: boolean;
 };
 
 /** Conversation visibility does not admit a caller to an unsandboxed host workspace. */
@@ -26,14 +30,30 @@ export function assertSessionFileReadPolicy(
   options: GatewayRequestHandlerOptions,
   target: SessionFileReadPolicyTarget,
 ) {
+  // Shared viewing, membership and admin scope never extend to the original files.
+  if (
+    target.historical &&
+    !(
+      target.entry &&
+      isSessionOwnRequester(
+        { cfg: options.context.getRuntimeConfig(), client: options.client },
+        { canonicalKey: target.canonicalKey, entry: target.entry },
+      )
+    )
+  ) {
+    throw sessionMutationForbiddenError(
+      "Only this conversation's owner can open its files from before the PR workspace.",
+    );
+  }
   if (!target.unscopedHostRoot) {
     return;
   }
   readGatewayRequestMutationAuthority(options).assertCurrent();
-  const error = authorizeSessionAgentRun({
+  const error = authorizeSessionWorkspaceRead({
     cfg: options.context.getRuntimeConfig(),
     client: options.client,
     target: { agentId: target.agentId, canonicalKey: target.canonicalKey, entry: target.entry },
+    unscopedHostRoot: target.unscopedHostRoot,
   });
   if (error) {
     throw new SessionMutationAuthorizationChangedError(error);
@@ -65,6 +85,7 @@ export function sessionFileWorkspaceMatches(
   return (
     fields.every((field) => isDeepStrictEqual(previous?.[field], current?.[field])) &&
     previous?.worktree?.id === current?.worktree?.id &&
+    isDeepStrictEqual(previous?.priorWorkspace, current?.priorWorkspace) &&
     isDeepStrictEqual(
       previous?.skillsSnapshot?.librarySelections,
       current?.skillsSnapshot?.librarySelections,
@@ -72,38 +93,13 @@ export function sessionFileWorkspaceMatches(
   );
 }
 
-/** Read the committed snapshot already prepared by the file route, without another database read. */
-export function captureSessionFileEntryRead(
-  source: Pick<GatewaySessionEntryRead, "agentId" | "canonicalKey" | "storePath" | "readSource">,
-  assertCurrent: () => void,
-) {
-  const metadata = captureSessionEntryMetadataRead(
-    { agentId: source.agentId, sessionKey: source.canonicalKey, storePath: source.storePath },
-    assertCurrent,
-  );
-  return () => {
-    assertCurrent();
-    return metadata
-      ? metadata.readCurrent()
-      : readRetainedSessionEntryFacts(
-          {
-            agentId: source.readSource?.agentId ?? source.agentId,
-            path: source.readSource?.path ?? source.storePath,
-          },
-          {
-            sessionKeys: [source.canonicalKey],
-            projection: "exact",
-            snapshotFields: ["skillsSnapshot"],
-          },
-        )?.entries.find((row) => row.sessionKey === source.canonicalKey)?.entry;
-  };
-}
-
 /** Host reads borrow the turn owner's prepared facts and the placement owner's live observation. */
 export function createSessionFileReadAuthority(
   options: GatewayRequestHandlerOptions,
   source: Pick<GatewaySessionEntryRead, "agentId" | "canonicalKey" | "storePath" | "readSource"> & {
     entry?: InternalSessionEntry;
+    readEntry: () => InternalSessionEntry | undefined;
+    assertSourceCurrent: () => void;
     root?: string;
     fileRoot?: string;
     fileWorkspace?: Awaited<ReturnType<typeof prepareSessionFileWorkspace>>;
@@ -111,9 +107,6 @@ export function createSessionFileReadAuthority(
 ) {
   const { context } = options;
   const { agentId } = source;
-  // The HTTP grant has its own retained session authority; do not capture the
-  // request's shorter planning-row lifetime in this reader.
-  const readEntry = captureSessionFileEntryRead(source, () => {});
   let placement:
     | Awaited<ReturnType<WorkerSessionPlacementStore["prepareRuntimeRefresh"]>>
     | undefined;
@@ -139,16 +132,12 @@ export function createSessionFileReadAuthority(
       current.root !== source.root ||
       resolveFileRoot(current) !== source.fileRoot
     ) {
-      throw new SessionMutationAuthorizationChangedError(
-        errorShape(ErrorCodes.FORBIDDEN, "outside session boundary"),
-      );
+      throw sessionMutationForbiddenError("outside session boundary");
     }
   };
   const withHostAuthority = async <T>(consume: () => T): Promise<T> => {
     if (!options.withSessionTurnAuthority || !source.entry?.sessionId) {
-      throw new SessionMutationAuthorizationChangedError(
-        errorShape(ErrorCodes.FORBIDDEN, "outside session boundary"),
-      );
+      throw sessionMutationForbiddenError("outside session boundary");
     }
     return options.withSessionTurnAuthority(
       { sessionKey: source.canonicalKey, agentId, sessionId: source.entry.sessionId },
@@ -178,23 +167,23 @@ export function createSessionFileReadAuthority(
     }
   };
   return {
-    authorizeHostRead: () => (hostAdmission ??= prepareHostRead()),
+    authorizeHostRead: () =>
+      source.fileWorkspace?.historical
+        ? Promise.resolve(false)
+        : (hostAdmission ??= prepareHostRead()),
     withCurrent: withHostAuthority,
     // Downloads retain the exact session row separately; recheck host configuration
     // and the placement owner's current observation immediately before HTTP delivery.
     assertCurrent: () => {
-      if (source.entry && source.fileWorkspace) {
-        const current = readEntry();
-        if (!current || !sessionFileWorkspaceMatches(source.entry, current)) {
-          throw new SessionMutationAuthorizationChangedError(
-            errorShape(ErrorCodes.FORBIDDEN, "Session workspace changed during file access"),
-          );
-        }
+      source.assertSourceCurrent();
+      const current = source.readEntry();
+      if (current && source.fileWorkspace) {
         source.fileWorkspace.assertCurrent(context.getRuntimeConfig(), current);
         assertSessionFileReadPolicy(options, {
           ...source,
           entry: current,
           unscopedHostRoot: source.fileWorkspace.unscopedHostRoot,
+          historical: source.fileWorkspace.historical,
         });
       }
       if (
@@ -204,9 +193,7 @@ export function createSessionFileReadAuthority(
         resolveSessionWorkspaceRoots(context.getRuntimeConfig(), agentId, source.entry).root !==
           source.root
       ) {
-        throw new SessionMutationAuthorizationChangedError(
-          errorShape(ErrorCodes.FORBIDDEN, "Session workspace changed during file access"),
-        );
+        throw new SessionFileWorkspaceChangedError();
       }
       if (usedHostRead && source.entry) {
         assertHostEntry(source.entry);

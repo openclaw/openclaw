@@ -64,17 +64,3 @@ export function mockCallAt(
   const normalizedIndex = index < 0 ? calls.length + index : index;
   return calls[normalizedIndex];
 }
-
-export function responseErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  if (error && typeof error === "object") {
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === "string") {
-      return message;
-    }
-    return JSON.stringify(error);
-  }
-  return String(error);
-}

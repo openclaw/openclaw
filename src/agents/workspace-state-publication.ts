@@ -7,12 +7,23 @@ import {
 } from "../infra/sqlite-worker-operation-admission.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { createStateDomainPublication } from "../state/state-domain-publication.js";
+import type { WorkspaceStateSnapshot } from "./workspace-state-types.js";
 
-// The snapshot cache consumes invalidation, not row or hash postimages.
-export const workspaceStatePublication = createStateDomainPublication<true>({
+export const workspaceStatePublication = createStateDomainPublication<WorkspaceStateSnapshot>({
   domain: "workspace-state",
-  keyOf: () => "changed",
-  isValue: (value): value is true => value === true,
+  keyOf: (value) => value.identity.workspaceKey,
+  isValue: (value): value is WorkspaceStateSnapshot =>
+    isRecord(value) &&
+    isRecord(value.identity) &&
+    typeof value.identity.workspaceKey === "string" &&
+    typeof value.identity.workspacePath === "string" &&
+    typeof value.setupExists === "boolean" &&
+    isRecord(value.setup) &&
+    value.setup.version === 1 &&
+    (value.attestation === undefined ||
+      (isRecord(value.attestation) &&
+        typeof value.attestation.attestedAtMs === "number" &&
+        value.attestation.generatedHashes instanceof Map)),
 });
 
 export function captureWorkspaceStateReceipt<T>(db: EngineConnection, run: () => T): T {

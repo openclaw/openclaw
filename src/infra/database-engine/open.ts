@@ -6,7 +6,7 @@ import {
   invalidateLocalSqliteSchemaAdmissions,
   publishSqliteDatabaseAdmission,
   publishSqliteDatabaseSchemaChange,
-  type SqliteDatabaseAdmissionKey,
+  type SqliteDatabaseFactKey,
 } from "../sqlite-database-admission.js";
 import { stageSqliteTransactionState } from "../sqlite-post-commit.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
@@ -19,6 +19,7 @@ import {
   admitPostgresCapabilities,
   postgresSchemaMetadataSql,
   getAdmittedPostgresSchema,
+  postgresStoreNamespace,
 } from "./postgres-schema.js";
 import { admitPostgresSearch } from "./postgres-search-schema.js";
 import type { DatabaseEngineInput } from "./types.js";
@@ -26,33 +27,8 @@ import type { DatabaseEngineInput } from "./types.js";
 type EngineAdmission =
   | { engine: "sqlite" }
   | { engine: "postgres"; storeId: string; namespace: string; version: number };
-const admissionKey: SqliteDatabaseAdmissionKey<EngineAdmission> = {
+const admissionKey: SqliteDatabaseFactKey<EngineAdmission> = {
   name: "database.engine",
-  read: (value) => {
-    if (!value || typeof value !== "object" || !("engine" in value)) {
-      return undefined;
-    }
-    if (value.engine === "sqlite") {
-      return { engine: "sqlite" };
-    }
-    if (
-      value.engine === "postgres" &&
-      "storeId" in value &&
-      typeof value.storeId === "string" &&
-      "namespace" in value &&
-      typeof value.namespace === "string" &&
-      "version" in value &&
-      typeof value.version === "number"
-    ) {
-      return {
-        engine: "postgres",
-        storeId: value.storeId,
-        namespace: value.namespace,
-        version: value.version,
-      };
-    }
-    return undefined;
-  },
 };
 
 export function readEngineAnchor(
@@ -105,7 +81,7 @@ export function openEngineStore(ref: {
   /** Bind owner-local state inside the new anchor transaction before connecting. */
   onFreshAnchor?: (anchor: DatabaseSync) => void;
   admitPostgres?: (db: PostgresSqlConnection, fresh: boolean) => void;
-  beforeMigrate?: (db: EngineConnection, fromVersion: number) => void;
+  beforeMigrate?: AdmittedStore["beforeMigrate"];
   /** Family custody for schema writes; shared state defaults to its physical owner. */
   assertMigrationCurrent?: () => void;
   closeOnFailure?: (db: PostgresSqlConnection, error: unknown) => never;
@@ -134,7 +110,10 @@ export function openEngineStore(ref: {
       `Existing SQLite ${schema.id} data cannot switch engines; stop the Gateway and use openclaw database port for a supported store family before changing ${familySetting(schema)}.`,
     );
   }
-  ref.prepareAnchor();
+  const readOnly = ref.input?.readOnly === true;
+  if (!readOnly) {
+    ref.prepareAnchor();
+  }
   const readOrCreateAnchor = () => {
     const inspection = ref.inspectSqlite();
     if (inspection.hasExistingData) {
@@ -142,7 +121,7 @@ export function openEngineStore(ref: {
         `Existing SQLite ${schema.id} data cannot switch engines; stop the Gateway and use openclaw database port for a supported store family before changing ${familySetting(schema)}.`,
       );
     }
-    if (!inspection.hasEngineAnchor && ref.existingOnly) {
+    if (!inspection.hasEngineAnchor && (ref.existingOnly || readOnly)) {
       throw new Error(
         "Missing PostgreSQL anchor; restore the matching PostgreSQL schema and anchor.",
       );
@@ -170,7 +149,7 @@ export function openEngineStore(ref: {
       return { storeId: row.store_id, namespace: row.schema };
     }
     const storeId = randomUUID();
-    const namespace = `${ref.input!.schemaPrefix}_${schema.id}_${storeId.replaceAll("-", "").slice(0, 16)}`;
+    const namespace = postgresStoreNamespace(ref.input!.schemaPrefix, schema.id, storeId);
     anchor
       .prepare(
         "INSERT INTO openclaw_engine_anchor (store_id, engine, schema) VALUES (?, 'postgres', ?)",
@@ -182,7 +161,7 @@ export function openEngineStore(ref: {
   const identity =
     known?.engine === "postgres"
       ? known
-      : ref.existingOnly
+      : ref.existingOnly || readOnly
         ? readOrCreateAnchor()
         : runSqliteImmediateTransactionSync(anchor, readOrCreateAnchor);
   const store: AdmittedStore = { ...ref, input: ref.input, ...identity };
@@ -198,14 +177,23 @@ export function openEngineStore(ref: {
       schema,
       recordSchema: fresh,
       preserveSchemaSeal: ref.existingVersion,
+      requireSealedSchema: readOnly,
     });
     ref.admitPostgres?.(db, fresh);
   };
   try {
     const publishSearch = schema.search
-      ? admitPostgresSearch(db, schema.search, identity.namespace)
+      ? admitPostgresSearch(
+          db,
+          schema.search,
+          identity.namespace,
+          ref.existingVersion ? 1 : schema.postgresVectorSearchVersion,
+        )
       : undefined;
-    if (!known || (known.engine === "postgres" && known.version !== schema.version)) {
+    if (readOnly) {
+      // Standby reads verify the current schema without creating or migrating either store.
+      db.runTransaction(() => admit(false), undefined, true);
+    } else if (!known || (known.engine === "postgres" && known.version !== schema.version)) {
       admitPostgresCapabilities(db);
       // Bootstrap borrows opening custody; ordinary writes still require domain admission.
       // Existing-only forbids creation; an unsealed port still needs writable schema admission.
@@ -252,7 +240,14 @@ export function openEngineStore(ref: {
                 if (!source) {
                   throw new Error("Missing PostgreSQL source schema for inspection");
                 }
-                schema = { ...schema, ...source, version: Number(meta.version) };
+                schema = {
+                  ...schema,
+                  ...source,
+                  postgresVectorDecoderVersion: source.postgresVectorDecoderVersion,
+                  postgresVectorSearchVersion: source.postgresVectorSearchVersion,
+                  postgresTextSearchVersion: source.postgresTextSearchVersion,
+                  version: Number(meta.version),
+                };
               } else {
                 assertMigrationCurrent = ref.assertMigrationCurrent;
                 assertMigrationCurrent?.();
@@ -298,7 +293,12 @@ export function openEngineStore(ref: {
     // Publish against the committed schema revision, after bootstrap/migration settles.
     publishSearch?.();
     for (const extension of Object.values(getAdmittedPostgresSchema(db)?.searchExtensions ?? {})) {
-      admitPostgresSearch(db, extension, identity.namespace)?.();
+      admitPostgresSearch(
+        db,
+        extension,
+        identity.namespace,
+        schema.postgresVectorSearchVersion,
+      )?.();
     }
     return db;
   } catch (error) {

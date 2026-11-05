@@ -1,6 +1,7 @@
 // Covers plugin config contract validation and ownership boundaries.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 
 const mocks = vi.hoisted(() => {
   const loadManifestRegistry = vi.fn();
@@ -51,19 +52,14 @@ function createRegistry(
     diagnostics: [],
     plugins: id
       ? [
-          {
+          createPluginManifestRecordFixture({
             id,
             origin,
             configContracts,
+            source: `/tmp/${id}/openclaw.plugin.json`,
             rootDir: `/tmp/${id}`,
             manifestPath: `/tmp/${id}/openclaw.plugin.json`,
-            source: `/tmp/${id}/openclaw.plugin.json`,
-            channels: [],
-            providers: [],
-            cliBackends: [],
-            skills: [],
-            hooks: [],
-          },
+          }),
         ]
       : [],
   };
@@ -102,7 +98,6 @@ describe("resolvePluginConfigContractsById", () => {
       {
         pluginIds: ["prepared-plugin"],
         manifestRegistry,
-        fallbackToBundledMetadata: true,
         fallbackToBundledMetadataForResolvedBundled: true,
         fallbackBundledPluginIds: ["prepared-plugin"],
       },
@@ -138,7 +133,6 @@ describe("resolvePluginConfigContractsById", () => {
       {
         pluginIds: ["prepared-plugin"],
         manifestRegistry: createRegistry("prepared-plugin", "bundled"),
-        fallbackToBundledMetadata: true,
         fallbackToBundledMetadataForResolvedBundled: true,
         fallbackBundledPluginIds: ["prepared-plugin"],
       },
@@ -204,16 +198,6 @@ describe("resolvePluginConfigContractsById", () => {
         secretInputs: { paths: [{ path: "tts.providers.*.apiKey", expected: "string" }] },
       },
     );
-  });
-
-  it("can skip bundled metadata fallback for registry-scoped callers", () => {
-    expect(
-      resolvePluginConfigContractsById({
-        pluginIds: ["missing"],
-        fallbackToBundledMetadata: false,
-      }),
-    ).toEqual(new Map());
-    expect(mocks.loadBundledManifestRegistry).not.toHaveBeenCalled();
   });
 });
 

@@ -127,7 +127,7 @@ describe("Browser panel downloads", () => {
       }
       await panel.download.save();
       expect(downloads).toEqual([]);
-      expect(panel.errorText).toContain("Could not download this file");
+      expect(panel.errorText).toContain("Couldn’t download this file");
       expect(panel.errorText).toContain("open it in your browser");
       expect(panel.download.available).toBe(true);
       await panel.download.save();

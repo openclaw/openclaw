@@ -16,6 +16,7 @@ type BoardWidgetSandboxHostOptions = {
   widget: BoardWidget;
   bridgeEnabled?: boolean;
   connected?: boolean;
+  documentActive: boolean;
   sandboxOrigin: string;
   sandboxUrl: string;
   sourceOrigin: string;
@@ -65,7 +66,7 @@ export class BoardWidgetSandboxHost {
 
   constructor(private options: BoardWidgetSandboxHostOptions) {
     this.documentHost = new WidgetSandboxHost(this.documentOptions());
-    this.documentHost.setActive(options.connected !== false);
+    this.documentHost.setActive(options.documentActive);
   }
 
   get frame(): HTMLIFrameElement {
@@ -77,7 +78,7 @@ export class BoardWidgetSandboxHost {
       return;
     }
     this.active = active;
-    this.documentHost.setActive(active && this.options.connected !== false);
+    this.documentHost.setActive(active && this.options.documentActive);
     if (!active) {
       this.cancelPendingRequests("Widget inactive");
       this.requestGeneration += 1;
@@ -116,7 +117,7 @@ export class BoardWidgetSandboxHost {
         this.documentHost.reset();
       }
     }
-    const active = this.active && options.connected !== false;
+    const active = this.active && options.documentActive;
     if (!active) {
       this.documentHost.setActive(false);
     }

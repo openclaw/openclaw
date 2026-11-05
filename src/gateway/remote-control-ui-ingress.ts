@@ -16,6 +16,7 @@ import {
   type GatewayControlUiIngressV2,
   type GatewayIngressPrincipal,
 } from "../plugins/gateway-ingress.types.js";
+import { assertionSucceeds } from "../shared/assertion.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import {
   captureResidentUserProfileAccess,
@@ -400,14 +401,7 @@ export function createGatewayControlUiIngressFactory(params: {
           throw new GatewayControlUiIngressError("closed", "Gateway request owner was replaced.");
         }
       };
-      const hasCurrentClientAuthority = () => {
-        try {
-          assertRequestCurrent();
-          return true;
-        } catch {
-          return false;
-        }
-      };
+      const hasCurrentClientAuthority = () => assertionSucceeds(assertRequestCurrent);
       assertRequestCurrent();
       const internal: NonNullable<GatewayClient["internal"]> = {
         authenticatedOperator: true,

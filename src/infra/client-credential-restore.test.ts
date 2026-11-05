@@ -5,7 +5,6 @@ import type { StatementSync } from "node:sqlite";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
-import { buildBackupArchivePath } from "../commands/backup-shared.js";
 import { parseBackupManifest, type BackupManifest } from "../commands/backup-verify-manifest.js";
 import { beginDoctorMaintenance } from "../commands/doctor-maintenance.js";
 import { backupDoctorMigrationDatabases } from "../commands/doctor-migration-backup.js";
@@ -21,24 +20,35 @@ import {
 } from "../state/openclaw-state-db.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { buildBackupArchivePath } from "./backup-archive-path-policy.js";
 import { createBackupArchive } from "./backup-create.js";
 import {
   bindFreshClientCredentialStore,
   prepareClientCredentialMigration,
   recoverClientCredentialStore,
 } from "./client-credential-migration.js";
+import { openMigrationCredentials } from "./client-credential-migration.test-support.js";
 import {
   readClientCredentialReceipt,
   writeClientCredentialReceipt,
 } from "./client-credential-readiness.js";
-import type { ClientCredentialReceipt } from "./client-credential-receipt.js";
-import { prepareRestoredClientCredentials } from "./client-credential-restore.js";
+import {
+  readClientCredentialFileIdentity,
+  type ClientCredentialReceipt,
+} from "./client-credential-receipt.js";
+import {
+  capturePortClientCredentialBinding,
+  prepareRestoredClientCredentials,
+} from "./client-credential-restore.js";
 import { CLIENT_CREDENTIAL_SCHEMA_SQL } from "./client-credential-schema.js";
 import {
   openClientCredentialCustody,
   runClientCredentialOperation,
 } from "./client-credential-store.js";
-import { generateStoredDeviceIdentity } from "./device-identity-material.js";
+import {
+  generateStoredDeviceIdentity,
+  storedDeviceIdentityToRow,
+} from "./device-identity-material.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import {
@@ -46,23 +56,21 @@ import {
   snapshotUpdateCandidateState,
 } from "./update-candidate-state.js";
 
+function createIdentity(env: NodeJS.ProcessEnv, timestamp: number) {
+  const identity = generateStoredDeviceIdentity(timestamp);
+  runClientCredentialOperation(env, {
+    kind: "identity.create",
+    identity: storedDeviceIdentityToRow("primary", identity, timestamp),
+  });
+  return identity;
+}
+
 describe("whole-archive credential relocation", () => {
   it("preserves interrupted completion through rehearsal until the copied owner recovers", async () => {
     await withOpenClawTestState(
       { layout: "split", scenario: "external-service", label: "credential-rehearsal" },
       async (state) => {
-        const identity = generateStoredDeviceIdentity(23);
-        runClientCredentialOperation(state.env, {
-          kind: "identity.create",
-          identity: {
-            identity_key: "primary",
-            device_id: identity.deviceId,
-            public_key_pem: identity.publicKeyPem,
-            private_key_pem: identity.privateKeyPem,
-            created_at_ms: 23,
-            updated_at_ms: 23,
-          },
-        });
+        const identity = createIdentity(state.env, 23);
         const sharedPath = state.statePath("state", "openclaw.sqlite");
         fs.mkdirSync(path.dirname(sharedPath), { recursive: true, mode: 0o700 });
         {
@@ -98,7 +106,7 @@ describe("whole-archive credential relocation", () => {
           expect(interruptedAfterSourceCommit).toBe(true);
         }
         {
-          using local = openClientCredentialCustody(state.env, { migration: true })!;
+          using local = openMigrationCredentials(state.env);
           expect(readClientCredentialReceipt(local.database)?.phase).toBe("copied");
         }
         const archive = await createBackupArchive({
@@ -132,7 +140,7 @@ describe("whole-archive credential relocation", () => {
         });
         const copiedEnv = { ...state.env, OPENCLAW_STATE_DIR: targetStateDir };
         {
-          using local = openClientCredentialCustody(copiedEnv, { migration: true })!;
+          using local = openMigrationCredentials(copiedEnv);
           expect(readClientCredentialReceipt(local.database)?.phase).toBe("copied");
         }
         const readIdentity = () =>
@@ -158,85 +166,162 @@ describe("whole-archive credential relocation", () => {
     );
   });
 
-  it("keeps a local orphan fenced when the matched PostgreSQL export predates cutover", async () => {
-    await withOpenClawTestState(
-      { layout: "split", scenario: "external-service", label: "credential-pg-restore" },
-      async (state) => {
-        const generated = generateStoredDeviceIdentity(7);
-        runClientCredentialOperation(state.env, {
-          kind: "identity.create",
-          identity: {
-            identity_key: "primary",
-            device_id: generated.deviceId,
-            public_key_pem: generated.publicKeyPem,
-            private_key_pem: generated.privateKeyPem,
-            created_at_ms: 7,
-            updated_at_ms: 7,
-          },
-        });
-        const sharedPath = state.statePath("state", "openclaw.sqlite");
-        fs.mkdirSync(path.dirname(sharedPath), { recursive: true, mode: 0o700 });
-        {
-          using anchor = openNodeSqliteDatabase(sharedPath);
-          anchor.exec(
-            "CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT);" +
-              "INSERT INTO openclaw_engine_anchor VALUES ('b3046bb3-bca5-444e-a760-7e6190afc0fd', 'postgres', 'synthetic_state');",
+  it.each([false, true])(
+    "keeps old exports fenced and rebinds local companions without PostgreSQL contact (companion=%s)",
+    async (companion) => {
+      await withOpenClawTestState(
+        { layout: "split", scenario: "external-service", label: "credential-pg-restore" },
+        async (state) => {
+          const device = createIdentity(state.env, 7);
+          const sharedPath = state.statePath("state", "openclaw.sqlite");
+          fs.mkdirSync(path.dirname(sharedPath), { recursive: true, mode: 0o700 });
+          {
+            using anchor = openNodeSqliteDatabase(sharedPath);
+            anchor.exec(
+              "CREATE TABLE openclaw_engine_anchor (store_id TEXT, engine TEXT, schema TEXT);" +
+                "INSERT INTO openclaw_engine_anchor VALUES ('b3046bb3-bca5-444e-a760-7e6190afc0fd', 'postgres', 'synthetic_state');",
+            );
+            runSqliteImmediateTransactionSync(anchor, () =>
+              bindFreshClientCredentialStore(anchor, { path: sharedPath, env: state.env }),
+            );
+          }
+          {
+            using local = openMigrationCredentials(state.env);
+            const sharedIdentity = fs.statSync(sharedPath, { bigint: true });
+            expect(readClientCredentialReceipt(local.database)).toEqual({
+              phase: "complete",
+              receipt: {
+                format: 1,
+                source: {
+                  kind: "canonical",
+                  engine: "postgres",
+                  identity: "b3046bb3-bca5-444e-a760-7e6190afc0fd",
+                  generation: "bootstrap:b3046bb3-bca5-444e-a760-7e6190afc0fd",
+                  sha256: "2a7509c68153d6badd47f49bb24209c90adbaee4793ad36669984982f8711ec1",
+                  destinationVersion: 1,
+                },
+                sharedFile: {
+                  path: fs.realpathSync.native(sharedPath),
+                  dev: String(sharedIdentity.dev),
+                  ino: String(sharedIdentity.ino),
+                },
+                legacyImports: {
+                  "identity:primary": { sha256: null },
+                  "identity:node": { sha256: null },
+                  "identity:shareExtension": { sha256: null },
+                  "auth:primary": { sha256: null },
+                  "auth:node": { sha256: null },
+                  "auth:shareExtension": { sha256: null },
+                },
+              },
+            });
+          }
+          const original = fs.readFileSync(state.statePath("client", "credentials.sqlite"));
+          const targetPath = state.path("restored");
+          const archiveRoot = "synthetic-archive";
+          const stateArchivePath = buildBackupArchivePath(archiveRoot, state.stateDir);
+          const restoredStateDir = path.join(targetPath, stateArchivePath);
+          const restoredSharedPath = path.join(
+            targetPath,
+            buildBackupArchivePath(archiveRoot, sharedPath),
           );
-          runSqliteImmediateTransactionSync(anchor, () =>
-            bindFreshClientCredentialStore(anchor, { path: sharedPath, env: state.env }),
+          fs.mkdirSync(path.dirname(restoredSharedPath), { recursive: true, mode: 0o700 });
+          fs.mkdirSync(path.join(restoredStateDir, "client"), { mode: 0o700 });
+          fs.copyFileSync(sharedPath, restoredSharedPath);
+          fs.copyFileSync(
+            state.statePath("client", "credentials.sqlite"),
+            path.join(restoredStateDir, "client", "credentials.sqlite"),
           );
-        }
-        {
-          using local = openClientCredentialCustody(state.env, { migration: true })!;
-          expect(readClientCredentialReceipt(local.database)!.receipt.source).toBeNull();
-        }
-        const original = fs.readFileSync(state.statePath("client", "credentials.sqlite"));
-        const targetPath = state.path("restored");
-        const archiveRoot = "synthetic-archive";
-        const stateArchivePath = buildBackupArchivePath(archiveRoot, state.stateDir);
-        const restoredStateDir = path.join(targetPath, stateArchivePath);
-        const restoredSharedPath = path.join(
-          targetPath,
-          buildBackupArchivePath(archiveRoot, sharedPath),
-        );
-        fs.mkdirSync(path.dirname(restoredSharedPath), { recursive: true, mode: 0o700 });
-        fs.mkdirSync(path.join(restoredStateDir, "client"), { mode: 0o700 });
-        fs.copyFileSync(sharedPath, restoredSharedPath);
-        fs.copyFileSync(
-          state.statePath("client", "credentials.sqlite"),
-          path.join(restoredStateDir, "client", "credentials.sqlite"),
-        );
-        const exportDirectory = `${restoredSharedPath}.postgres`;
-        fs.mkdirSync(exportDirectory, { mode: 0o700 });
-        fs.copyFileSync(sharedPath, path.join(exportDirectory, "anchor.sqlite"));
-        {
-          using image = openNodeSqliteDatabase(path.join(exportDirectory, "database.sqlite"));
-          image.exec("PRAGMA user_version = 25");
-        }
-        const manifest: BackupManifest = {
-          schemaVersion: 1,
-          createdAt: "2026-10-16T00:00:00.000Z",
-          archiveRoot,
-          runtimeVersion: "test",
-          platform: process.platform,
-          nodeVersion: process.version,
-          assets: [{ kind: "state", sourcePath: state.stateDir, archivePath: stateArchivePath }],
-          sqliteSnapshots: [{ role: "global", sourcePath: sharedPath }],
-        };
-        prepareRestoredClientCredentials({ manifest, targetPath })?.();
-        const restoredEnv = { ...state.env, OPENCLAW_STATE_DIR: restoredStateDir };
-        expect(
-          fs.readFileSync(path.join(restoredStateDir, "client", "credentials.sqlite")),
-        ).toEqual(original);
-        expect(() =>
-          runClientCredentialOperation(restoredEnv, {
-            kind: "identity.read",
-            identity_key: "primary",
-          }),
-        ).toThrow("migration is incomplete or stale");
-      },
-    );
-  });
+          const exportDirectory = `${restoredSharedPath}.postgres`;
+          fs.mkdirSync(exportDirectory, { mode: 0o700 });
+          fs.copyFileSync(sharedPath, path.join(exportDirectory, "anchor.sqlite"));
+          {
+            using image = openNodeSqliteDatabase(path.join(exportDirectory, "database.sqlite"));
+            image.exec("PRAGMA user_version = 25");
+          }
+          const manifest: BackupManifest = {
+            schemaVersion: 1,
+            createdAt: "2026-10-16T00:00:00.000Z",
+            archiveRoot,
+            runtimeVersion: "test",
+            platform: process.platform,
+            nodeVersion: process.version,
+            assets: [{ kind: "state", sourcePath: state.stateDir, archivePath: stateArchivePath }],
+            sqliteSnapshots: [{ role: "global", sourcePath: sharedPath }],
+          };
+          if (companion) {
+            manifest.profile = "local-companion";
+            manifest.postgresSnapshots = [];
+            manifest.postgresAnchors = [
+              {
+                sourcePath: sharedPath,
+                storeId: "b3046bb3-bca5-444e-a760-7e6190afc0fd",
+                namespace: "synthetic_state",
+              },
+            ];
+            fs.rmSync(exportDirectory, { recursive: true });
+          }
+          prepareRestoredClientCredentials({ manifest, targetPath })?.();
+          const restoredEnv = { ...state.env, OPENCLAW_STATE_DIR: restoredStateDir };
+          if (companion) {
+            {
+              using local = openMigrationCredentials(restoredEnv);
+              const receipt = readClientCredentialReceipt(local.database);
+              const identity = fs.statSync(restoredSharedPath, { bigint: true });
+              expect(receipt?.phase).toBe("complete");
+              expect(receipt?.receipt.sharedFile).toEqual({
+                path: fs.realpathSync.native(restoredSharedPath),
+                dev: String(identity.dev),
+                ino: String(identity.ino),
+              });
+              expect(receipt?.receipt.source).toMatchObject({
+                engine: "postgres",
+                identity: "b3046bb3-bca5-444e-a760-7e6190afc0fd",
+              });
+            }
+            const promotedState = state.path("promoted-state");
+            fs.renameSync(restoredStateDir, promotedState);
+            const promotedEnv = { ...state.env, OPENCLAW_STATE_DIR: promotedState };
+            const promotedShared = path.join(promotedState, "state/openclaw.sqlite");
+            const promotedFile = readClientCredentialFileIdentity(promotedShared);
+            if (!promotedFile) {
+              throw new Error("Promoted synthetic PostgreSQL anchor is missing");
+            }
+            expect(
+              runClientCredentialOperation(promotedEnv, {
+                kind: "identity.read",
+                identity_key: "primary",
+              }),
+            ).toMatchObject({
+              kind: "identity",
+              identity: { device_id: device.deviceId, private_key_pem: device.privateKeyPem },
+            });
+            expect(
+              capturePortClientCredentialBinding({
+                env: promotedEnv,
+                sourcePath: promotedShared,
+                sourceFile: promotedFile,
+              }),
+            ).not.toBeNull();
+            using admitted = openClientCredentialCustody(promotedEnv, { readOnly: true });
+            expect(readClientCredentialReceipt(admitted!.database)?.receipt.sharedFile).toEqual(
+              promotedFile,
+            );
+            return;
+          }
+          expect(
+            fs.readFileSync(path.join(restoredStateDir, "client", "credentials.sqlite")),
+          ).toEqual(original);
+          expect(() =>
+            runClientCredentialOperation(restoredEnv, {
+              kind: "identity.read",
+              identity_key: "primary",
+            }),
+          ).toThrow("migration is incomplete or stale");
+        },
+      );
+    },
+  );
 
   it.each([
     { alias: false, mismatch: "none" },
@@ -286,7 +371,11 @@ describe("whole-archive credential relocation", () => {
             root: process.cwd(),
             options: { repair: true, nonInteractive: true },
             runtime,
-            beforeStateMutation: createDoctorOriginalCaptureHook({ root: process.cwd(), runtime }),
+            beforeStateMutation: createDoctorOriginalCaptureHook({
+              root: process.cwd(),
+              runtime,
+              reportFindings: () => {},
+            }),
           });
           try {
             await maintenance!.run(() =>
@@ -340,7 +429,7 @@ describe("whole-archive credential relocation", () => {
           }
           let expectedSource: ClientCredentialReceipt["source"];
           {
-            using local = openClientCredentialCustody(state.env, { migration: true })!;
+            using local = openMigrationCredentials(state.env);
             const stored = readClientCredentialReceipt(local.database)!;
             expect(stored.receipt.source?.engine).toBe("sqlite");
             expectedSource = stored.receipt.source;
@@ -408,16 +497,9 @@ describe("whole-archive credential relocation", () => {
             }),
           ).toEqual({
             kind: "identity",
-            identity: {
-              identity_key: "primary",
-              device_id: identity.deviceId,
-              public_key_pem: identity.publicKeyPem,
-              private_key_pem: identity.privateKeyPem,
-              created_at_ms: 41,
-              updated_at_ms: 41,
-            },
+            identity: storedDeviceIdentityToRow("primary", identity, 41),
           });
-          using local = openClientCredentialCustody(restoredEnv, { migration: true })!;
+          using local = openMigrationCredentials(restoredEnv);
           const relocated = readClientCredentialReceipt(local.database)!;
           expect(relocated.receipt.source).toMatchObject({
             generation: expectedSource!.generation,

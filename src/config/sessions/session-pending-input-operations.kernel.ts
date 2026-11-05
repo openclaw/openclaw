@@ -45,6 +45,7 @@ import type {
 import { readPendingInputSourceInDatabase } from "./session-pending-input-source.kernel.js";
 import {
   isFinalInputCompletion,
+  markSessionPendingInputCancelledByUser,
   parseSessionPendingInputMessage,
 } from "./session-pending-input-value.js";
 
@@ -101,7 +102,12 @@ export function readPendingInput(database: OpenClawAgentDatabase, input: Pending
 
 export function mutatePendingInput(
   input: PendingInputMutation,
-  { writeTransaction, admit }: Pick<AgentWorkerOperationContext, "writeTransaction" | "admit">,
+  {
+    writeTransaction,
+    admit,
+  }: Pick<AgentWorkerOperationContext, "writeTransaction"> & {
+    admit: (stage: "transaction" | "commit", publication?: unknown) => void;
+  },
   publish: (database: OpenClawAgentDatabase["db"], receipt: PendingInputMutationReceipt) => void,
 ): PendingInputMutationReceipt {
   return writeTransaction(`session.pending-input.${input.kind}`, "Pending input", (current) =>
@@ -219,11 +225,17 @@ export function mutatePendingInput(
           }
           receipt.outcome = writeSessionInputCompletion(current, input, input.outcome);
         } else if (row) {
+          const changes = {
+            state: input.disposition,
+            ...(input.cancelledByUser
+              ? { message_json: markSessionPendingInputCancelledByUser(row.message_json) }
+              : {}),
+          };
           const result = executeSqliteQuerySync(
             current.db,
             getSessionKysely(current.db)
               .updateTable("session_pending_inputs")
-              .set({ state: input.disposition })
+              .set(changes)
               .where("input_id", "=", input.inputId)
               .where("state", "=", "queued")
               .where("consumed_event_id", "is", null),
@@ -233,7 +245,7 @@ export function mutatePendingInput(
           }
           if (result.numAffectedRows === 1n && actor) {
             actor.pendingInputs = writableSessionActorMap(actor.pendingInputs);
-            actor.pendingInputs.set(input.idempotencyKey, { ...row, state: input.disposition });
+            actor.pendingInputs.set(input.idempotencyKey, { ...row, ...changes });
           }
         }
         withoutSqliteDatabaseWriteScope(current.db, () => {

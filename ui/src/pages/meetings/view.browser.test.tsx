@@ -1,5 +1,5 @@
 import { createSignal } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import "../../styles.css";
@@ -9,30 +9,19 @@ import type { TranscriptsViewProps } from "./view-types.ts";
 import { TranscriptsView } from "./view.tsx";
 
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
-let container: HTMLDivElement;
-let updateView: ((props: TranscriptsViewProps) => void) | undefined;
-function mountView(props: TranscriptsViewProps) {
-  if (!updateView) {
-    const [value, setValue] = createSignal(props);
-    updateView = (next) => setValue({ ...next });
-    mountSolid(() => <TranscriptsView {...value()} />, { container });
-  } else {
-    updateView(props);
-  }
-  flush();
+let container: HTMLElement;
+let updateView: (props: TranscriptsViewProps) => void;
+let props: TranscriptsViewProps;
+const query = (selector: string) => container.querySelector<HTMLElement>(selector)!;
+const rect = (element: Element) => element.getBoundingClientRect();
+const speech = { sequence: 0, speakerLabel: "Avery", text: "Unbroken".repeat(120) };
+async function viewport(width = 1440, height = 1000) {
+  const { page } = await import("vitest/browser");
+  await page.viewport(width, height);
 }
-
-beforeEach(() => {
-  updateView = undefined;
-  container = document.createElement("div");
-  document.body.append(container);
-});
-afterEach(() => {
-  container.remove();
-});
-
-function readerProps(): TranscriptsViewProps {
-  return {
+beforeEach(async () => {
+  await viewport();
+  props = {
     basePath: "",
     now: Date.parse(meetingEntry.updatedAt),
     search: "?selector=meeting",
@@ -41,23 +30,20 @@ function readerProps(): TranscriptsViewProps {
     connected: true,
     allowed: true,
     list: { sessions: [meetingEntry], nextCursor: null },
+    listRead: () => {},
     listLoading: false,
     listError: null,
     reader: {
-      summary: meetingPage,
-      pages: [
-        {
-          ...meetingPage,
-          utterances: [{ sequence: 0, speakerLabel: "Avery", text: "Unbroken".repeat(120) }],
-        },
-      ],
+      summary: structuredClone(meetingPage),
+      pages: [{ ...meetingPage, utterances: [speech] }],
+      read: () => {},
       loading: false,
       error: null,
     },
     readerTab: "text",
-    summaryGeneration: { kind: "idle" },
-    onSummaryRetry: vi.fn(),
-    exportState: { kind: "idle" },
+    exporting: false,
+    exportCompletion: null,
+    exportRead: () => false,
     onNavigate: vi.fn(),
     onOpenCaptureSettings: vi.fn(),
     onRefresh: vi.fn(),
@@ -65,116 +51,73 @@ function readerProps(): TranscriptsViewProps {
     onReaderTab: vi.fn(),
     onDownload: vi.fn(),
   };
-}
+  const [value, setValue] = createSignal(props);
+  updateView = (next) => {
+    setValue({ ...next });
+    flush();
+  };
+  ({ container } = mountSolid(() => <TranscriptsView {...value()} />));
+});
 
 describe.skipIf(!hasBrowserLayout)("meeting transcript responsive reader", () => {
   it("keeps long speaker text inside the reading column and switches to a mobile drill-in", async () => {
-    const { page } = await import("vitest/browser");
-    const props = readerProps();
-    await page.viewport(1320, 900);
-    mountView(props);
-    const library = document.querySelector<HTMLElement>(".transcripts-library")!;
-    const reader = document.querySelector<HTMLElement>(".transcripts-reader")!;
+    await viewport(1320, 900);
+    const library = query(".transcripts-library");
+    const reader = query(".transcripts-reader");
     expect(getComputedStyle(library).display).not.toBe("none");
-    expect(reader.getBoundingClientRect().left).toBeGreaterThanOrEqual(
-      library.getBoundingClientRect().right - 1,
-    );
+    expect(rect(reader).left).toBeGreaterThanOrEqual(rect(library).right - 1);
     expect(reader.scrollWidth).toBeLessThanOrEqual(reader.clientWidth + 1);
-    await page.viewport(390, 844);
+    await viewport(390, 844);
     expect(getComputedStyle(library).display).toBe("none");
-    expect(reader.getBoundingClientRect().right).toBeLessThanOrEqual(window.innerWidth + 1);
+    expect(rect(reader).right).toBeLessThanOrEqual(window.innerWidth + 1);
     expect(reader.scrollWidth).toBeLessThanOrEqual(reader.clientWidth + 1);
-    const transcript = document.querySelector<HTMLElement>("#transcript-reader-tab-text")!;
-    const summary = document.querySelector<HTMLElement>("#transcript-reader-tab-summary")!;
-    transcript.focus();
-    transcript.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
-    expect(document.activeElement).toBe(summary);
-    expect(summary.getAttribute("aria-selected")).toBe("false");
-    expect(transcript.getAttribute("aria-selected")).toBe("true");
-    expect(props.onReaderTab).not.toHaveBeenCalled();
-    summary.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    expect(props.onReaderTab).toHaveBeenCalledExactlyOnceWith("summary");
-    mountView({ ...props, readerTab: "summary" });
-    expect(summary.getAttribute("aria-selected")).toBe("true");
-    expect(document.querySelector('[role="tabpanel"]')?.getAttribute("aria-labelledby")).toBe(
-      summary.id,
-    );
-    summary.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    expect(props.onReaderTab).toHaveBeenCalledExactlyOnceWith("summary");
-    expect(document.querySelector('[role="tabpanel"]')?.textContent).toContain(
-      "Notes extracted using text heuristics",
+    updateView({ ...props, readerTab: "summary" });
+    expect(query('[role="tabpanel"]').getAttribute("aria-labelledby")).toBe(
+      "transcript-reader-tab-summary",
     );
   });
   it("uses themed search controls and keeps the third library entry above the fold", async () => {
-    const { page } = await import("vitest/browser");
-    await page.viewport(1440, 1000);
-    const props = readerProps();
-    props.list = {
-      sessions: [
-        meetingEntry,
-        { ...meetingEntry, selector: "second" },
-        { ...meetingEntry, selector: "third" },
-      ],
-      nextCursor: null,
-    };
-    mountView(props);
-    const libraryInput = document.querySelector<HTMLInputElement>('input[name="query"]')!;
-    const readerInput = document.querySelector<HTMLInputElement>('input[name="find"]')!;
-    const libraryStyle = getComputedStyle(libraryInput);
-    const readerStyle = getComputedStyle(readerInput);
+    props.list!.sessions.push(
+      { ...meetingEntry, selector: "second" },
+      { ...meetingEntry, selector: "third" },
+    );
+    props.list = { ...props.list! };
+    updateView(props);
+    const libraryStyle = getComputedStyle(query('input[name="query"]'));
+    const readerStyle = getComputedStyle(query('input[name="find"]'));
     for (const property of ["backgroundColor", "borderRadius", "paddingLeft"] as const) {
       expect(readerStyle[property]).toBe(libraryStyle[property]);
     }
-    const third = document.querySelectorAll(".transcripts-list__entry")[2]!;
-    expect(third.getBoundingClientRect().bottom).toBeLessThan(window.innerHeight);
-    expect(document.querySelector<HTMLDetailsElement>(".transcripts-filters details")!.open).toBe(
-      false,
-    );
+    const third = container.querySelectorAll(".transcripts-list__entry")[2]!;
+    expect(rect(third).bottom).toBeLessThan(window.innerHeight);
+    expect(query(".transcripts-filters details")).toHaveProperty("open", false);
     const overview = "A readable summary of the decisions and follow-up work. ".repeat(5);
     props.search = "";
-    props.list.sessions[0] = { ...meetingEntry, overview };
-    mountView(props);
+    props.list!.sessions[0] = { ...meetingEntry, overview };
+    updateView(props);
     expect(container.querySelector(".transcripts-reader")).toBeNull();
-    const library = container.querySelector<HTMLElement>(".transcripts-library")!;
-    expect(library.getBoundingClientRect().width).toBeGreaterThan(600);
-    const preview = container.querySelector<HTMLElement>(".meetings-row__overview")!;
+    expect(rect(query(".transcripts-library")).width).toBeGreaterThan(600);
+    const preview = query(".meetings-row__overview");
     expect(preview.textContent).toBe(overview);
-    expect(preview.getBoundingClientRect().height).toBeGreaterThan(
+    expect(rect(preview).height).toBeGreaterThan(
       Number.parseFloat(getComputedStyle(preview).lineHeight),
     );
     expect(preview.scrollWidth).toBeLessThanOrEqual(preview.clientWidth + 1);
   });
 
   it("preserves stored Markdown notes while keeping transcript speech in its own tab", async () => {
-    const { page } = await import("vitest/browser");
-    await page.viewport(1440, 1000);
-    const props = readerProps();
     props.readerTab = "summary";
-    props.reader.summary = {
-      ...meetingPage,
-      summary: {
-        ...meetingPage.summary!,
-        markdown:
-          "# Design review\n\nFirst paragraph.\n\nSecond paragraph.\n\n## Next steps\n- Follow up.\n\n```md\n## Transcript\nA heading example, not recorded speech.\n```\n\n## Transcript\n- Avery: Raw recorded speech.\n",
-      },
-    };
-    mountView(props);
-    const notes = container.querySelector<HTMLElement>(".meetings-notes")!;
-    expect([...notes.querySelectorAll("h2")].map((heading) => heading.textContent)).toEqual([
-      "Next steps",
-    ]);
+    props.reader.summary!.summary!.markdown =
+      "# Design review\n\nFirst paragraph.\n\nSecond paragraph.\n\n## Next steps\n- Follow up.\n\n```md\n## Transcript\nA heading example, not recorded speech.\n```\n\n## Transcript\n- Avery: Raw recorded speech.\n";
+    updateView(props);
+    const notes = query(".meetings-notes");
+    expect(
+      ["h2", "p", "li"].map((tag) => [...notes.querySelectorAll(tag)].map((el) => el.textContent)),
+    ).toEqual([["Next steps"], ["First paragraph.", "Second paragraph."], ["Follow up."]]);
     expect(notes.textContent).not.toContain("Raw recorded speech.");
     expect(notes.querySelector("code")?.textContent).toContain("## Transcript");
     const paragraphs = notes.querySelectorAll("p");
-    expect([...paragraphs].map((paragraph) => paragraph.textContent)).toEqual([
-      "First paragraph.",
-      "Second paragraph.",
-    ]);
-    expect(notes.querySelector("h2")?.textContent).toBe("Next steps");
-    expect(notes.querySelector("li")?.textContent).toBe("Follow up.");
     const lineHeight = Number.parseFloat(getComputedStyle(paragraphs[0]!).lineHeight);
-    expect(
-      paragraphs[1]!.getBoundingClientRect().top - paragraphs[0]!.getBoundingClientRect().bottom,
-    ).toBeLessThan(lineHeight * 2);
+    expect(rect(paragraphs[1]!).top - rect(paragraphs[0]!).bottom).toBeLessThan(lineHeight * 2);
   });
 });

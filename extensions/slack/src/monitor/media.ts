@@ -204,45 +204,6 @@ const MAX_SLACK_MEDIA_CONCURRENCY = 3;
 const MAX_SLACK_FORWARDED_ATTACHMENTS = 8;
 const SLACK_MEDIA_LIMIT_REASON = `omitted: ${MAX_SLACK_MEDIA_FILES}-file limit`;
 
-function formatSlackMediaFailure(error: unknown): string {
-  // Download errors can contain URLs and response bodies; redact before bounding
-  // the text shared by diagnostics and model context, even with log redaction off.
-  return redactToolPayloadText(formatErrorMessage(error)).replace(/\s+/g, " ").slice(0, 200);
-}
-
-async function fetchFreshSlackFileUrl(params: {
-  file: SlackFile;
-  client?: SlackWebClient;
-  isRefreshedFileAllowed?: (file: SlackFile) => boolean;
-  assertCurrent?: () => void;
-  abortSignal?: AbortSignal;
-}): Promise<string | null> {
-  if (!params.file.id || !params.client) {
-    return null;
-  }
-  const assertCurrent = captureSlackMediaReadGuard(params);
-  try {
-    assertCurrent?.();
-    const info = await params.client.files.info({ file: params.file.id });
-    assertCurrent?.();
-    const freshFile = info.file as SlackFile | undefined;
-    if (freshFile && params.isRefreshedFileAllowed?.(freshFile) === false) {
-      logVerbose(`slack: refreshed file metadata rejected for file id=${params.file.id}`);
-      return null;
-    }
-    const freshUrl = freshFile?.url_private_download ?? freshFile?.url_private;
-    if (freshUrl) {
-      return freshUrl;
-    }
-    logVerbose(`slack: files.info returned no private URL for file id=${params.file.id}`);
-    return null;
-  } catch {
-    assertCurrent?.();
-    logVerbose(`slack: files.info failed for file id=${params.file.id}`);
-    return null;
-  }
-}
-
 async function downloadSlackMediaFile(
   params: SlackMediaDownloadParams & {
     file: SlackFile;
@@ -312,14 +273,33 @@ export async function resolveSlackMedia(params: {
   for (const file of files.slice(MAX_SLACK_MEDIA_FILES)) {
     params.unavailableFiles?.set(file, SLACK_MEDIA_LIMIT_REASON);
   }
-  const refreshFileUrl = (file: SlackFile) =>
-    fetchFreshSlackFileUrl({
-      file,
-      client: params.client,
-      isRefreshedFileAllowed: params.isRefreshedFileAllowed,
-      assertCurrent: params.assertCurrent,
-      abortSignal: params.abortSignal,
-    });
+  const refreshFileUrl = async (file: SlackFile): Promise<string | null> => {
+    const { client, isRefreshedFileAllowed } = params;
+    if (!file.id || !client) {
+      return null;
+    }
+    const assertRefreshCurrent = captureSlackMediaReadGuard(params);
+    try {
+      assertRefreshCurrent?.();
+      const info = await client.files.info({ file: file.id });
+      assertRefreshCurrent?.();
+      const freshFile = info.file as SlackFile | undefined;
+      if (freshFile && isRefreshedFileAllowed?.(freshFile) === false) {
+        logVerbose(`slack: refreshed file metadata rejected for file id=${file.id}`);
+        return null;
+      }
+      const freshUrl = freshFile?.url_private_download ?? freshFile?.url_private;
+      if (freshUrl) {
+        return freshUrl;
+      }
+      logVerbose(`slack: files.info returned no private URL for file id=${file.id}`);
+      return null;
+    } catch {
+      assertRefreshCurrent?.();
+      logVerbose(`slack: files.info failed for file id=${file.id}`);
+      return null;
+    }
+  };
 
   const { results, hasError, firstError } = await runTasksWithConcurrency({
     tasks: limitedFiles.map((file) => async (): Promise<SlackMediaResult | null> => {
@@ -337,7 +317,11 @@ export async function resolveSlackMedia(params: {
         try {
           return await downloadSlackMediaFile({ ...params, file, url, govSlack });
         } catch (error) {
-          reason = formatSlackMediaFailure(error);
+          // Download errors can contain URLs and response bodies; redact before bounding
+          // the text shared by diagnostics and model context, even with log redaction off.
+          reason = redactToolPayloadText(formatErrorMessage(error))
+            .replace(/\s+/g, " ")
+            .slice(0, 200);
         }
         assertCurrent?.();
         // Only a failed event URL gets the existing files.info retry. Record

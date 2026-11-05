@@ -15,7 +15,10 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
+  createPluginRecord,
+  createPluginRegistry,
   createPluginRuntimeMock,
+  disposePluginRegistryInstances,
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
   runSetupWizardConfigure,
@@ -73,8 +76,11 @@ async function expectPending(entered: Promise<void>, result: Promise<unknown>) {
 vi.mock("./zca-client.js", () => ({ createZalo: createZaloMock }));
 vi.mock("./qr-temp-file.js", () => ({ writeQrDataUrlToTempFile: async () => undefined }));
 
+import setupEntry from "../setup-entry.js";
+import { zalouserPlugin } from "./channel.js";
 import { zalouserSetupPlugin } from "./channel.setup.js";
 import { getZalouserRuntime, setZalouserRuntime } from "./runtime.js";
+import { getZaloSessionState } from "./session-runtime.js";
 import {
   isZaloCredentialRevocation,
   loadStoredZaloCredentials,
@@ -333,6 +339,104 @@ describe("zalouser credential persistence", () => {
     }
   });
 
+  it("keeps a retired QR result from replacing the current registration's saved credentials", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const register = () => {
+      const builder = createPluginRegistry({
+        runtime: createPluginRuntimeMock(),
+        logger: { info() {}, warn() {}, error() {}, debug() {} },
+        activateGlobalSideEffects: false,
+      });
+      const record = createPluginRecord({ id: "zalouser", origin: "bundled" });
+      builder.registry.plugins.push(record);
+      const api = builder.createApi(record, { config: {}, registrationMode: "full" });
+      const run = api.lifecycle.runInBackgroundContext!;
+      run(() => {
+        api.registerChannel({ plugin: zalouserPlugin });
+        setZalouserRuntime(api.runtime);
+        setupEntry.registerSetupRuntime?.(api);
+      });
+      return {
+        run,
+        gateway: builder.registry.channels[0]!.plugin.gateway!,
+        close: () => disposePluginRegistryInstances(builder.registry),
+      };
+    };
+    const profile = "managed-qr-retirement";
+    const oldResult = createDeferred<API>();
+    const oldStarted = createDeferred<void>();
+    const oldAbort = vi.fn();
+    const oldBeforeWrite = vi.fn(async () => {});
+    createZaloMock.mockResolvedValueOnce({
+      loginQR: (_options: unknown, callback?: (event: LoginQRCallbackEvent) => unknown) => {
+        callback?.({
+          type: LoginQRCallbackEventType.QRCodeGenerated,
+          data: { code: "old-qr", image: "data:image/png;base64,abc123" },
+          actions: { saveToFile: vi.fn(), retry: vi.fn(), abort: oldAbort },
+        });
+        oldStarted.resolve();
+        return oldResult.promise;
+      },
+    });
+    const old = register();
+    let current: ReturnType<typeof register> | undefined;
+    const currentStarted = createDeferred<void>();
+    const currentResult = createDeferred<API>();
+    let oldCompletion: Promise<void> | undefined;
+    let currentCompletion: Promise<void> | undefined;
+    let replacementStart: Promise<{ message: string }> | undefined;
+    try {
+      const starting = old.run(() =>
+        startZaloQrLogin({
+          profile,
+          force: true,
+          beforeCredentialPersistence: oldBeforeWrite,
+        }),
+      );
+      await oldStarted.promise;
+      // Observe the task without returning its promise from the background runner:
+      // doing so would admit another background call that retirement must drain.
+      oldCompletion = old.run(() => getZaloSessionState().activeQrLogins.get(profile)!).waitPromise;
+      await vi.advanceTimersByTimeAsync(150);
+      expect((await starting).qrDataUrl).toBeDefined();
+      await old.close();
+      expect(oldAbort).toHaveBeenCalledOnce();
+
+      current = register();
+      createZaloMock.mockResolvedValueOnce({
+        loginQR: () => {
+          currentStarted.resolve();
+          return currentResult.promise;
+        },
+      });
+      replacementStart = current.gateway.loginWithQrStart!({ accountId: profile, force: true });
+      await currentStarted.promise;
+      currentCompletion = current.run(() =>
+        getZaloSessionState().activeQrLogins.get(profile)!,
+      ).waitPromise;
+      currentResult.resolve(createMockApi({ cookies: cookieJar("current") }));
+      await currentCompletion;
+      await vi.advanceTimersByTimeAsync(150);
+      expect((await replacementStart).message).toBe("Zalo already connected.");
+      expect((await readCredentials(profile)).cookie).toEqual(cookieJar("current"));
+      await current.close();
+
+      oldResult.resolve(createMockApi({ cookies: cookieJar("retired") }));
+      await oldCompletion;
+      // Producer fencing prevents dispatch; this is not a worker rejection claim.
+      expect(oldBeforeWrite).not.toHaveBeenCalled();
+      expect((await readCredentials(profile)).cookie).toEqual(cookieJar("current"));
+    } finally {
+      currentResult.resolve(createMockApi({ cookies: cookieJar("current") }));
+      oldResult.resolve(createMockApi({ cookies: cookieJar("retired") }));
+      await vi.advanceTimersByTimeAsync(3000);
+      await Promise.allSettled([oldCompletion, currentCompletion, replacementStart]);
+      await old.close();
+      await current?.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("revalidates setup ownership immediately before QR credentials are written", async () => {
     const profile = "qr-stale-owner";
     const guardError = new Error("verified inference changed");
@@ -389,7 +493,7 @@ describe("zalouser credential persistence", () => {
     }
   });
 
-  it.each(["persist", "read-only", "reorder"] as const)(
+  it.each(["persist", "read-only"] as const)(
     "handles API cookie changes in %s mode",
     async (mode) => {
       const profile = `cookies-${mode}`;
@@ -399,15 +503,13 @@ describe("zalouser credential persistence", () => {
       const identity = { imei: "stored-imei", userAgent: "stored-user-agent" };
       await seedCredentials(profile, storedCredentials(storedCookie, identity));
       const storedBefore = await readCredentials(profile);
-      let currentCookie = mode === "reorder" ? storedCookie : loginCookie;
+      let currentCookie = loginCookie;
       const api = createMockApi({
         ...identity,
         language: "vi",
         cookies: () => currentCookie,
         getAllFriends: async () => {
-          if (mode !== "reorder") {
-            currentCookie = refreshedCookie;
-          }
+          currentCookie = refreshedCookie;
           return mode === "persist"
             ? [
                 {
@@ -447,11 +549,7 @@ describe("zalouser credential persistence", () => {
           : [],
       );
       const stored = await readCredentials(profile);
-      if (mode === "reorder") {
-        currentCookie = [...storedCookie].toReversed();
-        await expect(listZaloFriends(profile)).resolves.toStrictEqual([]);
-        expect(await readCredentials(profile)).toEqual(stored);
-      } else if (mode === "read-only") {
+      if (mode === "read-only") {
         expect(stored).toEqual(storedBefore);
       } else {
         expect(stored).toMatchObject({
@@ -536,6 +634,22 @@ describe("zalouser credential persistence", () => {
       syncOpen.mockRestore();
     },
   );
+
+  it("retries a failed session restore and reuses the successful API", async () => {
+    const profile = "restore-retry";
+    const cookie = cookieJar("stored");
+    await seedCredentials(profile, storedCredentials(cookie));
+    const failure = new Error("Zalo login failed");
+    const api = createMockApi({ cookies: cookie });
+    const login = vi.fn().mockRejectedValueOnce(failure).mockResolvedValueOnce(api);
+    createZaloMock.mockResolvedValue({ login });
+
+    await expect(getZaloUserInfo(profile)).rejects.toBe(failure);
+    await expect(getZaloUserInfo(profile)).resolves.toMatchObject({ userId: "user-1" });
+    await expect(listZaloFriends(profile)).resolves.toEqual([]);
+    expect(login).toHaveBeenCalledTimes(2);
+    expect((await readCredentials(profile)).cookie).toEqual(cookie);
+  });
 
   it("does not let a superseded restore overwrite or invalidate a replacement session", async () => {
     const profile = "restore-logout";

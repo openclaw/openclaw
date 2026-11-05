@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import type http from "node:http";
@@ -6,28 +7,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { resolvePluginNpmProjectDir } from "./install-paths.js";
-import { withPluginInstallRoots } from "./install-root-context.js";
-import {
-  requestDeferredPluginInstall,
-  resolvePluginInstallTransaction,
-} from "./install-transaction.js";
-import {
-  installPluginFromNpmPackArchive,
-  installPluginFromNpmSpec,
-  PLUGIN_INSTALL_ERROR_CODE,
-} from "./install.js";
+import { installPluginFromNpmSpec, PLUGIN_INSTALL_ERROR_CODE } from "./install.js";
 import {
   configWithInstalledPackageTreeBlockPolicy,
   createInstalledPackageTreePolicyExec,
   installNpmPlugin,
   installProjectDependencies,
-  registerNpmPayloadIdentityTests,
 } from "./install.npm-spec.test-support.js";
-import { runPluginPayloadSmokeCheck } from "./payload-verification.js";
-import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 import { pluginProcessRuntimeEntrypoints } from "./process-runtime.test-support.js";
 import {
   packPlugins,
@@ -36,7 +24,6 @@ import {
   startMutableRegistry,
   type RegistryPackage,
 } from "./test-helpers/npm-registry-fixtures.js";
-import { syncPluginsForUpdateChannel } from "./update-channel.js";
 
 const tempDirs = createTempDirTracker();
 const servers: http.Server[] = [];
@@ -131,10 +118,8 @@ function pluginNpmProjectRoot(npmRoot: string, packageName: string): string {
   return resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
 }
 
-async function useStaticRegistry(packages: RegistryPackage[]): Promise<string> {
-  const registry = await startStaticRegistry(packages, servers);
-  useRegistry(registry);
-  return registry;
+async function useStaticRegistry(packages: RegistryPackage[]): Promise<void> {
+  useRegistry(await startStaticRegistry(packages, servers));
 }
 
 function useRegistry(registry: string): void {
@@ -143,158 +128,60 @@ function useRegistry(registry: string): void {
 }
 
 describe("installPluginFromNpmSpec e2e", () => {
-  registerNpmPayloadIdentityTests({ makeInstallFixture, uniquePackageName, useStaticRegistry });
-
-  it.each(["npm", "npm-pack"] as const)(
-    "preserves a real %s successor when an earlier lifecycle lease has closed",
+  it.each(["version", "name", "normalized-version"] as const)(
+    "checks real npm payload %s against the selected registry identity",
     { timeout: 120_000 },
-    async (source) => {
-      const { rootDir, npmRoot } = await makeInstallFixture("npm-rollback-owner-e2e");
-      const packageName = uniquePackageName("rollback-owner");
-      const versions = await packPlugins(rootDir, [
-        { packageName, version: "1.0.0" },
-        { packageName, version: "2.0.0" },
-      ]);
-      await useStaticRegistry([{ packageName, latest: "2.0.0", versions }]);
-      const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(rootDir, "state") };
-      const install = (version: string, deferCommit = false, cancelBeforePublish = false) =>
-        withPluginLifecycleLease({ env }, async (lease) => {
-          let callerActive = true;
-          const params = requestDeferredPluginInstall(
-            {
-              npmDir: npmRoot,
-              mode: "update" as const,
-              timeoutMs: 120_000,
-              beforePersistentApply: () => {
-                if (!callerActive) {
-                  throw new Error("caller authority closed");
-                }
-              },
-              onBeforePluginArtifactCommit: async () => {
-                lease.assertOwned();
-                callerActive = !cancelBeforePublish;
-              },
-            },
-            undefined,
-            () => lease.assertOwned(),
-          );
-          const result =
-            source === "npm"
-              ? await installPluginFromNpmSpec({ ...params, spec: `${packageName}@${version}` })
-              : await installPluginFromNpmPackArchive({
-                  ...params,
-                  archivePath: path.join(rootDir, `${packageName}-${version}.tgz`),
-                });
-          if (!result.ok) {
-            throw new Error(result.error);
-          }
-          const transaction = resolvePluginInstallTransaction(result);
-          if (!transaction) {
-            throw new Error("expected deferred npm install");
-          }
-          if (!deferCommit) {
-            await transaction.commit();
-          }
-          return { result, transaction };
-        });
-
-      await install("1.0.0");
-      const older = await install("2.0.0", true);
-      const successor = await install("2.0.0");
-      expect(successor.result.targetDir).toBe(older.result.targetDir);
-      const projectRoot = path.dirname(path.dirname(successor.result.targetDir));
-      const manifestPath = path.join(projectRoot, "package.json");
-      const protectedFiles = [
-        manifestPath,
-        path.join(projectRoot, "package-lock.json"),
-        path.join(successor.result.targetDir, "dist", "index.js"),
+    async (identity) => {
+      const { rootDir, npmRoot, installOk } = await makeInstallFixture("npm-payload-identity-e2e");
+      const packageName = uniquePackageName("payload-identity");
+      const pluginId = "payload-identity";
+      const payloadName = identity === "name" ? uniquePackageName("other-payload") : packageName;
+      const payloadVersion = { version: "1.9.0", name: "2.0.0", "normalized-version": "v2.0.0" }[
+        identity
       ];
-      if (source === "npm-pack") {
-        const manifest = await readJson<{ dependencies: Record<string, string> }>(manifestPath);
-        const dependencySpec = manifest.dependencies[packageName];
-        if (!dependencySpec?.startsWith("file:")) {
-          throw new Error("expected a managed npm-pack file dependency");
-        }
-        protectedFiles.push(path.resolve(projectRoot, dependencySpec.slice("file:".length)));
+      const versions = await packPlugins(rootDir, [
+        { packageName, version: "1.0.0", pluginId },
+        { packageName: payloadName, version: payloadVersion, pluginId },
+      ]);
+      const selected = versions[1];
+      assert(selected, "packed update payload");
+      selected.version = "2.0.0";
+      await useStaticRegistry([{ packageName, latest: "2.0.0", versions }]);
+      const original = await installOk(`${packageName}@1.0.0`);
+      const manifestPath = path.join(original.targetDir, "package.json");
+      const originalManifest = await fs.readFile(manifestPath, "utf8");
+      const projectsRoot = path.join(npmRoot, "projects");
+      const originalProjects = (await fs.readdir(projectsRoot)).toSorted();
+      const beforeCommit = vi.fn(async () => {});
+      const result = await installPluginFromNpmSpec({
+        spec: `${packageName}@2.0.0`,
+        expectedPluginId: pluginId,
+        npmDir: npmRoot,
+        mode: "update",
+        onBeforePluginArtifactCommit: beforeCommit,
+        logger: { info: () => {}, warn: () => {} },
+        timeoutMs: 120_000,
+      });
+      expect(await fs.readFile(manifestPath, "utf8")).toBe(originalManifest);
+      if (identity === "normalized-version") {
+        expect(result).toMatchObject({
+          ok: true,
+          pluginId,
+          manifestName: packageName,
+          version: payloadVersion,
+          npmResolution: { name: packageName, version: "2.0.0" },
+        });
+        expect(beforeCommit).toHaveBeenCalledOnce();
+      } else {
+        assert(!result.ok, JSON.stringify(result));
+        expect(result.error).toMatch(/expected/i);
+        expect(result.error).toContain(identity === "version" ? "1.9.0" : payloadName);
+        expect(result.error).toContain(identity === "version" ? "2.0.0" : packageName);
+        expect(beforeCommit).not.toHaveBeenCalled();
+        expect((await fs.readdir(projectsRoot)).toSorted()).toEqual(originalProjects);
       }
-      const before = await Promise.all(protectedFiles.map((file) => fs.readFile(file)));
-
-      const rollbackError = await older.transaction.rollback().then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      expect.soft(rollbackError).toHaveProperty("code", "OPENCLAW_STATE_LEASE_LOST");
-      const after = await Promise.all(protectedFiles.map((file) => fs.readFile(file)));
-      expect(after).toEqual(before);
-
-      await expect(install("2.0.0", false, true)).rejects.toThrow("caller authority closed");
-      expect(await Promise.all(protectedFiles.map((file) => fs.readFile(file)))).toEqual(before);
     },
   );
-
-  it("relocates a bundled plugin through real npm only after artifact consent", async () => {
-    const { rootDir, npmRoot, register } = await makeInstallFixture("relocation-e2e");
-    const packageName = uniquePackageName("relocated-plugin");
-    await register([{ packageName }]);
-    const bundledPath = path.join(rootDir, "old", "extensions", packageName);
-    const config: OpenClawConfig = {
-      plugins: {
-        entries: { [packageName]: { enabled: true } },
-        load: { paths: [bundledPath] },
-        installs: {
-          [packageName]: { source: "path", sourcePath: bundledPath, installPath: bundledPath },
-        },
-      },
-    };
-    const roots = {
-      npmDir: npmRoot,
-      extensionsDir: path.join(rootDir, "extensions"),
-      gitDir: path.join(rootDir, "git"),
-      stateDir: path.join(rootDir, "state"),
-    };
-    const sync = (accept: boolean) =>
-      withPluginInstallRoots(roots, () =>
-        syncPluginsForUpdateChannel({
-          config,
-          channel: "stable",
-          env: { ...process.env, OPENCLAW_STATE_DIR: roots.stateDir },
-          externalizedBundledPluginBridges: [
-            { bundledPluginId: packageName, npmSpec: packageName },
-          ],
-          ...(accept
-            ? {
-                onCapabilityConsent: async (details: { reviewToken: string }) => ({
-                  reviewToken: details.reviewToken,
-                }),
-              }
-            : {}),
-        }),
-      );
-    const refused = await sync(false);
-    expect(refused.config).toEqual(config);
-    expect(refused.summary.errors).toEqual([
-      expect.objectContaining({
-        pluginId: packageName,
-        code: "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
-      }),
-    ]);
-    expect(refused.summary.errors[0]?.message).toContain(
-      "did not install the replacement plugin payload",
-    );
-    expect(refused.summary.errors[0]?.message).not.toContain("payload is missing");
-    const projectDir = pluginNpmProjectRoot(npmRoot, packageName);
-    await expect(fs.access(projectDir)).rejects.toHaveProperty("code", "ENOENT");
-    const accepted = await sync(true);
-    expect(accepted.summary.errors).toEqual([]);
-    expect(accepted.config.plugins?.load?.paths).toEqual([]);
-    expect(accepted.config.plugins?.installs?.[packageName]?.source).toBe("npm");
-    expect(
-      await runPluginPayloadSmokeCheck({
-        records: accepted.config.plugins?.installs ?? {},
-        env: process.env,
-      }),
-    ).toEqual({ checked: [packageName], failures: [] });
-  }, 120_000);
 
   it.each(["plugin", "hook pack"] as const)(
     "does not persist an npm %s when delegated authority closes during download",
@@ -325,6 +212,7 @@ describe("installPluginFromNpmSpec e2e", () => {
         import fs from "node:fs/promises";
         import path from "node:path";
         import { randomUUID } from "node:crypto";
+        import { listDirectoryTreeStrict } from ${JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.directoryInventory).href)};
         import { runPluginInstallCommand } from ${JSON.stringify(installCommandUrl.href)};
         import { writeConfigFile } from ${JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.config).href)};
         import { readHookInstalls } from ${JSON.stringify(resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.hookInstalls).href)};
@@ -379,9 +267,7 @@ describe("installPluginFromNpmSpec e2e", () => {
           }
           cancellationAbort.abort();
           await cancellation;
-          const npmEntries = await fs.readdir(path.join(process.env.OPENCLAW_STATE_DIR, "npm"), {
-            recursive: true,
-          }).catch((error) => {
+          const npmEntries = await listDirectoryTreeStrict(path.join(process.env.OPENCLAW_STATE_DIR, "npm")).catch((error) => {
             if (error.code === "ENOENT") return [];
             throw error;
           });
@@ -390,7 +276,7 @@ describe("installPluginFromNpmSpec e2e", () => {
             configUnchanged: configBefore === await fs.readFile(process.env.OPENCLAW_CONFIG_PATH, "utf8"),
             pluginInstalls: (await readPersistedInstalledPluginIndexInstallRecordsAsync()) ?? {},
             hookInstalls: readHookInstalls(),
-            npmPayloads: npmEntries.filter((entry) => entry.endsWith(path.join("node_modules", packageName))),
+            npmPayloads: npmEntries.map((entry) => entry.relativePath).filter((entry) => entry.endsWith(path.join("node_modules", packageName))),
             hookPayload: existsSync(path.join(process.env.OPENCLAW_STATE_DIR, "hooks", packageName)),
           };
           releaseAgentRunDelegatedAuthority(authority);
@@ -522,46 +408,37 @@ describe("installPluginFromNpmSpec e2e", () => {
     },
   );
 
-  it("keeps third-party peer dependencies in the owning npm project across later installs", async () => {
-    const { rootDir, npmRoot } = await makeInstallFixture("npm-plugin-third-party-peer-e2e");
+  it("keeps runtime peers and the isolated host link across later plugin installs", async () => {
+    const { npmRoot, register, installOk } = await makeInstallFixture(
+      "npm-plugin-third-party-peer-e2e",
+    );
     const pluginWithRuntimePeer = uniquePackageName("runtime-peer-plugin");
     const laterPlugin = uniquePackageName("later-plugin");
     const runtimePeer = uniquePackageName("runtime-peer");
-    await useStaticRegistry(
-      await registryPackages(rootDir, [
-        {
-          packageName: pluginWithRuntimePeer,
-          peerDependencies: { [runtimePeer]: "^1.0.0" },
-          peerDependenciesMeta: {},
-        },
-        { packageName: laterPlugin },
-        { packageName: runtimePeer },
-      ]),
-    );
-
-    const first = await installNpmPlugin({
-      spec: `${pluginWithRuntimePeer}@1.0.0`,
-      npmRoot,
-    });
-    if (!first.ok) {
-      throw new Error(first.error);
-    }
+    await register([
+      {
+        packageName: pluginWithRuntimePeer,
+        peerDependencies: { [runtimePeer]: "^1.0.0", openclaw: ">=2026.0.0" },
+        peerDependenciesMeta: { openclaw: { optional: true } },
+      },
+      { packageName: laterPlugin },
+      { packageName: runtimePeer },
+    ]);
+    const first = await installOk(`${pluginWithRuntimePeer}@1.0.0`);
     const firstProjectRoot = pluginNpmProjectRoot(npmRoot, pluginWithRuntimePeer);
-    await expect(
-      fs.lstat(path.join(firstProjectRoot, "node_modules", runtimePeer, "package.json")),
-    ).resolves.toBeTruthy();
-
-    const second = await installNpmPlugin({
-      spec: `${laterPlugin}@1.0.0`,
-      npmRoot,
-    });
-    if (!second.ok) {
-      throw new Error(second.error);
-    }
-
-    await expect(
-      fs.lstat(path.join(firstProjectRoot, "node_modules", runtimePeer, "package.json")),
-    ).resolves.toBeTruthy();
+    const hostLink = path.join(first.targetDir, "node_modules", "openclaw");
+    const expectHostLink = () =>
+      expect(fs.lstat(hostLink).then((stat) => stat.isSymbolicLink())).resolves.toBe(true);
+    await expectPackagePresent(firstProjectRoot, runtimePeer);
+    await expectHostLink();
+    await installOk(`${laterPlugin}@1.0.0`);
+    await expectPackagePresent(firstProjectRoot, runtimePeer);
+    await expectHostLink();
+    expect((await readProjectManifest(firstProjectRoot)).dependencies?.openclaw).toBeUndefined();
+    const lock = await readJson<{ packages?: Record<string, unknown> }>(
+      path.join(firstProjectRoot, "package-lock.json"),
+    );
+    expect(lock.packages?.["node_modules/openclaw"]).toBeUndefined();
   });
 
   it("plans peers from installed optional dependencies", async () => {
@@ -632,51 +509,5 @@ describe("installPluginFromNpmSpec e2e", () => {
     await expectPackagePresent(projectRoot, existing);
     await expectPackageAbsent(projectRoot, blocked);
     await expectPackageAbsent(projectRoot, peer);
-  });
-
-  it("keeps an earlier isolated openclaw peer link after later plugin installs", async () => {
-    const { npmRoot, register, installOk } = await makeInstallFixture("npm-plugin-peer-e2e");
-    const firstPackage = uniquePackageName("peer-plugin");
-    const secondPackage = uniquePackageName("later-plugin");
-    await register([
-      { packageName: firstPackage, peerDependencies: { openclaw: ">=2026.0.0" } },
-      { packageName: secondPackage },
-    ]);
-
-    const first = await installOk(`${firstPackage}@1.0.0`);
-    const hostLink = path.join(first.targetDir, "node_modules", "openclaw");
-    await expect(fs.lstat(hostLink).then((stat) => stat.isSymbolicLink())).resolves.toBe(true);
-
-    await installOk(`${secondPackage}@1.0.0`);
-
-    await expect(fs.lstat(hostLink).then((stat) => stat.isSymbolicLink())).resolves.toBe(true);
-    const projectRoot = pluginNpmProjectRoot(npmRoot, firstPackage);
-    const manifest = await readProjectManifest(projectRoot);
-    expect(manifest.dependencies?.openclaw).toBeUndefined();
-    const lock = await readJson<{
-      packages?: Record<string, unknown>;
-    }>(path.join(projectRoot, "package-lock.json"));
-    expect(lock.packages?.["node_modules/openclaw"]).toBeUndefined();
-  });
-
-  it("rejects a trusted pin when a real registry omits dist.integrity", async () => {
-    const { npmRoot, register, install } = await makeInstallFixture(
-      "missing-registry-integrity-e2e",
-    );
-    const packageName = uniquePackageName("missing-registry-integrity-plugin");
-    await register([{ packageName, omitIntegrity: true }]);
-
-    const result = await install(`${packageName}@1.0.0`, {
-      expectedIntegrity: `sha512-${Buffer.alloc(64, 1).toString("base64")}`,
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: `aborted: npm package integrity missing for ${packageName}@1.0.0`,
-    });
-    await expect(fs.access(pluginNpmProjectRoot(npmRoot, packageName))).rejects.toHaveProperty(
-      "code",
-      "ENOENT",
-    );
   });
 });

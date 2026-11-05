@@ -1,4 +1,14 @@
-import { createMemo, createSignal, createStore, For, onCleanup, onSettled, Show } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  createStore,
+  For,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import type {
   MemoryMigrationProviderPlan,
   MigrationsMemoryApplyResult,
@@ -6,14 +16,17 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/migrations.js";
 import type { ApplicationContext } from "../app/context.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
+import { registerMemoryImportEnglish } from "../i18n/locales/en-memory-import.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import "../styles/onboarding-memory-import.css";
-import "./modal-dialog.ts";
+import "./modal-dialog.tsx";
+
+registerEnglishCatalog(registerMemoryImportEnglish);
 
 const ONBOARDING_MEMORY_IMPORT_KEY = "openclaw.onboarding.memory-import";
 type Props = { context?: ApplicationContext; active: boolean };
@@ -109,13 +122,16 @@ function OnboardingMemoryImportContent(props: Props, host: OnboardingMemoryImpor
       draft[providerId] = result;
     });
   let applyingProviderId: string | null = null;
-  const [applying, setApplying] = createSignal<string | null>(null);
+  const [applying, setApplying] = createOptimistic<string | null>(null);
   let done = false;
   const [isDone, setDone] = createSignal(false);
   let closed = false;
   const [isClosed, setClosed] = createSignal(false);
   let binding: PlanBinding | null = null;
-  const [offer, setOffer] = createSignal<PlanBinding | null>(null);
+  const [planResult, setPlanResult] = createSignal<Promise<PlanBinding | null>>(
+    Promise.resolve(null),
+  );
+  const offer = createMemo(() => planResult());
   let abortPlan: AbortController | undefined;
   let agentsListRequest: ApplicationContext["agents"] | undefined;
   let disposed = false;
@@ -176,13 +192,14 @@ function OnboardingMemoryImportContent(props: Props, host: OnboardingMemoryImpor
           if (applyingProviderId !== null || done) {
             return undefined;
           }
-          setOffer((binding = null));
+          binding = null;
+          void setPlanResult(Promise.resolve(null));
           if (!active || closedInput || guarded || !client || !admin || !agentId) {
             return undefined;
           }
           const controller = new AbortController();
           abortPlan = controller;
-          void client
+          const request = client
             .request<MigrationsMemoryPlanResult>(
               "migrations.memory.plan",
               { agentId, overwrite: false },
@@ -198,26 +215,29 @@ function OnboardingMemoryImportContent(props: Props, host: OnboardingMemoryImpor
                 currentAgentId(context) !== agentId ||
                 plan.agentId !== agentId
               ) {
-                return;
+                return null;
               }
               const providers = offeredProviders(plan);
               if (providers.length === 0) {
                 if (!plan.providers.some((provider) => provider.error)) {
                   finish();
                 }
-                return;
+                return null;
               }
-              setOffer((binding = { client, agentId, plan }));
+              binding = { client, agentId, plan };
               selectedByProvider = Object.fromEntries(
                 providers.map((provider) => [provider.providerId, true]),
               );
               setSelection(selectedByProvider);
               setResults(() => ({}));
               setDone((done = false));
+              return binding;
             })
             .catch(() => {
               // Planning is an optional, silent onboarding offer.
+              return null;
             });
+          void setPlanResult(request);
           return () => {
             controller.abort();
             if (abortPlan === controller) {
@@ -248,6 +268,10 @@ function OnboardingMemoryImportContent(props: Props, host: OnboardingMemoryImpor
     setGuardDone();
     setClosed((closed = true));
   };
+  const presentApply = action(function* (providerId: string, pending: Promise<void>) {
+    setApplying(providerId);
+    yield pending;
+  });
   const importSelected = async () => {
     const current = currentBinding(binding);
     if (!current || applyingProviderId !== null || done) {
@@ -279,31 +303,34 @@ function OnboardingMemoryImportContent(props: Props, host: OnboardingMemoryImpor
       if (!planFingerprint || itemIds.length === 0) {
         continue;
       }
-      setApplying((applyingProviderId = provider.providerId));
-      try {
-        const result = await current.client.request<MigrationsMemoryApplyResult>(
-          "migrations.memory.apply",
-          {
-            idempotencyKey: generateUUID(),
-            agentId: current.agentId,
-            providerId: provider.providerId,
-            planFingerprint,
-            itemIds,
-            overwrite: false,
-          },
-        );
-        recordResult(provider.providerId, {
-          kind: result.summary.errors > 0 || result.summary.conflicts > 0 ? "partial" : "success",
-          result,
-        });
-      } catch (error) {
-        recordResult(provider.providerId, {
-          kind: "error",
-          message: formatUiError(error, t("onboarding.memoryImport.unknownError")),
-        });
-      }
+      applyingProviderId = provider.providerId;
+      const pending = (async () => {
+        try {
+          const result = await current.client.request<MigrationsMemoryApplyResult>(
+            "migrations.memory.apply",
+            {
+              idempotencyKey: generateUUID(),
+              agentId: current.agentId,
+              providerId: provider.providerId,
+              planFingerprint,
+              itemIds,
+              overwrite: false,
+            },
+          );
+          recordResult(provider.providerId, {
+            kind: result.summary.errors > 0 || result.summary.conflicts > 0 ? "partial" : "success",
+            result,
+          });
+        } catch (error) {
+          recordResult(provider.providerId, {
+            kind: "error",
+            message: formatUiError(error, t("onboarding.memoryImport.unknownError")),
+          });
+        }
+      })();
+      await presentApply(provider.providerId, pending);
     }
-    setApplying((applyingProviderId = null));
+    applyingProviderId = null;
     done =
       host.context?.gateway.snapshot.client === current.client &&
       currentAgentId(host.context) === current.agentId;
@@ -314,18 +341,21 @@ function OnboardingMemoryImportContent(props: Props, host: OnboardingMemoryImpor
   };
   const disconnect = () => {
     abortPlan?.abort();
-    setOffer((binding = null));
+    binding = null;
+    void setPlanResult(Promise.resolve(null));
     queueMicrotask(() => {
       if (!disposed && host.isConnected) {
         setPlanRequest((value) => value + 1);
       }
     });
   };
-  const stopDisconnect = listen(host, "onboarding-memory-disconnect", disconnect);
-  onCleanup(() => {
-    disposed = true;
-    abortPlan?.abort();
-    stopDisconnect();
+  onSettled(() => {
+    const stopDisconnect = listen(host, "onboarding-memory-disconnect", disconnect);
+    return () => {
+      disposed = true;
+      abortPlan?.abort();
+      stopDisconnect();
+    };
   });
 
   function Provider(providerProps: { provider: MemoryMigrationProviderPlan }) {
@@ -386,20 +416,20 @@ function OnboardingMemoryImportContent(props: Props, host: OnboardingMemoryImpor
     );
   const busy = () => applying() !== null;
   const hasSelected = () => providers().some((provider) => selection()[provider.providerId]);
-  const actions = (): ImportAction[] => (isDone() ? ["continue"] : ["import", "skip", "review"]);
+  const actions = (): ImportAction[] => (isDone() ? ["continue"] : ["review", "skip", "import"]);
   const actionLabels = () => ({
     continue: t("common.continue"),
     import: t(busy() ? "common.importing" : "onboarding.memoryImport.import"),
     skip: t("onboarding.memoryImport.skip"),
     review: t("onboarding.memoryImport.reviewDetails"),
   });
-  const runAction = (action: ImportAction) => {
-    if (action === "import") {
+  const runAction = (importAction: ImportAction) => {
+    if (importAction === "import") {
       void importSelected();
       return;
     }
     finish();
-    if (action === "review") {
+    if (importAction === "review") {
       host.context?.navigate("memory-import");
     }
   };
@@ -407,66 +437,71 @@ function OnboardingMemoryImportContent(props: Props, host: OnboardingMemoryImpor
     <>
       {agentsLifetime}
       {planLifetime}
-      <Show when={isVisible()}>
-        <openclaw-modal-dialog
-          class="onboarding-memory-import-dialog"
-          label={t("onboarding.memoryImport.title")}
-          description={t("onboarding.memoryImport.body")}
-          onModal-cancel={(event: Event) => {
-            if (applyingProviderId !== null) {
-              event.preventDefault();
-            } else {
-              finish();
-            }
-          }}
-        >
-          <section class="onboarding-memory-import">
-            <header>
-              <h2>
-                {isDone()
-                  ? t("onboarding.memoryImport.doneTitle")
-                  : t("onboarding.memoryImport.title")}
-              </h2>
-              <p>
-                {isDone()
-                  ? t("onboarding.memoryImport.doneBody", {
-                      migrated: String(total("migrated")),
-                      skipped: String(total("skipped")),
-                    })
-                  : t("onboarding.memoryImport.body")}
-              </p>
-            </header>
-            <ul>
-              <For each={providers()}>{(provider) => <Provider provider={provider} />}</For>
-            </ul>
-            <openclaw-modal-actions class="onboarding-memory-import__actions">
-              <For each={actions()}>
-                {(action) => (
-                  <button
-                    class={[
-                      "btn",
-                      {
-                        primary: action === "import" || action === "continue",
-                        "btn--ghost onboarding-memory-import__review": action === "review",
-                      },
-                    ]}
-                    type="button"
-                    data-test-id={
-                      action === "review" ? undefined : `onboarding-memory-import-${action}`
-                    }
-                    disabled={
-                      action !== "continue" && (busy() || (action === "import" && !hasSelected()))
-                    }
-                    onClick={() => runAction(action)}
-                  >
-                    {actionLabels()[action]}
-                  </button>
-                )}
-              </For>
-            </openclaw-modal-actions>
-          </section>
-        </openclaw-modal-dialog>
-      </Show>
+      <Loading on={planInputs()}>
+        <Show when={isVisible()}>
+          <openclaw-modal-dialog
+            class="onboarding-memory-import-dialog"
+            label={t("onboarding.memoryImport.title")}
+            description={t("onboarding.memoryImport.body")}
+            onModal-cancel={(event: Event) => {
+              if (applyingProviderId !== null) {
+                event.preventDefault();
+              } else {
+                finish();
+              }
+            }}
+          >
+            <section class="onboarding-memory-import">
+              <header>
+                <h2>
+                  {isDone()
+                    ? t("onboarding.memoryImport.doneTitle")
+                    : t("onboarding.memoryImport.title")}
+                </h2>
+                <p>
+                  {isDone()
+                    ? t("onboarding.memoryImport.doneBody", {
+                        migrated: String(total("migrated")),
+                        skipped: String(total("skipped")),
+                      })
+                    : t("onboarding.memoryImport.body")}
+                </p>
+              </header>
+              <ul>
+                <For each={providers()}>{(provider) => <Provider provider={provider} />}</For>
+              </ul>
+              <openclaw-modal-actions class="onboarding-memory-import__actions">
+                <For each={actions()}>
+                  {(importAction) => (
+                    <button
+                      class={[
+                        "btn",
+                        {
+                          primary: importAction === "import" || importAction === "continue",
+                          "btn--ghost onboarding-memory-import__review": importAction === "review",
+                        },
+                      ]}
+                      type="button"
+                      data-test-id={
+                        importAction === "review"
+                          ? undefined
+                          : `onboarding-memory-import-${importAction}`
+                      }
+                      disabled={
+                        importAction !== "continue" &&
+                        (busy() || (importAction === "import" && !hasSelected()))
+                      }
+                      onClick={() => runAction(importAction)}
+                    >
+                      {actionLabels()[importAction]}
+                    </button>
+                  )}
+                </For>
+              </openclaw-modal-actions>
+            </section>
+          </openclaw-modal-dialog>
+        </Show>
+      </Loading>
     </>
   );
 }

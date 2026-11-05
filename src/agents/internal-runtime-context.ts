@@ -29,7 +29,7 @@ const ESCAPED_INTERNAL_RUNTIME_CONTEXT_BEGIN = "[[OPENCLAW_INTERNAL_CONTEXT_BEGI
 const ESCAPED_INTERNAL_RUNTIME_CONTEXT_END = "[[OPENCLAW_INTERNAL_CONTEXT_END]]";
 
 /** Notice inserted into runtime-generated context blocks. */
-export const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
+const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
   "This context is runtime-generated, not user-authored. Keep internal details private.";
 export const RUNTIME_EVENT_USER_PROMPT = "Continue the OpenClaw runtime event.";
 /** Custom message type used for structured runtime-context messages. */
@@ -41,6 +41,33 @@ export type RuntimeContextFragment = {
   kind: "runtime-instruction" | "conversation-data" | "heartbeat-outcome";
   text: string;
 };
+
+/** Move only the exact section annotated by its producer; later policy additions survive. */
+export function splitExtraSystemPrompt(params: {
+  extraSystemPrompt?: string;
+  extraSystemPromptTurnContext?: { start: number; text: string };
+}) {
+  const prompt = params.extraSystemPrompt;
+  const context = params.extraSystemPromptTurnContext;
+  if (!prompt || !context?.text || !Number.isInteger(context.start) || context.start < 0) {
+    return { persistent: prompt, turn: undefined };
+  }
+  const end = context.start + context.text.length;
+  if (
+    prompt.slice(context.start, end) !== context.text ||
+    (context.start > 0 && prompt.slice(context.start - 2, context.start) !== "\n\n") ||
+    (end < prompt.length && prompt.slice(end, end + 2) !== "\n\n")
+  ) {
+    return { persistent: prompt, turn: undefined };
+  }
+  return {
+    persistent:
+      context.start === 0
+        ? prompt.slice(end === prompt.length ? end : end + 2)
+        : prompt.slice(0, context.start - 2) + prompt.slice(end),
+    turn: context.text,
+  };
+}
 
 /** Render trusted runtime fragments without promoting quoted data to instructions. */
 export function projectRuntimeContextFragments(fragments: RuntimeContextFragment[]): string {
@@ -71,6 +98,9 @@ const INTERNAL_EVENT_MARKER = "[Internal task completion event]";
 
 /** Escape protected context delimiters before embedding untrusted text. */
 export function escapeInternalRuntimeContextDelimiters(value: string): string {
+  if (!value.includes("OPENCLAW_INTERNAL_CONTEXT")) {
+    return value;
+  }
   return value
     .replaceAll(INTERNAL_RUNTIME_CONTEXT_BEGIN, ESCAPED_INTERNAL_RUNTIME_CONTEXT_BEGIN)
     .replaceAll(INTERNAL_RUNTIME_CONTEXT_END, ESCAPED_INTERNAL_RUNTIME_CONTEXT_END);
@@ -310,6 +340,15 @@ export function isOpenClawRuntimeContextCustomMessage(message: unknown): boolean
   );
 }
 
+function isAdditiveRuntimeContextMessage(message: unknown): boolean {
+  return (
+    isOpenClawRuntimeContextCustomMessage(message) &&
+    typeof message === "object" &&
+    message !== null &&
+    Reflect.get(Reflect.get(message, "details") ?? {}, "replay") === "append"
+  );
+}
+
 /** Remove all structured runtime-context custom messages. */
 export function stripRuntimeContextCustomMessages<T>(messages: T[]): T[] {
   if (!messages.some(isOpenClawRuntimeContextCustomMessage)) {
@@ -349,7 +388,13 @@ export function resolvePendingRuntimeContextReplay<T>(params: {
     persistedUserIndex,
     replayPersistedCarrier,
     pendingContextMessages: replayPersistedCarrier
-      ? stripRuntimeContextCustomMessages(params.pendingContextMessages)
+      ? params.pendingContextMessages.filter(
+          (message) =>
+            !isOpenClawRuntimeContextCustomMessage(message) ||
+            // Fallback context extends a dispatched turn; ordinary retries reuse
+            // its original carrier instead of refreshing the frozen prefix.
+            isAdditiveRuntimeContextMessage(message),
+        )
       : params.pendingContextMessages,
   };
 }
@@ -400,7 +445,10 @@ export function resolveRuntimeContextPromptOwner(messages: readonly unknown[]) {
 }
 
 /** Keeps the live prompt's context and unretained context immediately before the active user. */
-export function stripHistoricalRuntimeContextCustomMessages<T>(messages: T[]): T[] {
+export function stripHistoricalRuntimeContextCustomMessages<T>(
+  messages: T[],
+  currentUserIdempotencyKey?: string,
+): T[] {
   if (!messages.some(isOpenClawRuntimeContextCustomMessage)) {
     return messages;
   }
@@ -408,6 +456,11 @@ export function stripHistoricalRuntimeContextCustomMessages<T>(messages: T[]): T
   if (lastUserIndex === -1) {
     return messages.filter((message) => !isOpenClawRuntimeContextCustomMessage(message));
   }
+  const currentUserIndex = currentUserIdempotencyKey
+    ? messages.findLastIndex(
+        (message) => isUserMessage(message) && message.idempotencyKey === currentUserIdempotencyKey,
+      )
+    : lastUserIndex;
   let currentRuntimeContextStart = lastUserIndex;
   while (
     currentRuntimeContextStart > 0 &&
@@ -429,6 +482,11 @@ export function stripHistoricalRuntimeContextCustomMessages<T>(messages: T[]): T
   return messages.filter((message, index) => {
     if (!isOpenClawRuntimeContextCustomMessage(message)) {
       return true;
+    }
+    // Fallback context follows its canonical user across retries and steering,
+    // but must not become the next independent user's context after a failure.
+    if (isAdditiveRuntimeContextMessage(message)) {
+      return currentUserIndex >= 0 && index > currentUserIndex;
     }
     // An all-mode drain can admit several carrier/user pairs in one request.
     // A settled answer retires earlier pairs; tool loops remain the same turn.

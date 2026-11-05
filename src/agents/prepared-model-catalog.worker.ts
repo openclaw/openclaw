@@ -1,16 +1,19 @@
 /** Worker-thread entrypoint for complete model-catalog discovery. */
 import { parentPort, workerData } from "node:worker_threads";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { withClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import {
   copyConfigResolutionFacts,
   restoreConfigResolutionFacts,
 } from "../config/resolution-facts.js";
-import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { installDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import type { Model } from "../llm/types.js";
-import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
+import {
+  captureRemoteModelCatalogStartupSnapshot,
+  withRemoteModelCatalogSnapshot,
+} from "../model-catalog/remote-overlay.js";
 import { withHandedOffCodexClientVersion } from "../plugin-sdk/codex-client-version-handoff.internal.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
@@ -24,6 +27,8 @@ import { planRuntimePluginDiscovery } from "../plugins/provider-discovery.js";
 import { getLiveCatalogRetainedData } from "../plugins/provider-live-catalog-cache.js";
 import { restorePreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
 import { manifestPluginResolvesRuntimeModelCatalogAugment } from "../plugins/providers.js";
+import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import {
   listManifestSyntheticAuthProviderRefs,
@@ -31,8 +36,9 @@ import {
 } from "../plugins/synthetic-auth.runtime.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
-import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import { captureAuthProfileCredentialCommits } from "../state/user-model-account-authority.js";
+import { withTemplateInstallSchemaVersionFacts } from "../templates/provenance-runtime-read.js";
 import {
   resolveAgentCredentialMapFromStore,
   resolveUsableAgentCredentialModes,
@@ -55,7 +61,6 @@ import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import { resolveImplicitProviderDiscoveryScope } from "./models-config.providers.discovery-scope.js";
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
-import { fingerprintPreparedModelCatalogPluginContext } from "./prepared-model-catalog-fingerprints.js";
 import { measurePreparedCatalogRetainedData } from "./prepared-model-catalog-retained-data.js";
 import type { PreparedModelCatalogWorkerData } from "./prepared-model-catalog-worker.pool.js";
 import type {
@@ -74,61 +79,14 @@ import type { PreparedModelRuntimePluginGeneration } from "./prepared-model-runt
 import { AuthStorage } from "./sessions/auth-storage.js";
 
 type WorkerGeneration = {
-  pluginGeneration: PreparedModelRuntimePluginGeneration;
+  pluginGeneration: Omit<
+    PreparedModelRuntimePluginGeneration,
+    "inlineProviderModels" | "configuredCatalogEntries"
+  > & { pluginRegistry: PluginRegistry };
   pluginIds: ReadonlySet<string>;
   staticProviderIds: ReadonlySet<string>;
   release: () => void | Promise<void>;
 };
-
-async function refreshAuthStore(params: {
-  agentDir: string;
-  inheritedAuthDir?: string;
-  authStore: PreparedModelCatalogWorkerInput["authStore"];
-  config: PreparedModelCatalogWorkerInput["input"]["config"];
-  env: NodeJS.ProcessEnv;
-  profileIds?: readonly string[];
-  providerIds?: readonly string[];
-  pluginGeneration: PreparedModelRuntimePluginGeneration;
-}) {
-  const { store, displayPath } = await loadAuthProfileStoreForCatalogAsync(params.agentDir, {
-    allowKeychainPrompt: false,
-    ...(params.inheritedAuthDir ? { inheritedAuthDir: params.inheritedAuthDir } : {}),
-  });
-  const durable = preserveResolvedSecretBackedCredentials({
-    next: store,
-    existing: params.authStore,
-  });
-  const persistedProfileIds = new Set(params.authStore.runtimePersistedProfileIds ?? []);
-  const externalProfileIds = new Set(params.authStore.runtimeExternalProfileIds ?? []);
-  for (const [profileId, credential] of Object.entries(params.authStore.profiles)) {
-    if (
-      !persistedProfileIds.has(profileId) &&
-      !externalProfileIds.has(profileId) &&
-      durable.profiles[profileId] === undefined
-    ) {
-      durable.profiles[profileId] = credential;
-    }
-  }
-  const prepared = mergeRuntimeExternalProfileReferences({
-    next: durable,
-    existing: params.authStore,
-  });
-  const authStore = withPluginRuntimeGenerationScope(
-    {
-      metadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
-      pluginRegistry: params.pluginGeneration.pluginRegistry,
-    },
-    () =>
-      overlayExternalAuthProfiles(prepared, {
-        config: params.config,
-        env: params.env,
-        ...(params.providerIds ? { externalCliProviderIds: params.providerIds } : {}),
-        ...(params.profileIds ? { externalCliProfileIds: params.profileIds } : {}),
-        allowKeychainPrompt: false,
-      }),
-  );
-  return { authStore, displayPath };
-}
 
 function restoreWorkerConfig(value: PreparedModelCatalogWorkerInput) {
   // Restore the captured pair before discovery, including known-empty facts and shared identity.
@@ -140,15 +98,15 @@ function restoreWorkerConfig(value: PreparedModelCatalogWorkerInput) {
     restoreConfigResolutionFacts(value.sourceConfigForSecrets, value.sourceConfigResolutionFacts);
   }
   setRuntimeConfigSnapshot(value.input.config, value.sourceConfigForSecrets);
+  return getRuntimeConfigSnapshot({ capture: true })!;
 }
 
 async function prepareWorkerGeneration(
   value: PreparedModelCatalogWorkerInput,
+  config: OpenClawConfig,
   previous?: WorkerGeneration,
   pluginIds?: readonly string[],
 ): Promise<WorkerGeneration> {
-  const { prepareConfiguredModelFacts } =
-    await import("./prepared-model-runtime.configured-facts.js");
   // Rediscovery under agent workspaces or runtime activation overlays loses the owner's
   // metadata generation. Its source/built artifact selection must survive reconstruction too.
   const metadata =
@@ -156,7 +114,7 @@ async function prepareWorkerGeneration(
     restorePluginMetadataSnapshot(value.pluginMetadataSnapshot);
   // The parent owns native harness observations; this worker owns provider catalog hooks.
   // An empty eligible set stays empty instead of reopening unscoped plugin discovery.
-  const normalizedConfig = normalizePluginsConfig(value.input.config.plugins);
+  const normalizedConfig = normalizePluginsConfig(config.plugins);
   const basePluginIds =
     pluginIds ??
     metadata.plugins
@@ -166,7 +124,7 @@ async function prepareWorkerGeneration(
           isManifestPluginAvailableForControlPlane({
             snapshot: metadata,
             plugin,
-            config: value.input.config,
+            config,
             normalizedConfig,
             ...(value.input.env ? { env: value.input.env } : {}),
           }),
@@ -177,6 +135,7 @@ async function prepareWorkerGeneration(
   const pluginRegistry = await resources.load(
     {
       ...value.input,
+      config,
       metadataSnapshot: metadata,
       preferBuiltPluginArtifacts: value.preferBuiltPluginArtifacts,
       basePluginIds,
@@ -186,7 +145,9 @@ async function prepareWorkerGeneration(
     () => {},
   );
   const pluginGeneration = Object.freeze({
-    ...(previous?.pluginGeneration ?? prepareConfiguredModelFacts(value.input.config, metadata)),
+    // Configured model facts arrive with each request; retaining host-only projections here
+    // duplicates those rows for every workspace without contributing to discovery.
+    ...previous?.pluginGeneration,
     remoteCatalog: value.remoteCatalog,
     pluginMetadataSnapshot: metadata,
     pluginRegistry,
@@ -205,7 +166,7 @@ async function runCatalogRequest(
   value: PreparedModelCatalogWorkerInput,
   request: PreparedModelWorkerRequest,
   work: AsyncWorkScope,
-  prepareGeneration: () => Promise<WorkerGeneration>,
+  prepareGeneration: (config: OpenClawConfig) => Promise<WorkerGeneration>,
   beginDiscovery: () => Promise<void>,
 ): Promise<PreparedModelWorkerOutcome> {
   const directoryOwner = value.input.agentId
@@ -228,7 +189,9 @@ async function runCatalogRequest(
       }
     }
     // Structured-cloned requests need their own provenance even when preparation is reused.
-    restoreWorkerConfig(value);
+    // Pin the publisher's immutable runtime/source pair for registration before yielding.
+    // Keep request-local config identities below: synthetic auth receipts belong to each request.
+    const registrationConfig = restoreWorkerConfig(value);
     restorePreparedSyntheticAuthFacts(value.input.config, request.syntheticAuth, {
       env: value.input.env,
       workspaceDir: value.input.workspaceDir,
@@ -236,7 +199,7 @@ async function runCatalogRequest(
     restorePreparedSyntheticAuthFacts(value.input.config, request.syntheticAuth, {
       workspaceDir: value.input.workspaceDir,
     });
-    prepared = await prepareGeneration();
+    prepared = await prepareGeneration(registrationConfig);
     // The loader owns scoped registration facts. Request config and auth inputs
     // travel explicitly below; attaching them must not rerun broad auto-enable.
     const pluginGenerationScope = {
@@ -270,18 +233,40 @@ async function runCatalogRequest(
     }
     // Full discovery is one point-in-time operation: refresh first, then let every provider hook
     // and the returned availability projection consume the same exact store.
-    const { authStore, displayPath } = await refreshAuthStore({
-      agentDir: value.input.agentDir,
-      inheritedAuthDir: value.input.inheritedAuthDir,
-      authStore: value.authStore,
-      config: value.input.config,
-      env: value.input.env,
-      ...(request.kind === "auth-refresh" && request.profileIds
-        ? { profileIds: request.profileIds }
-        : {}),
-      providerIds: request.providerIds ?? listExternalCliSyncProviderIds(),
-      pluginGeneration: prepared.pluginGeneration,
+    const { agentDir, inheritedAuthDir, config, env } = value.input;
+    const authRefreshProfileIds = request.kind === "auth-refresh" ? request.profileIds : undefined;
+    const authRefreshProviderIds = request.providerIds ?? listExternalCliSyncProviderIds();
+    const { store, displayPath } = await loadAuthProfileStoreForCatalogAsync(agentDir, {
+      allowKeychainPrompt: false,
+      ...(inheritedAuthDir ? { inheritedAuthDir } : {}),
     });
+    const durable = preserveResolvedSecretBackedCredentials({
+      next: store,
+      existing: value.authStore,
+    });
+    const persistedProfileIds = new Set(value.authStore.runtimePersistedProfileIds ?? []);
+    const externalProfileIds = new Set(value.authStore.runtimeExternalProfileIds ?? []);
+    for (const [profileId, credential] of Object.entries(value.authStore.profiles)) {
+      if (
+        !persistedProfileIds.has(profileId) &&
+        !externalProfileIds.has(profileId) &&
+        durable.profiles[profileId] === undefined
+      ) {
+        durable.profiles[profileId] = credential;
+      }
+    }
+    const refreshedStore = mergeRuntimeExternalProfileReferences({
+      next: durable,
+      existing: value.authStore,
+    });
+    const authStore = withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
+      overlayExternalAuthProfiles(refreshedStore, {
+        config,
+        env,
+        ...(authRefreshProviderIds ? { externalCliProviderIds: authRefreshProviderIds } : {}),
+        ...(authRefreshProfileIds ? { externalCliProfileIds: authRefreshProfileIds } : {}),
+      }),
+    );
     if (request.kind === "catalog") {
       await replaceRuntimeAuthProfileStoreSnapshotsAsync([
         { agentDir: value.input.agentDir, store: authStore },
@@ -346,7 +331,12 @@ async function runCatalogRequest(
         ...new Set([...prepared.pluginIds, ...(discoveryPlan.pluginIds ?? discoveryPluginIds)]),
       ].toSorted();
       if (pluginIds.length > prepared.pluginIds.size) {
-        acquiredGeneration = await prepareWorkerGeneration(value, prepared, pluginIds);
+        acquiredGeneration = await prepareWorkerGeneration(
+          value,
+          registrationConfig,
+          prepared,
+          pluginIds,
+        );
         catalogGeneration = acquiredGeneration.pluginGeneration;
         pluginGenerationScope.pluginRegistry = catalogGeneration.pluginRegistry;
       }
@@ -467,6 +457,13 @@ async function runCatalogRequest(
     work.beginClose();
     await work.runWhenIdle(() => undefined);
     if (acquiredGeneration) {
+      const successor = getPluginRegistryInspectionResources(
+        acquiredGeneration.pluginGeneration.pluginRegistry,
+      );
+      if (!successor) {
+        throw new Error("Catalog scope growth has no inspection resource owner");
+      }
+      successor.adoptRetainedRegistrations(prepared.pluginGeneration.pluginRegistry);
       const releasePrevious = prepared.release;
       Object.assign(prepared, acquiredGeneration);
       acquiredGeneration = undefined;
@@ -510,7 +507,40 @@ if (parentPort) {
   serveWorkerTasks(
     async (input, channel) => {
       // SAFETY: The typed catalog host is the sole producer of this private task envelope.
-      const { value, request } = input as PreparedModelCatalogWorkerTask;
+      const task = input as PreparedModelCatalogWorkerTask;
+      const { request, context } = task;
+      let value: PreparedModelCatalogWorkerInput;
+      if ("pluginMetadataSnapshot" in task.value) {
+        value = task.value;
+      } else {
+        const retained = contexts.get(context.workspaceDir);
+        if (retained?.fingerprint !== context.fingerprint) {
+          throw new Error("Prepared model catalog worker context is unavailable");
+        }
+        value = {
+          ...task.value,
+          remoteCatalog: retained.prepared.pluginGeneration.remoteCatalog,
+          pluginMetadataSnapshot: retained.prepared.pluginGeneration.pluginMetadataSnapshot,
+        };
+      }
+      if (value.remoteCatalog) {
+        // Transport clones share the publisher's content revision. Reuse an existing owner
+        // before registry callbacks capture the request scope; keep no extra revision cache.
+        const retained = [
+          captureRemoteModelCatalogStartupSnapshot(),
+          ...Array.from(
+            contexts.values(),
+            ({ prepared }) => prepared.pluginGeneration.remoteCatalog,
+          ),
+        ].find(
+          (catalog) =>
+            catalog?.sourceUrl === value.remoteCatalog?.sourceUrl &&
+            catalog?.revision === value.remoteCatalog?.revision,
+        );
+        if (retained) {
+          value = { ...value, remoteCatalog: retained };
+        }
+      }
       activeRequest = value;
       let reportAfter = 0;
       let reportedPlugin: string | undefined;
@@ -526,51 +556,52 @@ if (parentPort) {
       };
       nativeReferenceProgress.subscribe(reportProgress);
       const stopProgress = () => nativeReferenceProgress.unsubscribe(reportProgress);
-      return withRemoteModelCatalogSnapshot(freezeJsonSnapshot(value.remoteCatalog), () =>
+      // The publisher validates this JSON; the private transport only clones its data.
+      return withRemoteModelCatalogSnapshot(freezeTrustedJsonSnapshot(value.remoteCatalog), () =>
         withPluginSourceCaptureDirectory(
           data.sourceCaptureDirectory,
           async () => {
             const { result: outcome, receipts: authCredentials } =
               await captureAuthProfileCredentialCommits(async () => {
-                const workspaceDir =
-                  value.pluginMetadataSnapshot.workspaceDir ?? value.input.workspaceDir;
+                const { workspaceDir, fingerprint } = context;
                 let previous = contexts.get(workspaceDir);
-                const fingerprint = fingerprintPreparedModelCatalogPluginContext(value);
                 let attempted: WorkerGeneration | undefined;
                 let replacing = false;
                 try {
                   const work = new AsyncWorkScope();
                   const result = await withWorkerAuthProfileWrites(value.input.env, work, () =>
-                    withClawInstallSchemaVersionFacts(request.clawInstallSchemaVersions, () =>
-                      // Never select a Codex binary here; report the parent's decision.
-                      withHandedOffCodexClientVersion(request.codexClientVersion, () =>
-                        work.run(() =>
-                          runCatalogRequest(
-                            value,
-                            request,
-                            work,
-                            async () => {
-                              if (previous?.fingerprint === fingerprint) {
-                                return previous.prepared;
-                              }
-                              replacing = true;
-                              return (attempted = await prepareWorkerGeneration(value));
-                            },
-                            async () => {
-                              // Admission can outlast a refresh on slow filesystems; only completed
-                              // generation preparation starts the provider-discovery deadline.
-                              stopProgress();
-                              const response = await channel?.request(null);
-                              response?.consumed();
-                              if (response && response.input !== true) {
-                                throw new Error(
-                                  "prepared model catalog request retired before discovery",
-                                );
-                              }
-                            },
+                    withTemplateInstallSchemaVersionFacts(
+                      request.templateInstallSchemaVersions,
+                      () =>
+                        // Never select a Codex binary here; report the parent's decision.
+                        withHandedOffCodexClientVersion(request.codexClientVersion, () =>
+                          work.run(() =>
+                            runCatalogRequest(
+                              value,
+                              request,
+                              work,
+                              async (config) => {
+                                if (previous?.fingerprint === fingerprint) {
+                                  return previous.prepared;
+                                }
+                                replacing = true;
+                                return (attempted = await prepareWorkerGeneration(value, config));
+                              },
+                              async () => {
+                                // Admission can outlast a refresh on slow filesystems; only completed
+                                // generation preparation starts the provider-discovery deadline.
+                                stopProgress();
+                                const response = await channel?.request(null);
+                                response?.consumed();
+                                if (response && response.input !== true) {
+                                  throw new Error(
+                                    "prepared model catalog request retired before discovery",
+                                  );
+                                }
+                              },
+                            ),
                           ),
                         ),
-                      ),
                     ),
                   );
                   if (attempted && result.status === "ok") {

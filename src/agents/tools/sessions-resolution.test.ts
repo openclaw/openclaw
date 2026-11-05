@@ -18,6 +18,20 @@ beforeEach(() => {
   callGatewayMock.mockReset();
 });
 
+it.each(["main", "ops"])(
+  "binds bare-key ownership lookup to the selected agent (%s)",
+  async (agentId) => {
+    callGatewayMock.mockResolvedValue({ key: "shared", agentId });
+    const result = await resolution.lookupRequesterSessionOwnership({
+      requesterSessionKey: "agent:main:dashboard:parent",
+      requesterAgentId: "main",
+      targetSessionKey: "shared",
+      targetAgentId: "ops",
+    });
+    expect(result).toEqual({ ok: true, value: agentId === "ops" });
+  },
+);
+
 function expectResolvedSessionReference(
   result: Awaited<ReturnType<typeof resolution.resolveSessionReference>>,
   key: string,

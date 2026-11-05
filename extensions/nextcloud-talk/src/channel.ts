@@ -1,12 +1,16 @@
 import { describeWebhookAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
-import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import { createChannelApprovalAuth } from "openclaw/plugin-sdk/approval-auth-runtime";
 import {
   adaptScopedAccountAccessor,
   createScopedChannelConfigAdapter,
   createScopedDmSecurityResolver,
   clearAccountFieldsFromConfigSection,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import {
+  buildChannelOutboundSessionRoute,
+  createChatChannelPlugin,
+} from "openclaw/plugin-sdk/channel-core";
 import {
   createAccountStatusSink,
   runPassiveAccountLifecycle,
@@ -17,6 +21,7 @@ import {
   createLoggedPairingApprovalNotifier,
   createPairingPrefixStripper,
 } from "openclaw/plugin-sdk/channel-pairing";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-plugin-common";
 import {
   createAllowlistProviderRouteAllowlistWarningCollector,
   createConditionalWarningCollector,
@@ -39,9 +44,7 @@ import {
   resolveDefaultNextcloudTalkAccountId,
   resolveNextcloudTalkAccount,
 } from "./accounts.js";
-import { nextcloudTalkApprovalAuth } from "./approval-auth.js";
 import { probeNextcloudTalkBotResponseFeature } from "./bot-preflight.js";
-import { DEFAULT_ACCOUNT_ID, type ChannelPlugin } from "./channel-api.js";
 import { NextcloudTalkChannelConfigSchema } from "./config-schema.js";
 import { nextcloudTalkDoctor } from "./doctor.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
@@ -50,15 +53,17 @@ import { registerNextcloudTalkWebhook } from "./monitor.js";
 import {
   looksLikeNextcloudTalkTargetId,
   normalizeNextcloudTalkMessagingTarget,
+  stripNextcloudTalkTargetPrefix,
 } from "./normalize.js";
 import {
+  normalizeNextcloudTalkAllowEntry,
+  normalizeNextcloudTalkAllowlist,
   resolveNextcloudTalkGroupRequireMention,
   resolveNextcloudTalkGroupToolPolicy,
 } from "./policy.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { sendMessageNextcloudTalk } from "./send.js";
-import { resolveNextcloudTalkOutboundSessionRoute } from "./session-route.js";
 import { nextcloudTalkSetupContract } from "./setup-core.js";
 import { nextcloudTalkSetupWizard } from "./setup-surface.js";
 import type { CoreConfig } from "./types.js";
@@ -68,6 +73,15 @@ import {
   resolveNextcloudTalkLegacyWebhook,
 } from "./webhook-route.js";
 import { createNextcloudTalkWebhookSpool } from "./webhook-spool.js";
+
+const nextcloudTalkApprovalAuth = createChannelApprovalAuth({
+  channelLabel: "Nextcloud Talk",
+  resolveInputs: ({ cfg, accountId }) => {
+    const account = resolveNextcloudTalkAccount({ cfg, accountId });
+    return { allowFrom: account.config.allowFrom };
+  },
+  normalizeApprover: (value) => normalizeNextcloudTalkAllowEntry(String(value)) || undefined,
+}).approvalAuth;
 
 function normalizeOrigin(value: string): string | null {
   return URL.parse(value)?.origin.toLowerCase() ?? null;
@@ -80,6 +94,7 @@ function sendNextcloudTalkMessage(
   return sendMessageNextcloudTalk(ctx.to, text, {
     accountId: ctx.accountId ?? undefined,
     replyTo: ctx.replyToId ?? undefined,
+    silent: ctx.silent,
     cfg: ctx.cfg,
     onPlatformSendDispatch: ctx.onPlatformSendDispatch,
     assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
@@ -110,6 +125,7 @@ const nextcloudTalkMessageAdapter = defineChannelMessageAdapter({
       text: true,
       media: true,
       replyTo: true,
+      silent: true,
     },
   },
   send: {
@@ -120,6 +136,7 @@ const nextcloudTalkMessageAdapter = defineChannelMessageAdapter({
       }
       const account = resolveNextcloudTalkAccount({ cfg: ctx.cfg, accountId: ctx.accountId });
       if (
+        ctx.audioAsVoice !== true &&
         account.enabled &&
         !account.config.apiUser?.trim() &&
         account.config.apiPassword === undefined &&
@@ -195,6 +212,13 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
         reactions: true,
         threads: false,
         media: true,
+        tts: {
+          voice: {
+            synthesisTarget: "audio-file",
+            audioFileFormats: ["mp3", "wav", "audio/mpeg", "audio/wav"],
+            captionedFinalText: true,
+          },
+        },
         nativeCommands: false,
         blockStreaming: true,
       },
@@ -217,11 +241,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
           defaultAccountId: resolveDefaultNextcloudTalkAccountId,
           clearBaseFields: ["botSecret", "botSecretFile", "baseUrl", "name"],
           resolveAllowFrom: (account) => account.config.allowFrom,
-          formatAllowFrom: (allowFrom) =>
-            formatAllowFromLowercase({
-              allowFrom,
-              stripPrefixRe: /^(nextcloud-talk|nc-talk|nc):/i,
-            }),
+          formatAllowFrom: normalizeNextcloudTalkAllowlist,
         }),
         isConfigured: isNextcloudTalkAccountConfigured,
         describeAccount: (account) =>
@@ -247,7 +267,28 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
         normalizeTarget: normalizeNextcloudTalkMessagingTarget,
         inferTargetChatType: ({ to }) =>
           normalizeNextcloudTalkMessagingTarget(to) ? "group" : undefined,
-        resolveOutboundSessionRoute: resolveNextcloudTalkOutboundSessionRoute,
+        resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
+          const roomId = stripNextcloudTalkTargetPrefix(target);
+          if (!roomId) {
+            return null;
+          }
+          return buildChannelOutboundSessionRoute({
+            cfg,
+            agentId,
+            channel: "nextcloud-talk",
+            accountId,
+            // Room tokens do not reveal whether inbound keys by room or sender id.
+            // Keep delivery behavior, but reject this route for explicit session selection.
+            recipientSessionExact: false,
+            peer: {
+              kind: "group",
+              id: roomId,
+            },
+            chatType: "group",
+            from: `nextcloud-talk:room:${roomId}`,
+            to: `nextcloud-talk:${roomId}`,
+          });
+        },
         targetResolver: {
           looksLikeId: looksLikeNextcloudTalkTargetId,
           hint: "<roomToken>",
@@ -486,8 +527,7 @@ export const nextcloudTalkPlugin: ChannelPlugin<ResolvedNextcloudTalkAccount> =
         resolvePolicy: (account) => account.config.dmPolicy,
         resolveAllowFrom: (account) => account.config.allowFrom,
         policyPathSuffix: "dmPolicy",
-        normalizeEntry: (raw) =>
-          normalizeLowercaseStringOrEmpty(raw.trim().replace(/^(nextcloud-talk|nc-talk|nc):/i, "")),
+        normalizeEntry: normalizeNextcloudTalkAllowEntry,
       }),
       collectWarnings: collectNextcloudTalkOpenGroupFindings,
     },

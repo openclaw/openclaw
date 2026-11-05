@@ -320,9 +320,9 @@ export function registerControlUiMobileBootstrapSuite(): void {
         });
         expect(talkMode.ok).toBe(true);
         expect(talkMode.payload).toMatchObject({ enabled: true, phase: "listening" });
-        const adminMutation = await rpcReq(wsOperator, "set-heartbeats", { enabled: false });
-        expect(adminMutation.ok).toBe(false);
-        expect(adminMutation.error?.message ?? "").toContain("missing scope");
+        const adminOperation = await rpcReq(wsOperator, "exec.approvals.get", {});
+        expect(adminOperation.ok).toBe(false);
+        expect(adminOperation.error?.message ?? "").toContain("missing scope");
         if (client.platform !== operatorClient.platform) {
           await withinTest(metadataRecorded.promise, signal);
         }

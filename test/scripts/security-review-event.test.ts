@@ -19,6 +19,7 @@ const pullRequest = {
 };
 const run = {
   id: 123,
+  run_attempt: 1,
   workflow_id: 456,
   path: ".github/workflows/ci.yml",
   event: "pull_request",
@@ -45,6 +46,11 @@ const branchPath = `${prefix}/pulls?state=open&head=contributor%3Afeature&per_pa
 const get = (path: string) => ({ path, method: "GET" });
 const reply = (body: unknown) => ({ body });
 const reviewEntry = (pr = 42, sha = head) => ({ pr, head: sha });
+const completionEntry = (pr = 42, sha = head, ciRunId = 123, ciRunAttempt = 1) => ({
+  ...reviewEntry(pr, sha),
+  ciRunId,
+  ciRunAttempt,
+});
 const creator = (login = "github-actions[bot]", type = "Bot") => ({ creator: { login, type } });
 const changedPull = (number = 42, sha = head) => ({
   ...pullRequest,
@@ -109,7 +115,7 @@ type Options = {
   responses?: Record<string, Reply | Reply[]>;
   expected?: Expected;
 };
-type Selection = { pr: number; head: string }[];
+type Selection = { pr: number; head: string; ciRunId?: number; ciRunAttempt?: number }[];
 type Expected = { status?: number; include?: Selection; posts?: number; truncated?: boolean };
 
 function evaluate(options: Options = {}) {
@@ -205,7 +211,17 @@ globalThis.fetch = async (url, options = {}) => {
     listingRequests: requests.filter(({ path }) => path?.includes("/workflows/ci.yml/runs")),
   };
   expect(evaluated.status, evaluated.error).toBe(expected.status ?? 0);
-  const include = expected.include ?? [reviewEntry()];
+  const include = expected.include ?? [
+    ["pull_request_target", "issue_comment"].includes(options.eventName ?? "workflow_run") ||
+    options.run?.conclusion === "skipped"
+      ? reviewEntry()
+      : completionEntry(
+          42,
+          head,
+          Number(options.run?.id ?? 123),
+          Number(options.run?.run_attempt ?? 1),
+        ),
+  ];
   expect(evaluated.published).toHaveLength(
     expected.posts ?? (evaluated.status === 0 ? include.length : 0),
   );
@@ -400,18 +416,149 @@ describe("automatic security review event resolution", () => {
     },
   );
 
-  it("rejects a bot dispatch before any API request", () => {
+  const refreshBody = `/refresh-security-review ${head}`;
+  const refreshEvent = {
+    action: "created",
+    issue: { number: 42, pull_request: {} },
+    comment: { body: refreshBody, user: { login: "maintainer", type: "User" } },
+  };
+  const permissionPath = `${prefix}/collaborators/maintainer/permission`;
+
+  it.each(["maintain", "admin"])(
+    "refreshes the exact current head for a human with live %s access",
+    (role_name) => {
+      const result = evaluate({
+        eventName: "issue_comment",
+        event: {
+          ...refreshEvent,
+          comment: { ...refreshEvent.comment, body: ` \r\n${refreshBody}\r\n ` },
+        },
+        responses: { [permissionPath]: reply({ role_name }) },
+      });
+      // Keep the head-only matrix: frozen native admission names this exact job.
+      expect(result.matrix).toEqual({ include: [{ pr: 42, head }] });
+      expect(result.requests).toEqual([
+        get(pullPath()),
+        get(permissionPath),
+        { path: publishPath(), method: "POST" },
+      ]);
+    },
+  );
+
+  it.each([
+    `${refreshBody} extra`,
+    refreshBody.toUpperCase(),
+    `/refresh-security-review ${head.slice(1)}`,
+    `/refresh-security-review ${head}0`,
+    `> ${refreshBody}`,
+    `\`${refreshBody}\``,
+    `${refreshBody}\n/allow-security-sensitive-change`,
+    `/allow-dependencies-change\n${refreshBody}`,
+  ])("ignores malformed or mixed refresh body %j without API effects", (body) => {
     const result = evaluate({
-      expected: { status: 1 },
-      eventName: "workflow_dispatch",
-      event: {
-        inputs: { pull_request: "42" },
-        sender: { id: 41898282, login: "github-actions[bot]", type: "Bot" },
-      },
+      eventName: "issue_comment",
+      event: { ...refreshEvent, comment: { ...refreshEvent.comment, body } },
+      expected: { include: [] },
     });
-    expect(result).toMatchObject({
-      error: "Security review requires an automatic pull request or CI event.",
-      requests: [],
+    expect(result.requests).toEqual([]);
+  });
+
+  it.each([
+    { action: "edited" },
+    { action: "deleted" },
+    { issue: { number: 42 } },
+    { comment: { body: refreshBody, user: { login: "automation[bot]", type: "Bot" } } },
+    { comment: { body: refreshBody, user: { type: "User" } } },
+  ])("does not publish for ineligible refresh activity %j", (event) => {
+    evaluate({
+      eventName: "issue_comment",
+      event: { ...refreshEvent, ...event },
+      expected: { include: [] },
+    });
+  });
+
+  it.each([
+    { head: { ...pullRequest.head, sha: otherHead } },
+    { state: "closed" },
+    { draft: true },
+    { base: { ref: "release", repo: repository } },
+    { base: { ref: "main", repo: { full_name: "other/repository" } } },
+  ])("does not publish for an ineligible live refresh target %j", (pullPatch) => {
+    evaluate({
+      eventName: "issue_comment",
+      event: refreshEvent,
+      pullRequest: pullPatch,
+      expected: { include: [] },
+    });
+  });
+
+  it.each(["write", "triage", "read", "custom-maintainer", undefined])(
+    "does not publish for live role %s",
+    (role_name) => {
+      evaluate({
+        eventName: "issue_comment",
+        event: refreshEvent,
+        responses: { [permissionPath]: reply({ role_name, permission: "admin" }) },
+        expected: { include: [] },
+      });
+    },
+  );
+
+  it.each([404, 403, 500])("handles permission lookup HTTP %s without publication", (status) => {
+    evaluate({
+      eventName: "issue_comment",
+      event: refreshEvent,
+      responses: { [permissionPath]: { status, body: { message: "Unavailable" } } },
+      expected: { status: status === 404 ? 0 : 1, include: [] },
+    });
+  });
+
+  it.each([undefined, "", "0", "-1", "123x", "9007199254740992"])(
+    "rejects a replay with invalid run ID %s before any API request",
+    (completed_ci_run_id) => {
+      const result = evaluate({
+        expected: { status: 1 },
+        eventName: "workflow_dispatch",
+        event: {
+          inputs: { completed_ci_run_id },
+        },
+      });
+      expect(result).toMatchObject({
+        error: "CI event has no valid workflow run identifier.",
+        requests: [],
+      });
+    },
+  );
+
+  it("replays a completed CI run through the live-head resolver", () => {
+    const result = evaluate({
+      eventName: "workflow_dispatch",
+      event: { inputs: { completed_ci_run_id: "123" } },
+    });
+    expect(result.paths).toEqual([
+      `${prefix}/actions/runs/123`,
+      `${prefix}/actions/workflows/ci.yml`,
+      pullPath(),
+      publishPath(),
+    ]);
+  });
+
+  it.each([
+    { name: "non-completed run", run: { status: "in_progress" }, status: 0 },
+    { name: "wrong workflow", run: { workflow_id: 999 }, status: 1 },
+    { name: "wrong repository", run: { repository: { full_name: "other/repository" } }, status: 1 },
+    {
+      name: "stale PR head",
+      pullRequest: { head: { ...pullRequest.head, sha: otherHead } },
+      status: 0,
+    },
+  ])("rejects replay of $name", ({ run: runPatch, pullRequest: pullRequestPatch, status }) => {
+    evaluate({
+      eventName: "workflow_dispatch",
+      event: { inputs: { completed_ci_run_id: "123" } },
+      run: runPatch,
+      pullRequest: pullRequestPatch,
+      expected: { status, include: [] },
     });
   });
 
@@ -434,6 +581,13 @@ describe("automatic security review event resolution", () => {
     expect(result.requests.slice(0, -1).every((request) => request.method === "GET")).toBe(true);
   });
 
+  it("passes the observed completed attempt to its review", () => {
+    evaluate({
+      run: { run_attempt: 3 },
+      expected: { include: [completionEntry(42, head, 123, 3)] },
+    });
+  });
+
   it.each<Options>([
     ...["CI", `CI release gate ${"b".repeat(40)}`].map((display_title) => ({
       run: { event: "workflow_dispatch", display_title },
@@ -454,6 +608,8 @@ describe("automatic security review event resolution", () => {
     { path: ".github/workflows/other.yml" },
     { repository: { full_name: "other/repository" } },
     { head_sha: "b".repeat(40) },
+    { run_attempt: 0 },
+    { run_attempt: undefined },
   ])("refuses a CI event whose live identity changed: %j", (changedRun) => {
     const result = evaluate({ run: changedRun, expected: { status: 1 } });
     expect(result.requests).not.toContainEqual({ path: `${prefix}/pulls/42`, method: "GET" });
@@ -480,7 +636,7 @@ describe("automatic security review event resolution", () => {
 });
 
 describe("scheduled reconciliation", () => {
-  it.each<[string, NonNullable<Options["responses"]>, boolean?]>([
+  it.each<[string, NonNullable<Options["responses"]>, boolean?, Selection?]>([
     [
       "covers the previous pass's grace period",
       {
@@ -496,6 +652,8 @@ describe("scheduled reconciliation", () => {
       {
         [ciRunsPath]: runListing([completed({ id: 124 }), completed({ updated_at: at("23:20") })]),
       },
+      true,
+      [completionEntry(42, head, 124)],
     ],
     [
       "uses the current PR head across completed heads",
@@ -505,9 +663,9 @@ describe("scheduled reconciliation", () => {
       },
       false,
     ],
-  ])("%s", (_name, responses, singleStatus = true) => {
-    const result = scheduled(responses);
-    if (singleStatus) {
+  ])("%s", (_name, responses, singleStatus, include) => {
+    const result = scheduled(responses, include ? { include } : undefined);
+    if (singleStatus ?? true) {
       expect(result.statusRequests).toEqual([get(statusesPath())]);
     }
   });
@@ -538,7 +696,7 @@ describe("scheduled reconciliation", () => {
         ),
         ...(paged ? { [statusesPath(head, 2)]: reply(statuses) } : {}),
       },
-      { include: selected ? [reviewEntry()] : [] },
+      { include: selected ? [completionEntry()] : [] },
     );
     if (selected) {
       expect(result.requests).toContainEqual(get(ciRunsPath));
@@ -567,7 +725,7 @@ describe("scheduled reconciliation", () => {
         ),
       );
     }
-    const result = scheduled(responses);
+    const result = scheduled(responses, { include: [completionEntry(42, head, 1500)] });
     expect(result.listingRequests).toEqual(Object.keys(responses).map(get));
   });
 
@@ -642,8 +800,8 @@ describe("scheduled reconciliation", () => {
       );
     }
     const selected = candidates.slice(0, 100);
-    const include = selected.map(({ pull_requests, head_sha }) =>
-      reviewEntry(pull_requests[0]!.number, head_sha),
+    const include = selected.map(({ pull_requests, head_sha, id, run_attempt }) =>
+      completionEntry(pull_requests[0]!.number, head_sha, id, run_attempt),
     );
     const result = scheduled(responses, { include, truncated: true });
     expect(result.statusRequests).toEqual(

@@ -13,6 +13,7 @@ import {
 } from "../../agents/cron-creator-authority-context.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import { bindReplyInputChannel } from "../../agents/harness/host-private-capabilities.js";
 import { resolveOwnerPromptNumbers } from "../../agents/owner-display.js";
 import { captureRequesterOrigin } from "../../agents/requester-origin.js";
 import { revokeRequesterCronAuthority } from "../../agents/subagents/requester-cron-authority.js";
@@ -43,9 +44,9 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { isConfiguredCommandOwner } from "../command-auth.js";
 import { bindCommandOwnerAuthority, getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { getGroupThreadTurn } from "../group-thread-context.js";
-import { resolveInternalTurnTranscript } from "../internal-turn-source.js";
-import { getRequesterProfile } from "../requester-profile.js";
+import { getRequesterProfile, transferRequesterProfile } from "../requester-profile.js";
 import type { OriginatingChannelType } from "../templating.js";
+import { resolveReplyScheduledToolPolicy } from "./agent-runner-run-params.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { PreparedReplyRunAdmission } from "./get-reply-run-admission.js";
@@ -57,6 +58,7 @@ import {
 import { hasInboundAudio } from "./inbound-media.js";
 import { normalizeMessageTimestampMs } from "./message-timestamp.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { resolveReplySteeringIntent } from "./reply-steering-intent.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority-inbound.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
@@ -109,7 +111,6 @@ export async function executePreparedReplyRun(
   const {
     params,
     runtimePolicySessionKey,
-    isHeartbeat,
     traceRunPhase,
     promptSessionCtx,
     inboundEventKind,
@@ -118,6 +119,7 @@ export async function executePreparedReplyRun(
     useFastReplyRuntime,
     fullAccessState,
     extraSystemPromptParts,
+    extraSystemPromptTurnContext,
     sourceConversationContextByMode,
     sourceConversationContextPromptOffset,
     extraSystemPromptStatic,
@@ -203,7 +205,6 @@ export async function executePreparedReplyRun(
   const freshChannelCronAuthorityTurn = isFreshChannelCronAuthorityTurn({
     messageProvider,
     senderId: sessionCtx.SenderId,
-    isHeartbeat,
     isRoomEvent,
     inputProvenance,
     spawnedBy: preparedSessionState.sessionEntry?.spawnedBy,
@@ -246,10 +247,9 @@ export async function executePreparedReplyRun(
       ctx.SenderIsSelf !== true);
   const ctxMediaForPersistence = ctx.media ?? [];
   const unresolvedSourceIndexes = new Set(currentTurnImages.unresolvedSourceIndexes ?? []);
-  const persistedCtxMedia = ctxMediaForPersistence.map((fact, index) =>
-    unresolvedSourceIndexes.has(index) ? { ...fact, hydrationSuppressed: true } : fact,
-  );
-  const userTurnMediaForPersistence = [...persistedCtxMedia, ...(opts?.media ?? [])];
+  // Keep failed pre-reads retryable in the transcript. Only this run skips them:
+  // plugin, CLI, and worker runners can reject unreadable image input.
+  const userTurnMediaForPersistence = [...ctxMediaForPersistence, ...(opts?.media ?? [])];
   const promptMediaForRun = suppressUnresolvedPromptMedia({
     promptMedia: promptMedia ?? [],
     inboundMediaIndexes,
@@ -320,6 +320,8 @@ export async function executePreparedReplyRun(
       }),
       sessionKey,
       operatorProfileId: opts?.operatorAuthority?.profileId,
+      // Linked channel identity establishes the initiator even without operator authority.
+      delegatedCreatorProfileId: getRequesterProfile(ctx)?.id,
     });
   const userTurnInput =
     userTurnTranscriptText !== undefined || userTurnMediaForPersistence.length > 0
@@ -328,15 +330,7 @@ export async function executePreparedReplyRun(
           senderIsOwner: command.senderIsOwner,
           requesterOrigin,
           ...(inputIdempotencyKey ? { idempotencyKey: inputIdempotencyKey } : {}),
-          ...(inputProvenance && !isHeartbeat ? { provenance: inputProvenance } : {}),
-          ...(isHeartbeat
-            ? {
-                provenance: resolveInternalTurnTranscript({
-                  InputProvenance: inputProvenance,
-                  InternalTurnSource: ctx.InternalTurnSource ?? sessionCtx.InternalTurnSource,
-                }).provenance,
-              }
-            : {}),
+          ...(inputProvenance ? { provenance: inputProvenance } : {}),
           ...(Object.keys(transport).length > 0 ? { transport } : {}),
           ...(userTurnMediaForPersistence.length > 0 ? { media: userTurnMediaForPersistence } : {}),
           ...(mediaImageLayout ? { mediaImageLayout } : {}),
@@ -398,6 +392,7 @@ export async function executePreparedReplyRun(
   const groupTurn = getGroupThreadTurn();
   const personalBootstrapEligible = isSessionPersonalBootstrapTurn({
     ...ctx,
+    SessionKey: sessionKey,
     InternalTurnSource: ctx.InternalTurnSource ?? sessionCtx.InternalTurnSource,
     InputProvenance: inputProvenance,
   });
@@ -445,10 +440,10 @@ export async function executePreparedReplyRun(
       sourceTurnId,
       admissionRunId: sourceMessageId,
       ingressProvider: ctx.Provider ?? ctx.Surface ?? promptSessionCtx.Provider,
-      entry: preparedSessionState.sessionEntry,
     }),
     personalBootstrapEligible,
     operatorAuthority: opts?.operatorAuthority,
+    sessionPrincipalTurn: opts?.sessionPrincipalTurn,
     transcriptPrompt: transcriptCommandBody,
     ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
     currentInboundEventKind: inboundEventKind,
@@ -489,12 +484,6 @@ export async function executePreparedReplyRun(
     summaryLine: baseBodyTrimmedRaw,
     ...(queuedToolsAllow !== undefined ? { toolsAllow: queuedToolsAllow } : {}),
     ...(opts?.disableTools !== undefined ? { disableTools: opts.disableTools } : {}),
-    ...(opts?.forceRestartSafeTools !== undefined
-      ? { forceRestartSafeTools: opts.forceRestartSafeTools }
-      : {}),
-    ...(opts?.forceCodeModeTools !== undefined
-      ? { forceCodeModeTools: opts.forceCodeModeTools }
-      : {}),
     enqueuedAt: Date.now(),
     currentTurnImagesPrepared: true as const,
     images: currentTurnImages.images,
@@ -514,6 +503,10 @@ export async function executePreparedReplyRun(
       normalizeOptionalString(sessionCtx.ChatId),
     originatingChatType: replyRoute.chatType,
     run: {
+      scheduledAutomation: opts?.scheduledAutomation,
+      scheduledToolPolicy: resolveReplyScheduledToolPolicy({
+        scheduledAutomation: opts?.scheduledAutomation,
+      }),
       onOperationAdmitted: opts?.onReplyOperationAdmitted,
       internalEventExecution: opts?.internalEventExecution,
       providerReviewAcknowledgment: opts?.providerReviewAcknowledgment,
@@ -567,6 +560,7 @@ export async function executePreparedReplyRun(
         resolveAgentRunCwd(cfg, agentId),
       permissionMode: admittedSessionSettings?.permissionMode,
       sessionRoot: normalizeOptionalString(preparedSessionState.sessionEntry?.sessionRoot),
+      blindPrompt: preparedSessionState.sessionEntry?.blindPrompt,
       config: cfg,
       toolOverrides: admittedSessionSettings?.toolOverrides,
       skillsSnapshot,
@@ -586,6 +580,7 @@ export async function executePreparedReplyRun(
       thinkingCatalog,
       thinkLevel: resolvedThinkLevel,
       thinkingExplicit: params.thinkingExplicit,
+      cyberAccessProgram: preparedSessionState.sessionEntry?.cyberAccessProgram,
       thinkLevelOverride,
       ...(() => {
         if (useFastReplyRuntime) {
@@ -639,7 +634,9 @@ export async function executePreparedReplyRun(
         ? { suppressNextUserMessagePersistence: true }
         : {}),
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
+      extraSystemPromptTurnContext,
       sourceReplyDeliveryMode,
+      bootstrapContextMode: opts?.bootstrapContextMode,
       taskSuggestionDeliveryMode: opts?.taskSuggestionDeliveryMode,
       silentReplyPromptMode,
       extraSystemPromptStatic,
@@ -655,6 +652,13 @@ export async function executePreparedReplyRun(
     },
   };
   const sourceReplyDeliveryRuntimeOptions = opts as SourceReplyDeliveryRuntimeOptions | undefined;
+  if (!inputProvenance || inputProvenance.kind === "external_user") {
+    transferRequesterProfile(ctx, followupRun);
+    bindReplyInputChannel(
+      followupRun.run,
+      ctx.SenderIsBot ? undefined : (ctx.Provider ?? ctx.Surface),
+    );
+  }
   copyChildSessionPublication(sessionCtx, followupRun.run);
   if (command.senderIsOwner && channelOwnerAuthority) {
     bindCommandOwnerAuthority(followupRun.run, channelOwnerAuthority);
@@ -683,6 +687,10 @@ export async function executePreparedReplyRun(
   const execute = () =>
     runReplyAgent({
       ...params,
+      steeringIntent: resolveReplySteeringIntent({
+        directives: params.directives,
+        resetTriggered: effectiveResetTriggered,
+      }),
       commandBody: prefixedCommandBody,
       transcriptCommandBody,
       followupRun,

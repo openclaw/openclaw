@@ -3,6 +3,7 @@
  * POST /v1beta/interactions
  */
 
+import { omitNullRequestHeaders } from "@openclaw/llm-core";
 import {
   asOptionalRecord,
   asRecord,
@@ -11,11 +12,14 @@ import {
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { calculateCost } from "../model-utils.js";
+import { resolveProviderContext, PROVIDER_MODEL_INPUT } from "../provider-types.js";
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import { buildGuardedModelFetch } from "../transports/host-policy.js";
 import { parseJsonPreservingUnsafeIntegers } from "../transports/json-unsafe-integers.js";
 import {
+  awaitProviderLifecycleCallback,
   failTransportStream,
+  iterateSseFrames,
   notifyProviderHttpResponse,
   notifyProviderStreamOpened,
   parseTerminalToolCallArguments,
@@ -33,21 +37,25 @@ import type {
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
   buildGoogleInteractionsParams,
+  normalizeGoogleInteractionsToolChoice,
   resolveGoogleApiClientHeaders,
+  type GoogleInteractionsOptions,
   type GoogleInteractionsRequestBody,
 } from "./google-interactions-request.js";
+import { buildGoogleInteractionsSimpleThinking, type GoogleApiType } from "./google-shared.js";
+import { mapGoogleToolArguments } from "./google-tool-parameters.js";
 import {
-  buildGoogleInteractionsSimpleThinking,
-  type GoogleApiType,
-  type GoogleProviderOptions,
-} from "./google-shared.js";
+  GOOGLE_VIDEO_SLOT_OMISSION,
+  materializeGoogleVideoSlots,
+  type GoogleVideoSlots,
+} from "./google-video-slots.js";
 import { buildBaseOptions } from "./simple-options.js";
 
 let toolCallCounter = 0;
 
 function resolveGoogleInteractionsApiKey<T extends GoogleApiType>(
   model: Model<T>,
-  options?: GoogleProviderOptions,
+  options?: Pick<GoogleInteractionsOptions, "apiKey">,
 ): string {
   return (
     options?.apiKey ||
@@ -83,7 +91,7 @@ function isGoogleInteractionsRequestBody(value: unknown): value is GoogleInterac
 
 export const streamGoogleInteractions: StreamFunction<
   "google-interactions",
-  GoogleProviderOptions
+  GoogleInteractionsOptions
 > = (model, context, options) => {
   const stream = new AssistantMessageEventStream();
   const output = createAssistantOutput(model, "google-interactions");
@@ -98,14 +106,55 @@ export const streamGoogleInteractions: StreamFunction<
       if (!apiKey.trim()) {
         throw new Error(`No API key for provider: ${model.provider}`);
       }
-      let body = buildGoogleInteractionsParams(model, context, options);
-      const nextBody = await options?.onPayload?.(body, model);
+      const providerInput = options?.[PROVIDER_MODEL_INPUT] ?? model.input;
+      const providerContext = providerInput.includes("video")
+        ? await resolveProviderContext(context, options)
+        : context;
+      const videoSlots: GoogleVideoSlots = new Map();
+      let body = buildGoogleInteractionsParams(model, providerContext, options, videoSlots);
+      const nextBody = await awaitProviderLifecycleCallback(
+        options?.onPayload ? () => options.onPayload?.(body, model) : undefined,
+        options?.signal,
+      );
       if (nextBody !== undefined) {
         if (!isGoogleInteractionsRequestBody(nextBody)) {
           throw new Error("Google Interactions onPayload returned an invalid request body");
         }
         body = nextBody;
       }
+      const optionRecord = asRecord(options);
+      const metadata = asRecord(optionRecord.videoMetadata ?? optionRecord.video_metadata);
+      const processing: Record<string, unknown> = {};
+      for (const [camel, snake] of [
+        ["startOffset", "start_offset"],
+        ["endOffset", "end_offset"],
+        ["fps", "fps"],
+      ] as const) {
+        const value = metadata[camel] ?? metadata[snake];
+        if (value !== undefined) {
+          processing[snake] = value;
+        }
+      }
+      materializeGoogleVideoSlots(
+        body,
+        videoSlots,
+        (slot, video) => {
+          Object.assign(slot, {
+            type: "video",
+            mime_type: video.mimeType,
+            data: video.data,
+            ...(Object.keys(processing).length > 0
+              ? { processing: { type: "static", ...processing } }
+              : {}),
+          });
+        },
+        (part) => {
+          if (part.type === "video") {
+            Object.keys(part).forEach((key) => Reflect.deleteProperty(part, key));
+            Object.assign(part, { type: "text", text: GOOGLE_VIDEO_SLOT_OMISSION });
+          }
+        },
+      );
 
       let baseUrl = (model.baseUrl || "https://generativelanguage.googleapis.com/v1beta")
         .trim()
@@ -142,7 +191,7 @@ export const streamGoogleInteractions: StreamFunction<
       });
       const response = await guardedFetch(url, {
         method: "POST",
-        headers,
+        headers: omitNullRequestHeaders(headers),
         body: JSON.stringify(body),
         signal: options?.signal,
       });
@@ -171,9 +220,6 @@ export const streamGoogleInteractions: StreamFunction<
         cancelStream: () => reader?.cancel(),
       });
       stream.push({ type: "start", partial: output });
-      const decoder = new TextDecoder();
-      let buffer = "";
-
       let currentBlock: TextContent | ThinkingContent | ToolCall | null = null;
       let currentBlockIndex = -1;
       let latestThoughtSignature: string | undefined;
@@ -187,6 +233,12 @@ export const streamGoogleInteractions: StreamFunction<
           if (currentBlock.partialJson?.trim()) {
             currentBlock.arguments = parseTerminalToolCallArguments(currentBlock.partialJson);
           }
+          currentBlock.arguments = mapGoogleToolArguments(
+            providerContext.tools,
+            currentBlock.name,
+            currentBlock.arguments,
+            "decode",
+          );
           delete currentBlock.partialJson;
           stream.push({
             type: "toolcall_end",
@@ -281,192 +333,176 @@ export const streamGoogleInteractions: StreamFunction<
         return toolCall;
       };
 
-      let streamDone = false;
       let sawCompletion = false;
-      while (!streamDone) {
-        const { done, value } = await reader.read();
-        buffer += decoder.decode(value, { stream: !done });
-        const frames = buffer.split(/(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/);
-        buffer = frames.pop() ?? "";
-        if (done) {
-          // Preserve the existing newline-terminated final event at EOF.
-          if (/[\r\n]$/.test(buffer)) {
-            frames.push(buffer);
-          }
-          streamDone = true;
+      for await (const { frame, terminated } of iterateSseFrames(reader.read.bind(reader))) {
+        // Preserve the existing newline-terminated final event at EOF.
+        if (!terminated && !/[\r\n]$/.test(frame)) {
+          continue;
+        }
+        const dataStr = frame
+          .split(/\r\n|\r|\n/)
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5))
+          .join("\n")
+          .trim();
+        if (!dataStr) {
+          continue;
+        }
+        if (dataStr === "[DONE]") {
+          break;
         }
 
-        for (const frame of frames) {
-          const dataStr = frame
-            .split(/\r\n|\r|\n/)
-            .filter((line) => line.startsWith("data:"))
-            .map((line) => line.slice(5))
-            .join("\n")
-            .trim();
-          if (!dataStr) {
-            continue;
-          }
-          if (dataStr === "[DONE]") {
-            streamDone = true;
-            break;
-          }
+        let event: Record<string, unknown>;
+        try {
+          event = asRecord(parseJsonPreservingUnsafeIntegers(dataStr));
+        } catch (error) {
+          throw streamFragmentError(error);
+        }
 
-          let event: Record<string, unknown>;
-          try {
-            event = asRecord(parseJsonPreservingUnsafeIntegers(dataStr));
-          } catch (error) {
-            throw streamFragmentError(error);
-          }
+        const eventType = event.event_type || event.type;
+        logGoogleInteractionsDebug("stream event", {
+          eventType: typeof eventType === "string" ? eventType : "unknown",
+        });
 
-          const eventType = event.event_type || event.type;
-          logGoogleInteractionsDebug("stream event", {
-            eventType: typeof eventType === "string" ? eventType : "unknown",
+        if (eventType === "error") {
+          const providerError = asOptionalRecord(event.error);
+          const message =
+            readStringField(providerError, "message") ?? "Google Interactions stream failed";
+          const error = Object.assign(new Error(message), {
+            code: readStringField(providerError, "code"),
+            type: "google_interactions_stream_error",
           });
+          throw error;
+        } else if (eventType === "step.delta") {
+          const delta = asOptionalRecord(event.delta);
+          const deltaType = delta?.type;
 
-          if (eventType === "error") {
-            const providerError = asOptionalRecord(event.error);
-            const message =
-              readStringField(providerError, "message") ?? "Google Interactions stream failed";
-            const error = Object.assign(new Error(message), {
-              code: readStringField(providerError, "code"),
-              type: "google_interactions_stream_error",
-            });
-            throw error;
-          } else if (eventType === "step.delta") {
-            const delta = asOptionalRecord(event.delta);
-            const deltaType = delta?.type;
-
-            if (deltaType === "text") {
-              appendTextDelta("text", readStringField(delta, "text") ?? "");
-            } else if (
-              deltaType === "thought" ||
-              deltaType === "thought_summary" ||
-              deltaType === "raw_thought"
-            ) {
-              let thinkingText = "";
-              if (typeof delta?.text === "string") {
-                thinkingText = delta.text;
-              } else if (typeof delta?.content === "string") {
-                thinkingText = delta.content;
-              } else if (Array.isArray(delta?.content)) {
-                thinkingText = joinTextParts(delta.content);
+          if (deltaType === "text") {
+            appendTextDelta("text", readStringField(delta, "text") ?? "");
+          } else if (
+            deltaType === "thought" ||
+            deltaType === "thought_summary" ||
+            deltaType === "raw_thought"
+          ) {
+            let thinkingText = "";
+            if (typeof delta?.text === "string") {
+              thinkingText = delta.text;
+            } else if (typeof delta?.content === "string") {
+              thinkingText = delta.content;
+            } else if (Array.isArray(delta?.content)) {
+              thinkingText = joinTextParts(delta.content);
+            } else {
+              thinkingText = readStringField(asOptionalRecord(delta?.content), "text") ?? "";
+            }
+            appendTextDelta("thinking", thinkingText);
+          } else if (
+            deltaType === "thought_signature" ||
+            (delta && typeof delta.signature === "string" && !delta.text)
+          ) {
+            const signature = readStringField(delta, "signature") ?? "";
+            if (signature) {
+              latestThoughtSignature = signature;
+              if (currentBlock?.type === "thinking") {
+                currentBlock.thinkingSignature = signature;
               } else {
-                thinkingText = readStringField(asOptionalRecord(delta?.content), "text") ?? "";
-              }
-              appendTextDelta("thinking", thinkingText);
-            } else if (
-              deltaType === "thought_signature" ||
-              (delta && typeof delta.signature === "string" && !delta.text)
-            ) {
-              const signature = readStringField(delta, "signature") ?? "";
-              if (signature) {
-                latestThoughtSignature = signature;
-                if (currentBlock?.type === "thinking") {
-                  currentBlock.thinkingSignature = signature;
-                } else {
-                  const lastThinking = output.content.findLast(
-                    (block): block is ThinkingContent => block.type === "thinking",
-                  );
-                  if (lastThinking && !lastThinking.thinkingSignature) {
-                    lastThinking.thinkingSignature = signature;
-                  } else if (!lastThinking) {
-                    output.content.push({
-                      type: "thinking",
-                      thinking: "",
-                      thinkingSignature: signature,
-                    });
-                  }
+                const lastThinking = output.content.findLast(
+                  (block): block is ThinkingContent => block.type === "thinking",
+                );
+                if (lastThinking && !lastThinking.thinkingSignature) {
+                  lastThinking.thinkingSignature = signature;
+                } else if (!lastThinking) {
+                  output.content.push({
+                    type: "thinking",
+                    thinking: "",
+                    thinkingSignature: signature,
+                  });
                 }
               }
-            } else if (deltaType === "arguments" || deltaType === "arguments_delta") {
-              const argText =
-                readStringField(delta, "arguments") ?? readStringField(delta, "text") ?? "";
-              if (currentBlock?.type !== "toolCall") {
-                currentBlock = startToolCallBlock(delta);
-              }
-              const streamedToolName = readStringField(delta, "name");
-              if (streamedToolName && (!currentBlock.name || currentBlock.name === "tool")) {
-                currentBlock.name = streamedToolName;
-              }
-              const streamedToolCallId = readStringField(delta, "id");
-              if (streamedToolCallId) {
-                currentBlock.id = streamedToolCallId;
-              }
-              currentBlock.partialJson = (currentBlock.partialJson ?? "") + argText;
-              stream.push({
-                type: "toolcall_delta",
-                contentIndex: currentBlockIndex,
-                delta: argText,
-                partial: output,
-              });
             }
-          } else if (eventType === "step.start") {
-            const step = asOptionalRecord(event.step);
-            if (step?.type === "thought") {
-              const stepSignature = readStringField(step, "signature");
-              if (stepSignature) {
-                latestThoughtSignature = stepSignature;
-              }
-              const initialThinking = joinTextParts(step.summary);
-              if (currentBlock?.type !== "thinking") {
-                currentBlock = startTextBlock("thinking", initialThinking);
-              }
-            } else if (step?.type === "model_output") {
-              currentBlock = startTextBlock("text", joinTextParts(step.content));
-            } else if (step?.type === "function_call") {
-              currentBlock = startToolCallBlock(step, asRecord(step.arguments));
+          } else if (deltaType === "arguments" || deltaType === "arguments_delta") {
+            const argText =
+              readStringField(delta, "arguments") ?? readStringField(delta, "text") ?? "";
+            if (currentBlock?.type !== "toolCall") {
+              currentBlock = startToolCallBlock(delta);
             }
-          } else if (eventType === "step.stop") {
-            latestUsage = asOptionalRecord(event.usage) ?? latestUsage;
-            endCurrentBlock();
-          } else if (
-            eventType === "interaction.completed" ||
-            eventType === "interaction.complete"
-          ) {
-            sawCompletion = true;
-            const interaction = asOptionalRecord(event.interaction) ?? event;
-            const usage = asOptionalRecord(interaction.usage) ?? latestUsage ?? {};
-            const promptTokens = Number(usage.total_input_tokens ?? 0);
-            const cacheRead = Number(usage.total_cached_tokens ?? 0);
-            const candidatesTokens = Number(usage.total_output_tokens ?? 0);
-            const thoughtTokens = Number(usage.total_thought_tokens ?? 0);
-            const toolUseTokens = Number(usage.total_tool_use_tokens ?? 0);
-            const outputTokens = candidatesTokens + thoughtTokens;
-            const totalTokens = Number(
-              usage.total_tokens ?? promptTokens + outputTokens + toolUseTokens,
-            );
+            const streamedToolName = readStringField(delta, "name");
+            if (streamedToolName && (!currentBlock.name || currentBlock.name === "tool")) {
+              currentBlock.name = streamedToolName;
+            }
+            const streamedToolCallId = readStringField(delta, "id");
+            if (streamedToolCallId) {
+              currentBlock.id = streamedToolCallId;
+            }
+            currentBlock.partialJson = (currentBlock.partialJson ?? "") + argText;
+            stream.push({
+              type: "toolcall_delta",
+              contentIndex: currentBlockIndex,
+              delta: argText,
+              partial: output,
+            });
+          }
+        } else if (eventType === "step.start") {
+          const step = asOptionalRecord(event.step);
+          if (step?.type === "thought") {
+            const stepSignature = readStringField(step, "signature");
+            if (stepSignature) {
+              latestThoughtSignature = stepSignature;
+            }
+            const initialThinking = joinTextParts(step.summary);
+            if (currentBlock?.type !== "thinking") {
+              currentBlock = startTextBlock("thinking", initialThinking);
+            }
+          } else if (step?.type === "model_output") {
+            currentBlock = startTextBlock("text", joinTextParts(step.content));
+          } else if (step?.type === "function_call") {
+            currentBlock = startToolCallBlock(step, asRecord(step.arguments));
+          }
+        } else if (eventType === "step.stop") {
+          latestUsage = asOptionalRecord(event.usage) ?? latestUsage;
+          endCurrentBlock();
+        } else if (eventType === "interaction.completed" || eventType === "interaction.complete") {
+          sawCompletion = true;
+          const interaction = asOptionalRecord(event.interaction) ?? event;
+          const usage = asOptionalRecord(interaction.usage) ?? latestUsage ?? {};
+          const promptTokens = Number(usage.total_input_tokens ?? 0);
+          const cacheRead = Number(usage.total_cached_tokens ?? 0);
+          const candidatesTokens = Number(usage.total_output_tokens ?? 0);
+          const thoughtTokens = Number(usage.total_thought_tokens ?? 0);
+          const toolUseTokens = Number(usage.total_tool_use_tokens ?? 0);
+          const outputTokens = candidatesTokens + thoughtTokens;
+          const totalTokens = Number(
+            usage.total_tokens ?? promptTokens + outputTokens + toolUseTokens,
+          );
 
-            output.usage = {
-              usageReport: {
-                state:
-                  typeof usage.total_input_tokens === "number" &&
-                  typeof usage.total_output_tokens === "number"
-                    ? "available"
-                    : "unavailable",
-              },
-              input: Math.max(0, promptTokens - cacheRead) + toolUseTokens,
-              output: outputTokens,
-              cacheRead,
-              cacheWrite: 0,
-              cacheTelemetry: { state: "available" },
-              totalTokens,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            };
-            if (model.cost) {
-              calculateCost(model, output.usage);
-            }
+          output.usage = {
+            usageReport: {
+              state:
+                typeof usage.total_input_tokens === "number" &&
+                typeof usage.total_output_tokens === "number"
+                  ? "available"
+                  : "unavailable",
+            },
+            input: Math.max(0, promptTokens - cacheRead) + toolUseTokens,
+            output: outputTokens,
+            cacheRead,
+            cacheWrite: 0,
+            cacheTelemetry: { state: "available" },
+            totalTokens,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          };
+          if (model.cost) {
+            calculateCost(model, output.usage);
+          }
 
-            const status =
-              typeof interaction.status === "string" ? interaction.status : "completed";
-            if (status === "failed" || status === "cancelled" || status === "budget_exceeded") {
-              throw new Error(`Google Interactions API completed with status: ${status}`);
-            }
-            if (status === "incomplete") {
-              output.stopReason = "length";
-            } else {
-              const hasToolCalls = output.content.some((b) => b.type === "toolCall");
-              output.stopReason = hasToolCalls ? "toolUse" : "stop";
-            }
+          const status = typeof interaction.status === "string" ? interaction.status : "completed";
+          if (status === "failed" || status === "cancelled" || status === "budget_exceeded") {
+            throw new Error(`Google Interactions API completed with status: ${status}`);
+          }
+          if (status === "incomplete") {
+            output.stopReason = "length";
+          } else {
+            const hasToolCalls = output.content.some((b) => b.type === "toolCall");
+            output.stopReason = hasToolCalls ? "toolUse" : "stop";
           }
         }
       }
@@ -529,8 +565,15 @@ export const streamSimpleGoogleInteractions: StreamFunction<
   }
 
   const base = buildBaseOptions(model, options, apiKey);
+  // Google-specific call options are not part of the shared base projection.
+  const record = asRecord(options);
+  const toolChoice = normalizeGoogleInteractionsToolChoice(record.toolChoice);
+  const videoMetadata = record.videoMetadata ?? record.video_metadata;
   return streamGoogleInteractions(model, context, {
     ...base,
+    ...(typeof record.topP === "number" ? { topP: record.topP } : {}),
     thinking: buildGoogleInteractionsSimpleThinking(model, options),
-  } satisfies GoogleProviderOptions);
+    ...(toolChoice ? { toolChoice } : {}),
+    ...(videoMetadata !== undefined ? { videoMetadata } : {}),
+  });
 };

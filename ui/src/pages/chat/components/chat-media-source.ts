@@ -1,3 +1,4 @@
+import { createChangeListeners } from "../../../../../src/shared/listeners.js";
 import {
   appendChatMediaPlaybackParam,
   waitForChatMediaPlayback,
@@ -15,6 +16,7 @@ function finiteMediaTime(value: number): number {
 
 /** Synchronous browser-playback owner; keeps refreshed tickets from interrupting active media. */
 export class ChatMediaSourceOwner {
+  private syncQueued = false;
   private appliedSource = "";
   private appliedIdentity = "";
   private pendingSource = "";
@@ -30,12 +32,9 @@ export class ChatMediaSourceOwner {
   private playbackSource = "";
   private playbackReadiness: "idle" | "preparing" | "ready" | "unavailable" = "idle";
 
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = createChangeListeners();
 
-  subscribe(notify: () => void): () => void {
-    this.listeners.add(notify);
-    return () => this.listeners.delete(notify);
-  }
+  readonly subscribe = this.listeners.subscribe;
 
   private setPlayback(
     readiness: typeof this.playbackReadiness,
@@ -46,9 +45,7 @@ export class ChatMediaSourceOwner {
     }
     this.playbackReadiness = readiness;
     this.playbackSource = source;
-    for (const notify of this.listeners) {
-      notify();
-    }
+    this.listeners.publish();
   }
 
   get readySource(): string {
@@ -57,6 +54,18 @@ export class ChatMediaSourceOwner {
 
   get readiness() {
     return this.playbackReadiness;
+  }
+
+  queueSync(sync: () => void): void {
+    if (this.syncQueued) {
+      return;
+    }
+    this.syncQueued = true;
+    // Native callers assign related properties together; consume their complete source once.
+    queueMicrotask(() => {
+      this.syncQueued = false;
+      sync();
+    });
   }
 
   sync(

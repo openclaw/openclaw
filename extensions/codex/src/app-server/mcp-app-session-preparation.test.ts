@@ -1,15 +1,14 @@
 import type { AgentHarnessSessionPreparationV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import { prepareCodexMcpAppSession } from "./mcp-app-session-preparation.js";
 import type { CodexAppServerBindingStore } from "./session-binding.js";
+const thread = { threadId: "native-thread", clientId: "native-client" };
 const mocks = vi.hoisted(() => ({
   acquire: vi.fn(),
   release: vi.fn(),
-  releaseBinding: vi.fn(),
   start: vi.fn(),
   bundle: vi.fn(),
-  user: vi.fn(),
   assert: vi.fn(),
   request: vi.fn(),
   ensure: vi.fn(),
@@ -19,13 +18,13 @@ const mocks = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   loadCodexBundleMcpThreadConfig: mocks.bundle,
 }));
+// mock-isolation: Thread preparation supplies a fixed user-MCP patch without live runtime setup.
 vi.mock("openclaw/plugin-sdk/codex-mcp-projection", () => ({
-  buildCodexUserMcpServersThreadConfigPatchForRuntime: mocks.user,
+  buildCodexUserMcpServersThreadConfigPatchForRuntime: async () => undefined,
 }));
 vi.mock("./auth-profile.js", () => ({
   resolveCodexAppServerAuthProfileId: () => "prepared-account",
 }));
-vi.mock("./config-parsing.js", () => ({ readCodexPluginConfig: () => ({}) }));
 vi.mock("./binding-connection.js", () => ({
   resolveCodexBindingAppServerConnection: async () => ({
     appServer: {
@@ -43,20 +42,10 @@ vi.mock("./config-requirements.js", () => ({ readCodexRequirementsToml: () => un
 vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", () => ({
   loadExecApprovalsReadOnlyAsync: async () => ({}),
 }));
-vi.mock("./launch-args.js", () => ({ isCodexAppServerProxyLaunch: () => false }));
 vi.mock("./client-runtime.js", () => ({ ensureCodexAppServerClientRuntime: mocks.ensure }));
 vi.mock("./plugin-app-cache-key.js", () => ({
   buildCodexPluginAppCacheKey: () => "account-cache",
   buildCodexAppServerRuntimeFingerprint: () => "native-owner",
-}));
-vi.mock("./plugin-thread-config-deadline.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./plugin-thread-config-deadline.js")>()),
-  resolveCodexPluginThreadConfigStartupPolicy: () => ({ pluginThreadConfigRequired: false }),
-  prepareCodexPluginThreadConfigStartupProvider: vi.fn(),
-}));
-vi.mock("./plugin-thread-config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./plugin-thread-config.js")>()),
-  mergeCodexThreadConfigs: (...parts: object[]) => Object.assign({}, ...parts),
 }));
 vi.mock("./session-permission-policy.js", () => ({
   applyCodexSessionPermissionPolicy: ({ appServer }: { appServer: object }) => appServer,
@@ -73,7 +62,7 @@ vi.mock("./session-binding.js", async (importOriginal) => ({
   resolveCodexSessionBinding: async () => ({
     binding: undefined,
     authority: { assertLegacyCurrent: mocks.assert },
-    release: mocks.releaseBinding,
+    release: vi.fn(),
   }),
 }));
 vi.mock("./thread-ownership.js", () => ({
@@ -113,10 +102,7 @@ function fixture() {
     },
     run: async (operation) => operation(),
   };
-  const read = () =>
-    mocks.start.mock.calls.length > 0
-      ? { threadId: "native-thread", clientId: "native-client" }
-      : undefined;
+  const read = () => (mocks.start.mock.calls.length > 0 ? thread : undefined);
   return {
     preparation,
     bindingStore: {
@@ -137,63 +123,56 @@ beforeEach(() => {
   });
   mocks.bundle.mockResolvedValue({
     configPatch: { mcp_servers: { demo: { command: "fixture" } } },
-    diagnostics: [],
-    evaluated: true,
-    staticServerNames: ["demo"],
-    userStaticServerNames: [],
   });
-  mocks.user.mockResolvedValue(undefined);
   mocks.retain.mockResolvedValue(true);
-  mocks.start.mockResolvedValue({ threadId: "native-thread", clientId: "native-client" });
+  mocks.start.mockResolvedValue(thread);
 });
+afterEach(() => expect(mocks.release).toHaveBeenCalledOnce());
 describe("cold native MCP App session preparation", () => {
   it("uses the existing client and thread lifecycle without sending a model turn", async () => {
     const fixtureParams = fixture();
-    await expect(prepareCodexMcpAppSession(fixtureParams)).resolves.toMatchObject({
-      threadId: "native-thread",
-    });
+    await expect(prepareCodexMcpAppSession(fixtureParams)).resolves.toMatchObject(thread);
     expect(mocks.acquire).toHaveBeenCalledOnce();
     expect(mocks.ensure).toHaveBeenCalledOnce();
-    expect(mocks.start).toHaveBeenCalledWith(
-      expect.objectContaining({
-        bindingStore: fixtureParams.bindingStore,
-        params: expect.objectContaining({
-          hostCapabilities: fixtureParams.preparation.params.hostCapabilities,
-        }),
-        userMcpServersEnabled: false,
-        nativeModelAdmission: "required",
-        shellGitConfigParameters: "'maintenance.auto=false' 'gc.auto=0'",
-        dynamicTools: [],
-      }),
-    );
+    expect(mocks.start.mock.calls).toMatchObject([
+      [
+        {
+          bindingStore: fixtureParams.bindingStore,
+          params: {
+            hostCapabilities: fixtureParams.preparation.params.hostCapabilities,
+          },
+          userMcpServersEnabled: false,
+          nativeModelAdmission: "required",
+          shellGitConfigParameters: "'maintenance.auto=false' 'gc.auto=0'",
+          dynamicTools: [],
+        },
+      ],
+    ]);
     expect(mocks.request).not.toHaveBeenCalled();
-    expect(mocks.release).toHaveBeenCalledOnce();
     expect(mocks.retain).toHaveBeenCalledOnce();
     expect(mocks.rollback).not.toHaveBeenCalled();
-  });
-  it("rejects non-JSON projected configuration before native thread admission", async () => {
-    mocks.bundle.mockResolvedValue({
-      configPatch: { mcp_servers: { demo: { command: () => "invalid" } } },
-    });
-    await expect(prepareCodexMcpAppSession(fixture())).rejects.toThrow();
-    expect(mocks.start).not.toHaveBeenCalled();
-    expect(mocks.release).toHaveBeenCalledOnce();
   });
   it("rolls back an unretained cold subscription", async () => {
     mocks.retain.mockResolvedValue(false);
     await expect(prepareCodexMcpAppSession(fixture())).rejects.toThrow("ownership changed");
     expect(mocks.rollback).toHaveBeenCalledWith(expect.anything(), "native-thread", false);
-    expect(mocks.release).toHaveBeenCalledOnce();
   });
-  it("revalidates source authority after static config preparation", async () => {
-    mocks.bundle.mockImplementation(async () => {
-      mocks.assert.mockImplementation(() => {
-        throw new Error("revoked");
+  it.each(["non-JSON configuration", "revoked authority"])(
+    "rejects %s before thread admission",
+    async (failure) => {
+      mocks.bundle.mockImplementation(async () => {
+        if (failure === "non-JSON configuration") {
+          return { configPatch: { mcp_servers: { demo: { command: () => "invalid" } } } };
+        }
+        mocks.assert.mockImplementation(() => {
+          throw new Error("revoked");
+        });
+        return {};
       });
-      return {};
-    });
-    await expect(prepareCodexMcpAppSession(fixture())).rejects.toThrow("revoked");
-    expect(mocks.start).not.toHaveBeenCalled();
-    expect(mocks.release).toHaveBeenCalledOnce();
-  });
+      await expect(prepareCodexMcpAppSession(fixture())).rejects.toThrow(
+        failure === "revoked authority" ? "revoked" : undefined,
+      );
+      expect(mocks.start).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -150,6 +150,7 @@ class ConnectionManager internal constructor(
           add(MODEL_SELECTION_POLICY_CLIENT_CAPABILITY)
           // Android does not consume presence rosters; accept deltas to avoid unused full snapshots.
           add("presence-deltas")
+          add("health-summary")
         },
       commands = emptyList(),
       permissions = emptyMap(),

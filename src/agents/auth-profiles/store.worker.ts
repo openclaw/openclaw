@@ -38,12 +38,9 @@ import type {
   AuthProfileUsageResult,
   AuthStoreUpdateInput,
 } from "./store.worker-contract.js";
-import type { AuthProfileRowRead, UserModelAuthProfile } from "./types.js";
+import type { AuthProfileRowRead, ProfileUsageStats, UserModelAuthProfile } from "./types.js";
 import { recordAuthProfileUsageInDatabase } from "./usage-kernel.js";
-import type {
-  PersonalAuthProfileUsageReduction,
-  PersonalAuthProfileUsageResult,
-} from "./usage-reduction.js";
+import type { PersonalAuthProfileUsageReduction } from "./usage-reduction.js";
 import { reduceAuthProfileFailure } from "./usage-reduction.js";
 import { resetAuthProfileFailureState } from "./usage-state.js";
 
@@ -108,9 +105,9 @@ export const authProfileOperations = {
     { open, stateOptions },
   ) => {
     const database = open();
+    requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
         const result = enrollAuthProfileAuthorizationInDatabase(db, "shared-state", input);
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
         return result;
@@ -169,22 +166,26 @@ export const authProfileOperations = {
       stateOptions(),
       { operationLabel: "auth-profiles.update" },
     ),
-  "authProfiles.usage": (input: AuthProfileUsageInput, { stateOptions }): AuthProfileUsageResult =>
-    runOpenClawStateWriteTransaction(
+  "authProfiles.usage": (
+    input: AuthProfileUsageInput,
+    { stateOptions },
+  ): AuthProfileUsageResult => {
+    requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+    return runOpenClawStateWriteTransaction(
       ({ db, path }) => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
         const receipt = recordAuthProfileUsageInDatabase(db, path, "shared-state", input);
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
         return { ok: true, receipt };
       },
       stateOptions(),
       { operationLabel: "auth-profiles.usage" },
-    ),
+    );
+  },
   "authProfiles.personalUsage": (
     input: { profileId: string; reduction: PersonalAuthProfileUsageReduction },
     { stateOptions },
-  ): PersonalAuthProfileUsageResult | undefined => {
-    let result: PersonalAuthProfileUsageResult | undefined;
+  ): ProfileUsageStats | undefined => {
+    let result: ProfileUsageStats | undefined;
     updateUserModelAuthProfile(
       input.profileId,
       (profile) => {
@@ -208,7 +209,7 @@ export const authProfileOperations = {
           return false;
         }
         profile.usageStats = next;
-        result = { previous, next, now };
+        result = next;
         return true;
       },
       stateOptions(),

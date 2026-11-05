@@ -44,6 +44,7 @@ import {
 } from "./state-migrations.transcript-archive-publication.js";
 import { transformArchiveBytesIncrementally } from "./state-migrations.transcript-archive-stream.js";
 import { repairHistoricalTranscriptEventJson } from "./state-migrations.transcript-directives-transform.js";
+import { Utf8InputError } from "./utf8-input.js";
 
 export const TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE = TRANSCRIPT_ARCHIVE_MIGRATION_BATCH_SIZE;
 export const MEDIA_ARCHIVE_VERIFICATION_KEY = "media-transcript-archive-verification-v1";
@@ -69,6 +70,7 @@ type ArchiveMigrationOptions = {
   start: ArchiveCursor;
   signal?: AbortSignal;
   verification?: { key: string; prepared?: ReadonlySet<string>; collect?: Set<string> };
+  prepareRewrite?: () => Promise<void>;
   beforeRewrite?: () => void;
   writeCursor?: (cursor: ArchiveCursor | { phase: "complete" }) => void;
 } & (
@@ -209,10 +211,17 @@ async function listArchiveBatch(
       if (options?.signal?.aborted && error === options.signal.reason) {
         throw error;
       }
+      if (error instanceof Utf8InputError) {
+        throw error;
+      }
       const detail = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed migrating transcript archive ${archivePath} (${owner}): ${detail}`, {
-        cause: error,
-      });
+      // Update diagnostics keep only the first 256 bytes of Doctor output; lead with the cause.
+      throw new Error(
+        `Failed migrating transcript archive (${owner}): ${detail} [${archivePath}]`,
+        {
+          cause: error,
+        },
+      );
     }
   }
   return plans;
@@ -417,6 +426,7 @@ export async function migrateCanonicalTranscriptArchives(
       // Until file repair and cursor commit finish, changed rows remain pending.
       const needsRewrite = batch.some((planned) => planned.changed);
       if (!params.verifyOnly && needsRewrite) {
+        await params.prepareRewrite?.();
         write("historical-transcript-archive-directives", () => {
           params.beforeRewrite?.();
           const pending = new Map(

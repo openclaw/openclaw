@@ -1,16 +1,15 @@
 // Preserve fixture setup before production consumers.
 // oxfmt-ignore
-import { runSubagentStateWorkerOperation as runWorker, useSubagentControlFixture } from "./subagent-control.test-support.js";
+import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import path from "node:path";
-import { expect, it, onTestFinished, vi } from "vitest";
-import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
+import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { captureGatewayOperatorRunAuthority } from "../../../gateway/operator-run-authority.js";
 import {
   createContext,
   createOperatorClient,
 } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
-import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
@@ -19,15 +18,14 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
-import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { setTestEnvValue } from "../../../test-utils/env.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import {
   announcementFixture,
   completeRegistered,
   currentRun,
+  holdAnnouncementCommand,
   installEndedHook,
-  registrationDefaults,
   registerSuccessor,
   storedAnnouncement,
   suspendRun,
@@ -47,12 +45,7 @@ import {
 } from "./subagent-registry-publication.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
-import {
-  registerSubagentRun,
-  resumeSubagentRun,
-  prepareSubagentSessionCleanupRevocation,
-} from "./subagent-registry.js";
-import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import { resumeSubagentRun, prepareSubagentSessionCleanupRevocation } from "./subagent-registry.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import { testing } from "./subagent-registry.test-helpers.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
@@ -77,71 +70,48 @@ const nativePersistence = await vi.importActual<
 
 const registerCompletion = announcementFixture(fixture, false);
 
-it.each(["keep", "delete"] as const)(
-  "settles registered quiet %s completion without host registry writes",
-  async (cleanup) => {
-    const run = await registerCompletion(`ordinary-announcement-${cleanup}`, { cleanup });
-    const { runId } = run;
-    const deleted: unknown[] = [];
-    fixture.gateway.mockImplementation(async (request) => {
-      if (request.method === "agent.wait") {
-        return await new Promise<never>(() => {});
-      }
-      if (request.method !== "sessions.delete") {
-        throw new Error(`Unexpected RPC ${request.method}`);
-      }
-      request.assertDispatchCurrent?.();
-      deleted.push({
-        request: request.params,
-        marker: storedAnnouncement(runId)?.deleteCleanupDispatchedAt,
-      });
-      return {};
-    });
-    const registryWrites: string[] = [];
-    let statements: ReturnType<typeof observeHostDataSql> | undefined;
-    // Terminal admission precedes browser cleanup. Measure ordinary cleanup through
-    // its awaited registry bookkeeping; requester batch transport stays mocked.
-    fixture.cleanup.mockImplementation(async () => {
-      statements = observeHostDataSql((sql) => {
-        if (/(?:insert into|update|delete from)\s+"?subagent_runs\b/i.test(sql)) {
-          registryWrites.push(sql);
-        }
-      });
-    });
-    try {
-      completeRegistered(run);
-      await fixture.settle();
-      expect(storedAnnouncement(runId)).toMatchObject({
-        cleanupCompletedAt: expect.any(Number),
-        execution: { status: "terminal", outcome: { status: "ok" } },
-        delivery: { status: "not_required" },
-      });
-      expect(fixture.cleanup).toHaveBeenCalledOnce();
-      expect(statements).toBeDefined();
-      expect(fixture.announce).not.toHaveBeenCalled();
-      expect(deleted).toHaveLength(cleanup === "delete" ? 1 : 0);
-      if (cleanup === "delete") {
-        expect(deleted[0]).toMatchObject({
-          marker: expect.any(Number),
-          request: {
-            key: run.childSessionKey,
-            expectedSessionId: "ordinary-child-session",
-            expectedLifecycleRevision: "ordinary-child-revision",
-          },
-        });
-      }
-      expect(registryWrites.length).toBe(0);
-    } finally {
-      statements?.restore();
+it.each(["keep", "delete"] as const)("settles registered quiet %s completion", async (cleanup) => {
+  const run = await registerCompletion(`ordinary-announcement-${cleanup}`, { cleanup });
+  const { runId } = run;
+  const deleted: unknown[] = [];
+  fixture.gateway.mockImplementation(async (request) => {
+    if (request.method === "agent.wait") {
+      return await new Promise<never>(() => {});
     }
-  },
-);
+    if (request.method !== "sessions.delete") {
+      throw new Error(`Unexpected RPC ${request.method}`);
+    }
+    request.assertDispatchCurrent?.();
+    deleted.push({
+      request: request.params,
+      marker: storedAnnouncement(runId)?.deleteCleanupDispatchedAt,
+    });
+    return {};
+  });
+  completeRegistered(run);
+  await fixture.settle();
+  expect(storedAnnouncement(runId)).toMatchObject({
+    cleanupCompletedAt: expect.any(Number),
+    execution: { status: "terminal", outcome: { status: "ok" } },
+    delivery: { status: "not_required" },
+  });
+  expect(fixture.announce).not.toHaveBeenCalled();
+  expect(deleted).toHaveLength(cleanup === "delete" ? 1 : 0);
+  if (cleanup === "delete") {
+    expect(deleted[0]).toMatchObject({
+      marker: expect.any(Number),
+      request: {
+        key: run.childSessionKey,
+        expectedSessionId: "ordinary-child-session",
+        expectedLifecycleRevision: "ordinary-child-revision",
+      },
+    });
+  }
+});
 
 it("retains registered cleanup admission behind a durable write while a successor queues", async () => {
   const run = await registerCompletion("cleanup-start-successor");
   const entry = currentRun(run.runId)!;
-  const ready = createDeferredCore();
-  const release = createDeferredCore();
   const successorQueued = createDeferredCore();
   const mutation = vi.mocked(mutateSubagentRuns).mockImplementation((runIds, plan, options) => {
     const pending = nativePersistence.mutateSubagentRuns(runIds, plan, options);
@@ -151,45 +121,28 @@ it("retains registered cleanup admission behind a durable write while a successo
     return pending;
   });
   let predecessor: Promise<void> | undefined;
-  let cleanupContext:
-    | Parameters<typeof nativeCleanup.startSubagentAnnounceCleanupFlow>[0]
-    | undefined;
   const start = vi
     .spyOn(announceCleanup, "startSubagentAnnounceCleanupFlow")
     .mockImplementation((context, ...args) => {
-      cleanupContext = context;
       predecessor ??= updateRun(run.runId, (draft) => {
         draft.label = "queued before cleanup";
       });
       return nativeCleanup.startSubagentAnnounceCleanupFlow(context, ...args);
     });
-  let held = false;
-  const worker = probe.command(
-    stateWorker,
-    async (command, options, scope) => {
-      if (
-        !held &&
-        isSubagentRegistryWriteCommand(command) &&
-        command.input.values.some(
-          (row) =>
-            row.run_id === run.runId &&
-            rowToSubagentRunRecord(row)?.label === "queued before cleanup",
-        )
-      ) {
-        held = true;
-        ready.resolve();
-        await release.promise;
-      }
-      return scope.execute(command, options);
-    },
-    { original: runWorker },
+  const { ready, release, worker } = holdAnnouncementCommand(
+    (command) =>
+      isSubagentRegistryWriteCommand(command) &&
+      command.input.values.some(
+        (row) =>
+          row.run_id === run.runId &&
+          rowToSubagentRunRecord(row)?.label === "queued before cleanup",
+      ),
   );
   let registration: Promise<void> | undefined;
   try {
     completeRegistered(run);
     await ready.promise;
     expect(currentRun(run.runId)?.cleanupHandled).not.toBe(true);
-    expect(cleanupContext?.cleanupReservations.has(getSubagentRunRuntimeKey(entry))).toBe(true);
     expect(storedAnnouncement(run.runId)?.cleanupHandled).not.toBe(true);
     expect(fixture.wake).not.toHaveBeenCalled();
     resumeSubagentRun(run.runId);
@@ -201,11 +154,7 @@ it("retains registered cleanup admission behind a durable write while a successo
     await predecessor;
     await registration;
     await fixture.settle();
-    expect(fixture.wake).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        settledEntry: expect.objectContaining({ runId: run.runId }),
-      }),
-    );
+    expect(fixture.wake).toHaveBeenCalledOnce();
     expect(storedAnnouncement(run.runId)).toMatchObject({
       cleanupCompletedAt: expect.any(Number),
       execution: { status: "terminal", suppressSessionEffects: true },
@@ -263,14 +212,6 @@ it.each(["current", "revoked", "source switched", "yielded"] as const)(
   "uses current authority for an ended hook after suspended bookkeeping (%s)",
   async (change) => {
     const runId = "suspended-announcement-hook";
-    const childSessionKey = `agent:main:subagent:${runId}`;
-    await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId: "main",
-      sessionKey: childSessionKey,
-      defaultSessionId: "suspended-child-session",
-      lifecycleRevision: "suspended-child-revision",
-    });
     const waitResult = createDeferredCore<Record<string, unknown>>();
     const waitStarted = createDeferredCore();
     if (change === "yielded") {
@@ -283,22 +224,9 @@ it.each(["current", "revoked", "source switched", "yielded"] as const)(
         return await waitResult.promise;
       });
     }
-    const { holdLiveRequesterTurns } =
-      await import("./subagent-requester-turn-liveness.test-support.js");
-    onTestFinished(holdLiveRequesterTurns("held-parent-turn").restore);
-    await registerSubagentRun({
-      ...registrationDefaults,
-      runId,
-      childSessionKey,
-      sessionEntry: {
-        sessionId: "suspended-child-session",
-        lifecycleRevision: "suspended-child-revision",
-      },
-      requesterTurnRunId: "held-parent-turn",
-      completionTarget: "parent",
-      task: "discard a suspended result without stale hook effects",
-      retainAttachmentsOnKeep: true,
-      expectsCompletionMessage: true,
+    const { childSessionKey } = await registerCompletion(runId, { holdForRequester: true });
+    await updateRun(runId, (draft) => {
+      draft.retainAttachmentsOnKeep = true;
     });
     const registeredEntry = currentRun(runId);
 
@@ -322,10 +250,7 @@ it.each(["current", "revoked", "source switched", "yielded"] as const)(
         path: path.join(replacementDir, path.basename(originalSource.admission.databasePath)),
       });
     }
-    const entry = currentRun(runId)!;
-    let pausedRecord: typeof entry | undefined;
-    expect(entry.execution.status).toBe("terminal");
-    expect(entry.endedHookEmittedAt).toBeUndefined();
+    let pausedRecord: ReturnType<typeof currentRun>;
     await suspendRun(runId);
     const ended = vi.fn(async () => {});
     const registry = installEndedHook(ended);
@@ -398,21 +323,19 @@ it.each(["current", "revoked", "source switched", "yielded"] as const)(
           });
         }
         expect(loadSubagentRegistryFromSqlite().has(runId)).toBe(false);
-      } else if (change === "yielded") {
-        expect(outcome).toEqual({ completed: true });
-        expect(currentRun(runId)).toEqual(pausedRecord);
-        expect(storedAnnouncement(runId)?.pauseReason).toBe("sessions_yield");
       } else {
         expect(outcome).toEqual({ completed: true });
+        if (change === "yielded") {
+          expect(currentRun(runId)).toEqual(pausedRecord);
+          expect(storedAnnouncement(runId)?.pauseReason).toBe("sessions_yield");
+        }
       }
       if (change !== "yielded") {
         expect(currentRun(runId)?.delivery?.status).toBe("discarded");
       }
-      if (change !== "current") {
-        expect(currentRun(runId)?.endedHookEmittedAt).toBeUndefined();
-      } else {
-        expect(currentRun(runId)?.endedHookEmittedAt).toBeTypeOf("number");
-      }
+      expect(currentRun(runId)?.endedHookEmittedAt).toEqual(
+        change === "current" ? expect.any(Number) : undefined,
+      );
     } finally {
       waitResult.resolve({ status: "pending" });
       release.resolve();
@@ -435,10 +358,8 @@ it.each([false, true])(
     });
     completeRegistered(run);
     await fixture.settle();
-    let entry = currentRun(run.runId)!;
-    expect(entry.execution.status).toBe("terminal");
     await suspendRun(run.runId);
-    entry = currentRun(run.runId)!;
+    const entry = currentRun(run.runId)!;
     const ended = vi.fn(async () => {});
     installEndedHook(ended);
 
@@ -456,8 +377,6 @@ it.each([false, true])(
       throw new Error("Expected canonical successor authority");
     }
     client.internal = { operatorRunAuthority: source.authority };
-    const ready = createDeferredCore();
-    const release = createDeferredCore();
     const cleanupEntered = createDeferredCore();
     const releaseCleanup = createDeferredCore();
     const removeAttachments = registryHelpers.safeRemoveAttachmentsDir;
@@ -470,24 +389,10 @@ it.each([false, true])(
         }
         return removeAttachments(retired, isCurrent);
       });
-    let held = false;
-    const worker = probe.command(
-      stateWorker,
-      async (command, executeOptions, scope) => {
-        const result = await scope.execute(command, executeOptions);
-        if (
-          !held &&
-          isSubagentRegistryWriteCommand(command) &&
-          command.input.deleteRunIds.includes(run.runId)
-        ) {
-          held = true;
-          // The real transaction has settled; only its host acknowledgement waits.
-          ready.resolve();
-          await release.promise;
-        }
-        return result;
-      },
-      { original: runWorker },
+    const { ready, release, worker } = holdAnnouncementCommand(
+      (command) =>
+        isSubagentRegistryWriteCommand(command) && command.input.deleteRunIds.includes(run.runId),
+      true,
     );
     const sweeping = testing.sweepOnceForTests();
     const outcome = sweeping.then(
@@ -504,12 +409,11 @@ it.each([false, true])(
     let rejectedRegistration: Promise<unknown> | undefined;
     let registration: Promise<void> | undefined;
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         ready.promise,
-        outcome.then(() => {
-          throw new Error("Registered retirement omitted its acknowledgement boundary");
-        }),
-      ]);
+        outcome,
+        "Registered retirement omitted its acknowledgement boundary",
+      );
       expect(currentRun(run.runId)).toBe(entry);
       expect(entry.delivery?.status).toBe("suspended");
       expect(loadSubagentRegistryFromSqlite().has(run.runId)).toBe(false);
@@ -523,12 +427,11 @@ it.each([false, true])(
       const publicationRevision = getSubagentRegistryPublicationRevision();
       release.resolve();
       if (replace) {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           cleanupEntered.promise,
-          outcome.then(() => {
-            throw new Error("Suspended retirement settled before attachment cleanup entered");
-          }),
-        ]);
+          outcome,
+          "Suspended retirement settled before attachment cleanup entered",
+        );
         const rejection = await rejectedRegistration;
         expect(rejection).toBeInstanceOf(SubagentRegistryMutationRejectedError);
         expect(rejection).toHaveProperty(

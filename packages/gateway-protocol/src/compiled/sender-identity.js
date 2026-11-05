@@ -25,7 +25,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
-// node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/guard/unicode/unicode.mjs
 function CodePointCount(value) {
   let result = 0,
     index = 0,
@@ -36,9 +35,7 @@ function CodePointCount(value) {
   }
   return result;
 }
-
-// <stdin>
-var isSessionParticipantIdentity = /* @__PURE__ */ (() => {
+var isSessionParticipantIdentity = (() => {
   let External = [],
     check_0 = (value) =>
       (typeof value == "object" &&

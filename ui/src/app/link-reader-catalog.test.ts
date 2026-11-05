@@ -35,7 +35,7 @@ it.each([
         [flag]: before,
       },
     };
-    current().opts.onHello?.({
+    current().testOptions.onHello?.({
       ...GATEWAY_STORE_TEST_HELLO,
       auth: { role: "operator", scopes: ["operator.read"] },
       features: { methods: ["forge.detail"] },
@@ -53,7 +53,7 @@ it.each([
       pluginSurfaceUrls: {},
       controlUiLinkReaders: [{ ...reader, linkReader: { ...reader.linkReader, [flag]: after } }],
     });
-    current().opts.onEvent?.(
+    current().testOptions.onEvent?.(
       createGatewayEvent("plugins.controlUi.changed", { revision: "updated" }),
     );
     await vi.waitFor(() =>

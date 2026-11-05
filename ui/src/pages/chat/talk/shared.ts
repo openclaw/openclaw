@@ -14,9 +14,10 @@ import type {
   RealtimeVoiceBrowserSession,
   RealtimeVoiceCloseOptions,
 } from "../../../../../src/talk/provider-types.js";
-import type { TalkEvent, TalkEventInput } from "../../../../../src/talk/talk-events.js";
+import type { TalkEvent } from "../../../../../src/talk/talk-events.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../../api/gateway.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import type { RealtimeTalkInputOwner } from "./input.ts";
 
 export type RealtimeTalkStatus = "idle" | "connecting" | "listening" | "thinking" | "error";
@@ -50,15 +51,10 @@ export type RealtimeTalkCallbacks = {
   onTranscript?: (entry: RealtimeTalkTranscript) => void;
   onTranscriptOrder?: (items: ReadonlyArray<{ itemId: string; order: number }>) => void;
   onTranscriptItem?: (item: RealtimeTalkTranscriptItem) => void;
-  onTalkEvent?: (event: RealtimeTalkEvent) => void;
+  onTalkEvent?: (event: { type: "session.ready" | "session.closed" }) => void;
   onVideoStream?: (stream: MediaStream | null) => void;
   onVideoError?: (error: unknown) => void;
 };
-
-export type RealtimeTalkEventInput<TPayload = unknown> = Omit<
-  TalkEventInput<TPayload>,
-  "payload" | "timestamp"
-> & { payload?: TPayload };
 
 export type RealtimeTalkSessionResult = RealtimeVoiceBrowserSession & {
   voiceSessionId?: string;
@@ -99,77 +95,10 @@ export type RealtimeTalkTransportContext = {
   videoDeviceId?: string;
 };
 
-export function createRealtimeTalkEventEmitter(
-  ctx: RealtimeTalkTransportContext,
-  session: RealtimeTalkSessionResult,
-): (input: RealtimeTalkEventInput) => void {
-  let seq = 0;
-  let turnSeq = 0;
-  let activeTurnId: string | undefined;
-  const sessionId =
-    "relaySessionId" in session && session.relaySessionId.trim()
-      ? session.relaySessionId
-      : `${ctx.sessionKey}:${session.provider}:${session.transport}`;
-  return (input) => {
-    if (!ctx.callbacks.onTalkEvent) {
-      return;
-    }
-    const turnId = resolveRealtimeTalkTurnId(input);
-    seq += 1;
-    ctx.callbacks.onTalkEvent({
-      id: `${sessionId}:${seq}`,
-      type: input.type,
-      sessionId,
-      turnId,
-      captureId: input.captureId,
-      seq,
-      timestamp: new Date().toISOString(),
-      mode: "realtime",
-      transport: session.transport,
-      brain: "agent-consult",
-      provider: session.provider,
-      final: input.final,
-      callId: input.callId,
-      itemId: input.itemId,
-      parentId: input.parentId,
-      payload: input.payload ?? null,
-    });
-    if (
-      input.type === "turn.ended" ||
-      input.type === "turn.cancelled" ||
-      input.type === "session.replaced" ||
-      input.type === "session.closed"
-    ) {
-      activeTurnId = undefined;
-    }
-  };
-
-  function resolveRealtimeTalkTurnId(input: RealtimeTalkEventInput): string | undefined {
-    if (input.type !== "turn.started" && !isTurnScopedTalkEvent(input.type)) {
-      return input.turnId;
-    }
-    activeTurnId = input.turnId ?? activeTurnId ?? `turn-${++turnSeq}`;
-    return activeTurnId;
-  }
-}
-
-function isTurnScopedTalkEvent(type: RealtimeTalkEvent["type"]): boolean {
-  return (
-    type === "turn.ended" ||
-    type === "turn.cancelled" ||
-    type.startsWith("input.audio.") ||
-    type.startsWith("transcript.") ||
-    type.startsWith("output.") ||
-    type.startsWith("tool.")
-  );
-}
-
 type ChatPayload = {
   runId?: string;
-  stream?: string;
   state?: string;
   errorMessage?: string;
-  data?: unknown;
   message?: unknown;
 };
 
@@ -235,7 +164,6 @@ export function waitForChatResult(params: {
   runId: string;
   timeoutMs: number;
   timeoutMessage?: string;
-  emitTalkEvent?: (input: RealtimeTalkEventInput) => void;
   signal?: AbortSignal;
 }): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -252,7 +180,7 @@ export function waitForChatResult(params: {
     const onAbort = () => {
       settle(new DOMException("OpenClaw tool call aborted", "AbortError"));
     };
-    params.signal?.addEventListener("abort", onAbort, { once: true });
+    const disposeAbort = params.signal && listen(params.signal, "abort", onAbort, { once: true });
     let unsubscribe: () => void = () => undefined;
     const settle = (result: string | Error | DOMException) => {
       if (settled) {
@@ -263,7 +191,7 @@ export function waitForChatResult(params: {
       if (emptyFinalFallbackTimer !== undefined) {
         window.clearTimeout(emptyFinalFallbackTimer);
       }
-      params.signal?.removeEventListener("abort", onAbort);
+      disposeAbort?.();
       unsubscribe();
       if (typeof result === "string") {
         resolve(result);
@@ -309,7 +237,6 @@ export function waitForChatResult(params: {
       if (!payload || payload.runId !== params.runId) {
         return;
       }
-      emitRealtimeTalkAgentProgress(params.emitTalkEvent, payload);
       if (payload.state === "final") {
         const finalText = extractTextFromMessage(payload.message);
         if (finalText) {
@@ -325,28 +252,6 @@ export function waitForChatResult(params: {
         settle(new Error(payload.errorMessage ?? "OpenClaw tool call failed"));
       }
     });
-  });
-}
-
-function emitRealtimeTalkAgentProgress(
-  emitTalkEvent: ((input: RealtimeTalkEventInput) => void) | undefined,
-  payload: ChatPayload,
-): void {
-  if (!emitTalkEvent || payload.stream !== "tool") {
-    return;
-  }
-  const record = asOptionalObjectRecord(payload.data) ?? {};
-  const phase = typeof record.phase === "string" ? record.phase : undefined;
-  const name = typeof record.name === "string" ? record.name : undefined;
-  const toolCallId = typeof record.toolCallId === "string" ? record.toolCallId : undefined;
-  emitTalkEvent({
-    type: "tool.progress",
-    callId: toolCallId,
-    payload: {
-      runId: payload.runId,
-      ...(name ? { name } : {}),
-      ...(phase ? { phase } : {}),
-    },
   });
 }
 
@@ -366,17 +271,6 @@ function requestRealtimeTalkSteer(
     : ctx.client.request("talk.client.steer", request);
 }
 
-function realtimeTalkControlProgress(result: unknown): RealtimeTalkEventInput {
-  return {
-    type: "tool.progress",
-    payload: { name: REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME, result },
-    final:
-      result && typeof result === "object" && "mode" in result
-        ? result.mode === "status" || result.mode === "cancel"
-        : undefined,
-  };
-}
-
 export function shouldInterruptRealtimeTalkControlResponse(result: unknown): boolean {
   const record = asOptionalObjectRecord(result);
   return (
@@ -388,7 +282,6 @@ export function shouldInterruptRealtimeTalkControlResponse(result: unknown): boo
 export async function steerRealtimeTalkActiveConsult(params: {
   ctx: RealtimeTalkTransportContext;
   text: string;
-  emitTalkEvent?: (input: RealtimeTalkEventInput) => void;
   onControlResult?: (result: unknown) => void;
   speakControlResult?: (message: string) => void;
 }): Promise<void> {
@@ -410,13 +303,8 @@ export async function steerRealtimeTalkActiveConsult(params: {
         params.speakControlResult(buildRealtimeVoiceAgentControlSpeechMessage(message));
       }
     }
-    params.emitTalkEvent?.(realtimeTalkControlProgress(result));
-  } catch (error) {
-    params.emitTalkEvent?.({
-      type: "tool.error",
-      payload: { message: formatUiError(error) },
-      final: true,
-    });
+  } catch {
+    // Steering failure must not reject the transport's fire-and-forget callback.
   }
 }
 
@@ -426,42 +314,26 @@ export async function submitRealtimeTalkAgentControl(params: {
   submit: (callId: string, result: unknown) => void | Promise<void>;
   callId: string;
   sessionId?: string;
-  emitTalkEvent?: (input: RealtimeTalkEventInput) => void;
   signal?: AbortSignal;
 }): Promise<void> {
   if (params.signal?.aborted) {
     return;
   }
   let result: unknown;
-  let talkEvent: RealtimeTalkEventInput;
   try {
     const parsed = parseRealtimeVoiceAgentControlToolArgs(params.args);
     result = await requestRealtimeTalkSteer(params.ctx, params.sessionId, parsed.text, parsed.mode);
     if (params.signal?.aborted) {
       return;
     }
-    talkEvent = {
-      ...realtimeTalkControlProgress(result),
-      callId: params.callId,
-    };
   } catch (error) {
     const message = formatUiError(error);
-    talkEvent = {
-      type: "tool.error",
-      callId: params.callId,
-      payload: { message },
-      final: true,
-    };
     result = { error: message };
     if (params.signal?.aborted || isAbortError(error)) {
       return;
     }
   }
   await params.submit(params.callId, result);
-  if (params.signal?.aborted) {
-    return;
-  }
-  params.emitTalkEvent?.(talkEvent);
 }
 
 // Owns the consult's abort listener until its acknowledged run and result settle.
@@ -471,7 +343,6 @@ export async function submitRealtimeTalkConsult(params: {
   submit: (callId: string, result: unknown) => void | Promise<void>;
   callId: string;
   relaySessionId?: string;
-  emitTalkEvent?: (input: RealtimeTalkEventInput) => void;
   submitAbortResult?: boolean;
   signal?: AbortSignal;
 }): Promise<void> {
@@ -511,7 +382,7 @@ export async function submitRealtimeTalkConsult(params: {
     await submitAbortResult();
     return;
   }
-  params.signal?.addEventListener("abort", abortRun, { once: true });
+  const disposeAbort = params.signal && listen(params.signal, "abort", abortRun, { once: true });
   try {
     const args =
       typeof params.args === "string" ? JSON.parse(params.args || "{}") : (params.args ?? {});
@@ -539,7 +410,6 @@ export async function submitRealtimeTalkConsult(params: {
       client: ctx.client,
       runId: run.runId,
       timeoutMs: 120_000,
-      emitTalkEvent: params.emitTalkEvent,
       signal: params.signal,
     });
     await submitOnce({ result });
@@ -555,7 +425,7 @@ export async function submitRealtimeTalkConsult(params: {
       error: formatUiError(error),
     });
   } finally {
-    params.signal?.removeEventListener("abort", abortRun);
+    disposeAbort?.();
     if (submissionCompleted && !aborted && !params.signal?.aborted) {
       ctx.callbacks.onStatus?.("listening");
     }

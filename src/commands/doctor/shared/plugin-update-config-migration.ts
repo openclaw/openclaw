@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { resolveConfigWidePluginMetadataSnapshot } from "../../../config/io.plugin-metadata.js";
-import { findLegacyConfigRuleIssues } from "../../../config/legacy.js";
+import { findLegacyConfigRuleIssues } from "../../../config/legacy.shared.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import {
@@ -91,6 +91,14 @@ export async function preparePluginUpdateConfigMigration(params: {
         restoreDoctorConfigEnvRefs(
           migrated.config,
           prepareDoctorConfigReferenceSource(params.snapshot),
+          undefined,
+          {
+            // Policy migration must not send reference replay to the prior package generation.
+            pluginCompatibility: {
+              pluginIds: [...selectedIds],
+              manifestRegistry: metadata.manifestRegistry,
+            },
+          },
         ),
       );
       return { config, selectedIds, selectedPending, inspected };

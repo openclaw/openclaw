@@ -9,6 +9,8 @@ import type {
 } from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import type {
   SessionCostUsageDeferredMetadata,
   SessionCostUsageRollupRow,
@@ -31,8 +33,8 @@ import type {
 } from "./session-cost-usage-worker.types.js";
 import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
 
-// Computation holds no actor FIFO turn. Overlapping refreshes simply reuse the next refresh request.
-const refreshes = new Set<string>();
+// Computation holds no actor FIFO turn. Direct detail waits; background overlaps return busy.
+const refreshes = new Map<string, Deferred>();
 type UsageCostOwnerLocation = Pick<SessionActorStorageBinding, "agentId" | "path">;
 type CapturedUsageCostOwner = NonNullable<ReturnType<typeof captureSessionActorStorageOwner>>;
 type UsageCostMemorySource = Omit<SessionActorStorageBinding, "actor"> & {
@@ -72,9 +74,10 @@ export async function runSessionActorUsage(
   binding: SessionActorStorageBinding | CapturedUsageCostOwner,
   operation: UsageCostWorkerOperation,
   resolveCost: UsageCostResolver,
+  waitForRefresh = false,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
   if ("actor" in binding) {
-    return runCapturedSessionActorUsage(binding, operation, resolveCost);
+    return runCapturedSessionActorUsage(binding, operation, resolveCost, waitForRefresh);
   }
   const selected =
     binding.binding?.agentId === binding.agentId && binding.binding.path === binding.path
@@ -93,7 +96,12 @@ export async function runSessionActorUsage(
       : await selected?.actor.storage!.acquire(sessionKey, lifetime)
     : undefined;
   try {
-    return await runCapturedSessionActorUsage({ ...binding, actor }, operation, resolveCost);
+    return await runCapturedSessionActorUsage(
+      { ...binding, actor },
+      operation,
+      resolveCost,
+      waitForRefresh,
+    );
   } finally {
     await actor?.release();
   }
@@ -103,22 +111,37 @@ async function runCapturedSessionActorUsage(
   binding: UsageCostMemorySource,
   operation: UsageCostWorkerOperation,
   resolveCost: UsageCostResolver,
+  waitForRefresh: boolean,
 ): Promise<UsageCostWorkerResult | { kind: "busy" }> {
+  if (operation.kind === "overview") {
+    // The overview loader reads private sessions through their whole in-memory rollups.
+    throw new Error("Private session usage has no overview quarter rows");
+  }
   const refresh = operation.kind === "refresh";
   const key = refreshKey(binding);
-  if (refresh && refreshes.has(key)) {
-    return { kind: "busy" };
-  }
   if (refresh) {
-    refreshes.add(key);
+    for (let current = refreshes.get(key); current; current = refreshes.get(key)) {
+      if (!waitForRefresh) {
+        return { kind: "busy" };
+      }
+      await racePromiseWithAbortSignal(
+        current.promise,
+        getAsyncWorkSignal(),
+        (aborted) => aborted.reason,
+      );
+    }
+  }
+  const completion = refresh ? createDeferredCore() : undefined;
+  if (completion) {
+    refreshes.set(key, completion);
   }
   try {
     const requested =
       operation.kind === "sessions"
         ? operation.sessions.map((entry) => entry.sessionFile)
-        : operation.kind === "summary"
-          ? undefined
-          : operation.sessionFiles;
+        : operation.kind === "refresh"
+          ? operation.sessionFiles
+          : undefined;
     const requestedSessionId = (file: string) => {
       const marker = parseSqliteSessionFileMarker(file);
       if (!marker || marker.agentId !== binding.agentId || marker.storePath !== binding.path) {
@@ -167,11 +190,10 @@ async function runCapturedSessionActorUsage(
     if (operation.kind === "inventory") {
       return {
         kind: "inventory",
-        files: (selectedFiles ?? [...files.values()].map(({ file }) => file))
+        files: [...files.values()]
+          .map(({ file }) => file)
           .filter(
-            (file): file is UsageCostTranscriptFile =>
-              file !== undefined &&
-              (operation.minMtimeMs === undefined || file.mtimeMs >= operation.minMtimeMs),
+            (file) => operation.minMtimeMs === undefined || file.mtimeMs >= operation.minMtimeMs,
           )
           .map(({ kind, sourcePath, sessionId, mtimeMs }) => ({
             kind,
@@ -252,6 +274,7 @@ async function runCapturedSessionActorUsage(
                 ...operation,
                 files: [...files.values()].map(({ file }) => file),
               }),
+              staleSessionFiles: [],
             }
           : {
               kind: "sessions" as const,
@@ -337,8 +360,9 @@ async function runCapturedSessionActorUsage(
       })),
     };
   } finally {
-    if (refresh) {
+    if (completion) {
       refreshes.delete(key);
+      completion.resolve();
     }
   }
 }

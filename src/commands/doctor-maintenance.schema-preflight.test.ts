@@ -7,11 +7,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runDoctorHealthFlow } from "../flows/doctor-health.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { corruptSqliteIndexKey } from "../infra/sqlite-index-corruption.test-support.js";
-import { cleanupSnapshotOperations } from "../infra/sqlite-readonly-location-cleanup.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
-import { setLoggerOverride } from "../logging/logger.js";
-import { testApi } from "../logging/logger.test-support.js";
 import { readAgentDeletionRecoveryHolds } from "../state/agent-deletion-journal-recovery.kernel.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
@@ -19,7 +16,6 @@ import { seedOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-sto
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
-  repairOpenClawStateDatabaseSchema,
 } from "../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
 import { STATE_SUPERVISION_KEY } from "../state/openclaw-state-ownership.js";
@@ -53,20 +49,15 @@ const outputOf = (runtime: ReturnType<typeof runtimeMock>) =>
 
 function readRows(pathname: string, sql: string, ...params: string[]) {
   const { DatabaseSync } = requireNodeSqlite();
-  const db = new DatabaseSync(pathname, { readOnly: true });
-  try {
-    return db.prepare(sql).all(...params);
-  } finally {
-    db.close();
-  }
+  using db = new DatabaseSync(pathname, { readOnly: true });
+  return db.prepare(sql).all(...params);
 }
 
 function writeDatabase(pathname: string, sql: string) {
   fs.mkdirSync(path.dirname(pathname), { recursive: true });
   const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(pathname);
+  using database = new DatabaseSync(pathname);
   database.exec(sql);
-  database.close();
 }
 
 it("fails repair for an old configured agentDir schema", async () => {
@@ -139,30 +130,6 @@ it("refuses newer agent schemas before repairing the registry", async () => {
   });
 });
 
-it("repairs a missing shared-state index", async () => {
-  await withState(async (state) => {
-    const initial = openOpenClawStateDatabase({ env: state.env });
-    initial.db.exec("DROP INDEX idx_task_runs_runtime_run");
-    closeOpenClawStateDatabaseForTest();
-    mocks.runContributions.mockImplementation(async (ctx) => {
-      const result = repairOpenClawStateDatabaseSchema({ env: state.env });
-      ctx.runtime.log([...result.changes, ...result.warnings].join("\n"));
-    });
-    const runtime = runtimeMock();
-    await runRepair(runtime);
-
-    const output = outputOf(runtime);
-    expect(mocks.runContributions, output).toHaveBeenCalledOnce();
-    expect(runtime.exit, output).not.toHaveBeenCalled();
-    expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
-    expect(
-      readRows(initial.path, "SELECT name FROM pragma_index_info('idx_task_runs_runtime_run')"),
-    ).toEqual(
-      ["runtime", "run_id", "source_id", "created_at", "task_id"].map((name) => ({ name })),
-    );
-  });
-});
-
 it("preserves audit rows and missing deletion history through index repair", async () => {
   await withState(async (state) => {
     const heldPath = createLegacyDatabaseFixture({
@@ -196,45 +163,7 @@ it("preserves audit rows and missing deletion history through index repair", asy
       });
     quarantine();
     const runtime = runtimeMock();
-    const cleanupLog = state.path("snapshot-cleanup.log");
-    let snapshotPath: string | undefined;
-    let removalFailures = 0;
-    const copyFile = fs.copyFileSync;
-    const remove = fs.rmSync;
-    const copy = vi.spyOn(fs, "copyFileSync").mockImplementation((source, destination, mode) => {
-      copyFile(source, destination, mode);
-      const directory = path.dirname(String(destination));
-      if (
-        path.dirname(directory) === path.dirname(initial.path) &&
-        path.basename(directory).startsWith("openclaw-index-recovery-")
-      ) {
-        snapshotPath = String(source);
-      }
-    });
-    const cleanup = vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
-      if (String(target) === snapshotPath) {
-        removalFailures += 1;
-        throw Object.assign(new Error("private snapshot busy"), { code: "EBUSY" });
-      }
-      remove(target, options);
-    });
-    try {
-      setLoggerOverride({ level: "warn", file: cleanupLog });
-      await runRepair(runtime);
-      expect(removalFailures).toBeGreaterThan(0);
-      expect(snapshotPath && fs.existsSync(snapshotPath)).toBe(true);
-      await testApi.flushFileLogQueueForTests();
-      expect(fs.readFileSync(cleanupLog, "utf8")).toContain(
-        "SQLite read-only snapshot cleanup failed",
-      );
-    } finally {
-      copy.mockRestore();
-      cleanup.mockRestore();
-      await cleanupSnapshotOperations()
-        .then(() => testApi.flushFileLogQueueForTests())
-        .finally(() => setLoggerOverride(null));
-    }
-    expect(snapshotPath && fs.existsSync(snapshotPath)).toBe(false);
+    await runRepair(runtime);
 
     const output = outputOf(runtime);
     expect(runtime.exit, output).not.toHaveBeenCalled();

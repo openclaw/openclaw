@@ -2,7 +2,7 @@ import { vi } from "vitest";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import type { ProducedPluginUpdateResult } from "./update-command-plugins-internals.js";
+import type { PostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 
 const mocks = vi.hoisted(() => ({
   root: vi.fn(),
@@ -32,8 +32,7 @@ vi.mock("../../infra/update-triage.js", () => ({
   prepareUpdateFailureTriage: async () => async () => ({ status: "completed", hint: "" }),
 }));
 
-export const pluginResult: ProducedPluginUpdateResult = {
-  assessment: { kind: "no-payload-repair" },
+export const pluginResult: PostCorePluginUpdateResult = {
   status: "ok",
   changed: false,
   sync: { changed: false, switchedToBundled: [], switchedToNpm: [], warnings: [], errors: [] },

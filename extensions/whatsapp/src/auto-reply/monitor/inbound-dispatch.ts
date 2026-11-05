@@ -109,46 +109,6 @@ function isWhatsAppVisibleDeliveryError(error: unknown): boolean {
   );
 }
 
-function markWhatsAppReplyDeliveryErrorVisibleAfterFlush(
-  error: unknown,
-  delivered: number,
-): unknown {
-  if (delivered === 0) {
-    return error;
-  }
-  if (isWhatsAppVisibleDeliveryError(error)) {
-    return error;
-  }
-  return markWhatsAppVisibleDeliveryError(
-    new Error("deferred WhatsApp media delivery failed after an earlier visible send", {
-      cause: error,
-    }),
-  );
-}
-
-function resolveWhatsAppDurableReplyToId(params: {
-  context: FinalizedMsgContext;
-  info: ReplyDeliveryInfo;
-  currentMessageId?: string;
-  payload: DeliverableWhatsAppOutboundPayload<ReplyPayload>;
-}): string | null {
-  if (params.payload.replyToId === null) {
-    return null;
-  }
-  const explicitPayloadReplyToId = normalizeOptionalString(params.payload.replyToId);
-  if (explicitPayloadReplyToId) {
-    return explicitPayloadReplyToId;
-  }
-  const hasVisibleInboundReplyTarget =
-    Boolean(normalizeOptionalString(params.context.ReplyToId)) ||
-    Boolean(normalizeOptionalString(params.context.ReplyToIdFull));
-  const currentInboundMessageId = normalizeOptionalString(params.currentMessageId);
-  if (params.info.kind === "final" && hasVisibleInboundReplyTarget && currentInboundMessageId) {
-    return currentInboundMessageId;
-  }
-  return null;
-}
-
 function resolveWhatsAppDeliverablePayload(
   payload: ReplyPayload,
   info: { kind: ReplyDispatchKind },
@@ -191,81 +151,6 @@ function shouldDeferWhatsAppMediaOnlyPayload(params: {
     !params.reply.text.trim() &&
     params.mediaUrls.size > 0
   );
-}
-
-function createWhatsAppMediaOnlyReplyCoalescer(params: {
-  deliver: (pending: PendingWhatsAppMediaOnlyPayload) => Promise<WhatsAppReplyDeliveryVisibility>;
-}) {
-  const pendingMediaOnlyPayloads: PendingWhatsAppMediaOnlyPayload[] = [];
-  const flushWhere = async (
-    shouldFlush: (pending: PendingWhatsAppMediaOnlyPayload) => boolean,
-  ): Promise<number> => {
-    let delivered = 0;
-    const candidates: PendingWhatsAppMediaOnlyPayload[] = [];
-    const retained: PendingWhatsAppMediaOnlyPayload[] = [];
-    for (const pending of pendingMediaOnlyPayloads.splice(0)) {
-      if (shouldFlush(pending)) {
-        candidates.push(pending);
-      } else {
-        retained.push(pending);
-      }
-    }
-    pendingMediaOnlyPayloads.push(...retained);
-    for (const [index, candidate] of candidates.entries()) {
-      try {
-        const delivery = await params.deliver(candidate);
-        candidate.resolveFinalization(delivery);
-        if (delivery.visibleReplySent) {
-          delivered += 1;
-        }
-      } catch (error: unknown) {
-        const visibleError = markWhatsAppReplyDeliveryErrorVisibleAfterFlush(error, delivered);
-        candidate.rejectFinalization(error);
-        // Every deferred payload left the queue when this flush began. Reject the unattempted
-        // tail too, or core will wait forever on finalization promises no later flush can own.
-        for (const remaining of candidates.slice(index + 1)) {
-          remaining.rejectFinalization(
-            new Error("deferred WhatsApp media delivery was not attempted", { cause: error }),
-          );
-        }
-        throw visibleError;
-      }
-    }
-    return delivered;
-  };
-
-  return {
-    defer(
-      pending: Omit<PendingWhatsAppMediaOnlyPayload, "resolveFinalization" | "rejectFinalization">,
-    ) {
-      const finalization = createDeferred<WhatsAppReplyDeliveryVisibility>();
-      pendingMediaOnlyPayloads.push({
-        ...pending,
-        resolveFinalization: finalization.resolve,
-        rejectFinalization: finalization.reject,
-      });
-      return finalization.promise;
-    },
-    flushNonDuplicateMedia: (mediaUrls: Set<string>) =>
-      flushWhere((pending) => !hasWhatsAppMediaUrlOverlap(pending.mediaUrls, mediaUrls)),
-    supersedeMedia(mediaUrl: string): void {
-      const retained: PendingWhatsAppMediaOnlyPayload[] = [];
-      for (const pending of pendingMediaOnlyPayloads.splice(0)) {
-        if (pending.mediaUrls.delete(mediaUrl)) {
-          // The original finalization still owns every unmatched attachment, in order.
-          const mediaUrls = [...pending.mediaUrls];
-          pending.payload = { ...pending.payload, mediaUrl: mediaUrls[0], mediaUrls };
-        }
-        if (pending.mediaUrls.size === 0) {
-          pending.resolveFinalization({ visibleReplySent: false });
-          continue;
-        }
-        retained.push(pending);
-      }
-      pendingMediaOnlyPayloads.push(...retained);
-    },
-    flushAll: () => flushWhere(() => true),
-  };
 }
 
 export function buildWhatsAppInboundTransportContext(
@@ -474,7 +359,6 @@ export function updateWhatsAppMainLastRoute(params: {
       backgroundTasks: params.backgroundTasks,
       storeAgentId: params.route.agentId,
       sessionKey: params.route.mainSessionKey,
-      channel: "whatsapp",
       to: params.dmRouteTarget,
       accountId: params.route.accountId,
       ctx: params.ctx,
@@ -613,11 +497,83 @@ export function createWhatsAppReplyPlan(params: {
     return result;
   };
 
-  const mediaOnlyCoalescer = createWhatsAppMediaOnlyReplyCoalescer({
-    deliver: async (pending) => {
-      return await deliverNormalizedPayload(pending.payload, pending.info);
+  const pendingMediaOnlyPayloads: PendingWhatsAppMediaOnlyPayload[] = [];
+  const flushWhere = async (
+    shouldFlush: (pending: PendingWhatsAppMediaOnlyPayload) => boolean,
+  ): Promise<number> => {
+    let delivered = 0;
+    const candidates: PendingWhatsAppMediaOnlyPayload[] = [];
+    const retained: PendingWhatsAppMediaOnlyPayload[] = [];
+    for (const pending of pendingMediaOnlyPayloads.splice(0)) {
+      if (shouldFlush(pending)) {
+        candidates.push(pending);
+      } else {
+        retained.push(pending);
+      }
+    }
+    pendingMediaOnlyPayloads.push(...retained);
+    for (const [index, candidate] of candidates.entries()) {
+      try {
+        const delivery = await deliverNormalizedPayload(candidate.payload, candidate.info);
+        candidate.resolveFinalization(delivery);
+        if (delivery.visibleReplySent) {
+          delivered += 1;
+        }
+      } catch (error: unknown) {
+        const visibleError =
+          delivered === 0 || isWhatsAppVisibleDeliveryError(error)
+            ? error
+            : markWhatsAppVisibleDeliveryError(
+                new Error("deferred WhatsApp media delivery failed after an earlier visible send", {
+                  cause: error,
+                }),
+              );
+        candidate.rejectFinalization(error);
+        // Every deferred payload left the queue when this flush began. Reject the unattempted
+        // tail too, or core will wait forever on finalization promises no later flush can own.
+        for (const remaining of candidates.slice(index + 1)) {
+          remaining.rejectFinalization(
+            new Error("deferred WhatsApp media delivery was not attempted", { cause: error }),
+          );
+        }
+        throw visibleError;
+      }
+    }
+    return delivered;
+  };
+
+  const mediaOnlyCoalescer = {
+    defer(
+      pending: Omit<PendingWhatsAppMediaOnlyPayload, "resolveFinalization" | "rejectFinalization">,
+    ) {
+      const finalization = createDeferred<WhatsAppReplyDeliveryVisibility>();
+      pendingMediaOnlyPayloads.push({
+        ...pending,
+        resolveFinalization: finalization.resolve,
+        rejectFinalization: finalization.reject,
+      });
+      return finalization.promise;
     },
-  });
+    flushNonDuplicateMedia: (mediaUrls: Set<string>) =>
+      flushWhere((pending) => !hasWhatsAppMediaUrlOverlap(pending.mediaUrls, mediaUrls)),
+    supersedeMedia(mediaUrl: string): void {
+      const retained: PendingWhatsAppMediaOnlyPayload[] = [];
+      for (const pending of pendingMediaOnlyPayloads.splice(0)) {
+        if (pending.mediaUrls.delete(mediaUrl)) {
+          // The original finalization still owns every unmatched attachment, in order.
+          const mediaUrls = [...pending.mediaUrls];
+          pending.payload = { ...pending.payload, mediaUrl: mediaUrls[0], mediaUrls };
+        }
+        if (pending.mediaUrls.size === 0) {
+          pending.resolveFinalization({ visibleReplySent: false });
+          continue;
+        }
+        retained.push(pending);
+      }
+      pendingMediaOnlyPayloads.push(...retained);
+    },
+    flushAll: () => flushWhere(() => true),
+  };
 
   const dispatcherOptions: NonNullable<ChannelInboundTurnPlan["dispatcherOptions"]> = {
     ...params.replyPipeline,
@@ -658,16 +614,28 @@ export function createWhatsAppReplyPlan(params: {
       if (reply.hasMedia || !reply.text.trim()) {
         return false;
       }
+      const context = params.context;
+      const currentMessageId = params.transport.correlationId;
+      let replyToId: string | null = null;
+      if (payload.replyToId !== null) {
+        const explicitPayloadReplyToId = normalizeOptionalString(payload.replyToId);
+        if (explicitPayloadReplyToId) {
+          replyToId = explicitPayloadReplyToId;
+        } else {
+          const hasVisibleInboundReplyTarget =
+            Boolean(normalizeOptionalString(context.ReplyToId)) ||
+            Boolean(normalizeOptionalString(context.ReplyToIdFull));
+          const currentInboundMessageId = normalizeOptionalString(currentMessageId);
+          if (info.kind === "final" && hasVisibleInboundReplyTarget && currentInboundMessageId) {
+            replyToId = currentInboundMessageId;
+          }
+        }
+      }
       return {
         prepareRuntimeHandoff: (cfg) =>
           resolveWebMonitorConfigSnapshot({ cfg, accountId: params.route.accountId }).cfg,
         to: conversationId,
-        replyToId: resolveWhatsAppDurableReplyToId({
-          context: params.context,
-          info,
-          currentMessageId: params.transport.correlationId,
-          payload,
-        }),
+        replyToId,
         formatting: {
           textLimit,
           tableMode,

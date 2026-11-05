@@ -6,14 +6,15 @@ import type {
   SessionTypingEvent,
   TaskSuggestion,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { hasMultiplePresenceIdentities, projectPresencePayload } from "../../lib/presence-users.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import {
   resolveUiConversationIdentity,
   scopedSessionArtifactKey,
@@ -31,7 +32,9 @@ import {
   type ChatTypingOverflow,
 } from "./chat-typing-presence.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import { canManageChatSessionSharing } from "./components/chat-session-sharing.ts";
+import { canManageChatSessionSharing } from "./components/chat-session-sharing-shared.tsx";
+
+registerChatSessionEnglish();
 
 const TYPING_ACTIVE_MS = 2_500;
 const TYPING_DRAFT_ACTIVE_MS = 10_000;

@@ -6,12 +6,10 @@ import type {
   AuthProfileStore,
   AuthProfileStoreOwner,
   OAuthCredential,
+  ProfileUsageStats,
   SharedAuthStoreOwnership,
 } from "./types.js";
-import type {
-  PersonalAuthProfileUsageReduction,
-  PersonalAuthProfileUsageResult,
-} from "./usage-reduction.js";
+import type { PersonalAuthProfileUsageReduction } from "./usage-reduction.js";
 
 export type AuthProfileReadSource =
   | { kind: "shared-state"; databasePath: string }
@@ -35,12 +33,13 @@ export type AuthProfileUsageInput = {
 
 export type AuthProfileUsageReceipt = {
   store: AuthProfileStore;
-  result: PersonalAuthProfileUsageResult | undefined;
+  result: ProfileUsageStats | undefined;
   publication: {
     credentialsChanged: boolean;
     profileSetChanged: boolean;
     stateChanged: boolean;
     selectionChanged: boolean;
+    availabilityOnly?: boolean;
     profileIds: string[];
   };
 };

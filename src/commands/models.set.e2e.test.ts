@@ -15,22 +15,19 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+  const { createTestConfigSnapshot } = await import("./test-runtime-config-helpers.js");
   const readConfigFileSnapshot = async (): Promise<ConfigFileSnapshot> => {
     const config = structuredClone(mocks.currentConfig);
     return {
-      path: "/tmp/openclaw-models-set-fixture.json",
-      exists: true,
+      ...createTestConfigSnapshot(
+        config,
+        structuredClone(config),
+        "/tmp/openclaw-models-set-fixture.json",
+      ),
       raw: JSON.stringify(config),
       parsed: config,
-      valid: true,
       hash: "config-hash",
-      sourceConfig: config,
-      resolved: config,
-      runtimeConfig: structuredClone(config),
       config: structuredClone(config),
-      issues: [],
-      warnings: [],
-      legacyIssues: [],
     };
   };
   return {

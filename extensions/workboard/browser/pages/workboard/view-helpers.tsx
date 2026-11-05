@@ -2,26 +2,29 @@
 import type { CronJob } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
+import { asDateTimestampMs } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { icons } from "../../components/icons.tsx";
+import { workboardLocale } from "../../host.ts";
 import { t } from "../../i18n/index.ts";
-import { formatDateTimeMs } from "../../lib/format.ts";
 import {
   getWorkboardState,
   workboardMutationsReady,
-  type WorkboardCard,
-  type WorkboardEvent,
-  type WorkboardExecutionEngine,
-  type WorkboardLifecycle,
-  type WorkboardPriority,
-  type WorkboardStatus,
-  type WorkboardUiState,
-} from "../../lib/workboard/index.ts";
-import type { WorkboardClientContext } from "../../lib/workboard/runtime.ts";
+  type WorkboardClientContext,
+} from "../../lib/workboard/runtime.ts";
 import { isReservedSessionKey } from "../../lib/workboard/session-links.ts";
 import type { WorkboardSessionResolution } from "../../lib/workboard/session-resolution.ts";
 import { getCardSessionState } from "../../lib/workboard/session-state.ts";
+import type {
+  WorkboardCard,
+  WorkboardEvent,
+  WorkboardExecutionEngine,
+  WorkboardLifecycle,
+  WorkboardPriority,
+  WorkboardStatus,
+  WorkboardUiState,
+} from "../../lib/workboard/types.ts";
 import { agentDisplayName, findCardAgent, type WorkboardAgentsList } from "./agent-filter.ts";
 
 export type BoardAutomationState = { jobId: string } & (
@@ -138,14 +141,25 @@ function formatRefreshTime(value: number): string {
   }).format(new Date(value));
 }
 
+let updatedTimeLocale: string | undefined;
+let updatedTimeFormatter: Intl.DateTimeFormat | undefined;
+
 export function formatUpdatedTime(value: number | undefined): string {
-  return value
-    ? formatDateTimeMs(
-        value,
-        { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" },
-        "",
-      )
-    : "";
+  const timestamp = value ? asDateTimestampMs(value) : undefined;
+  if (timestamp === undefined) {
+    return "";
+  }
+  const locale = workboardLocale();
+  if (!updatedTimeFormatter || updatedTimeLocale !== locale) {
+    updatedTimeLocale = locale;
+    updatedTimeFormatter = new Intl.DateTimeFormat(locale, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  }
+  return updatedTimeFormatter.format(timestamp);
 }
 
 export function dispatchSummaryMessage(state: WorkboardUiState) {
@@ -188,7 +202,6 @@ export function workboardMutationContext(workboard: WorkboardProps): WorkboardCl
   return {
     host: workboard.host,
     client: workboard.client,
-    requestUpdate: workboard.onRequestUpdate,
   };
 }
 
@@ -200,7 +213,9 @@ export function formatEventLabel(event: WorkboardEvent): string {
 }
 
 export function matchesCardQuery(card: WorkboardCard, search: string): boolean {
-  const query = search.trim().toLowerCase();
+  // Normalize comparison text only; card labels/notes/diagnostics are user/agent-writable
+  // and may be NFD (e.g. from mobile IME), which would fail to match NFC storage text.
+  const query = search.trim().toLowerCase().normalize("NFC");
   if (!query) {
     return true;
   }
@@ -255,7 +270,7 @@ export function matchesCardQuery(card: WorkboardCard, search: string): boolean {
     ...card.labels,
   ]
     .filter((value): value is string => typeof value === "string")
-    .some((value) => value.toLowerCase().includes(query));
+    .some((value) => value.toLowerCase().normalize("NFC").includes(query));
 }
 
 export function isWorkboardSessionChoice(session: GatewaySessionRow): boolean {

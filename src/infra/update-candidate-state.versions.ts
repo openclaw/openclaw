@@ -19,11 +19,14 @@ export const UpdateStateSchemaVersionsSchema = z.array(
   }),
 );
 export type UpdateStateSchemaVersion = z.infer<typeof UpdateStateSchemaVersionsSchema>[number];
-/** Publish exact aliases; released shared/agent callers opt out of local schema versions. */
+/** Released daemon-aware callers cannot classify the newer client credential family. */
 export function publishStateDatabaseVersions(
   files: Map<string, StateDatabaseDiscovery>,
   inspected: Map<string, Omit<UpdateStateSchemaVersion, "path">>,
-  input: Pick<StateInput, "stateDir" | "includeLocalStoreVersions">,
+  input: Pick<
+    StateInput,
+    "stateDir" | "includeLocalStoreVersions" | "includeClientCredentialStoreVersion"
+  >,
 ): UpdateStateSchemaVersion[] {
   const versions: UpdateStateSchemaVersion[] = [];
   for (const [identity, discovery] of files) {
@@ -35,13 +38,18 @@ export function publishStateDatabaseVersions(
       versions.push({ path: spelling, ...result });
     }
   }
-  return input.includeLocalStoreVersions === false
-    ? versions.filter(
-        ({ path: file }) =>
-          file !== resolveClientCredentialStorePath({ OPENCLAW_STATE_DIR: input.stateDir }) &&
-          file !== resolveDaemonRuntimePinStorePath({ OPENCLAW_STATE_DIR: input.stateDir }),
-      )
-    : versions;
+  const env = { OPENCLAW_STATE_DIR: input.stateDir };
+  const clientPath = resolveClientCredentialStorePath(env);
+  const daemonPath = resolveDaemonRuntimePinStorePath(env);
+  return versions.filter(({ path: file }) => {
+    if (file === clientPath) {
+      return (
+        input.includeLocalStoreVersions !== false &&
+        input.includeClientCredentialStoreVersion !== false
+      );
+    }
+    return input.includeLocalStoreVersions !== false || file !== daemonPath;
+  });
 }
 
 export function resolveUpdateStateContentVersion(entry: UpdateStateSchemaVersion): number | null {

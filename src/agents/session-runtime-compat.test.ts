@@ -24,55 +24,38 @@ const nativeTarget = {
   cliSessionId: "native-claude-session",
 };
 
-describe("resolvePersistedSessionRuntimeId", () => {
-  it("lets a locked harness outrank a conflicting persisted runtime override", () => {
-    expect(resolvePersistedSessionRuntimeId(lockedCodex)).toBe("codex");
-  });
-
-  it("uses the override without native ownership", () => {
-    expect(resolvePersistedSessionRuntimeId({ ...lockedCodex, pluginOwnerId: "model-owner" })).toBe(
-      "openclaw",
-    );
-  });
-
-  it("filters default overrides before falling back to the persisted harness", () => {
-    expect(
-      resolvePersistedSessionRuntimeId({
-        agentHarnessId: "codex-app-server",
-        agentRuntimeOverride: "default",
-      }),
-    ).toBe("codex");
-  });
+it.each([
+  ["locked harness outranks override", lockedCodex, "codex"],
+  ["plugin owns override", { ...lockedCodex, pluginOwnerId: "model-owner" }, "openclaw"],
+  [
+    "default falls back to harness",
+    { agentHarnessId: "codex-app-server", agentRuntimeOverride: "default" },
+    "codex",
+  ],
+] as const)("persisted runtime: %s", (_name, entry, expected) => {
+  expect(resolvePersistedSessionRuntimeId(entry)).toBe(expected);
 });
 
-describe("resolveSessionRuntimeOverrideForProvider", () => {
-  it("keeps a locked harness across a conflicting provider runtime alias", () => {
-    expect(
-      resolveSessionRuntimeOverrideForProvider({
-        provider: "anthropic",
-        entry: { ...lockedCodex, agentRuntimeOverride: "claude-cli" },
-      }),
-    ).toBe("codex");
-  });
-
-  it("retains a plugin-owned runtime request after another harness reports usage", () => {
-    const entry = {
-      agentRuntimeOverride: "openclaw",
-      modelSelectionLocked: true,
-      pluginOwnerId: "model-owner",
-    };
-    for (const agentHarnessId of [undefined, "codex", "claude-cli"]) {
-      expect(
-        resolveSessionRuntimeOverrideForProvider({
-          provider: "openai",
-          entry: { ...entry, agentHarnessId },
-        }),
-      ).toBe("openclaw");
-    }
-  });
+it.each([
+  ["anthropic", { ...lockedCodex, agentRuntimeOverride: "claude-cli" }, "codex"],
+  ...[undefined, "codex", "claude-cli"].map(
+    (agentHarnessId) =>
+      [
+        "openai",
+        { ...lockedCodex, agentHarnessId, pluginOwnerId: "model-owner" },
+        "openclaw",
+      ] as const,
+  ),
+] as const)("preserves runtime ownership for %s / %j", (provider, entry, expected) => {
+  expect(resolveSessionRuntimeOverrideForProvider({ provider, entry })).toBe(expected);
 });
 
 describe("resolveManualCompactionCliTarget", () => {
+  const compact = (
+    entry: Parameters<typeof resolveManualCompactionCliTarget>[0]["entry"],
+    provider = "anthropic",
+    cfg?: Parameters<typeof resolveManualCompactionCliTarget>[0]["cfg"],
+  ) => resolveManualCompactionCliTarget({ provider, entry, cfg });
   beforeEach(() => {
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [cliBackend()] as never,
@@ -81,58 +64,20 @@ describe("resolveManualCompactionCliTarget", () => {
 
   afterEach(cliBackendsTesting.resetDepsForTest);
 
-  it("uses setup metadata for claude-cli", () => {
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [],
-      resolvePluginSetupCliBackend: ({ backend }) =>
-        backend === "claude-cli"
-          ? ({
-              pluginId: "anthropic",
-              backend: cliBackend(),
-            } as never)
-          : undefined,
-    });
-    expect(
-      resolveManualCompactionCliTarget({
-        provider: "claude-cli",
-        cfg: {},
-        entry: { cliSessionBindings: nativeBinding },
-      }),
-    ).toEqual(nativeTarget);
-  });
-
-  it("passes config when resolving an explicit setup-registered runtime binding", () => {
-    const cfg = { plugins: { entries: { anthropic: { enabled: true } } } };
+  it.each([false, true])("uses setup metadata (explicit runtime: %s)", (explicit) => {
+    const cfg = explicit ? { plugins: { entries: { anthropic: { enabled: true } } } } : {};
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [],
       resolvePluginSetupCliBackend: ({ backend, config }) =>
         backend === "claude-cli" && config === cfg
-          ? ({
-              pluginId: "anthropic",
-              backend: cliBackend(),
-            } as never)
+          ? ({ pluginId: "anthropic", backend: cliBackend() } as never)
           : undefined,
     });
-
-    expect(
-      resolveManualCompactionCliTarget({
-        provider: "anthropic",
-        cfg,
-        entry: {
-          agentRuntimeOverride: "claude-cli",
-          cliSessionBindings: nativeBinding,
-        },
-      }),
-    ).toEqual(nativeTarget);
-  });
-
-  it("does not infer a CLI runtime without its native binding", () => {
-    expect(
-      resolveManualCompactionCliTarget({
-        provider: "anthropic",
-        entry: {},
-      }),
-    ).toEqual({});
+    const entry = {
+      cliSessionBindings: nativeBinding,
+      ...(explicit ? { agentRuntimeOverride: "claude-cli" } : {}),
+    };
+    expect(compact(entry, explicit ? "anthropic" : "claude-cli", cfg)).toEqual(nativeTarget);
   });
 
   it("does not choose between multiple compatible native bindings", () => {
@@ -141,30 +86,26 @@ describe("resolveManualCompactionCliTarget", () => {
         [cliBackend(), cliBackend("other-claude-cli", "other-claude")] as never,
     });
     expect(
-      resolveManualCompactionCliTarget({
-        provider: "anthropic",
-        entry: {
-          cliSessionBindings: {
-            "claude-cli": { sessionId: "claude-session" },
-            "other-claude-cli": { sessionId: "other-session" },
-          },
+      compact({
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "claude-session" },
+          "other-claude-cli": { sessionId: "other-session" },
         },
       }),
     ).toEqual({});
   });
 
-  it("does not reuse an unlocked historical harness binding after a provider switch", () => {
-    expect(
-      resolveManualCompactionCliTarget({
-        provider: "openai",
-        entry: {
-          agentHarnessId: "claude-cli",
-          modelSelectionLocked: false,
-          cliSessionBindings: {
-            "claude-cli": { sessionId: "stale-claude-session" },
-          },
-        },
-      }),
-    ).toEqual({});
+  it.each([
+    [{}, "anthropic"],
+    [
+      {
+        agentHarnessId: "claude-cli",
+        modelSelectionLocked: false,
+        cliSessionBindings: nativeBinding,
+      },
+      "openai",
+    ],
+  ] as const)("does not infer an incompatible or unbound CLI runtime: %j", (entry, provider) => {
+    expect(compact(entry, provider)).toEqual({});
   });
 });

@@ -14,6 +14,7 @@ import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-con
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { USER_PROFILE_AVATAR_MIME_TYPES } from "../shared/avatar-limits.js";
+import { userProfileDisplayName } from "../shared/user-profile-display-name.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { stageUserProfileEmailBindingChange } from "./user-profile-events.js";
 import type { UserProfileMutationContext } from "./user-profile-mutation.js";
@@ -453,7 +454,12 @@ export function projectUserProfileDisplay(
   const avatarMime = normalizeUserProfileAvatarMime(profile.avatar_mime);
   return {
     id: profile.id,
-    displayName: profile.display_name,
+    displayName:
+      userProfileDisplayName(
+        profile.id,
+        profile.display_name,
+        profile.githubIdentity?.login ?? profile.githubLogin,
+      ) ?? null,
     avatarRevision:
       profile.avatar_sha256 && avatarMime
         ? `${profile.avatar_sha256}-${avatarMime.slice("image/".length)}`
@@ -506,6 +512,20 @@ export function projectCatalogUserProfileIdentity(
   );
 }
 
+/** Verified GitHub identity facts of one catalog row; a row without them exposes neither field. */
+export function projectUserProfileGitHubFacts(
+  row: Pick<ProfileDisplayRow, "githubAccountIds" | "enterpriseGitHubAccounts"> | undefined,
+) {
+  return {
+    ...(row?.githubAccountIds ? { githubAccountIds: [...row.githubAccountIds] } : {}),
+    ...(row?.enterpriseGitHubAccounts
+      ? {
+          enterpriseGitHubAccounts: row.enterpriseGitHubAccounts.map((account) => ({ ...account })),
+        }
+      : {}),
+  };
+}
+
 /** Bind a canonical account and its original email lifetimes to the retained catalog owner. */
 export function bindPreparedUserProfileIdentity(
   profileId: string,
@@ -530,33 +550,36 @@ export function bindPreparedUserProfileIdentity(
     requiredGithubAccountIds?: readonly number[],
   ) => {
     catalog.assertCurrent(profileId);
+    const profile = resolveCatalogProfile(rows, profileId);
     if (
-      resolveCatalogProfile(rows, profileId)?.id !== profileId ||
+      profile?.id !== profileId ||
       requiredEmailBindingIds.some((id) => bindings.byId.get(id) !== profileId)
     ) {
       throw new UserProfileNotFoundError(profileId);
     }
     if (requiredGithubAccountIds?.length) {
-      const accounts = new Set(rows.get(profileId)?.githubAccountIds);
+      const accounts = new Set(profile.githubAccountIds);
       if (requiredGithubAccountIds.some((accountId) => !accounts.has(accountId))) {
         throw new UserProfileNotFoundError(profileId);
       }
     }
+    return profile;
   };
   function readCurrentProfile(
     this: void,
     requiredEmailBindingIds?: readonly string[],
     requiredGithubAccountIds?: readonly number[],
   ) {
-    assertCurrent(requiredEmailBindingIds, requiredGithubAccountIds);
+    const profile = assertCurrent(requiredEmailBindingIds, requiredGithubAccountIds);
     return {
       profileId,
-      assignedRole: rows.get(profileId)?.role || null,
-      githubLogin: rows.get(profileId)?.githubLogin ?? null,
+      assignedRole: profile.role || null,
+      githubLogin: profile.githubLogin ?? null,
     };
   }
   return {
     readCurrentProfile,
+    readCurrentRevision: assertCurrent,
     get emailBindingIds() {
       assertCurrent();
       if (
@@ -570,7 +593,6 @@ export function bindPreparedUserProfileIdentity(
     },
     readCurrentFacts(this: void, requiredEmailBindingIds) {
       const profile = readCurrentProfile(requiredEmailBindingIds);
-      const githubAccountIds = rows.get(profileId)?.githubAccountIds;
       const aliases = new Set([profileId]);
       for (const row of rows.values()) {
         if (row.merged_into === profileId) {
@@ -581,7 +603,7 @@ export function bindPreparedUserProfileIdentity(
         profile: {
           profileId: profile.profileId,
           emails: [...(bindings.emailsByProfile.get(profileId) ?? [])].toSorted(),
-          ...(githubAccountIds ? { githubAccountIds: [...githubAccountIds] } : {}),
+          ...projectUserProfileGitHubFacts(rows.get(profileId)),
           assignedRole: profile.assignedRole,
           githubLogin: profile.githubLogin,
         },

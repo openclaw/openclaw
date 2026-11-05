@@ -39,7 +39,7 @@ export const DatabaseConfigSchema = z
           .register(sensitive)
           .register(configUiMetadata, {
             label: "PostgreSQL Connection",
-            help: "Shared PostgreSQL DSN, required when any effective family engine is postgres. Env/file SecretRefs are qualified; TLS and exec-backed DSNs remain experimental pending live qualification. Store-backed refs cannot bootstrap the database. The host resolves it once for database workers. Connection failures never fall back to SQLite.",
+            help: "Shared PostgreSQL DSN, required when any effective family engine is postgres. Supports env, file, and exec SecretRefs and TLS connections; see the PostgreSQL operator guide for setup and qualification limits. Store-backed refs cannot bootstrap the database. The host resolves it once for database workers. Connection failures never fall back to SQLite.",
           }),
         schemaPrefix: z
           .string()
@@ -53,7 +53,7 @@ export const DatabaseConfigSchema = z
       .optional()
       .register(configUiMetadata, {
         label: "PostgreSQL",
-        help: "PostgreSQL connection and schema naming. PostgreSQL 17 is qualified; other admitted majors remain experimental pending conformance. Back up each store schema together with its local SQLite anchor. See the PostgreSQL operator guide for deployment qualification limits.",
+        help: "PostgreSQL connection and schema naming. PostgreSQL 16–18 are qualified; other admitted majors remain experimental pending conformance. Back up each store schema together with its local SQLite anchor. See the PostgreSQL operator guide for deployment qualification limits.",
       }),
   })
   .optional()

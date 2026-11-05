@@ -21,20 +21,6 @@ extension ExecApprovalsSecurity {
     }
 }
 
-extension ExecApprovalsAsk {
-    static func stricter(_ lhs: ExecAsk, _ rhs: ExecAsk) -> ExecAsk {
-        lhs.strictnessRank >= rhs.strictnessRank ? lhs : rhs
-    }
-
-    private var strictnessRank: Int {
-        switch self {
-        case .off: 0
-        case .onMiss: 1
-        case .always: 2
-        }
-    }
-}
-
 enum ExecApprovalDecision: String, Codable, Equatable {
     case allowOnce = "allow-once"
     case allowAlways = "allow-always"

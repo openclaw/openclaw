@@ -3,11 +3,17 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { expect, it } from "vitest";
+import {
+  closeHttpServer,
+  readRequestText,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { sendChatAndWait } from "./gateway-chat-fixture.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { createPluginEnabledGatewayTestEnv } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 // Registered in gatewayDatabaseWorkerTestFiles: only that project's forked pool gives this Gateway a
@@ -15,26 +21,14 @@ import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.
 it("continuation-skip stops re-sending workspace instructions on the next turn", async () => {
   const state = await createOpenClawTestState({
     label: "continuation-skip-bootstrap",
-    env: {
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-    },
+    env: createPluginEnabledGatewayTestEnv(),
   });
   const sentinel = `BSKIP-${randomUUID()}`;
   const requests: string[] = [];
   const providerWork: Promise<void>[] = [];
   const endpoint = createServer((request, response) => {
     const work = (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
-      requests.push(Buffer.concat(chunks).toString("utf8"));
+      requests.push(await readRequestText(request));
       writeOpenAiResponsesText(response, {
         text: "CONTINUATION_SKIP_REPLY",
         messageId: `msg_${randomUUID()}`,
@@ -59,9 +53,7 @@ it("continuation-skip stops re-sending workspace instructions on the next turn",
       `http://127.0.0.1:${address.port}/v1`,
       "continuation-proof",
     );
-    // A workspace without BOOTSTRAP.md resolves bootstrapMode "none", which is the state where
-    // main never records the completion marker and every later turn keeps re-injecting.
-    await fs.mkdir(state.workspaceDir, { recursive: true });
+    // No BOOTSTRAP.md: bootstrapMode "none" must still record the completion marker.
     await fs.writeFile(
       path.join(state.workspaceDir, "AGENTS.md"),
       `# Continuation proof workspace\n\nSentinel ${sentinel}\n`,
@@ -80,7 +72,6 @@ it("continuation-skip stops re-sending workspace instructions on the next turn",
           skipBootstrap: true,
           contextInjection: "continuation-skip",
           model: { primary: model.modelRef, fallbacks: [] },
-          heartbeat: { every: "0m" },
         },
       },
       models: {
@@ -104,33 +95,14 @@ it("continuation-skip stops re-sending workspace instructions on the next turn",
       const sessionKey = `agent:main:continuation-${randomUUID()}`;
       const turn = async (message: string): Promise<string> => {
         const requestStart = requests.length;
-        const started = await client.request<{ runId: string; status: string }>("chat.send", {
-          sessionKey,
-          message,
-          deliver: false,
-          idempotencyKey: randomUUID(),
-        });
-        expect(started.status).toBe("started");
-        // The client's own request timeout defaults to the same 30s as the server-side wait, so
-        // widen it here; a loaded runner would otherwise race and fail before the run settles.
-        await expect(
-          client.request<{ status: string }>(
-            "agent.wait",
-            { runId: started.runId, timeoutMs: 30_000 },
-            { timeoutMs: 35_000 },
-          ),
-        ).resolves.toMatchObject({ status: "ok" });
+        await sendChatAndWait(client, sessionKey, message);
         const sent = requests.slice(requestStart);
         expect(sent).toHaveLength(1);
         return sent[0]!;
       };
 
-      const first = await turn("Name the workspace sentinel.");
-      expect(first).toContain(sentinel);
-      // This second request is the shipped outcome: the settled turn recorded the marker, so the
-      // same session no longer pays for workspace instructions it already received.
-      const second = await turn("And now the sentinel again?");
-      expect(second).not.toContain(sentinel);
+      expect(await turn("Name the workspace sentinel.")).toContain(sentinel);
+      expect(await turn("And now the sentinel again?")).not.toContain(sentinel);
     } finally {
       try {
         await disconnectGatewayClient(client);
@@ -142,9 +114,7 @@ it("continuation-skip stops re-sending workspace instructions on the next turn",
     endpoint.closeAllConnections();
     try {
       if (endpoint.listening) {
-        await new Promise<void>((resolve, reject) => {
-          endpoint.close((error) => (error ? reject(error) : resolve()));
-        });
+        await closeHttpServer(endpoint);
       }
       await Promise.all(providerWork);
     } finally {

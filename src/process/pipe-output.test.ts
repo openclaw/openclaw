@@ -1,5 +1,6 @@
 import { PassThrough, Writable } from "node:stream";
 import { expect, it, vi } from "vitest";
+import { nextEventLoopTurn } from "../../test/helpers/promise.js";
 import { pipeProcessOutput } from "./pipe-output.js";
 
 it.each(["dispose", "destination close", "destination error", "source close"])(
@@ -21,9 +22,7 @@ it.each(["dispose", "destination close", "destination error", "source close"])(
     } else {
       source.destroy();
     }
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextEventLoopTurn();
     expect(destination.listenerCount("drain")).toBe(0);
     expect(destination.listenerCount("error")).toBe(0);
     expect(destination.listenerCount("close")).toBe(0);
@@ -64,9 +63,7 @@ it.each(["close", "error", "finish", "unpipe"])(
       } else {
         destination.destroy(ending === "error" ? new Error("destination failed") : undefined);
       }
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextEventLoopTurn();
       expect(source.readableEnded).toBe(true);
     } finally {
       finishWrite?.();

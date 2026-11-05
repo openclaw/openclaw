@@ -156,11 +156,7 @@ export function readAssistantTextBlocksForPhase(
 /** Extracts assistant text for a requested phase without mixing legacy and explicitly phased text. */
 export function extractAssistantTextForPhase(
   message: unknown,
-  options?: {
-    phase?: AssistantPhase;
-    sanitizeText?: (text: string) => string;
-    joinWith?: string;
-  },
+  options?: { phase?: AssistantPhase },
 ): string | undefined {
   const entry = asOptionalObjectRecord(message);
   if (!entry) {
@@ -168,23 +164,19 @@ export function extractAssistantTextForPhase(
   }
   const messagePhase = normalizeAssistantPhase(entry.phase);
   const phase = options?.phase;
-  const sanitizeText = options?.sanitizeText;
-  const joinWith = options?.joinWith ?? "\n";
-  const sanitizeBlockText = (text: string) => (sanitizeText ? sanitizeText(text) : text);
   const inlineText = typeof entry.text === "string" ? entry.text : entry.content;
   if (typeof inlineText === "string") {
-    const text = messagePhase === phase ? sanitizeBlockText(inlineText) : undefined;
+    const text = messagePhase === phase ? inlineText : undefined;
     return text?.trim() ? text : undefined;
   }
 
   const parts: string[] = [];
   for (const block of readAssistantTextBlocksForPhase(message, phase)) {
-    const sanitized = sanitizeBlockText(block.text);
-    if (sanitized.trim()) {
-      parts.push(sanitized);
+    if (block.text.trim()) {
+      parts.push(block.text);
     }
   }
-  return parts.length ? parts.join(joinWith) : undefined;
+  return parts.length ? parts.join("\n") : undefined;
 }
 
 /** Returns user-visible assistant text, preferring final answers over legacy unphased text. */

@@ -9,7 +9,9 @@ import type {
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
 } from "../../../src/gateway/control-ui-contract.js";
+import { operatorScopeSatisfied } from "../../../src/shared/operator-scope-compat.js";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "./gateway-methods.ts";
@@ -40,8 +42,6 @@ export function summarizeSessionPullRequests(
     ? previous
     : { numbers, state: current.state };
 }
-
-export const SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD = "controlUi.sessionPullRequests.subscribe";
 
 const STRUCTURAL_SESSION_REASONS = new Set<unknown>([
   "new",
@@ -108,6 +108,9 @@ export function sessionPullRequestsForGateway(
 
   const canReadPullRequests = () =>
     canCallGatewayMethod(gateway.snapshot, SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, "operator.read");
+  const canReadAllPullRequests = () =>
+    operatorScopeSatisfied("operator.read", gateway.snapshot.hello?.auth?.scopes ?? []);
+  let broadRead = canReadAllPullRequests();
 
   const notify = () => Array.from(listeners).forEach((listener) => listener());
 
@@ -150,6 +153,9 @@ export function sessionPullRequestsForGateway(
     }
     const keys = new Map<string, number>();
     for (const watched of watchedByOwner.values()) {
+      if (watched.passive && !canReadAllPullRequests()) {
+        continue;
+      }
       for (const key of watched.keys) {
         const priority = watched.passive ? 0 : watched.foreground ? 2 : 1;
         keys.set(key, Math.max(keys.get(key) ?? 0, priority));
@@ -224,11 +230,15 @@ export function sessionPullRequestsForGateway(
 
   const handleGatewaySnapshot = (snapshot: ApplicationGateway["snapshot"]) => {
     const changed = connection.transition(snapshot);
-    if (changed) {
+    const nextBroadRead = canReadAllPullRequests();
+    const readScopeChanged = broadRead !== nextBroadRead;
+    broadRead = nextBroadRead;
+    if (changed || readScopeChanged) {
+      orderedWatchedKeys = undefined;
       retireConnection();
     }
-    if (changed || snapshot.hello !== lifecycle.requestHello) {
-      retry.reset();
+    if (changed || readScopeChanged || snapshot.hello !== lifecycle.requestHello) {
+      lifecycle.resetRetry();
       lifecycle.schedule();
     }
   };
@@ -262,6 +272,17 @@ export function sessionPullRequestsForGateway(
     if (event.event === "sessions.changed") {
       const changed = readSessionChangedEvent(event.payload);
       const reason = asNullableRecord(event.payload)?.reason;
+      if (
+        !changed &&
+        ["delete", "sharing", "profile-identity"].includes(String(reason)) &&
+        !operatorScopeSatisfied("operator.read", gateway.snapshot.hello?.auth?.scopes ?? [])
+      ) {
+        clearSnapshotsAndWaiters();
+        for (const key of watchedKeys()) {
+          refresh(key);
+        }
+        return;
+      }
       if (!changed || !STRUCTURAL_SESSION_REASONS.has(reason)) {
         return;
       }
@@ -306,6 +327,7 @@ export function sessionPullRequestsForGateway(
       let next = snapshot;
       if (
         current &&
+        !snapshot.discardPrevious &&
         canRetainCurrent &&
         (snapshot.branchRead === false ||
           snapshot.status === "rate-limited" ||
@@ -325,10 +347,17 @@ export function sessionPullRequestsForGateway(
         );
         next = {
           ...next,
-          // Membership is authoritative even when passive reads omit GitHub metadata.
-          taskPullRequests: snapshot.taskPullRequests?.map((task) =>
-            Object.assign({}, task, { pullRequest: task.pullRequest ?? retained.get(task.url) }),
-          ),
+          // Membership is authoritative even when passive reads omit GitHub metadata. Passive
+          // state chips replace richer retained details only when the state changed.
+          taskPullRequests: snapshot.taskPullRequests?.map((task) => {
+            const prior = retained.get(task.url);
+            return Object.assign({}, task, {
+              pullRequest:
+                prior && prior.state === (task.pullRequest?.state ?? prior.state)
+                  ? prior
+                  : task.pullRequest,
+            });
+          }),
         };
       }
       snapshots.set(sessionKey, next);
@@ -345,9 +374,7 @@ export function sessionPullRequestsForGateway(
     onSnapshot: handleGatewaySnapshot,
     onEvent: handleGatewayEvent,
     onAttach: () => {
-      if (connection.transition(gateway.snapshot)) {
-        retireConnection();
-      }
+      handleGatewaySnapshot(gateway.snapshot);
       lifecycle.clearRequest();
     },
     onDetach: () => {
@@ -359,7 +386,6 @@ export function sessionPullRequestsForGateway(
       automaticRefreshTimers.clear();
     },
   });
-  const { retry } = lifecycle;
 
   function sync() {
     const snapshot = gateway.snapshot;
@@ -426,7 +452,7 @@ export function sessionPullRequestsForGateway(
           for (const key of refreshSessionKeys) {
             pendingRefreshKeys.add(key);
           }
-          retry.schedule(() => {
+          lifecycle.scheduleRetry(() => {
             if (lifecycle.attached && isActive()) {
               lifecycle.schedule();
             }
@@ -476,7 +502,7 @@ export function sessionPullRequestsForGateway(
       });
     }
     orderedWatchedKeys = undefined;
-    retry.reset();
+    lifecycle.resetRetry();
     pruneUnwatched();
     if (isActive()) {
       if (!wasActive) {
@@ -503,7 +529,7 @@ export function sessionPullRequestsForGateway(
       );
     } else {
       pendingRefreshKeys.add(key);
-      retry.reset();
+      lifecycle.resetRetry();
       lifecycle.schedule();
     }
     return true;

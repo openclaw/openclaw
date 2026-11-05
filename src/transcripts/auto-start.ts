@@ -4,6 +4,7 @@ import { throwCollectedErrors, throwSettledAggregate } from "../infra/error-grap
 import { formatErrorMessage } from "../infra/errors.js";
 import { runPluginCleanup } from "../plugins/plugin-instance-scope.js";
 import { normalizeCapabilityProviderId } from "../plugins/provider-registry-shared.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { createTranscriptAutoStartRetry } from "./auto-start-retry.js";
@@ -79,7 +80,7 @@ export function createTranscriptsAutoStartService(
       if (stopped) {
         return { settled: Promise.resolve() };
       }
-      diagnostics = beginConfiguredTranscriptStarts(config?.transcripts);
+      diagnostics = beginConfiguredTranscriptStarts();
       const resolved = resolveTranscriptsConfig(config?.transcripts);
       if (!resolved.enabled) {
         return { settled: Promise.resolve() };
@@ -171,7 +172,8 @@ export function createTranscriptsAutoStartService(
       );
       const settled = await awaitWithinDeadline(
         () => Promise.allSettled(selected.flatMap((entry) => Array.from(entry.pendingStarts))),
-        Date.now() + AUTO_START_STOP_TIMEOUT_MS,
+        monotonicNow() + AUTO_START_STOP_TIMEOUT_MS,
+        monotonicNow,
       );
       if (settled === ABSOLUTE_DEADLINE_EXPIRED) {
         void stopping.then((results) => {

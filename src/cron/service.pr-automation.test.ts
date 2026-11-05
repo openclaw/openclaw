@@ -42,9 +42,24 @@ import { cronTestDeps } from "./service.fixture-builders.test-support.js";
 import type { CronEvent } from "./service.js";
 import { createCronServiceWithStateForTest } from "./service.test-harness.js";
 import { onTimer } from "./service/timer.test-support.js";
+import { runCronSessionTurn } from "./session-run.js";
 import { resolveCronSessionTargetSessionKey } from "./session-target.js";
 
+const sessionRunner = vi.hoisted(() => ({
+  runEmbedded: vi.fn<typeof import("../agents/embedded-agent-runner/run.js").runEmbeddedAgent>(),
+}));
+// mock-isolation: Both recipe runners share the synthetic model; controller and effects stay real.
+vi.mock("../agents/embedded-agent-runner/run.js", () => ({
+  runEmbeddedAgent: sessionRunner.runEmbedded,
+}));
+
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+await Promise.all([
+  import("../auto-reply/dispatch.js"),
+  import("../auto-reply/reply/get-reply-from-config.runtime.js").then((runtime) =>
+    runtime.prewarmConfigDrivenReplyRuntime(),
+  ),
+]);
 const { resolveAgentDir } = await import("./isolated-agent/run.runtime.js");
 const session = await vi.importActual<typeof import("./isolated-agent/session.js")>(
   "./isolated-agent/session.js",
@@ -69,6 +84,9 @@ beforeEach(() => {
   ensureAgentWorkspaceMock.mockImplementation(async ({ dir }: { dir: string }) => ({ dir }));
   resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
   mockRunCronFallbackPassthrough();
+  sessionRunner.runEmbedded
+    .mockReset()
+    .mockImplementation((params) => runEmbeddedAgentMock(params));
 });
 
 // Synthetic model: transports recipe targets; does not prove autonomous merging.
@@ -167,6 +185,18 @@ async function createFixture(option: CiAutomationOption) {
           finished.resolve(event);
         }
       },
+      runSessionEvent: (request) =>
+        work.track(() =>
+          runCronSessionTurn({
+            ...request,
+            cfg: config,
+            agentId: "main",
+            sessionKey: expectDefined(
+              resolveCronSessionTargetSessionKey(request.job.sessionTarget),
+              "explicit recipe session target",
+            ),
+          }),
+        ),
       runIsolatedAgentJob: (request) =>
         work.track(() =>
           runCronIsolatedAgentTurn({
@@ -174,9 +204,7 @@ async function createFixture(option: CiAutomationOption) {
             cfg: config,
             deps: {},
             agentId: "main",
-            sessionKey:
-              resolveCronSessionTargetSessionKey(request.job.sessionTarget) ??
-              `cron:${request.job.id}`,
+            sessionKey: `cron:${request.job.id}`,
           }),
         ),
     }),
@@ -228,6 +256,9 @@ it("transports autoFix for only the selected PR across session replacement and d
       params.runId,
     );
     expectDefined(resolveAdmittedRunActiveAssertion(admitted), "active admission assertion")();
+    params.onExecutionPhase?.({ phase: "model_call_started" });
+    await params.onExecutionStarted?.();
+    await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
     const target = readRecipeTarget(params.prompt);
     finalEffect(
       { owner: target.owner, repo: target.repo, number: target.number },

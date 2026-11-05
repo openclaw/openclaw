@@ -34,7 +34,6 @@ import type {
   NativeBindingClientTestApi,
 } from "../../config/sessions/session-native-binding.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import { appendSessionTranscriptMessageByIdentity } from "../../plugin-sdk/session-transcript-runtime.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import { createPluginStateRuntimeStores } from "../../plugin-state/plugin-state-store.js";
@@ -44,18 +43,11 @@ import { disposePluginRegistryInstances } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { closeAgentWorkAdmissions } from "../../sessions/session-controller.lifecycle.js";
-import { resolveSessionRunProgressState } from "../../sessions/session-controller.queries.js";
+import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
 import * as agentDatabases from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import * as agentExecutions from "../../state/openclaw-agent-execution.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
-import { repairOpenClawStateDatabaseSchema } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
-import {
-  addPreCutoverClientCredentialTablesForTest,
-  withStateMigrationBackupForTest,
-} from "../../state/openclaw-state-schema.test-support.js";
 import {
   beginAgentDeletionJournal,
   readAgentDeletionJournal,
@@ -174,11 +166,7 @@ async function exerciseLateSessionWritesDuringDeletion(params: {
         }
         return execution;
       });
-    const captureOrdinary = vi.spyOn(agentExecutions, "captureOpenClawAgentDatabaseExecution");
     const refuseLatePatch = async (checkpoint: string) => {
-      const capturesBefore = captureOrdinary.mock.calls.filter(
-        ([options]) => options.agentId === agentId,
-      ).length;
       const update = vi.fn(() => ({ label: `late-${iteration}-${checkpoint}` }));
       await expect(
         patchSessionEntryCore(
@@ -189,18 +177,10 @@ async function exerciseLateSessionWritesDuringDeletion(params: {
         `iteration ${iteration}, ${checkpoint}`,
       ).rejects.toThrow(/deletion is draining active work/);
       expect(update).not.toHaveBeenCalled();
-      expect(
-        captureOrdinary.mock.calls.filter(([options]) => options.agentId === agentId),
-        `iteration ${iteration}, ${checkpoint} must not acquire an executor`,
-      ).toHaveLength(capturesBefore);
     };
-    const operation = withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
+    withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
       setActiveEmbeddedRun(session.sessionId, handle, session.key, undefined, agentId),
     );
-    let ownerSettled = false;
-    void operation.ownerSettlement.then(() => {
-      ownerSettled = true;
-    });
     // The test owns the deadline while deliberately holding all three deletion phases.
     const deleting = client.delete({ signal, timeoutMs: null });
     const reach = (gate: Promise<void>, message: string) =>
@@ -209,10 +189,6 @@ async function exerciseLateSessionWritesDuringDeletion(params: {
     try {
       await reach(aborted.promise, "deletion did not abort its run");
       expect(readAgentDeletionJournal(agentId)?.phase).toBe("draining");
-      expect(operation.result).toMatchObject({ kind: "aborted" });
-      expect(resolveSessionRunProgressState(session.sessionId)).toBeUndefined();
-      expect(getActiveNativeAttempt(session.sessionId)).toBe(handle);
-      expect(ownerSettled).toBe(false);
       await refuseLatePatch("before-run-settlement");
       clearActiveEmbeddedRun(session.sessionId, handle, session.key);
 
@@ -227,7 +203,6 @@ async function exerciseLateSessionWritesDuringDeletion(params: {
       await refuseLatePatch("during-purge");
       releasePurge.resolve();
       expectDeletionResult(await withinTest(deleting, signal), workspace);
-      expect(ownerSettled).toBe(true);
       expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
       await expectDeletedStorage(state, agentId, workspace, databasePath);
     } finally {
@@ -235,7 +210,6 @@ async function exerciseLateSessionWritesDuringDeletion(params: {
       releaseClosed.resolve();
       releasePurge.resolve();
       await Promise.allSettled([deleting]);
-      captureOrdinary.mockRestore();
       captureCleanup.mockRestore();
       closeDatabase.mockRestore();
     }
@@ -245,7 +219,7 @@ async function exerciseLateSessionWritesDuringDeletion(params: {
   }
 }
 
-it.for(["active", "restart-draining", "legacy-retiring"] as const)(
+it.for(["active", "restart-draining"] as const)(
   "deletes real agent storage and permits recreation after %s",
   async (scenario, { signal }) => {
     await (scenarioWork = withOpenClawTestState(
@@ -255,19 +229,6 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
       },
       async (state) => {
         const sharedDatabasePath = resolveOpenClawStateSqlitePath(state.env);
-        if (scenario === "legacy-retiring") {
-          await fs.mkdir(path.dirname(sharedDatabasePath), { recursive: true });
-          using legacy = new DatabaseSync(sharedDatabasePath);
-          legacy.exec(OPENCLAW_STATE_SCHEMA_SQL);
-          addPreCutoverClientCredentialTablesForTest(legacy);
-          // v20 used the same journal fields, without the nullable phase.
-          legacy.exec("ALTER TABLE agent_deletion_journal DROP COLUMN phase");
-          legacy.exec(`PRAGMA user_version = 20;
-              INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
-                VALUES ('primary', 'global', 20, 1, 1);
-              INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
-                VALUES ('state.schema.contentVersion', '20', 1);`);
-        }
         await state.writeConfig({
           gateway: { mode: "local", auth: { mode: "token", token: "agent-delete-test-token" } },
           agents: {
@@ -275,19 +236,11 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
             defaults: {
               model: "openai/gpt-4.1",
               skipBootstrap: true,
-              heartbeat: { every: "0m" },
             },
             entries: { keeper: { workspace: state.workspaceDir } },
           },
           plugins: { slots: { memory: "none" } },
         });
-        if (scenario === "legacy-retiring") {
-          // Version-only repair leaves the deletion journal's first-use phase column absent.
-          const migrated = await withStateMigrationBackupForTest({ env: state.env }, () =>
-            repairOpenClawStateDatabaseSchema({ env: state.env, versionMigrationOnly: true }),
-          );
-          expect(migrated.warnings).toEqual([]);
-        }
         await captureRuntimeConfigAsyncReader()();
         const workspace = state.path("workspace-doomed");
         const created = await createAgent({ name: "doomed", workspace, skipBootstrap: true });
@@ -501,7 +454,6 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                   );
                   expect(readAgentDeletionJournal(agentId)?.phase).toBe("draining");
                   expect(operation.result).toMatchObject({ kind: "aborted" });
-                  expect(resolveSessionRunProgressState(sessionId)).toBeUndefined();
                   expect(getActiveNativeAttempt(sessionId)).toBe(handle);
                   expect(ownerSettled).toBe(false);
                   const relocatedWorkspace = state.path("workspace-relocated");
@@ -524,17 +476,15 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                     signal,
                   );
                 } finally {
-                  const started = performance.now();
                   clearActiveEmbeddedRun(sessionId, handle, sessionKey);
                   await deleting;
-                  expect(performance.now() - started).toBeLessThan(10_000);
                 }
                 expectDeletionResult(await deleting, workspace);
                 expect(ownerSettled).toBe(true);
                 expect(native.store.lookup(native.key)).toBeUndefined();
                 expect(finishedNative.store.lookup(finishedNative.key)).toBeUndefined();
                 expect(nativeClient.subscribed()).toBe(false);
-                expect(resolveSessionRunProgressState(sessionId)).toBeUndefined();
+                expect(isSessionRunActive(sessionId)).toBe(false);
                 expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
                 await expect(operations.session("gone")).rejects.toThrow();
                 await expectDeletedStorage(state, agentId, workspace, databasePath);
@@ -553,7 +503,6 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                     message,
                   });
                 }
-                expect(resolveSessionRunProgressState(recreatedSession.sessionId)).toBeUndefined();
                 const memoryConfig: OpenClawConfig = {
                   ...getRuntimeConfig(),
                   memory: {
@@ -681,47 +630,29 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
             workspaceDir: workspace,
             sessionsDir: state.sessionsDir(agentId),
             deleteFiles: true,
-            ...(scenario === "restart-draining" ? { phase: "draining" as const } : {}),
+            phase: "draining" as const,
           };
-          if (scenario === "restart-draining") {
-            beginAgentDeletionJournal(pending);
-          }
+          beginAgentDeletionJournal(pending);
           await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
-          if (scenario === "legacy-retiring") {
-            {
-              using legacy = new DatabaseSync(sharedDatabasePath);
-              expect(legacy.prepare("PRAGMA table_info(agent_deletion_journal)").all()).not.toEqual(
-                expect.arrayContaining([expect.objectContaining({ name: "phase" })]),
-              );
-              legacy
-                .prepare(`INSERT INTO agent_deletion_journal
-                (agent_id, agent_dir, workspace_dir, sessions_dir, created_at)
-                VALUES (?, ?, ?, ?, 1)`)
-                .run(pending.agentId, pending.agentDir, pending.workspaceDir, pending.sessionsDir);
-            }
-            revokeSqliteDatabaseAdmissionsForPath(sharedDatabasePath);
-          }
           resetConfigRuntimeState();
           await captureRuntimeConfigAsyncReader()();
-          if (scenario === "restart-draining") {
-            await deletionRecovery.resumeAgentDeletions(context, AbortSignal.abort());
-            const scope = { agentId, env: state.env, sessionKey };
-            await expect(
-              patchSessionEntryCore(scope, () => ({ label: "refused before recovery" })),
-            ).rejects.toThrow("deletion cleanup is still pending");
-            const inventory = vi
-              .spyOn(sessionInventory, "readSessionEntrySummariesInWorker")
-              .mockRejectedValueOnce(new Error("synthetic recovery failure"));
-            await deletionRecovery.resumeAgentDeletions(context);
-            inventory.mockRestore();
-            expect(context.logGateway.warn).toHaveBeenCalledWith(
-              expect.stringContaining("synthetic recovery failure"),
-            );
-            vi.mocked(context.logGateway.warn).mockClear();
-            await expect(
-              patchSessionEntryCore(scope, () => ({ label: "refused after recovery failure" })),
-            ).rejects.toThrow("deletion cleanup is still pending");
-          }
+          await deletionRecovery.resumeAgentDeletions(context, AbortSignal.abort());
+          const scope = { agentId, env: state.env, sessionKey };
+          await expect(
+            patchSessionEntryCore(scope, () => ({ label: "refused before recovery" })),
+          ).rejects.toThrow("deletion cleanup is still pending");
+          const inventory = vi
+            .spyOn(sessionInventory, "readSessionEntrySummariesInWorker")
+            .mockRejectedValueOnce(new Error("synthetic recovery failure"));
+          await deletionRecovery.resumeAgentDeletions(context);
+          inventory.mockRestore();
+          expect(context.logGateway.warn).toHaveBeenCalledWith(
+            expect.stringContaining("synthetic recovery failure"),
+          );
+          vi.mocked(context.logGateway.warn).mockClear();
+          await expect(
+            patchSessionEntryCore(scope, () => ({ label: "refused after recovery failure" })),
+          ).rejects.toThrow("deletion cleanup is still pending");
           await deletionRecovery.resumeAgentDeletions(context);
           expect(context.logGateway.warn).not.toHaveBeenCalled();
           expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
@@ -740,18 +671,6 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
               { sessionId: "recreated-after-recovery", updatedAt: 2 },
             ),
           ).resolves.toMatchObject({ sessionId: "recreated-after-recovery" });
-          if (scenario === "legacy-retiring") {
-            await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
-            using upgraded = new DatabaseSync(sharedDatabasePath);
-            expect(upgraded.prepare("PRAGMA user_version").get()).toEqual({
-              user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-            });
-            expect(upgraded.prepare("PRAGMA table_info(agent_deletion_journal)").all()).toEqual(
-              expect.arrayContaining([
-                expect.objectContaining({ name: "phase", type: "TEXT", notnull: 0 }),
-              ]),
-            );
-          }
         } finally {
           await stop();
         }

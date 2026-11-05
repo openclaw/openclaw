@@ -1,4 +1,8 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "../../packages/agent-core/src/internal-hooks.js";
 import { createAbortError } from "../infra/abort-signal.js";
 /**
  * Combines per-call cancellation with run-level aborts while preserving
@@ -7,11 +11,28 @@ import { createAbortError } from "../infra/abort-signal.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isCodeModeControlTool } from "./code-mode-control-tools.js";
-import {
-  attachInternalToolExecutionPreparer,
-  getInternalToolExecutionPreparer,
-} from "./runtime/internal-hooks.js";
-import { registerTrustedToolNoStartError } from "./tool-result-error.js";
+import { markToolExecutionNotStarted as registerTrustedToolNoStartError } from "./tool-effect-receipt.js";
+
+export type ToolTurnHandoff = { readonly code: "sessions_yield"; readonly turnHandoff: true };
+type ToolTurnHandoffReceipt = { status: "started"; async: true; yielded?: true; message: string };
+const acceptedHandoffs = new WeakMap<
+  object,
+  { toolCallId: string | undefined; receipt: ToolTurnHandoffReceipt }
+>();
+
+/** Host-only acceptance evidence; guest JSON and ordinary aborts cannot mint a handoff. */
+export function createToolTurnHandoff(
+  toolCallId: string | undefined,
+  receipt: ToolTurnHandoffReceipt,
+): ToolTurnHandoff {
+  const reason = { code: "sessions_yield", turnHandoff: true } as const;
+  acceptedHandoffs.set(reason, { toolCallId, receipt });
+  return reason;
+}
+
+export function readToolTurnHandoff(reason: unknown) {
+  return typeof reason === "object" && reason !== null ? acceptedHandoffs.get(reason) : undefined;
+}
 
 function throwAbortError(): never {
   throw registerTrustedToolNoStartError(createAbortError("Aborted"));
@@ -69,9 +90,13 @@ export function raceWithAbortSignal<T>(
 }
 
 function isTurnYieldCall(tool: AnyAgentTool, args: unknown): boolean {
+  const input = asOptionalObjectRecord(args);
   return (
     tool.name === "sessions_yield" ||
-    (tool.name === "plugins" && asOptionalObjectRecord(args)?.action === "reloadAndResume")
+    (tool.name === "plugins" && input?.action === "reloadAndResume") ||
+    (tool.name === "github_publish" &&
+      (input?.action === "prepare_pr" ||
+        ((input?.action ?? "publish") === "publish" && typeof input?.workspacePath === "string")))
   );
 }
 

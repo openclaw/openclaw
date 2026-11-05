@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { createStaleWhileRevalidateCache } from "openclaw/plugin-sdk/collection-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { LiveModelCatalogHttpError } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
@@ -63,7 +63,12 @@ const OLLAMA_SHOW_TIMEOUT_MS = 3000;
 const OLLAMA_TAGS_TIMEOUT_MS = 5000;
 const MAX_OLLAMA_DISCOVERY_PROBES = OLLAMA_CONTEXT_ENRICH_LIMIT * 4;
 const MAX_OLLAMA_SHOW_CACHE_ENTRIES = 256;
-const ollamaModelShowInfoCache = new Map<string, Promise<OllamaModelShowInfo>>();
+const ollamaModelShowInfoCache = createStaleWhileRevalidateCache<OllamaModelShowInfo>({
+  maxEntries: MAX_OLLAMA_SHOW_CACHE_ENTRIES,
+  maxPending: Infinity,
+  ttlMs: Infinity,
+  cacheable: hasOllamaModelShowInfo,
+});
 const OLLAMA_ALWAYS_BLOCKED_HOSTNAMES = new Set(["metadata.google.internal"]);
 
 export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string) {
@@ -165,11 +170,6 @@ function buildOllamaModelShowCacheKey(
   }
   const authScope = apiKey ? createHash("sha256").update(apiKey).digest("hex") : "anonymous";
   return `${resolveOllamaApiBase(apiBase)}|${model.name}|${version}|${authScope}`;
-}
-
-function setOllamaModelShowCacheEntry(key: string, value: Promise<OllamaModelShowInfo>): void {
-  pruneMapToMaxSize(ollamaModelShowInfoCache, MAX_OLLAMA_SHOW_CACHE_ENTRIES - 1);
-  ollamaModelShowInfoCache.set(key, value);
 }
 
 export function hasOllamaModelShowInfo(info: OllamaModelShowInfo): boolean {
@@ -328,19 +328,12 @@ async function queryOllamaModelShowInfoCached(
     return await queryOllamaModelShowInfo(normalizedApiBase, model.name, opts);
   }
 
-  const cached = ollamaModelShowInfoCache.get(cacheKey);
-  if (cached) {
-    return await cached;
-  }
-
-  const pending = queryOllamaModelShowInfo(normalizedApiBase, model.name, opts).then((result) => {
-    if (!hasOllamaModelShowInfo(result)) {
-      ollamaModelShowInfoCache.delete(cacheKey);
-    }
-    return result;
-  });
-  setOllamaModelShowCacheEntry(cacheKey, pending);
-  return await pending;
+  const { value } = await ollamaModelShowInfoCache.read(
+    cacheKey,
+    () => queryOllamaModelShowInfo(normalizedApiBase, model.name, opts),
+    { allowStale: false },
+  );
+  return value;
 }
 
 /** @deprecated Use queryOllamaModelShowInfo instead. */

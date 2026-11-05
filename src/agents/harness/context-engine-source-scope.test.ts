@@ -13,6 +13,7 @@ import {
   sessionParams,
   textMessage,
 } from "./context-engine-lifecycle.test-support.js";
+import { createTurnBoundary } from "./context-engine-turn.test-support.js";
 
 const assemblyParams = {
   ...sessionParams,
@@ -199,17 +200,14 @@ describe("harness context engine source scopes", () => {
     "retains prepared source authority through asynchronous %s consumers and release",
     async (operation) => {
       const admission = {
-        agentId: "main",
-        sessionId: sessionParams.sessionId,
-        sessionKey: sessionParams.sessionKey,
-        storePath: "/tmp/context-engine-source/openclaw-agent.sqlite",
-        generation: "generation-1",
+        ...createTurnBoundary(
+          "/tmp/context-engine-source/openclaw-agent.sqlite",
+          "current-turn",
+          sessionParams.sessionId,
+        ).admission,
         entryId: "current-user",
-        rawSeq: 1,
-        effectiveParentId: null,
+        sessionKey: sessionParams.sessionKey,
         activeMessagePosition: 0,
-        logicalTurnId: "current-turn",
-        role: "user" as const,
       };
       const consumerStarted = createDeferred();
       const finishConsumer = createDeferred();

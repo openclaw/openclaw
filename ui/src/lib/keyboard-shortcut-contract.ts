@@ -68,7 +68,7 @@ export function formatKeyboardShortcutParts(
 ): string[] {
   const modifiers: Record<KeyboardShortcutModifier, string> = applePlatform
     ? { mod: "⌘", ctrl: "⌃", shift: "⇧", alt: "⌥" }
-    : { mod: "Ctrl", ctrl: "Ctrl", shift: "Shift", alt: "Alt" };
+    : { mod: "Ctrl", ctrl: "Ctrl", shift: "⇧", alt: "Alt" };
   const keys: Partial<Record<KeyboardShortcutKey, string>> = {
     Backquote: "`",
     Comma: ",",
@@ -84,13 +84,6 @@ export function formatKeyboardShortcutParts(
     ...combo.modifiers.map((modifier) => modifiers[modifier]),
     keys[combo.key] ?? combo.key.toUpperCase(),
   ];
-}
-
-export function formatKeyboardShortcutCombo(
-  combo: KeyboardShortcutCombo,
-  applePlatform = isApplePlatform(),
-): string {
-  return formatKeyboardShortcutParts(combo, applePlatform).join(applePlatform ? "" : "+");
 }
 
 export function matchesShortcutCombo(combo: KeyboardShortcutCombo, event: KeyboardEvent): boolean {

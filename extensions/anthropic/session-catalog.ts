@@ -153,23 +153,12 @@ function toGenericClaudeHost(
       // the run command: continue only returns the existing session key, and
       // the turn itself still fails closed at invoke time.
       const continuable = terminal.localResumable || nodeCli || Boolean(existingSessionKey);
+      const { name, recencyAt, ...metadata } = session;
       return [
         {
-          threadId: session.threadId,
-          ...(session.name ? { name: session.name } : {}),
-          ...(session.color ? { color: session.color } : {}),
-          ...(session.cwd ? { cwd: session.cwd } : {}),
-          status: session.status,
-          ...(session.createdAt !== undefined ? { createdAt: session.createdAt } : {}),
-          ...(session.updatedAt !== undefined ? { updatedAt: session.updatedAt } : {}),
-          ...(session.recencyAt != null ? { recencyAt: session.recencyAt } : {}),
-          source: session.source,
-          modelProvider: session.modelProvider,
-          ...(session.cliVersion ? { cliVersion: session.cliVersion } : {}),
-          ...(session.gitBranch ? { gitBranch: session.gitBranch } : {}),
-          ...(session.customGroup ? { customGroup: session.customGroup } : {}),
-          ...(session.pullRequest ? { pullRequest: session.pullRequest } : {}),
-          archived: session.archived,
+          ...metadata,
+          ...(name ? { name } : {}),
+          ...(recencyAt != null ? { recencyAt } : {}),
           ...(continuable && existingSessionKey ? { sessionKey: existingSessionKey } : {}),
           canContinue: continuable,
           canArchive: false,
@@ -182,7 +171,9 @@ function toGenericClaudeHost(
   };
 }
 
-type ClaudeSessionCatalogRuntime = Required<
+export function createClaudeSessionCatalogRuntime(
+  api: OpenClawPluginApi,
+): Required<
   Pick<
     SessionCatalogProvider,
     | "list"
@@ -192,11 +183,7 @@ type ClaudeSessionCatalogRuntime = Required<
     | "openTerminal"
     | "checkUpstreamActivity"
   >
->;
-
-export function createClaudeSessionCatalogRuntime(
-  api: OpenClawPluginApi,
-): ClaudeSessionCatalogRuntime {
+> {
   return {
     list: async (query) => {
       const bound = listBoundClaudeSessions(api, query.agentId, query.sessionEntries);

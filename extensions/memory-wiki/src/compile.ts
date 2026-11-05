@@ -25,10 +25,8 @@ import {
   isClaimContestedStatus,
   normalizeClaimStatus,
   WIKI_AGING_DAYS,
-  type WikiClaimContradictionCluster,
   type WikiClaimHealth,
   type WikiFreshness,
-  type WikiPageContradictionCluster,
 } from "./claim-health.js";
 import {
   readMemoryWikiDashboardState,
@@ -44,7 +42,6 @@ import {
 import {
   appendMemoryWikiLog,
   hashMemoryWikiVaultSources,
-  loadMemoryWikiValidatedVaultIdentity,
   loadMemoryWikiVaultIdentity,
 } from "./log.js";
 import {
@@ -55,7 +52,6 @@ import {
   renderWikiMarkdown,
   scanWikiPageSummary,
   type WikiClaim,
-  type WikiClaimEvidence,
   type WikiPageSummary,
   type WikiRelationship,
   WIKI_RELATED_END_MARKER,
@@ -63,11 +59,7 @@ import {
 } from "./markdown.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { isPersonLikePage } from "./person-page.js";
-import {
-  buildRelatedPageIndex,
-  selectRelatedPages,
-  type RelatedPageIndex,
-} from "./related-pages.js";
+import { buildRelatedPageIndex, selectRelatedPages } from "./related-pages.js";
 import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { readExistingWikiPageUtf8, writeManagedMarkdownFile } from "./vault-page-write.js";
 import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
@@ -136,16 +128,33 @@ const DASHBOARD_PAGES: Record<string, DashboardPageDefinition> = {
         [
           "Contradiction note clusters",
           "Page Notes",
-          buildPageContradictionClusters(pages).map((cluster) =>
-            formatPageContradictionClusterLine(config, cluster, sourceRelativeTo),
-          ),
+          buildPageContradictionClusters(pages).map((cluster) => {
+            const pageRefs = cluster.entries.map((entry) =>
+              formatWikiLink({
+                renderMode: config.vault.renderMode,
+                relativePath: entry.pagePath,
+                sourceRelativeTo,
+                title: entry.pageTitle,
+              }),
+            );
+            return `- ${cluster.label}: ${pageRefs.join(" | ")}`;
+          }),
         ],
         [
           "Competing claim clusters",
           "Claim Clusters",
-          buildClaimContradictionClusters({ pages, now }).map((cluster) =>
-            formatClaimContradictionClusterLine(config, cluster, sourceRelativeTo),
-          ),
+          buildClaimContradictionClusters({ pages, now }).map((cluster) => {
+            const entries = cluster.entries.map(
+              (entry) =>
+                `${formatWikiLink({
+                  renderMode: config.vault.renderMode,
+                  relativePath: entry.pagePath,
+                  sourceRelativeTo,
+                  title: entry.pageTitle,
+                })} -> ${formatClaimIdentity(entry)} (${entry.status}, ${formatFreshnessLabel(entry.freshness)})`,
+            );
+            return `- \`${cluster.label}\`: ${entries.join(" | ")}`;
+          }),
         ],
       ]);
     },
@@ -237,10 +246,27 @@ const DASHBOARD_PAGES: Record<string, DashboardPageDefinition> = {
         .toSorted((left, right) => left.title.localeCompare(right.title));
       return renderCountedList(
         "People with routing metadata",
-        matches.map(
-          (page) =>
-            `- ${formatPersonDirectoryLine(config, page, assessPageFreshness(page, now), sourceRelativeTo)}`,
-        ),
+        matches.map((page) => {
+          const freshness = assessPageFreshness(page, now);
+          const card = page.personCard;
+          const details = [
+            formatMaybeDetail("id", page.canonicalId ?? card?.canonicalId ?? page.id),
+            formatMaybeDetail("aliases", formatListPreview(page.aliases)),
+            formatMaybeDetail("handles", formatListPreview(card?.handles ?? [])),
+            formatMaybeDetail("lane", card?.lane),
+            formatMaybeDetail("ask", formatListPreview(card?.askFor ?? [])),
+            formatMaybeDetail(
+              "best",
+              formatListPreview([...page.bestUsedFor, ...(card?.bestUsedFor ?? [])]),
+            ),
+            formatMaybeDetail("privacy", page.privacyTier ?? card?.privacyTier),
+            formatMaybeDetail("refreshed", page.lastRefreshedAt ?? card?.lastRefreshedAt),
+            formatMaybeDetail("freshness", formatFreshnessLabel(freshness)),
+          ].filter(Boolean);
+          return `- ${formatPageLink(config, page, sourceRelativeTo)}${
+            details.length > 0 ? `: ${details.join("; ")}` : ""
+          }`;
+        }),
         "No person-like entity pages with agent cards yet.",
         "\n",
       );
@@ -260,10 +286,23 @@ const DASHBOARD_PAGES: Record<string, DashboardPageDefinition> = {
         });
       return renderCountedList(
         "Structured relationships",
-        relationships.map(
-          ({ page, relationship }) =>
-            `- ${formatRelationshipLine(config, page, relationship, sourceRelativeTo)}`,
-        ),
+        relationships.map(({ page, relationship }) => {
+          const details = [
+            relationship.kind ?? "related",
+            relationship.weight !== undefined ? `weight ${relationship.weight.toFixed(2)}` : null,
+            relationship.confidence !== undefined
+              ? `confidence ${relationship.confidence.toFixed(2)}`
+              : null,
+            relationship.evidenceKind ? `evidence ${relationship.evidenceKind}` : null,
+            relationship.privacyTier ? `privacy ${relationship.privacyTier}` : null,
+            relationship.note,
+          ].filter(Boolean);
+          return `- ${formatPageLink(config, page, sourceRelativeTo)} -> ${formatRelationshipTarget(
+            config,
+            relationship,
+            sourceRelativeTo,
+          )}${details.length > 0 ? ` (${details.join(", ")})` : ""}`;
+        }),
         "No structured relationships yet.",
       );
     },
@@ -308,7 +347,46 @@ const DASHBOARD_PAGES: Record<string, DashboardPageDefinition> = {
   "privacy-review": {
     title: "Privacy Review",
     buildBody: ({ config, pages, sourceRelativeTo }) => {
-      const entries = collectPrivacyReviewEntries(config, pages, sourceRelativeTo);
+      const entries: string[] = [];
+      for (const page of pages) {
+        if (isReviewablePrivacyTier(page.privacyTier)) {
+          entries.push(
+            `- ${formatPageLink(config, page, sourceRelativeTo)}: page privacy ${page.privacyTier}`,
+          );
+        }
+        if (isReviewablePrivacyTier(page.personCard?.privacyTier)) {
+          entries.push(
+            `- ${formatPageLink(config, page, sourceRelativeTo)}: person card privacy ${page.personCard?.privacyTier}`,
+          );
+        }
+        for (const relationship of page.relationships) {
+          if (isReviewablePrivacyTier(relationship.privacyTier)) {
+            entries.push(
+              `- ${formatPageLink(config, page, sourceRelativeTo)}: relationship privacy ${
+                relationship.privacyTier
+              } -> ${formatRelationshipTarget(config, relationship, sourceRelativeTo)}`,
+            );
+          }
+        }
+        for (const claim of page.claims) {
+          for (const evidence of claim.evidence) {
+            if (!isReviewablePrivacyTier(evidence.privacyTier)) {
+              continue;
+            }
+            const detail = [
+              evidence.kind ? `kind ${evidence.kind}` : null,
+              evidence.sourceId ? `source ${evidence.sourceId}` : null,
+              evidence.path ? `path ${evidence.path}` : null,
+              evidence.lines ? `lines ${evidence.lines}` : null,
+            ]
+              .filter(Boolean)
+              .join(", ");
+            entries.push(
+              `- ${formatPageLink(config, page, sourceRelativeTo)}: evidence privacy ${evidence.privacyTier} on ${formatClaimIdentityForPage(claim)}${detail ? ` (${detail})` : ""}`,
+            );
+          }
+        }
+      }
       return renderCountedList(
         "Privacy review entries",
         entries,
@@ -336,7 +414,27 @@ type CompileMemoryWikiOptions = {
   signal?: AbortSignal;
 };
 
+function scanPageSummary(params: Parameters<typeof scanWikiPageSummary>[0]) {
+  const scan = scanWikiPageSummary(params);
+  if (scan.status !== "valid") {
+    return { scan, importInsight: null, overviewItem: null };
+  }
+  const { parsed, ...summaryScan } = scan;
+  return {
+    scan: summaryScan,
+    importInsight: projectMemoryWikiImportInsight(scan.page, parsed),
+    overviewItem: projectMemoryWikiOverviewItem(scan.page, parsed.body),
+  };
+}
+
+// Keep at most 16 MiB of projections from each of the four most recent vaults.
+// Disk reads and source hashing still run on every pass, including cache hits.
+const pageSummaryCaches = new Map<string, Map<string, { digest: Buffer; summary: string }>>();
+
 async function readPageSummaries(rootDir: string, signal?: AbortSignal) {
+  const previous = pageSummaryCaches.get(rootDir);
+  const next: NonNullable<typeof previous> = new Map();
+  let cachedBytes = 0;
   const filePaths = (
     await Promise.all(
       WIKI_PAGE_GROUPS.map(async (group) =>
@@ -358,21 +456,25 @@ async function readPageSummaries(rootDir: string, signal?: AbortSignal) {
         `read wiki page ${absolutePath}`,
       );
       signal?.throwIfAborted();
-      sourceDigests.push([relativePath, createHash("sha256").update(bytes).digest()]);
+      const digest = createHash("sha256").update(bytes).digest();
+      sourceDigests.push([relativePath, digest]);
       // Large imported pages are parsed off the request path, but the compiler
       // still yields between pages so background recovery cannot starve Gateway ticks.
       await yieldToEventLoop();
       signal?.throwIfAborted();
-      const scan = scanWikiPageSummary({ absolutePath, relativePath, raw: bytes.toString("utf8") });
-      if (scan.status !== "valid") {
-        return { scan, importInsight: null, overviewItem: null };
+      const candidate = previous?.get(relativePath);
+      const cached = candidate?.digest.equals(digest) ? candidate : undefined;
+      const result: ReturnType<typeof scanPageSummary> = cached
+        ? JSON.parse(cached.summary)
+        : scanPageSummary({ absolutePath, relativePath, raw: bytes.toString("utf8") });
+      // Serialization detaches substrings from large source pages and keeps
+      // mutable compile results separate from the retained cache.
+      const summary = cached?.summary ?? JSON.stringify(result);
+      cachedBytes += Buffer.byteLength(summary);
+      if (cachedBytes <= 16 * 1024 * 1024) {
+        next.set(relativePath, { digest, summary });
       }
-      const { parsed, ...summaryScan } = scan;
-      return {
-        scan: summaryScan,
-        importInsight: projectMemoryWikiImportInsight(scan.page, parsed),
-        overviewItem: projectMemoryWikiOverviewItem(scan.page, parsed.body),
-      };
+      return result;
     }),
     limit: READ_PAGE_SUMMARIES_CONCURRENCY,
     errorMode: "stop",
@@ -381,6 +483,11 @@ async function readPageSummaries(rootDir: string, signal?: AbortSignal) {
     throw readResult.firstError;
   }
   signal?.throwIfAborted();
+  pageSummaryCaches.delete(rootDir);
+  pageSummaryCaches.set(rootDir, next);
+  if (pageSummaryCaches.size > 4) {
+    pageSummaryCaches.delete(pageSummaryCaches.keys().next().value!);
+  }
 
   return {
     sourceGeneration: hashMemoryWikiVaultSources(sourceDigests),
@@ -430,32 +537,6 @@ function formatMaybeDetail(label: string, value: string | null | undefined): str
   return value ? `${label} ${value}` : null;
 }
 
-function formatPersonDirectoryLine(
-  config: ResolvedMemoryWikiConfig,
-  page: WikiPageSummary,
-  freshness: WikiFreshness,
-  sourceRelativeTo?: string,
-): string {
-  const card = page.personCard;
-  const details = [
-    formatMaybeDetail("id", page.canonicalId ?? card?.canonicalId ?? page.id),
-    formatMaybeDetail("aliases", formatListPreview(page.aliases)),
-    formatMaybeDetail("handles", formatListPreview(card?.handles ?? [])),
-    formatMaybeDetail("lane", card?.lane),
-    formatMaybeDetail("ask", formatListPreview(card?.askFor ?? [])),
-    formatMaybeDetail(
-      "best",
-      formatListPreview([...page.bestUsedFor, ...(card?.bestUsedFor ?? [])]),
-    ),
-    formatMaybeDetail("privacy", page.privacyTier ?? card?.privacyTier),
-    formatMaybeDetail("refreshed", page.lastRefreshedAt ?? card?.lastRefreshedAt),
-    formatMaybeDetail("freshness", formatFreshnessLabel(freshness)),
-  ].filter(Boolean);
-  return `${formatPageLink(config, page, sourceRelativeTo)}${
-    details.length > 0 ? `: ${details.join("; ")}` : ""
-  }`;
-}
-
 function formatRelationshipTarget(
   config: ResolvedMemoryWikiConfig,
   relationship: WikiRelationship,
@@ -470,29 +551,6 @@ function formatRelationshipTarget(
     });
   }
   return relationship.targetTitle ?? relationship.targetId ?? relationship.targetPath ?? "unknown";
-}
-
-function formatRelationshipLine(
-  config: ResolvedMemoryWikiConfig,
-  page: WikiPageSummary,
-  relationship: WikiRelationship,
-  sourceRelativeTo?: string,
-): string {
-  const details = [
-    relationship.kind ?? "related",
-    relationship.weight !== undefined ? `weight ${relationship.weight.toFixed(2)}` : null,
-    relationship.confidence !== undefined
-      ? `confidence ${relationship.confidence.toFixed(2)}`
-      : null,
-    relationship.evidenceKind ? `evidence ${relationship.evidenceKind}` : null,
-    relationship.privacyTier ? `privacy ${relationship.privacyTier}` : null,
-    relationship.note,
-  ].filter(Boolean);
-  return `${formatPageLink(config, page, sourceRelativeTo)} -> ${formatRelationshipTarget(
-    config,
-    relationship,
-    sourceRelativeTo,
-  )}${details.length > 0 ? ` (${details.join(", ")})` : ""}`;
 }
 
 function countBy(values: readonly string[]): Map<string, number> {
@@ -521,58 +579,6 @@ function isReviewablePrivacyTier(value: string | undefined): boolean {
   return tier !== "" && tier !== "public";
 }
 
-function formatEvidencePrivacyDetails(evidence: WikiClaimEvidence): string {
-  return [
-    evidence.kind ? `kind ${evidence.kind}` : null,
-    evidence.sourceId ? `source ${evidence.sourceId}` : null,
-    evidence.path ? `path ${evidence.path}` : null,
-    evidence.lines ? `lines ${evidence.lines}` : null,
-  ]
-    .filter(Boolean)
-    .join(", ");
-}
-
-function collectPrivacyReviewEntries(
-  config: ResolvedMemoryWikiConfig,
-  pages: WikiPageSummary[],
-  sourceRelativeTo?: string,
-): string[] {
-  const entries: string[] = [];
-  for (const page of pages) {
-    if (isReviewablePrivacyTier(page.privacyTier)) {
-      entries.push(
-        `- ${formatPageLink(config, page, sourceRelativeTo)}: page privacy ${page.privacyTier}`,
-      );
-    }
-    if (isReviewablePrivacyTier(page.personCard?.privacyTier)) {
-      entries.push(
-        `- ${formatPageLink(config, page, sourceRelativeTo)}: person card privacy ${page.personCard?.privacyTier}`,
-      );
-    }
-    for (const relationship of page.relationships) {
-      if (isReviewablePrivacyTier(relationship.privacyTier)) {
-        entries.push(
-          `- ${formatPageLink(config, page, sourceRelativeTo)}: relationship privacy ${
-            relationship.privacyTier
-          } -> ${formatRelationshipTarget(config, relationship, sourceRelativeTo)}`,
-        );
-      }
-    }
-    for (const claim of page.claims) {
-      for (const evidence of claim.evidence) {
-        if (!isReviewablePrivacyTier(evidence.privacyTier)) {
-          continue;
-        }
-        const detail = formatEvidencePrivacyDetails(evidence);
-        entries.push(
-          `- ${formatPageLink(config, page, sourceRelativeTo)}: evidence privacy ${evidence.privacyTier} on ${formatClaimIdentityForPage(claim)}${detail ? ` (${detail})` : ""}`,
-        );
-      }
-    }
-  }
-  return entries;
-}
-
 function formatClaimIdentity(claim: WikiClaimHealth): string {
   return claim.claimId ? `\`${claim.claimId}\`: ${claim.text}` : claim.text;
 }
@@ -596,39 +602,6 @@ function formatClaimHealthLine(
   })}: ${formatClaimIdentity(claim)} (${details.join(", ")})`;
 }
 
-function formatPageContradictionClusterLine(
-  config: ResolvedMemoryWikiConfig,
-  cluster: WikiPageContradictionCluster,
-  sourceRelativeTo?: string,
-): string {
-  const pageRefs = cluster.entries.map((entry) =>
-    formatWikiLink({
-      renderMode: config.vault.renderMode,
-      relativePath: entry.pagePath,
-      sourceRelativeTo,
-      title: entry.pageTitle,
-    }),
-  );
-  return `- ${cluster.label}: ${pageRefs.join(" | ")}`;
-}
-
-function formatClaimContradictionClusterLine(
-  config: ResolvedMemoryWikiConfig,
-  cluster: WikiClaimContradictionCluster,
-  sourceRelativeTo?: string,
-): string {
-  const entries = cluster.entries.map(
-    (entry) =>
-      `${formatWikiLink({
-        renderMode: config.vault.renderMode,
-        relativePath: entry.pagePath,
-        sourceRelativeTo,
-        title: entry.pageTitle,
-      })} -> ${formatClaimIdentity(entry)} (${entry.status}, ${formatFreshnessLabel(entry.freshness)})`,
-  );
-  return `- \`${cluster.label}\`: ${entries.join(" | ")}`;
-}
-
 function renderWikiPageLinks(params: {
   config: ResolvedMemoryWikiConfig;
   pages: WikiPageSummary[];
@@ -641,28 +614,6 @@ function renderWikiPageLinks(params: {
   return params.pages
     .map((page) => `- ${formatPageLink(params.config, page, params.sourceRelativeTo)}`)
     .join("\n");
-}
-
-function buildRelatedBlockBody(
-  config: ResolvedMemoryWikiConfig,
-  page: WikiPageSummary,
-  index: RelatedPageIndex,
-): string {
-  const { sourcePages, backlinkPages, relatedPages } = selectRelatedPages(page, index);
-  const groups: Array<[string, WikiPageSummary[]]> = [
-    ["Sources", sourcePages],
-    ["Referenced By", backlinkPages],
-    ["Related Pages", relatedPages],
-  ];
-  return (
-    groups
-      .filter(([, pages]) => pages.length > 0)
-      .map(
-        ([heading, pages]) =>
-          `### ${heading}\n\n${renderWikiPageLinks({ config, pages, sourceRelativeTo: page.relativePath })}`,
-      )
-      .join("\n\n") || "- No related pages yet."
-  );
 }
 
 async function refreshPageRelatedBlocks(params: {
@@ -688,13 +639,28 @@ async function refreshPageRelatedBlocks(params: {
     if (original.trim().length === 0) {
       continue;
     }
+    const config = params.config;
+    const { sourcePages, backlinkPages, relatedPages } = selectRelatedPages(page, index);
+    const groups: Array<[string, WikiPageSummary[]]> = [
+      ["Sources", sourcePages],
+      ["Referenced By", backlinkPages],
+      ["Related Pages", relatedPages],
+    ];
+    const relatedBody =
+      groups
+        .filter(([, pages]) => pages.length > 0)
+        .map(
+          ([heading, pages]) =>
+            `### ${heading}\n\n${renderWikiPageLinks({ config, pages, sourceRelativeTo: page.relativePath })}`,
+        )
+        .join("\n\n") || "- No related pages yet.";
     const updated = withTrailingNewline(
       replaceManagedMarkdownBlock({
         original,
         heading: "## Related",
         startMarker: WIKI_RELATED_START_MARKER,
         endMarker: WIKI_RELATED_END_MARKER,
-        body: buildRelatedBlockBody(params.config, page, index),
+        body: relatedBody,
       }),
     );
     if (updated === original) {
@@ -1001,7 +967,11 @@ async function compileMemoryWikiVaultUnlocked(
       });
       options?.signal?.throwIfAborted();
     },
-    () => loadMemoryWikiValidatedVaultIdentity(rootDir),
+    () => loadMemoryWikiVaultIdentity(rootDir),
+    {
+      reuseUnchanged: compiledInputIdentity.compiledCacheSourceGeneration === scan.sourceGeneration,
+      signal: options?.signal,
+    },
   );
   await appendMemoryWikiLog(rootDir, {
     type: "compile",

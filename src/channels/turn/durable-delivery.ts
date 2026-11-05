@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { getGroupThreadDispatchContext } from "../../auto-reply/group-thread-context.js";
@@ -9,12 +10,24 @@ import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isProvenDeliveryNotSentError } from "../../infra/delivery-recovery.shared.js";
 import { normalizeDeliverableOutboundChannel } from "../../infra/outbound/channel-resolution.js";
+import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import {
   type DurableFinalDeliveryRequirement,
   resolveOutboundDurableFinalDeliverySupport,
 } from "../../infra/outbound/deliver.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+import {
+  getPluginRegistryGatewayChannelRegistration,
+  getPluginRegistryGatewayOwner,
+  isPluginRegistryGatewayViewOf,
+} from "../../plugins/registry-lifecycle.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeRegistryScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
+import { runOutsidePluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeLoadContext } from "../../plugins/runtime/load-context.js";
 import { deriveDurableFinalDeliveryRequirements } from "../message/capabilities.js";
 import {
   durableMessageBatchMayHaveReachedRecipient,
@@ -25,7 +38,6 @@ import {
   createChannelDeliveryResultFromReceipt,
   createChannelPartialDeliveryError,
 } from "./delivery-result.js";
-import { withDurableDeliveryRuntime } from "./durable-delivery-runtime.js";
 import type {
   ChannelDeliveryInfo,
   ChannelDeliveryResult,
@@ -146,8 +158,68 @@ async function deliverInboundReplyWithMessageSendContext(
   }
 
   try {
-    return await withDurableDeliveryRuntime(input, (cfg, assertCurrent) =>
-      deliverAdmittedInboundReply({ ...input, cfg }, sendBatch, assertCurrent),
+    // Final delivery is a new operation of the admitting Gateway, not of the completed model turn.
+    const deliver = (cfg: OpenClawConfig, assertCurrent?: () => void) =>
+      deliverAdmittedInboundReply({ ...input, cfg }, sendBatch, assertCurrent);
+    const registry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+    const owner = registry && getPluginRegistryGatewayOwner(registry);
+    if (!registry || !owner) {
+      return await deliver(input.cfg);
+    }
+    const current = owner.current();
+    const reject = (message: string): never => {
+      throw new PlatformMessageNotDispatchedError(message, {
+        cause: new Error(message),
+        retryable: false,
+      });
+    };
+    if (!current) {
+      return reject("The Gateway that admitted this reply is closing.");
+    }
+    const assertCurrent = () => {
+      if (owner.current() !== current) {
+        reject("The reply delivery runtime changed before sending.");
+      }
+    };
+    if (current === registry || isPluginRegistryGatewayViewOf(registry, current)) {
+      // A filtered agent registry is still this publication, not a reload handoff.
+      // The completed model turn must not select or own the final transport.
+      return await runOutsidePluginRuntimeGenerationScope(() =>
+        withPluginRuntimeRegistryScope(current, () => deliver(input.cfg, assertCurrent)),
+      );
+    }
+    const cfg = getPluginRuntimeLoadContext(current)?.rawConfig;
+    const channel = current.channels.find((entry) => entry.plugin.id === input.channel);
+    const prepareRuntimeHandoff = input.prepareRuntimeHandoff;
+    const admittedChannel = getPluginRegistryGatewayChannelRegistration(registry, input.channel);
+    const admittedConfig = admittedChannel?.config;
+    const retainedChannel =
+      channel &&
+      admittedChannel?.pluginId === channel.pluginId &&
+      admittedChannel.plugin === channel.plugin;
+    if (
+      !cfg ||
+      !admittedConfig ||
+      !isDeepStrictEqual(cfg.channels?.[input.channel], admittedConfig.channels?.[input.channel]) ||
+      !isDeepStrictEqual(cfg.channels?.defaults, admittedConfig.channels?.defaults) ||
+      !channel ||
+      !retainedChannel ||
+      !isDeepStrictEqual(
+        cfg.plugins?.entries?.[channel.pluginId],
+        admittedConfig.plugins?.entries?.[channel.pluginId],
+      )
+    ) {
+      return reject("The reply channel changed; delivery was not started.");
+    }
+    // Drop both inherited generation selectors, but retain the exact authenticated caller.
+    // The retained registration and unchanged settings keep the admitted sender. Channels whose
+    // credential can change outside config (env, files, SecretRefs) pin it through the callback.
+    return await runOutsidePluginRuntimeGenerationScope(() =>
+      withPluginRuntimeRegistryScope(current, () => {
+        const preparedCfg = prepareRuntimeHandoff ? prepareRuntimeHandoff(cfg) : cfg;
+        assertCurrent();
+        return deliver(preparedCfg, assertCurrent);
+      }),
     );
   } catch (error) {
     return { status: "failed", error };
