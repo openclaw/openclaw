@@ -67,6 +67,7 @@ describe("Gateway operation policy reload", () => {
     "update.checkOnStart",
     "update.channel",
     "update.auto.enabled",
+    "update.auto.schedule",
     "telemetry.enabled",
     "telemetry.consentedAt",
   ])("hot-applies operation policy without restarting subsystems: %s", (path) => {

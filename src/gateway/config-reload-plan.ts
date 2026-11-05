@@ -280,6 +280,7 @@ const DEFAULT_RELOAD_POLICIES: ReloadPolicy[] = [
       "update.checkOnStart",
       "update.channel",
       "update.auto.enabled",
+      "update.auto.schedule",
       "telemetry.enabled",
       "telemetry.consentedAt",
     ],

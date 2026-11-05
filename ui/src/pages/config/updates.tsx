@@ -42,6 +42,7 @@ import { formatDateTimeMs, formatTimeAgo } from "../../lib/format.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { RecordedAttempt } from "./updates-recorded-attempt.tsx";
+import { UpdatesSchedule } from "./updates-schedule.tsx";
 import { UpdatesStatus } from "./updates-status.tsx";
 import {
   UPDATES_CHANNELS,
@@ -368,6 +369,7 @@ function GatewayUpdates(props: UpdatesViewProps) {
       channel,
       autoEnabled:
         typeof auto?.enabled === "boolean" ? auto.enabled : (schedule?.autoEnabled ?? false),
+      expression: typeof auto?.schedule === "string" ? auto.schedule : undefined,
       extendedStable: channel === "extended-stable",
     };
   };
@@ -475,6 +477,13 @@ function GatewayUpdates(props: UpdatesViewProps) {
           }
           onChange={props.onAutomaticUpdatesChange}
         />
+        <Show when={!settings().extendedStable && !devPackageInstall()}>
+          <UpdatesSchedule
+            expression={settings().expression}
+            disabled={props.configBusy || checksDisabled() || !settings().autoEnabled}
+            onChange={(expression) => props.onAutomaticScheduleChange(expression)}
+          />
+        </Show>
       </SettingsSection>
       <SettingsSection title={t("updates.page.statusTitle")}>
         <SettingsRow

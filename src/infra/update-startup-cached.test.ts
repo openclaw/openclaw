@@ -14,7 +14,8 @@ import {
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { createGatewayUpdateLifecycle } from "./update-check-lifecycle.js";
 import { checkUpdateStatus, resolveNpmChannelTag } from "./update-check.js";
-import { createGatewayUpdateCheck, runGatewayUpdateCheck } from "./update-startup.js";
+import { createGatewayUpdateCheck } from "./update-startup-scheduler.js";
+import { runGatewayUpdateCheck } from "./update-startup.js";
 import { getGatewayUpdateSchedule } from "./update-status-schedule.js";
 import { getUpdateAvailable, resetUpdateStatusState } from "./update-status-state.js";
 
