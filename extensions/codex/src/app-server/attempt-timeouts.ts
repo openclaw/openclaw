@@ -1,3 +1,4 @@
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   MAX_TIMER_TIMEOUT_MS,
   addTimerTimeoutGraceMs,
@@ -17,7 +18,7 @@ export const TURN_FINALIZE_DRAIN_ABORT_GRACE_MS = 5_000;
 
 type CodexAppServerStartupErrorReason = "aborted" | "timed_out";
 
-export class CodexAppServerStartupError extends Error {
+export class CodexAppServerStartupError extends AgentHarnessPreflightError {
   readonly code = "CODEX_APP_SERVER_STARTUP_CANCELLED";
 
   constructor(
@@ -26,7 +27,11 @@ export class CodexAppServerStartupError extends Error {
       ? "codex app-server startup timed out"
       : "codex app-server startup aborted",
   ) {
-    super(message);
+    // This deadline expires before turn/start, not during model inference.
+    // Trying every fallback model on the same blocked harness repeats the entire
+    // startup wait without making progress. Preserve the original cancellation
+    // identity while letting the host skip candidates using this same harness.
+    super(message, { scope: "harness" });
     this.name = "CodexAppServerStartupError";
   }
 }

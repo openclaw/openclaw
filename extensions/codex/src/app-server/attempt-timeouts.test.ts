@@ -1,4 +1,5 @@
 // Codex tests cover attempt timeouts plugin behavior.
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -100,6 +101,8 @@ describe("Codex app-server attempt timeouts", () => {
     await vi.advanceTimersByTimeAsync(5);
     const error = await errorResult;
     expect(isCodexAppServerStartupError(error, "timed_out")).toBe(true);
+    expect(error).toBeInstanceOf(AgentHarnessPreflightError);
+    expect(error).toMatchObject({ scope: "harness" });
     expect((error as Error).message).toBe("codex app-server startup timed out");
     expect(events).toEqual(["cleanup-start", "cleanup-done"]);
   });
@@ -118,6 +121,9 @@ describe("Codex app-server attempt timeouts", () => {
 
     const error = await errorResult;
     expect(isCodexAppServerStartupError(error, "aborted")).toBe(true);
+    // A watchdog cancellation must not become a retry on another model either.
+    expect(error).toBeInstanceOf(AgentHarnessPreflightError);
+    expect(error).toMatchObject({ scope: "harness" });
     expect((error as Error).message).toBe("codex app-server startup aborted");
   });
 });

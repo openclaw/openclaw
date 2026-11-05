@@ -348,10 +348,18 @@ export async function retainSharedCodexAppServerClientByInstanceId(clientId: str
     const release = retainSharedClientEntry(entry);
     return {
       client,
-      // Only writer handoffs should wait for a still-usable retired owner.
-      release: (waitForRetirement = false) => {
+      // Process-owned writers still require the physical-exit fence. A confirmed
+      // unsubscribe on an external socket releases only this thread: waiting for
+      // the whole connection would also wait for unrelated, possibly persistent
+      // sibling work. Socket exit does not own the remote process in any case.
+      release: (waitForRetirement = false, options?: { subscriptionReleased: boolean }) => {
+        const transport = state.startMetadata.get(client)?.startOptions.transport;
+        const releasedSocketSubscription =
+          options?.subscriptionReleased === true &&
+          (transport === "websocket" || transport === "unix");
         release();
-        return client.getCloseError() || (waitForRetirement && entry.closeWhenIdle)
+        return client.getCloseError() ||
+          (waitForRetirement && entry.closeWhenIdle && !releasedSocketSubscription)
           ? waitForCodexAppServerClientExit(client)
           : undefined;
       },
