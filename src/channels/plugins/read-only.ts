@@ -458,29 +458,6 @@ export function resolveReadOnlyChannelPluginsForConfig(
   return resolveReadOnlyChannelPluginsFromIds(cfg, options, context, configuredChannelIds);
 }
 
-export async function resolveReadOnlyChannelPluginsForConfigAsync(
-  cfg: OpenClawConfig,
-  options: ReadOnlyChannelPluginOptions = {},
-): Promise<ReadOnlyChannelPluginResolution> {
-  const context = resolveReadOnlyChannelContext(cfg, options);
-  const { activationSourceConfig, workspaceDir, env, manifestRecords } = context;
-  // Same scope as the sync resolver, but async presence probes avoid deprecated sync plugin state.
-  const listConfiguredIds = (config: OpenClawConfig) =>
-    listConfiguredChannelIdsForReadOnlyScopeAsync({
-      config,
-      activationSourceConfig,
-      workspaceDir,
-      env,
-      includePersistedAuthState: options.includePersistedAuthState,
-      manifestRecords,
-    });
-  const configuredChannelIds = uniqueStrings([
-    ...(await listConfiguredIds(cfg)),
-    ...(activationSourceConfig === cfg ? [] : await listConfiguredIds(activationSourceConfig)),
-  ]).filter(isSafeManifestChannelId);
-  return resolveReadOnlyChannelPluginsFromIds(cfg, options, context, configuredChannelIds);
-}
-
 export async function listReadOnlyChannelPluginsForConfigAsync(
   cfg: OpenClawConfig,
   options: ReadOnlyChannelPluginOptions = {},
