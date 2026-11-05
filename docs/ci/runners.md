@@ -209,6 +209,9 @@ their SHA-512 hashes in private staging before extraction; missing or invalid
 archives fall back to the runner image, then the registry. Exact dependency
 archives carry the same files, and dependency repair preserves them. Store v2
 and exact-dependency v4 entries reseed once to include these bootstrap archives.
+Vitest transform and Node compile caches use workspace-relative `.cache/` roots
+so archives restore across different runner workspace layouts. Their new namespaces
+exclude older archives containing absolute-host paths.
 Cache publication still belongs to the existing warmer on each backend.
 Node discovery scans only the toolcache's executable levels, avoiding bundled
 npm dependency trees before selecting an already-installed runtime.
