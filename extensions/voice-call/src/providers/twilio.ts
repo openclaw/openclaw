@@ -417,7 +417,7 @@ export class TwilioProvider implements VoiceCallProvider {
         return TwilioProvider.EMPTY_TWIML;
       }
       return `<?xml version="1.0" encoding="UTF-8"?><Response>
-  ${buildSpeechGather(webhookUrl, ctx.query?.language, normalizeOptionalString(ctx.query?.turnToken))}
+  ${buildSpeechGather(webhookUrl, normalizeOptionalString(ctx.query?.language), normalizeOptionalString(ctx.query?.turnToken))}
 </Response>`;
     }
     if (direction === "inbound") {

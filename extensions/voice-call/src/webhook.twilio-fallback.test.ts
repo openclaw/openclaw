@@ -148,7 +148,12 @@ function listening(xml: string) {
   expect(xml).not.toMatch(/<Pause|<Hangup/);
   const target = xml.match(/<Redirect method="POST">([^<]+)<\/Redirect>/)?.[1];
   expect(target).toBeDefined();
-  return String(target).replaceAll("&amp;", "&");
+  const action = gather?.match(/\baction="([^"]+)"/)?.[1];
+  expect(action).toBeDefined();
+  return {
+    redirect: String(target).replaceAll("&amp;", "&"),
+    action: String(action).replaceAll("&amp;", "&"),
+  };
 }
 
 it.each(["inbound", "outbound"] as const)(
@@ -170,7 +175,7 @@ it("renews silent gathers and delivers the next reply through the signed webhook
   expect(
     await f.manager.speak(call.callId, "Take your time.", { listenAfterPlayback: true }),
   ).toEqual({ success: true });
-  let redirect = listening(f.updates().at(-1)!);
+  let { redirect, action } = listening(f.updates().at(-1)!);
   const beforeSilence = f.updates().length;
   for (let i = 0; i < 2; i++) {
     // Real silence callbacks can have identical form fields. Each returned
@@ -178,17 +183,17 @@ it("renews silent gathers and delivers the next reply through the signed webhook
     const response = await f.post(redirect);
     expect(response.status).toBe(200);
     const next = listening(response.body);
-    expect(next).not.toBe(redirect);
-    redirect = next;
+    expect(next.redirect).not.toBe(redirect);
+    ({ redirect, action } = next);
     expect(response.body).not.toContain("<Say");
     expect(f.updates()).toHaveLength(beforeSilence);
   }
-  expect(await f.post(redirect, { SpeechResult: "Untrusted input." }, "invalid")).toEqual({
+  expect(await f.post(action, { SpeechResult: "Untrusted input." }, "invalid")).toEqual({
     status: 401,
     body: "Unauthorized",
   });
   expect(mocks.generate).not.toHaveBeenCalled();
-  expect((await f.post(redirect, { SpeechResult: "Hello again." })).status).toBe(200);
+  expect((await f.post(action, { SpeechResult: "Hello again." })).status).toBe(200);
   await f.released.promise;
   expect(mocks.generate).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ userMessage: "Hello again." }),
@@ -220,14 +225,14 @@ it("keeps an explicit conversation prompt playing and resolves its token-scoped 
   await ready.promise;
   const prompt = f.updates().at(-1)!;
   expect(prompt).toMatch(/<Say[^>]*>What next\?<\/Say>\s*<Gather/);
-  const redirect = listening(prompt);
+  const { redirect } = listening(prompt);
   const token = new URL(redirect).searchParams.get("turnToken");
   expect(token).toBeTruthy();
   const silent = await f.post(redirect);
   expect(silent.status).toBe(200);
   const next = listening(silent.body);
-  expect(new URL(next).searchParams.get("turnToken")).toBe(token);
-  expect((await f.post(next, { SpeechResult: "Keep going." })).status).toBe(200);
+  expect(new URL(next.redirect).searchParams.get("turnToken")).toBe(token);
+  expect((await f.post(next.action, { SpeechResult: "Keep going." })).status).toBe(200);
   expect(await turn).toEqual({ success: true, transcript: "Keep going." });
   expect(f.updates()).toHaveLength(before + 1);
   expect(mocks.generate).not.toHaveBeenCalled();
