@@ -8,13 +8,9 @@ if (!Array.isArray(input) || !input.every((pathname) => typeof pathname === "str
   throw new Error("SQLite header probe expects a JSON array of paths");
 }
 const paths: string[] = input;
-let unreadable: { code: unknown; errno: unknown; path: string } | undefined;
 const retriedSources: string[] = [];
-const results = paths.map((candidate) => {
-  if (unreadable) {
-    return false;
-  }
-  const pathname = path.resolve(candidate);
+
+function probeSqliteHeader(pathname: string): boolean {
   for (let attempt = 0; ; attempt++) {
     try {
       if (!fs.lstatSync(pathname).isFile()) {
@@ -51,15 +47,26 @@ const results = paths.map((candidate) => {
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
         continue;
       }
-      unreadable = {
-        code,
-        errno: error instanceof Error && "errno" in error ? error.errno : undefined,
-        path: pathname,
-      };
-      return false;
+      throw error;
     }
   }
-});
+}
+
+const results: boolean[] = [];
+let unreadable: { code: unknown; errno: unknown; path: string } | undefined;
+for (const candidate of paths) {
+  const pathname = path.resolve(candidate);
+  try {
+    results.push(probeSqliteHeader(pathname));
+  } catch (error) {
+    unreadable = {
+      code: error instanceof Error && "code" in error ? error.code : undefined,
+      errno: error instanceof Error && "errno" in error ? error.errno : undefined,
+      path: pathname,
+    };
+    break;
+  }
+}
 if (unreadable) {
   // Descriptor read errors omit their path. Never publish partial classifications.
   process.stderr.write(JSON.stringify(unreadable));
