@@ -6,7 +6,6 @@ import {
   chatDisplaySourceKey,
   chatRowDisplaySchema,
   boundChatThumbnails,
-  projectChatRowDisplay,
   MAX_CHAT_THUMBNAILS,
   MAX_CHAT_THUMBNAIL_BYTES,
   type ChatDisplayFacts,
@@ -25,7 +24,6 @@ import {
 } from "./history-merge.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 import {
-  MAX_CACHED_CHAT_SNAPSHOT_WEIGHT,
   MAX_CACHED_CHAT_WEIGHT,
   boundChatSessionSnapshot,
   serializedArrayItemWeight,
@@ -424,8 +422,7 @@ export function appendChatMessageToCache(
     }
     claims.add(eventClaim);
   }
-  const messageWeight = serializedArrayItemWeight(message);
-  if (messageWeight === null) {
+  if (serializedArrayItemWeight(message) === null) {
     deleteChatSnapshot(cache, cacheKey, "cache-eviction");
     return;
   }
@@ -444,20 +441,8 @@ export function appendChatMessageToCache(
     // segment. Restore prepares fresh membership and reopens any trimmed edge.
     pagination,
   };
-  if (eventClaim) {
-    cacheChatSessionSnapshot(cache, host, target, snapshot);
-    return;
-  }
-  const weight = existing.weight + messageWeight + (existing.snapshot.messages.length > 0 ? 1 : 0);
-  if (weight > MAX_CACHED_CHAT_SNAPSHOT_WEIGHT) {
-    cacheChatSessionSnapshot(cache, host, target, snapshot);
-    return;
-  }
-  setSessionCacheValue(cache, cacheKey, {
-    snapshot,
-    weight,
-  });
-  trimChatSessionSnapshotCache(cache, cacheKey);
+  // Admission reweighs changed coverage and retires display facts outside its window.
+  cacheChatSessionSnapshot(cache, host, target, snapshot);
 }
 
 export function readChatMessagesFromCache(
@@ -552,10 +537,7 @@ export function cacheChatSessionSnapshot(
     deleteChatSnapshot(cache, cacheKey, "cache-eviction");
     return;
   }
-  const rowDisplay = projectChatRowDisplay(snapshot);
-  const bounded = boundChatSessionSnapshot(
-    rowDisplay === snapshot.rowDisplay ? snapshot : { ...snapshot, rowDisplay },
-  );
+  const bounded = boundChatSessionSnapshot(snapshot);
   if (!bounded) {
     deleteChatSnapshot(cache, cacheKey, "cache-eviction");
     return;

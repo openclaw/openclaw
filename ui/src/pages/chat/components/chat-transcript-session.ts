@@ -115,10 +115,16 @@ export function createTranscriptPresentation(
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
   rowElements: () => Iterable<HTMLElement>,
   beforeMeasure: () => void,
+  onMeasured?: (row: HTMLElement, height: number) => void,
 ) {
   const readConnectedRows = (): (() => boolean) | null => {
     flushMessageOverflowMeasurements();
-    const apply = readConnectedTranscriptRows(scrollElement(), virtualizer, rowElements());
+    const apply = readConnectedTranscriptRows(
+      scrollElement(),
+      virtualizer,
+      rowElements(),
+      onMeasured,
+    );
     return apply
       ? () => {
           beforeMeasure();

@@ -48,9 +48,9 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Bounded resident history and snapshot validation measure 1,287,226 B gzip.
+  // Bounded history, canonical snapshot admission, and stable reader geometry measure 1,288,557 B gzip.
   // Retain the 811 B headroom from the prior Chat boot budget.
-  chatBootJsGzipBytes: 1_288_037,
+  chatBootJsGzipBytes: 1_289_368,
   newBootJsGzipBytes: 797_395,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.

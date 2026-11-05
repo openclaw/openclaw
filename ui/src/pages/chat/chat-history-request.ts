@@ -14,7 +14,6 @@ import { subscribeToSharedRequest } from "../../lib/shared-request-subscription.
 import {
   chatHistoryRequestParams,
   type ChatHistoryRequestBudget,
-  type CHAT_HISTORY_REQUEST_LIMIT,
 } from "./chat-history-request-params.ts";
 import { retryChatHistoryRead } from "./chat-history-retry.ts";
 import {
@@ -396,17 +395,12 @@ export type OlderHistorySelector =
   | {
       messageId: string;
       sessionId: string;
+      limit?: 1;
       continuity?: Pick<
         NonNullable<ChatHistoryResult["continuity"]>,
         "cursor" | "activeLeafEntryId"
       >;
     };
-
-export type ChatHistoryPageReadSelector =
-  | OlderHistorySelector
-  | (Extract<OlderHistorySelector, { messageId: string }> & {
-      limit: typeof CHAT_HISTORY_REQUEST_LIMIT;
-    });
 
 export function chatHistoryPageSelector(
   state: ChatState,
@@ -430,14 +424,15 @@ export function chatHistoryPageSelector(
     chatHistoryWindowBoundary(state.chatMessages, pagination, direction),
   );
   const sessionId = state.currentSessionId?.trim();
-  return messageId && sessionId ? { messageId, sessionId } : null;
+  // Reopening an edge needs only its source group; around reads keep their window.
+  return messageId && sessionId ? { messageId, sessionId, limit: 1 } : null;
 }
 
 export async function requestOlderChatHistoryPage(
   client: GatewayBrowserClient,
   sessionKey: string,
   requestAgentId: string | undefined,
-  selector: ChatHistoryPageReadSelector,
+  selector: OlderHistorySelector,
   isCurrent: () => boolean,
   signal?: AbortSignal,
   requestBudget?: ChatHistoryRequestBudget,
@@ -490,7 +485,7 @@ export function createChatHistoryPageRead(state: ChatState, speculative = false)
     claim,
     isCurrent: () => acceptsHistoryResult(state, claim),
     read: async (
-      selector: ChatHistoryPageReadSelector,
+      selector: OlderHistorySelector,
       signal: AbortSignal,
       budget?: ChatHistoryRequestBudget,
       ownsIntent?: () => boolean,
@@ -512,7 +507,7 @@ export function createChatHistoryPageRead(state: ChatState, speculative = false)
 
 export async function loadOlderChatHistoryPage(
   state: ChatState,
-  selector: ChatHistoryPageReadSelector,
+  selector: OlderHistorySelector,
   signal = new AbortController().signal,
   ownsIntent?: () => boolean,
 ): Promise<ChatHistoryResult | undefined> {

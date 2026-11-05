@@ -147,7 +147,7 @@ export abstract class ChatPaneReplyNavigation extends ChatPaneSession {
         }
         const result = await loadOlderChatHistoryPage(
           state,
-          { messageId, sessionId: state.currentSessionId },
+          { messageId, sessionId: state.currentSessionId, limit: 1 },
           signal,
           isCurrent,
         );

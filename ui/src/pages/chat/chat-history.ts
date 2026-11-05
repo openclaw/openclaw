@@ -116,11 +116,7 @@ export async function restoreChatHistoryBookmark(
     // reopen can clamp a short target to the bottom before that offset is reached.
     const result = await loadOlderChatHistoryPage(
       state,
-      {
-        messageId: bookmark.messageId,
-        sessionId: bookmark.sessionId,
-        limit: CHAT_HISTORY_REQUEST_LIMIT,
-      },
+      { messageId: bookmark.messageId, sessionId: bookmark.sessionId },
       signal,
       isCurrent,
     );

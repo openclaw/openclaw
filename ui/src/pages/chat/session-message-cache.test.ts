@@ -77,18 +77,21 @@ describe("session message cache", () => {
     expect(toJSON).toHaveBeenCalledTimes(1);
   });
 
-  it("evicts unserializable cached rows while resident admission still reports the error", () => {
-    const circular: { self?: unknown } = {};
-    circular.self = circular;
-    const { write, read, append } = createCacheContext();
-    for (const message of [circular, 1n]) {
-      write(widgetSnapshot(["retained before invalid receipt"]));
-      expect(read()).toBeDefined();
-      expect(() => messageWeight(message)).toThrow();
-      append("home", message);
-      expect(read()).toBeNull();
-    }
-  });
+  it.each([false, true])(
+    "evicts unserializable cached rows before claimed=%s admission",
+    (claimed) => {
+      const circular: { self?: unknown } = {};
+      circular.self = circular;
+      const { write, read, append } = createCacheContext();
+      for (const message of [circular, 1n]) {
+        write(widgetSnapshot(["retained before invalid receipt"]));
+        expect(read()).toBeDefined();
+        expect(() => messageWeight(message)).toThrow();
+        append("home", message, claimed ? {} : undefined);
+        expect(read()).toBeNull();
+      }
+    },
+  );
 
   it("publishes changed older edges without inventing numeric coverage", () => {
     const { cache, write, read } = createCacheContext();
@@ -560,6 +563,60 @@ describe("session message cache", () => {
     append(target, final, event);
     append(target, final, event);
     expect(messages(target)).toEqual([cached, final]);
+  });
+
+  it("charges only the admitted envelope after an unclaimed append retires segments", () => {
+    const { cache, write, read, append } = createCacheContext();
+    const cached = { role: "assistant", content: "cached", __openclaw: { seq: 1 } };
+    const delivered = { role: "user", content: "delivered", __openclaw: { seq: 2 } };
+    write(
+      widgetSnapshot([cached], "session-1", {
+        pagination: {
+          hasMore: false,
+          segments: [{ sources: ["seq:1"], hasOlder: false, hasNewer: false }],
+        },
+      }),
+    );
+    const publish = vi.fn();
+    observeChatCache(cache, { write: publish, delete: vi.fn() });
+    append("home", delivered);
+    const snapshot = read();
+    expect(snapshot?.messages).toEqual([cached, delivered]);
+    expect(snapshot?.pagination).toEqual({ hasMore: false });
+    expect(publish).toHaveBeenCalledExactlyOnceWith(
+      expect.any(String),
+      snapshot,
+      JSON.stringify(snapshot).length,
+    );
+  });
+
+  it("retires row display bytes outside the display window after an unclaimed append", () => {
+    const { cache, write, read, append } = createCacheContext();
+    const messages = Array.from({ length: 80 }, (_, index) => ({
+      role: "assistant",
+      content: "cached",
+      __openclaw: { id: `m-${index}`, seq: index + 1 },
+    }));
+    const thumbnail = new Blob(["old preview"], { type: "image/webp" });
+    const first = {
+      images: { source: { width: 480, height: 240, rendition: 480 as const, thumbnail } },
+    };
+    const last = { links: { source: { title: "Retained preview" } } };
+    write(widgetSnapshot(messages, "session-1", { rowDisplay: { "m-0": first, "m-79": last } }));
+    expect(read()?.rowDisplay?.["m-0"]).toBe(first);
+    const publish = vi.fn();
+    observeChatCache(cache, { write: publish, delete: vi.fn() });
+    const delivered = { role: "user", content: "delivered", __openclaw: { id: "m-80", seq: 81 } };
+    append("home", delivered);
+    const snapshot = read();
+    expect(snapshot?.messages).toEqual([...messages, delivered]);
+    expect(snapshot?.rowDisplay).toEqual({ "m-79": last });
+    expect(snapshot?.rowDisplay?.["m-79"]).toBe(last);
+    expect(publish).toHaveBeenCalledExactlyOnceWith(
+      expect.any(String),
+      snapshot,
+      JSON.stringify(snapshot).length,
+    );
   });
 
   it("does not retain history across backing session changes", () => {

@@ -15,7 +15,7 @@ import {
 } from "./chat-history-request-params.ts";
 import {
   attachHistoryActivity,
-  type ChatHistoryPageReadSelector,
+  type OlderHistorySelector,
   createChatHistoryPageRead,
   chatHistoryPageSelector,
   type StagedOlderHistoryPage,
@@ -41,7 +41,7 @@ export async function requestOlderChatHistoryPage(
   client: GatewayBrowserClient,
   sessionKey: string,
   requestAgentId: string | undefined,
-  selector: ChatHistoryPageReadSelector,
+  selector: OlderHistorySelector,
   isCurrent: () => boolean,
   signal?: AbortSignal,
   requestBudget?: ChatHistoryRequestBudget,
@@ -50,7 +50,7 @@ export async function requestOlderChatHistoryPage(
   let smallOnly = false;
   for (;;) {
     const issued = {
-      limit: "messageId" in selector && !selector.continuity ? 1 : CHAT_HISTORY_REQUEST_LIMIT,
+      limit: CHAT_HISTORY_REQUEST_LIMIT,
       maxBytes: CHAT_HISTORY_REQUEST_MAX_BYTES,
       ...("cursor" in selector && !selector.limit ? budget : {}),
       ...("limit" in selector ? { limit: selector.limit } : {}),

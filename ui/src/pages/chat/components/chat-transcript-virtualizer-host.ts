@@ -232,7 +232,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
             getScrollElement: () => this.scrollElement,
             prependAnchor: this.prependAnchor,
             endAnchor: this.endAnchor,
-            canFollowEnd: () => this.canAutoFollow(),
+            canFollowEnd: this.canAutoFollow,
             isProgrammaticScroll: () => this.isProgrammaticScroll,
             isMaintenanceScroll: () => this.isMaintenanceScroll,
             cancelScroll: () => this.cancelScroll(),
@@ -262,15 +262,15 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       scrollEndThreshold: -1,
       overscan: CHAT_TRANSCRIPT_OVERSCAN,
     });
-    // Initial placement owns compensation until it finishes; the reader anchor owns it after.
+    // Positioning owners restore their anchors; boot offsets must follow native measurements.
     this.virtualizer.shouldAdjustScrollPositionOnItemSizeChange = this.readerAnchor.landSize;
-    // A boot re-anchor can precede its native extent; only reader geometry may override it.
     const beforeMeasure = () => this.initialRange.reading && this.offsetState.syncNativeOffset?.();
     this.presentation = createTranscriptPresentation(
       () => this.scrollElement,
       this.virtualizer,
       () => this.rowRefs.elements,
       beforeMeasure,
+      this.readerAnchor.recordOwnedMeasurement,
     );
     this.rowRefs = new TranscriptRowRefs(this.virtualizer, {
       isCurrentRow: (element, key) =>
@@ -608,9 +608,8 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     return this.prependAnchor.bookmark(this.scrollElement);
   }
 
-  private canAutoFollow(): boolean {
-    return canFollowTranscriptEnd(this.bookmarkState, this.offsetState, this.callbacks);
-  }
+  private readonly canAutoFollow = () =>
+    canFollowTranscriptEnd(this.bookmarkState, this.offsetState, this.callbacks);
 
   scrollToEnd({ source = "manual", behavior = "auto" }: ChatScrollToEndOptions = {}): boolean {
     // Hydration/resize follow cannot replace a saved reader. A new latest
@@ -775,7 +774,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       presentation: this.presentation,
       renderer: this.renderer,
       scrollRestoreHost: this.scrollRestoreHost,
-      canAutoFollow: () => this.canAutoFollow(),
+      canAutoFollow: this.canAutoFollow,
       scrollToEnd: (options) => this.scrollToEnd(options),
       invalidate: this.invalidate,
     });
