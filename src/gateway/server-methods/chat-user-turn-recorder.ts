@@ -50,6 +50,9 @@ import type { GatewayClient } from "./shared-types.js";
 
 export type GatewayChatUserTurnPersist = (options?: {
   contextFreeCommand?: true;
+  sessionLifecyclePatch?: NonNullable<
+    Parameters<UserTurnTranscriptRecorder["persistApproved"]>[0]
+  >["sessionLifecyclePatch"];
 }) => ReturnType<UserTurnTranscriptRecorder["persistFallback"]>;
 
 type GatewayChatUserTurnController = {
@@ -389,7 +392,7 @@ export function createGatewayChatUserTurnController(params: {
     }
     const persisted = await measureDiagnosticsTimelineSpan(
       "gateway.chat_send.persist_user_transcript",
-      () => recorder.persistFallback(),
+      () => recorder.persistFallback(options),
       {
         phase: "agent-turn",
         config: session.cfg,

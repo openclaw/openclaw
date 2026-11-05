@@ -166,7 +166,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     retainWorkAdmission: retainGatewayWorkAdmission,
     armOperatorRunCancellation: admission.armOperatorRunCancellation,
     retireOperatorRunCancellation: admission.retireOperatorRunCancellation,
-    recordUnstartedFailure: (failure) => dispatchErrorLifecycle.recordUnstartedOutcome(failure),
+    recordUnstartedFailure: (failure) => dispatchErrorLifecycle.recordUnstartedFailure(failure),
   });
   const injectionDisposition = createChatSendInjectionDisposition(
     {
@@ -589,7 +589,14 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
             await finalizeChatSendDispatchedReplies({
               ...replyFinalization,
               foldCommandBlocks: isInternalTextSlashCommandTurn || replyDispatchRun !== undefined,
-              persistUserTurnTranscript: persistGatewayUserTurnTranscriptBestEffort,
+              persistUserTurnTranscript: (options) =>
+                persistGatewayUserTurnTranscriptBestEffort({
+                  ...options,
+                  // Completed commands have no runtime to resume or terminalize.
+                  ...(!agentRunStarted
+                    ? { sessionLifecyclePatch: { lastInteractionAt: session.now } }
+                    : {}),
+                }),
               suppressReplies: !replyDispatchRun && replyDispatch.hasAppendedWebchatAgentMedia(),
               // Bound ACP writes its own transcript; the dashboard still needs its reply.
               runtimeOwnsTranscript:
@@ -612,7 +619,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
             (hasReturnedAgentError && (runtimeFailed || !finalizedSourceReply));
           if (!context.chatRunState.hasAbortMarker(clientRunId)) {
             if (hasTerminalAgentError && !dispatchResult.collaborativeSteeringRefused) {
-              await dispatchErrorLifecycle.recordUnstartedOutcome({
+              await dispatchErrorLifecycle.recordUnstartedFailure({
                 error: returnedAgentErrorMessage ?? "agent returned an error payload",
                 notice: returnedAgentErrorMessage,
               });

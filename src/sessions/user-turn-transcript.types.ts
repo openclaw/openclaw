@@ -315,6 +315,8 @@ export type UserTurnTranscriptRecorder = {
     params?: UserTurnPersistenceOptions,
   ) => Promise<UserTurnTranscriptPersistResult | undefined>;
   persistFallback: (
-    params?: UserTurnPersistenceOptions,
+    params?: UserTurnPersistenceOptions & {
+      sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
+    },
   ) => Promise<UserTurnTranscriptPersistResult | undefined>;
 };
