@@ -411,7 +411,30 @@ export async function createQaCrablineTransportAdapter(params: {
     };
     observeEvent = state.observeEvent;
     const { selection, transportPolicy } = params;
-    const stateMethods = createQaTransportStateMethods({ state, accountId: adapter.accountId });
+    const timeoutDiagnostics =
+      selection.channel === "matrix"
+        ? {
+            describeTransportState: () => {
+              // Publish only Crabline's generated event IDs, never arbitrary bus content.
+              const ids = state
+                .getSnapshot()
+                .messages.filter(
+                  (message) =>
+                    message.accountId === adapter.accountId &&
+                    message.direction === "inbound" &&
+                    /^\$[A-Za-z0-9_-]{43}$/u.test(message.id),
+                )
+                .slice(-8)
+                .map((message) => message.id);
+              return `matrix inbound event IDs=${JSON.stringify(ids)}`;
+            },
+          }
+        : {};
+    const stateMethods = createQaTransportStateMethods({
+      state,
+      accountId: adapter.accountId,
+      ...timeoutDiagnostics,
+    });
     const hooks: Pick<
       QaTransportAdapter,
       | "prepareFlow"
@@ -478,6 +501,7 @@ export async function createQaCrablineTransportAdapter(params: {
     }
     return {
       ...stateMethods,
+      ...timeoutDiagnostics,
       ...hooks,
       id: "crabline",
       label: `crabline local ${selection.channel}`,

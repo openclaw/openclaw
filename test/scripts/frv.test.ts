@@ -1077,6 +1077,35 @@ describe("FRV continuation preflight", () => {
     expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
     expect(fixture.client.rerunParent).not.toHaveBeenCalled();
   });
+  it.each(["parent", "child"])(
+    "rechecks the producer before uncertain %s retry",
+    async (target) => {
+      const fixture = artifactFixture();
+      if (target === "child") {
+        const read = fixture.client.getRun.getMockImplementation()!;
+        fixture.client.getRun.mockImplementation(async (id) =>
+          id === "101" ? runFor(fixture.selected, 1, "failure") : read(id),
+        );
+        fixture.client.getAttemptJobs = async () => [job("test", "failure")];
+      }
+      const mutation = target === "child" ? fixture.client.rerunFailed : fixture.client.rerunParent;
+      mutation.mockImplementation(async () => {
+        fixture.producer.head_sha = "c".repeat(40);
+        throw Object.assign(new Error("gh api failed"), {
+          stderr: "gh: request failed (HTTP 502)",
+        });
+      });
+      await withFastPolling(
+        () =>
+          expect(continueFailed(fixture.plan, "77", fixture.client)).rejects.toThrow(
+            "identity changed",
+          ),
+        "5",
+      );
+      expect(mutation).toHaveBeenCalledOnce();
+    },
+  );
+
   it("rejects deleted B admission before continuation can select rerun effects", async () => {
     const selected = child("normalCi", "101");
     const client = {

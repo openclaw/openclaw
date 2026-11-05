@@ -1,5 +1,8 @@
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
+import { createQaBusState } from "./bus-state.js";
 import { withTransport } from "./crabline-transport.test-support.js";
+import { createQaTransportAdapter } from "./qa-transport-registry.js";
 
 describe("Crabline provider-native inbound message identity", () => {
   it.each([
@@ -22,6 +25,52 @@ describe("Crabline provider-native inbound message identity", () => {
       });
     },
   );
+
+  it("reports only the last eight owned native Matrix inbound IDs on timeout", async () => {
+    await withTempDir("qa-matrix-timeout-", async (outputDir) => {
+      const state = createQaBusState();
+      const created = await createQaTransportAdapter({
+        channelId: "matrix",
+        driver: "crabline",
+        outputDir,
+        state,
+      });
+      const transport = created.adapter;
+      try {
+        const ids: string[] = [];
+        const input = {
+          conversation: { id: "private-room", kind: "group" as const },
+          senderId: "@private-sender:matrix.test",
+          text: "private message content",
+        };
+        for (let index = 0; index < 10; index += 1) {
+          ids.push((await transport.sendInbound(input)).id);
+        }
+        state.addInboundMessage({ ...input, accountId: "other" }, "$" + "Z".repeat(43));
+        state.addInboundMessage(
+          { ...input, accountId: transport.accountId },
+          "private-nonnative-id",
+        );
+        state.addOutboundMessage({
+          accountId: transport.accountId,
+          to: "group:private-room",
+          text: "private outbound content",
+        });
+        const error = await transport
+          .waitForOutbound({ textIncludes: "missing marker", timeoutMs: 0 })
+          .catch((caught: unknown) => caught);
+        const message = String(error);
+        expect(message).toContain(`matrix inbound event IDs=${JSON.stringify(ids.slice(-8))}`);
+        expect(message).not.toContain(ids[0]);
+        expect(message).not.toContain(ids[1]);
+        expect(message).not.toMatch(
+          /private-room|private-sender|private message content|private outbound content|private-nonnative-id|Z{43}/u,
+        );
+      } finally {
+        await created.cleanupWithoutGateway();
+      }
+    });
+  });
 
   it("preserves Telegram message IDs repeated across independent chats", async () => {
     const input = (id: string) => ({
