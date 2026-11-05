@@ -1,0 +1,5 @@
+# PR #193134: generation reads accept a non-writing connection's zero-commit WAL index.
+# Real node:sqlite connections open or close at the final stable read, a receipt is
+# not reused across the transition, and a commit or a committed writer's retired
+# index still refuses.
+92
