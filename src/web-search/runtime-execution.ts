@@ -3,7 +3,7 @@ import { isTrustedToolExecutionPreflightError } from "../agents/tool-result-erro
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/web-provider-types.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
-import { WebSearchProviderError } from "./runtime-error.js";
+import { isMissingCredentialCode, WebSearchProviderError } from "./runtime-error.js";
 import type { RunWebSearchResult } from "./runtime-types.js";
 
 type ExecuteWebSearchCandidatesParams = {
@@ -18,12 +18,14 @@ type ExecuteWebSearchCandidatesParams = {
   allowFallback: boolean;
 };
 
-function isStructuredAvailabilityError(result: unknown): result is { error: string } {
-  if (!result || typeof result !== "object" || !("error" in result)) {
-    return false;
-  }
-  const error = (result as { error?: unknown }).error;
-  return typeof error === "string" && /^missing_[a-z0-9_]*api_key$/i.test(error);
+function isStructuredAvailabilityError(
+  result: unknown,
+): result is Record<string, unknown> & { error: string } {
+  return (
+    typeof result === "object" &&
+    result !== null &&
+    isMissingCredentialCode((result as { error?: unknown }).error)
+  );
 }
 
 export async function executeWebSearchCandidates(
@@ -62,6 +64,7 @@ export async function executeWebSearchCandidates(
         firstFailure ??= new WebSearchProviderError(
           candidate.id,
           new Error(`web_search provider "${candidate.id}" returned ${executed.error}`),
+          executed,
         );
         continue;
       }

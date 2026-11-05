@@ -217,7 +217,7 @@ export async function resolveNodeExecutionTarget(
   const nodes = await listNodes({});
   if (nodes.length === 0) {
     throw new Error(
-      "exec host=node requires a paired node (none available). This requires a companion app or node host.",
+      "exec host=node requires a paired node (none available). This lasts until the operator pairs a companion app or node host, so retrying will not help. Run the command on another exec host if the task allows it, or tell the user a node must be paired.",
     );
   }
   // Canonicalize boundNode and requestedNode (which may be display names, IPs,
@@ -255,7 +255,7 @@ export async function resolveNodeExecutionTarget(
       nameResolveFailed: (reason, eligibleIds) =>
         `${reason} (eligible connected system.run node ids: ${eligibleIds})`,
       noneEligible: () =>
-        "exec host=node requires a connected node that supports system.run (none available). Start or reconnect the companion app or node host.",
+        "exec host=node requires a connected node that supports system.run (none available). This lasts until a node reconnects, so retrying will not help. Run the command on another exec host if the task allows it, or tell the user to start or reconnect the companion app or node host.",
       multipleEligible: (eligible) =>
         `exec host=node requires a node when multiple executable nodes are connected: ${eligible
           .map((node) => (node.displayName ? `${node.nodeId} (${node.displayName})` : node.nodeId))

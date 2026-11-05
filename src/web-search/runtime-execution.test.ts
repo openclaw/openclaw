@@ -3,6 +3,7 @@ import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import type { WebSearchProviderToolDefinition } from "../plugins/web-provider-types.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { createWebSearchTestProvider } from "../test-utils/web-provider-runtime.test-helpers.js";
+import { WebSearchProviderError } from "./runtime-error.js";
 import { executeWebSearchCandidates } from "./runtime-execution.js";
 
 function candidate(id: string, execute: WebSearchProviderToolDefinition["execute"]) {
@@ -68,6 +69,23 @@ describe("executeWebSearchCandidates", () => {
       expect(fail).toHaveBeenCalledOnce();
     },
   );
+
+  it("returns the selected provider's missing-credential payload after fallback is exhausted", async () => {
+    const payload = { error: "missing_fixture_api_key", message: "set FIXTURE_KEY" };
+    const failure = await executeWebSearchCandidates({
+      candidates: [
+        candidate("first", async () => payload),
+        candidate("second", async () => ({ error: "missing_other_api_key" })),
+      ],
+      args: {},
+      allowFallback: true,
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(WebSearchProviderError);
+    expect((failure as WebSearchProviderError).toResult()).toEqual({
+      provider: "first",
+      result: payload,
+    });
+  });
 
   it("gives cancellation precedence over a saved failure and later cleanup error", async () => {
     const controller = new AbortController();
