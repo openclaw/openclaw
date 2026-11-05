@@ -20,6 +20,7 @@ function mountFrame(
   context: ApplicationContext,
   overrides: Parameters<typeof createFrameOwner>[1] = {},
   subscribe = false,
+  proxyReady = true,
 ) {
   const fetchDocument = vi.fn(async () => new Response("<p>Dashboard</p>"));
   vi.stubGlobal("fetch", fetchDocument);
@@ -42,7 +43,9 @@ function mountFrame(
   const post = vi.spyOn(frame.contentWindow!, "postMessage");
   const notify = (data: object, ports: MessagePort[] = []) =>
     dispatchFrameMessage(frame, { origin: new URL(frame.src).origin, data, ports });
-  notify({ method: "ui/notifications/sandbox-proxy-ready", params: { sandboxUrl: frame.src } });
+  if (proxyReady) {
+    notify({ method: "ui/notifications/sandbox-proxy-ready", params: { sandboxUrl: frame.src } });
+  }
   return { root, frame, post, notify, fetchDocument, refresh };
 }
 afterEach(() => {
@@ -195,29 +198,15 @@ it.each([
   "offers sandboxOrigin guidance behind More info after the ready deadline (sandboxOrigin=$sandboxOrigin)",
   async ({ sandboxOrigin, hint }) => {
     vi.useFakeTimers();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("<p>Dashboard</p>")),
-    );
     const context = {
       gateway: {
         snapshot: { phase: "connected" },
         connection: { gatewayUrl: "https://gateway.example" },
       },
     } as ApplicationContext;
-    const root = document.createElement("div");
-    document.body.append(root);
-    const widget = { ...grantedFrameWidgetFixture(), sandboxOrigin };
-    lifecycle = createFrameOwner(() => widget, {
-      connected: () => root.isConnected,
-      context: () => context,
-      refreshFrame: () => vi.fn(async () => {}),
-      resolveFrameUrl: () => () => "/widget?bt=ticket",
-    });
-    onTestFinished(lifecycle.subscribe(() => lifecycle?.update()));
-    mountBoardWidgetFrame(lifecycle, widget, root, disposers);
-    lifecycle.update();
     // The outer sandbox frame never announces readiness.
+    const widget = { ...grantedFrameWidgetFixture(), sandboxOrigin };
+    const { root } = mountFrame(widget, context, {}, true, false);
     await vi.advanceTimersByTimeAsync(30_000);
     flush();
     const notice = root.querySelector('[role="status"]');
