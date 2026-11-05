@@ -3,18 +3,13 @@ import { isMcpAppViewExpiredError } from "@openclaw/gateway-protocol/gateway-err
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { raceWithTimeout } from "@openclaw/retry";
 import type { ApplicationContext } from "../app/context.ts";
-import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { navigateMcpAppLink } from "../app/mcp-app-routing.ts";
-import { hasOperatorReadAccess } from "../app/operator-access.ts";
 import { i18n, t as translate } from "../i18n/index.ts";
 import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
 import { parseMcpAppLink } from "../lib/mcp-app-route.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { observeResize } from "../lib/reactive/observers.ts";
-import {
-  boardAppDisplayKey,
-  boardAppDisplaySchema,
-} from "../pages/chat/session-board-app-snapshot.ts";
+import { boardAppDisplaySchema } from "../pages/chat/session-board-app-snapshot.ts";
 import { bindMcpAppResourceHandlers } from "./mcp-app-bridge.ts";
 import { createMcpAppConfirm } from "./mcp-app-confirm.ts";
 import {
@@ -37,6 +32,7 @@ import {
   requestMcpAppBinding,
   resolveMcpAppBinding,
   isCurrentMcpAppBinding,
+  readMcpAppBindingInputs,
 } from "./mcp-app-view-binding.ts";
 import type {
   McpAppBinding,
@@ -90,21 +86,7 @@ export function createMcpAppView(
     afterSettlement(flushInputs);
   }
 
-  function readBindingInputs() {
-    const gateway = context.gateway;
-    return [
-      gateway.snapshot.client,
-      host.sessionKey,
-      host.viewId,
-      host.agentId,
-      gateway.connectionRevision,
-      gatewayPresentationScope(gateway).key,
-      gateway.snapshot.phase === "connected" &&
-        gateway.snapshot.hello !== null &&
-        !hasOperatorReadAccess(gateway.snapshot.hello.auth ?? null),
-      host.widget && boardAppDisplayKey(host.widget),
-    ] as const;
-  }
+  const readBindingInputs = () => readMcpAppBindingInputs(host, context.gateway);
 
   function flushInputs() {
     inputFlushPending = false;
@@ -216,10 +198,28 @@ export function createMcpAppView(
       if (!retain || activeResources?.binding) await teardownResources(activeResources);
       abort.signal.throwIfAborted();
       if (!binding && retain && activeResources) return;
-      const payload = binding
-        ? await requestOwner<McpAppViewPayload>(binding, "mcp.app.view", {}, abort.signal)
-        : !readBindingInputs()[6] && host.widget && (await host.appDisplay?.(host.widget));
-      if (retain && activeResources) await frameSetup.catch(() => undefined);
+      const livePayload = binding
+        ? requestOwner<McpAppViewPayload>(binding, "mcp.app.view", {}, abort.signal)
+        : null;
+      // Observe failures while the cached frame initializes; the result is awaited below.
+      void livePayload?.catch(() => undefined);
+      let displaySetup = activeResources ? frameSetup : undefined;
+      if (!activeResources && !readBindingInputs()[6] && host.widget && host.appDisplay) {
+        const cached = await host.appDisplay(host.widget);
+        abort.signal.throwIfAborted();
+        if (cached && host.sessionKey) {
+          displaySetup = setupResources(null, cached);
+          frameSetup = displaySetup;
+          retain = true;
+        }
+      }
+      if (!livePayload) {
+        if (displaySetup) await displaySetup;
+        else if (host.viewId) throw new Error(translate("mcpApp.errors.gatewayUnavailable"));
+        return;
+      }
+      if (displaySetup) await displaySetup.catch(() => undefined);
+      const payload = await livePayload;
       abort.signal.throwIfAborted();
       if (payload && binding && retain && (await activeResources?.adopt?.(binding, payload)))
         return;

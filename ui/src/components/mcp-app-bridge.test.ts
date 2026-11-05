@@ -496,9 +496,13 @@ it("forwards resource metadata and keeps subscriptions with the extracted bridge
   }
 });
 
-it.each(["same", "html", "csp", "sandbox", "input", "capabilities"] as const)(
-  "restores a display without authority and handles %s live content",
-  async (change) => {
+it.each(
+  ["same", "html", "csp", "sandbox", "input", "capabilities"].flatMap((change) =>
+    [false, true].map((hasLease) => ({ change, hasLease })),
+  ),
+)(
+  "restores $change display without authority (initial lease: $hasLease)",
+  async ({ change, hasLease }) => {
     const cached: McpAppViewPayload = {
       html: "<output>Last board state</output>",
       csp: { connectDomains: ["https://data.example"] },
@@ -536,9 +540,10 @@ it.each(["same", "html", "csp", "sandbox", "input", "capabilities"] as const)(
       updates.push(value);
       result.resolve();
     };
+    const liveResult = createDeferred<McpAppViewPayload>();
     const client = {
       request: vi.fn(async (method: string) =>
-        method === "mcp.app.listTools" ? { tools: [] } : fresh,
+        method === "mcp.app.listTools" ? { tools: [] } : liveResult.promise,
       ),
     };
     const gateway = {
@@ -553,6 +558,7 @@ it.each(["same", "html", "csp", "sandbox", "input", "capabilities"] as const)(
     const { view, unmount } = mountView(
       {
         sessionKey: "agent:main:warm",
+        viewId: hasLease ? "fresh-live-lease" : "",
         widget: boardWidget({ contentKind: "mcp-app" }),
         appDisplay: display,
       },
@@ -564,7 +570,7 @@ it.each(["same", "html", "csp", "sandbox", "input", "capabilities"] as const)(
       await app.connect(pairs[0]![1]);
       await result.promise;
       const frame = view.querySelector("iframe");
-      expect(client.request).not.toHaveBeenCalled();
+      expect(client.request).toHaveBeenCalledTimes(hasLease ? 1 : 0);
       expect(gateway.subscribeEvents).not.toHaveBeenCalled();
       expect(input).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ arguments: { period: "week" } }),
@@ -584,8 +590,9 @@ it.each(["same", "html", "csp", "sandbox", "input", "capabilities"] as const)(
       ] as const) {
         await expect(requestRecord(app, method, params)).rejects.toThrow("Reconnect and try again");
       }
-      expect(client.request).not.toHaveBeenCalled();
-      view.viewId = "fresh-live-lease";
+      expect(client.request).toHaveBeenCalledTimes(hasLease ? 1 : 0);
+      if (!hasLease) view.viewId = "fresh-live-lease";
+      liveResult.resolve(fresh);
       if (change === "same") {
         await waitForSolid(() => expect(updates).toHaveLength(2));
         expect(view.querySelector("iframe")).toBe(frame);

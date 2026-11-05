@@ -1,5 +1,6 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { createMemo, lazy, type Element } from "solid-js";
+import { McpAppView } from "../../components/mcp-app-view-lazy.ts";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
 import type { BoardViewCallbacks } from "../../lib/board/provider.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
@@ -10,9 +11,14 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { usePanePresentation } from "./chat-pane-presentation.ts";
 import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 
-export const BoardView = lazy(() => import("../../components/board/board-view.tsx"), {
-  export: "BoardView",
-});
+export const BoardView = lazy(
+  () => {
+    // Both rendered boundaries own readiness; asset preparation does not hold the board.
+    void McpAppView.preload().catch(() => undefined);
+    return import("../../components/board/board-view.tsx");
+  },
+  { export: "BoardView" },
+);
 
 export type BoardSessionSurfaceProps = {
   onViewRef?: (element: HTMLElementTagNameMap["openclaw-board-view"]) => void | (() => void);

@@ -1,5 +1,13 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createSignal, Errored, Loading, onSettled, Show } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  Errored,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
@@ -61,44 +69,42 @@ export function BoardMcpAppContent(props: {
   const [presented, setPresented] = createSignal(false, {
     ownedWrite: true,
   });
-  createEffect(
-    () => {
-      const view = props.appView;
-      return (
-        props.widget.contentKind === "mcp-app" &&
-        (!props.active || props.nearVisible) &&
-        ((view?.status === "ready" && view.expiresAtMs > Date.now()) ||
-          (Boolean((props.active || presented()) && props.appDisplay) &&
-            view?.status !== "stale" &&
-            props.widget.grantState !== "pending" &&
-            props.widget.grantState !== "rejected"))
-      );
-    },
-    (next) => {
-      const current = ++generation;
-      if (next) {
-        setPresented(true);
-        element?.restartAfterTeardown();
-        return;
-      }
-      const retirement = element?.teardown();
-      if (retirement) {
-        void retirement.then(() => {
-          if (current === generation) {
-            setPresented(false);
-            props.retired?.();
-          } else {
-            element?.restartAfterTeardown();
-          }
-        });
-      } else {
-        setPresented(false);
-        props.retired?.();
-      }
-    },
-  );
+  const admitted = createMemo(() => {
+    const view = props.appView;
+    return (
+      props.widget.contentKind === "mcp-app" &&
+      (!props.active || props.nearVisible) &&
+      ((view?.status === "ready" && view.expiresAtMs > Date.now()) ||
+        (Boolean((props.active || presented()) && props.appDisplay) &&
+          view?.status !== "stale" &&
+          props.widget.grantState !== "pending" &&
+          props.widget.grantState !== "rejected"))
+    );
+  });
+  createEffect(admitted, (next) => {
+    const current = ++generation;
+    if (next) {
+      setPresented(true);
+      element?.restartAfterTeardown();
+      return;
+    }
+    const retirement = element?.teardown();
+    if (retirement) {
+      void retirement.then(() => {
+        if (current === generation) {
+          setPresented(false);
+          props.retired?.();
+        } else {
+          element?.restartAfterTeardown();
+        }
+      });
+    } else {
+      setPresented(false);
+      props.retired?.();
+    }
+  });
   onSettled(() => {
-    // Preserve preloading before the lease arrives; Errored owns a failed read when rendered.
+    // Standalone/cold cells also prepare before their lease; the lazy owner deduplicates this.
     void McpAppView.preload().catch(() => undefined);
     return () => {
       generation += 1;
@@ -114,7 +120,7 @@ export function BoardMcpAppContent(props: {
     <div class="board-widget__mcp-app">
       {props.accessNotice}
       <Show
-        when={presented()}
+        when={admitted() || presented()}
         fallback={
           <Show
             when={props.nearVisible && props.appView?.status === "stale"}

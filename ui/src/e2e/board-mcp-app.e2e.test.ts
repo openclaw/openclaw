@@ -357,15 +357,17 @@ suite.define(() => {
     );
   });
 
-  it("paints the cached app within 1000 ms of the warm pane without any board skeleton", async () => {
-    const page = await newPage({ viewport: { width: 1440, height: 1000 } });
-    const gateway = await installApp(page, appLease("first-live-view"), {
-      awaitInitialRoster: false,
-      authMethod: "trusted-proxy",
-      authMode: "trusted-proxy",
-      presenceUsers: [{ id: "fixture-operator", name: "Fixture operator", self: true }],
-      heldMethods: ["board.widget.appView"],
-      app: appViewPayload(`<button id="access">Refresh access</button><output id="access-status"></output><script>
+  it.each(["offline", "online"])(
+    "paints the cached app %s within 1000 ms of the warm pane without any board skeleton",
+    async (mode) => {
+      const page = await newPage({ viewport: { width: 1440, height: 1000 } });
+      const gateway = await installApp(page, appLease("first-live-view"), {
+        awaitInitialRoster: false,
+        authMethod: "trusted-proxy",
+        authMode: "trusted-proxy",
+        presenceUsers: [{ id: "fixture-operator", name: "Fixture operator", self: true }],
+        heldMethods: [mode === "offline" ? "board.widget.appView" : "mcp.app.view"],
+        app: appViewPayload(`<button id="access">Refresh access</button><output id="access-status"></output><script>
         const send = message => parent.postMessage({jsonrpc:"2.0", ...message}, "*");
         document.getElementById("access").onclick = () => send({id:2,method:"ui/request-display-mode",params:{mode:"inline"}});
         addEventListener("message", ({source, data}) => {
@@ -380,56 +382,66 @@ suite.define(() => {
         send({id:1, method:"ui/initialize", params:{appInfo:{name:"Warm board",version:"1"},
           appCapabilities:{}, protocolVersion:${JSON.stringify(LATEST_PROTOCOL_VERSION)}}});
       </script>`),
-    });
-    await suite.openDashboard(page, sessionKey);
-    await gateway.waitForRequest("board.widget.appView");
-    await gateway.resolveDeferred("board.widget.appView");
-    await appFrame(page).getByText("ready", { exact: true }).waitFor();
-    await page.evaluate(async () => {
-      const pane = document.querySelector("openclaw-chat-pane");
-      const store = Reflect.get(pane!, "sessionSnapshotStore");
-      await store.flush();
-      await store.whenWritesIdle();
-    });
-    await page.addInitScript(() => {
-      let paneAt: number | undefined;
-      let skeletonFrames = 0;
-      const sample = () => {
-        if (document.querySelector("[data-cached-session]")) paneAt ??= performance.now();
-        if (document.querySelector(".board-session-surface openclaw-panel-loading-skeleton"))
-          skeletonFrames++;
-        Reflect.set(window, "warmBoardFrames", { paneAt, skeletonFrames });
+      });
+      await suite.openDashboard(page, sessionKey);
+      const heldMethod = mode === "offline" ? "board.widget.appView" : "mcp.app.view";
+      await gateway.waitForRequest(heldMethod);
+      await gateway.resolveDeferred(heldMethod);
+      await appFrame(page).getByText("ready", { exact: true }).waitFor();
+      await page.evaluate(async () => {
+        const pane = document.querySelector("openclaw-chat-pane");
+        const store = Reflect.get(pane!, "sessionSnapshotStore");
+        await store.flush();
+        await store.whenWritesIdle();
+      });
+      await page.addInitScript(() => {
+        let paneAt: number | undefined;
+        let skeletonFrames = 0;
+        const sample = () => {
+          if (document.querySelector("[data-cached-session]")) paneAt ??= performance.now();
+          if (document.querySelector(".board-session-surface openclaw-panel-loading-skeleton"))
+            skeletonFrames++;
+          Reflect.set(window, "warmBoardFrames", { paneAt, skeletonFrames });
+          requestAnimationFrame(sample);
+        };
         requestAnimationFrame(sample);
-      };
-      requestAnimationFrame(sample);
-    });
-    await gateway.setOnline(false);
-    await page.reload({ waitUntil: "domcontentloaded" });
-    await page.locator("[data-cached-session]").waitFor();
-    await appFrame(page).getByText("ready", { exact: true }).waitFor({ timeout: 1000 });
-    await page.waitForFunction(
-      () => typeof Reflect.get(window, "warmBoardFrames")?.paneAt === "number",
-    );
-    const elapsed = await page.evaluate(() => {
-      const frames = Reflect.get(window, "warmBoardFrames");
-      return { skeletonFrames: frames.skeletonFrames, elapsed: performance.now() - frames.paneAt };
-    });
-    expect(elapsed.skeletonFrames).toBe(0);
-    expect(elapsed.elapsed).toBeLessThan(1000);
-    await readBoardIdentity(page, true);
-    await appFrame(page).getByRole("button", { name: "Refresh access" }).click();
-    await appFrame(page).getByText("Reconnect and try again", { exact: false }).waitFor();
-    await gateway.setOnline(true);
-    await waitForControlUiGatewayReady(page);
-    await gateway.waitForRequest("board.widget.appView");
-    await gateway.resolveDeferred("board.widget.appView", appLease("fresh-live-view"));
-    await gateway.waitForRequest("mcp.app.view");
-    await appFrame(page).getByRole("button", { name: "Refresh access" }).click();
-    await appFrame(page).getByText("Live access ready", { exact: true }).waitFor();
-    await expect
-      .poll(() => readBoardIdentity(page))
-      .toEqual({ connected: true, hidden: false, inert: false, same: true });
-  });
+      });
+      if (mode === "offline") await gateway.setOnline(false);
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.locator("[data-cached-session]").waitFor();
+      await appFrame(page).getByText("ready", { exact: true }).waitFor({ timeout: 1000 });
+      await page.waitForFunction(
+        () => typeof Reflect.get(window, "warmBoardFrames")?.paneAt === "number",
+      );
+      const elapsed = await page.evaluate(() => {
+        const frames = Reflect.get(window, "warmBoardFrames");
+        return {
+          skeletonFrames: frames.skeletonFrames,
+          elapsed: performance.now() - frames.paneAt,
+        };
+      });
+      expect(elapsed.skeletonFrames).toBe(0);
+      expect(elapsed.elapsed).toBeLessThan(1000);
+      await readBoardIdentity(page, true);
+      await appFrame(page).getByRole("button", { name: "Refresh access" }).click();
+      await appFrame(page).getByText("Reconnect and try again", { exact: false }).waitFor();
+      if (mode === "offline") {
+        await gateway.setOnline(true);
+        await waitForControlUiGatewayReady(page);
+        await gateway.waitForRequest("board.widget.appView");
+        await gateway.resolveDeferred("board.widget.appView", appLease("fresh-live-view"));
+        await gateway.waitForRequest("mcp.app.view");
+      } else {
+        await gateway.waitForRequest("mcp.app.view");
+        await gateway.resolveDeferred("mcp.app.view");
+      }
+      await appFrame(page).getByRole("button", { name: "Refresh access" }).click();
+      await appFrame(page).getByText("Live access ready", { exact: true }).waitFor();
+      await expect
+        .poll(() => readBoardIdentity(page))
+        .toEqual({ connected: true, hidden: false, inert: false, same: true });
+    },
+  );
 
   it("retains one board runtime across split, expanded, and inactive panel states", async () => {
     const page = await newPage({ viewport: { width: 1280, height: 800 } });

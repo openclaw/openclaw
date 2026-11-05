@@ -1,7 +1,26 @@
 import type { ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { hasOperatorReadAccess } from "../app/operator-access.ts";
+import { boardAppDisplayKey } from "../pages/chat/session-board-app-snapshot.ts";
 import type { McpAppBinding, McpAppViewElement } from "./mcp-app-view-types.ts";
+
+export function readMcpAppBindingInputs(
+  host: McpAppViewElement,
+  gateway: ApplicationContext["gateway"],
+) {
+  return [
+    gateway.snapshot.client,
+    host.sessionKey,
+    host.viewId,
+    host.agentId,
+    gateway.connectionRevision,
+    gatewayPresentationScope(gateway).key,
+    gateway.snapshot.phase === "connected" &&
+      gateway.snapshot.hello !== null &&
+      !hasOperatorReadAccess(gateway.snapshot.hello.auth ?? null),
+    host.widget && boardAppDisplayKey(host.widget),
+  ] as const;
+}
 
 export async function requestMcpAppBinding<T>(
   binding: McpAppBinding | null,
