@@ -130,7 +130,7 @@ describe("renderSessionProgressCard", () => {
             known: true,
             connected: true,
             children: { running: 1, queued: 1, waiting: 0, failed: 1 },
-            childError: "Review: Access denied",
+            childError: "Review: Access denied".padEnd(237, "x") + "🦞🦞",
           },
         },
         container,
@@ -138,14 +138,16 @@ describe("renderSessionProgressCard", () => {
       expect(container.querySelector('[role="status"]')?.textContent).toContain(
         "1 running · 1 queued · 1 failed",
       );
-      expect(container.querySelector('[role="status"]')?.textContent).toContain(
-        "Review: Access denied",
+      expect(query(container, ".session-progress-card__runtime-detail")?.textContent).toBe(
+        "Review: Access denied".padEnd(237, "x") + "🦞",
       );
       expect(container.querySelector('[data-error="true"]')).not.toBeNull();
       expect(container.querySelector("details")).toBe(details);
       expect(container.querySelectorAll(".session-progress-card__step")).toHaveLength(3);
       render({ ...input, runtime: { connected: false, hasActiveSubagentRun: true } }, container);
-      expect(container.querySelector('[role="status"]')?.textContent).toContain("Connection lost");
+      expect(container.querySelector('[role="status"]')?.textContent).toContain(
+        "Disconnected · Activity may be outdated",
+      );
       expect(container.querySelector(".session-run-spinner")).toBeNull();
       render({ ...input, runtime: { known: false } }, container);
       expect(container.querySelector('[role="status"]')?.textContent).toBe("Activity unavailable");

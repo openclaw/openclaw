@@ -10,13 +10,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { SubagentRunReadRecord } from "../../src/agents/subagents/registry/subagent-registry-read.types.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -58,10 +58,6 @@ const runs = Object.freeze(
     });
   }),
 );
-
-function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
-}
 
 const samplingInterval = 32_768;
 for (const includeChildren of [false, true]) {
@@ -111,7 +107,7 @@ for (const includeChildren of [false, true]) {
     const hostLoadAfter = loadavg();
     if (values.mode === "allocation") {
       const { profile } = await inspector.post("HeapProfiler.stopSampling");
-      allocationBytes = sampledBytes(profile.head);
+      allocationBytes = sumSampledHeapBytes(profile.head);
     }
     assert.equal(checksum, iterations * (includeChildren ? 69 : 5));
     assert.equal(createHash("sha256").update(JSON.stringify(last)).digest("hex"), outputSha256);

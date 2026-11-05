@@ -54,22 +54,12 @@ describe("cron model schema regressions", () => {
       { management: "only" as const },
       { management: "also" as const },
       { selfRemoveOnly: true },
-      { readOnly: true },
     ]) {
       const changed = createCronToolSchema(options);
       expect(changed).not.toEqual(unscoped);
       expect(createCronToolSchema({ ...options })).toBe(changed);
     }
-    const recovery = createCronToolSchema({ readOnly: true });
     expect(Value.Check(unscoped, { action: "remove", jobId: "saved-job" })).toBe(true);
-    for (const [action, accepted] of [
-      ["list", true],
-      ["get", true],
-      ["status", false],
-      ["remove", false],
-    ] as const) {
-      expect(Value.Check(recovery, { action, jobId: "saved-job" })).toBe(accepted);
-    }
   });
 
   it("does not advertise forbidden automation management inside a scheduled run", () => {
@@ -97,20 +87,12 @@ describe("cron model schema regressions", () => {
       activeRun: true,
       nextCheckEnabled: true,
     });
-    const recovery = createCronToolSchema({
-      selfRemoveOnly: true,
-      activeRun: true,
-      nextCheckEnabled: true,
-      readOnly: true,
-    });
     for (const action of ["scratch_get", "scratch_set", "record_result"]) {
       expect(Value.Check(restricted.parameters, { action })).toBe(false);
       expect(Value.Check(active, { action })).toBe(true);
-      expect(Value.Check(recovery, { action })).toBe(false);
     }
     expect(Value.Check(active, { action: "next_check" })).toBe(false);
     expect(Value.Check(paced, { action: "next_check" })).toBe(true);
-    expect(Value.Check(recovery, { action: "next_check" })).toBe(false);
   });
 
   it("keeps conversation definitions stable while scheduled calls stay self-scoped", async () => {

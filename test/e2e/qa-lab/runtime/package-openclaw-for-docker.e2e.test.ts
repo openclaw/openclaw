@@ -13,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV } from "../../../../scripts/lib/bundled-plugin-build-entries.mjs";
 import { PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH } from "../../../../scripts/lib/package-dist-inventory-contract.mts";
 import { writePackageDistInventoryForPublish } from "../../../../scripts/lib/package-dist-inventory.ts";
+import { collectPackageRootModules } from "../../../../scripts/lib/package-root-modules.mts";
 import {
   preparePackageDocsMap,
   restorePackageDocsMap,
@@ -864,11 +865,10 @@ describe("package-openclaw-for-docker", () => {
     const tempRoot = tempDirs.make("openclaw-package-harness-");
     let child: ReturnType<typeof spawn> | undefined;
     const copiedFiles = [
-      "cli-invocation.mjs",
-      "cli-parent-lifetime.mjs",
-      "gateway-shutdown-budget.mjs",
-      "node-runtime-env.mjs",
-      "runtime-process-bootstrap.generated.mjs",
+      ...collectPackageRootModules([
+        "cli-invocation.mjs",
+        "runtime-process-bootstrap.generated.mjs",
+      ]),
       "packages/normalization-core/src/number-coercion.ts",
       "packages/normalization-core/src/string-coerce.ts",
       "scripts/package-openclaw-for-docker.mts",
@@ -883,6 +883,8 @@ describe("package-openclaw-for-docker", () => {
       "scripts/lib/bundled-plugin-build-entries.mjs",
       "scripts/lib/bundled-plugin-paths.mjs",
       "scripts/lib/check-limits.mts",
+      "scripts/lib/release-context.mjs",
+      "scripts/lib/release-version.mjs",
       "scripts/lib/error-format.mts",
       "scripts/lib/managed-child-process.mts",
       "scripts/lib/managed-cleanup-handoff.mts",
@@ -1387,7 +1389,12 @@ describe("package-openclaw-for-docker", () => {
     const packageJsonPath = path.join(sourceDir, "package.json");
     const originalPackageJson = `${JSON.stringify(
       {
-        dependencies: { "@openclaw/ai": "workspace:*", "dep-a": "workspace:1.2.3" },
+        dependencies: {
+          "@openclaw/ai": "workspace:*",
+          "dep-a": "workspace:1.2.3",
+          "root-required": "2.0.0",
+          "root-optional-peer": "3.0.0",
+        },
         devDependencies: { "@openclaw/session-url-contract": "workspace:*" },
         files: ["dist"],
         name: "openclaw",
@@ -1441,9 +1448,15 @@ describe("package-openclaw-for-docker", () => {
                 },
                 name: "@openclaw/ai",
                 version: "2026.6.17",
-                peerDependencies: { "@opentelemetry/api": "^1.9.0", retained: "1.0.0" },
+                peerDependencies: {
+                  "@opentelemetry/api": "^1.9.0",
+                  "root-required": "^2.0.0",
+                  "root-optional-peer": "^3.0.0",
+                  retained: "1.0.0",
+                },
                 peerDependenciesMeta: {
                   "@opentelemetry/api": { optional: true },
+                  "root-optional-peer": { optional: true },
                   retained: { optional: true },
                 },
               })}\n`,
@@ -1464,6 +1477,8 @@ describe("package-openclaw-for-docker", () => {
       expect(packageJson.dependencies["@openclaw/ai"]).toBe("2026.6.17");
       expect(packageJson.dependencies["@openclaw/private-runtime"]).toBeUndefined();
       expect(packageJson.dependencies["dep-a"]).toBe("1.2.3");
+      expect(packageJson.dependencies["root-required"]).toBe("2.0.0");
+      expect(packageJson.dependencies["root-optional-peer"]).toBe("3.0.0");
       expect(packageJson.devDependencies?.["@openclaw/session-url-contract"]).toBe("workspace:*");
       expect(packageJson.bundleDependencies).toContain("@openclaw/ai");
       expect(fs.existsSync(path.join(installedAiPath, "original-marker"))).toBe(false);

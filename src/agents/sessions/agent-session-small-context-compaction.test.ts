@@ -186,69 +186,70 @@ describe("AgentSession small-context compaction", () => {
     expect(streamMocks.streamSimple).not.toHaveBeenCalled();
   });
 
-  it.each(["manual", "automatic"])(
-    "preserves file metadata while fitting a non-Latin %s summary",
-    async (mode) => {
-      const model = { ...testModel, contextWindow: 4_096, maxTokens: 1_024 };
-      const settingsManager = smallSettings();
-      const sessionManager = SessionManager.inMemory();
-      const file = "/workspace/archive.md";
-      sessionManager.appendMessage(
-        makeUserMessage("Read the archive and preserve its project decisions.", 1),
-      );
-      sessionManager.appendMessage(
-        createAssistant(
-          model,
-          [{ type: "toolCall", id: "archive-read", name: "read", arguments: { path: file } }],
-          "toolUse",
-        ),
-      );
-      sessionManager.appendMessage(
-        makeTextToolResult("archive-read", "read", "The project uses blue buttons.", false, 3),
-      );
-      sessionManager.appendMessage(makeUserMessage("Continue the project.", 4));
-      sessionManager.appendMessage(createAssistant(model, "Ready to continue."));
-      const { session } = await createTestSession({
+  it.each([
+    ["manual", "non-Latin", "保留项目的蓝色按钮和归档决策。"],
+    ["automatic", "non-Latin", "保留项目的蓝色按钮和归档决策。"],
+    ["automatic", "dense JSON", '{"x":123456789,"y":"abc123def456ghi789"}'],
+  ])("preserves file metadata while fitting a %s %s summary", async (mode, _kind, summaryText) => {
+    const model = { ...testModel, contextWindow: 4_096, maxTokens: 1_024 };
+    const settingsManager = smallSettings();
+    const sessionManager = SessionManager.inMemory();
+    const file = "/workspace/archive.md";
+    sessionManager.appendMessage(
+      makeUserMessage("Read the archive and preserve its project decisions.", 1),
+    );
+    sessionManager.appendMessage(
+      createAssistant(
         model,
-        settingsManager,
-        sessionManager,
-        systemPrompt: "Preserve project decisions.",
-      });
-      const generatedSummary = "保留项目的蓝色按钮和归档决策。".repeat(300);
-      streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
-        textStream(activeModel, generatedSummary),
-      );
-      const budget = createCompactionRequestBudget({
-        contextWindow: model.contextWindow,
-        reserveTokens: 1_024,
-        systemPrompt: session.systemPrompt,
-        tools: session.state.tools,
-      });
+        [{ type: "toolCall", id: "archive-read", name: "read", arguments: { path: file } }],
+        "toolUse",
+      ),
+    );
+    sessionManager.appendMessage(
+      makeTextToolResult("archive-read", "read", "The project uses blue buttons.", false, 3),
+    );
+    sessionManager.appendMessage(makeUserMessage("Continue the project.", 4));
+    sessionManager.appendMessage(createAssistant(model, "Ready to continue."));
+    const { session } = await createTestSession({
+      model,
+      settingsManager,
+      sessionManager,
+      systemPrompt: "Preserve project decisions.",
+    });
+    const generatedSummary = summaryText.repeat(300);
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      textStream(activeModel, generatedSummary),
+    );
+    const budget = createCompactionRequestBudget({
+      contextWindow: model.contextWindow,
+      reserveTokens: 1_024,
+      systemPrompt: session.systemPrompt,
+      tools: session.state.tools,
+    });
 
-      const outcome =
-        mode === "manual"
-          ? { status: "completed" as const, result: await session.compact() }
-          : await session[agentSessionAutomaticCompaction](undefined, undefined, undefined, {
-              requestBudget: budget,
-            });
-      if (outcome.status !== "completed") {
-        throw new Error(outcome.reason);
-      }
-      const result = outcome.result;
+    const outcome =
+      mode === "manual"
+        ? { status: "completed" as const, result: await session.compact() }
+        : await session[agentSessionAutomaticCompaction](undefined, undefined, undefined, {
+            requestBudget: budget,
+          });
+    if (outcome.status !== "completed") {
+      throw new Error(outcome.reason);
+    }
+    const result = outcome.result;
 
-      expect(result.summary).toContain(file);
-      expect(result.summary).toContain("Turn Context (split turn)");
-      expect(result.details).toMatchObject({ readFiles: [file] });
-      expect(
-        sessionManager.getBranch().findLast((entry) => entry.type === "compaction"),
-      ).toMatchObject({ summary: result.summary });
-      if (mode === "automatic") {
-        expect(result.summary.length).toBeLessThan(generatedSummary.length);
-      } else {
-        expect(result.summary).toContain(generatedSummary);
-      }
-    },
-  );
+    expect(result.summary).toContain(file);
+    expect(result.summary).toContain("Turn Context (split turn)");
+    expect(result.details).toMatchObject({ readFiles: [file] });
+    expect(
+      sessionManager.getBranch().findLast((entry) => entry.type === "compaction"),
+    ).toMatchObject({ summary: result.summary });
+    if (mode === "automatic") {
+      expect(result.summary.length).toBeLessThan(generatedSummary.length);
+    } else {
+      expect(result.summary).toContain(generatedSummary);
+    }
+  });
 
   it("leaves history intact when a complete tool-call/result tail cannot fit", async () => {
     const model = { ...testModel, contextWindow: 4_096, maxTokens: 1_024 };

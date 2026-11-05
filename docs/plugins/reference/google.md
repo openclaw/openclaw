@@ -25,3 +25,4 @@ Adds Google, Google Gemini CLI, Google Vertex model provider support to OpenClaw
 ## Related docs
 
 - [google](/providers/google)
+- [google-vertex](/providers/google-vertex)

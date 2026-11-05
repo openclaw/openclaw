@@ -17,6 +17,8 @@ import {
   publishSqliteDatabaseAdmission,
   retireSqliteDatabaseAdmissionForPath,
 } from "../infra/sqlite-database-admission.js";
+import { withOpenClawStateReadOnlyLocation } from "./openclaw-state-db-read-connection.js";
+import { getOpenClawStateFeatureSchemaSql } from "./openclaw-state-feature-schema.js";
 import type {
   OpenClawStateReadReply,
   OpenClawStateReadRequest,
@@ -34,6 +36,7 @@ const mock = vi.hoisted(() => {
         ) => Promise<OpenClawStateReadReply>
       >(),
     control: {
+      signal: new AbortController().signal,
       runNativeSection: async <T>(operation: () => T | Promise<T>) => operation(),
       throwIfCancelled: () => {},
     } satisfies WorkerTaskControl,
@@ -113,10 +116,10 @@ vi.mock("./openclaw-state-db-read-connection.js", () => ({
   closeRetainedOpenClawStateReadConnections: vi.fn(),
   openOpenClawStateReadConnection: mock.open,
   readOpenClawStateReadOnlyLocation: mock.settle,
-  withOpenClawStateReadOnlyLocation: (operation: (source: { db: object }) => unknown) => {
+  withOpenClawStateReadOnlyLocation: vi.fn((operation: (source: { db: object }) => unknown) => {
     mock.admit();
     return operation({ db: mock.database ?? {} });
-  },
+  }),
 }));
 
 import "./openclaw-state-read.worker.js";
@@ -129,6 +132,7 @@ const request: OpenClawStateReadRequest = {
   command: { type: "backup.runs" },
 };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const readAtLocation = vi.mocked(withOpenClawStateReadOnlyLocation);
 
 afterEach(async () => {
   await closePostgresPool();
@@ -136,6 +140,8 @@ afterEach(async () => {
 });
 
 beforeEach(() => {
+  readAtLocation.mockClear();
+  mock.control.signal = new AbortController().signal;
   mock.open.mockReset().mockImplementation(() => {
     throw new Error("Unexpected database open");
   });
@@ -168,32 +174,121 @@ it.each([
   expect(mock.unrelatedHandlerLoaded).toBe(false);
 });
 
-it("reads an absent publication receipt without loading unrelated handlers", async () => {
-  const db = openNodeSqliteDatabase(":memory:");
-  mock.database = db;
-  try {
-    const reply = await mock.handler({
-      ...request,
-      command: {
-        type: "githubPublications.sharedObservation",
-        input: {
-          session: { agentId: "main", sessionKey: "agent:main:fixture", sessionId: "fixture" },
-          selector: {},
-          entry: {},
-        },
-      },
-    });
-    expect(reply).toEqual({
-      ok: true,
+it.each([
+  {
+    command: {
       type: "githubPublications.sharedObservation",
-      sourceAdmitted: true,
-      row: undefined,
-    });
-    expect(mock.unrelatedHandlerLoaded).toBe(false);
-  } finally {
-    db.close();
-  }
-});
+      input: {
+        session: { agentId: "main", sessionKey: "agent:main:fixture", sessionId: "fixture" },
+        selector: {},
+        entry: {},
+      },
+    },
+    tables: [],
+    result: { row: undefined },
+  },
+  {
+    command: { type: "workerEnvironments.snapshot", input: {} },
+    tables: [
+      "worker_environments",
+      "worker_environment_credentials",
+      "worker_environment_ssh_fallback_ports",
+      "worker_environment_session_attachments",
+    ],
+    result: { facts: { ids: [], environments: [], credentials: [], attachments: [] } },
+  },
+  {
+    command: { type: "workers.placementRecoveryCandidates", input: undefined },
+    tables: [
+      "worker_session_placements",
+      "worker_workspace_pending_results",
+      "worker_workspace_reconciliations",
+    ],
+    result: { candidates: [] },
+  },
+  {
+    command: { type: "preparedPoolPresence.read", input: undefined },
+    tables: ["config_machine_state"],
+    result: { demand: undefined },
+  },
+  {
+    command: { type: "sandboxRegistry.list", input: {} },
+    tables: ["sandbox_registry_entries"],
+    result: { entries: [] },
+  },
+] as const)(
+  "reads startup $command.type without loading unrelated handlers",
+  async ({ command, tables, result }) => {
+    const db = openNodeSqliteDatabase(":memory:");
+    mock.database = db;
+    try {
+      for (const table of tables) {
+        db.exec(getOpenClawStateFeatureSchemaSql(table));
+      }
+      expect(await mock.handler({ ...request, command })).toEqual({
+        ok: true,
+        type: command.type,
+        sourceAdmitted: true,
+        ...result,
+      });
+      expect(mock.unrelatedHandlerLoaded).toBe(false);
+    } finally {
+      db.close();
+    }
+  },
+);
+
+it.each(["runtime", "runtime-discovery"] as const)(
+  "reads the captured deletion snapshot for %s without loading unrelated handlers",
+  async (purpose) => {
+    const db = openNodeSqliteDatabase(":memory:");
+    mock.database = db;
+    const databasePath = path.resolve("/captured-state.sqlite");
+    try {
+      db.exec(getOpenClawStateFeatureSchemaSql("agent_deletion_journal"));
+      db.prepare(`INSERT INTO agent_deletion_journal
+        (agent_id, agent_dir, workspace_dir, sessions_dir, created_at, phase)
+        VALUES ('retired', '/fixture/retired', '/fixture/workspace', '/fixture/sessions', 1, 'pending')`).run();
+      expect(
+        await mock.handler({
+          ...request,
+          databasePath,
+          command: { type: "agentDatabaseDeletion.snapshot", purpose },
+        }),
+      ).toEqual({
+        ok: true,
+        type: "agentDatabaseDeletion.snapshot",
+        sourceAdmitted: true,
+        snapshot: {
+          deletedAgents: [{ agentId: "retired", status: "pending" }],
+          registeredAgentDatabases: [],
+          retainedDeletions:
+            purpose === "runtime"
+              ? { status: "empty" }
+              : {
+                  status: "present",
+                  entries: [
+                    {
+                      agentId: "retired",
+                      agentDir: "/fixture/retired",
+                      databasePaths: [path.join("/fixture/retired", "openclaw-agent.sqlite")],
+                      cleanupCompleted: false,
+                    },
+                  ],
+                  held: [],
+                },
+        },
+      });
+      expect(mock.query).toHaveBeenCalledExactlyOnceWith(db, databasePath, false);
+      expect(readAtLocation.mock.calls[0]?.[8], "captured quarantine store admission").toBe(
+        path.resolve("/fixture", "state", "openclaw-quarantine.sqlite"),
+      );
+      expect(mock.unrelatedHandlerLoaded).toBe(false);
+    } finally {
+      db.close();
+    }
+  },
+);
 
 it("starts its PG bridge while the first command module is still loading", async () => {
   const databasePath = path.join(tempDirs.make("state-reader-bridge-prestart-"), "state.sqlite");
@@ -316,6 +411,7 @@ describe.each([
     request: vi.fn<WorkerTaskChannel["request"]>(),
   };
   const control: WorkerTaskControl = {
+    signal: new AbortController().signal,
     runNativeSection: async <T>(operation: () => T | Promise<T>) => {
       nativeSection();
       return operation();
@@ -327,6 +423,7 @@ describe.each([
   let releaseImport: PromiseWithResolvers<void>;
 
   beforeEach(async () => {
+    control.signal = new AbortController().signal;
     // Each command must start cold, including Vitest's separate mock-module cache.
     vi.resetModules();
     loaded.clear();

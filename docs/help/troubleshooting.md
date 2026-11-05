@@ -63,8 +63,8 @@ Common causes:
   for one agent.
 
 Change the profile, restart or reload the Gateway, then recheck with
-`openclaw status --all`. Check the chat **Execution permissions** menu separately;
-Full tool selection does not grant Full Access or configure missing plugins.
+`openclaw status --all`. Check the chat **Permissions** menu separately;
+Full tool selection does not grant **Full access** or configure missing plugins.
 Full profile/group table: [Tool profiles](/gateway/config-tools/tool-policy#tool-profiles).
 
 ## Anthropic long context 429

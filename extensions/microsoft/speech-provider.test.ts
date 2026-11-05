@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { EdgeTTS } from "node-edge-tts";
 import {
   createDebugProxyCaptureReaderAsync,
@@ -7,7 +7,7 @@ import {
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { isTtsProviderConfigured, resolveTtsConfig } from "openclaw/plugin-sdk/tts-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { installDebugProxyTestResetHooks } from "../test-support/debug-proxy-env-test-helpers.js";
 import { buildMicrosoftSpeechProvider } from "./speech-provider.js";
 
@@ -82,34 +82,57 @@ describe("Microsoft speech provider", () => {
     }
   });
 
-  it("maps the default voice to Chinese for CJK input", async () => {
-    const edgeSpy = vi.spyOn(EdgeTTS.prototype, "ttsPromise").mockImplementation(async function (
-      this: EdgeTTS,
-      _text,
-      outputPath,
-    ) {
-      expect(this).toMatchObject({
-        voice: "zh-CN-XiaoxiaoNeural",
-        lang: "zh-CN",
-        outputFormat: "audio-24khz-48kbitrate-mono-mp3",
-        saveSubtitles: false,
-        timeout: 1000,
+  it.each(["success", "failure"] as const)(
+    "maps the default voice to Chinese and cleans CJK synthesis files after %s",
+    async (outcome) => {
+      const audioBuffer = Buffer.from([0xff, 0xfb, 0x90, 0x00]);
+      const failure = new Error("Edge TTS test failure");
+      const edgeSpy = vi.spyOn(EdgeTTS.prototype, "ttsPromise").mockImplementation(async function (
+        this: EdgeTTS,
+        _text,
+        outputPath,
+      ) {
+        expect(this).toMatchObject({
+          voice: "zh-CN-XiaoxiaoNeural",
+          lang: "zh-CN",
+          outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+          saveSubtitles: false,
+          timeout: 1000,
+        });
+        writeFileSync(outputPath, audioBuffer);
+        if (outcome === "failure") {
+          throw failure;
+        }
       });
-      writeFileSync(outputPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
-    });
-    const text = "你好，这是一个测试 hello";
-    await provider.synthesize({
-      text,
-      cfg: {},
-      providerConfig: {},
-      timeoutMs: 1000,
-      target: "audio-file",
-    });
-    expect(edgeSpy).toHaveBeenCalledExactlyOnceWith(
-      text,
-      expect.stringMatching(/speech[.]mp3.*[.]part$/),
-    );
-  });
+      const text = "你好，这是一个测试 hello";
+      const synthesis = provider.synthesize({
+        text,
+        cfg: {},
+        providerConfig: {},
+        timeoutMs: 1000,
+        target: "audio-file",
+      });
+      if (outcome === "failure") {
+        await expect(synthesis).rejects.toBe(failure);
+      } else {
+        await expect(synthesis).resolves.toMatchObject({
+          audioBuffer,
+          outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+          fileExtension: ".mp3",
+        });
+      }
+      expect(edgeSpy).toHaveBeenCalledExactlyOnceWith(
+        text,
+        expect.stringMatching(/speech[.]mp3.*[.]part$/),
+      );
+      const call = edgeSpy.mock.calls[0];
+      assert(call);
+      const outputPath = call[1];
+      const workspace = outputPath.match(/^(.*[/\\]tts-microsoft-[^/\\]+)[/\\]/)?.[1];
+      assert(workspace, "Expected a Microsoft TTS workspace");
+      expect([outputPath, workspace].filter(existsSync)).toEqual([]);
+    },
+  );
 });
 
 it("supports the public synchronous TTS readiness API through the compatibility window", () => {

@@ -5,8 +5,8 @@ import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
 } from "../../state/openclaw-state-worker-error.js";
-import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import type { SessionHistoryDelta } from "./session-history-types.js";
+import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import {
   SessionTranscriptProjectionUnavailableError,
   SessionTranscriptStorageUnavailableError,

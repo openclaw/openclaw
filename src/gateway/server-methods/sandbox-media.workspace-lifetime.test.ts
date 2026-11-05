@@ -7,6 +7,7 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import * as localWorkspace from "../../agents/sandbox/local-workspace.js";
+import { WorktreeRemovalContentionError } from "../../agents/worktrees/errors.js";
 import { ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import { useManagedWorktreeTestRepository } from "../../agents/worktrees/service.test-support.js";
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
@@ -109,6 +110,9 @@ it.for(["staged", "read-failed", "aborted", "retired"] as const)(
         releaseRead.resolve();
         if (outcome === "aborted") {
           await expect(pending).rejects.toBe(failure);
+        } else if (outcome === "retired") {
+          await expect(pending).rejects.toBeInstanceOf(WorktreeRemovalContentionError);
+          expect(ctx.media?.[0]?.path).toBe(source);
         } else {
           const result = await pending;
           if (outcome === "staged") {
@@ -126,7 +130,9 @@ it.for(["staged", "read-failed", "aborted", "retired"] as const)(
             fs.stat(path.join(projectionPath, "media", "inbound")),
           ).rejects.toMatchObject({ code: "ENOENT" });
         }
-        expect(() => owner!.assertCurrent()).toThrow("Local sandbox workspace authority changed");
+        expect(() => owner!.assertCurrent()).toThrow(
+          outcome === "aborted" ? failure : "Local sandbox workspace authority changed",
+        );
       } finally {
         releaseRead.resolve();
         await pending.catch(() => {});

@@ -494,6 +494,9 @@ or protocol-version change.
   Job definitions, run summaries, diagnostics, and delivery traces are omitted;
   use `cron.get`, `cron.list`, or `cron.runs` when displaying those details.
   Internal `cron_changed` plugin hooks still receive the full job snapshot.
+  A `finished` event already carries the next-run time; clients should not expect
+  a duplicate `scheduled` event for that same schedule. Quiet trigger evaluations
+  still publish `scheduled` when they advance the schedule without a completion.
 - `cron.inventory.changed`: payload-free notice after a committed cron definition
   change, including add, update, retarget, remove, and enable/disable changes.
   It reaches every operator connection admitted to read cron, including readers

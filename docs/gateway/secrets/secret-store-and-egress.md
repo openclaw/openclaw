@@ -16,9 +16,9 @@ The shared secret store is a Gateway-wide, team-scoped place for secrets and env
 Entries have two explicit access modes. Both retain the existing `secret` and `env` storage kinds, and either kind can back a SecretRef:
 
 - **Protected secret** (`kind: "secret"`) values are write-only after saving. Gateway list results, the Control UI, and CLI list/get output never include them; there is no reveal RPC. A protected value is inert until a supported config field references it with a SecretRef or an enabled, destination-bound [secret egress proxy](#secret-egress-proxy) uses it.
-- **Agent-readable environment** (`kind: "env"`) values remain visible to administrators in the Control UI and can be returned by `store list` and `store get`. OpenClaw adds them as plaintext to Gateway-hosted commands run through its exec tool, after inherited process values and before explicit per-call env. The agent can print, transmit, or persist these values. Protected host keys are ignored with a visible warning.
+- **Agent-readable environment** (`kind: "env"`) values remain visible to admins in the Control UI and can be returned by `store list` and `store get`. OpenClaw adds them as plaintext to Gateway-hosted commands run through its exec tool, after inherited process values and before explicit per-call env. The agent can print, transmit, or persist these values. Protected host keys are ignored with a visible warning.
 
-Agent-readable environment values do not reach Codex native shell, the Codex sandbox exec-server, ACP children such as Claude Code, OpenClaw sandbox exec, or remote `node` exec. Those paths assemble a different child environment. In eligible Codex app-server turns, use `gateway_exec` to deliberately re-enter the OpenClaw Gateway execution path; `gateway_process` provides the existing per-session background follow-up. Native Codex shell remains preferred for ordinary local work. Gateway-hosted exec captures the store snapshot on its first execution in a run. Later additions, replacements, deletions, and host edits require a new run; storing a credential does not refresh an already-captured exec snapshot.
+Agent-readable environment values do not reach Codex native shell, the Codex sandbox exec-server, ACP children such as Claude Code, OpenClaw sandbox exec, or remote `node` exec. Those paths assemble a different child environment. In eligible Codex app-server turns, use `gateway_exec` to deliberately re-enter the OpenClaw Gateway execution path; `gateway_process` provides the existing per-session background follow-up. Native Codex shell remains preferred for ordinary local work. Gateway-hosted exec captures the store snapshot on its first execution in a run. Later additions, replacements, deletions, and host edits apply from the next reply; storing a credential does not refresh an already-captured exec snapshot.
 
 By default, `secret` entries are never injected into subprocess environments. When the default-off [secret egress proxy](#secret-egress-proxy) is enabled, Gateway-hosted exec commands receive process-local sentinels instead of plaintext values.
 
@@ -104,12 +104,17 @@ Equivalent config:
 }
 ```
 
-When enabled, OpenClaw adds these values to Gateway-hosted exec environments:
+When enabled, OpenClaw adds these values to non-durable Gateway-hosted exec environments:
 
 - `HTTPS_PROXY` and `HTTP_PROXY`, with per-process credentials embedded in the loopback proxy URL
 - `NODE_USE_ENV_PROXY=1`, which makes supported Node.js global `fetch` clients honor `HTTP_PROXY` and `HTTPS_PROXY` without using `NODE_OPTIONS`
 - `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`, and `GIT_SSL_CAINFO`, pointing at the Gateway's trusted certificate bundle
 - each team-store `secret` entry as an `oc-sent-v2...end` sentinel; `env` entries keep their existing behavior and precedence
+
+[Durable commands](/gateway/background-process#durable-processes) launch without
+these grants, sentinels, or proxy settings because grants end with the Gateway.
+The exec result reports the number of omitted credentials. Managed GitHub
+identity credentials remain available at launch.
 
 Proxy authentication uses standard Basic proxy auth with username `openclaw` and a random password for each managed exec process. OpenClaw creates the grant after approval and launch checks. A background command retains its grant when the originating agent turn ends; its process supervisor owns both execution and proxy access. Base64 is not treated as encryption: the listener binds only to loopback, and a process that can read the proxy token from the agent environment can already read the sentinels in that environment. Missing, wrong, or revoked credentials receive `407 Proxy Authentication Required` and are never forwarded.
 

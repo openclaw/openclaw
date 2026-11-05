@@ -29,6 +29,11 @@
  * omit it to measure clock/runtime changes over unchanged materialized facts.
  * --yield-events gives each publication its own job, allowing weak samples to expire.
  * Both saved and current projection owners use the same native TypeScript loader.
+ * With --expose-gc, memoryAfterGc reports retained memory after the measured pass
+ * and a job boundary for weak samples. Collection precedes digest replay and is
+ * outside CPU/allocation measurement.
+ * Reports synchronous publication p99/max with sample counts; these are owner
+ * stalls, not whole-Gateway event-loop or sessions.list latency.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -407,10 +412,13 @@ if (values.allocations) {
 }
 const hostLoadBefore = loadavg();
 const memoryBefore = process.memoryUsage();
+const publicationMs: number[] = [];
 const cpuStart = process.threadCpuUsage();
 const start = performance.now();
 for (let index = 0; index < events; index++) {
+  const publicationStart = performance.now();
   publish(index);
+  publicationMs.push(performance.now() - publicationStart);
   if (values["yield-events"]) {
     await setImmediate();
   }
@@ -418,6 +426,7 @@ for (let index = 0; index < events; index++) {
 const elapsedMs = performance.now() - start;
 const cpu = process.threadCpuUsage(cpuStart);
 const memoryAfter = process.memoryUsage();
+const sortedPublicationMs = publicationMs.toSorted((a, b) => a - b);
 const measuredEncoding = { envelopeEncodings, envelopeBytes, deliveries };
 let sampledBytes: number | undefined;
 if (values.allocations) {
@@ -429,6 +438,12 @@ if (values.allocations) {
     node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
   sampledBytes = sum(profile.head);
   inspector.disconnect();
+}
+let memoryAfterGc: NodeJS.MemoryUsage | undefined;
+if (global.gc) {
+  await setImmediate();
+  global.gc();
+  memoryAfterGc = process.memoryUsage();
 }
 // Hash in a separate replay so serialization and cryptography do not mask projection savings.
 for (const peer of peers) {
@@ -462,6 +477,9 @@ console.log(
     mode: values.allocations ? "allocation" : "timing",
     elapsedMs,
     threadCpuMs: (cpu.user + cpu.system) / 1000,
+    publicationSamples: publicationMs.length,
+    publicationP99Ms: sortedPublicationMs[Math.floor(publicationMs.length * 0.99)],
+    publicationMaxMs: sortedPublicationMs.at(-1),
     sampledBytes,
     payloadDigest: digest.digest("hex"),
     wireDigest: wireDigest.digest("hex"),
@@ -469,6 +487,7 @@ console.log(
     hostLoadAfter: loadavg(),
     memoryBefore,
     memoryAfter,
+    memoryAfterGc,
   }),
 );
 for (const peer of peers) {

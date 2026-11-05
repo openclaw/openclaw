@@ -1,12 +1,12 @@
 ---
 name: knowledge-entities
-description: Resolve and enrich Knowledge people, companies, projects, and concepts during an authorized ingestion or entity update, with sourced State, timelines, and back-links. Read-only identity questions do not authorize writes.
+description: Resolve and enrich Knowledge people, companies, projects, and concepts during an authorized ingestion or entity update, with sourced State, source notes, and links. Read-only identity questions do not authorize writes.
 ---
 
 # Resolve and enrich entities
 
 Find who or what an entity is before asking, decide whether it deserves a page,
-then write a sourced profile and link it both ways. Read a reference only when
+then write a sourced profile, its source note and links. Read a reference only when
 its step needs it. Shared references are identical across Knowledge skills; if
 another Knowledge skill brought you here, don't reread ones you already read.
 
@@ -27,8 +27,8 @@ another Knowledge skill brought you here, don't reread ones you already read.
 - Check Knowledge before asking the user or searching externally. Ask only with a
   hypothesis.
 - No stubs or placeholders: every page's first line says who or what it is.
-- Every fact has an inline citation; every enriched page links to its source and
-  the source links back.
+- Every fact has an inline citation. The source links to every enriched page, and
+  each enriched page has a source note: its relationship with the source.
 - Scale effort to importance. When in doubt, don't create a page.
 - Never overwrite user-written assessments; flag contradictions with both
   citations.
@@ -62,15 +62,22 @@ citation, or a reason it has none.
 
 ### 4. Write
 
-- **Create:** introduction, State and the first Timeline line, plus only the
-  optional sections the evidence supports ([profiles](references/profiles.md)).
-- **Update:** add the Timeline line; edit a State topic only when its meaning
-  changed; use `knowledge_edit_body` for local edits.
+- **Create:** introduction and State, plus only the optional sections the
+  evidence supports ([profiles](references/profiles.md)). No Timeline section.
+- **Source note:** one `attended` or `discusses` relationship between the entity
+  and the source, with a one-sentence body
+  ([source notes](references/profiles.md#source-notes)). It is the entity's row
+  in its derived Timeline.
+- **Update:** edit a State topic only when its meaning changed; use
+  `knowledge_edit_body` for local edits. Retire a written Timeline section when
+  the page still has one
+  ([retire a written Timeline](references/profiles.md#retire-a-written-timeline)).
 - Use declared ontology fields only; omit unknown values.
 - Page bodies have a size budget, smaller for hub pages
   ([page budgets](references/publish.md#page-budgets)). When a write is
-  rejected, give the subject that outgrew its section its own page with
-  `knowledge_extract_section`; never truncate.
+  rejected, retire a written Timeline section first; otherwise give the subject
+  that outgrew its section its own page with `knowledge_extract_section`. Never
+  truncate.
 - Create claims and evidenced relationships for independently useful
   assertions ([assertions](references/assertions.md)). Markdown links don't
   create relationships.
@@ -79,16 +86,18 @@ citation, or a reason it has none.
 
 ### 5. Cross-reference
 
-Link source → entity and entity → source using observed paths. Update related
-pages when the new signal matters to them: the company page from a person, and
-the reverse; the parent project from a sub-feature.
+Link source → entity using observed paths. The way back from the entity is its
+source note, so the entity page needs no link to the source unless its prose
+cites it. Update related pages when the new signal matters to them: the company
+page from a person, and the reverse; the parent project from a sub-feature.
 
-**Done when:** both link directions exist for every linked entity.
+**Done when:** the source links to every entity and every entity has its source
+note.
 
 ### 6. Verify
 
-Run [verify](references/verify.md) with planned `expectedLinks` in both
-directions, associations and relationship endpoints. Reread each changed page
+Run [verify](references/verify.md) with planned source → entity
+`expectedLinks`, associations and source-note endpoints. Reread each changed page
 against [writing](references/writing.md) and the no-placeholder rule.
 
 **Done when:** structural checks pass and every changed page reads as a real
