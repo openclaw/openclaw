@@ -7,10 +7,11 @@ import type { OpenClawConfig } from "../config/types.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createWhisperExecutable } from "./local-audio.test-support.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
 import { runMediaFixture } from "./runner-case.test-support.js";
 import { buildProviderRegistry, runCapability } from "./runner.js";
 import { withAudioFixture } from "./runner.test-utils.js";
-import type { AudioTranscriptionRequest, MediaUnderstandingProvider } from "./types.js";
+import type { AudioTranscriptionRequest } from "./types.js";
 
 vi.mock("../agents/model-auth.js", async () => {
   const { createAvailableModelAuthMockModule } = await import("./runner.test-mocks.js");
