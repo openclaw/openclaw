@@ -75,8 +75,14 @@ IDs of accepted user inputs still queued behind that session at shutdown. The
 Gateway writes one marker per running root session, batched by session store,
 before aborting work. It uses the existing session-entry JSON in SQLite and needs
 no schema migration.
-Crash recovery uses the run identity already persisted by ordinary turn admission
-and cleared by terminal settlement, bounded by the recorded predecessor lifetime.
+Crash recovery uses the nonterminal run marker committed with accepted plain
+chat input, before dispatch hooks or runtime start. The same commit records its
+writer identity; terminal settlement clears the run marker. Recovery is bounded
+by the recorded predecessor lifetime. Command persistence
+records activity only; commands gain recovery markers when their runs start.
+Commands that become runs, such as `/goal` or skill rewrites, remain unprotected
+between input persistence and runtime start. A plain message that a hook ends
+without starting a run can retain its marker and be retried after a crash.
 The same startup metadata read discovers both sources; there are no extra restart checkpoints or execution reconstruction.
 
 Startup recovers marked sessions in ready stores immediately. Before adopting
@@ -94,6 +100,10 @@ own input readiness pending until its retained inputs are admitted. This also
 applies when several logical agents share the same physical store. Database
 reads and writes retain their normal admission rules; recovery does not borrow
 startup's temporary database access or wait for model executions to finish.
+Crash recovery waits for preparation to settle without an interactive request
+deadline. Slow preparation does not disqualify interrupted work; failed preparation
+still prevents unmarked adoption and reports the normal admission diagnostics.
+This requires the updated Gateway, with no marker or schema migration.
 
 <a id="graceful-restarts-drain-first" />
 

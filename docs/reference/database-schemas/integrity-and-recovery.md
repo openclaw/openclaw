@@ -687,9 +687,17 @@ journal and retire the incomplete copy. Maintenance reports removed bytes and
 retained directories; missing tokens, unknown layouts and legacy workers are
 retained for operator inspection.
 
-Legacy copies in the shared cache and updater-owned temporary roots still require
-explicit offline operator maintenance. They cannot be attributed safely to one
-installation. Primary databases and published backups remain outside this sweep.
+The same pass also visits sibling `sqlite-<hash>` namespaces and
+`openclaw-sqlite-readonly-v2-*` directories directly under the shared cache
+parent. Earlier Doctor and triage runs, and older releases, staged copies there.
+Those copies are retired only after 24 hours without activity anywhere in their
+tree, because another installation may own them, and they still need exclusive
+ownership of every nested token. Unreadable roots are counted as retained, and
+namespace directories are never removed.
+
+Copies without a lifetime token, pre-token legacy layouts, unknown layouts and
+updater-owned temporary roots still require explicit offline operator
+maintenance. Primary databases and published backups remain outside this sweep.
 Deletion runs in the native worker, in steps of at most 64 MiB; delayed filesystem
 metadata work can still affect other traffic on the same filesystem. Snapshot
 allocation, fresh maintenance and rollback never invoke or await the sweep.

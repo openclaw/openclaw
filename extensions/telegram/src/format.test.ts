@@ -41,6 +41,7 @@ describe("Telegram formatting", () => {
     "<b>Rollup</b>\n\n<blockquote>No emails.</blockquote>\n\n<pre><code>error</code></pre>",
     "<blockquote expandable>hidden details</blockquote>",
     '<tg-time unix="1647531900" format="wDT">22:45 tomorrow</tg-time>',
+    '<pre><code class="language-python">print(1)\n</code></pre>',
   ])("preserves supported Telegram HTML: %s", (input) => {
     expect(markdownToTelegramHtml(input)).toBe(input);
     expect(htmlText(input)).toBe(input);
@@ -84,10 +85,6 @@ describe("Telegram formatting", () => {
     [
       '<code class="language-text">/queue followup debounce:0\n</code>',
       "<code>/queue followup debounce:0\n</code>",
-    ],
-    [
-      '<pre><code class="language-python">print(1)\n</code></pre>',
-      '<pre><code class="language-python">print(1)\n</code></pre>',
     ],
     ['```bash\necho "hello"\n```', '<pre><code class="language-bash">echo "hello"\n</code></pre>'],
     // #4071: overlapping bold and autolink ranges must nest, not cross.
@@ -307,8 +304,10 @@ describe("Telegram formatting", () => {
 });
 
 describe("file references", () => {
-  it("does not wrap in HTML mode (trusts caller markup)", () => {
+  it("keeps native HTML text, tags and file refs intact", () => {
     expect(htmlText("Check README.md")).toBe("Check README.md");
+    expect(htmlText("x<y <b>z</b>")).toBe("x&lt;y <b>z</b>");
+    expect(htmlText("<code>i<n</code>")).toBe("<code>i&lt;n</code>");
     expect(renderTelegramHtmlText("Check README.md")).toContain("<code>README.md</code>");
   });
 

@@ -152,6 +152,11 @@ on:
         required: false
         default: ""
         type: string
+      npm_preflight_use_github_hosted_runners:
+        description: Run npm artifact preflight jobs on GitHub-hosted ubuntu-24.04 instead of Blacksmith
+        required: false
+        default: false
+        type: boolean
 permissions:
   actions: write
   contents: read
@@ -1513,6 +1518,7 @@ jobs:
               args=(-f stage="$stage" -f dispatch_id="$dispatch_id" -f source_sha="$TARGET_SHA" -f release_tag="$RELEASE_TAG" -f preflight_phase="$PREFLIGHT_PHASE")
               if [[ "$stage" == "npm" ]]; then
                 args+=(-f npm_dist_tag="$NPM_DIST_TAG" -f release_candidate_branch="$RELEASE_CANDIDATE_BRANCH")
+                args+=(-f npm_preflight_use_github_hosted_runners="$NPM_PREFLIGHT_USE_GITHUB_HOSTED_RUNNERS")
               elif [[ "$stage" == "candidate" ]]; then
                 args+=(-f request_json="$CANDIDATE_REQUEST_JSON" -f prepared_npm_bundle_json="$PREPARED_NPM_BUNDLE_JSON")
               fi
@@ -1909,6 +1915,7 @@ jobs:
       RELEASE_TAG: ${{ needs.resolve_target.outputs.release_tag }}
       NPM_DIST_TAG: ${{ needs.resolve_target.outputs.npm_dist_tag }}
       RELEASE_CANDIDATE_BRANCH: ${{ needs.resolve_target.outputs.release_candidate_branch }}
+      NPM_PREFLIGHT_USE_GITHUB_HOSTED_RUNNERS: ${{ inputs.npm_preflight_use_github_hosted_runners }}
       PREFLIGHT_PHASE: ${{ inputs.rerun_group == 'all' && 'all' || 'prepare' }}
       CHILD_WORKFLOW_REF: ${{ github.ref_name }}
       PARENT_WORKFLOW_SHA: ${{ github.sha }}

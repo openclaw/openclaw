@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/config.js";
-import type { RealtimeVoiceProviderResolveConfigContext } from "../../../talk/provider-types.js";
+import type { RealtimeVoiceProviderResolveConfigContext } from "../../../talk/provider-contexts.js";
 import { bindSessionRowProjection } from "../../session-row-projection-access.js";
 import { roleClient, rolePolicyConfig } from "../../session-sharing.test-utils.js";
 import { preparedTalkSessionProjection as projection } from "../test-helpers.js";

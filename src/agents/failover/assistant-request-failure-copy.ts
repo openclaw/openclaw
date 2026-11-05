@@ -295,10 +295,9 @@ export function renderRecordedAssistantFailureCopy(
     return `⚠️ ${approvalMessage}`;
   }
   const raw = typeof message.errorMessage === "string" ? message.errorMessage.trim() : "";
-  // Terminal lifecycle errors can already contain our safe copy without the original auth facts.
-  for (const reason of ["auth", "auth_permanent"] as const) {
-    const copy = ASSISTANT_REQUEST_FAILURE_COPY[reason];
-    if (raw === copy || raw === `⚠️ ${copy}`) {
+  // Terminal lifecycle errors can already contain our safe copy without the original failure facts.
+  for (const copy of Object.values(ASSISTANT_REQUEST_FAILURE_COPY)) {
+    if (copy && (raw === copy || raw === `⚠️ ${copy}`)) {
       return `⚠️ ${copy}`;
     }
   }

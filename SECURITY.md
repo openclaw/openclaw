@@ -334,7 +334,7 @@ OpenClaw's web interface (Gateway Control UI + HTTP endpoints) is intended for *
 
 ### Node.js Version
 
-OpenClaw requires **Node.js 24.22.1+ or Node.js 26.12.1+**. Node 26 is recommended; Node 24 is the supported LTS line. These minimum versions include the upstream SQLite WAL-reset corruption fix, preserve embedded NUL characters in SQLite TEXT reads, and reject the keys compromised in the October 2026 eMudhra incident. Node 22, 23, and 25 are unsupported.
+OpenClaw requires **Node.js 24.16.0+ on 24.x or Node.js 26.1.0+**, with a working, lossless `node:sqlite` binding and a WAL-reset-safe SQLite library. **Node 24.22.1+ or Node 26.12.1+ is strongly recommended** to reject keys compromised in the October 2026 eMudhra incident. Earlier compatible runtimes may trust TLS certificates signed with those keys. Startup prefers an already-installed patched Node; if none is available, it warns on stderr and continues without downloading a runtime solely for the missing certificate patch. Node 26 is recommended; Node 24 is the supported LTS line. Node 22, 23, and 25 are unsupported.
 
 Verify your Node.js version:
 

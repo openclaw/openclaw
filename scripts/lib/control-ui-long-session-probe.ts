@@ -10,7 +10,7 @@ const paneSelector = ".chat-pane-cache__pane--active";
 const needle = "long-session-search-needle";
 const cpuMetrics = ["TaskDuration", "ScriptDuration", "LayoutDuration", "RecalcStyleDuration"];
 
-async function sampleTranscriptScrollFrames(
+export async function sampleTranscriptScrollFrames(
   element: HTMLElement | SVGElement,
   options: { direction: "top" | "bottom"; trajectory: boolean; count: number },
 ) {
@@ -725,7 +725,11 @@ export async function probeLongSession(options: {
               ?.getAttribute("aria-expanded") === "true",
           paneSelector,
         );
-        await entry(workload.firstOutputEntryId).waitFor({ state: "visible" });
+        await pane
+          .locator(
+            `.chat-bubble:not(.chat-bubble--tool-shell)[data-entry-id=${JSON.stringify(workload.firstOutputEntryId)}]`,
+          )
+          .waitFor({ state: "visible" });
       });
       disclosure = { expand, expandedMemory: await memory("expanded") };
       await page.screenshot({ path: path.join(artifactDir, `${prefix}.expanded.png`) });
