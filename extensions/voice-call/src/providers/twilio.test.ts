@@ -694,6 +694,14 @@ describe("TwilioProvider", () => {
     expect(result.providerResponseBody).toContain('language="es-ES"');
     expect(result.providerResponseBody).toContain("turnToken=turn-1");
     expect(result.providerResponseBody).not.toContain("<Pause");
+    for (const status of ["completed", "in-progress"]) {
+      const ended = provider.parseWebhookEvent({
+        ...createContext(`CallSid=CA-listen&CallStatus=${status}&Direction=outbound-api`),
+        url: url.toString(),
+        query: Object.fromEntries(url.searchParams),
+      });
+      expect(ended.providerResponseBody).not.toContain("<Gather");
+    }
   });
 
   it("uses a stable fallback dedupeKey for identical request payloads", () => {

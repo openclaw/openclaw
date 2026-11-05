@@ -204,3 +204,31 @@ it("renews silent gathers and delivers the next reply through the signed webhook
     { speaker: "bot", text: "I can hear you." },
   ]);
 });
+
+it("keeps an explicit conversation prompt playing and resolves its token-scoped reply after silence", async () => {
+  const f = await fixture();
+  await f.answer();
+  const call = f.manager.getActiveCalls()[0]!;
+  const ready = Promise.withResolvers<void>();
+  f.manager.onCallUpdated = (snapshot) => {
+    if (snapshot.state === "listening" && snapshot.transcript.at(-1)?.text === "What next?") {
+      ready.resolve();
+    }
+  };
+  const before = f.updates().length;
+  const turn = f.manager.continueCall(call.callId, "What next?");
+  await ready.promise;
+  const prompt = f.updates().at(-1)!;
+  expect(prompt).toMatch(/<Say[^>]*>What next\?<\/Say>\s*<Gather/);
+  const redirect = listening(prompt);
+  const token = new URL(redirect).searchParams.get("turnToken");
+  expect(token).toBeTruthy();
+  const silent = await f.post(redirect);
+  expect(silent.status).toBe(200);
+  const next = listening(silent.body);
+  expect(new URL(next).searchParams.get("turnToken")).toBe(token);
+  expect((await f.post(next, { SpeechResult: "Keep going." })).status).toBe(200);
+  expect(await turn).toEqual({ success: true, transcript: "Keep going." });
+  expect(f.updates()).toHaveLength(before + 1);
+  expect(mocks.generate).not.toHaveBeenCalled();
+});
