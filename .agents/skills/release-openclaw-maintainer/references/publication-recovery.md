@@ -272,40 +272,31 @@ bootstrap child through its [direct route](first-package.md), not a rerun.
 
 ## Reviewed security-scan mismatch
 
-Plugin NPM Release repacks every plugin with the publisher tooling (P), checked
-out at `.release-tooling` from the run's `github.workflow_sha`, and scans that
-exact tarball. The Full Release Validation tarball was built with the
-candidate's toolchain, so it can pass while P's bundler produces different
-bytes. A `Scan exact plugin npm artifact` failure with `unreviewed critical
-findings in exact npm artifact`, where the finding's `contentSha256` differs
-from `REVIEWED_CRITICAL_FINDING_CONTENT_SHA256` in
-`scripts/plugin-npm-security-scan.mts`, is deterministic for that P. A redispatch
-from the same tooling tag rebuilds the same bytes and fails again.
+Plugin NPM Release repacks plugins with the publisher tooling P and scans each
+tarball against P's reviewed inventory in `scripts/plugin-npm-security-scan.mts`.
+An `unreviewed critical findings in exact npm artifact` failure is deterministic
+for that P; a redispatch from the same tooling fails again. Full Release
+Validation runs the same scan for packages with reviewed findings in `Prepare
+exact plugin npm artifacts`, so a publish-time mismatch usually means P advanced
+after validation or the package had no reviewed finding.
 
-Before any redispatch, reproduce under P's toolchain. Use a clean checkout of
-the exact source SHA with frozen dependencies, then add P at `.release-tooling`
-inside it:
+Reproduce under P before any redispatch. In a clean checkout of the source SHA
+with frozen dependencies:
 
 ```bash
-git -C <source-checkout> worktree add .release-tooling <P-workflow-sha>
-(cd <source-checkout>/.release-tooling && CI=true pnpm install --frozen-lockfile --ignore-scripts)
-cd <source-checkout>
+git worktree add .release-tooling <P-workflow-sha>
+(cd .release-tooling && CI=true pnpm install --frozen-lockfile --ignore-scripts)
 export TSX_TSCONFIG_PATH="$PWD/.release-tooling/tsconfig.json"
 OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR=/tmp/plugin-scan \
   bash .release-tooling/scripts/plugin-npm-publish.sh --repo-root "$PWD" --pack extensions/<id>
 node --import tsx .release-tooling/scripts/plugin-npm-security-scan.mts \
-  --package-name <package-name> --package-version <version> \
-  --tarball /tmp/plugin-scan/<tarball>.tgz
+  --package-name <package-name> --package-version <version> --tarball /tmp/plugin-scan/<tarball>.tgz
 ```
 
-If the local scan fails the same way, compare the flagged file with the
-reviewed bytes. Record the new hash on `main` only after review confirms that the
-flagged logic is unchanged (see #192489), then publish from a protected tooling
-tag that contains the update. If the local scan passes, the failure is specific
-to the runner. Diagnose it before you dispatch again. Main CI's
-`check-plugin-npm-security-scan` row scans main-built packs when lockfile,
-bundler, scanner, or plugin inputs change, so a mismatch at publish points to a
-gap between P's toolchain and the candidate's.
+If it fails the same way, review the flagged file. Record the new hash on `main`
+only after review confirms the flagged logic is unchanged (see #192489), then
+publish from protected tooling that contains the update. If it passes, diagnose
+the runner before you dispatch again.
 
 ## Docker mirror
 

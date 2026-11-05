@@ -1,33 +1,41 @@
-#!/usr/bin/env -S node --import tsx
-
-// Packs plugins with this checkout's toolchain and scans the exact tarballs.
-// Release publication repacks with its own trusted tooling, so a bundler,
-// lockfile, or plugin change that drifts a reviewed finding must fail here, in
-// the change that causes it, instead of at publish time. CI selects packages
-// with selectPluginNpmSecurityScanPackageDirs.
+// Full Release Validation runs this from the admitted publisher tooling P, in
+// the candidate checkout, while its plugin npm preflight child packs with the
+// candidate's own tooling. Plugin NPM Release repacks with P and scans with P's
+// inventory, so a P-only bundler, lockfile, or inventory change would otherwise
+// fail only at publish. Packs use P's packer (--tooling-root) on this checkout.
+// Only packages with reviewed findings are packed: their reviewed hashes, paths,
+// and counts are what toolchain drift breaks. Accepted gap: a package with no
+// reviewed finding that gains one only under P still fails at publish.
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runTasksWithConcurrency } from "../src/utils/run-with-concurrency.js";
-import { hasUnjoinedWork, runManagedCommand } from "./lib/managed-child-process.mts";
-import { scanPluginNpmArtifactSecurity } from "./plugin-npm-security-scan.mts";
+import { runManagedCommand } from "./lib/managed-child-process.mts";
+import {
+  reviewedCriticalFindingPackageNames,
+  scanPluginNpmArtifactSecurity,
+} from "./plugin-npm-security-scan.mts";
 
-// Same per-command ceiling as the pretag pack check: a complete build and pack
-// keeps its normal budget while lifecycle or registry stalls stop.
+type PlannedPackage = { packageDir: string; packageName: string; version: string };
+
+// Same per-command ceiling as the pretag pack check.
 const PACK_TIMEOUT_MS = 10 * 60_000;
-// Packs are package-local; four overlap the build, install, and registry waits.
-const PACK_CONCURRENCY = 4;
 
-async function packAndScan(rootDir: string, outputRoot: string, packageDir: string) {
+async function packAndScan(toolingRoot: string, outputRoot: string, plugin: PlannedPackage) {
   const outputDir = mkdtempSync(join(outputRoot, "pack-"));
   const status = await runManagedCommand({
-    args: ["scripts/plugin-npm-publish.sh", "--pack", packageDir],
+    args: [
+      join(toolingRoot, "scripts/plugin-npm-publish.sh"),
+      "--repo-root",
+      ".",
+      "--pack",
+      plugin.packageDir,
+    ],
     bin: "bash",
-    cwd: rootDir,
     env: { ...process.env, OPENCLAW_PLUGIN_NPM_PACK_OUTPUT_DIR: outputDir },
     shell: false,
-    requireProcessTreeExit: process.platform !== "win32",
+    requireProcessTreeExit: true,
     stdio: ["ignore", "ignore", "inherit"],
     timeoutMs: PACK_TIMEOUT_MS,
   });
@@ -38,73 +46,63 @@ async function packAndScan(rootDir: string, outputRoot: string, packageDir: stri
   if (!tarball || extra.length > 0) {
     throw new Error(`expected one packed tarball, found ${extra.length + (tarball ? 1 : 0)}`);
   }
-  const packageJson = JSON.parse(readFileSync(join(rootDir, packageDir, "package.json"), "utf8"));
-  const report = scanPluginNpmArtifactSecurity({
-    packageName: packageJson.name,
-    packageVersion: packageJson.version,
+  return scanPluginNpmArtifactSecurity({
+    packageName: plugin.packageName,
+    packageVersion: plugin.version,
     tarball: readFileSync(join(outputDir, tarball)),
   });
-  rmSync(outputDir, { recursive: true, force: true });
-  return report;
 }
 
-async function runPluginNpmSecurityScanCheck(packageDirs: readonly string[]) {
-  const rootDir = resolve(".");
-  const outputRoot = mkdtempSync(join(tmpdir(), "openclaw-plugin-npm-security-scan-"));
+export async function scanWithPublisherTooling(toolingRoot: string, plan: PlannedPackage[]) {
+  const reviewed = reviewedCriticalFindingPackageNames();
+  const selected = plan.filter((plugin) => reviewed.has(plugin.packageName));
+  const outputRoot = mkdtempSync(join(tmpdir(), "openclaw-plugin-npm-publisher-scan-"));
   const failures: string[] = [];
-  let unjoinedWork = false;
   try {
     await runTasksWithConcurrency({
-      limit: PACK_CONCURRENCY,
-      tasks: packageDirs.map((packageDir) => async () => {
+      limit: availableParallelism(),
+      tasks: selected.map((plugin) => async () => {
         try {
-          const report = await packAndScan(rootDir, outputRoot, packageDir);
+          const report = await packAndScan(toolingRoot, outputRoot, plugin);
           console.log(
-            `plugin npm security scan: ${report.packageName} ok (${report.criticalFindingCount} reviewed critical findings)`,
+            `${report.packageName}: ${report.criticalFindingCount} critical findings, all reviewed`,
           );
         } catch (error) {
-          unjoinedWork ||= hasUnjoinedWork(error);
-          failures.push(`${packageDir}: ${error instanceof Error ? error.message : String(error)}`);
+          const message = error instanceof Error ? error.message : String(error);
+          // The scanner already prefixes its findings with the package name.
+          failures.push(
+            message.startsWith(plugin.packageName) ? message : `${plugin.packageName}: ${message}`,
+          );
         }
       }),
     });
   } finally {
-    if (!unjoinedWork) {
-      rmSync(outputRoot, { recursive: true, force: true });
-    }
+    rmSync(outputRoot, { recursive: true, force: true });
   }
   if (failures.length > 0) {
     throw new Error(
       [
-        `plugin npm security scan failed for ${failures.length} of ${packageDirs.length} packages:`,
+        `Publisher tooling would reject ${failures.length} of ${selected.length} plugin npm packs at Plugin NPM Release:`,
         ...failures.toSorted(),
-        "A reviewed finding drifted or a new critical finding appeared. Review the packed bytes, then update the inventory in scripts/plugin-npm-security-scan.mts.",
+        "Each finding names the packed file and its new contentSha256. Review that file; if its behavior is unchanged, record the new hash or limit in scripts/plugin-npm-security-scan.mts on main, then validate and publish with tooling that contains the update.",
       ].join("\n"),
     );
   }
-  console.log(`plugin npm security scan: ${packageDirs.length} packages passed.`);
-}
-
-function parsePackageDirs(argv: readonly string[]) {
-  const packageDirs: string[] = [];
-  for (let index = 0; index < argv.length; index += 2) {
-    const value = argv[index + 1];
-    if (argv[index] !== "--package" || !value || value.startsWith("-")) {
-      break;
-    }
-    packageDirs.push(value);
-  }
-  if (packageDirs.length === 0 || packageDirs.length * 2 !== argv.length) {
-    throw new Error(
-      "usage: node --import tsx scripts/check-plugin-npm-security-scan.mts --package extensions/<id> [--package ...]",
-    );
-  }
-  return packageDirs;
+  console.log(
+    `Publisher tooling accepts ${selected.length} plugin npm packs with reviewed findings.`,
+  );
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  const [toolingFlag, toolingRoot, planFlag, planPath] = process.argv.slice(2);
   try {
-    await runPluginNpmSecurityScanCheck(parsePackageDirs(process.argv.slice(2)));
+    if (toolingFlag !== "--tooling-root" || !toolingRoot || planFlag !== "--plan" || !planPath) {
+      throw new Error(
+        "usage: check-plugin-npm-security-scan.mts --tooling-root <publisher-checkout> --plan <plugin-npm-release-plan.json>",
+      );
+    }
+    const plan = JSON.parse(readFileSync(planPath, "utf8")) as { all: PlannedPackage[] };
+    await scanWithPublisherTooling(resolve(toolingRoot), plan.all);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

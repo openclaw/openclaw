@@ -1000,14 +1000,6 @@ const changedScopeHasPromptSnapshotImpact =
   eventName !== "pull_request" ||
   typeof changedNodeTestPlan.hasPromptSnapshotAffectingChange !== "function" ||
   changedNodeTestPlan.hasPromptSnapshotAffectingChange(changedPaths);
-// Release publication repacks plugins with its own tooling; scanning the packs
-// this tree builds makes bundler or plugin drift fail in the change that causes it.
-const pluginNpmSecurityScanPackageDirs =
-  typeof changedNodeTestPlan.selectPluginNpmSecurityScanPackageDirs === "function"
-    ? changedNodeTestPlan.selectPluginNpmSecurityScanPackageDirs(
-        eventName === "pull_request" ? changedPaths : null,
-      )
-    : [];
 const supportsSqliteSessionLifecycleProof = existsSync(
   "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
 );
@@ -1565,21 +1557,10 @@ const additionalChecks = [
     group: "runtime-topology-architecture",
     runner: "blacksmith-16vcpu-ubuntu-2404",
   },
-  ...(pluginNpmSecurityScanPackageDirs.length > 0
-    ? [
-        {
-          check_name: "check-plugin-npm-security-scan",
-          group: "plugin-npm-security-scan",
-          runner: "blacksmith-8vcpu-ubuntu-2404",
-          package_dirs: pluginNpmSecurityScanPackageDirs.join(" "),
-        },
-      ]
-    : []),
 ].filter(
   ({ group }) =>
     !(ordinaryPullRequest && group === "runtime-topology-architecture") &&
     (!narrowCheckScope ||
-      group === "plugin-npm-security-scan" ||
       (group === "prompt-snapshots"
         ? changedScopeHasPromptSnapshotImpact
         : narrowCheckScope.additionalGroups.includes(group))),

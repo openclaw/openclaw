@@ -88,15 +88,6 @@ for check_group in "${check_groups[@]}"; do
       run_check "test:extensions:package-boundary:compile" pnpm run test:extensions:package-boundary:compile
       run_check "test:extensions:package-boundary:canary" pnpm run test:extensions:package-boundary:canary
       ;;
-    plugin-npm-security-scan)
-      # The manifest selects package dirs from changed plugin build inputs.
-      read -r -a scan_package_dirs <<< "${PLUGIN_NPM_SECURITY_SCAN_PACKAGE_DIRS:-}"
-      scan_args=()
-      for package_dir in "${scan_package_dirs[@]}"; do
-        scan_args+=(--package "$package_dir")
-      done
-      run_check "plugin-npm-security-scan" node --import tsx scripts/check-plugin-npm-security-scan.mts "${scan_args[@]}"
-      ;;
     runtime-topology-architecture)
       GOGC="${GOGC:-30}" GOMEMLIMIT="${GOMEMLIMIT:-3GiB}" \
         run_check "check:architecture" pnpm check:architecture
