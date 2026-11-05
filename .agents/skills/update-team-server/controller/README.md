@@ -190,6 +190,31 @@ using this recovery with `mixed`. No service-unit edit, daemon reload, or Gatewa
 restart is part of controller adoption. Any subsequent operator recovery requires
 its own incident authorization and coordinated restart window.
 
+## Retained incident recovery
+
+The captured installed controller includes an incident-bound retained-repair
+owner and complete-closure adoption protocol, originally proposed in #187854.
+The [source record](SOURCE.md) distinguishes that unmerged source from later
+installed-only changes and lists the fixes retained during reconciliation.
+[Retained repair](RETAINED-REPAIR.md) describes the phases, evidence custody,
+start claim, acceptance, and fail-closed adoption bridge. These are operator
+interfaces for the retained incident, not a general replacement updater.
+
+Every library command requires the existing exclusive deployment lock on FD 9,
+except the systemd start condition with its own root/PID1/cgroup authority.
+Read-only admission must also participate so adoption cannot expose mixed files.
+Names such as `check` or `inspect` do not imply read-only behavior: some settle
+interrupted durable publications. Do not exempt commands or downgrade the lock
+without an explicit command contract and adoption proof.
+
+The shell parses arguments before acquiring that same lock, then validates its
+executing inode and the completed closure before any controller proof or effect.
+Ordinary deployment retains its bounded wait; incident-bound actions refuse
+contention. A script waiting across adoption is rejected as stale after locking.
+For a gate-aware incumbent, use the retained adoption owner and its exact
+approved closure descriptors; replacing files outside that owner leaves the
+completed gate bound to the predecessor and correctly refuses admission.
+
 ## Installed closure
 
 Install from one reviewed, merged OpenClaw commit. These four files are one
@@ -273,9 +298,8 @@ approval. This does not compare against upstream main or a package registry and
 does not invent a release-expiry threshold. No new receipt or cache is written.
 
 The launcher now takes the deployment lock exclusively and nonblockingly, then
-hands it to the release proofs as FD 9. The host's currently installed release
-library requires that lock on FD 9 before any command; this repository's library
-accepts the handoff unchanged. Runtime bodies and status reporters do not inherit
+hands it to the release proofs as FD 9. The reconciled release library requires that lock on FD 9 before ordinary
+commands, including `audit-root`; the launcher preserves that handoff. Runtime bodies and status reporters do not inherit
 either lock descriptor.
 Proof failures print their command, exit code, and last 2000 stderr bytes. The
 disk-maintenance body remains outside this closure; its launcher job entry is

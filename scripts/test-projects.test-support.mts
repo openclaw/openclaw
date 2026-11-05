@@ -4711,6 +4711,7 @@ function resolveBoundedChangedTestTargetPlan(
           createTestInputFingerprint(cwd, changedPaths),
           adaptiveMarkdownQualification,
           options.adaptiveMarkdown.isIndependentCompanion,
+          cwd,
         )
       : (owners: string[]) => owners;
   const graphOptions = {
