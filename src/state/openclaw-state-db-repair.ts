@@ -12,7 +12,6 @@ import { formatSchemaMigrationFailure } from "../infra/schema-migration-diagnost
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { revokeSqliteDatabaseAdmissions } from "../infra/sqlite-database-admission.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
-import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import {
   repairDoctorSqliteIndexCorruption,
   prepareDoctorSqliteIndexCorruption,
