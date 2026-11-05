@@ -116,6 +116,15 @@ function createManagedProfileFixture() {
   };
 }
 
+function expectNoCookieSnapshotScratch() {
+  const cacheRoot = path.join(profileMocks.tempRoot, "openclaw");
+  const namespaces = fs.readdirSync(cacheRoot);
+  expect(namespaces).toEqual([expect.stringMatching(/^sqlite-[a-f0-9]{24}$/)]);
+  for (const namespace of namespaces) {
+    expect(fs.readdirSync(path.join(cacheRoot, namespace))).toEqual([]);
+  }
+}
+
 beforeEach(() => {
   Object.defineProperty(process, "platform", { ...platformDescriptor, value: "darwin" });
   profileMocks.cookiesSetManyViaPlaywright.mockClear();
@@ -174,7 +183,7 @@ it("removes cookie snapshot scratch when reading invalid SQLite bytes fails", as
   const cookiesFile = createSystemProfileFixture();
   fs.writeFileSync(cookiesFile, "not a SQLite database");
   await expect(readSystemProfileCookies(source)).rejects.toThrow(/not a database/);
-  expect(fs.readdirSync(path.join(profileMocks.tempRoot, "openclaw"))).toEqual([]);
+  expectNoCookieSnapshotScratch();
 });
 
 it("imports decrypted and committed WAL cookies without blocking snapshot writes", async () => {
@@ -208,7 +217,7 @@ it("imports decrypted and committed WAL cookies without blocking snapshot writes
     });
     expect(syncFlush).not.toHaveBeenCalled();
     expect(prepare.mock.calls.some(([sql]) => /\b(?:VACUUM|COMMIT)\b/i.test(sql))).toBe(false);
-    expect(fs.readdirSync(path.join(profileMocks.tempRoot, "openclaw"))).toEqual([]);
+    expectNoCookieSnapshotScratch();
   } finally {
     writer.close();
   }
