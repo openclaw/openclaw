@@ -153,6 +153,7 @@ packages/normalization-core/src/stable-node-path.ts
 packages/normalization-core/src/stable-stringify.ts
 packages/normalization-core/src/string-coerce.ts
 packages/normalization-core/src/string-normalization.ts
+packages/normalization-core/src/stringified-error.ts
 packages/normalization-core/src/text-decoding.ts
 packages/normalization-core/src/utf16-slice.ts
 packages/plugin-package-contract/package.json
@@ -404,6 +405,7 @@ src/agents/worktrees/repository-paths.ts
 src/agents/worktrees/run-end-lifecycle.ts
 src/agents/sandbox/registry-lifecycle.ts
 src/agents/sandbox/registry-publication.ts
+src/config/cron-default-destinations.ts
 src/config/zod-schema.database.ts
 src/infra/directory-walk.ts
 src/infra/database-engine/adapters.ts
@@ -439,6 +441,7 @@ src/infra/database-engine/sqlite-vector-types.ts
 src/infra/database-engine/sqlite-vector.ts
 src/infra/database-engine/text-bytes.ts
 src/infra/database-engine/vector-contract.ts
+src/infra/doctor-progress.ts
 src/infra/gateway-shutdown-budget.ts
 src/infra/postgres-sync/bridge-prestart.ts
 src/infra/postgres-sync/connection.ts
@@ -2329,6 +2332,7 @@ test/vitest/vitest.extension-whatsapp-paths.mjs
 test/vitest/vitest.extension-zalo-paths.mjs
 test/vitest/vitest.gateway-server-paths.mjs
 test/vitest/vitest.include-patterns.ts
+test/vitest/vitest.markdown-paths.mjs
 test/vitest/vitest.package-contract-paths.mjs
 test/vitest/vitest.pattern-file.ts
 test/vitest/vitest.performance-config.ts

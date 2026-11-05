@@ -84,8 +84,6 @@ type OrphanRepairPlan = Omit<OrphanRepairCandidate, "messageEntry"> & {
   contextEnginePrompt: string;
   messageEntry: SessionMessageEntry & { message: PersistedUserTurnMessage };
   removeLeaf: boolean;
-  /** The preserved leaf already stores the merged text, so the new durable row must not repeat it. */
-  durableLeafCarriesMergedText: boolean;
 };
 
 function isUserSessionMessageEntry(
@@ -94,40 +92,10 @@ function isUserSessionMessageEntry(
   return entry.message.role === "user";
 }
 
-/** Chat input authored by this session's own user, not an internal or cross-session handoff. */
-function isExternalUserOrphan(provenance: unknown): boolean {
-  // An unrecognized provenance kind (realtime voice, host sentinels) is not chat input.
-  if (provenance === undefined || provenance === null) {
-    return true;
-  }
-  return normalizeInputProvenance(provenance)?.kind === "external_user";
-}
-
-/**
- * Durable text for a repaired turn.
- *
- * A removed leaf has to carry its text in the replacement row. A preserved external leaf already
- * stores that text as a visible history row, so repeating it would show the same message twice.
- */
-export function resolveOrphanRepairTranscriptPrompt(params: {
-  transcriptPrompt: string;
-  leafMessage: PersistedUserTurnMessage;
-  durableLeafCarriesMergedText: boolean;
-}): string {
-  if (params.durableLeafCarriesMergedText) {
-    return params.transcriptPrompt;
-  }
-  return mergeOrphanedTrailingUserPrompt({
-    prompt: params.transcriptPrompt,
-    leafMessage: params.leafMessage,
-  }).prompt;
-}
-
 export function resolveOrphanRepairPlan(params: {
   sessionManager: OrphanRepairSessionManager;
   prompt: string;
   preserveLeaf: boolean;
-  /** This turn already wrote its own canonical row, so a differing leaf is stale and must go. */
   currentTurnPersisted: boolean;
 }): OrphanRepairPlan | undefined {
   const candidate = findTrailingMessageEntryForOrphanRepair(params.sessionManager);
@@ -141,28 +109,25 @@ export function resolveOrphanRepairPlan(params: {
   ) {
     return undefined;
   }
+  const provenance = candidate.messageEntry.message.provenance;
+  // Keep unanswered chat input in ordinary history. Merging it into a new turn
+  // would repeat it when that turn's stored model prompt is replayed later.
+  if (
+    !params.preserveLeaf &&
+    !params.currentTurnPersisted &&
+    candidate.messageEntry.message.excludeFromContext !== true &&
+    (provenance == null || normalizeInputProvenance(provenance)?.kind === "external_user")
+  ) {
+    return undefined;
+  }
   const merge = mergeOrphanedTrailingUserPrompt({
     prompt: params.prompt,
     leafMessage: candidate.messageEntry.message,
   });
-  // The merged prompt already carries this external user's text, so the durable row can stay:
-  // rewinding it would hide an accepted message from history and publish a leaf control, which
-  // marks the whole transcript index for a full rebuild before this run may continue.
-  const keepMergedExternalLeaf =
-    merge.merged &&
-    !params.preserveLeaf &&
-    // This turn still writes its own canonical row after the preserved leaf; an already
-    // persisted row means the leaf is stale and the repair has to replace it.
-    !params.currentTurnPersisted &&
-    // A preserved leaf is dropped from this call's provider prefix by position, so it has to be
-    // the context tail; excluded rows are invisible to that context and must keep the old repair.
-    candidate.messageEntry.message.excludeFromContext !== true &&
-    isExternalUserOrphan(candidate.messageEntry.message.provenance);
   return {
     contextEnginePrompt: merge.prompt,
     messageEntry: candidate.messageEntry,
     trailingEntries: candidate.trailingEntries,
-    removeLeaf: keepMergedExternalLeaf ? false : merge.removeLeaf || !params.preserveLeaf,
-    durableLeafCarriesMergedText: keepMergedExternalLeaf,
+    removeLeaf: merge.removeLeaf || !params.preserveLeaf,
   };
 }

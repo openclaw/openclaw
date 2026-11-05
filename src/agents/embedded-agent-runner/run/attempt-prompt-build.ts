@@ -50,10 +50,7 @@ import {
   usesEscapedRuntimeContext,
   normalizeMessagesForCurrentPromptBoundary,
 } from "./attempt-llm-boundary.js";
-import {
-  resolveOrphanRepairTranscriptPrompt,
-  type resolveOrphanRepairPlan,
-} from "./attempt-orphan-repair.js";
+import type { resolveOrphanRepairPlan } from "./attempt-orphan-repair.js";
 import {
   mergeOrphanedTrailingUserPrompt,
   resolvePromptBuildHookResult,
@@ -307,12 +304,12 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
       prompt: effectivePrompt,
       leafMessage: leafEntry.message,
     });
-    effectivePrompt = orphanPromptMerge.prompt;
-    effectiveTranscriptPrompt = resolveOrphanRepairTranscriptPrompt({
-      transcriptPrompt: effectiveTranscriptPrompt,
+    const transcriptPromptMerge = mergeOrphanedTrailingUserPrompt({
+      prompt: effectiveTranscriptPrompt,
       leafMessage: leafEntry.message,
-      durableLeafCarriesMergedText: input.orphanRepair.durableLeafCarriesMergedText,
     });
+    effectivePrompt = orphanPromptMerge.prompt;
+    effectiveTranscriptPrompt = transcriptPromptMerge.prompt;
     const action = input.orphanRepair.removeLeaf
       ? orphanPromptMerge.merged
         ? "Merged and removed"

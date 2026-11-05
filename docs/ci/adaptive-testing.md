@@ -234,6 +234,12 @@ import consumers, policy checks and smoke tests retain their existing selection.
 The stateful table test is outside this pilot. Scheduled, main and release runs
 retain their existing full coverage.
 
+Ten pure Markdown test files run in the dedicated `core-markdown` owner. It
+shares Node worker policy, hermetic environment setup, output redaction and
+resource controls with other lanes, without their application transforms or
+custom cleanup runner. The table test keeps its existing unit owner. New tests
+keep the ordinary ownership rules until explicitly moved into this lane.
+
 `config/ci-adaptive-markdown.json` records reviewed input fingerprints. The
 selector uses its existing import graph to hash each test's current transitive
 workspace inputs, plus the shared test configuration and dependency lock inputs.

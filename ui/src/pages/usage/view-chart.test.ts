@@ -1,10 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createSignal } from "solid-js";
 /* @vitest-environment jsdom */
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
+import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import * as metrics from "./metrics.ts";
 import { buildProviderSeries, type ProviderSeries } from "./provider-series.ts";
 import type { CostDailyEntry, UsageProps } from "./types.ts";
 import { dailyEntry } from "./usage-chart.test-support.ts";
@@ -50,15 +52,24 @@ function renderDailyChart(
 }
 
 describe("DailyChartCompact", () => {
-  it("formats only visible axis labels while keeping every day accessible across ranges", () => {
+  it("reuses date labels across value updates while keeping every day accessible across ranges", async () => {
+    const restoreI18n = captureI18nStateForTesting();
+    onTestFinished(restoreI18n);
+    await i18n.setLocale("en");
+    const dateFormat = vi.spyOn(metrics, "formatFullDate");
+    onTestFinished(() => dateFormat.mockRestore());
     const dates = Array.from({ length: 180 }, (_, index) =>
       new Date(Date.UTC(2026, 0, index + 1)).toISOString().slice(0, 10),
     );
     const [count, setCount] = createSignal(180);
+    const [offset, setOffset] = createSignal(0);
+    const [tokens, setTokens] = createSignal(100);
     const { container } = mountSolid(() =>
       DailyChartCompact({
         get dailyEntries() {
-          return dates.slice(0, count()).map((date) => dailyEntry(date, 100));
+          return dates
+            .slice(offset(), offset() + count())
+            .map((date) => dailyEntry(date, tokens(), tokens() / 100));
         },
         selectedDays: [],
         chartMode: "tokens",
@@ -67,7 +78,11 @@ describe("DailyChartCompact", () => {
         providerSeries: [],
         onSelectDay: () => {},
         get range() {
-          return { startDate: dates[0]!, endDate: dates[count() - 1]!, complete: true };
+          return {
+            startDate: dates[offset()]!,
+            endDate: dates[offset() + count() - 1]!,
+            complete: true,
+          };
         },
       }),
     );
@@ -81,10 +96,32 @@ describe("DailyChartCompact", () => {
       labels().filter((label) => !label.classList.contains("daily-bar-label--hidden")),
     ).toHaveLength(7);
 
+    const firstBar = bars()[0];
+    dateFormat.mockClear();
+    setTokens(200);
+    flush();
+    expect(dateFormat).not.toHaveBeenCalled();
+    expect(bars()[0]).toBe(firstBar);
+    expect(bars().every((bar) => bar.getAttribute("aria-label")?.includes("200"))).toBe(true);
+    expect(bars()[0]?.getAttribute("aria-label")).toContain("$2.00");
+
+    await i18n.setLocale("de");
+    flush();
+    expect(dateFormat).toHaveBeenCalled();
+    expect(bars()[0]).toBe(firstBar);
+    expect(bars()[0]?.getAttribute("aria-label")).toContain("1. Januar 2026");
+
     setCount(4);
     flush();
     expect(bars()).toHaveLength(4);
     expect(labels().every((label) => label.textContent)).toBe(true);
+
+    dateFormat.mockClear();
+    setOffset(1);
+    flush();
+    expect(bars()).toHaveLength(4);
+    expect(dateFormat).toHaveBeenCalledWith("2026-01-05");
+    expect(bars()[0]?.getAttribute("aria-label")).toContain("2. Januar 2026");
   });
 
   it("keeps day selection operable with mouse and keyboard", () => {
