@@ -152,6 +152,7 @@ packages/normalization-core/src/stable-node-path.ts
 packages/normalization-core/src/stable-stringify.ts
 packages/normalization-core/src/string-coerce.ts
 packages/normalization-core/src/string-normalization.ts
+packages/normalization-core/src/stringified-error.ts
 packages/normalization-core/src/text-decoding.ts
 packages/normalization-core/src/utf16-slice.ts
 packages/plugin-package-contract/package.json
