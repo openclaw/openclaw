@@ -58,6 +58,10 @@ describe("cron edit", () => {
     [["--clear-model"], { payload: { kind: "agentTurn", model: null } }],
     [["--clear-thinking"], { payload: { kind: "agentTurn", thinking: null } }],
     [["--name", "Renamed"], { name: "Renamed" }],
+    [
+      ["--failure-alert-channel", "", "--failure-alert-to", " ", "--failure-alert-account-id", ""],
+      { failureAlert: { channel: null, to: null, accountId: null } },
+    ],
   ] as const)("sends only the requested patch for %j", async (args, patch) => {
     await edit(args);
     expectPatch(patch);
