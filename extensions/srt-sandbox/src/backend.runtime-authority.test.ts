@@ -334,6 +334,37 @@ describe.skipIf(!isLive)("srt sandbox backend — live runtime authority", () =>
     LIVE_TIMEOUT,
   );
 
+  it.each(["revocation", "wrap failure"])(
+    "releases caller-prepared custody on termination after %s during spec preparation",
+    async (failure) => {
+      const { ws, authority, handle } = await setup();
+      const prepared = handle.prepareProcessCleanup!({});
+      const other = handle.prepareProcessCleanup!({});
+      const marker = path.join(ws, "never-ran");
+      const error = failure === "revocation" ? authority.revoked : new Error("wrap failed");
+      const original = SandboxManager.wrapWithSandboxArgv.bind(SandboxManager);
+      vi.spyOn(SandboxManager, "wrapWithSandboxArgv").mockImplementationOnce(async (...args) => {
+        const wrapped = await original(...args);
+        if (failure === "wrap failure") {
+          throw error;
+        }
+        authority.current = false;
+        return wrapped;
+      });
+      expect(existsSync(prepared.env.SRT_CUSTODY_SOCKET!)).toBe(true);
+      await expect(
+        handle.buildExecSpec({ command: `touch '${marker}'`, env: prepared.env, usePty: false }),
+      ).rejects.toBe(error);
+      // The host retains termination custody until a spec returns; there is
+      // no finalize token on this path. Cleanup must work after revocation.
+      await prepared.terminate();
+      expect(existsSync(path.dirname(prepared.env.SRT_CUSTODY_SOCKET!))).toBe(false);
+      expect(existsSync(other.env.SRT_CUSTODY_SOCKET!)).toBe(true);
+      expect(existsSync(marker)).toBe(false);
+    },
+    LIVE_TIMEOUT,
+  );
+
   it(
     "rejects the pin-owner RPC when authority is revoked during owner preparation",
     async () => {

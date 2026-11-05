@@ -280,7 +280,15 @@ export class ExecCustody {
     this.leases.add(lease);
     return {
       env: { ...env, [SOCKET_ENV]: lease.socketPath, [TOKEN_ENV]: lease.nonce },
-      terminate: async () => this.cancel(lease),
+      terminate: async () => {
+        this.cancel(lease);
+        // Before launch, the caller may have no spec/finalize token yet.
+        // Retained termination custody must also release that preparation.
+        // Claimed commands keep their lease until ordinary finalization.
+        if (!lease.claimed) {
+          await this.finalize(lease);
+        }
+      },
       interrupt: async () => false,
     };
   }

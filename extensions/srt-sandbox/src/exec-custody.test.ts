@@ -299,7 +299,6 @@ describe.skipIf(process.platform === "win32")("normal exec lifecycle custody", (
   it("closes the cancellation-before-native-spawn race", async () => {
     const custody = new ExecCustody();
     const prepared = custody.prepare({});
-    await prepared.terminate();
     const spec = custody.wrap(
       {
         argv: [process.execPath, "-e", "process.exit(99)"],
@@ -308,10 +307,80 @@ describe.skipIf(process.platform === "win32")("normal exec lifecycle custody", (
       },
       prepared.env,
     );
+    await prepared.terminate();
     const child = spawn(spec.argv[0]!, spec.argv.slice(1), { env: spec.env, stdio: "ignore" });
     const [code] = (await once(child, "exit")) as [number];
     expect(code).toBe(1);
     await custody.finalize(spec.finalizeToken);
+  });
+
+  it("releases only its unclaimed lease on termination, including duplicate cleanup", async () => {
+    let current = true;
+    const custody = new ExecCustody({
+      assertRuntimeCurrent: () => {
+        if (!current) {
+          throw new Error("retired");
+        }
+      },
+    });
+    const foreign = new ExecCustody();
+    const prepared = custody.prepare({});
+    const other = custody.prepare({});
+    const foreignPrepared = foreign.prepare({});
+    const cleanup = vi.fn();
+    const spec = custody.wrap(
+      { argv: ["/bin/true"], env: prepared.env, stdinMode: "pipe-open" },
+      prepared.env,
+      cleanup,
+    );
+    try {
+      expect(existsSync(prepared.env.SRT_CUSTODY_SOCKET!)).toBe(true);
+      current = false;
+      await Promise.all([prepared.terminate(), prepared.terminate()]);
+      expect(existsSync(path.dirname(prepared.env.SRT_CUSTODY_SOCKET!))).toBe(false);
+      expect(existsSync(other.env.SRT_CUSTODY_SOCKET!)).toBe(true);
+      expect(existsSync(foreignPrepared.env.SRT_CUSTODY_SOCKET!)).toBe(true);
+      await custody.finalize(spec.finalizeToken);
+      expect(cleanup).toHaveBeenCalledTimes(1);
+    } finally {
+      custody.dispose();
+      foreign.dispose();
+    }
+  });
+
+  it("keeps a claimed command's lease until finalization while cancelling another preparation", async () => {
+    const custody = new ExecCustody();
+    const running = custody.prepare({});
+    const spec = custody.wrap(
+      {
+        argv: [process.execPath, "-e", "console.log('running'); setInterval(()=>{},1000)"],
+        env: running.env,
+        stdinMode: "pipe-open",
+      },
+      running.env,
+    );
+    const child = spawn(spec.argv[0]!, spec.argv.slice(1), {
+      env: spec.env,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const exited = once(child, "exit");
+    try {
+      await once(child.stdout!, "data");
+      const abandoned = custody.prepare({});
+      await abandoned.terminate();
+      expect(existsSync(path.dirname(abandoned.env.SRT_CUSTODY_SOCKET!))).toBe(false);
+      expect(alive(child.pid!)).toBe(true);
+      expect(existsSync(running.env.SRT_CUSTODY_SOCKET!)).toBe(true);
+      await running.terminate();
+      await exited;
+      expect(existsSync(running.env.SRT_CUSTODY_SOCKET!)).toBe(true);
+      await custody.finalize(spec.finalizeToken);
+      expect(existsSync(path.dirname(running.env.SRT_CUSTODY_SOCKET!))).toBe(false);
+    } finally {
+      custody.dispose();
+      await custody.finalize(spec.finalizeToken);
+      await exited;
+    }
   });
 });
 
