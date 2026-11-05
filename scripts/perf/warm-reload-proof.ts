@@ -150,8 +150,20 @@ async function readProbe(page: Page) {
       "__warmReloadProof",
     );
     data.stopped = true;
+    const rig: { loaf: unknown[]; mut: Map<string, unknown> } | undefined = Reflect.get(
+      window,
+      "__perf",
+    );
+    const detailsPlacement: unknown = Reflect.get(window, "__detailsPlacementReads");
     return {
       ...data,
+      rig: rig
+        ? {
+            loaf: rig.loaf,
+            mutations: [...rig.mut],
+            detailsPlacement,
+          }
+        : undefined,
       paneChrome: Reflect.get(window, "__paneChrome").read(data.firstTranscriptDomMs),
       timeOrigin: performance.timeOrigin,
       capturedUntilMs: performance.now(),
