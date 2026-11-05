@@ -371,6 +371,10 @@ openclaw models accounts --timeout 45000 list --json
 openclaw models accounts list --timeout 45000 --json
 ```
 
+When the Gateway is unreachable, account commands use the same connection
+guidance as other Gateway commands instead of exposing a raw socket error.
+Account actions still require a connected Gateway and an identified person.
+
 ## Auth profiles
 
 `models auth list` escapes control characters in terminal output. Its `--json` output preserves the original field values.

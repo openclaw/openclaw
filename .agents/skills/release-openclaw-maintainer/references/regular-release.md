@@ -18,7 +18,7 @@ after public ClawHub downloads verify, so stable releases use the direct route.
 
 `pnpm release:stable YYYY.M.PATCH` runs strict stable qualification and publication as one resumable state
 machine with the phases `cut → validate → publish → flip-github → sync-beta →
-macos → closeout`. State lives in `.artifacts/release-YYYY.M.PATCH/state.json`;
+closeout → macos`. State lives in `.artifacts/release-YYYY.M.PATCH/state.json`;
 rerunning the command continues from the first incomplete phase, `--from <phase>`
 restarts from that phase, `--status` prints the table, and `--dry-run` prints
 every command it would run without executing anything. The operator answers
@@ -43,10 +43,11 @@ cancels a child run (the API cannot prove which parent dispatched one), so
 when those capabilities are absent it prints the exact child-approval and
 stale-child sweep commands for the operator instead; `flip-github` un-drafts the release and marks it latest; `sync-beta` advances the
 beta dist-tag to the already-published stable version;
-`macos` waits for the preflight, dispatches the real publish, and requires the
-appcast on `main`; `closeout` waits for the publish parent, requires the exact
-shipped version and changelog on `main`, and dispatches the closeout run unless
-the release already carries the closeout manifest and checksum assets.
+`closeout` waits for the publish parent, applies the
+[stable main closeout](stable-main-closeout.md) version and changelog contract,
+and dispatches the closeout run unless the release already carries its manifest
+and checksum assets; `macos` then completes the independent preflight, publication,
+and appcast checks without blocking that main closeout.
 
 The orchestrator probes three capabilities and otherwise falls back to today's
 manual commands: a publish parent at the tooling SHA that runs the dist-tag
@@ -211,6 +212,9 @@ With publication/tag-push authority, pass `--workflow-sha <tooling-sha>` to
 `pnpm release:candidate --` or `pnpm release:publish-preflight --` to reuse or
 mint the protected lightweight `release-publish/<tooling-sha12>-<epoch>` tag
 through the git refs API, verify it, and print the dispatch with `--ref <tag>`.
+The checklist requires `--workflow-sha` or `--publish-workflow-ref`. Without
+either, it fails right after any FRV dispatch, before waiting, and names every
+missing flag (including a required SDK acknowledgement) in one exact rerun command.
 Manual tag creation remains the fallback. The push may print a
 `Cannot create ref due to creations being restricted` ruleset warning while the
 tag still exists: verify with `gh api repos/openclaw/openclaw/git/ref/tags/<tag>`

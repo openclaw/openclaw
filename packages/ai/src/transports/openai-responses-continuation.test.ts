@@ -17,7 +17,10 @@ import {
   type ResponsesContinuationState,
 } from "./openai-responses-continuation.js";
 import { inputMessage as userInput } from "./openai-responses-prompt-observer.test-support.js";
-import { normalizeOpenAIResponsesFunctionCallId as normalizeCallId } from "./openai-responses-tool-call-id-shape.js";
+import {
+  normalizeOpenAIResponsesFunctionCallId as normalizeCallId,
+  splitOpenAIFunctionCallPairing,
+} from "./openai-responses-tool-call-id-shape.js";
 
 type Input = NonNullable<ResponsesContinuationRequest["input"]>;
 type Output = ResponsesContinuationState["lastResponseItems"];
@@ -291,6 +294,42 @@ describe("OpenAI Responses continuation", () => {
     } finally {
       stringify.mockRestore();
     }
+  });
+
+  it("reuses immutable sent history while checking replacement prefixes and new tool ownership", () => {
+    const host = createAiTransportHost({
+      immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
+    });
+    runWithAiTransportHost(host, () => {
+      const rawId = "functions.gateway:0";
+      const oldCall = toolCall("call_old");
+      const input = freezeJsonSnapshot([firstUser, oldCall, toolOutput("call_old")]);
+      const latest = toolCall(rawId, { id: "fc_latest", status: "completed" });
+      const state = record(undefined, input, "resp_cached", [latest]);
+      const replayedId = splitOpenAIFunctionCallPairing(
+        normalizeCallId(`${rawId}|fc_latest`),
+      ).callId;
+      const result = toolOutput(replayedId);
+      const request = { input: [...input, { ...latest, call_id: replayedId }, result] };
+      const keys = vi.spyOn(Object, "keys");
+      try {
+        expect(resolve(state, request)).toMatchObject({
+          continuationStatus: "continued",
+          request: { previous_response_id: "resp_cached", input: [toolOutput(rawId)] },
+        });
+        expect(
+          keys.mock.calls.filter(([value]) => input.some((item) => item === value)),
+        ).toHaveLength(0);
+      } finally {
+        keys.mockRestore();
+      }
+      expectHistoryChanged(state, { input: [...input, latest, toolOutput("unowned")] });
+      expectHistoryChanged(state, {
+        ...request,
+        input: [firstUser, oldCall, toolOutput("call_old", "edited"), ...request.input.slice(3)],
+      });
+      expect(resolve(state, structuredClone(request)).continuationStatus).toBe("continued");
+    });
   });
 
   it("compares mutable continuation history without materializing property-entry arrays", () => {
@@ -592,15 +631,27 @@ describe("OpenAI Responses continuation", () => {
       expectHistoryChanged(state, request);
     },
   );
-  it("rejects a changed earlier tool result when IDs share a replay shape", () => {
-    const canonicalCallId = normalizeCallId(" x");
-    const first = toolCall(canonicalCallId, { name: "first" });
-    const second = toolCall(" x", { name: "second" });
-    const originalOutput = toolOutput(canonicalCallId);
-    const state = continuationState(undefined, [firstUser, first, second, originalOutput]);
-    const changed = { ...originalOutput, call_id: " x" };
-    const request = replayRequest(state, first, second, changed, assistantOutput, secondUser);
-    expectHistoryChanged(state, request);
+  it("keeps identical sent IDs but rejects changed results sharing a replay shape", () => {
+    const host = createAiTransportHost({
+      immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
+    });
+    runWithAiTransportHost(host, () => {
+      const canonicalCallId = normalizeCallId(" x");
+      const first = toolCall(canonicalCallId, { name: "first" });
+      const second = toolCall(" x", { name: "second" });
+      const originalOutput = toolOutput(canonicalCallId);
+      const input = freezeJsonSnapshot([firstUser, first, second, originalOutput]);
+      const state = continuationState(undefined, input);
+      expect(
+        resolve(
+          state,
+          replayRequest(state, first, second, originalOutput, assistantOutput, secondUser),
+        ).continuationStatus,
+      ).toBe("continued");
+      const changed = { ...originalOutput, call_id: " x" };
+      const request = replayRequest(state, first, second, changed, assistantOutput, secondUser);
+      expectHistoryChanged(state, request);
+    });
   });
 
   it("retains pending calls when a result matches a colliding replay shape", () => {

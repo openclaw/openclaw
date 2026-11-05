@@ -235,7 +235,10 @@ function armActor(
       !waitsForStartupBatch(actor, job) &&
       hasScheduledNextRunAtMs(job.state.nextRunAtMs)
     ) {
-      nextWakeAtMs = Math.min(nextWakeAtMs ?? Infinity, job.state.nextRunAtMs);
+      nextWakeAtMs = Math.min(
+        nextWakeAtMs ?? Infinity,
+        Math.max(job.state.nextRunAtMs, job.state.admissionDeferred?.retryAtMs ?? 0),
+      );
     }
   }
   if (!enabled) {
@@ -295,6 +298,8 @@ function boundedCatchup(
       for (const job of jobs.values()) {
         if (
           !isJobEnabled(job) ||
+          // Pending admission already owns its slot and retry deadline across restarts.
+          job.state.admissionDeferred !== undefined ||
           skipped.has(job.id) ||
           waitsForStartupBatch(actor, job) ||
           active.has(job.id) ||

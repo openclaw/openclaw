@@ -1,0 +1,2 @@
+82
+# Builder publication: empty/removed cgroup, live/unreadable rejection, unresolved safety fallback.

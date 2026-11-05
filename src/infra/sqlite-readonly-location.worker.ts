@@ -42,9 +42,11 @@ import {
   SQLITE_READONLY_WORKER_MAX_BUFFER,
   SQLITE_INSPECTION_CONTENTION_PREFIX,
   SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX,
+  SQLITE_SNAPSHOT_CAPACITY_PREFIX,
   isSqliteSnapshotStagingMode,
   type SqliteReadOnlyWorkerResult,
 } from "./sqlite-readonly-worker-protocol.js";
+import { isSqliteSnapshotCapacityError } from "./sqlite-snapshot-capacity-error.js";
 import { beginSqliteSnapshotRetirement } from "./sqlite-snapshot-retirement.js";
 import {
   createSqliteSnapshotStagingTokenSync,
@@ -88,6 +90,10 @@ async function inspect(
     };
   }
   try {
+    if (mode === "staging-sweep") {
+      const { reclaimSqliteSnapshotsInProcess } = await import("./sqlite-snapshot-reclamation.js");
+      return { ok: true, reclamation: await reclaimSqliteSnapshotsInProcess(pathname) };
+    }
     if (mode === "task-delivery-recovery") {
       const recoveryDirectory = args[2];
       const sourcePath = args[3];
@@ -224,6 +230,7 @@ async function inspect(
       (mode === "staging-create" || mode === "staging-create-legacy") &&
       isPrivateDirectoryCreationRefused(error);
     const prefix =
+      (isSqliteSnapshotCapacityError(error) ? SQLITE_SNAPSHOT_CAPACITY_PREFIX : "") +
       (contention ? SQLITE_INSPECTION_CONTENTION_PREFIX : "") +
       (allocationRefused ? SQLITE_SNAPSHOT_ALLOCATION_REFUSED_PREFIX : "");
     return {
@@ -396,10 +403,19 @@ function runSession(): void {
             throw new Error(`Unknown SQLite read-only operation: ${request.type}`);
           }
           assertExistingDatabaseIdentity(pathname, expectedIdentity);
-          const value = sqliteReadOnlyOperations.execute(request, {
+          const value = await sqliteReadOnlyOperations.execute(request, {
             path: pathname,
             env: process.env,
+            assertCurrent: () => {
+              if (stopping) {
+                throw new Error("SQLite read-only worker is stopping");
+              }
+              assertExistingDatabaseIdentity(pathname, expectedIdentity);
+            },
           });
+          if (stopping) {
+            return;
+          }
           assertExistingDatabaseIdentity(pathname, expectedIdentity);
           const handle = transfers.start(
             [{ kind: "result", value: { operation: request.type, value } }].values(),

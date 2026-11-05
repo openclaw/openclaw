@@ -1,4 +1,3 @@
-// Real built UI, Gateway persistence, queue admission and OpenAI plugin; only external I/O is synthetic.
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
@@ -219,6 +218,7 @@ globalThis.__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__ = { ...undici, fetch: globalThi
         agents: {
           defaults: {
             model: "openai/gpt-6.1-sol",
+            utilityModel: "", // Keep background utility calls out of chat dispatch receipts.
             models: {
               "openai/gpt-6.1-sol": {
                 agentRuntime: { id: "openclaw" },

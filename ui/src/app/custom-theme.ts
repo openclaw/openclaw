@@ -1,7 +1,6 @@
 import { asNullableRecord as readThemeRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-
 export const THEME_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const CUSTOM_THEME_STYLE_ID = "openclaw-custom-theme";
 const MAX_CSS_TOKEN_LENGTH = 240;
@@ -88,25 +87,28 @@ export type ImportedCustomTheme = {
   dark: ThemeTokenMap;
 };
 
+// Validation runs during startup; the lazy importer localizes these failures.
+export class ThemeValidationError extends Error {}
+
 export function requireThemeId(value: string) {
   if (!THEME_ID_PATTERN.test(value)) {
-    throw new Error("Unsupported tweakcn link. Expected a theme share URL.");
+    throw new ThemeValidationError();
   }
 }
 
 export function requireSafeCssValue(value: unknown, label: string) {
   const normalized = normalizeOptionalString(value);
   if (!normalized || normalized.length > MAX_CSS_TOKEN_LENGTH) {
-    throw new Error(`Unsupported tweakcn token: ${label}`);
+    throw new ThemeValidationError(label);
   }
   const lowered = normalized.toLowerCase();
   if (FORBIDDEN_CSS_VALUE_PARTS.some((part) => lowered.includes(part))) {
-    throw new Error(`Unsupported tweakcn token: ${label}`);
+    throw new ThemeValidationError(label);
   }
   for (const char of normalized) {
     const code = char.charCodeAt(0);
     if (code < 0x20 || code === 0x7f || "{};<>`".includes(char)) {
-      throw new Error(`Unsupported tweakcn token: ${label}`);
+      throw new ThemeValidationError(label);
     }
   }
   return normalized;
@@ -115,7 +117,7 @@ export function requireSafeCssValue(value: unknown, label: string) {
 export function requireSafeFontFamilyValue(value: unknown, label: string) {
   const normalized = requireSafeCssValue(value, label);
   if (/[^A-Za-z0-9 ,'"._-]/.test(normalized)) {
-    throw new Error(`Unsupported tweakcn token: ${label}`);
+    throw new ThemeValidationError(label);
   }
   return normalized;
 }
@@ -138,7 +140,7 @@ function normalizeStoredTokenMap(value: Record<string, unknown> | undefined): Th
 
 export function describeThemeLabel(value: string | undefined) {
   const normalized = normalizeOptionalString(value);
-  return normalized ? truncateUtf16Safe(normalized, 80) : "Custom";
+  return normalized ? truncateUtf16Safe(normalized, 80) : "";
 }
 
 export function parseImportedCustomTheme(value: unknown): ImportedCustomTheme | null {

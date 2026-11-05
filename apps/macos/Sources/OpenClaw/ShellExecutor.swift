@@ -42,8 +42,8 @@ enum ShellExecutor {
             let stderrData = (try? Data(contentsOf: self.stderrURL)) ?? Data()
             try? FileManager.default.removeItem(at: self.stdoutURL.deletingLastPathComponent())
             return (
-                String(bytes: stdoutData, encoding: .utf8) ?? "",
-                String(bytes: stderrData, encoding: .utf8) ?? "")
+                String(decoding: stdoutData, as: UTF8.self),
+                String(decoding: stderrData, as: UTF8.self))
         }
 
         var subprocessStandardOutput: FileDescriptorOutput {
