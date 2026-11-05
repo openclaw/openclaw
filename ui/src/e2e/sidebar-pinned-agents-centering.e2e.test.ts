@@ -1,8 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import type { AgentsListResult } from "../api/types.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -30,7 +27,6 @@ suite.define(() => {
         await seedSidebarSettings(page, suite.server.baseUrl, {
           sidebarAgentsMode: "roster",
           pinnedAgentIds: agents.map((agent) => agent.id),
-          theme: "dark",
         });
         await installMockGateway(page, {
           methodResponses: {
@@ -56,22 +52,6 @@ suite.define(() => {
           const pins = sidebar.locator(".sidebar-pinned-agents");
           const cards = pins.locator("[data-pinned-agent]");
           await expect.poll(() => cards.count()).toBe(count);
-          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" && count === 2) {
-            const frame = await takeControlUiScreenshotFrame(
-              page,
-              pins,
-              [cards.first(), cards.last()],
-              {
-                elements: [sidebar.locator(".sidebar")],
-                animations: "disabled",
-              },
-            );
-            await writeFile(
-              path.join(suite.artifactDir, `pinned-agents-${width}.png`),
-              frame.elements[0]!.png,
-            );
-            console.log("Pinned agent proof:", suite.artifactDir);
-          }
           await expect
             .poll(() =>
               pins.evaluate((element) => {
