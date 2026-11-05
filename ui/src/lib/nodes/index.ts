@@ -254,25 +254,26 @@ async function generateIdentity(): Promise<DeviceIdentity> {
  * Synchronous identity probe for render gating: reads the stored device id
  * without creating, repairing, or fingerprint-verifying an identity, so a
  * "do we hold credentials?" check stays side-effect free before connect().
- * Without a stored one it reports the page-lifetime identity, so a credential
+ * Without a usable stored one (missing, unparsable or malformed) it reports the
+ * page-lifetime identity, as loadOrCreateDeviceIdentity does, so a credential
  * kept in memory on a storage-blocked page can still be found and forgotten.
  */
 export function peekStoredDeviceIdentityId(): string | null {
   try {
     const raw = getSafeLocalStorage()?.getItem(DEVICE_IDENTITY_STORAGE_KEY);
-    if (!raw) {
-      return sessionDeviceIdentity?.deviceId ?? null;
-    }
-    const parsed: unknown = JSON.parse(raw);
-    return isRecord(parsed) &&
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    if (
+      isRecord(parsed) &&
       parsed.version === 1 &&
       typeof parsed.deviceId === "string" &&
       parsed.deviceId
-      ? parsed.deviceId
-      : null;
+    ) {
+      return parsed.deviceId;
+    }
   } catch {
-    return null;
+    // An unreadable stored identity is replaced, like a missing one.
   }
+  return sessionDeviceIdentity?.deviceId ?? null;
 }
 
 // Storage-blocked pages (for example private browsing) must still present one

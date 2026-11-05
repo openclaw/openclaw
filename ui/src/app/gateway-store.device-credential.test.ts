@@ -113,31 +113,41 @@ describe("createApplicationGateway stored device credential", () => {
     },
   );
 
-  it("finds and forgets a credential kept only for this page when storage rejects writes", async () => {
-    const storage = createStorageMock();
-    storage.setItem = () => {
-      throw new DOMException("quota exceeded", "QuotaExceededError");
-    };
-    vi.stubGlobal("localStorage", storage);
-    const identity = await loadOrCreateDeviceIdentity();
-    const { gateway } = createStore();
-    const pageCredential = {
-      deviceId: identity.deviceId,
-      gatewayUrl: gateway.connection.gatewayUrl,
-      role: "operator",
-    };
-    storeDeviceAuthToken({
-      ...pageCredential,
-      token: "page-only-token",
-      scopes: ["operator.read"],
-    });
-    expect(loadDeviceAuthToken(pageCredential)?.token).toBe("page-only-token");
+  it.each([
+    ["no stored identity", null],
+    ["unparsable", "{not json"],
+    ["malformed", JSON.stringify({ version: 1 })],
+  ])(
+    "finds and forgets a credential kept only for this page when storage rejects writes (%s)",
+    async (_, storedIdentity) => {
+      const storage = createStorageMock();
+      if (storedIdentity !== null) {
+        storage.setItem(IDENTITY_KEY, storedIdentity);
+      }
+      storage.setItem = () => {
+        throw new DOMException("quota exceeded", "QuotaExceededError");
+      };
+      vi.stubGlobal("localStorage", storage);
+      const identity = await loadOrCreateDeviceIdentity();
+      const { gateway } = createStore();
+      const pageCredential = {
+        deviceId: identity.deviceId,
+        gatewayUrl: gateway.connection.gatewayUrl,
+        role: "operator",
+      };
+      storeDeviceAuthToken({
+        ...pageCredential,
+        token: "page-only-token",
+        scopes: ["operator.read"],
+      });
+      expect(loadDeviceAuthToken(pageCredential)?.token).toBe("page-only-token");
 
-    expect(gateway.hasStoredDeviceToken?.()).toBe(true);
-    expect(gateway.forgetDeviceToken?.()).toBe(true);
-    expect(loadDeviceAuthToken(pageCredential)).toBeNull();
-    expect(gateway.hasStoredDeviceToken?.()).toBe(false);
-  });
+      expect(gateway.hasStoredDeviceToken?.()).toBe(true);
+      expect(gateway.forgetDeviceToken?.()).toBe(true);
+      expect(loadDeviceAuthToken(pageCredential)).toBeNull();
+      expect(gateway.hasStoredDeviceToken?.()).toBe(false);
+    },
+  );
 
   it("skips reconnect when no credential is stored", () => {
     const { gateway, clients } = createStore();
