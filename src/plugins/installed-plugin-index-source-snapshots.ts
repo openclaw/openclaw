@@ -124,13 +124,13 @@ export function foldPluginSourceSnapshotChanges(
 export function listLaterPluginSourceSnapshotChanges(
   current: InstalledPluginIndex | null,
   changes: readonly PluginSourceSnapshotIndexChange[],
-): string[] {
+): PluginSourceSnapshotIndexChange[] {
   const currentById = new Map(current?.plugins.map((plugin) => [plugin.pluginId, plugin]));
-  return changes.flatMap((change) => {
+  return changes.filter((change) => {
     const retained = snapshotState(currentById.get(change.pluginId));
-    return isDeepStrictEqual(retained, change.after) || isDeepStrictEqual(retained, change.before)
-      ? []
-      : [change.pluginId];
+    return (
+      !isDeepStrictEqual(retained, change.after) && !isDeepStrictEqual(retained, change.before)
+    );
   });
 }
 

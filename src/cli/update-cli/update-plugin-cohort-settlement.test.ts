@@ -21,12 +21,14 @@ import {
 } from "../../infra/update-run-ledger.js";
 import { inspectPluginCohortRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import type { UpdateRecoveryRecord } from "../../infra/update-run-recovery-schema.js";
+import * as recoveryStore from "../../infra/update-run-recovery-store.js";
 import {
   beginPluginCohortRecovery,
   loadPluginCohortRecovery,
   writePluginCohortRecovery,
 } from "../../infra/update-run-recovery-store.js";
 import { updateRunWarningMessages } from "../../infra/update-run-step.js";
+import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -346,4 +348,124 @@ it("completes a rollback that keeps a later config edit", async () => {
   expect(fs.readFileSync(f.configPath, "utf8")).toBe(edited);
   expect(f.row()).toEqual(f.beforeRow);
   expect(f.warnings()).toEqual([expect.stringContaining("config file")]);
+});
+
+it("still reports a kept config edit after a later settlement step fails", async () => {
+  const f = await interruptedCohort({ root: installedRoot(candidate), config: true });
+  const edited = f.afterConfig.replace('"port": 1', '"port": 2');
+  fs.writeFileSync(f.configPath, edited);
+  // Settlement counts the kept config file, then stops before it finishes.
+  vi.spyOn(recoveryStore, "deletePluginCohortRecovery").mockImplementationOnce(() => {
+    throw new Error("interrupted after counting the config file");
+  });
+  await expect(f.settle()).rejects.toThrow("interrupted after counting the config file");
+  expect(f.cohort()?.settledPublications).toBe(2);
+  await f.settle();
+  expect(f.cohort()).toBeUndefined();
+  expect(fs.readFileSync(f.configPath, "utf8")).toBe(edited);
+  expect(f.warnings()).toEqual([expect.stringContaining("config file")]);
+});
+
+it("settles a plugin cohort stored by released updaters, keeping later decisions", async () => {
+  // Rows exactly as the shipped updater and refused repair left them; only paths and
+  // the run identity differ. This change adds no field and reads them unchanged.
+  const stateDir = dirs.make("cohort-settlement-stored-");
+  const root = installedRoot(original);
+  const options = { env: { HOME: stateDir, OPENCLAW_STATE_DIR: stateDir, NODE_ENV: "test" } };
+  const report = (pluginId: string) =>
+    JSON.stringify({
+      pluginId,
+      reason:
+        "Package convergence must wait until the updating parent releases its install records.",
+      command: "openclaw update repair",
+      requiresStateMigration: true,
+    });
+  const row = (pluginId: string, finishedAt: number | null) => ({
+    startedAt: 1792078289392,
+    finishedAt,
+    status: finishedAt === null ? "pending" : "completed",
+    reportJson: report(pluginId),
+  });
+  const pluginIds = ["discord", "whatsapp"];
+  for (const pluginId of pluginIds) {
+    await recordDeferredPluginMigrations({
+      env: options.env,
+      pending: [{ ...obligation, pluginId }],
+    });
+    // Each obligation was completed after the update published it.
+    await recordDeferredPluginMigrations({
+      env: options.env,
+      pending: [],
+      settlements: [{ pluginId, status: "completed", reason: "later Doctor" }],
+    });
+  }
+  const { runId } = createUpdateRun({ trigger: "cli" }, options);
+  const identity = (core: Core) => ({ root, nodePath: process.execPath, ...core });
+  writeConfigMachineState(
+    `update.recovery.${runId}`,
+    {
+      runId,
+      transactionId: "530520b0-b38c-4afd-9de0-299c53948be0",
+      revision: 0,
+      claimId: "9228b442-7879-4dd0-a079-ed08ee0f1713",
+      claimKind: "initial",
+      handoff: null,
+      source: { stateDir, configPath: path.join(stateDir, "openclaw.json") },
+      from: identity(original),
+      to: identity(candidate),
+      createdAtMs: 1793834878779,
+      updatedAtMs: 1793834878779,
+      effects: [],
+      restore: null,
+      verification: null,
+      primaryFailure: null,
+    },
+    options,
+  );
+  writeConfigMachineState(
+    `update.pluginCohort.${runId}`,
+    {
+      runId,
+      transactionId: "530520b0-b38c-4afd-9de0-299c53948be0",
+      revision: 2,
+      disposition: "rollback",
+      installKey: root,
+      priorArtifacts: [],
+      artifacts: [],
+      publications: [
+        {
+          kind: "plugin-migrations",
+          rows: pluginIds.map((pluginId) => ({
+            pluginId,
+            before: row(pluginId, 1793831024586),
+            after: row(pluginId, null),
+          })),
+        },
+      ],
+      settledPublications: 0,
+    },
+    options,
+  );
+  await closeOpenClawStateDatabaseAsync();
+  const rows = () =>
+    openOpenClawStateDatabase(options)
+      .db.prepare("SELECT id, finished_at, status FROM migration_runs ORDER BY id")
+      .all();
+  const later = rows();
+  const expected = await inspectPluginCohortRecoveryAdmission(options, runId);
+  if (!expected) {
+    throw new Error("Expected the stored plugin cohort to require repair");
+  }
+  await settleInterruptedUpdatePluginCohort({
+    expected,
+    root,
+    options,
+    assertCurrent: () => fence.assertCurrent(),
+  });
+  expect(loadPluginCohortRecovery(runId, options)).toBeUndefined();
+  expect(await inspectPluginCohortRecoveryAdmission(options)).toBeUndefined();
+  expect(rows()).toEqual(later);
+  expect(updateRunWarningMessages(getUpdateRun(runId, options)?.steps ?? [])).toEqual([
+    expect.stringMatching(/plugin discord .*plugin whatsapp /u),
+  ]);
 });

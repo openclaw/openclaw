@@ -1,6 +1,7 @@
 # Best-effort plugin cohort rollback (package files, config files, source snapshots).
 # Real install-index fixtures keep a later package payload or source snapshot,
 # restore matching records, and record the kept change as an update warning.
-# Repair settlement keeps a later config edit, and still continues an interrupted
-# rollback that already restored migration rows.
-23
+# Repair settlement keeps a later config edit, still continues an interrupted
+# rollback that already restored migration rows, and still reports a kept config
+# file after a later step fails. A later demo snapshot keeps its package-owner record.
+88

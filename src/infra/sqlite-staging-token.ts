@@ -3,6 +3,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
+import { withSqliteDatabaseAdmissionSettlement } from "./sqlite-database-admission-wait.js";
 import { retireSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
 import { withSqliteNativeOpen } from "./sqlite-error-diagnostics.js";
 
@@ -28,6 +29,28 @@ export function acquireSqliteStagingToken(
   directory: string,
   mode: "create" | "read" | "reclaim",
   options: { allowMissing?: boolean } = {},
+): SqliteStagingToken {
+  // Cancelled work still reclaims, releases or retires private locks instead of
+  // leaving copies behind, but it never mints a new staging owner.
+  const settle = withSqliteDatabaseAdmissionSettlement;
+  const acquire = () => acquireStagingToken(directory, mode, options);
+  const token = mode === "create" ? acquire() : settle(acquire);
+  const settled: SqliteStagingToken = Object.assign(
+    (retiring?: boolean) => settle(() => token(retiring)),
+    {
+      beginRetirement: () => {
+        settle(() => token.beginRetirement());
+        return settled;
+      },
+    },
+  );
+  return settled;
+}
+
+function acquireStagingToken(
+  directory: string,
+  mode: "create" | "read" | "reclaim",
+  options: { allowMissing?: boolean },
 ): SqliteStagingToken {
   const location = path.join(directory, SQLITE_STAGING_TOKEN_FILES[0]);
   const readIdentity = (pathname: string, kind: "directory" | "file") => {

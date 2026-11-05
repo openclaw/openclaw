@@ -15,8 +15,6 @@ import type {
   PluginCohortRecovery,
   PluginCohortRecoveryPair,
 } from "../infra/update-plugin-cohort-schema.js";
-import { PLUGIN_COHORT_KEPT_WARNING_STEP } from "../infra/update-run-codec.js";
-import { recordUpdateRunDiagnostic } from "../infra/update-run-ledger.js";
 import type { UpdateRecoveryRecord } from "../infra/update-run-recovery-schema.js";
 import {
   beginPluginCohortRecovery,
@@ -48,6 +46,7 @@ import {
   restoreRetainedManagedNpmInstallMarkers,
 } from "./managed-npm-retention.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import type { PluginSourceSnapshotIndexChange } from "./plugin-source-snapshot.types.js";
 import {
   assertPluginCohortArtifactDirectory,
   readPluginCohortArtifactIdentity as artifactIdentity,
@@ -56,6 +55,7 @@ import {
   ownsPluginCohortRetentionMarker as ownsRetentionMarker,
   readPluginCohortRetentionMarker,
 } from "./update-cohort-artifacts.js";
+import { formatKeptChanges, recordKeptChanges } from "./update-cohort-kept-changes.js";
 
 type ArtifactIdentity = NonNullable<PluginCohortRecovery["priorArtifacts"][number]["identity"]>;
 type CohortOptions = { env: NodeJS.ProcessEnv; fence: UpdateRecoveryFence };
@@ -367,6 +367,17 @@ export function recordPluginCohortRetentionMarker(
   });
 }
 
+/** Install records are keyed by installation owner; snapshots by plugin ID. */
+function snapshotBelongsToInstallation(
+  restoration: PluginSourceSnapshotIndexChange,
+  installKey: string,
+): boolean {
+  const owners = [restoration.before?.installOwner, restoration.after?.installOwner].filter(
+    (owner) => owner !== undefined,
+  );
+  return owners.length > 0 ? owners.includes(installKey) : restoration.pluginId === installKey;
+}
+
 /**
  * Restore only matching cohort deltas. A migration obligation, install record,
  * source snapshot, package payload or config file that a later writer changed
@@ -470,6 +481,8 @@ export async function settleUpdatePluginCohort(
             });
             if (!restored) {
               kept.push(`config file ${publication.file.filePath}`);
+              // Counting this file below means no later repair revisits it; record it first.
+              recordKeptChanges(params.runId, kept, params.env);
             }
           }
           fence.assertCurrent();
@@ -492,27 +505,33 @@ export async function settleUpdatePluginCohort(
           if (snapshot.path !== pair.reservation.source?.configPath) {
             throw new Error("Plugin cohort restoration selected a different configuration path.");
           }
-          // A later writer owns a plugin whose record, source snapshot or package files
-          // changed after publication. Keep that plugin's index entry as it is now.
-          const keepPlugin = (pluginId: string, what: string) => {
-            kept.push(`plugin ${pluginId} ${what}`);
+          // A later writer owns an installation whose record, plugin source snapshot or
+          // package files changed after publication. Keep its index state as it is now.
+          const keepPlugin = (installKey: string, what: string) => {
+            kept.push(`plugin ${installKey} ${what}`);
             sourceSnapshotRestorations = sourceSnapshotRestorations.filter(
-              (restoration) => restoration.pluginId !== pluginId,
+              (restoration) => !snapshotBelongsToInstallation(restoration, installKey),
             );
           };
-          const laterSnapshots = new Set(
-            listLaterPluginSourceSnapshotChanges(
-              await readPersistedInstalledPluginIndex({ env: params.env }),
-              sourceSnapshotRestorations,
-            ),
+          const laterSnapshots = listLaterPluginSourceSnapshotChanges(
+            await readPersistedInstalledPluginIndex({ env: params.env }),
+            sourceSnapshotRestorations,
           );
-          for (const pluginId of laterSnapshots) {
-            keepPlugin(pluginId, "source snapshot");
+          for (const later of laterSnapshots) {
+            kept.push(`plugin ${later.pluginId} source snapshot`);
+            sourceSnapshotRestorations = sourceSnapshotRestorations.filter(
+              (restoration) => restoration.pluginId !== later.pluginId,
+            );
           }
           for (const change of recordChanges.values()) {
             const current = currentRecords[change.pluginId];
             const alreadyRestored = isDeepStrictEqual(current, change.before);
-            if (laterSnapshots.has(change.pluginId)) {
+            if (
+              laterSnapshots.some((later) => snapshotBelongsToInstallation(later, change.pluginId))
+            ) {
+              if (!alreadyRestored && !isDeepStrictEqual(current, change.after)) {
+                kept.push(`plugin ${change.pluginId} install record`);
+              }
               continue;
             }
             if (!alreadyRestored && !isDeepStrictEqual(current, change.after)) {
@@ -687,15 +706,11 @@ export async function settleUpdatePluginCohort(
         process.emitWarning(`Plugin source snapshot collection deferred: ${String(error)}`);
       }
       if (kept.length > 0) {
-        const warning = `Update rollback kept newer changes made after the update instead of restoring them: ${kept.join("; ")}. Run openclaw doctor to review them.`;
+        let warning: string;
         try {
-          recordUpdateRunDiagnostic(
-            params.runId,
-            warning,
-            { env: params.env },
-            PLUGIN_COHORT_KEPT_WARNING_STEP,
-          );
+          warning = recordKeptChanges(params.runId, kept, params.env);
         } catch (error) {
+          warning = formatKeptChanges(kept);
           process.emitWarning(
             `Update history did not record kept plugin changes: ${String(error)}`,
           );
