@@ -488,8 +488,8 @@ describe("createApplicationGateway connection ownership", () => {
       expect(gateway.snapshot.phase).toBe(willRetry ? "reconnecting" : "offline");
       expect(gateway.snapshot.lastError).toBe(
         willRetry
-          ? "Connection to the Gateway was interrupted. Reconnecting automatically. (WebSocket 1006)"
-          : "Connection to the Gateway was interrupted. Check your connection and try again. (WebSocket 1006)",
+          ? "Disconnected. Reconnecting automatically. (WebSocket 1006)"
+          : "Disconnected. Check your connection and reconnect. (WebSocket 1006)",
       );
     }
   });

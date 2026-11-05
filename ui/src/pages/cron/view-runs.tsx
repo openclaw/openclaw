@@ -329,7 +329,7 @@ export function RunsSection(props: CronRunsSectionProps) {
             aria-live="polite"
             data-test-id="cron-runs-loading"
           >
-            {t("cron.list.loading")}
+            {t("cron.runs.loading")}
           </div>
         ) : props.runsState !== "ready" ? undefined : hasRunFilters() ? (
           <div class="muted cron-runs__empty">{t("cron.runs.noMatching")}</div>
@@ -370,15 +370,11 @@ export function RunsSection(props: CronRunsSectionProps) {
           disabled={props.runsLoadingMore}
           onClick={() => props.onLoadMoreRuns()}
         >
-          {props.runsLoadingMore ? t("cron.list.loading") : t("cron.runs.loadMore")}
+          {props.runsLoadingMore ? t("cron.runs.loading") : t("cron.runs.loadMore")}
         </button>
       ) : undefined}
     </div>
   );
-}
-function formatRunNextLabel(nextRunAtMs: number, nowMs = Date.now()) {
-  const rel = formatRelativeTimestamp(nextRunAtMs);
-  return nextRunAtMs > nowMs ? t("cron.runEntry.next", { rel }) : t("cron.runEntry.due", { rel });
 }
 export function runStatusLabel(
   value: string,
@@ -476,7 +472,9 @@ function Run(props: {
               : t("common.na")}
           </div>
           {props.entry.nextRunAtMs !== undefined ? (
-            <div class="muted">{formatRunNextLabel(props.entry.nextRunAtMs)}</div>
+            <div class="muted">
+              {t("cron.runEntry.next", { rel: props.formatTimestamp(props.entry.nextRunAtMs) })}
+            </div>
           ) : undefined}
           {props.entry.runId || props.entry.runAtMs !== undefined || props.entry.sessionKey ? (
             <div>

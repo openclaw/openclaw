@@ -4,6 +4,7 @@ import { resolveAgentHarnessPolicy } from "../../../agents/harness/policy.js";
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import { makeCronStreamSandboxTarget } from "../../../cron/stream-sandbox.test-support.js";
 import type { QuarantinedCronConfigJob } from "../../../cron/types-shared.js";
+import { withMockedPlatform } from "../../../test-utils/vitest-spies.js";
 import { legacyCodexProviderIdentityKey } from "../shared/codex-route-model-ref.js";
 import { TASK_SUGGESTION_TOOL_NAME_MIGRATION } from "../shared/legacy-tool-name-migration.js";
 import {
@@ -293,30 +294,35 @@ it("does not rewrite Codex refs during an ordinary cron normalization pass", () 
   expect(job?.payload).toMatchObject({ model: "codex/gpt-5.6-sol" });
 });
 
-it("converts legacy agent command prompts into command cron payloads", () => {
+it.each([
+  ["linux", ["sh", "-lc"]],
+  ["win32", ["cmd.exe", "/d", "/s", "/c"]],
+] as const)("converts legacy agent command prompts on %s", (platform, shell) => {
   const command =
     "cd /home/openclaw/.razor/quant && ./scripts/system/run_position_control.sh --write-card --silent-token NO_REPLY";
-  const { job, result } = normalizeLegacy({
-    sessionTarget: "isolated",
-    payload: {
-      kind: "agentTurn",
-      message: `Command to run:\n- command: ${command}\n- workdir: /home/openclaw/.razor/quant\n- timeout: 840`,
-      toolsAllow: ["group:runtime"],
-      lightContext: true,
-      timeoutSeconds: 900,
-      model: "openai/gpt-5.5",
-      deliver: true,
-      channel: "telegram",
-      to: "123",
-    },
-  });
+  const { job, result } = withMockedPlatform(platform, () =>
+    normalizeLegacy({
+      sessionTarget: "isolated",
+      payload: {
+        kind: "agentTurn",
+        message: `Command to run:\n- command: ${command}\n- workdir: /home/openclaw/.razor/quant\n- timeout: 840`,
+        toolsAllow: ["group:runtime"],
+        lightContext: true,
+        timeoutSeconds: 900,
+        model: "openai/gpt-5.5",
+        deliver: true,
+        channel: "telegram",
+        to: "123",
+      },
+    }),
+  );
 
   expect(result.issues.legacyAgentTurnCommandPayload).toBe(1);
   expectFields(job, {
     delivery: { mode: "announce", channel: "telegram", to: "123" },
     payload: {
       kind: "command",
-      argv: ["sh", "-lc", command],
+      argv: [...shell, command],
       cwd: "/home/openclaw/.razor/quant",
       timeoutSeconds: 900,
     },

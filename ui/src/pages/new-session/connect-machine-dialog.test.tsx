@@ -70,12 +70,13 @@ describe("machine connection presentation", () => {
     initial.resolve(code("first"));
     await waitForSolid(() => expect(view.getByText(code("first").command)).toBeDefined());
     const dialog = view.container.querySelector("openclaw-modal-dialog");
-
     const refresh = createDeferred<DevicePairJoinSetup>();
     request.mockReturnValueOnce(refresh.promise);
-    view.getByRole<HTMLButtonElement>("button", { name: "Mint fresh code" }).click();
+    view.getByRole<HTMLButtonElement>("button", { name: "Create new code" }).click();
     await waitForSolid(() =>
-      expect(view.getByRole<HTMLButtonElement>("button", { name: "Minting…" }).disabled).toBe(true),
+      expect(view.getByRole<HTMLButtonElement>("button", { name: "Creating code…" }).disabled).toBe(
+        true,
+      ),
     );
     expect(view.getByText(code("first").command)).toBeDefined();
     expect(view.container.querySelector("openclaw-modal-dialog")).toBe(dialog);
@@ -86,7 +87,7 @@ describe("machine connection presentation", () => {
     expect(view.getByText(code("first").command)).toBeDefined();
 
     request.mockResolvedValueOnce(code("replacement"));
-    view.getByRole<HTMLButtonElement>("button", { name: "Mint fresh code" }).click();
+    view.getByRole<HTMLButtonElement>("button", { name: "Create new code" }).click();
     await waitForSolid(() => expect(view.getByText(code("replacement").command)).toBeDefined());
     expect(view.queryByRole("alert")).toBeNull();
     expect(view.queryByText(code("first").command)).toBeNull();
@@ -127,7 +128,7 @@ describe("machine connection presentation", () => {
       expect(view.queryByText(code("retired-secret").command)).toBeNull();
       expect(view.queryByRole("alert")).toBeNull();
       expect(
-        view.getByRole<HTMLButtonElement>("button", { name: "Mint fresh code" }).disabled,
+        view.getByRole<HTMLButtonElement>("button", { name: "Create new code" }).disabled,
       ).toBe(false);
     },
   );

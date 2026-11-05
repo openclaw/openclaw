@@ -2,6 +2,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { pathForPluginSettings } from "../../app-route-paths.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSessionNavigationEnglish } from "../../i18n/locales/en-session-navigation.ts";
+import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   readSessionMethodAccess,
@@ -21,15 +22,13 @@ import { isExpiredIncognitoSession, setChatError } from "./chat-history-state.ts
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { resolveChatPaneParentSession } from "./chat-pane-header-identity.ts";
 import { ChatPaneRetainedPresentation } from "./chat-pane-retained-presentation.ts";
-import {
-  NEW_SESSION_ACTIVE_RUN_MESSAGE,
-  NEW_SESSION_LIST_LOADING_MESSAGE,
-} from "./chat-pane-shared.ts";
 import { canCreateChatSession, resolveChatAgentId } from "./chat-state-route.ts";
 
 registerSessionNavigationEnglish();
 
 /** Creates or resets a conversation while guarding its asynchronous ownership. */
+registerSessionOrganizationSharedEnglish();
+
 export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentation {
   readonly sessionCreation = { creatingIncognito: false };
 
@@ -192,7 +191,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
         actionLabel: t("common.unarchive"),
         actionPending: params.cached,
         disabledReason: !params.selectedSessionId
-          ? "Session lifecycle action requires a durable session identity."
+          ? t("sessionsView.lifecycleIdentityRequired")
           : params.unarchiveAccess.allowed
             ? undefined
             : params.unarchiveAccess.reason,
@@ -247,11 +246,11 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     const isCurrent = () =>
       this.isConnectionScopeCurrent(scope) && this.context.sessions === sessions;
     if (!canCreateChatSession(state)) {
-      setChatError(state, NEW_SESSION_ACTIVE_RUN_MESSAGE);
+      setChatError(state, t("chat.sendErrors.newSessionBusy"));
       return false;
     }
     if (state.sessionsLoading) {
-      setChatError(state, NEW_SESSION_LIST_LOADING_MESSAGE);
+      setChatError(state, t("chat.sendErrors.newSessionLoading"));
       return false;
     }
     const initialAccess = readCreateAccess();

@@ -2,10 +2,13 @@ import {
   ErrorCodes,
   GatewayProtocolRequestError,
   GatewayProtocolRequestTimeoutError,
-  GatewayErrorDetailCodes,
   readMissingScopeError,
 } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  SETUP_ADMISSION_BUSY_ERROR_CODE,
+  WIZARD_NOT_FOUND_ERROR_CODE,
+} from "../../../packages/gateway-protocol/src/gateway-error-codes.js";
 
 function hasGatewayErrorDetail(err: unknown, expectedCode: string, detailCode: string): boolean {
   const error = asRecord(err);
@@ -23,19 +26,11 @@ function hasGatewayErrorDetail(err: unknown, expectedCode: string, detailCode: s
 
 /** Identifies an expired process-local wizard session without parsing public copy. */
 export function isWizardNotFoundError(err: unknown): boolean {
-  return hasGatewayErrorDetail(
-    err,
-    ErrorCodes.INVALID_REQUEST,
-    GatewayErrorDetailCodes.WIZARD_NOT_FOUND,
-  );
+  return hasGatewayErrorDetail(err, ErrorCodes.INVALID_REQUEST, WIZARD_NOT_FOUND_ERROR_CODE);
 }
 
 export function isSetupAdmissionBusyError(err: unknown): boolean {
-  return hasGatewayErrorDetail(
-    err,
-    ErrorCodes.UNAVAILABLE,
-    GatewayErrorDetailCodes.SETUP_ADMISSION_BUSY,
-  );
+  return hasGatewayErrorDetail(err, ErrorCodes.UNAVAILABLE, SETUP_ADMISSION_BUSY_ERROR_CODE);
 }
 
 export function isMissingOperatorReadScopeError(err: unknown): boolean {

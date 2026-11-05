@@ -329,7 +329,23 @@ export async function prepareWorktreeTemplate(params: {
           });
           return undefined;
         }
-        setWorktreePreparationTemplate("cold", { reason: "template-disk-admission" });
+        // Preserve the observed miss after build progress replaces reason with ready.
+        setWorktreePreparationTemplate("cold", {
+          reason: "template-disk-admission",
+          missReason: !existing
+            ? "no-generation"
+            : existing.status !== "ready"
+              ? "invalid"
+              : existing.backend !== params.backend
+                ? "backend-changed"
+                : existing.sourceCommit !== params.sourceCommit
+                  ? "commit-changed"
+                  : existing.contentKey !== params.contentKey
+                    ? "content-changed"
+                    : "invalid",
+          priorSourceCommit: existing?.sourceCommit.slice(0, 12),
+          requestedSourceCommit: params.sourceCommit.slice(0, 12),
+        });
         await params.requireSpace();
         if (
           existing &&
