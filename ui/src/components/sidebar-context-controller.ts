@@ -57,10 +57,11 @@ export function createSidebarScroll(
       // The frame can disappear while its containing sidebar retains destination offsets.
       return elementRef((element: HTMLElement) => {
         scroller = element;
-        // Refs precede adoption; the cached rows must exist before restoring the offset.
+        // Restore after adoption; writing the initial zero would force an unnecessary layout.
         onSettled(() => {
-          if (scroller === element) {
-            element.scrollTop = host.sidebarSnapshot?.scrollTop ?? positions.get(presentedKey) ?? 0;
+          const top = host.sidebarSnapshot?.scrollTop ?? positions.get(presentedKey);
+          if (scroller === element && top) {
+            element.scrollTop = top;
           }
         });
         const bound = observeScrollState(element, (next) =>
