@@ -1,2 +1,2 @@
-# Loopback RFB peers have to count abandoned VncAuth handshakes. Offer-only fixtures cannot show the TigerVNC blacklist.
-164
+# Loopback RFB peers have to count abandoned handshakes, disabled discovery, and revocation before the credential write.
+255

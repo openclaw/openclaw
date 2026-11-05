@@ -1,6 +1,6 @@
-import { createCipheriv } from "node:crypto";
 import net from "node:net";
 import { Duplex } from "node:stream";
+import { buildVncAuthResponse } from "./rfb-vnc-auth.js";
 
 const RFB_BANNER_BYTES = 12;
 const RFB_37_MINOR = 7;
@@ -20,32 +20,6 @@ const RFB_SERVER_INIT_BYTES = 24;
 
 class RfbAuthenticationRejected extends Error {
   override name = "RfbAuthenticationRejected";
-}
-
-function reverseByteBits(value: number): number {
-  let input = value;
-  let output = 0;
-  for (let index = 0; index < 8; index += 1) {
-    output = (output << 1) | (input & 1);
-    input >>= 1;
-  }
-  return output;
-}
-
-/**
- * RFB VncAuth response. Single DES is the wire primitive.
- * rfb-preauth already imports this module, so the probe keeps its own copy.
- */
-export function buildVncAuthResponse(password: string, challenge: Buffer): Buffer {
-  const key = Buffer.alloc(8);
-  Buffer.from(password, "utf8").copy(key, 0, 0, 8);
-  for (let index = 0; index < key.length; index += 1) {
-    key[index] = reverseByteBits(key[index] ?? 0);
-  }
-  // EDE with K1=K2 matches DES-ECB on OpenSSL builds that omit des-ecb.
-  const cipher = createCipheriv("des-ede", Buffer.concat([key, key]), null);
-  cipher.setAutoPadding(false);
-  return Buffer.concat([cipher.update(challenge), cipher.final()]);
 }
 
 /** Parses the fixed-width RFB ProtocolVersion banner without socket state. */
@@ -362,11 +336,14 @@ async function finishConfiguredVncAuth(params: {
   protocolMinor: number;
   prefixLength: number;
   password: string;
+  assertCurrent?: () => void;
 }): Promise<void> {
   const selection = params.protocolMinor < RFB_37_MINOR ? Buffer.alloc(0) : Buffer.from([2]);
   await writeStream(params.stream, Buffer.concat([params.versionReply, selection]));
   await readStreamExactly(params.stream, params.prefixLength);
   const challenge = await readStreamExactly(params.stream, 16);
+  // The response is the credential. A revoked desktop must fail before it is sent.
+  params.assertCurrent?.();
   await writeStream(params.stream, buildVncAuthResponse(params.password, challenge));
   const status = (await readStreamExactly(params.stream, 4)).readUInt32BE(0);
   if (status !== 0) {
@@ -384,6 +361,7 @@ async function finishConfiguredVncAuth(params: {
     throw new RfbAuthenticationRejected(reason || "VNC authentication failed");
   }
   // Shared ClientInit keeps an existing viewer attached while readiness checks the server.
+  params.assertCurrent?.();
   await writeStream(params.stream, Buffer.from([1]));
   const header = await readStreamExactly(params.stream, RFB_SERVER_INIT_BYTES);
   const nameLength = header.readUInt32BE(20);
@@ -402,6 +380,7 @@ export async function probeRfbServer(params: {
   timeoutMs: number;
   signal?: AbortSignal;
   vncPassword?: string;
+  assertCurrent?: () => void;
 }): Promise<RfbProbeResult> {
   const result = await connectRfbServer(params);
   if (result.kind !== "rfb") {
@@ -415,6 +394,16 @@ export async function probeRfbServer(params: {
     result.stream.destroy(new SocketTimeoutError("RFB handshake timed out"));
   }, params.timeoutMs);
   deadline.unref();
+  let authorityRevoked = false;
+  const assertCurrent = () => {
+    try {
+      params.signal?.throwIfAborted();
+      params.assertCurrent?.();
+    } catch (error) {
+      authorityRevoked = true;
+      throw error;
+    }
+  };
   try {
     await finishConfiguredVncAuth({
       stream: result.stream,
@@ -422,9 +411,13 @@ export async function probeRfbServer(params: {
       protocolMinor: result.protocolMinor,
       prefixLength: result.inspectedPrefixLength,
       password: params.vncPassword,
+      assertCurrent,
     });
     return { kind: "rfb", securityTypes: result.securityTypes };
   } catch (error) {
+    if (authorityRevoked) {
+      throw error;
+    }
     params.signal?.throwIfAborted();
     if (error instanceof RfbAuthenticationRejected) {
       return { kind: "auth-rejected", reason: error.message };

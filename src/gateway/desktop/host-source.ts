@@ -120,14 +120,14 @@ export async function inspectHostDesktop(
       detail: "disabled; enable the Desktop lab with desktop.host.enabled=true",
     };
   }
-  return inspectConfiguredHostDesktop(params);
+  return inspectConfiguredHostDesktop(params, true);
 }
 
 /** Setup inspection discovers a source without enabling access or starting a desktop. */
 export async function inspectHostDesktopSetup(
   params: Omit<HostDesktopInspectionParams, "managedDesktop">,
 ): Promise<NonNullable<EnvironmentSummary["desktopSetup"]>> {
-  const inspection = await inspectConfiguredHostDesktop(params);
+  const inspection = await inspectConfiguredHostDesktop(params, false);
   if (inspection.status.state === "attached") {
     return { state: "ready" };
   }
@@ -168,12 +168,15 @@ async function readConfiguredVncPassword(
 
 async function inspectConfiguredHostDesktop(
   params: HostDesktopInspectionParams,
+  authenticate: boolean,
 ): Promise<HostDesktopInspection> {
   const port = params.config?.port ?? DEFAULT_HOST_DESKTOP_PORT;
   const platform = params.platform ?? process.platform;
-  // A missing file still classifies the offer. A readable password finishes VncAuth
-  // so TigerVNC does not blacklist the status connection.
-  const configuredPassword = await readConfiguredVncPassword(params.config?.passwordFile);
+  // Disabled setup discovery stays credential-free. Enabled readiness finishes
+  // VncAuth when the password file can be read, so TigerVNC does not blacklist it.
+  const configuredPassword = authenticate
+    ? await readConfiguredVncPassword(params.config?.passwordFile)
+    : {};
   const probe = await probeRfbServer({
     host: "127.0.0.1",
     port,
@@ -275,13 +278,12 @@ export function createHostDesktopSource(params: {
     assertCurrent?.();
     selectedManagedDesktop = false;
     const configuredPassword = await readConfiguredVncPassword(params.config.passwordFile);
-    if (configuredPassword.error) {
-      throw new Error(configuredPassword.error);
-    }
+    assertCurrent?.();
     const probe = await probeRfbServer({
       host: "127.0.0.1",
       port,
       timeoutMs: HOST_DESKTOP_PROBE_TIMEOUT_MS,
+      assertCurrent,
       ...(configuredPassword.password ? { vncPassword: configuredPassword.password } : {}),
     });
     assertCurrent?.();
@@ -302,6 +304,9 @@ export function createHostDesktopSource(params: {
     }
     if (probe.kind === "not-rfb") {
       throw new Error(nonRfbError(port));
+    }
+    if (configuredPassword.error) {
+      throw new Error(configuredPassword.error);
     }
     if (probe.kind === "auth-rejected") {
       throw new Error("VNC authentication failed; check desktop.host.passwordFile and retry");

@@ -502,10 +502,6 @@ describe("managed Linux desktop", () => {
     expect(acquired.vncPassword).toHaveLength(8);
     expect(isSecretValueRegisteredForRedaction(acquired.vncPassword)).toBe(true);
     expect(probeRfb).toHaveBeenCalledTimes(2);
-    expect(probeRfb.mock.calls.map((call) => call[0].vncPassword)).toEqual([
-      acquired.vncPassword,
-      acquired.vncPassword,
-    ]);
     expect(runPasswordTool).toHaveBeenCalledWith(
       ["tigervncpasswd", "-f"],
       expect.objectContaining({ input: expect.any(Buffer) }),

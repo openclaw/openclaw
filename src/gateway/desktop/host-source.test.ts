@@ -147,7 +147,7 @@ describe("gateway host desktop source", () => {
     } else {
       expect(inspection).toMatchObject({ state });
     }
-    expect(readFile).toHaveBeenCalledWith("/nonexistent/desktop-password", "utf8");
+    expect(readFile).not.toHaveBeenCalled();
     expect(config.enabled).toBe(false);
   });
 
@@ -299,6 +299,102 @@ describe("gateway host desktop source", () => {
     ).resolves.toMatchObject({ auth: "vnc-password", vncPassword: "desktop-secret" });
     await vi.waitFor(() => expect(finished).toBe(2));
     expect(abandoned).toBe(0);
+  });
+
+  it("keeps disabled setup discovery from reading or sending the VNC password", async () => {
+    let responses = 0;
+    const { server } = createSocketServer(cleanups, (socket) => {
+      const pending: Buffer[] = [];
+      socket.on("data", (chunk: Buffer) => {
+        pending.push(chunk);
+        const data = Buffer.concat(pending);
+        if (data.length >= 12) {
+          socket.write(Buffer.from([1, 2]));
+        }
+        if (data.length >= 29) {
+          responses += 1;
+        }
+      });
+      socket.write(Buffer.from("RFB 003.008\n"));
+    });
+    const port = await listenLoopback(server);
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-host-desktop-"));
+    const passwordFile = path.join(root, "passwd");
+    await fs.writeFile(passwordFile, "desktop-secret\n");
+    cleanups.push(async () => {
+      await fs.rm(root, { recursive: true, force: true });
+    });
+    const readFile = vi.spyOn(fs, "readFile");
+    await expect(
+      inspectHostDesktopSetup({
+        config: { enabled: false, port, passwordFile },
+        platform: "darwin",
+      }),
+    ).resolves.toEqual({ state: "ready" });
+    expect(readFile).not.toHaveBeenCalled();
+    expect(responses).toBe(0);
+  });
+
+  it("stops a revoked desktop before it sends the VNC password", async () => {
+    let challengeSent = false;
+    let responses = 0;
+    const { server } = createSocketServer(cleanups, (socket) => {
+      const pending: Buffer[] = [];
+      let offered = false;
+      socket.on("data", (chunk: Buffer) => {
+        pending.push(chunk);
+        const data = Buffer.concat(pending);
+        if (!offered && data.length >= 12) {
+          offered = true;
+          socket.write(Buffer.from([1, 2]));
+        }
+        if (!challengeSent && data.length >= 13) {
+          challengeSent = true;
+          socket.write(Buffer.alloc(16, 3));
+        }
+        if (data.length >= 29) {
+          responses += 1;
+        }
+      });
+      socket.write(Buffer.from("RFB 003.008\n"));
+    });
+    const port = await listenLoopback(server);
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-host-desktop-"));
+    const passwordFile = path.join(root, "passwd");
+    await fs.writeFile(passwordFile, "desktop-secret\n");
+    cleanups.push(async () => {
+      await fs.rm(root, { recursive: true, force: true });
+    });
+    const source = createHostDesktopSource({
+      config: { enabled: true, port, passwordFile },
+      platform: "linux",
+    });
+    await expect(
+      source.acquire(() => {
+        if (challengeSent) {
+          throw new Error("desktop stopped");
+        }
+      }),
+    ).rejects.toThrow("desktop stopped");
+    expect(responses).toBe(0);
+  });
+
+  it("starts managed mode when the attach password file cannot be read", async () => {
+    const managed = fakeManagedDesktop();
+    const source = createHostDesktopSource({
+      config: {
+        enabled: true,
+        managed: true,
+        passwordFile: "/nonexistent/desktop-password",
+      },
+      platform: "linux",
+      managedDesktop: managed.managed,
+    });
+    await expect(source.acquire()).resolves.toMatchObject({
+      auth: "vnc-password",
+      vncPassword: "managed-secret",
+    });
+    expect(managed.acquire).toHaveBeenCalledOnce();
   });
 
   it("attaches ARD and keeps account credentials only in the observer token", async () => {

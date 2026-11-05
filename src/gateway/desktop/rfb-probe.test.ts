@@ -8,12 +8,7 @@ import {
   createSocketServer,
   listenLoopback,
 } from "./desktop.test-support.js";
-import {
-  buildVncAuthResponse,
-  classifyRfbSecurity,
-  connectRfbServer,
-  probeRfbServer,
-} from "./rfb-probe.js";
+import { classifyRfbSecurity, connectRfbServer, probeRfbServer } from "./rfb-probe.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 const VERSION = Buffer.from("RFB 003.008\n");
@@ -106,6 +101,10 @@ describe("configured VncAuth probe", () => {
   it("finishes the handshake before closing and rejects a wrong password", async () => {
     const password = "secret12";
     const challenge = Buffer.alloc(16, 4);
+    // Independent of buildVncAuthResponse. Password secret12, challenge 16 bytes of 0x04.
+    const expectedResponse = Buffer.from([
+      68, 0, 237, 84, 60, 173, 8, 143, 68, 0, 237, 84, 60, 173, 8, 143,
+    ]);
     let incomplete = 0;
     let authenticated = 0;
     let rejected = 0;
@@ -130,7 +129,7 @@ describe("configured VncAuth probe", () => {
           stage = "response";
         }
         if (stage === "response" && body.length >= 17) {
-          const ok = body.subarray(1, 17).equals(buildVncAuthResponse(password, challenge));
+          const ok = body.subarray(1, 17).equals(expectedResponse);
           const status = Buffer.alloc(4);
           if (!ok) {
             status.writeUInt32BE(1, 0);
