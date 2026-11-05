@@ -16,9 +16,9 @@ export function EndpointModel(props: {
   onRemove: () => void;
 }) {
   return (
-    <fieldset class="custom-endpoint-editor__model" disabled={props.disabled}>
+    <fieldset class="card settings-section" disabled={props.disabled}>
       <legend>{t("modelProviders.endpoints.modelRow", { number: String(props.number) })}</legend>
-      <div class="custom-endpoint-editor__connection">
+      <div class="grid custom-endpoint-editor__connection">
         <label class="field">
           <span>{t("modelProviders.endpoints.modelId")}</span>
           <input

@@ -1,0 +1,4 @@
+# Endpoint editor regression coverage: 1068 feature-owned LF lines plus 13
+# lines to validate authored input and materialize the distinct runtime snapshot.
+# Covers HTTP authority, authored config CAS and metadata preservation, and UI flows.
+1081
