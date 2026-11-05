@@ -27,6 +27,7 @@ import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { registerChatDetailsEnglish } from "../../ui/src/i18n/locales/en-chat-details.ts";
 import { registerChatFailedMessageEditEnglish } from "../../ui/src/i18n/locales/en-chat-failed-message-edit.ts";
 import { registerChatMessageMetadataEnglish } from "../../ui/src/i18n/locales/en-chat-message-metadata.ts";
+import { registerChatResetConfirmationEnglish } from "../../ui/src/i18n/locales/en-chat-reset-confirmation.ts";
 import { registerChatSessionOptionalEnglish } from "../../ui/src/i18n/locales/en-chat-session-optional.ts";
 import { registerChatSessionSharingEnglish } from "../../ui/src/i18n/locales/en-chat-session-sharing.ts";
 import { registerChatSessionEnglish } from "../../ui/src/i18n/locales/en-chat-session.ts";
@@ -313,6 +314,7 @@ describe("control-ui-i18n generated ownership", () => {
     for (const fragment of [
       registerChatDetailsEnglish.catalog,
       registerChatSessionEnglish.catalog,
+      registerChatResetConfirmationEnglish.catalog,
       registerChatMessageMetadataEnglish.catalog,
       registerChatFailedMessageEditEnglish.catalog,
       registerChatSessionOptionalEnglish.catalog,

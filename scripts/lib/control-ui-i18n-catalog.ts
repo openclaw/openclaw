@@ -29,6 +29,7 @@ import { registerChatOutputsEnglish } from "../../ui/src/i18n/locales/en-chat-ou
 import { registerChatPermissionsEnglish } from "../../ui/src/i18n/locales/en-chat-permissions.ts";
 import { registerChatProviderReviewEnglish } from "../../ui/src/i18n/locales/en-chat-provider-review.ts";
 import { registerChatQuestionsEnglish } from "../../ui/src/i18n/locales/en-chat-questions.ts";
+import { registerChatResetConfirmationEnglish } from "../../ui/src/i18n/locales/en-chat-reset-confirmation.ts";
 import { registerChatSessionOptionalEnglish } from "../../ui/src/i18n/locales/en-chat-session-optional.ts";
 import { registerChatSessionSharingEnglish } from "../../ui/src/i18n/locales/en-chat-session-sharing.ts";
 import { registerChatSessionEnglish } from "../../ui/src/i18n/locales/en-chat-session.ts";
@@ -549,9 +550,13 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         sidebar,
         clawhub: registerPluginManagementEnglish.catalog.chat.clawhub,
         ...registerChatSessionEnglish.catalog.chat,
+        board: {
+          ...registerChatSessionEnglish.catalog.chat.board,
+          ...registerChatResetConfirmationEnglish.catalog.chat.board,
+        },
         sessionReset: {
           ...en.chat.sessionReset,
-          ...registerChatSessionEnglish.catalog.chat.sessionReset,
+          ...registerChatResetConfirmationEnglish.catalog.chat.sessionReset,
         },
         ...registerChatFailedMessageEditEnglish.catalog.chat,
         ...registerChatSessionOptionalEnglish.catalog.chat,

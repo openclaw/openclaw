@@ -1,8 +1,8 @@
 import "../../components/modal-dialog.tsx";
-import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
+import { registerChatResetConfirmationEnglish } from "../../i18n/locales/en-chat-reset-confirmation.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatResetConfirmationEnglish);
 
 export type ChatBoardResetConfirmationProps = {
   undoReset?: boolean;

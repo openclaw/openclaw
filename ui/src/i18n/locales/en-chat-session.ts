@@ -6,12 +6,6 @@ import { en } from "./en.ts";
 // This copy follows its lazy rendering consumers; shared labels stay in en.ts.
 const enChatSession = {
   chat: {
-    sessionReset: {
-      undoTitle: "Undo session reset?",
-      undoDescription:
-        "Restore the conversation from before this reset. Messages sent after the reset stay in another branch; they won’t be merged into the restored conversation.",
-      undoConfirm: "Undo reset",
-    },
     settingErrors: {
       model: "Couldn’t change the model. Try again. {error}",
       thinking: "Couldn’t change effort. Try again. {error}",
@@ -175,8 +169,6 @@ const enChatSession = {
       workboardCard: "Workboard card: {title}, {status}",
       defaultTab: "Main",
       mockPlaceholder: "Board view · {tabs} tabs · {widgets} widgets",
-      resetTitle: "Reset conversation?",
-      resetDescription: "The conversation context resets. Your dashboard stays.",
     },
     taskSuggestions: {
       adminRequired: "You need admin access to start suggested tasks.",
