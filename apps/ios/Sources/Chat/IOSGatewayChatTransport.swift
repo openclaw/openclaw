@@ -627,7 +627,7 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
                       response.artifact.download["mode"]?.value as? String != "unsupported"
                 else { throw IOSMediaArtifactLoader.LoadError.invalidResponse }
                 return try await mediaArtifactLoader.loadArtifact(
-                    response: response, managed: managed, expectedGatewayID: gatewayID, isCurrent: isCurrent)
+                    response: response, expectedGatewayID: gatewayID, isCurrent: isCurrent)
             })
     }
 

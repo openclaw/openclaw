@@ -46,7 +46,7 @@ struct IOSMediaArtifactLoaderTests {
         do {
             let file = try await loader.loadArtifact(
                 response: Self.downloadResult(mimeType: "application/pdf", url: path),
-                managed: false, expectedGatewayID: config.effectiveStableID,
+                expectedGatewayID: config.effectiveStableID,
                 isCurrent: { await authority.current })
             #expect(scenario == "valid")
             #expect(file.data == Data("fixture".utf8))
@@ -59,6 +59,26 @@ struct IOSMediaArtifactLoaderTests {
         }
     }
 
+    @Test @MainActor func `ordinary catalog IDs load managed media grants`() async throws {
+        let config = try Self.config(url: #require(URL(string: "wss://gateway.example/gw")))
+        let loader = IOSMediaArtifactLoader(
+            connectionProvider: {
+                IOSMediaArtifactLoader.Connection(
+                    config: config, gatewayID: config.effectiveStableID, customHeaders: [:])
+            },
+            requestFactory: { _, _ in
+                { request in
+                    #expect(request.url?.absoluteString == "https://gateway.example/gw" + Self.ticketedPath)
+                    return try Self.response(for: request, mimeType: "image/png", data: Data([1, 2, 3]))
+                }
+            })
+        let file = try await loader.loadArtifact(
+            response: Self.downloadResult(mimeType: "image/png"),
+            expectedGatewayID: config.effectiveStableID, isCurrent: { true })
+        #expect(file.data == Data([1, 2, 3]))
+        #expect(file.mimeType == "image/png")
+    }
+
     @Test @MainActor func `empty catalog files are valid without an HTTP request`() async throws {
         let loader = IOSMediaArtifactLoader(connectionProvider: {
             Issue.record("Inline bytes must not start an HTTP request")
@@ -66,7 +86,7 @@ struct IOSMediaArtifactLoaderTests {
         })
         let file = try await loader.loadArtifact(
             response: Self.downloadResult(mimeType: "text/plain", inlineData: Data()),
-            managed: false, expectedGatewayID: "fixture", isCurrent: { true })
+            expectedGatewayID: "fixture", isCurrent: { true })
         #expect(file.data.isEmpty)
         #expect(file.mimeType == "text/plain")
     }

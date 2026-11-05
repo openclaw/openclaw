@@ -49,7 +49,6 @@ struct IOSMediaArtifactLoader: Sendable {
     /// Original bytes for catalog preview/export. Unlike chat playback, this never streams.
     func loadArtifact(
         response: ArtifactsDownloadResult,
-        managed: Bool,
         expectedGatewayID: String,
         isCurrent: @escaping @Sendable () async -> Bool) async throws -> OpenClawChatMediaData
     {
@@ -62,16 +61,19 @@ struct IOSMediaArtifactLoader: Sendable {
         let loaded = try await OpenClawChatMediaArtifactLoader.load(
             response: response, kind: .file, playback: nil)
         { path in
+            // The Gateway may return a managed-media grant for an ordinary catalog ID.
+            // The response route owns resolution and its HTTP response contract.
+            let artifactDownload = path.hasPrefix("/api/artifacts/download/")
             let source = try await self.source(
                 path: path,
                 kind: .file,
                 playback: nil,
                 expectedGatewayID: expectedGatewayID,
-                artifactDownload: !managed,
+                artifactDownload: artifactDownload,
                 isCurrent: isCurrent)
             return (source.url, false, { request in
                 let (data, http) = try await source.download(request)
-                if !managed, (200..<300).contains(http.statusCode) {
+                if artifactDownload, (200..<300).contains(http.statusCode) {
                     let disposition = http.value(forHTTPHeaderField: "Content-Disposition")?
                         .split(separator: ";", maxSplits: 1).first?
                         .trimmingCharacters(in: .whitespaces).lowercased()
