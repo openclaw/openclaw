@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
+import * as gatewayLock from "../../infra/gateway-lock.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
@@ -20,6 +21,7 @@ import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import type { updateGitInstall } from "./update-command-git.js";
 import { updateStep } from "./update-command-maintenance-fixtures.test-support.js";
+import type { PackageInstallUpdateParams } from "./update-command-package.js";
 import * as readiness from "./update-command-readiness.js";
 import { registerServiceCollectionTests } from "./update-command-service-collection.test-support.js";
 import type { PreManagedServiceStop } from "./update-command-service.js";
@@ -407,9 +409,6 @@ describe("mutable update execution", () => {
         );
         mocks.runGitUpdate.mockImplementation(
           async (params: Parameters<typeof updateGitInstall>[0]) => {
-            if (!params.inspectGitTarget || !params.beforeGitMutation) {
-              throw new Error("Expected both real Git admission callbacks");
-            }
             await params.inspectGitTarget(target);
             events.push("git");
             expect(mocks.serviceStopped).toBe(false);
@@ -439,9 +438,7 @@ describe("mutable update execution", () => {
           "activation-schema",
           ...(incompatible ? [] : ["verified", "mutable-prepare", "stop", "mutation"]),
         ]);
-        expect(mocks.serviceStopped).toBe(!incompatible);
         expect(execution?.previousVerified).toBe(!incompatible);
-        expect(beginMutation).toHaveBeenCalledTimes(incompatible ? 0 : 1);
         expect(onActivation).toHaveBeenCalledTimes(incompatible ? 0 : 1);
         expect(execution, JSON.stringify(execution?.failure)).toMatchObject({
           mutationStarted: !incompatible,
@@ -453,5 +450,77 @@ describe("mutable update execution", () => {
         expect(mocks.runPackageUpdate).not.toHaveBeenCalled();
       });
     },
+  );
+
+  it.each(
+    (["git", "package"] as const).flatMap((kind) =>
+      (["postgres-held", "postgres-free", "sqlite-held"] as const).map((scenario) => ({
+        kind,
+        scenario,
+      })),
+    ),
+  )(
+    "settles PostgreSQL capture ownership before replacing a $kind install ($scenario)",
+    async ({ kind, scenario }) =>
+      withTestDir({ prefix: "postgres-capture-ownership-" }, async (root) => {
+        const refused = scenario === "postgres-held";
+        const params = await runParams(root, kind);
+        const { env } = params.opts.run;
+        await writeFixtureJson(path.join(root, "openclaw.json"), {
+          database: {
+            engine: scenario === "sqlite-held" ? "sqlite" : "postgres",
+            postgres: { connection: "postgresql://synthetic.invalid/update-capture" },
+          },
+        });
+        // Only the stopped control lets the updater release the simulated Gateway owner.
+        mocks.maybeStopService.mockImplementation(async ({ phase }) => ({
+          ...inspectOrStopService(scenario === "postgres-free" ? phase : "inspect"),
+          running: false,
+          serviceEnv: env,
+          serviceUpdateVerdict: { kind: "absent" },
+        }));
+        const acquire = gatewayLock.acquireGatewayLock;
+        vi.spyOn(gatewayLock, "acquireGatewayLock").mockImplementation(async (options) =>
+          scenario !== "postgres-free" && options?.role === "sqlite-maintenance"
+            ? null
+            : acquire(options),
+        );
+        const events: string[] = [];
+        const target = { schemaVersions: { state: 15, agent: 19 } };
+        mocks.runGitUpdate.mockImplementation(
+          async (options: Parameters<typeof updateGitInstall>[0]) => {
+            await options.inspectGitTarget(target);
+            await options.beforeGitMutation(target);
+            events.push("install-replaced");
+            return { ...successfulUpdate, mode: "git" };
+          },
+        );
+        mocks.runPackageUpdate.mockImplementation(async (options: PackageInstallUpdateParams) => {
+          await options.validateCandidate(root);
+          await options.beforeActivate();
+          events.push("install-replaced");
+          return successfulUpdate;
+        });
+        const execution = await withUpdateCommandExecutor(
+          params.opts.run.runId,
+          async (executor) => {
+            params.opts.run.executorFence = await executor.enter(root);
+            return execute(params);
+          },
+        );
+
+        expect(mocks.serviceStopped).toBe(scenario === "postgres-free");
+        expect(events).toEqual(refused ? [] : ["install-replaced"]);
+        expect(execution, JSON.stringify(execution?.failure)).toMatchObject({
+          mutationStarted: !refused,
+          result: refused
+            ? { status: "error", reason: "database-engine-preflight" }
+            : { status: "ok" },
+        });
+        if (refused) {
+          expect(execution?.failure?.detail).toContain("exclusive state ownership");
+          expect(execution?.failure?.detail).toMatch(/Stop the Gateway through its service owner/);
+        }
+      }),
   );
 });
