@@ -76,7 +76,7 @@ const GIT_MERGE_BASE_RELEASE_HEAD_KEY = "merge-base\u0000origin/release/2026.7.2
 const GIT_CHECK_RELEASE_REF_KEY = "check-ref-format\u0000refs/remotes/origin/release/2026.7.2";
 const defaultProviderHelp =
   "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n";
-const brokerProviderHelp = "provider: aws, azure, blacksmith-testbox, or daytona\n";
+const brokerProviderHelp = "provider: ascii-box, aws, azure, blacksmith-testbox, or daytona\n";
 const azureProviderHelp =
   "provider: hetzner, aws, azure, local-container, blacksmith-testbox, or cloudflare\n";
 const fakeRunValueOptionHelp = [
@@ -86,6 +86,7 @@ const fakeRunValueOptionHelp = [
   "blacksmith-workflow string",
   "capture-stderr string",
   "capture-stdout string",
+  "class string",
   "download value",
   "fresh-pr string",
   "id string",
@@ -97,6 +98,7 @@ const fakeRunValueOptionHelp = [
   "script string",
   "target string",
   "ttl duration",
+  "type string",
   "windows-mode string",
 ]
   .map((option) => `  -${option}\n`)
@@ -216,7 +218,7 @@ async function main() {
     if (process.env.OPENCLAW_FAKE_CRABBOX_SELECTION_UNKNOWN_PATH) topFiles.push({ path: "not-a-source-candidate.txt" });
     process.stdout.write(JSON.stringify({ candidate: { files: topFiles.length + Number(process.env.OPENCLAW_FAKE_CRABBOX_SELECTION_COUNT_DELTA || "0") }, topFiles })); return;
   }
-  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.81.0"); return; }
+  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.81.1"); return; }
   if (args[0] === "run" && args[1] === "--help") { process.stdout.write(helpText); return; }
   if (args[0] === "warmup" && args[1] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeWarmupValueOptionHelp}`)}); return; }
   if (args[0] === "actions" && args[1] === "hydrate" && args[2] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeHydrateValueOptionHelp}`)}); return; }
@@ -325,7 +327,7 @@ main().catch((error) => { process.stderr.write(String(error?.stack || error) + "
         '  if [ -n "${OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG:-}" ]; then',
         `    printf '%s\\n' '["--version"]' >> "$OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG"`,
         "  fi",
-        `  printf '%s\\n' "\${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.81.0}"`,
+        `  printf '%s\\n' "\${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.81.1}"`,
         "  exit 0",
         "fi",
         'if [ "$#" -eq 2 ] && [ "$1" = "run" ] && [ "$2" = "--help" ]; then',
@@ -378,7 +380,7 @@ function makeSlowHelpCrabbox(helpText: string, delayMs: number): string {
     String.raw`
 const args = process.argv.slice(2);
 if (args[0] === "--version") {
-  console.log("crabbox 0.81.0");
+  console.log("crabbox 0.81.1");
 } else if (args[0] === "run" && args[1] === "--help") {
   setTimeout(() => { process.stderr.write(${JSON.stringify(runHelpText)}); process.exit(0); }, ${delayMs});
 }`,
@@ -582,6 +584,9 @@ function wrapperEnv(helpText: string, options: WrapperOptions): NodeJS.ProcessEn
     CRABBOX_TARGET: "",
     CRABBOX_TARGET_OS: "",
     CRABBOX_WINDOWS_MODE: "",
+    CRABBOX_DEFAULT_CLASS: "",
+    CRABBOX_SERVER_TYPE: "",
+    CRABBOX_CONFIG: "",
     OPENCLAW_CRABBOX_ALLOW_DIRECT_AWS: "",
     OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES: "0",
     OPENCLAW_CRABBOX_WRAPPER_IGNORE_REPO_BINARY: "1",
@@ -1910,7 +1915,7 @@ describe("scripts/crabbox-wrapper", () => {
       const stateDir = path.join(root, "state");
       const platform = process.platform;
       const arch = process.arch === "x64" ? "amd64" : process.arch;
-      const managed = path.join(stateDir, "tools/crabbox/0.81.0", `${platform}-${arch}`, "crabbox");
+      const managed = path.join(stateDir, "tools/crabbox/0.81.1", `${platform}-${arch}`, "crabbox");
       mkdirSync(path.dirname(managed), { recursive: true });
       // Keep candidate and managed commands distinguishable at the executable boundary.
       const fake = path.join(makeFakeCrabbox(defaultProviderHelp), "crabbox-node");
@@ -1936,7 +1941,7 @@ describe("scripts/crabbox-wrapper", () => {
       };
       const result = runDefaultWrapper(runArgs(provider, "--", "true"), options);
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stderr).toContain(`version=0.81.0 provider=${provider}`);
+      expect(result.stderr).toContain(`version=0.81.1 provider=${provider}`);
       expect(readInvocations(candidateLog)).toEqual([["--version"]]);
       const calls = readInvocations(log);
       expect(calls[0]).toEqual(["--version"]);
@@ -2023,14 +2028,14 @@ describe("scripts/crabbox-wrapper", () => {
       name: "fails closed when no policy provider is ready",
       args: ["run", "--workload", "ci-fast", "--", "echo ok"],
       options: {
-        env: fakeCrabboxEnv({ UNREADY_PROVIDERS: "blacksmith-testbox,daytona,azure,aws" }),
+        env: fakeCrabboxEnv({ UNREADY_PROVIDERS: "ascii-box,daytona,azure,aws" }),
       },
       includes: [
         "no ready provider for workload=ci-fast",
         "provider readiness",
-        "blacksmith-testbox:doctor exited 1: provider (failed)",
+        "ascii-box:doctor exited 1: provider (failed)",
       ],
-      matches: [/recovery: run `\S+crabbox doctor --provider blacksmith-testbox --json`/u],
+      matches: [/recovery: run `\S+crabbox doctor --provider ascii-box --json`/u],
     },
     {
       name: "ignores the legacy direct AWS override",
@@ -2305,6 +2310,20 @@ describe("scripts/crabbox-wrapper", () => {
     messages?: string[];
     timeoutProbe?: boolean;
   }>([
+    {
+      name: "selects Boat first for routine CI proof",
+      args: ["run", "--workload", "ci-fast", "--no-sync", "--no-hydrate", "--", "echo ok"],
+      options: {},
+      provider: "ascii-box",
+      messages: ["selected=ascii-box chain=ascii-box,daytona,azure,aws"],
+    },
+    {
+      name: "uses the next eligible provider when Boat is not ready",
+      args: ["run", "--workload", "ci-proof", "--no-sync", "--no-hydrate", "--", "echo ok"],
+      options: { env: fakeCrabboxEnv({ UNREADY_PROVIDERS: "ascii-box" }) },
+      provider: "daytona",
+      messages: ["selected=daytona chain=ascii-box,daytona,azure,aws", "ascii-box:doctor exited 1"],
+    },
     {
       name: "falls through a doctor-reported auth failure to the next provider",
       args: ["run", "--workload", "desktop", "--", "echo ok"],
@@ -2636,7 +2655,7 @@ describe("scripts/crabbox-wrapper", () => {
       const env = testHomeEnv(home);
       if (customState) {
         env.XDG_STATE_HOME = path.join(home, "selected state");
-        env.OPENCLAW_FAKE_CRABBOX_VERSION = "crabbox 0.81.0";
+        env.OPENCLAW_FAKE_CRABBOX_VERSION = "crabbox 0.81.1";
         const legacyKey = path.join(
           testCrabboxConfigDir(home),
           "testboxes",
@@ -2659,16 +2678,16 @@ describe("scripts/crabbox-wrapper", () => {
   );
 
   it.each([
-    { id: "tbx_default", createKey: true, state: "", version: "0.81.0", selectedKey: false },
-    { id: "tbx_selected", createKey: true, state: "state", version: "0.81.0", selectedKey: true },
-    { id: "blue-hermit", createKey: false, state: "", version: "0.81.0", selectedKey: false },
+    { id: "tbx_default", createKey: true, state: "", version: "0.81.1", selectedKey: false },
+    { id: "tbx_selected", createKey: true, state: "state", version: "0.81.1", selectedKey: true },
+    { id: "blue-hermit", createKey: false, state: "", version: "0.81.1", selectedKey: false },
     ...(process.platform === "win32"
       ? [
           {
             id: "tbx_namespaced",
             createKey: true,
             state: "namespaced",
-            version: "0.81.0",
+            version: "0.81.1",
             selectedKey: true,
           },
         ]
@@ -2727,14 +2746,14 @@ describe("scripts/crabbox-wrapper", () => {
       env: {
         ...testHomeEnv(home),
         XDG_STATE_HOME: stateRoot,
-        OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.81.0",
+        OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.81.1",
       },
     });
     expect(result).toMatchObject({ status: 2, stdout: "" });
     expect(result.stderr).toContain("XDG_STATE_HOME must be absolute");
   });
 
-  it.each([{ version: "0.81.0", stateDirectory: "state " }])(
+  it.each([{ version: "0.81.1", stateDirectory: "state " }])(
     "fails before reuse when a Blacksmith Testbox is claimed by another repo ($version, $stateDirectory)",
     ({ version, stateDirectory }) => {
       const home = invocationLogTempDirs.make("openclaw-crabbox-home-");
@@ -3031,46 +3050,52 @@ console.error = function (...args) {
     },
   );
 
-  it.skipIf(process.platform === "win32").each([0, 43])(
-    "executes the named Testbox job with frozen preparation (install exit %s)",
-    (installExit) => {
-      const root = invocationLogTempDirs.make("openclaw-testbox-job-");
-      const events = path.join(root, "events");
-      writeShellCommand(
-        path.join(root, "corepack"),
-        `
-case "$*" in
-  'pnpm install --frozen-lockfile')
-    printf 'install\\n' >> ${shellQuote(events)}
-    printf 'install diagnostics\\n'
-    exit ${installExit}
-    ;;
-  'pnpm check:changed')
-    printf 'payload\\n' >> ${shellQuote(events)}
-    printf 'payload\\n'
-    ;;
-  *) exit 64 ;;
-esac
-`,
-      );
-      const config = parse(readFileSync(path.join(repoRoot, ".crabbox.yaml"), "utf8")) as {
-        jobs: { "testbox-changed": { shell?: boolean; command: string } };
-      };
-      const job = config.jobs["testbox-changed"];
-      // Crabbox jobRunArgs uses strings.Fields unless shell is enabled.
-      const command = job.shell
-        ? job.command
-        : job.command.trim().split(/\s+/u).map(shellQuote).join(" ");
-      const result = spawnSync("bash", ["-c", command], {
-        cwd: root,
-        encoding: "utf8",
-        timeout: 10_000,
-        env: { ...process.env, PATH: [root, process.env.PATH].join(path.delimiter) },
+  it.each<{
+    name: string;
+    args?: string[];
+    config?: Record<string, unknown>;
+    env?: Record<string, string>;
+    warmup?: boolean;
+    fast?: boolean;
+  }>([
+    { name: "new Boat run", fast: true },
+    { name: "new fixed Boat warmup", warmup: true, args: ["--lease-id", "cbx_new"], fast: true },
+    { name: "explicit class", args: ["--class", "standard"] },
+    { name: "explicit native size", args: ["--type=small"] },
+    { name: "environment class", env: { CRABBOX_DEFAULT_CLASS: "standard" } },
+    { name: "environment size", env: { CRABBOX_SERVER_TYPE: "small" } },
+    { name: "alternate config", env: { CRABBOX_CONFIG: "fixture.yaml" } },
+    { name: "configured class", config: { class: "large" } },
+    { name: "configured native size", config: { serverTypeExplicit: true } },
+    { name: "existing Boat lease", args: ["--id", "cbx_existing"] },
+    { name: "explicit AWS", args: ["--provider", "aws"] },
+    { name: "automatic Windows", args: ["--target", "windows"] },
+  ])(
+    "preserves repository defaults and sizing for $name",
+    ({ args = [], config: overrides, env, warmup, fast = false }) => {
+      const config = parse(readFileSync(path.join(repoRoot, ".crabbox.yaml"), "utf8"));
+      expect(config).toMatchObject({
+        provider: "boat",
+        class: "standard",
+        asciiBox: { noEnv: true },
+        actions: { workflow: ".github/workflows/crabbox-hydrate.yml", job: "hydrate" },
+        jobs: {
+          prewarm: { provider: "azure", class: "standard", type: "Standard_D4ads_v6" },
+          changed: { provider: "azure", class: "standard", type: "Standard_D4ads_v6" },
+        },
       });
-      expect(result.status, result.stderr).toBe(installExit);
-      expect(result.stdout).toBe(installExit ? "" : "payload\n");
-      expect(result.stderr).toContain("install diagnostics");
-      expect(readFileSync(events, "utf8")).toBe(installExit ? "install\n" : "install\npayload\n");
+      expect(config.jobs).not.toHaveProperty("testbox-changed");
+      const result = runWrapper(
+        brokerProviderHelp,
+        warmup
+          ? ["warmup", ...args]
+          : ["run", ...args, "--no-sync", "--no-hydrate", "--", "echo", "ok"],
+        { configJson: { ...config, serverTypeExplicit: false, ...overrides }, env },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const output = parseFakeCrabboxOutput(result);
+      expect(output.args.filter((arg) => arg === "fast")).toHaveLength(fast ? 1 : 0);
+      expect(output.args).toEqual(expect.arrayContaining(args));
     },
   );
 
