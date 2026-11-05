@@ -69,4 +69,64 @@ describe("resolveVoiceResponseModel", () => {
       model: "gpt-5.4-mini",
     });
   });
+
+  it("resolves model aliases configured in coreConfig", () => {
+    const coreConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-5-5": {
+              alias: "medium",
+            },
+          },
+        },
+      },
+    } as unknown as CoreAgentDeps;
+
+    expect(
+      resolveVoiceResponseModel({
+        voiceConfig: VoiceCallConfigSchema.parse({
+          responseModel: "medium",
+        }),
+        agentRuntime,
+        coreConfig: coreConfig as never,
+      }),
+    ).toEqual({
+      modelRef: "anthropic/claude-sonnet-5-5",
+      provider: "anthropic",
+      model: "claude-sonnet-5-5",
+    });
+  });
+
+  it("resolves agent-scoped model aliases when agentId is provided", () => {
+    const coreConfig = {
+      agents: {
+        list: [
+          {
+            id: "support",
+            models: {
+              "openai/gpt-5.4": {
+                alias: "support-model",
+              },
+            },
+          },
+        ],
+      },
+    } as unknown as CoreAgentDeps;
+
+    expect(
+      resolveVoiceResponseModel({
+        voiceConfig: VoiceCallConfigSchema.parse({
+          responseModel: "support-model",
+        }),
+        agentRuntime,
+        coreConfig: coreConfig as never,
+        agentId: "support",
+      }),
+    ).toEqual({
+      modelRef: "openai/gpt-5.4",
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+  });
 });

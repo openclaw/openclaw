@@ -564,6 +564,45 @@ describe("generateVoiceResponse", () => {
     expect(args.sessionKey).toBe("agent:main:voice:15550001111");
   });
 
+  it("resolves model aliases configured in coreConfig when responseModel is set", async () => {
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([
+      { text: '{"spoken":"Alias model works."}' },
+    ]);
+    const voiceConfig = VoiceCallConfigSchema.parse({
+      responseModel: "fast-alias",
+      responseTimeoutMs: 5000,
+    });
+    const coreConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-5-5": {
+              alias: "fast-alias",
+            },
+          },
+        },
+      },
+    } as unknown as CoreConfig;
+
+    const result = await generateVoiceResponse({
+      voiceConfig,
+      coreConfig,
+      agentRuntime: runtime,
+      callId: "call-alias",
+      from: "+15550002222",
+      transcript: [{ speaker: "user", text: "hello with alias" }],
+      userMessage: "hello with alias",
+    });
+
+    expect(result.text).toBe("Alias model works.");
+    const pinnedSessionEntry = sessionStore["agent:main:voice:15550002222"];
+    expect(pinnedSessionEntry?.providerOverride).toBe("anthropic");
+    expect(pinnedSessionEntry?.modelOverride).toBe("claude-sonnet-5-5");
+    const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
+    expect(args.provider).toBe("anthropic");
+    expect(args.model).toBe("claude-sonnet-5-5");
+  });
+
   it("rejects responseModel for a model-locked session without running the embedded agent", async () => {
     const { runtime, runEmbeddedAgent, patchSessionEntry, sessionStore } = createAgentRuntime([]);
     sessionStore["agent:main:voice:15550001111"] = {

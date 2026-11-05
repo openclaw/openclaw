@@ -573,6 +573,73 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(consultParams.prompt).toContain("Caller: Also check the ETA.");
   });
 
+  it("resolves model aliases in coreConfig for realtime consults", async () => {
+    const config = createBaseConfig();
+    config.responseModel = "smart-alias";
+    config.realtime.enabled = true;
+    config.realtime.tools = [
+      {
+        type: "function",
+        name: "custom_tool",
+        description: "Custom tool",
+        parameters: { type: "object", properties: {} },
+      },
+    ];
+    const coreConfig = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-5-5": {
+              alias: "smart-alias",
+            },
+          },
+        },
+      },
+    } as unknown as CoreConfig;
+
+    const runEmbeddedAgent = vi.fn(async () => ({
+      payloads: [{ text: "Alias consult answer." }],
+      meta: {},
+    }));
+    const agentRuntime = {
+      defaults: { provider: "openai", model: "gpt-5.4" },
+      resolveAgentDir: vi.fn(() => "/tmp/agent"),
+      resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
+      resolveAgentIdentity: vi.fn(),
+      resolveThinkingDefault: vi.fn(() => "high"),
+      resolveAgentTimeoutMs: vi.fn(() => 30_000),
+      ensureAgentWorkspace: vi.fn(async () => {}),
+      session: createMockSessionRuntime({}),
+      runEmbeddedAgent,
+    };
+    mocks.managerGetCall.mockReturnValue({
+      callId: "call-alias",
+      direction: "inbound",
+      from: "+15550001234",
+      to: "+15550009999",
+      transcript: [{ speaker: "user", text: "Consult with alias model." }],
+    });
+
+    await createVoiceCallRuntime({
+      config,
+      coreConfig,
+      agentRuntime: agentRuntime as never,
+    });
+
+    const handler = requireRealtimeConsultToolHandler();
+    await expect(handler({ question: "Consult question" }, "call-alias", {})).resolves.toEqual({
+      text: "Alias consult answer.",
+    });
+
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    const consultParams = requireRecord(
+      firstCallParam(runEmbeddedAgent.mock.calls as unknown[][], "embedded OpenClaw consult"),
+      "embedded OpenClaw consult params",
+    );
+    expect(consultParams.provider).toBe("anthropic");
+    expect(consultParams.model).toBe("claude-sonnet-5-5");
+  });
+
   it("canonicalizes restored legacy per-call keys for realtime consults", async () => {
     const config = createBaseConfig();
     config.inboundPolicy = "allowlist";

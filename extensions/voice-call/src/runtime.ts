@@ -429,6 +429,8 @@ export async function createVoiceCallRuntime(params: {
           const { provider: agentProvider, model } = resolveVoiceResponseModel({
             voiceConfig: effectiveConfig,
             agentRuntime,
+            coreConfig: cfg,
+            agentId,
           });
           const thinkLevel =
             effectiveConfig.realtime.consultThinkingLevel ??
