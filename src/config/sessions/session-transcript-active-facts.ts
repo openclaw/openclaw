@@ -1,7 +1,11 @@
 import type { SQLInputValue } from "node:sqlite";
 import { sql, type RawBuilder, type SqlBool } from "kysely";
 import { BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
-import { jsonNativeFieldsValid } from "../../infra/database-engine/json-values.js";
+import {
+  jsonNativeFieldsValid,
+  jsonPathValue,
+  jsonType,
+} from "../../infra/database-engine/json-values.js";
 import {
   createSqliteQueryCache,
   getNodeSqliteKysely,
@@ -57,9 +61,9 @@ export function transcriptDependencyFactsProjectableSql(
   }
   return /* kysely-allow-raw: SQLite json_each(json_extract(data)) treats text as JSON source; do not eagerly parse legacy scalar placement data. */ sql<SqlBool>`CASE WHEN ${navigation} IS NOT NULL THEN 1
     WHEN NOT ${jsonNativeFieldsValid(database, identity)} THEN 0
-    WHEN json_extract(${identity}, '$.type') = 'custom'
-      AND json_extract(${identity}, '$.customType') = ${BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE}
-      AND json_type(${identity}, '$.data') = 'text' THEN 0 ELSE 1 END`;
+    WHEN ${jsonPathValue(database, identity, sql.lit("$.type"))} = 'custom'
+      AND ${jsonPathValue(database, identity, sql.lit("$.customType"))} = ${BACKGROUND_RESULT_PLACEMENT_CUSTOM_TYPE}
+      AND ${jsonType(database, identity, sql.lit("$.data"))} = 'text' THEN 0 ELSE 1 END`;
 }
 
 /** Inputs come from the payload writer; no payload-table lookup is needed. */

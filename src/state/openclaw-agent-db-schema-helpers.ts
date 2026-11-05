@@ -27,7 +27,7 @@ import {
 } from "../infra/sqlite-schema-issues.js";
 import { extractSqliteTableSchema, quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 import { readMainTableList } from "../infra/sqlite-strict.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import { readSqliteUserVersion, writeSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   AGENT_V14_BOARD_SCHEMA_SQL,
@@ -443,7 +443,7 @@ export function finishAgentSchemaMigration(
   assertMigration: () => void,
   integrity?: { tables: readonly string[]; foreignKeyTables?: readonly string[] },
 ): void {
-  db.exec(`PRAGMA user_version = ${targetVersion};`);
+  writeSqliteUserVersion(db, targetVersion);
   persistAgentSchemaMetadata(db, agentId, targetVersion);
   assertAgentSchemaVersion(db, { agentId, pathname, version: targetVersion }, schemaSql);
   for (const table of integrity?.tables ?? []) {
