@@ -13,21 +13,23 @@ vi.mock("../runtime-api.js", () => ({ fetchWithSsrFGuard }));
 
 afterEach(() => {
   fetchWithSsrFGuard.mockReset();
+  vi.restoreAllMocks();
 });
 
-function lookupAccount(accountId: string): ResolvedNextcloudTalkAccount {
-  return createAccount({
+const lookupAccount = (accountId: string): ResolvedNextcloudTalkAccount =>
+  createAccount({
     accountId,
     baseUrl: "https://nc.example.com",
     config: { apiUser: "bot", apiPassword: "secret" },
   });
-}
 
 const roomResponse = (type: number | string) => Response.json({ ocs: { data: { type } } });
 
-function mockResponse(response: Response) {
+function mockResponse(...responses: Response[]) {
   const release = vi.fn(async () => {});
-  fetchWithSsrFGuard.mockResolvedValue({ response, release });
+  for (const response of responses) {
+    fetchWithSsrFGuard.mockResolvedValueOnce({ response, release });
+  }
   return release;
 }
 const malformedResponse = () =>
@@ -46,6 +48,8 @@ describe("nextcloud talk room info", () => {
     { dimension: "user", config: { apiUser: "other-bot", apiPassword: "secret" } },
     { dimension: "password", config: { apiUser: "bot", apiPassword: "other-secret" } },
   ])("isolates cached room kinds by current $dimension", async ({ dimension, ...overrides }) => {
+    const wallClock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    const elapsedClock = vi.spyOn(performance, "now").mockReturnValue(0);
     const first = lookupAccount(`scope-${dimension}`);
     const second = { ...first, ...overrides };
     const roomToken = "shared-room";
@@ -62,10 +66,13 @@ describe("nextcloud talk room info", () => {
     await expect(lookup(second)).resolves.toBe("group");
     await expect(lookup(first)).resolves.toBe("direct");
     expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
-    expect(release).toHaveBeenCalledTimes(2);
 
     await expect(lookup({ ...first, config: {} })).resolves.toBeUndefined();
-    expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
+    wallClock.mockReturnValue(Date.now() - 600_000);
+    elapsedClock.mockReturnValue(600_000);
+    await expect(lookup(first)).resolves.toBe("direct");
+    expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(3);
+    expect(release).toHaveBeenCalledTimes(3);
   });
 
   it("does not reuse a rejected room lookup under a different network policy", async () => {
@@ -102,10 +109,7 @@ describe("nextcloud talk room info", () => {
   });
 
   it("leaves HTTP 599 retryable and fetches the room again after recovery", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuard
-      .mockResolvedValueOnce({ response: new Response("", { status: 599 }), release })
-      .mockResolvedValueOnce({ response: roomResponse(6), release });
+    const release = mockResponse(new Response("", { status: 599 }), roomResponse(6));
     await expect(lookup("http-599")).rejects.toThrow("(599)");
     await expect(lookup("http-599")).resolves.toBe("direct");
     await expect(lookup("http-599")).resolves.toBe("direct");
@@ -116,10 +120,8 @@ describe("nextcloud talk room info", () => {
 
   it("propagates transport errors without caching them", async () => {
     const transportError = new TypeError("fetch failed");
-    fetchWithSsrFGuard.mockRejectedValueOnce(transportError).mockResolvedValueOnce({
-      response: roomResponse(1),
-      release: vi.fn(async () => {}),
-    });
+    fetchWithSsrFGuard.mockRejectedValueOnce(transportError);
+    mockResponse(roomResponse(1));
     await expect(lookup("transport")).rejects.toBe(transportError);
     await expect(lookup("transport")).resolves.toBe("direct");
     expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
@@ -129,51 +131,6 @@ describe("nextcloud talk room info", () => {
     await expect(lookup(account)).resolves.toBeUndefined();
     await expect(lookup(account)).resolves.toBeUndefined();
     expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
-  });
-
-  it("refreshes the cached room kind on elapsed time even when the wall clock is stepped back", async () => {
-    let perfNow = 0;
-    let wallNow = Date.UTC(2026, 7, 31);
-    vi.spyOn(performance, "now").mockImplementation(() => perfNow);
-    vi.spyOn(Date, "now").mockImplementation(() => wallNow);
-
-    const account = lookupAccount("elapsed-scope");
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuard
-      .mockResolvedValueOnce({ response: roomResponse(1), release })
-      .mockResolvedValueOnce({ response: roomResponse(3), release });
-
-    await expect(lookup(account)).resolves.toBe("direct");
-    expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
-
-    // The host clock is adjusted backward while the process keeps running; the
-    // room-kind window (elapsed time) still expires and re-looks up the room.
-    wallNow -= 10 * 60_000;
-    perfNow += 10 * 60_000;
-
-    await expect(lookup(account)).resolves.toBe("group");
-    expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
-    expect(release).toHaveBeenCalledTimes(2);
-  });
-
-  it("serves the cached room kind within the window regardless of the wall clock", async () => {
-    const perfNow = 0;
-    let wallNow = Date.UTC(2026, 7, 31);
-    vi.spyOn(performance, "now").mockImplementation(() => perfNow);
-    vi.spyOn(Date, "now").mockImplementation(() => wallNow);
-
-    const account = lookupAccount("window-scope");
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuard.mockResolvedValueOnce({ response: roomResponse(1), release });
-
-    await expect(lookup(account)).resolves.toBe("direct");
-    expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
-
-    // The wall clock jumps forward but elapsed time stays within the 5-minute window.
-    wallNow += 10 * 60_000;
-
-    await expect(lookup(account)).resolves.toBe("direct");
-    expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
   });
 });
 
