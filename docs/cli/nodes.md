@@ -102,6 +102,11 @@ The invocation timeout covers Gateway checks, node wake-up, readiness retries, a
 
 ## Notify, push, location, screen
 
+Add `--session <key>` to `nodes push` to open an existing chat when the
+notification is tapped. The destination is scoped to the sending Gateway and checked
+against current session access. iOS does not send a message or automatically switch
+Gateways. Missing or inaccessible destinations leave the current screen unchanged.
+
 ```bash
 openclaw nodes notify --node <id> --title "Build" --body "Done" --priority timeSensitive
 openclaw nodes push --node <id> --title "OpenClaw" --environment sandbox

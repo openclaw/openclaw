@@ -9,6 +9,7 @@ import {
   validateWebPushUnsubscribeParams,
   validateWebPushVapidPublicKeyParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import {
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
@@ -44,6 +45,11 @@ import {
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "../role-policy.js";
+import {
+  getSessionRowProjection,
+  requireSessionRowProjection,
+} from "../session-row-projection-access.js";
+import { withPreparedSessionResolve } from "../sessions-resolve.js";
 import { resolveNodePushTransport } from "./node-push-transport.js";
 import { respondError, respondUnavailableOnThrow } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
@@ -211,7 +217,7 @@ export const pushHandlers = {
   "push.test": defineValidatedGatewayHandler(
     "push.test",
     validatePushTestParams,
-    async ({ params, respond, context }) => {
+    async ({ params, respond, context, client, sessionMutationAuthorization }) => {
       const nodeId = normalizeOptionalString(params.nodeId) ?? "";
       if (!nodeId) {
         respondError(respond, ErrorCodes.INVALID_REQUEST, "nodeId required");
@@ -243,7 +249,43 @@ export const pushHandlers = {
           respondError(respond, ErrorCodes.INVALID_REQUEST, transport.error);
           return;
         }
-        const result = await sendApnsAlert({ ...transport.transport, nodeId, title, body });
+        const alert = { ...transport.transport, nodeId, title, body };
+        const result =
+          params.sessionKey === undefined
+            ? await sendApnsAlert(alert)
+            : await (async () => {
+                const identity = await loadOrCreateProcessDeviceIdentityAsync();
+                const projection = requireSessionRowProjection(context);
+                const selection = {
+                  projection,
+                  client,
+                  p: { key: params.sessionKey },
+                  isCurrent: () => getSessionRowProjection(context) === projection,
+                };
+                return await withPreparedSessionResolve(selection, (resolved) => {
+                  sessionMutationAuthorization?.assertCurrent();
+                  if (!resolved.ok || !("key" in resolved)) {
+                    throw new Error("Push chat destination is unavailable");
+                  }
+                  // The APNs transport rechecks this at its actual send boundary,
+                  // including after relay preparation. A resolved key is not a grant.
+                  const isCurrent = async () => {
+                    try {
+                      return await withPreparedSessionResolve(selection, (current) => {
+                        sessionMutationAuthorization?.assertCurrent();
+                        return current.ok && "key" in current && current.key === resolved.key;
+                      });
+                    } catch {
+                      return false;
+                    }
+                  };
+                  return sendApnsAlert({
+                    ...alert,
+                    destination: { gatewayDeviceId: identity.deviceId, sessionKey: resolved.key },
+                    isCurrent,
+                  });
+                });
+              })();
         if (
           shouldClearStoredApnsRegistration({
             registration,

@@ -176,6 +176,30 @@ import UIKit
         }
     }
 
+    @Test @MainActor func coldLaunchAndDuplicateTapsWaitForAuthorizedConnectionWithoutFocusing() async {
+        let previousModel = OpenClawAppModelRegistry.appModel
+        OpenClawAppModelRegistry.appModel = nil
+        defer { OpenClawAppModelRegistry.appModel = previousModel }
+        let delegate = OpenClawAppDelegate()
+        let request = ChatNotificationRequest(
+            notificationID: "synthetic-tap", gatewayDeviceId: "gateway-a", sessionKey: "agent:main:incident")
+        delegate.routeChatNotification(request)
+        delegate.routeChatNotification(request)
+        let model = NodeAppModel()
+        let originalKey = model.chatSessionKey
+        delegate.appModel = model
+        for _ in 0..<20 {
+            if model.pendingChatNotification == request { break }
+            await Task.yield()
+        }
+        #expect(model.pendingChatNotification == request)
+        #expect(model.openChatRequestID == 0)
+        #expect(model.chatSessionKey == originalKey)
+        await model.handleChatNotification(request)
+        #expect(model.pendingChatNotification == request)
+        #expect(model.openChatRequestID == 0)
+    }
+
     @MainActor
     private static func waitForGatewaySetup(in model: NodeAppModel) async -> GatewayConnectDeepLink? {
         for _ in 0..<20 {

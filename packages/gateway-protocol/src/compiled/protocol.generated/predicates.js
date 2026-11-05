@@ -1079,7 +1079,7 @@ var External = [
     /(^ip$)/u,
     /(^source$|^status$|^city$|^region$|^country$|^countryCode$|^attribution$)/u,
     /(^text$|^url$)/u,
-    /(^nodeId$|^title$|^body$|^environment$)/u,
+    /(^nodeId$|^sessionKey$|^title$|^body$|^environment$)/u,
     /(^commandName$|^targetIds$|^allowedPaths$|^forcedActivePaths$|^optionalActivePaths$|^providerOverrides$)/u,
     /(^webSearch$|^webFetch$)/u,
     /(^ok$|^assignments$|^diagnostics$|^inactiveRefPaths$)/u,
@@ -9647,6 +9647,7 @@ var External = [
       (unique_898, unique_899) => External[456].test(unique_898) || check_2(value[unique_898]),
     ) &&
     check_6(value.nodeId) &&
+    (value.sessionKey === void 0 || !("sessionKey" in value) || check_63(value.sessionKey)) &&
     (value.title === void 0 || !("title" in value) || check_272(value.title)) &&
     (value.body === void 0 || !("body" in value) || check_272(value.body)) &&
     (value.environment === void 0 || !("environment" in value) || check_1412(value.environment)),

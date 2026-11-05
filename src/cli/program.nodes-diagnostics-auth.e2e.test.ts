@@ -277,6 +277,22 @@ describe("cli program (nodes push)", () => {
     process.argv = previousArgv;
   });
 
+  it.each([undefined, "agent:main:incident"])(
+    "forwards only the requested chat destination: %s",
+    async (session) => {
+      mockPushResult(pushResult());
+      await runPush(session === undefined ? [] : ["--session", session]);
+      const request = gatewayRequests().find((entry) => entry.method === "push.test");
+      expect(request?.params).toMatchObject({ nodeId: "ios-node" });
+      if (session === undefined) {
+        expect(request?.params).not.toHaveProperty("sessionKey");
+      } else {
+        expect(request?.params).toHaveProperty("sessionKey", session);
+      }
+      expect(request?.params).not.toHaveProperty("gatewayDeviceId");
+    },
+  );
+
   it.each([
     { environment: "", json: false },
     { environment: "staging", json: true },

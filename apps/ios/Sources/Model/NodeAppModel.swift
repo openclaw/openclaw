@@ -384,6 +384,8 @@ final class NodeAppModel {
     var gatewayDefaultAgentId: String?
     var gatewayAgents: [AgentSummary] = []
     var openChatRequestID: Int = 0
+    private(set) var pendingChatNotification: ChatNotificationRequest?
+    private var lastHandledChatNotificationID: String?
     @ObservationIgnored private var consumedOpenChatRequestID: Int = 0
     private(set) var pendingLiveVoiceStart = false
     var liveVoiceStartError: String?
@@ -3172,6 +3174,62 @@ extension NodeAppModel {
         self.openChatRequestID &+= 1
     }
 
+    func handleChatNotification(_ request: ChatNotificationRequest) async {
+        guard request.notificationID != self.lastHandledChatNotificationID,
+              request.notificationID != self.pendingChatNotification?.notificationID
+        else { return }
+        self.pendingChatNotification = request
+        await self.deliverPendingChatNotification()
+    }
+
+    private func deliverPendingChatNotification() async {
+        guard let request = self.pendingChatNotification, self.operatorConnected else { return }
+        let generation = self.operatorAuthorityGeneration
+        let stillCurrent = {
+            self.operatorConnected && self.operatorAuthorityGeneration == generation &&
+                self.pendingChatNotification == request
+        }
+        if let restore = self.chatSessionRoutingRestoreTask {
+            await restore.value
+        }
+        guard stillCurrent(), let route = await self.operatorGateway.currentRoute() else { return }
+        do {
+            let key = try await request.resolve(
+                gatewayIdentity: {
+                    try await self.fetchPushRelayGatewayIdentity(ifCurrentRoute: route).deviceId
+                },
+                session: { sessionKey in
+                    let params = try JSONEncoder().encode(["key": sessionKey])
+                    let response = try await self.operatorGateway.request(
+                        method: "sessions.resolve",
+                        paramsJSON: String(decoding: params, as: UTF8.self),
+                        timeoutSeconds: 8,
+                        ifCurrentRoute: route)
+                    struct Resolution: Decodable {
+                        let ok: Bool
+                        let key: String?
+                    }
+                    let resolved = try JSONDecoder().decode(Resolution.self, from: response)
+                    return resolved.ok ? resolved.key : nil
+                },
+                isCurrent: stillCurrent)
+            guard await self.operatorGateway.currentRoute() == route, stillCurrent() else { return }
+            self.pendingChatNotification = nil
+            self.lastHandledChatNotificationID = request.notificationID
+            guard let key else { return }
+            // Resolve through the current authenticated connection before focus writes
+            // preferences or retargets Talk. A push never creates or sends to a session.
+            self.openChat(sessionKey: key)
+        } catch {
+            // Preserve a disconnected tap for the existing reconnect owner. A refused
+            // destination on a live connection falls back to the current screen.
+            if stillCurrent() {
+                self.pendingChatNotification = nil
+                self.lastHandledChatNotificationID = request.notificationID
+            }
+        }
+    }
+
     func consumeOpenChatRequest(_ requestID: Int) -> Bool {
         guard requestID != 0,
               requestID == self.openChatRequestID,
@@ -4151,6 +4209,8 @@ extension NodeAppModel {
         }
         guard shouldContinue() else { return }
         self.chatSessionRoutingRestoreTask = nil
+        await self.deliverPendingChatNotification()
+        guard shouldContinue() else { return }
         await self.refreshBrandingFromGateway(shouldApply: shouldContinue)
         guard shouldContinue() else { return }
         await self.refreshAgentsFromGateway(shouldApply: shouldContinue)
