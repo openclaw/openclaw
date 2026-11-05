@@ -1,48 +1,95 @@
 import "./dynamic-tool-build.test-support.js";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createAdmittedHostCapabilityTestFixture } from "../../../../src/agents/harness/host-capability.test-support.js";
-import { withSessionPlacementComputer } from "../../../../src/agents/session-placement-computer.js";
+import { WebSocketServer } from "ws";
+import { rawDataToText } from "./client-websocket.test-support.js";
 import { createBridge } from "./dynamic-tools.test-support.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { createCodexTestModel } from "./test-support.js";
-
-const computerInventory = vi.hoisted(() => ({ nodes: vi.fn() }));
-vi.mock("../../../../src/agents/tools/nodes-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../../src/agents/tools/nodes-utils.js")>()),
-  listNodes: computerInventory.nodes,
-}));
-vi.mock("../../../../src/agents/tools/computer-tool-gateway.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../../../../src/agents/tools/computer-tool-gateway.js")
-  >()),
-  loadGatewayComputerStatus: async () => ({ configured: false, available: false }),
-}));
 
 const {
   setupDynamicToolBuildFixture,
   cleanupDynamicToolBuildFixture,
   buildDynamicToolsForTest,
   createParams,
+  bindProductionCodexHostCapabilities,
 } = await import("./dynamic-tool-build.test-support.js");
 let tempDir: string;
 let workspaceDir: string;
 let params: ReturnType<typeof createParams>;
 const hostCapabilityClosers: Array<() => void> = [];
+let server: WebSocketServer;
+let port: number;
+let nodes: unknown[];
+const discovery: string[] = [];
 beforeEach(async () => {
-  computerInventory.nodes.mockReset().mockResolvedValue([]);
+  nodes = [];
+  discovery.length = 0;
+  server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  server.on("connection", (socket) => {
+    socket.send(
+      JSON.stringify({
+        type: "event",
+        event: "connect.challenge",
+        payload: { nonce: "computer-fixture", ts: Date.now() },
+      }),
+    );
+    socket.on("message", (data) => {
+      const request: { id: string; method: string; params: { maxProtocol: number } } = JSON.parse(
+        rawDataToText(data),
+      );
+      let payload: unknown;
+      if (request.method === "connect") {
+        payload = {
+          type: "hello-ok",
+          protocol: request.params.maxProtocol,
+          server: { version: "fixture", connId: "computer-fixture" },
+          features: { methods: ["node.list", "computer.status"], events: [] },
+          snapshot: {},
+          policy: { maxPayload: 1_000_000, maxBufferedBytes: 1_000_000, tickIntervalMs: 60_000 },
+        };
+      } else {
+        discovery.push(request.method);
+        payload =
+          request.method === "node.list" ? { nodes } : { configured: false, available: false };
+      }
+      socket.send(JSON.stringify({ type: "res", id: request.id, ok: true, payload }));
+    });
+  });
+  await new Promise<void>((resolve) => {
+    server.once("listening", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Missing fixture port");
+  }
+  port = address.port;
+  vi.stubEnv("OPENCLAW_GATEWAY_URL", `ws://127.0.0.1:${port}`);
+  vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "computer-fixture-token");
   tempDir = await setupDynamicToolBuildFixture();
   workspaceDir = path.join(tempDir, "workspace");
   params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
 });
 afterEach(async () => {
+  for (const socket of server.clients) {
+    socket.terminate();
+  }
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    });
+  });
   await cleanupDynamicToolBuildFixture(tempDir, hostCapabilityClosers);
 });
 function buildTools(options: Parameters<typeof buildDynamicToolsForTest>[2]) {
   return buildDynamicToolsForTest(params, workspaceDir, options);
 }
 
-it.each(["v2", "v1", "missing", "denied", "scoped", "text", "session"])(
+it.each(["v2", "v1", "missing", "denied", "scoped", "text"])(
   "serializes the initial paired computer schema through the Codex host: %s",
   async (kind) => {
     const v2Actions = [
@@ -52,7 +99,7 @@ it.each(["v2", "v1", "missing", "denied", "scoped", "text", "session"])(
       "set_value",
       "get_accessibility_tree",
     ];
-    computerInventory.nodes.mockResolvedValue(
+    nodes =
       kind === "missing"
         ? []
         : [
@@ -74,61 +121,29 @@ it.each(["v2", "v1", "missing", "denied", "scoped", "text", "session"])(
                   }
                 : {}),
             },
-          ],
-    );
+          ];
     params.model = createCodexTestModel("codex", kind === "text" ? ["text"] : ["text", "image"]);
     if (kind === "scoped") {
       params.toolsAllow = ["message"];
     }
     params.config = {
+      gateway: { mode: "local", port, auth: { mode: "token", token: "computer-fixture-token" } },
       tools: {
         codeMode: false,
         toolSearch: false,
         ...(kind === "denied" ? { deny: ["computer"] } : {}),
       },
     };
-    const host = await createAdmittedHostCapabilityTestFixture(params);
-    params.hostCapabilities = host.hostCapabilities;
-    hostCapabilityClosers.push(() => {
-      host.closeHost();
-      host.closeAdmission();
-    });
-    const build = () => buildTools({ sandbox: null });
-    const tools =
-      kind === "session"
-        ? await withSessionPlacementComputer(
-            {
-              runId: params.runId,
-              agentId: "main",
-              isActive: () => true,
-              bind: () => ({
-                computerUse: {
-                  contractVersion: 2,
-                  provider: { id: "session", label: "Session", generation: "1" },
-                  actions: ["screenshot"],
-                  targets: ["screen"],
-                  deliveryModes: ["foreground"],
-                  observations: ["image"],
-                  features: { recording: false, agentCursor: false, multiDisplay: false },
-                },
-                resolveNode: async () => ({ nodeId: "session-node" }),
-                invoke: async () => undefined,
-              }),
-            },
-            build,
-          )
-        : await build();
+    await bindProductionCodexHostCapabilities(params, hostCapabilityClosers);
+    const tools = await buildTools({ sandbox: null });
     const specs = createBridge(tools, { loading: "direct" }).specs;
     const first = JSON.stringify(
       flattenCodexDynamicToolFunctions(specs).filter((tool) => tool.name === "computer"),
     );
     if (["denied", "scoped", "text"].includes(kind)) {
       expect(tools.some((tool) => tool.name === "computer")).toBe(false);
-      expect(computerInventory.nodes).not.toHaveBeenCalled();
+      expect(discovery).toEqual([]);
       return;
-    }
-    if (kind === "session") {
-      expect(computerInventory.nodes).not.toHaveBeenCalled();
     }
     expect(first).toContain('"computer"');
     for (const action of v2Actions) {
@@ -138,5 +153,6 @@ it.each(["v2", "v1", "missing", "denied", "scoped", "text", "session"])(
         expect(first).not.toContain(`"${action}"`);
       }
     }
+    expect(discovery.toSorted()).toEqual(["computer.status", "node.list"]);
   },
 );

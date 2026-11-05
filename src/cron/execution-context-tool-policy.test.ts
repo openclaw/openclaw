@@ -18,6 +18,12 @@ vi.mock("../agents/tools/gateway.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/tools/gateway.js")>()),
   callGatewayTool: async (method: string, _opts: unknown, params: unknown) => {
     gateway.dispatches.push({ method, params });
+    if (method === "node.list") {
+      return { nodes: [] };
+    }
+    if (method === "computer.status") {
+      return { configured: false, available: false };
+    }
     if (method === "cron.get") {
       await gateway.holdGet;
     }
@@ -59,7 +65,12 @@ const RUN_KEY = "agent:main:cron:job-1:run:s1";
 const PROFILE = { type: "human", source: "profile", id: "profile-requester" } as const;
 const CFG: OpenClawConfig = {};
 const SCOPE_ERROR = "Automations tool is restricted to the current automation.";
-const dispatched = () => gateway.dispatches.map((call) => call.method);
+// Availability reads during construction are not automation actions. Keep every
+// other method visible so forbidden actions and unexpected dispatches still fail.
+const dispatched = () =>
+  gateway.dispatches
+    .filter(({ method }) => method !== "node.list" && method !== "computer.status")
+    .map((call) => call.method);
 
 function job(overrides: Partial<CronStoredJob>): CronStoredJob {
   return {
