@@ -16,6 +16,8 @@ export function buildAssistantFailoverSignal(
   msg: AssistantMessage,
   opts?: { provider?: string },
 ): FailoverSignal {
+  const transportStatus = extractErrorHttpStatus(msg.errorMessage?.trim() ?? "")?.code;
+  const provider = opts?.provider ?? msg.provider;
   const textRetryAfterMs = resolveRetryAfterMs(msg.errorMessage, Date.now(), msg.errorBody);
   const retryAfterMs =
     msg.retryAfterMs === null
@@ -24,12 +26,14 @@ export function buildAssistantFailoverSignal(
         ? textRetryAfterMs
         : Math.max(msg.retryAfterMs, textRetryAfterMs ?? 0);
   return {
-    status: extractErrorHttpStatus(msg.errorMessage?.trim() ?? "")?.code,
+    status: transportStatus,
     ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
     code: msg.errorCode,
+    // The trusted producer validates this assertion before diagnostic body clipping.
+    quotaScope: msg.quotaScope,
     errorType: msg.errorType,
     message: msg.errorMessage?.trim() || undefined,
-    provider: opts?.provider ?? msg.provider,
+    provider,
     details: extractFailoverSignalDetails(msg.errorBody),
   };
 }

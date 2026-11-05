@@ -6,6 +6,7 @@ import { modelTransportRoutesMatch } from "../../agents/model-compat-catalog.js"
 import {
   modelFallbackOverrideFromAvailability,
   resolveModelFallbackAvailability,
+  resolveModelQuotaRecoveryPolicy,
 } from "../../agents/model-selection-config.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import {
@@ -50,7 +51,7 @@ export function resolveModelFallbackOptions(
   // Only agent-turn jobs pick a model; system-event turns keep the session's fallback policy.
   const automation =
     run.scheduledAutomation?.job.payload.kind === "agentTurn" ? run.scheduledAutomation : undefined;
-  const modelFallbackAvailability = resolveModelFallbackAvailability({
+  const selectionParams: Parameters<typeof resolveModelFallbackAvailability>[0] = {
     cfg: config,
     agentId: run.agentId,
     sessionKey: run.sessionKey,
@@ -73,7 +74,8 @@ export function resolveModelFallbackOptions(
           hasAutoFallbackProvenance: run.hasAutoFallbackProvenance === true,
           subagentSpawnLineage: run.subagentSpawnLineage,
         }),
-  });
+  };
+  const modelFallbackAvailability = resolveModelFallbackAvailability(selectionParams);
   return {
     cfg: config,
     provider: run.provider,
@@ -83,6 +85,9 @@ export function resolveModelFallbackOptions(
     agentId: run.agentId,
     sessionKey: run.runtimePolicySessionKey ?? run.sessionKey,
     modelFallbackAvailability,
+    modelQuotaRecoveryPolicy: automation
+      ? { kind: "blocked" as const, reason: "non_interactive" as const }
+      : resolveModelQuotaRecoveryPolicy(selectionParams),
     fallbacksOverride: modelFallbackOverrideFromAvailability(modelFallbackAvailability),
   };
 }
@@ -98,6 +103,7 @@ export function buildRunEntrySelection(
     requestedRouteResolution: selection.requestedRouteResolution,
     agentDir: selection.agentDir,
     fallbacksOverride: selection.fallbacksOverride,
+    modelQuotaRecoveryPolicy: selection.modelQuotaRecoveryPolicy,
     cyberAccessProgram: run.cyberAccessProgram,
     userLockedAuthProfileId: run.scheduledAutomation
       ? run.scheduledAutomation.job.inferenceBinding?.source === "user"

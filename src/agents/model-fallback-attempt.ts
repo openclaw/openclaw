@@ -363,6 +363,7 @@ function resolveResultClassificationError(
           ...context,
           status: classification.status,
           code: classification.code,
+          quotaScope: classification.quotaScope,
           rawError: classification.rawError,
           rateLimitRetriesExhausted: classification.rateLimitRetriesExhausted,
         }),
@@ -521,6 +522,7 @@ function buildFailedCandidateAttempt(
     authMode: described.authMode,
     status: described.status,
     code: described.code,
+    quotaScope: described.quotaScope,
   };
 }
 
@@ -639,6 +641,8 @@ export function throwFallbackFailureSummary(params: {
       status: lastAttempt?.status,
       rateLimitRetriesExhausted: lastAttempt?.rateLimitRetriesExhausted,
       code: lastAttempt?.code,
+      quotaScope: lastAttempt?.quotaScope,
+      quotaRecovery: isFailoverError(params.lastError) ? params.lastError.quotaRecovery : undefined,
       cause: params.lastError instanceof Error ? params.lastError : undefined,
       sessionId: params.attribution?.sessionId,
       lane: params.attribution?.lane,

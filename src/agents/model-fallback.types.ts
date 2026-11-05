@@ -1,6 +1,6 @@
 import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { AgentTerminalSnapshot } from "./agent-terminal-snapshot.js";
-import type { FailoverReason } from "./failover/signal.js";
+import type { FailoverReason, FailoverSignal } from "./failover/signal.js";
 
 export const MODEL_FALLBACK_SKIPPED_CODE = "MODEL_FALLBACK_SKIPPED";
 
@@ -13,6 +13,18 @@ export type ModelFallbackAvailability =
   | { kind: "none_configured"; source: "explicit" | "inherited" }
   | { kind: "disabled_by_model_override" }
   | { kind: "disabled_by_model_selection_lock" };
+
+export type ModelQuotaRecoveryPolicy =
+  | { kind: "eligible"; target: ModelCandidate }
+  | {
+      kind: "blocked";
+      reason:
+        | "locked"
+        | "disabled"
+        | "configured_fallbacks"
+        | "non_interactive"
+        | "no_same_provider_default";
+    };
 
 export type ModelFallbackRouteOrigin = "requested" | "configured-fallback" | "configured-primary";
 export type ModelFallbackRouteResolution = "raw" | "resolved";
@@ -30,6 +42,7 @@ export type FallbackAttempt = ModelCandidate & {
   authMode?: string;
   status?: number;
   code?: string;
+  quotaScope?: FailoverSignal["quotaScope"];
 };
 
 /** Original route plus the outer fallback stage that admitted one real attempt. */
@@ -49,6 +62,7 @@ export type ModelFallbackResultClassification =
       reason?: FailoverReason;
       status?: number;
       code?: string;
+      quotaScope?: FailoverSignal["quotaScope"];
       rawError?: string;
       rateLimitRetriesExhausted?: number;
       preserveResultOnExhaustion?: boolean;

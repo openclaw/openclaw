@@ -552,6 +552,8 @@ export interface AssistantMessage {
   endTurn?: boolean;
   errorMessage?: string;
   errorCode?: string;
+  /** Transport-verified exhausted daily quota for this model, not generic throttling. */
+  quotaScope?: "daily-model";
   errorType?: string;
   errorBody?: string;
   /** Provider retry floor before diagnostic clipping; null means too large to represent. */

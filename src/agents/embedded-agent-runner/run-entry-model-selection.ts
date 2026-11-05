@@ -70,3 +70,30 @@ export async function resolveRunEntryModelSelection(
   };
   return snapshot ? withPluginRuntimeGenerationScope(snapshot, resolve) : resolve();
 }
+
+export function resolveRunEntryFallbackSelection(
+  params: Pick<EmbeddedAgentRunEntryParams<EmbeddedAgentRunResult>, "selection" | "modelResolve">,
+  hookSelection: ResolvedRunEntryModelSelection | undefined,
+): EmbeddedAgentRunEntryParams<EmbeddedAgentRunResult>["selection"] {
+  const hookOwnsFallbacks = hookSelection?.fallbacksOverride !== undefined;
+  return params.modelResolve?.modelSelectionLocked
+    ? {
+        ...params.selection,
+        fallbacksOverride: [],
+        modelQuotaRecoveryPolicy: { kind: "blocked" as const, reason: "locked" as const },
+      }
+    : hookOwnsFallbacks && hookSelection
+      ? {
+          ...params.selection,
+          provider: hookSelection.provider,
+          model: hookSelection.modelId,
+          fallbacksOverride: hookSelection.fallbacksOverride,
+          modelQuotaRecoveryPolicy: { kind: "blocked" as const, reason: "disabled" as const },
+          requestedRouteResolution:
+            hookSelection.provider !== params.selection.provider ||
+            hookSelection.modelId !== params.selection.model
+              ? ("raw" as const)
+              : params.selection.requestedRouteResolution,
+        }
+      : params.selection;
+}
