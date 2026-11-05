@@ -411,6 +411,29 @@ it("model mode injects high bodies, medium pointers and nothing for low", async 
   expect(logged()[0]).toMatchObject({ mode: "live", outcome: "injected" });
 });
 
+it("publishes nothing when memory access lapses after scoring", async () => {
+  const { ctx, run, logged, evaluateV2 } = await setup(gate({ mode: "live" }), {
+    relevant: { Nova: 0.99 },
+  });
+  const live = ctx.assertMemoryAudienceCurrent as () => void;
+  let revoked = false;
+  ctx.assertMemoryAudienceCurrent = () => {
+    if (revoked) {
+      throw new Error("memory audience revoked");
+    }
+    live();
+  };
+  const scored = evaluateV2.getMockImplementation()!;
+  evaluateV2.mockImplementationOnce(async (batch, options) => {
+    const outcome = await scored(batch, options);
+    revoked = true;
+    return outcome;
+  });
+  expect(await run("Is Nova due for her shots?")).toBe(undefined);
+  expect(evaluateV2).toHaveBeenCalledTimes(1);
+  expect(logged()[0]).toMatchObject({ outcome: "error" });
+});
+
 it("injects nothing when the agent has no Decision model or the provider is down", async () => {
   const { run, logged } = await setup(gate({ mode: "live", ...MODEL }), {
     unavailable: "not-configured",
