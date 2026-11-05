@@ -1,7 +1,5 @@
 import { createHash } from "node:crypto";
-import { connect } from "node:net";
 import { createLocalJWKSet, decodeJwt, jwtVerify } from "jose";
-import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import type { ProviderAuthContext, ProviderAuthResult } from "openclaw/plugin-sdk/plugin-entry";
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth-result";
@@ -42,11 +40,7 @@ import {
 const TOKEN_ENDPOINT = `${TOKEN_SHARING_ISSUER}/api/accounts/oauth/token`;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const LOGIN_TIMEOUT_MS = 5 * 60_000;
-const BUSY_PORT_NOTE =
-  "Port 8080 is already in use, so OpenClaw cannot finish this sign-in automatically. After you approve, your browser goes to localhost:8080, which may show an error page. Copy the full URL from the address bar and paste it below. The app using port 8080 might receive that redirect; if you do not trust it, decline below, stop that app, and sign in again.";
 type LoginOwner = Pick<ProviderAuthContext, "signal" | "assertCurrent">;
-type CallbackServer = Awaited<ReturnType<typeof startProviderOAuthLoopbackCallbackServer>>;
-type Authorization = Awaited<ReturnType<CallbackServer["waitForCallback"]>>;
 
 async function requestJson(url: string, owner: LoginOwner, body?: URLSearchParams) {
   owner.signal?.throwIfAborted();
@@ -284,68 +278,6 @@ export async function refreshTokenSharingCredential(
   }
 }
 
-/**
- * macOS lets 127.0.0.1 bind beside a `::` or `::1` listener, so EADDRINUSE misses an app that
- * would take the localhost redirect over IPv6. Hosts without IPv6 loopback report not taken.
- */
-async function isIpv6LoopbackTaken(): Promise<boolean> {
-  const port = Number(new URL(TOKEN_SHARING_REDIRECT_URI).port);
-  return await new Promise((resolve) => {
-    const socket = connect({ host: "::1", port, timeout: 1000 });
-    const finish = (taken: boolean) => {
-      socket.destroy();
-      resolve(taken);
-    };
-    socket.once("connect", () => finish(true));
-    socket.once("error", () => finish(false));
-    socket.once("timeout", () => finish(false));
-  });
-}
-
-/** Holds a pasted redirect to the listener's rules; returns the problem as text when it fails. */
-function readPastedRedirect(input: string, state: string): Authorization | string {
-  // The masked prompt keeps rejected text, so a retried paste lands after it.
-  const parameters = URL.parse(
-    input.slice(Math.max(input.lastIndexOf("http://"), 0)).trim(),
-  )?.searchParams;
-  if (!parameters?.has("state")) {
-    return "Paste the full URL from your browser's address bar, not just the code.";
-  }
-  if (parameters.getAll("state").length !== 1 || parameters.get("state") !== state) {
-    return "That URL is from a different sign-in. Paste the URL from this one.";
-  }
-  const error = parameters.get("error");
-  if (error !== null) {
-    return { type: "oauth_error", error };
-  }
-  const code = parameters.get("code")?.trim();
-  if (!code || parameters.getAll("code").length !== 1) {
-    return "That URL has no authorization code. Finish signing in, then copy the URL again.";
-  }
-  return { type: "authorization_code", code, state, parameters };
-}
-
-async function promptForRedirect(
-  ctx: ProviderAuthContext,
-  state: string,
-  signal: AbortSignal,
-): Promise<Authorization> {
-  const pasted = await ctx.prompter.text({
-    message: "Paste the full redirect URL from your browser:",
-    sensitive: true,
-    signal,
-    validate: (value) => {
-      const redirect = readPastedRedirect(value, state);
-      return typeof redirect === "string" ? redirect : undefined;
-    },
-  });
-  const redirect = readPastedRedirect(pasted, state);
-  if (typeof redirect === "string") {
-    throw new Error(redirect);
-  }
-  return redirect;
-}
-
 /** Local authorization owns the listener, state, verifier, and callback lifetime together. */
 export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {
   const owner = {
@@ -406,92 +338,61 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
   const { verifier, challenge } = await generatePKCE();
   const state = generateOAuthState();
   const nonce = generateOAuthState();
-  const url = new URL(`${TOKEN_SHARING_ISSUER}/api/accounts/authorize`);
-  url.search = new URLSearchParams({
-    response_type: "code",
-    client_id: clientId,
-    redirect_uri: TOKEN_SHARING_REDIRECT_URI,
-    resource: TOKEN_SHARING_RESOURCE,
-    scope: authorizationScope,
-    code_challenge: challenge,
-    code_challenge_method: "S256",
-    state,
-    nonce,
-    ...(registering ? { agent_name_hint: "OpenClaw" } : {}),
-  }).toString();
-  let callback: CallbackServer | undefined;
+  const callback = await startProviderOAuthLoopbackCallbackServer({
+    redirectUrl: TOKEN_SHARING_REDIRECT_URI,
+    expectedState: state,
+    signal: owner.signal,
+    // SSH forwards target IPv4 loopback; the redirect still names localhost.
+    bindOnlyHostname: "127.0.0.1",
+    deferResponse: true,
+  });
   try {
-    if (!(await isIpv6LoopbackTaken())) {
-      callback = await startProviderOAuthLoopbackCallbackServer({
-        redirectUrl: TOKEN_SHARING_REDIRECT_URI,
-        expectedState: state,
-        signal: owner.signal,
-        // SSH forwards target IPv4 loopback; keep the registered localhost redirect unchanged.
-        bindOnlyHostname: "127.0.0.1",
-        deferResponse: true,
-      });
-    }
-  } catch (error) {
-    // This sign-in's redirect URI fixes the port, so the user pastes the redirect instead.
-    if (extractErrorCode(error) !== "EADDRINUSE") {
-      throw error;
-    }
-  }
-  try {
-    const consent = [
-      "Authorize eligible Responses API calls using your Codex allowance. Token sharing does not grant access to conversations, Codex history, or connected apps.",
-      ...(registering
-        ? []
-        : [
-            "Reconnect with the same ChatGPT user and workspace. To switch either, cancel and choose Connect a different ChatGPT account or workspace.",
-          ]),
-    ];
-    const showNote = async (lines: string[]) => {
-      owner.assertCurrent?.();
-      owner.signal.throwIfAborted();
-      await withOAuthLoginAbort(
-        ctx.prompter.note(lines.join("\n\n"), "Sign in with ChatGPT (Beta)"),
-        owner.signal,
-      );
-    };
-    if (!callback) {
-      // A browser can redirect at once and CLI notes do not wait, so only an answer protects this.
-      await showNote([...consent, BUSY_PORT_NOTE]);
-      const confirmed = await withOAuthLoginAbort(
-        ctx.prompter.confirm({ message: "Open the sign-in page?", initialValue: true }),
-        owner.signal,
-      );
-      if (!confirmed) {
-        throw new Error(
-          "ChatGPT sign-in cancelled. Stop the app using port 8080, then sign in again.",
-        );
-      }
-    }
+    // A free port per attempt, so an app on any fixed port cannot block sign-in. Loopback
+    // redirects may vary their port (RFC 8252 section 7.3); exchange must repeat the exact URI.
+    const redirectUri = callback.redirectUrl;
+    const { port } = new URL(redirectUri);
+    const url = new URL(`${TOKEN_SHARING_ISSUER}/api/accounts/authorize`);
+    url.search = new URLSearchParams({
+      response_type: "code",
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      resource: TOKEN_SHARING_RESOURCE,
+      scope: authorizationScope,
+      code_challenge: challenge,
+      code_challenge_method: "S256",
+      state,
+      nonce,
+      ...(registering ? { agent_name_hint: "OpenClaw" } : {}),
+    }).toString();
     owner.assertCurrent?.();
-    owner.signal.throwIfAborted();
-    // Gateway wizards attach the browser URL to the next step they publish.
+    // Gateway wizards attach the browser URL to the next note they publish.
     await withOAuthLoginAbort(ctx.openUrl(url.toString()), owner.signal);
-    const signInUrl = ctx.prompter.openUrl ? [] : [`Sign-in URL: ${url.toString()}`];
-    if (callback) {
-      // Remote notes await acknowledgement; the OAuth deadline still owns listener cleanup.
-      await showNote([
-        ...consent,
-        ...(ctx.isRemote
-          ? [
-              "Open the sign-in link in your browser. Its localhost:8080 callback must reach this OpenClaw process. For an SSH host, forward the port with: ssh -N -L 8080:127.0.0.1:8080 user@gateway-host",
-            ]
-          : []),
-        ...signInUrl,
-      ]);
-    } else if (signInUrl.length > 0) {
-      await showNote(signInUrl);
-    }
     owner.assertCurrent?.();
     owner.signal.throwIfAborted();
-    const authorization = await withOAuthLoginAbort(
-      callback ? callback.waitForCallback() : promptForRedirect(ctx, state, owner.signal),
+    // Remote notes await acknowledgement; the OAuth deadline still owns listener cleanup.
+    await withOAuthLoginAbort(
+      ctx.prompter.note(
+        [
+          "Authorize eligible Responses API calls using your Codex allowance. Token sharing does not grant access to conversations, Codex history, or connected apps.",
+          ...(registering
+            ? []
+            : [
+                "Reconnect with the same ChatGPT user and workspace. To switch either, cancel and choose Connect a different ChatGPT account or workspace.",
+              ]),
+          ...(ctx.isRemote
+            ? [
+                `Open the sign-in link in your browser. Its localhost:${port} callback must reach this OpenClaw process, and the port changes on every sign-in. For an SSH host, forward it before opening the link: ssh -N -L ${port}:127.0.0.1:${port} user@gateway-host`,
+              ]
+            : []),
+          ...(ctx.prompter.openUrl ? [] : [`Sign-in URL: ${url.toString()}`]),
+        ].join("\n\n"),
+        "Sign in with ChatGPT (Beta)",
+      ),
       owner.signal,
     );
+    owner.assertCurrent?.();
+    owner.signal.throwIfAborted();
+    const authorization = await withOAuthLoginAbort(callback.waitForCallback(), owner.signal);
     owner.assertCurrent?.();
     owner.signal.throwIfAborted();
     if (authorization.type === "oauth_error") {
@@ -520,7 +421,7 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
         clientId: authorizedClientId,
         code: authorization.code,
         verifier,
-        redirectUri: TOKEN_SHARING_REDIRECT_URI,
+        redirectUri,
         resource: TOKEN_SHARING_RESOURCE,
       }),
     );
@@ -547,7 +448,7 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
     }
     const profileName = credential.accountId.slice(0, 24);
     const sharing = credential.authFlow === TOKEN_SHARING_AUTH_FLOW;
-    await callback?.complete({
+    await callback.complete({
       status: 200,
       contentType: "text/html; charset=utf-8",
       body: oauthSuccessHtml(
@@ -585,13 +486,13 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
     }
     return result;
   } catch (error) {
-    await callback?.complete({
+    await callback.complete({
       status: 400,
       contentType: "text/html; charset=utf-8",
       body: oauthErrorHtml("Sign-in did not complete. Return to OpenClaw for details and retry."),
     });
     throw error;
   } finally {
-    await callback?.close();
+    await callback.close();
   }
 }

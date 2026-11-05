@@ -232,10 +232,32 @@ describe("ChatGPT token-sharing authorization", () => {
       // WizardSession attaches a queued external URL to the next emitted step.
       expect(pendingUrl).toBeDefined();
       expect(message).not.toContain(pendingUrl!);
-      expect(message).toContain("8080:127.0.0.1:8080");
+      const { port } = new URL(new URL(pendingUrl!).searchParams.get("redirect_uri")!);
+      expect(message).toContain(`${port}:127.0.0.1:${port}`);
       await visitBrowser(pendingUrl!);
     });
     await expectConnected(await loginTokenSharing(ctx));
+  });
+
+  it("signs in on a free callback port while another app holds 8080", async () => {
+    // The sign-in once fixed its callback to 8080. An already busy 8080 is the same case.
+    const occupant = createServer((_request, response) => response.end("other app"));
+    await new Promise<void>((resolve) => {
+      occupant.once("error", () => resolve());
+      occupant.listen(8080, "127.0.0.1", resolve);
+    });
+    try {
+      await expectConnected(await loginTokenSharing(context()));
+      const redirectUri = new URL(authorization.searchParams.get("redirect_uri")!);
+      expect(redirectUri.hostname).toBe("localhost");
+      expect(redirectUri.pathname).toBe("/auth/callback");
+      expect(redirectUri.port).not.toBe("8080");
+      expect(exchangeForm().get("redirect_uri")).toBe(redirectUri.href);
+    } finally {
+      await new Promise<void>((resolve) => {
+        occupant.close(() => resolve());
+      });
+    }
   });
 
   it("restarts a cancelled login without accepting its stale callback", async () => {
@@ -424,7 +446,7 @@ describe("ChatGPT token-sharing authorization", () => {
       client_id: clientId,
       code: "test-code",
       resource: TOKEN_SHARING_RESOURCE,
-      redirect_uri: "http://localhost:8080/auth/callback",
+      redirect_uri: authorization.searchParams.get("redirect_uri"),
     });
     expect(form.has("client_secret")).toBe(false);
     expect(result.profiles[0]?.profileId).toBe("openai:existing");
@@ -536,201 +558,5 @@ describe("ChatGPT token-sharing authorization", () => {
       message: "ChatGPT connection expired or was revoked. Sign in again to reconnect.",
       oauthRefreshFailure: { reason: "invalid_grant" },
     });
-  });
-});
-
-describe("ChatGPT token-sharing with port 8080 taken", () => {
-  const registeredId = "oaiapp_testregistered";
-  let occupant: ReturnType<typeof createServer>;
-
-  const occupy = async (host: string) => {
-    occupant = createServer();
-    await new Promise<void>((resolve, reject) => {
-      occupant.once("error", reject);
-      occupant.listen(8080, host, resolve);
-    });
-  };
-  const release = async () => {
-    await new Promise((resolve) => {
-      occupant.close(resolve);
-    });
-  };
-
-  beforeEach(() => occupy("127.0.0.1"));
-  afterEach(release);
-
-  // The browser lands on the app holding the port; the address bar keeps the redirect.
-  const redirectFor = (extra: string[][]) => {
-    const redirect = new URL(authorization.searchParams.get("redirect_uri")!);
-    redirect.search = new URLSearchParams([
-      ["state", authorization.searchParams.get("state")!],
-      ...extra,
-    ]).toString();
-    return redirect.toString();
-  };
-  const pasteContext = (
-    paste: () => string,
-    overrides: Partial<ProviderAuthContext> = {},
-  ): ProviderAuthContext => {
-    const ctx = context({
-      openUrl: async (url) => {
-        authorization = new URL(url);
-      },
-      ...overrides,
-    });
-    ctx.prompter.confirm = vi.fn(async () => true);
-    ctx.prompter.text = vi.fn(async () => paste());
-    return ctx;
-  };
-
-  it.each([
-    { name: "first sign-in", existingProfiles: [], returned: [["client_id", registeredId]] },
-    { name: "reconnect", existingProfiles: undefined, returned: [] },
-  ])("finishes $name from the pasted redirect URL", async ({ existingProfiles, returned }) => {
-    const expectedClientId = returned.length ? registeredId : clientId;
-    identity.aud = expectedClientId;
-    const ctx = pasteContext(
-      () => redirectFor([["code", "test-code"], ...returned]),
-      existingProfiles ? { existingProfiles } : {},
-    );
-    const result = await loginTokenSharing(ctx);
-    expect(result.profiles[0]?.credential).toMatchObject({
-      clientId: expectedClientId,
-      authFlow: TOKEN_SHARING_AUTH_FLOW,
-    });
-    expect(Object.fromEntries(exchangeForm())).toMatchObject({
-      client_id: expectedClientId,
-      code: "test-code",
-      redirect_uri: "http://localhost:8080/auth/callback",
-    });
-    expect(vi.mocked(ctx.prompter.note).mock.calls[0]![0]).toContain(
-      "The app using port 8080 might receive that redirect",
-    );
-  });
-
-  // macOS lets 127.0.0.1 bind beside these listeners, but localhost reaches them over ::1.
-  it.for(["::1", "::"])(
-    "asks for the paste when %s takes the localhost redirect",
-    async (host, t) => {
-      await release();
-      try {
-        await occupy(host);
-      } catch {
-        await occupy("127.0.0.1");
-        t.skip("IPv6 loopback unavailable");
-      }
-      const ctx = pasteContext(() => redirectFor([["code", "test-code"]]));
-      await expect(loginTokenSharing(ctx)).resolves.toMatchObject({
-        profiles: [{ credential: { authFlow: TOKEN_SHARING_AUTH_FLOW } }],
-      });
-      expect(ctx.prompter.text).toHaveBeenCalledOnce();
-    },
-  );
-
-  it("warns and waits for an answer before the browser can redirect to that app", async () => {
-    const events: string[] = [];
-    const ctx = pasteContext(() => redirectFor([["code", "test-code"]]));
-    ctx.openUrl = async (url) => {
-      events.push("browser");
-      authorization = new URL(url);
-    };
-    ctx.prompter.note = vi.fn(async (message: string) => {
-      events.push(message.includes("might receive that redirect") ? "warning" : "note");
-    });
-    ctx.prompter.confirm = vi.fn(async () => {
-      events.push("confirm");
-      return true;
-    });
-    ctx.prompter.text = vi.fn(async () => {
-      events.push("paste");
-      return redirectFor([["code", "test-code"]]);
-    });
-    await loginTokenSharing(ctx);
-    // A CLI note returns at once, so only the answer gives the warning time to matter.
-    expect(events.slice(0, 3)).toEqual(["warning", "confirm", "browser"]);
-    expect(events.at(-1)).toBe("paste");
-  });
-
-  it("opens nothing and exchanges nothing when the warning is declined", async () => {
-    const openUrl = vi.fn(async () => undefined);
-    const ctx = pasteContext(() => "unused", { openUrl });
-    ctx.prompter.confirm = vi.fn(async () => false);
-    await expect(loginTokenSharing(ctx)).rejects.toThrow("Stop the app using port 8080");
-    expect(openUrl).not.toHaveBeenCalled();
-    expect(ctx.prompter.text).not.toHaveBeenCalled();
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("keeps the queued Gateway URL for the paste step and out of the warning", async () => {
-    const queued: string[] = [];
-    const ctx = pasteContext(() => redirectFor([["code", "test-code"]]));
-    ctx.prompter.openUrl = ctx.openUrl = async (url) => {
-      authorization = new URL(url);
-      queued.push("url");
-    };
-    ctx.prompter.note = vi.fn(async (message: string) => {
-      expect(queued).toEqual([]);
-      expect(message).not.toContain("auth.openai.com");
-    });
-    ctx.prompter.text = vi.fn(async () => {
-      expect(queued).toEqual(["url"]);
-      return redirectFor([["code", "test-code"]]);
-    });
-    await loginTokenSharing(ctx);
-    expect(ctx.prompter.note).toHaveBeenCalledOnce();
-  });
-
-  it("accepts a retried paste that lands after rejected text in the masked field", async () => {
-    const ctx = pasteContext(() => `rejected_text${redirectFor([["code", "test-code"]])}`);
-    await loginTokenSharing(ctx);
-    expect(exchangeForm().get("code")).toBe("test-code");
-  });
-
-  it("keeps first sign-in out of the token exchange when the paste drops client_id", async () => {
-    const ctx = pasteContext(() => redirectFor([["code", "test-code"]]), { existingProfiles: [] });
-    await expect(loginTokenSharing(ctx)).rejects.toThrow("invalid OAuth client ID");
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("reports a declined sign-in pasted back from the browser", async () => {
-    const ctx = pasteContext(() => redirectFor([["error", "access_denied"]]));
-    await expect(loginTokenSharing(ctx)).rejects.toThrow("authorization was declined");
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["a bare code", () => "test-code", "not just the code"],
-    [
-      "a URL without state",
-      () => "http://localhost:8080/auth/callback?code=c",
-      "not just the code",
-    ],
-    ["another sign-in", () => "http://localhost:8080/auth/callback?code=c&state=old", "different"],
-    [
-      "a repeated state",
-      () => {
-        const state = authorization.searchParams.get("state")!;
-        return `http://localhost:8080/auth/callback?code=c&state=${state}&state=${state}`;
-      },
-      "different",
-    ],
-    ["a URL without a code", () => redirectFor([]), "no authorization code"],
-    [
-      "a repeated code",
-      () =>
-        redirectFor([
-          ["code", "a"],
-          ["code", "b"],
-        ]),
-      "no authorization code",
-    ],
-  ])("refuses %s before any token exchange", async (_name, paste, message) => {
-    const ctx = pasteContext(paste);
-    ctx.prompter.text = vi.fn(async ({ validate }) => {
-      expect(validate?.(paste())).toContain(message);
-      return paste();
-    });
-    await expect(loginTokenSharing(ctx)).rejects.toThrow(message);
-    expect(request).not.toHaveBeenCalled();
   });
 });

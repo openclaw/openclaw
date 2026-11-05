@@ -194,9 +194,3 @@ For SIWC, approve token sharing during sign-in to enable model calls. If you
 complete sign-in with identity permissions alone, the account can be saved but
 cannot authorize inference. Your account and workspace must also allow SIWC and
 the requested model access.
-
-SIWC receives its browser redirect on `localhost:8080`. If another app already
-uses that port, OpenClaw warns you and asks before opening the browser, then
-asks you to paste the full redirect URL from your browser's address bar; the
-code alone is not enough. That app might receive the redirect, so if you do not
-trust it, decline, stop the app, and sign in again.
