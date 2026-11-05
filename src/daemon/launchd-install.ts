@@ -20,6 +20,7 @@ import {
   resolveLaunchAgentPlistPath,
   writeLaunchAgentPlist,
 } from "./launchd-service-files.js";
+import { waitForLaunchAgentUnloaded } from "./launchd-stop.js";
 import { assertNoSystemLaunchDaemonOwnership } from "./launchd-system.js";
 import { formatLine, normalizeWindowsPathSeparators, writeFormattedLines } from "./output.js";
 import { resolveDaemonHomeDir } from "./paths.js";
@@ -198,6 +199,9 @@ export async function installLaunchAgent(
       ? await install()
       : await withGatewayServiceInstallationRecovery(install, async () => {
           const files = publication.files;
+          // A replacement still exiting, or a failing hook, never skips restoring the previous
+          // agent; its error is thrown once that recovery is done.
+          let failure: { error: unknown } | undefined;
           if (activationAttempted) {
             await files.assertCurrent();
             const current = await probeLaunchAgentState(serviceTarget);
@@ -209,24 +213,34 @@ export async function installLaunchAgent(
             if (current.state !== "not-loaded") {
               await files.assertCurrent();
               await bootoutLaunchAgent(serviceTarget);
-            }
-          }
-          // The hook runs only once the replacement is booted out, before the previous agent
-          // is restored and bootstrapped; a failing hook never skips that recovery.
-          const hook = activationAttempted
-            ? await args.beforeRecovery?.().then(
+              // bootout can return while the job's processes are still exiting, and the hook
+              // may change files they run from, so it runs only once they are gone.
+              failure = await waitForLaunchAgentUnloaded(
+                serviceTarget,
+                current.state === "running" && current.runtime.pid ? [current.runtime.pid] : [],
+                assertGatewayServiceUpdateCurrent,
+                (pids) =>
+                  args.stdout.write(
+                    `${formatLine("Warning", `Waiting for Gateway PID ${pids.join(", ")} to exit before restoring the previous LaunchAgent.`)}\n`,
+                  ),
+              ).then(
                 () => undefined,
                 (error: unknown) => ({ error }),
-              )
-            : undefined;
+              );
+            }
+            failure ??= await args.beforeRecovery?.().then(
+              () => undefined,
+              (error: unknown) => ({ error }),
+            );
+          }
           const restored = await files.restore();
           if (activationAttempted && restoreLoaded) {
             await files.assertCurrent();
             await assertNoSystemLaunchDaemonOwnership(label);
             await bootstrap(targetPlistPath, "openclaw gateway start");
           }
-          if (hook) {
-            throw hook.error;
+          if (failure) {
+            throw failure.error;
           }
           return restored || activationAttempted;
         });
