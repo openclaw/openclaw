@@ -38,7 +38,9 @@ enum TalkModeGatewayConfigParser {
         let activeProvider = common.activeProvider
         let activeConfig = common.providerConfig
         let ui = snapshot?.config?["ui"]?.dictionaryValue
-        let seamColorHex = ui?["seamColor"]?.stringValue?.nonEmpty
+        let seamColorHex = GatewayUserPreferences.gatewayAccentHex(
+            preference: ui?["prefs"]?.dictionaryValue?["accent"]?.stringValue,
+            seamColor: ui?["seamColor"]?.stringValue)
         let voice = activeConfig?["voiceId"]?.stringValue
         let resolvedModel = activeConfig?["modelId"]?.stringValue?.nonEmpty
             ?? (activeProvider == defaultProvider ? defaultModelIdFallback : nil)

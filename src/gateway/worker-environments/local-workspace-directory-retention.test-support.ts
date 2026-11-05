@@ -173,3 +173,56 @@ export async function prepareLegacyArchiveRetention(params: {
   // Earlier writers reserved archive receipts against their reduced Git base.
   await replaceBaseline(archived.baseManifestRaw);
 }
+
+export async function proveArchivedInputRetention(
+  owner: LocalWorkspaceOwner,
+  service: ManagedWorktreeService,
+) {
+  const canonical = owner.worktree.path;
+  const gitOwner = await import("../../agents/worktrees/git.js");
+  const projection = await prepare(owner);
+  const originalAdmission = (await readLocalWorkspaceProjection(owner.worktree.id))!
+    .source_paths_json;
+  const input = ".artifacts/build-cache-inputs/node_modules/late-original.json";
+  expect(JSON.parse(originalAdmission)).not.toContain(input);
+  await writeText(canonical, ".gitignore", ".env.local\n.artifacts/\n");
+  await fs.mkdir(path.dirname(path.join(canonical, input)), { recursive: true });
+  await writeText(canonical, input, "host-admitted input\n");
+  await gitOwner.requireGit(canonical, ["add", "--force", "--", input]);
+  await prepare(owner);
+  await expectText(projection, input, "host-admitted input\n");
+  const removed = await service.remove({ id: owner.worktree.id, reason: "legacy-admission-probe" });
+  expect(removed.removed).toBe(true);
+  expect(
+    await gitOwner.requireGit(owner.worktree.repoRoot, [
+      "ls-tree",
+      "-r",
+      "--name-only",
+      removed.snapshotRef!,
+    ]),
+  ).toContain(input);
+  // Before this policy, host-index admission did not update source_paths_json.
+  await withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async (store) => {
+    await store.update(store.get()!, { source_paths_json: originalAdmission });
+  });
+  await closeOpenClawStateDatabaseAsync();
+  owner.worktree = await service.restore({ id: owner.worktree.id });
+  expect(owner.worktree.snapshotRef).toBeTruthy();
+  await prepare(owner);
+  await expectText(projection, input, "host-admitted input\n");
+  expect(await gitOwner.requireGit(canonical, ["ls-files"])).not.toContain(input);
+  const generated = ".artifacts/build-cache-inputs/generated-after-restore.json";
+  await writeText(projection, generated, "new disposable cache\n");
+  if (process.platform !== "win32" && process.getuid?.() !== 0) {
+    await fs.chmod(path.join(projection, generated), 0);
+  }
+  await writeText(projection, input, "restored authored edit\n");
+  const inventory = vi.spyOn(gitOwner, "requireGitBuffer");
+  await synchronize(owner);
+  expect(
+    inventory.mock.calls.filter(([, args]) => ["ls-files", "ls-tree"].includes(args[0]!)),
+  ).toEqual([]);
+  inventory.mockRestore();
+  await expectText(canonical, input, "restored authored edit\n");
+  await expectMissing(canonical, generated);
+}

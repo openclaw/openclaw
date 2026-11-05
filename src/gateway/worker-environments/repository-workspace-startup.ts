@@ -22,6 +22,7 @@ export async function syncSessionRepositoryWorkspace(params: {
   generation: number;
   gitAuthor?: { name?: string; email?: string };
   runSetupScript?: boolean;
+  setupDisabled?: boolean;
   readNativeCredential?: GitHubCredentialReader;
   retainCredentialCleanup?: (revoke: () => Promise<void>) => void;
   preparedRepository?: PreparedRepositoryWorkspace;
@@ -50,6 +51,7 @@ export async function syncSessionRepositoryWorkspace(params: {
     !prepared &&
     !repository.checkpointRef &&
     repository.runSetupScript &&
+    !params.setupDisabled &&
     params.runSetupScript !== true
   ) {
     throw new Error(
@@ -77,6 +79,7 @@ export async function syncSessionRepositoryWorkspace(params: {
       !prepared &&
       !repository.checkpointRef &&
       repository.runSetupScript &&
+      !params.setupDisabled &&
       params.runSetupScript === true,
     ...(github?.token ? { gitToken: github.token } : {}),
   };

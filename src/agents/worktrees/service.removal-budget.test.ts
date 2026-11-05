@@ -3,6 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as localWorkspace from "../../gateway/worker-environments/local-workspace-projection.js";
 import * as gitExec from "../../infra/git-exec.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
@@ -326,57 +327,81 @@ it("records an admitted deletion timeout after its caller cancels and loses sess
   expect(getRegistryWorktree(env, record.id)?.removedAt).toBeUndefined();
 });
 
-it("persists timeout backoff across restart and retries only when due or explicitly requested", async () => {
-  const { env, materialize } = await fixture();
-  const record = (await materialize(["timed-out"]))[0]!;
-  await fs.writeFile(path.join(record.path, "README.md"), "retained changes\n");
-  let attempts = 0;
-  let fail = true;
-  const execute = gitExec.executeGitCommandBytes;
-  vi.spyOn(gitExec, "executeGitCommandBytes").mockImplementation(async (cwd, args, options) => {
-    if (args.includes("write-tree")) {
-      attempts++;
-      if (fail) {
-        return { ...timedOut(Buffer.alloc(0), 120_000), windowsEncoding: null };
+it.each([
+  ["timeout", "idle"],
+  ["timeout", "retired"],
+  ["workspace-size", "idle"],
+  ["workspace-size", "retired"],
+] as const)(
+  "persists %s backoff for %s owners across restart and retries only when due or explicitly requested",
+  async (failure, ownerState) => {
+    const { env, materialize } = await fixture();
+    const record = (await materialize(["timed-out"], { ownerId: "fixture-owner" }))[0]!;
+    await fs.writeFile(path.join(record.path, "README.md"), "retained changes\n");
+    let attempts = 0;
+    let fail = true;
+    const settle = localWorkspace.withSettledLocalWorkspace;
+    vi.spyOn(localWorkspace, "withSettledLocalWorkspace").mockImplementation(async (...args) => {
+      if (failure === "workspace-size") {
+        attempts++;
+        if (fail) {
+          throw new Error(
+            "Cloud workspace staged result exceeds its byte limit: 973111431 bytes across 383 changed files/symlinks; 805306368 byte limit.",
+          );
+        }
       }
+      return settle(...args);
+    });
+    const execute = gitExec.executeGitCommandBytes;
+    vi.spyOn(gitExec, "executeGitCommandBytes").mockImplementation(async (cwd, args, options) => {
+      if (failure === "timeout" && args.includes("write-tree")) {
+        attempts++;
+        if (fail) {
+          return { ...timedOut(Buffer.alloc(0), 120_000), windowsEncoding: null };
+        }
+      }
+      return await execute(cwd, args, options);
+    });
+    const gc = (retryDeferred = false) =>
+      makeService(env).gc({ retryDeferred, readOwnerState: () => ownerState });
+    const attemptStarted = Date.now();
+    expect((await gc()).outcome).toBe("partial");
+    const first = retryState(env, record.id);
+    expect(first).toEqual({
+      stage: failure === "timeout" ? "snapshot" : "preparation",
+      elapsedMs: expect.any(Number),
+      attempts: 1,
+      retryAt: expect.any(Number),
+    });
+    expect(await read(record.path)).toBe("retained changes\n");
+    if (ownerState === "retired") {
+      expect(getRegistryWorktree(env, record.id)?.runEndCleanup?.outcome).toBe("failed");
     }
-    return await execute(cwd, args, options);
-  });
-  const gc = () => makeService(env).gc();
-  const attemptStarted = Date.now();
-  expect((await gc()).outcome).toBe("partial");
-  const first = retryState(env, record.id);
-  expect(first).toEqual({
-    stage: "snapshot",
-    elapsedMs: expect.any(Number),
-    attempts: 1,
-    retryAt: expect.any(Number),
-  });
-  expect(await read(record.path)).toBe("retained changes\n");
 
-  expect(first?.retryAt).toBeGreaterThanOrEqual(attemptStarted + 2 * hour);
-  expect(first?.retryAt).toBeLessThanOrEqual(Date.now() + 2 * hour);
-  const delayed = await setRetryAt(env, record.id, Date.now() + hour);
-  await closeOpenClawStateDatabaseAsync();
-  expect((await gc()).outcome).toBe("deferred");
-  expect(attempts).toBe(1);
-  expect(retryState(env, record.id)).toEqual(delayed);
+    expect(first?.retryAt).toBeGreaterThanOrEqual(attemptStarted + 2 * hour);
+    expect(first?.retryAt).toBeLessThanOrEqual(Date.now() + 2 * hour);
+    const delayed = await setRetryAt(env, record.id, Date.now() + hour);
+    await closeOpenClawStateDatabaseAsync();
+    expect((await gc()).outcome).toBe("deferred");
+    expect(attempts).toBe(1);
+    expect(retryState(env, record.id)).toEqual(delayed);
 
-  await setRetryAt(env, record.id, Date.now() - 1);
-  const secondStarted = Date.now();
-  expect((await gc()).outcome).toBe("partial");
-  expect(attempts).toBe(2);
-  expect(retryState(env, record.id)).toMatchObject({ attempts: 2, retryAt: expect.any(Number) });
-  expect(retryState(env, record.id)?.retryAt).toBeGreaterThanOrEqual(secondStarted + 4 * hour);
-  expect(retryState(env, record.id)?.retryAt).toBeLessThanOrEqual(Date.now() + 4 * hour);
-  fail = false;
-  const retried = await makeService(env).gc({ retryDeferred: true });
-  expect(retried.removed).toEqual([record.id]);
-  expect(attempts).toBe(3);
-  expect(retryState(env, record.id)).toBeUndefined();
-  const restored = await makeService(env).restore({ id: record.id });
-  expect(await read(restored.path)).toBe("retained changes\n");
-});
+    await setRetryAt(env, record.id, Date.now() - 1);
+    const secondStarted = Date.now();
+    expect((await gc()).outcome).toBe("partial");
+    expect(attempts).toBe(2);
+    expect(retryState(env, record.id)).toMatchObject({ attempts: 2, retryAt: expect.any(Number) });
+    expect(retryState(env, record.id)?.retryAt).toBeGreaterThanOrEqual(secondStarted + 4 * hour);
+    expect(retryState(env, record.id)?.retryAt).toBeLessThanOrEqual(Date.now() + 4 * hour);
+    fail = false;
+    const retried = await gc(true);
+    expect(retried.removed).toEqual([record.id]);
+    expect(attempts).toBe(3);
+    expect(retryState(env, record.id)).toBeUndefined();
+    const restored = await makeService(env).restore({ id: record.id });
+    expect(await read(restored.path)).toBe("retained changes\n");
+  },
+);
 
 describe("nested eviction", () => {
   let root: string;

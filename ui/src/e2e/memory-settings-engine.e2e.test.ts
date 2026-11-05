@@ -256,7 +256,7 @@ suite.define(() => {
       await expect.poll(() => toggle.isChecked()).toBe(true);
       await page.getByText("Needs attention", { exact: true }).first().waitFor();
       await page
-        .getByText("Could not refresh Control UI configuration: authoritative snapshot unavailable")
+        .getByText("Couldn’t refresh settings. Try again. authoritative snapshot unavailable")
         .waitFor();
       expect(await page.getByText("Couldn’t update Active memory. Try again.").count()).toBe(0);
       expect(pageErrors).toEqual([]);

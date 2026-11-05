@@ -165,7 +165,10 @@ describe("CLI config producer lifetime", () => {
       path.join(plugin.dir, "doctor-contract-api.cjs"),
       `module.exports = { legacyConfigRules: [${JSON.stringify(rule)}] };`,
     );
-    writeJson(configPath, pluginConfig(plugin, { config: { label: 17 } }));
+    writeJson(configPath, {
+      ...pluginConfig(plugin, { config: { label: 17 } }),
+      meta: { migrations: { skillWorkshopPlugin: true } },
+    });
     await withEnvAsync(env, async () => {
       const discover = vi.spyOn(discovery, "discoverOpenClawPlugins");
       const session = createPluginCliLoadSession();

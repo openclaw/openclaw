@@ -57,10 +57,10 @@ function query(owner: ParentNode, selector: string): HTMLElement {
   return owner.querySelector<HTMLElement>(selector)!;
 }
 
-function interactiveOwner(content = table) {
+function interactiveOwner(content = table, options = interactiveOptions) {
   const owner = document.createElement("div");
   owner.className = "chat-thread";
-  owner.innerHTML = `<div class="chat-text">${toSanitizedMarkdownHtml(content, interactiveOptions)}</div>`;
+  owner.innerHTML = `<div class="chat-text">${toSanitizedMarkdownHtml(content, options)}</div>`;
   document.body.append(owner);
   const shell = query(owner, ".markdown-table");
   const viewport = query(owner, ".markdown-table__viewport");
@@ -119,6 +119,19 @@ describe("Markdown table interactions", () => {
     document.body.replaceChildren();
     vi.unstubAllGlobals();
     restoreDialogPolyfill();
+  });
+
+  it("copies rendered breaks and delimiter characters within their table cells", async () => {
+    vi.useFakeTimers();
+    const { owner, copy } = interactiveOwner(
+      '| Label | Value | Empty |\n| --- | --- | --- |\n| **Alpha**<br>Beta | One | |\n| Quote "here"<br>next | Comma, kept | |\n| `A\tB` | End | |\n| Quote "only" | Plain | |',
+      { ...interactiveOptions, progressBars: false },
+    );
+    await copyTable(copy, "Copied");
+    expect(writeText).toHaveBeenLastCalledWith(
+      'Label\tValue\tEmpty\n"Alpha\nBeta"\tOne\t\n"Quote ""here""\nnext"\tComma, kept\t\n"A\tB"\tEnd\t\n"Quote ""only"""\tPlain\t',
+    );
+    expect(owner.querySelectorAll("br")).toHaveLength(2);
   });
 
   it.each(["ltr", "rtl"])("tracks physical hidden edges in %s tables", (direction) => {
