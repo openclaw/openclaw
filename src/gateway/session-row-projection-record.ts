@@ -196,6 +196,7 @@ export type Query = {
 export type Inputs = Parameters<typeof rowProjection.readSessionRowInputs>[0];
 export type SnapshotOptions = Pick<Inputs, "now" | "excludedChildKeys"> & {
   childActivity?: SessionChildActivity;
+  backgroundProcessCount?: number;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
   active?: boolean;
@@ -505,6 +506,7 @@ export function present(
     activeModel: active ? (live ?? undefined) : record.fallbackModel,
     excludedChildKeys: options.excludedChildKeys,
     childActivity: options.childActivity,
+    backgroundProcessCount: options.backgroundProcessCount,
   });
   Object.assign(row, options.preparedFacts ?? record.facts?.present());
   row.hasBoard = record.hasBoard;

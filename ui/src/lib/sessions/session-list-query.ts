@@ -465,6 +465,7 @@ export type ManagedSessionList = ObservedSessionList & {
   /** Raw page identities, scoped to this window, for completeness despite hidden rows. */
   receivedKeys: Set<string>;
   startupRetryAttempt: number;
+  deniedConnectionEpoch: number | null;
   /** Invalidation retires remaining pages without cancelling the correlated RPC. */
   readGeneration: number;
   readRevision: number;

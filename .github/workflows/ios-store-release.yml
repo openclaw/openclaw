@@ -83,7 +83,7 @@ jobs:
           set -euo pipefail
           bundle _4.0.23_ install --jobs 4 --retry 3
           bundle _4.0.23_ check
-          test "$(bundle _4.0.23_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.241.1"
+          test "$(bundle _4.0.23_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.241.2"
 
       - name: Select Xcode and install pinned native tools
         run: |
@@ -100,6 +100,34 @@ jobs:
           rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
+      - name: Identify iOS native cache inputs
+        id: ios-cache-inputs
+        run: |
+          echo "xcode=$(xcodebuild -version | shasum -a 256 | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          echo "OPENCLAW_WATCH_RTC_CACHE_DIR=$RUNNER_TEMP/openclaw-watch-rtc-libraries" >> "$GITHUB_ENV"
+
+      # Match main CI's archive paths and keys; validation never publishes caches.
+      - name: Restore Watch RTC build inputs
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ${{ runner.temp }}/openclaw-watch-rtc-libraries
+          key: watch-rtc-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-${{ hashFiles('apps/shared/OpenClawWatchRTC/Cargo.lock', 'apps/shared/OpenClawWatchRTC/Cargo.toml', 'apps/shared/OpenClawWatchRTC/rust-toolchain.toml', 'apps/shared/OpenClawWatchRTC/build.sh', 'apps/shared/OpenClawWatchRTC/src/**', 'apps/ios/project.yml') }}
+          # The build phase verifies each slice fingerprint and checksum before reuse.
+          restore-keys: |
+            watch-rtc-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-
+
+      - name: Restore screenshot source packages
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/ios/build/SourcePackages
+          key: ios-source-packages-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-${{ hashFiles('apps/ios/**/Package.resolved', 'apps/ios/project.yml', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}
+
       - name: Capture iPhone, iPad, and Watch screenshots
         env:
           OPENCLAW_SNAPSHOT_DIAGNOSTICS: "1"
@@ -109,7 +137,9 @@ jobs:
           OPENCLAW_SNAPSHOT_SKIP_WATCH: ${{ inputs.startup_probe && '1' || '0' }}
         run: |
           node scripts/ios-resource-timeline.mjs --output "$RUNNER_TEMP/ios-resource-timeline.jsonl" -- \
-            pnpm ios:screenshots
+            pnpm ios:screenshots &&
+          awk '/Watch RTC: verified cache hit / { hits++ } END { printf "Watch RTC verified cache hits: %d\n", hits }' \
+            apps/ios/build/SnapshotLogs/build.log
 
       - name: Compare Spotlight eligibility of build products
         if: inputs.startup_probe
@@ -118,7 +148,7 @@ jobs:
             --source apps/ios/build/SnapshotDerivedData \
             --output "$RUNNER_TEMP/ios-spotlight-probe.json"
 
-      - name: Retain screenshots and sanitized diagnostics
+      - name: Retain screenshots and XCTest diagnostics
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -126,6 +156,8 @@ jobs:
           path: |
             apps/ios/fastlane/screenshots/en-US/*.png
             apps/ios/build/SnapshotTestResults/capture-attempts.json
+            apps/ios/build/SnapshotTestResults/*.xcresult
+            apps/ios/build/SnapshotLogs/*.log
             apps/ios/build/screenshot-diagnostics.json
             ${{ runner.temp }}/ios-resource-timeline.jsonl
             ${{ runner.temp }}/ios-spotlight-probe.json
@@ -203,7 +235,7 @@ jobs:
           set -euo pipefail
           bundle _4.0.23_ install --jobs 4 --retry 3
           bundle _4.0.23_ check
-          test "$(bundle _4.0.23_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.241.1"
+          test "$(bundle _4.0.23_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.241.2"
 
       - name: Select Xcode
         run: |

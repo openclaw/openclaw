@@ -286,6 +286,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
           this.closed = true;
           this.cancelConnecting?.();
           this.reconnectSupervisor.cancel();
+          this.clearQueuedAudio();
           this.forceClose(socket);
         },
         failConnect: (error) => {

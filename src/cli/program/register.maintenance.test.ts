@@ -145,13 +145,13 @@ describe("registered maintenance commands", () => {
     ["--fix", false],
     ["--repair", true],
   ] as const)(
-    "dispatches only client credential preparation with %s (json=%s)",
+    "dispatches native credential and runtime-intent preparation with %s (json=%s)",
     async (repair, json) => {
       await runCli(
         `doctor --client-credentials ${repair} --non-interactive ${json ? "--json" : ""}`,
       );
       expect(mocks.prepareStartupClientCredentials.mock.calls).toEqual([
-        [{ env: process.env, runtime }],
+        [{ env: process.env, runtime, prepareRuntimePins: true }],
       ]);
       expectNoCalls(doctorCommand, runDoctorLintCli, runtime.log, runtime.error);
       if (json) {

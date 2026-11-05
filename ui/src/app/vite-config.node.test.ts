@@ -321,7 +321,7 @@ it("emits Brotli and gzip variants only for bundled compressible assets", async 
   expect(brotliDecompressSync(variants[0]?.source ?? Buffer.alloc(0)).toString()).toBe(source);
   expect(gunzipSync(variants[1]?.source ?? Buffer.alloc(0)).toString()).toBe(source);
   expect(createHash("sha256").update(variants[1]!.source).digest("hex")).toBe(
-    "aabdc80dc704c3abc609a76c6ac3e9ae872cf023770c6ea5fbb29ffe56adfcab",
+    "60e4687fc5820ca008c163772ca7f2c11787042a29b21615e43beebd8eb30198",
   );
   // No timestamp, filename, or host OS field may make the pinned gzip bytes host-dependent.
   expect(variants[1]!.source.subarray(0, 10).toString("hex")).toBe("1f8b08000000000002ff");
@@ -586,7 +586,7 @@ it.each([
   ).toThrow(`${key} ${error}`);
 });
 
-it.each(["agent-id", "error-coercion", "expect"])(
+it.each(["agent-id", "error-coercion", "expect", "stringified-error"])(
   "resolves internal source aliases for %s",
   (subpath) => {
     const aliases = resolveSourcePackageAliasesForVite();

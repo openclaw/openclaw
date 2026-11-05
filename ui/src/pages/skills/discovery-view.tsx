@@ -2,6 +2,7 @@ import { createMemo, Errored, isPending, Loading, onSettled, Show } from "solid-
 import type { SkillLibraryEntry } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { SkillStatusEntry } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
+import { SettingsEmpty, SettingsGroup } from "../../components/solid/settings-ui.tsx";
 import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isPhoneLayout } from "../../lib/phone-layout.ts";
@@ -289,9 +290,15 @@ export function SkillDiscovery(props: SkillsProps) {
             entries().length === 0 &&
             !props.loading &&
             props.state.connected && (
-              <p class="muted" role="status">
-                {t("skillsPage.empty")}
-              </p>
+              <SettingsGroup>
+                <SettingsEmpty
+                  message={
+                    <span role="status">
+                      {t(query().trim() ? "skillsPage.noMatches" : "skillsPage.empty")}
+                    </span>
+                  }
+                />
+              </SettingsGroup>
             )}
         </Loading>
       </Errored>

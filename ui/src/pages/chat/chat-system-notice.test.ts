@@ -58,7 +58,7 @@ describe("system notices through pending-to-history promotion", () => {
     ],
     [
       "restart-sentinel",
-      "System · gateway restarted",
+      "System · Gateway restarted",
       "Gateway restarted during update 2026.8.2 -> 2026.8.3.",
       false,
     ],

@@ -163,7 +163,7 @@ suite.define(() => {
       if (native) {
         expect(heading.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
       }
-      const search = page.getByRole("searchbox", { name: "Search Templates", exact: true });
+      const search = page.getByRole("searchbox", { name: "Search templates", exact: true });
       const { box, introBox } = await search.evaluate((element) => {
         const bounds = (target: Element): Box => {
           const rect = target.getBoundingClientRect();

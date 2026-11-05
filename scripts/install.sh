@@ -21,6 +21,10 @@ fi
 
 set -euo pipefail
 
+# Distros with user private groups (Ubuntu, Fedora) default to umask 002; the
+# installed runtime must not be group-writable or owned-path checks refuse it.
+umask go-w
+
 # BEGIN GENERATED UPDATE NETWORK BUDGET
 # Source: src/infra/update-network-budget.ts; regenerate: node scripts/generate-update-network-budget.mjs
 UPDATE_NETWORK_TIMEOUT_SECONDS=300
@@ -1270,7 +1274,7 @@ Options:
   --bun-path <absolute path>          Use an existing OpenClaw Bun fork executable
   --beta                               Use beta if available, else latest
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw)
-  --no-git-update                      Skip git pull for existing checkout
+  --no-git-update                     Skip rebasing local main (Git fetches can still occur)
   --no-onboard                          Skip onboarding (non-interactive)
   --no-prompt                           Disable prompts (required in CI/automation)
   --verify                              Run a post-install smoke verify
@@ -1987,10 +1991,6 @@ ensure_macos_default_node_active() {
         return 0
     fi
 
-    local active_path active_version
-    active_path="$(command -v node 2>/dev/null || echo "not found")"
-    active_version="$(node -v 2>/dev/null || echo "missing")"
-
     if [[ -z "$brew_node_prefix" || ! -x "${brew_node_prefix}/bin/node" ]]; then
         ui_error "Homebrew ${NODE_BREW_FORMULA} is not installed on disk"
         echo "The previous 'brew install' step appears to have failed."
@@ -1998,9 +1998,9 @@ ensure_macos_default_node_active() {
         return 1
     fi
 
-    ui_error "Node.js v${NODE_DEFAULT_MAJOR} was installed but this shell is using ${active_version} (${active_path})"
-    echo "Add this to your shell profile and restart shell:"
-    echo "  export PATH=\"${brew_node_prefix}/bin:\$PATH\""
+    # Homebrew's node is first on PATH here, so a rejected runtime is a stale keg, not a shadowing one.
+    ui_error "Homebrew ${NODE_BREW_FORMULA} $(node -v 2>/dev/null || echo "missing") does not meet OpenClaw's Node.js requirement (${NODE_PACKAGE_ENGINE})"
+    echo "Run 'brew update && brew upgrade ${NODE_BREW_FORMULA}', then rerun the installer."
     return 1
 }
 

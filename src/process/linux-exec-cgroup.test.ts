@@ -42,6 +42,7 @@ vi.mock("./linux-exec-cgroup-device.js", async (importOriginal) => ({
 
 const root = "/sys/fs/cgroup/system.slice/openclaw.service";
 const exec = `${root}/agent-exec`;
+const unscoped = `${exec}/unscoped`;
 const MiB = 1024 ** 2;
 beforeEach(() => {
   mockProcessPlatform("linux");
@@ -83,7 +84,7 @@ it("preserves half of inherited ceilings on both solid-state and rotational disk
   fixture.files["/sys/fs/cgroup/system.slice/io.max"] =
     "9:127 rbps=524288 wbps=524288 riops=max wiops=160";
   expect(await initializeGatewayExecCgroup("/state")).toContain("isolation active");
-  expect(getAgentExecCgroup()).toBe(exec);
+  expect(getAgentExecCgroup()).toBe(unscoped);
   expect(fixture.files[`${exec}/memory.high`]).toBe("629145600");
   expect(fixture.files[`${exec}/cpu.weight`]).toBe("10");
   const limits = fixture.write.mock.calls
@@ -111,7 +112,7 @@ it.each([2400 * MiB, 201828433920])(
       fixture.files[`/sys/dev/block/${device}/queue/rotational`] = "0\n";
     }
     expect(await initializeGatewayExecCgroup("/state")).toContain("isolation active");
-    expect(fixture.write.mock.calls.filter(([file]) => file.endsWith("/io.max"))).toEqual([
+    expect(fixture.write.mock.calls.filter(([file]) => file === `${exec}/io.max`)).toEqual([
       [`${exec}/io.max`, "9:127 rbps=262144000 wbps=262144000 riops=40960 wiops=40960"],
       [`${exec}/io.max`, "8:0 rbps=262144000 wbps=262144000 riops=40960 wiops=40960"],
     ]);
@@ -164,7 +165,7 @@ it.each(["flat service", "foreign scope", "missing controllers", "unwritable", "
 
 it("does not discover an earlier policy after state-device resolution fails", async () => {
   await initializeGatewayExecCgroup("/state");
-  expect(getAgentExecCgroup()).toBe(exec);
+  expect(getAgentExecCgroup()).toBe(unscoped);
   fixture.devices = [];
   expect(await initializeGatewayExecCgroup("/state")).toContain("isolation unavailable");
   expect(getAgentExecCgroup()).toBeUndefined();
@@ -173,11 +174,54 @@ it("does not discover an earlier policy after state-device resolution fails", as
 it("discovers helper placement from its own delegated service and rechecks writability", async () => {
   expect(getAgentExecCgroup()).toBeUndefined();
   await initializeGatewayExecCgroup("/state");
-  expect(getAgentExecCgroup()).toBe(exec);
+  expect(getAgentExecCgroup()).toBe(unscoped);
   fixture.files["/proc/self/cgroup"] = "0::/system.slice/openclaw.service/agent-exec\n";
-  expect(getAgentExecCgroup()).toBe(exec);
+  expect(getAgentExecCgroup()).toBe(unscoped);
   fixture.writable = false;
   expect(getAgentExecCgroup()).toBeUndefined();
+});
+
+it("shares one half-budget across a session's commands and keeps other sessions separate", async () => {
+  fixture.devices = ["9:127"];
+  fixture.files["/sys/dev/block/9:127/queue/rotational"] = "0";
+  await initializeGatewayExecCgroup("/state");
+  const parentPolicy = fixture.files[`${exec}/io.max`];
+  const first = getAgentExecCgroup("agent:main:first");
+  expect(first).toMatch(new RegExp(`^${exec}/session-[a-f0-9]{32}$`));
+  expect(getAgentExecCgroup(" agent:main:first ")).toBe(first);
+  const second = getAgentExecCgroup("agent:main:second");
+  expect(second).not.toBe(first);
+  for (const directory of [first, second, getAgentExecCgroup()]) {
+    expect(fixture.files[`${directory}/io.max`]).toBe(
+      "9:127 rbps=131072000 wbps=131072000 riops=20480 wiops=20480",
+    );
+  }
+  expect(fixture.files[`${exec}/io.max`]).toBe(parentPolicy);
+  expect(fixture.files[`${exec}/cgroup.subtree_control`]).toBe("cpu io memory");
+  fixture.files["/proc/self/cgroup"] = `0::${first!.slice("/sys/fs/cgroup".length)}\n`;
+  expect(getAgentExecCgroup("agent:main:first")).toBe(first);
+  const handle = { pid: 321 };
+  expect(spawnInAgentExecCgroup(first, () => handle)).toBe(handle);
+  expect(fixture.write).toHaveBeenLastCalledWith(`${root}/gateway/cgroup.procs`, "0");
+});
+
+it("keeps failed session policy setup inside the prepared shared budget", async () => {
+  await initializeGatewayExecCgroup("/state");
+  const session = getAgentExecCgroup("agent:main:first");
+  fixture.denied = `${session}/io.max`;
+  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+  expect(getAgentExecCgroup("agent:main:first")).toBe(unscoped);
+  expect(warning).toHaveBeenCalledWith(expect.stringContaining("shared exec budget"));
+});
+
+it("retains a populated flat aggregate without changing or moving its commands", async () => {
+  await initializeGatewayExecCgroup("/state");
+  fixture.files[`${exec}/cgroup.subtree_control`] = "";
+  fixture.files[`${exec}/cgroup.procs`] = "123";
+  fixture.write.mockClear();
+  expect(await initializeGatewayExecCgroup("/state")).toContain("isolation deferred");
+  expect(fixture.write).not.toHaveBeenCalled();
+  expect(getAgentExecCgroup("agent:main:first")).toBe(exec);
 });
 
 it("preserves the spawned handle and reports a failed broker return to the Gateway leaf", () => {

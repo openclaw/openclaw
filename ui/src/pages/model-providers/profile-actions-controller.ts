@@ -19,7 +19,11 @@ import type {
   ModelProviderRemovalTarget,
 } from "./data.ts";
 import type { ModelProvidersData } from "./load.ts";
-import { showProfileActionError, showProfileLogoutSuccess } from "./profiles-view.tsx";
+import {
+  showProfileActionError,
+  showProfileActionWarning,
+  showProfileLogoutSuccess,
+} from "./profiles-view.tsx";
 import { updateRecordEntry } from "./record-state.ts";
 
 type PendingProfileOrder = {
@@ -195,7 +199,7 @@ export function createModelProviderProfileActions(options: {
             }
           }
           if (clearOptimisticOrder(provider, pending.optimisticOrder) && result.warning) {
-            showProfileActionError(result.warning);
+            showProfileActionWarning(result.warning);
           }
         } catch (error) {
           if (!isCurrent()) {
@@ -341,7 +345,7 @@ export function createModelProviderProfileActions(options: {
       const confirmed = await showConfirmDialog({
         title: removing
           ? t("modelProviders.remove.title", { provider: pending.label })
-          : t("modelProviders.logout.actionFor", { account: pending.label }),
+          : t("modelProviders.logout.title", { account: pending.label }),
         message: removing
           ? [
               pending.removeTargets.some((target) => !target.credentialType)

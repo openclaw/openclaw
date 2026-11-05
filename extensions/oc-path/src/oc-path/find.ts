@@ -10,6 +10,8 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isMap, isScalar, isSeq, type Document, type Node, type Pair } from "yaml";
 import type { AstBlock, AstItem, MdAst } from "./ast.js";
+import { walkMdFrontmatter } from "./find-md-frontmatter.js";
+import type { OnMatch, Slot, SlotSub, WalkContext } from "./find-types.js";
 import type { JsoncValue } from "./jsonc/ast.js";
 import { resolveJsoncPositionalSegment } from "./jsonc/resolve-value.js";
 import type { JsonlAst, JsonlLine } from "./jsonl/ast.js";
@@ -43,20 +45,6 @@ import { derefYamlNode, resolveYamlPositionalSegment } from "./yaml/resolve.js";
 interface OcPathMatch {
   readonly path: OcPath;
   readonly match: OcMatch;
-}
-
-type Slot = "section" | "item" | "field";
-interface SlotSub {
-  readonly slot: Slot;
-  readonly value: string;
-}
-
-type OnMatch = (subs: readonly SlotSub[]) => void;
-
-interface WalkContext {
-  onMatch: OnMatch;
-  visited: WeakMap<object, Set<string>>;
-  kind: OcAst["kind"];
 }
 
 export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[] {
@@ -546,30 +534,7 @@ function walkMd(
 
   // Frontmatter sentinel short-circuits regular dispatch.
   if (level.kind === "root" && walked.length === 0 && cur.value === "[frontmatter]") {
-    const next = subs[i + 1];
-    if (next === undefined) {
-      context.onMatch([{ slot: cur.slot, value: cur.value }]);
-      return;
-    }
-    if (isUnionSeg(next.value)) {
-      for (const alt of parseUnionSeg(next.value) ?? []) {
-        const altSubs = subs.slice();
-        altSubs[i + 1] = { slot: next.slot, value: alt };
-        walkMd(level, altSubs, i, walked, context);
-      }
-      return;
-    }
-    const wildcard = next.value === WILDCARD_SINGLE || next.value === WILDCARD_RECURSIVE;
-    const fmKey = unquoteSeg(next.value);
-    for (const fm of level.ast.frontmatter) {
-      if (!wildcard && fm.key !== fmKey) {
-        continue;
-      }
-      context.onMatch([
-        { slot: cur.slot, value: cur.value },
-        { slot: next.slot, value: quoteSeg(fm.key) },
-      ]);
-    }
+    walkMdFrontmatter(level.ast, subs, i, context);
     return;
   }
 

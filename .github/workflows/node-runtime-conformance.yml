@@ -40,6 +40,8 @@ on:
       - "src/infra/node-commands.ts"
       - "packages/normalization-core/**"
       - "!crates/openclaw-node-host/SIDECAR_PROTOCOL.md"
+      # Standalone Cargo workspace, not part of the shared crates/ build.
+      - "!crates/openclaw-iroh-node/**"
       - "!patches/README.md"
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]

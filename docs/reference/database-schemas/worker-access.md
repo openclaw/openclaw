@@ -119,8 +119,11 @@ Active accounting uses the independent history reader without reserving the
 agent database writer. Byte totals advance with actor appends and travel in its
 existing receipts, including when the full transcript is not resident. A reader
 borrows those totals only when the transcript version matches its native SQL
-snapshot; cold or changed snapshots retain their own accounting. Usage reads
-stay bounded and never expand to the complete active history.
+snapshot; cold or changed snapshots retain their own accounting. Actor readmission
+also reuses the admitted connection's exact-version totals when its prior resident
+state is absent. Metadata rewrites advance that version, and uncommitted writes
+still compute their own totals. Usage reads stay bounded and never expand to the
+complete active history.
 
 Entry reclamation derives each surviving row's transcript references once per
 synchronous deletion, even when several retained generations need a new owner.
@@ -3274,9 +3277,12 @@ Independent lease heartbeats for the same physical state database share one
 worker, native connection, and earliest-deadline timer. Due renewals update their
 exact owners in one statement, retaining each lease's own expiry and cleanup.
 Matching renewal intervals share a deadline; joining one may renew a lease early.
-The Gateway SQL owner renews every 30 seconds: one third of its 90-second stale
-heartbeat bound, which is shorter than its 300-second lease TTL. The separate
-filesystem owner still renews every 15 seconds. Startup identity repair and
+State leases renew at one third of their TTL without a fixed 30-second cap.
+The Gateway SQL owner renews every 100 seconds for its 300-second lease TTL;
+heartbeat age is diagnostic and never proves that an owner stopped. The separate
+filesystem owner still renews every 15 seconds. Renewal keeps its FULL commit
+durability: an in-progress commit can still hold SQLite's single writer lock.
+Startup identity repair and
 explicit verification retain their current checks. Closing one lease leaves its siblings running;
 closing the last joins native worker exit. Renewal remains independent of the
 Gateway event loop, including during concurrent worktree creation.

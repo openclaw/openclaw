@@ -87,6 +87,7 @@
     "onStartup": true
   },
   "controlUi": {
+    "panelIcon": "assets/panel-icon.svg",
     "entry": "dist/control-ui/60c08d9d3b59278097647bd1b8aa5c2ad6b102c4c93d91b4047f9033eba49aa0/index.js",
     "styles": [
       "dist/control-ui/60c08d9d3b59278097647bd1b8aa5c2ad6b102c4c93d91b4047f9033eba49aa0/index.css"

@@ -11,13 +11,18 @@ import type {
   SkillStatusEntry,
   SkillStatusReport,
 } from "../../api/types.ts";
+import { i18n } from "../../i18n/lib/translate.ts";
+import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import {
   createConfigMutationRunner,
   type ConfigMutationOwner,
 } from "../config/config-mutation-runner.ts";
 import { formatUiError, formatUiExternalText } from "../format-error.ts";
+import { registerEnglishCatalog } from "../reactive/i18n.ts";
 import type { ClawHubSearchResult } from "./clawhub-search.ts";
 import { loadSkillStatusReport } from "./status-report.ts";
+
+registerEnglishCatalog(registerSkillsBrowserEnglish);
 
 export type ClawHubSkillDetail = SkillsDetailResult;
 export type ClawHubSkillSecurityVerdict = SkillsSecurityVerdictsResult["items"][number];
@@ -463,7 +468,7 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
   }
 }
 
-export async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStatusReport) {
+async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStatusReport) {
   const client = state.client;
   const isCurrentAgent = captureSkillsAgentScope(state);
   retireSkillsRead(state.clawhubVerdictsRead);
@@ -596,7 +601,7 @@ export async function updateSkillEnabled(
     state,
     skillKey,
     { enabled },
-    enabled ? "Skill enabled" : "Skill disabled",
+    i18n.t(enabled ? "skillsPage.skillEnabled" : "skillsPage.skillDisabled"),
     canDispatch,
   );
 }
@@ -707,7 +712,7 @@ export async function installFromClawHub(state: SkillsState, ref: string, versio
     return {
       kind: "success",
       message: formatClawHubInstallMessage(
-        formatUiExternalText(result?.message, `Installed ${ref}`),
+        formatUiExternalText(result?.message, i18n.t("skillsPage.installedRef", { ref })),
         result?.warning ? formatUiExternalText(result.warning) : undefined,
       ),
     };

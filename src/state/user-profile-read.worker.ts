@@ -8,12 +8,18 @@ import {
 } from "./user-channel-identities.js";
 import { readUserChannelIdentityResult } from "./user-channel-identities.worker.js";
 import { readUserProfileCatalogIdentity } from "./user-profile-catalog-identity.read.js";
-import { readUserProfileGitHubCommand } from "./user-profile-github-identity.js";
+import {
+  readUserProfileGitHubCommand,
+  selectUserProfileGitHubIdentities,
+} from "./user-profile-github-identity.js";
 import {
   readUserProfileSnapshotCommand,
   selectUserProfileIdentityInDatabase,
 } from "./user-profile-identity.read.js";
-import { readUserProfileAvatarCommand } from "./user-profiles-internal.js";
+import {
+  inspectProfileAvatarInDatabase,
+  readUserProfileAvatarCommand,
+} from "./user-profiles-internal.js";
 
 /** Profile read kernels share the caller's admitted worker connection and error owner. */
 export function readUserProfileCommand(
@@ -54,6 +60,20 @@ export function readUserProfileCommand(
     case "userProfiles.catalog":
       return readUserProfileSnapshotCommand(db, command);
     case "userProfiles.avatar.inspect":
+      return runSqliteReadSnapshotSync(db, () => {
+        const inspection = inspectProfileAvatarInDatabase(db, command.profileId);
+        const profileId = inspection.profile?.id;
+        return {
+          type: command.type,
+          inspection: {
+            ...inspection,
+            githubAvatarUrl:
+              profileId && !inspection.avatar
+                ? selectUserProfileGitHubIdentities(db, [profileId]).get(profileId)?.avatarUrl
+                : undefined,
+          },
+        };
+      });
     case "userProfiles.avatar.read":
       return readUserProfileAvatarCommand(db, command);
   }

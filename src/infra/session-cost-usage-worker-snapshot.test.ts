@@ -46,14 +46,16 @@ const fixture = vi.hoisted(() => ({
 vi.mock("../state/openclaw-agent-db-readonly.js", () => ({
   withOpenClawAgentDatabaseReadOnly: fixture.withRead,
 }));
-// mock-isolation: Pause transcript discovery without loading the worker's retained refresh state.
+// mock-isolation: Avoid loading the worker's retained refresh state.
 vi.mock("./session-cost-usage-refresh-inputs.worker.js", () => ({
   createUsageCostCollectionAccess: () => ({ inventory: fixture.inventory }),
   usageRefreshInputs: vi.fn(),
 }));
-// mock-isolation: Supply captured aliases without opening a second native store in this worker test.
+// mock-isolation: Supply captured metadata and aliases without opening a second native store.
 vi.mock("./session-cost-usage-collection.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-cost-usage-collection.js")>()),
+  listUsageCountedTranscriptSources: fixture.inventory,
+  readUsageCostTranscriptSourceStats: async (sources: UsageCostTranscriptFile[]) => sources,
   resolveUsageCostTranscriptFiles: fixture.selectedFiles,
 }));
 

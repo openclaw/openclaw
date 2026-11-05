@@ -1,5 +1,9 @@
+import { writeFileSync } from "node:fs";
+import path from "node:path";
 import { afterAll, beforeAll, expect, it, onTestFinished } from "vitest";
 import { buildCapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
+import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import * as fixtures from "./plugins.e2e.test-support.ts";
 
 fixtures.describeControlUiE2e("Control UI plugin runtime actions", () => {
@@ -40,6 +44,20 @@ fixtures.describeControlUiE2e("Control UI plugin runtime actions", () => {
     const accept = button("Enable Calendar Plus", consent);
     await accept.waitFor({ state: "visible" });
     await expect.poll(() => accept.isEnabled()).toBe(true);
+    expect(await consent.textContent()).toContain("Modify prompts");
+    expect(await consent.textContent()).toContain("Only allow this for plugins you trust.");
+    expect(await consent.textContent()).toContain("Allowed (default)");
+    if (process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1") {
+      const dir = createControlUiE2eArtifactDir("prompt-permission-consent");
+      for (const width of [1440, 393]) {
+        const frame = await takeControlUiScreenshotFrame(page, consent, [accept], {
+          animations: "disabled",
+          viewport: { width, height: 1000 },
+        });
+        writeFileSync(path.join(dir, `consent-${width}.png`), frame.png);
+      }
+      await page.setViewportSize({ width: 1440, height: 1000 });
+    }
     await gateway.deferNext(setEnabled);
     await accept.click();
     const retry = await gateway.waitForRequest(setEnabled, { after: 1 });

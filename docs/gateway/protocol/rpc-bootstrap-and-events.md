@@ -99,7 +99,10 @@ Views are retained in least-recently-used order, with limits of 512 cache slots
 retention per projection. The estimate counts history identities, current row
 references and cached row/fact encodings, serialized array buffers, selection and
 partition entries, query keys, and view overhead. Shared current row encodings are
-counted once per projection, while packed replies are charged per view. This is a
+counted once per projection, while packed replies are charged per view. Selection
+refreshes remove superseded filtered partitions and their byte charges together;
+unchanged partitions remain reusable. This accounting does not depend on garbage
+collection. This is a
 retention estimate rather than whole-heap
 attribution. A response exceeding the budget is
 served without retaining its baseline. Eviction does not change authorization
@@ -494,6 +497,9 @@ or protocol-version change.
   Job definitions, run summaries, diagnostics, and delivery traces are omitted;
   use `cron.get`, `cron.list`, or `cron.runs` when displaying those details.
   Internal `cron_changed` plugin hooks still receive the full job snapshot.
+  A `finished` event already carries the next-run time; clients should not expect
+  a duplicate `scheduled` event for that same schedule. Quiet trigger evaluations
+  still publish `scheduled` when they advance the schedule without a completion.
 - `cron.inventory.changed`: payload-free notice after a committed cron definition
   change, including add, update, retarget, remove, and enable/disable changes.
   It reaches every operator connection admitted to read cron, including readers
@@ -652,6 +658,9 @@ deduplicated by resolved session and run ID. While the `system.run` invocation
 that started the run still waits for its result, the Gateway holds the finished
 notification: the caller receives the output inline, and the notification is queued
 only if that invocation then fails (timeout, cancellation or disconnect). A
+started, finished, or denied event that arrives after the caller already received
+a successful result inline produces no notification; a terminal event consumes
+the retained authorization. A
 heartbeat wake is requested only after a system event is queued.
 
 Node event delivery is best-effort, not a durable completion ledger.

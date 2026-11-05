@@ -29,6 +29,14 @@ struct OpenClawTypographyTests {
         #expect(!source.contains(".font(."))
     }
 
+    @Test func `ESP setup controls and secret prompts use branded typography`() throws {
+        let source = try String(contentsOf: Self.sourceURL("Settings/ESPDeviceSetupScreen.swift"), encoding: .utf8)
+        #expect(Self.unbrandedTextCallOffenders(in: source, relativePath: "ESPDeviceSetupScreen.swift").isEmpty)
+        #expect(source.contains("prompt: Text(title).font(OpenClawType.subhead)"))
+        #expect(source.contains(".accessibilityLabel(Text(title))"))
+        #expect(!source.contains("SecureField(\""))
+    }
+
     @Test func `About support links use the branded shared row`() throws {
         let settings = try String(contentsOf: Self.sourceURL("Design/SettingsProTabSections.swift"), encoding: .utf8)
         let supportRow = try Self.extract(settings, from: "title: \"Support\"", to: "!)")
@@ -47,9 +55,11 @@ struct OpenClawTypographyTests {
         #expect(settings.contains("Text(verbatim: target.origin.url.absoluteString)"))
         #expect(settings.contains(".fixedSize(horizontal: false, vertical: true)"))
         #expect(settings.contains(".textSelection(.enabled)"))
-        let dashboard = try String(contentsOf: Self.sourceURL("Settings/DashboardPageScreen.swift"), encoding: .utf8)
-        #expect(dashboard.contains("Text(\"Open Gateway settings\")"))
-        #expect(dashboard.contains(".font(OpenClawType.body)"))
+        let embeddedDashboard = try String(
+            contentsOf: Self.sourceURL("Settings/SettingsHubScreen.swift"),
+            encoding: .utf8)
+        #expect(embeddedDashboard.contains("Text(\"Open Gateway settings\")"))
+        #expect(embeddedDashboard.contains(".font(OpenClawType.subheadSemiBold)"))
     }
 
     @Test(arguments: ["ChatFileAttachment.swift", "ChatMessageReactions.swift"])

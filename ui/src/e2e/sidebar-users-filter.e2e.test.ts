@@ -208,8 +208,9 @@ suite.define(() => {
         await usersTitle.getByText("Users", { exact: true }).waitFor();
         const titleStyle = (title: typeof usersTitle) =>
           title.evaluate((element) => {
-            const { color, fontSize, fontWeight } = getComputedStyle(element);
-            return { color, fontSize, fontWeight };
+            const { color, fontSize, fontWeight, letterSpacing, textTransform } =
+              getComputedStyle(element);
+            return { color, fontSize, fontWeight, letterSpacing, textTransform };
           });
         const usersTitleStyle = await titleStyle(usersTitle);
         await rail.click();
@@ -260,6 +261,8 @@ suite.define(() => {
         await page.locator('[data-navigation-view="sessions"]').click();
         await header.locator(".sidebar-session-sort").waitFor();
         expect(await headerGeometry()).toEqual(usersGeometry);
+        await usersTitle.getByText("Sessions", { exact: true }).waitFor();
+        expect(await titleStyle(usersTitle)).toEqual(usersTitleStyle);
       },
     ));
 });

@@ -28,6 +28,26 @@ it("packs all-row facts without encoding their identical recipient lists", () =>
   expect(packed.sessions.map((value) => value.sharedFacts)).toEqual([[0], [0], [0]]);
 });
 
+it("does not reread required row facts when only a sibling identity changes", () => {
+  let reads = 0;
+  const stable: GatewaySessionRow = Object.freeze({
+    get key() {
+      reads++;
+      return "stable";
+    },
+    kind: "direct",
+    updatedAt: 1,
+    label: "Stable",
+    pinned: false,
+  });
+  const sibling = { ...row, label: "Sibling", pinned: false };
+  const first = shareSessionRowFacts([stable, sibling]);
+  reads = 0;
+  const changed = shareSessionRowFacts([stable, { ...sibling, updatedAt: 2 }]);
+  expect(changed.sessions[0]).toBe(first.sessions[0]);
+  expect(reads).toBe(0);
+});
+
 let cache: SessionListViewCache;
 let reports: { views: number; refs: number; estimatedBytes: number }[];
 let retirements: string[];

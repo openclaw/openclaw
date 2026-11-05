@@ -169,6 +169,31 @@ describe("process supervisor", () => {
     await run.wait();
   });
 
+  it("keeps shared session budgets separate from individual command cancellation", async () => {
+    const stopped = prepare(terminating());
+    const sibling = prepare();
+    const other = prepare();
+    const runs = await Promise.all([
+      spawn({ runId: "first", scopeKey: "session-a", executionIntent: "agent-tool" }),
+      spawn({ runId: "second", scopeKey: "session-a", executionIntent: "agent-tool" }),
+      spawn({ runId: "third", scopeKey: "session-b", executionIntent: "agent-tool" }),
+    ]);
+    expect(child.mock.calls.map(([input]) => input.executionScopeKey)).toEqual([
+      "session-a",
+      "session-a",
+      "session-b",
+    ]);
+    supervisor.cancel("first");
+    await expect(runs[0]!.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
+    expect(stopped.killMock).toHaveBeenCalledExactlyOnceWith("SIGTERM");
+    expect(sibling.killMock).not.toHaveBeenCalled();
+    expect(other.killMock).not.toHaveBeenCalled();
+    sibling.settle(0);
+    other.settle(0);
+    await Promise.all(runs.map((run) => run.wait()));
+    await supervisor.shutdown();
+  });
+
   it("coalesces overlapping Windows deadlines while hard kill is pending", async () => {
     vi.useFakeTimers();
     mockProcessPlatform("win32");

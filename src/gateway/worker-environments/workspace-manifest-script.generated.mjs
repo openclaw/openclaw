@@ -67,6 +67,7 @@ export async function runWorkspaceManifestProgram(
     ".cache/openclaw/bun",
     ".cache/ms-playwright",
     ".local/share/pnpm/store",
+    "artifacts/task-environment/local/share/pnpm/store",
     ".openclaw/.pnpm-store",
     ".openclaw/tools",
     ".artifacts/vitest-workers",

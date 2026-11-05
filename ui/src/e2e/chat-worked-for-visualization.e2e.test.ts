@@ -200,15 +200,17 @@ suite.define(() => {
             expect(await workedFor.getAttribute("aria-expanded")).toBe(String(expanded));
             expect(await widget.count()).toBe(1);
             expect(await browser.count()).toBe(1);
-            const overlaps = await page.locator(".chat-virtual-row").evaluateAll((elements) => {
-              const rects = elements.map((element) => element.getBoundingClientRect());
-              return rects.flatMap((rect, index) => {
-                const next = rects[index + 1];
-                return next && rect.bottom > next.top
-                  ? [{ bottom: rect.bottom, nextTop: next.top }]
-                  : [];
+            const overlaps = await page
+              .locator(".chat-virtual-row:not([data-prepared-row])")
+              .evaluateAll((elements) => {
+                const rects = elements.map((element) => element.getBoundingClientRect());
+                return rects.flatMap((rect, index) => {
+                  const next = rects[index + 1];
+                  return next && rect.bottom > next.top
+                    ? [{ bottom: rect.bottom, nextTop: next.top }]
+                    : [];
+                });
               });
-            });
             expect(overlaps).toEqual([]);
           }
         },

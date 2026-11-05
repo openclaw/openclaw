@@ -244,7 +244,7 @@ suite.define(() => {
         await expectBrowser(panel.locator(".header-search__toggle")).toBeVisible();
         await page.keyboard.type("zz");
         await expectBrowser(search).toHaveValue("zz");
-        await expectBrowser(panel).toContainText("No matching people or agents");
+        await expectBrowser(panel).toContainText("No people or agents match your search.");
         await page.keyboard.press("Escape");
         await expectBrowser(search).toBeHidden();
         await page.keyboard.type("carol");

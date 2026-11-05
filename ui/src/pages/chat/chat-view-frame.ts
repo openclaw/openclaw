@@ -17,7 +17,6 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isSessionRunVisuallyActive } from "../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import {
@@ -106,6 +105,7 @@ export type ChatProps = Omit<
     // Resolve after the first pane frame prepares the Solid owner's permission facts.
     readProviderReview?: () => ChatProviderReviewOwner | undefined;
     error: string | null;
+    errorDetail?: unknown;
     diskSpace?: SessionPlacementDiskSpace;
     workerRuntimeInstall?: SessionPlacementWorkerRuntimeInstall;
     inlineApproval?: ExecApprovalRequest | null;
@@ -203,10 +203,6 @@ export function createChatViewFrame(
             if (props.readSignal?.aborted) {
               return true;
             }
-            if (!selectionContextOnly && !uploadsEnabled(props.uploadConfig)) {
-              showToast({ message: uploadsDisabledMessage() });
-              return false;
-            }
             const attachment = createChatSelectionAttachment(
               { ...selection, comment, sessionKey: props.sessionKey },
               { attachmentLimits: props.attachmentLimits, selectionContextOnly },
@@ -226,7 +222,7 @@ export function createChatViewFrame(
       );
     } catch (error) {
       if (current()) {
-        showToast({ message: formatUiError(error) });
+        showToast({ severity: "error", message: formatUiError(error) });
       }
     }
   };
@@ -307,7 +303,7 @@ export function createChatViewFrame(
     commentAttachments: props.suggestionComposer ? undefined : props.attachments,
     commentsDisabled: !canCompose || Boolean(props.readSignal?.aborted),
     onAddToChat:
-      props.canSend && !props.suggestionComposer && uploadsEnabled(props.uploadConfig)
+      props.canSend && !props.suggestionComposer
         ? (selection, anchorRect) =>
             void openSelectionComment(
               selection,

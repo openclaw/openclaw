@@ -27,6 +27,7 @@ import {
   SettingsStatus,
   SettingsToggleRow,
   SettingsValue,
+  SettingsUnavailable,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerAppsEnglish } from "../../i18n/locales/en-apps.ts";
@@ -36,6 +37,7 @@ import { projectNativeDeviceSettings } from "../../lib/reactive/application-nati
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
+import { LaunchAtLoginSetting } from "./launch-at-login-setting.tsx";
 import "./device.css";
 
 registerEnglishCatalog(registerAppsEnglish);
@@ -460,17 +462,7 @@ export function DevicePage() {
               label="iconAnimations"
               description={t("configPage.deviceSettings.iconAnimationsHint")}
             />
-            <Toggle
-              setting="app.launchAtLogin"
-              checked={props.snapshot.app!.launchAtLogin}
-              label="launchAtLogin"
-              description={
-                props.snapshot.app!.launchAtLoginAvailable === false
-                  ? t("configPage.deviceSettings.launchAtLoginUnavailable")
-                  : undefined
-              }
-              disabled={props.snapshot.app!.launchAtLoginAvailable === false}
-            />
+            <LaunchAtLoginSetting app={props.snapshot.app!} />
             <GatewayHosting app={props.snapshot.app!} />
             <Toggle
               setting="app.quickChatEnabled"
@@ -690,7 +682,11 @@ export function DevicePage() {
         <SettingsPage>
           <Show
             when={capability}
-            fallback={<SettingsEmpty message={t("configPage.deviceSettings.appOnly")} />}
+            fallback={
+              <SettingsSection>
+                <SettingsUnavailable message={t("configPage.deviceSettings.appOnly")} />
+              </SettingsSection>
+            }
           >
             <Show
               when={Boolean(snapshot())}

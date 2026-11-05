@@ -523,6 +523,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                   summaryOutputPolicy,
                   {
                     requestBudget: accountingRecorder?.requestBudget,
+                    requestFromEntryId: accountingRecorder?.requestFromEntryId,
                     pendingUserEntryId: accountingRecorder?.pendingUserEntryId,
                     onSummaryReady: () => {
                       summaryReady = true;

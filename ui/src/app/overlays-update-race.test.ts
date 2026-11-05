@@ -165,7 +165,8 @@ describe("update run response races", () => {
         },
         () => (timing === "reconnect" ? {} : { run: found }),
       );
-      const outcome = timing === "disconnect" ? "outcome is unknown" : "Admission reply lost";
+      const outcome =
+        timing === "disconnect" ? "Couldn’t confirm the update outcome." : "Admission reply lost";
       await flushMicrotasks();
       const operation = settleAtCleanup(overlays.runUpdate());
       await flushMicrotasks();

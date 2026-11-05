@@ -54,6 +54,10 @@ workspace, `skills/` wins over `.agents/skills/`. Both directories participate i
 snapshot refresh and sandbox synchronization. Sandboxed runs read the
 materialized copies, not the original host paths.
 
+After a Gateway restart, sandbox skill synchronization compares existing copies
+with the current source content. Unchanged files are retained; changed or removed
+instructions and supporting files are reconciled before the turn uses them.
+
 Managed worktree sessions keep their recorded source workspace as the skill
 source. That source is read and watched on the Gateway, even when a File Transfer
 plugin serves the agent workspace from a paired node. The node reads its configured
@@ -170,7 +174,7 @@ skill. Different owners can use the same friendly name without one skill
 silently replacing another.
 
 <Warning>
-A shared Gateway remains [one trust domain](/start/teams#one-trust-boundary).
+A shared Gateway remains [one trust domain](/start/multiplayer#one-trust-boundary).
 Skills attached to a shared session are inputs to that session, not secret
 storage. Library ownership governs management and discovery; it does not grant
 new tools, credentials, host installation rights, or isolation from the Gateway

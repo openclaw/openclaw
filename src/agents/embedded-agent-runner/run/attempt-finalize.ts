@@ -376,7 +376,7 @@ export async function completeEmbeddedAttemptAfterTurn(
         sourceTarget && terminalEntry && reachedPromptBoundary
           ? captureCompletedTurnMessageAnchor(sessionManager, terminalEntry.id)
           : undefined,
-      skillExperienceReviewSource:
+      completedTurnSource:
         sourceTarget && terminalEntry && reachedPromptBoundary
           ? { ...sourceTarget, entryId: terminalEntry.id }
           : undefined,

@@ -508,7 +508,7 @@ export async function finalizeCodexAttempt(
       (diagnostic) => diagnostic.type === "provider_refusal",
     );
     await runCodexAgentEndHook(params, {
-      skillExperienceReviewSource: providerRefusal ? undefined : terminalAnchor,
+      completedTurnSource: providerRefusal ? undefined : terminalAnchor,
       event: {
         messages: buildCodexAgentEndMessages(params, result.messagesSnapshot, activeTurnId),
         success: !finalAborted && !finalPromptError,

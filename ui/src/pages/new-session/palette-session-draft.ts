@@ -4,6 +4,7 @@ import { closeMenusWithin } from "../../components/solid/menu.tsx";
 import { t } from "../../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -41,7 +42,7 @@ export class PaletteSessionDraft {
     this.callbacks.changed();
   }
   setSubmissionError(error: unknown) {
-    this.draft?.submission.setError(error instanceof Error ? error.message : String(error));
+    this.draft?.submission.setError(formatUiError(error));
   }
   private slot: PaletteDraftSlot | undefined;
   private get draft(): NewSessionDraft | undefined {
@@ -202,7 +203,7 @@ export class PaletteSessionDraft {
     this.synchronizePresentationScope();
     const props = this.attachmentProps();
     if (this.read().open && !this.messageLocked && props) {
-      handleChatAttachmentPaste(event, props, { imagesOnly: true });
+      handleChatAttachmentPaste(event, props);
     }
   };
 
@@ -562,7 +563,7 @@ export class PaletteSessionDraft {
       }
     };
     showToast({
-      fifo: true,
+      severity: result.initialRun.status === "rejected" ? "error" : undefined,
       message: `${resolveSessionDisplayName(result.key, row)}: ${status}`,
       actionLabel: t("sessionsView.openSession"),
       onAction: openSession,

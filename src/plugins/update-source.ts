@@ -410,18 +410,6 @@ function normalizeExactSemverVersion(value: string | undefined): string | undefi
   return trimmed.startsWith("v") ? trimmed.slice(1) : trimmed;
 }
 
-export function isTrustedSourceLinkedOfficialNpmUpdate(params: {
-  pluginId: string;
-  spec: string | undefined;
-  record: PluginInstallRecord;
-}): boolean {
-  const officialSpec =
-    officialInstallRecords.resolveTrustedSourceLinkedOfficialNpmInstall(params)?.npmSpec;
-  const officialPackageName = resolveNpmSpecPackageName(officialSpec);
-  const requestedPackageName = resolveNpmSpecPackageName(params.spec);
-  return Boolean(officialPackageName && requestedPackageName === officialPackageName);
-}
-
 export function isTrustedSourceLinkedOfficialBridgeNpmInstall(params: {
   targetPluginId: string;
   npmSpec: string | undefined;

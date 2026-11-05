@@ -20,6 +20,8 @@ const PHASES = [
 ] as const;
 type ChatSendPhase = (typeof PHASES)[number] | `detail.${string}`;
 type PostAckStage = "startup" | "steer" | "queued";
+const DEPENDENCY_RETIRE_VERIFY =
+  "attempt.setup.sandbox.workspace_selection.prepare.reconcile.dependency.retire.verify";
 
 export type ChatSendDiagnostics = ReturnType<typeof startChatSendDiagnostics>;
 
@@ -47,6 +49,7 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
   let stage: "request" | PostAckStage = "request";
   let startedAt = performance.now();
   let acknowledgedMs: number | undefined;
+  let dependencyRetireVerifyAttempts = 0;
   let finished = false;
   let identity: { sessionId: string; runId: string } | undefined;
 
@@ -57,6 +60,7 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
     const slow = elapsedMs >= 1_000;
     if (!slow && !emit) {
       totals.clear();
+      dependencyRetireVerifyAttempts = 0;
       startedAt = now;
       return elapsedMs;
     }
@@ -89,12 +93,16 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
         }
       }
       if (slow) {
+        if (dependencyRetireVerifyAttempts) {
+          message += ` detail.${DEPENDENCY_RETIRE_VERIFY}.attempts=${dependencyRetireVerifyAttempts}`;
+        }
         log.info(message);
       }
     } catch {
       // Diagnostic failures must not change acknowledgement or dispatch outcomes.
     }
     totals.clear();
+    dependencyRetireVerifyAttempts = 0;
     startedAt = now;
     return elapsedMs;
   };
@@ -134,6 +142,9 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
       if (durationMs !== undefined) {
         totals.set(phase, (totals.get(phase) ?? 0) + durationMs);
         return undefined;
+      }
+      if (spanName === DEPENDENCY_RETIRE_VERIFY) {
+        dependencyRetireVerifyAttempts++;
       }
       return scope(phase)?.finish;
     },

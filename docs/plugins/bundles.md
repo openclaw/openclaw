@@ -85,6 +85,18 @@ detected but not wired.
 | LSP servers              | Claude `.lsp.json` and manifest-declared `lspServers` merged into embedded OpenClaw LSP defaults  | Claude         |
 | Settings                 | Claude `settings.json` imported as embedded OpenClaw defaults                                     | Claude         |
 
+#### Recommended prompts
+
+Codex bundles can advertise starter prompts with `interface.defaultPrompt` in
+`.codex-plugin/plugin.json`. OpenClaw accepts a string or an array of up to three
+non-empty strings. Portable Agent Plugins use the same field under
+`extensions["com.openai"].interface.defaultPrompt` in root `plugin.json`.
+
+These normalize to OpenClaw's [recommended prompt metadata](/plugins/manifest#recommended-prompts).
+Only outer whitespace is trimmed; internal whitespace and full text are preserved.
+An invalid declaration is ignored as a whole with a warning, not silently shortened.
+Reading these recommendations never executes bundle content.
+
 #### Skill content
 
 - Bundle skill roots load as normal OpenClaw skill roots.

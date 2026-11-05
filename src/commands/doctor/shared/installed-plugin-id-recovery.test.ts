@@ -119,6 +119,7 @@ it.each([
       const cfg = { agents: { defaults: { workspace: state.path("workspace") } }, plugins };
       await state.writeConfig({
         ...cfg,
+        meta: { migrations: { skillWorkshopPlugin: true } },
         gateway: {
           mode: "local",
           auth: rotatesEnv ? { mode: "token", token: "${ROOT_VALUE}" } : undefined,

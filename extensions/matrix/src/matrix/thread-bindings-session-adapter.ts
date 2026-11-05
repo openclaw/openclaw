@@ -1,11 +1,11 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isPluginOwnedSessionBindingRecord } from "openclaw/plugin-sdk/conversation-binding-runtime";
-import { isAcpSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveThreadBindingFarewellText,
+  resolveThreadBindingTargetKind,
   type SessionBindingAdapterV2,
 } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import type { MatrixClient } from "./sdk.js";
@@ -182,31 +182,18 @@ export function createMatrixSessionBindingAdapter(
           : undefined),
         ...input.metadata,
       };
-      let targetKind: MatrixThreadBindingRecord["targetKind"] = input.targetKind;
-      if (targetKind === "session") {
-        if (isAcpSessionKey(targetSessionKey)) {
-          targetKind = "acp";
-        } else if (!isPluginOwnedSessionBindingRecord({ metadata })) {
-          const { readAcpSessionEntryAsync } = await import("openclaw/plugin-sdk/acp-runtime");
-          const session = await readAcpSessionEntryAsync({
-            cfg: params.cfg,
-            sessionKey: targetSessionKey,
-            agentId: normalizeOptionalString(metadata.agentId),
-            assertCurrent: () => {
-              assertManagerCurrent();
-              input.assertCurrent?.();
-            },
-          });
-          if (session?.storeReadFailed) {
-            throw new Error(
-              "Matrix binding target could not be classified; retry when session storage is available.",
-            );
-          }
-          if (session?.acp) {
-            targetKind = "acp";
-          }
-        }
-      }
+      const targetKind = await resolveThreadBindingTargetKind({
+        cfg: params.cfg,
+        targetSessionKey,
+        targetKind: input.targetKind,
+        metadata,
+        agentId: normalizeOptionalString(metadata.agentId),
+        channel: "Matrix",
+        assertCurrent: () => {
+          assertManagerCurrent();
+          input.assertCurrent?.();
+        },
+      });
 
       assertAcceptingMutation();
       input.assertCurrent?.();

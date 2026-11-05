@@ -226,6 +226,14 @@ function anonymizeOperatorSource(
     return { source: { version: 1 }, executionRevision: "execution-1" } as never;
   }
   const { snapshot } = source;
+  const fixtureBase = {
+    profileId: "profile-1",
+    scopes: [...snapshot.scopes],
+    assignedRole: snapshot.assignedRole === null ? null : "role",
+    githubLogin: null,
+    grant: null,
+    aliasBindingIds: [],
+  };
   return {
     executionRevision: "execution-1",
     source: {
@@ -235,23 +243,31 @@ function anonymizeOperatorSource(
       sessionId: "parent-session",
       ...(source.lifecycleRevision ? { lifecycleRevision: "rev-1" } : {}),
       sourceRunId: "source-run",
-      snapshot: {
-        profileId: "profile-1",
-        scopes: [...snapshot.scopes],
-        assignedRole: snapshot.assignedRole === null ? null : "role",
-        githubLogin: null,
-        grant: null,
-        aliasBindingIds: [],
-        authPolicy: {
-          generation: "",
-          grantGeneration: "generation",
-          role: "operator",
-          authMethod: snapshot.authPolicy.authMethod,
-        },
-        controlUiAdmin: snapshot.controlUiAdmin,
-        localOperator: snapshot.localOperator,
-        sourceIngress: snapshot.sourceIngress,
-      },
+      snapshot:
+        snapshot.sourceIngress === "principal"
+          ? {
+              ...fixtureBase,
+              sourceIngress: "principal",
+              ingress: {
+                pluginId: "plugin-1",
+                audienceId: "audience-1",
+                recoveryId: "issuance-1",
+              },
+              controlUiAdmin: false,
+              localOperator: false,
+            }
+          : {
+              ...fixtureBase,
+              authPolicy: {
+                generation: "",
+                grantGeneration: "generation",
+                role: "operator",
+                authMethod: snapshot.authPolicy.authMethod,
+              },
+              controlUiAdmin: snapshot.controlUiAdmin,
+              localOperator: snapshot.localOperator,
+              sourceIngress: snapshot.sourceIngress,
+            },
     },
   };
 }

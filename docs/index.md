@@ -93,7 +93,7 @@ these hub links to reach the same top-level docs areas from the page body.
 
 OpenClaw is a **self-hosted gateway** that connects your favorite chat apps — Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more via channel plugins — to AI coding agents. You run a single Gateway process on your own machine (or a server), and it becomes the bridge between your messaging apps and an always-available AI assistant.
 
-**Who is it for?** Developers, power users, and teams who want an AI assistant they can message from anywhere — without giving up control of their data or relying on a hosted service. The same gateway runs as a personal assistant on one laptop or as a shared [team deployment](/start/teams); configuration is the only difference.
+**Who is it for?** Developers, power users, and teams who want an AI assistant they can message from anywhere — without giving up control of their data or relying on a hosted service. The same gateway runs as a personal claw on one laptop or as a shared [multiplayer claw](/start/multiplayer); configuration is the only difference.
 
 **What makes it different?**
 
@@ -176,15 +176,15 @@ The Gateway is the single source of truth for sessions, routing, and channel con
   </Step>
   <Step title="Complete onboarding">
     Onboarding offers **Quick start** and **Custom setup**. Quick start reuses
-    detected AI access, verifies it with a real completion, and opens the web
-    dashboard with a Gateway in the foreground. Custom setup walks the full
+    detected AI access, verifies it with a real completion, offers to keep the
+    Gateway running in the background, and opens the web dashboard. Custom setup walks the full
     guided flow. `openclaw onboard --classic` opens the classic step-by-step
     wizard instead.
 
   </Step>
   <Step title="Install the Gateway service">
-    Quick start leaves the Gateway in the foreground. Press **Ctrl+C**, then
-    install the background service:
+    Skip this step if you accepted Quick start's background question. Otherwise,
+    press **Ctrl+C**, then install the background service:
 
     ```bash
     openclaw gateway install

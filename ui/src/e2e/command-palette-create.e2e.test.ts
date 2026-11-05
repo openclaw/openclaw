@@ -476,7 +476,7 @@ suite.define(() => {
         code: "INVALID_REQUEST",
         message: "Fixture denied creation; correct the request and retry.",
       });
-      await expect.poll(() => toast.textContent()).toContain("Session didn't start");
+      await expect.poll(() => toast.textContent()).toContain("Couldn’t start the session");
       expect(await toast.textContent()).toContain("Fixture denied creation");
       await toast.getByRole("button", { name: "Try again", exact: true }).click();
       const retry = await gateway.waitForRequest("sessions.create", { after: 2 });

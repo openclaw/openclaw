@@ -4,7 +4,7 @@ import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
-import { hasOperatorReadAccess } from "../../app/operator-access.ts";
+import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import { enableHostDesktop as enableHostDesktopConfig } from "../../components/desktop/host-desktop-setup.ts";
 import { t } from "../../i18n/index.ts";
@@ -459,6 +459,8 @@ export function createSystems(context: ApplicationContext) {
     },
     storageProbeRead: (name: string) => storageProbeRequests.get(name)?.read ?? null,
     desktopAvailable,
+    desktopAccessDenied: () =>
+      !hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null),
     selected,
     hostDesktopEnabled,
     desktopSetupBusy,

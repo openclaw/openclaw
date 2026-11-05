@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { wrapRunWithTestPreparedAdmission } from "../admitted-run-context.test-support.js";
 import {
@@ -19,6 +19,7 @@ import { applyCliSessionBindingResult, getCliSessionBinding } from "../cli-sessi
 import * as cliTranscript from "../command/attempt-execution.helpers.js";
 import { resolveDiagnosticModelResponse } from "../diagnostic-model-response.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "../embedded-agent-runner/result-fallback-classifier.js";
+import { hasModelFallbackStop, resolveModelFallbackError } from "../failover-error.js";
 import {
   buildBlockedCliRunResult,
   buildCliDeliveredFailure,
@@ -114,9 +115,7 @@ function mcpFixture(sessionId: string) {
 }
 
 function expectOutcome(promise: Promise<unknown>, expected: unknown, rejected: boolean) {
-  return rejected
-    ? expect(promise).rejects.toBe(expected)
-    : expect(promise).resolves.toBe(expected);
+  return expect(promise)[rejected ? "rejects" : "resolves"].toBe(expected);
 }
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
@@ -389,6 +388,93 @@ it.each([false, true])("rejects undefined after cleanup failure=%s", async (clea
   expect(cleanup).toHaveBeenCalledOnce();
 });
 
+it.each(["execution", "authority", "undefined", "optional"] as const)(
+  "preserves required backend cleanup failure through %s settlement",
+  async (stage) => {
+    const context = buildPreparedCliRunContext();
+    const original =
+      stage === "undefined" ? undefined : Object.freeze(new Error(`${stage} failed`));
+    const cleanup = new Error("backend cleanup failed");
+    const entered = createDeferred();
+    const held = createDeferred();
+    const release = async () => {
+      entered.resolve();
+      await held.promise;
+    };
+    if (stage === "optional") {
+      context.params.cleanupCliLiveSessionOnRunEnd = true;
+      context.preparedBackend.closeLiveSession = release;
+    } else {
+      context.preparedBackend.cleanup = release;
+    }
+    if (stage === "authority") {
+      context.params.assertCurrent = () => {
+        // oxlint-disable-next-line typescript/only-throw-error -- Keep the original JavaScript failure value at the authority boundary.
+        throw original;
+      };
+    }
+    let finished = false;
+    const settled = settlePreparedCliRun({
+      context,
+      run:
+        stage !== "authority"
+          ? async () => {
+              // oxlint-disable-next-line typescript/only-throw-error -- Exercise primitive rejection without changing the initiating failure value.
+              throw original;
+            }
+          : async () => ({ payloads: [{ text: "pending" }], meta: { durationMs: 1 } }),
+    }).finally(() => {
+      finished = true;
+    });
+    const failure = settled.catch((error: unknown) => error);
+    try {
+      await awaitGateBeforeSettlement(entered.promise, settled, "backend cleanup was skipped");
+      expect(finished).toBe(false);
+      held.reject(cleanup);
+      const error = await failure;
+      if (original) {
+        expect(error).toBe(original);
+      } else {
+        expect(error).toEqual(new Error("undefined"));
+      }
+      expect(hasModelFallbackStop(error)).toBe(stage !== "optional");
+      if (stage !== "optional") {
+        expect(resolveModelFallbackError(error)).toEqual({ kind: "terminal", error });
+      }
+    } finally {
+      held.resolve();
+      await failure;
+    }
+  },
+);
+
+it("refuses replacement after required one-shot backend cleanup exceeds the reporting budget", async () => {
+  vi.useFakeTimers();
+  const held = createDeferred();
+  const entered = createDeferred();
+  const context = buildPreparedCliRunContext();
+  context.params.oneShotCliRun = true;
+  context.preparedBackend.cleanup = async () => {
+    entered.resolve();
+    await held.promise;
+  };
+  const settled = settlePreparedCliRun({ context, run: async () => ({ meta: { durationMs: 1 } }) });
+  const failure = settled.catch((error: unknown) => error);
+  try {
+    await awaitGateBeforeSettlement(entered.promise, settled, "backend cleanup was skipped");
+    await vi.advanceTimersByTimeAsync(10_001);
+    const error = await failure;
+    expect(hasModelFallbackStop(error)).toBe(true);
+    expect(error).toMatchObject({
+      message: expect.stringContaining("resource replacement refused"),
+    });
+  } finally {
+    held.resolve();
+    await settled.catch(() => {});
+    vi.useRealTimers();
+  }
+});
+
 it.each(["progress", "ambiguous", "final"] as const)(
   "requires final source delivery to preserve a %s message through cleanup failure",
   async (delivery) => {
@@ -418,6 +504,7 @@ it.each(["Done", ""])("captures only the final CLI result %j after narration", (
   const output = transformCliResultText({ text, textParts, rawFinalText });
   const result = testRunResult({ output });
   expect(result.meta.finalAssistantRawText).toBe(text);
+  expect(result.meta.finalAssistantVisibleText).toBe(rawFinalText || undefined);
   expect(resolveDiagnosticModelResponse(result)).toBe(rawFinalText || undefined);
 });
 

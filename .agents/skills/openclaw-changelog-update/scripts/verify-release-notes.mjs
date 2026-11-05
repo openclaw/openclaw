@@ -42,6 +42,7 @@ const excludedHandles = new Set([
   "codex",
   "hugin-bot",
   "roboclaw-bot",
+  "tideclaw-bot",
   "steipete-oai",
 ]);
 const nonEditorialTypes = new Set([
@@ -244,6 +245,34 @@ function gitIsAncestor(base, target) {
   }
   return fail(
     `could not validate release range ancestry for ${base}..${target}: ${
+      result.stderr?.trim() || result.signal || result.status
+    }`,
+  );
+}
+
+function gitMergeBase(base, target) {
+  const result = spawnSync("git", ["merge-base", base, target], {
+    encoding: "utf8",
+    env: { ...process.env, NO_COLOR: "1" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.status === 0 && result.stdout.trim()) {
+    return result.stdout.trim();
+  }
+
+  const shallow = spawnSync("git", ["rev-parse", "--is-shallow-repository"], {
+    encoding: "utf8",
+    env: { ...process.env, NO_COLOR: "1" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (shallow.status === 0 && shallow.stdout.trim() === "true") {
+    return fail(
+      `could not resolve release range merge base for ${base}..${target}: this checkout is shallow; fetch complete history (for example, git fetch --unshallow origin) and retry`,
+    );
+  }
+
+  return fail(
+    `could not resolve release range merge base for ${base}..${target}: ${
       result.stderr?.trim() || result.signal || result.status
     }`,
   );
@@ -2748,7 +2777,7 @@ function main() {
     if (!options.shippedRefs.includes(options.base)) {
       options.shippedRefs.push(options.base);
     }
-    options.base = git(["merge-base", options.base, options.target]);
+    options.base = gitMergeBase(options.base, options.target);
   }
   const rootDir = process.cwd();
   if (options.releaseBranch && !gitIsAncestor(options.target, options.releaseBranch)) {

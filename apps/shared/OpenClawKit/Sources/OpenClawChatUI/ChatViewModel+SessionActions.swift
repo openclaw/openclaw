@@ -133,6 +133,7 @@ extension OpenClawChatViewModel {
     @discardableResult
     func performStartNewSession(
         agentID: String? = nil,
+        inheritCurrentSession: Bool = false,
         worktree: Bool,
         worktreeBaseRef: String? = nil,
         routeLease: OpenClawChatNewSessionRouteLease? = nil) async -> Bool
@@ -151,7 +152,8 @@ extension OpenClawChatViewModel {
                 self.activeAgentId ??
                 OpenClawChatSessionKey.agentID(from: self.resolvedMainSessionKey))?
             .lowercased()
-        let parentSessionKey = requestedAgentID == nil || requestedAgentID == currentAgentID
+        // Global/sidebar creation uses Gateway defaults; only in-chat /new inherits.
+        let parentSessionKey = inheritCurrentSession && (requestedAgentID == nil || requestedAgentID == currentAgentID)
             ? self.sessionKey
             : nil
         let next: String

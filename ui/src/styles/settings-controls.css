@@ -40,6 +40,11 @@ select.settings-select:not([multiple]) {
   height: 16px;
 }
 
+/* A section with only actions keeps them on the trailing edge. */
+.settings-section__actions:only-child {
+  margin-inline-start: auto;
+}
+
 /* One segmented control. Its height is the surrounding control height, so it
    always matches the inputs and buttons beside it; --compact is the only other
    size, for dense menu rows. The surface keeps its 2px inset. Many-option enums
@@ -168,7 +173,7 @@ select.settings-select:not([multiple]) {
   }
 }
 
-@media (max-width: 768px) {
+@media (max-width: 640px) {
   .settings-segmented__btn[data-compact-label] {
     font-size: 0;
   }
@@ -255,9 +260,9 @@ select.settings-select {
 }
 
 .settings-secret__toggle svg {
-  width: 16px;
-  height: 16px;
-  stroke-width: 2px;
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
+  stroke-width: var(--chrome-icon-stroke);
 }
 
 /* Quiet count badge used by settings pages and the Skill Workshop. */
@@ -276,7 +281,7 @@ select.settings-select {
 @media (pointer: coarse), (max-width: 640px) {
   :root {
     --settings-control-height: 38px;
-    --settings-touch-control-height: 44px;
+    --settings-touch-control-height: 38px;
   }
 }
 
@@ -284,8 +289,6 @@ select.settings-select {
    actions share the field height; a row's action is one step down, on the composer's 32px. */
 @media (max-width: 640px) {
   :root {
-    --settings-touch-control-height: var(--settings-control-height);
-    --logs-toolbar-height: var(--settings-control-height);
     --row-action-size: 32px;
   }
 
@@ -345,7 +348,7 @@ select.settings-select {
     min-height: var(--settings-control-height);
   }
 
-  :root .btn:is(.cron-job-menu__trigger, .device-entry__menu-trigger, .secrets-store__menu-trigger),
+  :root .btn:is(.cron-job-menu__trigger, .secrets-store__menu-trigger),
   :root .plugin-editor__menu .btn.btn--icon,
   :root openclaw-sessions-page td .icon-btn[aria-haspopup="menu"] {
     width: var(--row-action-size);

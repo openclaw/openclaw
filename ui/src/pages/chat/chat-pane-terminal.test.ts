@@ -140,7 +140,7 @@ it("disables terminal continuation with query-specific guidance", async () => {
   });
   expect(continuation.disabled).toBe(true);
   expect(continuation.title).toBe(
-    "Query-routed Gateway URLs cannot create credential-free continuation commands because authentication and stored device scope are not query-aware. Use a manually authenticated CLI target or a queryless configured Gateway URL.",
+    "This Gateway address can’t open a terminal. Use the CLI or a Gateway address without a query string.",
   );
 });
 

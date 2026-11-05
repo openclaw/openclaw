@@ -166,18 +166,10 @@ function hasAcpxSetupAutoEnableRelevantConfig(cfg: OpenClawConfig): boolean {
   return configured && (!backend || backend === "acpx");
 }
 
-function hasXaiSetupAutoEnableRelevantConfig(cfg: OpenClawConfig): boolean {
-  if (cfg.plugins?.entries?.xai?.enabled === false) {
-    return false;
-  }
-  const pluginConfig = cfg.plugins?.entries?.xai?.config;
-  return (
-    isRecord(pluginConfig) &&
-    (isRecord(pluginConfig.xSearch) || isRecord(pluginConfig.codeExecution))
-  );
-}
-
-function resolveRelevantSetupAutoEnablePluginIds(cfg: OpenClawConfig): string[] {
+function resolveRelevantSetupAutoEnablePluginIds(
+  cfg: OpenClawConfig,
+  registry: PluginManifestRegistry,
+): string[] {
   const pluginIds = new Set(
     Object.keys(asOptionalObjectRecord(cfg.plugins?.entries) ?? {})
       .map((pluginId) => pluginId.trim())
@@ -189,22 +181,33 @@ function resolveRelevantSetupAutoEnablePluginIds(cfg: OpenClawConfig): string[] 
   if (hasAcpxSetupAutoEnableRelevantConfig(cfg)) {
     pluginIds.add("acpx");
   }
-  if (hasXaiSetupAutoEnableRelevantConfig(cfg)) {
-    pluginIds.add("xai");
-  }
-  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
+  const policy = normalizePluginsConfig(cfg.plugins);
+  return [...pluginIds]
+    .filter((pluginId) => {
+      const plugin = registry.plugins.find((record) => record.id === pluginId);
+      // Enabled non-channel candidates are discarded unless they repair an allowlist
+      // or participate in prefer-over ordering. Avoid capturing their setup dependencies.
+      return (
+        policy.entries[pluginId]?.enabled !== true ||
+        (policy.allow.length > 0 && !policy.allow.includes(pluginId)) ||
+        !plugin ||
+        plugin.channels.length > 0 ||
+        (plugin.channelConfigs?.[pluginId]?.preferOver?.length ?? 0) > 0 ||
+        (plugin.channelCatalogMeta?.preferOver?.length ?? 0) > 0
+      );
+    })
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function hasSetupAutoEnableRelevantConfig(cfg: OpenClawConfig): boolean {
   return (
+    hasConfiguredPluginConfigEntry(cfg) ||
     hasBrowserSetupAutoEnableRelevantConfig(cfg) ||
-    hasAcpxSetupAutoEnableRelevantConfig(cfg) ||
-    hasXaiSetupAutoEnableRelevantConfig(cfg) ||
-    hasConfiguredPluginConfigEntry(cfg)
+    hasAcpxSetupAutoEnableRelevantConfig(cfg)
   );
 }
 
-/** Prepare the same setup owners consulted by readiness and auto-enable probes. */
+/** Prepare only the setup owners whose probes can affect auto-enable selection. */
 export async function preparePluginAutoEnableSetup(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -217,9 +220,14 @@ export async function preparePluginAutoEnableSetup(params: {
   ) {
     return;
   }
+  const registry = resolvePluginAutoEnableManifestRegistry({
+    ...params,
+    env: params.env ?? process.env,
+  });
   await resolvePluginSetupRegistryAsync({
     ...params,
-    pluginIds: resolveRelevantSetupAutoEnablePluginIds(params.config),
+    manifestRegistry: registry,
+    pluginIds: resolveRelevantSetupAutoEnablePluginIds(params.config, registry),
   });
 }
 
@@ -255,7 +263,7 @@ function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig): boolean {
   }
   if (
     hasPluginAllowlistWithMaterialEntries(cfg) ||
-    hasConfiguredPluginConfigEntry(cfg) ||
+    hasSetupAutoEnableRelevantConfig(cfg) ||
     hasConfiguredPluginProviders(cfg)
   ) {
     return true;
@@ -287,15 +295,9 @@ export function resolvePluginAutoEnableReadiness(
   return {
     mayNeedAutoEnable:
       hasPluginAllowlistWithMaterialEntries(cfg) ||
-      hasConfiguredPluginConfigEntry(cfg) ||
+      hasSetupAutoEnableRelevantConfig(cfg) ||
       configuredChannelIds.length > 0 ||
-      hasConfiguredPluginProviders(cfg) ||
-      (hasSetupAutoEnableRelevantConfig(cfg) &&
-        resolvePluginSetupAutoEnableReasons({
-          config: cfg,
-          env,
-          pluginIds: resolveRelevantSetupAutoEnablePluginIds(cfg),
-        }).length > 0),
+      hasConfiguredPluginProviders(cfg),
     configuredChannelIds,
   };
 }
@@ -447,9 +449,10 @@ export function resolveConfiguredPluginAutoEnableCandidates(
 
   if (hasSetupAutoEnableRelevantConfig(params.config)) {
     const manifestMatchedPluginIds = new Set(changes.map((entry) => entry.pluginId));
-    const setupPluginIds = resolveRelevantSetupAutoEnablePluginIds(params.config).filter(
-      (pluginId) => !manifestMatchedPluginIds.has(pluginId),
-    );
+    const setupPluginIds = resolveRelevantSetupAutoEnablePluginIds(
+      params.config,
+      params.registry,
+    ).filter((pluginId) => !manifestMatchedPluginIds.has(pluginId));
     for (const entry of resolvePluginSetupAutoEnableReasons({
       config: params.config,
       env: params.env,

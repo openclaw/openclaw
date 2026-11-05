@@ -1872,13 +1872,13 @@ describe("followup queue collect routing", () => {
       }
     };
     q.add({
-      ...createRun({ prompt: "dropped ambient" }),
+      ...createRun({ prompt: "dropped ambient" }, { terminalReplyExpectation: "required" }),
       deliveryCorrelations: [{ begin: summaryBegin }],
       currentInboundEventKind: "room_event",
       currentInboundContext: { text: "dropped context" },
     });
     q.add({
-      ...createRun({ prompt: "live ambient" }),
+      ...createRun({ prompt: "live ambient" }, { terminalReplyExpectation: "required" }),
       currentInboundEventKind: "room_event",
       currentInboundAudio: true,
       currentInboundContext: { text: "live context" },
@@ -2392,7 +2392,7 @@ describe("followup queue collect routing", () => {
       q.done.resolve();
     };
     q.add({
-      ...createRun({ prompt: "dropped ambient" }),
+      ...createRun({ prompt: "dropped ambient" }, { terminalReplyExpectation: "required" }),
       currentInboundEventKind: "room_event",
       currentInboundContext: { text: "dropped context" },
       turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: onComplete },

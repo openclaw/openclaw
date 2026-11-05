@@ -202,6 +202,15 @@ failure. This also applies when the one-time missing-runtime download produces
 the same fallback. Healthy cryptex mounts and already staged disk images skip this
 repair. Local runs leave installation to the operator.
 
+An unavailable runtime can still have its downloaded fallback DMG. Repair checks
+for that package before deleting the registration and uses the same clone-and-stage
+path. This avoids downloading the asset again and creating shared registrations
+whose cleanup can remove the replacement runtime. Missing cached packages keep
+the existing delete-and-download repair. If Apple removes only the
+registration, repair waits up to two minutes for the retained asset to re-register
+before the existing targeted deletion retry; a temporarily empty inventory does
+not establish that cleanup finished.
+
 Registrations already marked `Deleting` are left to CoreSimulator and excluded
 from repair candidates. More than one remaining registration still stops the
 repair before it deletes anything.

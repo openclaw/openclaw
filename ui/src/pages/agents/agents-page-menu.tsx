@@ -7,15 +7,23 @@ import { showToast } from "../../lib/toast.ts";
 
 async function copyAgentId(id: string) {
   const copied = await copyToClipboard(id);
-  showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
+  showToast({
+    severity: copied ? "success" : "error",
+    message: t(copied ? "common.copied" : "common.copyFailed"),
+  });
 }
 
-// Phone widths swap the toolbar's secondary actions for this menu; both run the same actions.
+// Holds the selected agent's actions. New agent and Refresh join them on the phone.
 export function AgentsPageMenu(props: {
   agentId: string | null;
   defaultLabel: string;
   defaultDisabled: boolean;
   pinLabel: string;
+  showPhoneActions: boolean;
+  createLabel: string;
+  createDisabled: boolean;
+  createDisabledReason?: string;
+  onCreate: () => void;
   refreshLabel: string;
   refreshDisabled: boolean;
   onSetDefault: (agentId: string) => void;
@@ -24,6 +32,17 @@ export function AgentsPageMenu(props: {
 }) {
   const id = createUniqueId();
   const items = (): MenuEntry[] => [
+    ...(props.showPhoneActions
+      ? [
+          {
+            id: "create",
+            label: props.createLabel,
+            disabled: props.createDisabled,
+            focusableWhenDisabled: Boolean(props.createDisabledReason),
+            details: props.createDisabledReason,
+          },
+        ]
+      : []),
     ...(props.agentId
       ? [
           { id: "copy", label: t("agents.copyId") },
@@ -31,7 +50,9 @@ export function AgentsPageMenu(props: {
           { id: "pin", label: props.pinLabel },
         ]
       : []),
-    { id: "refresh", label: props.refreshLabel, disabled: props.refreshDisabled },
+    ...(props.showPhoneActions
+      ? [{ id: "refresh", label: props.refreshLabel, disabled: props.refreshDisabled }]
+      : []),
   ];
   return (
     <Menu
@@ -46,7 +67,9 @@ export function AgentsPageMenu(props: {
       items={items()}
       onSelect={(item) => {
         const agentId = props.agentId;
-        if (item.id === "refresh") {
+        if (item.id === "create") {
+          props.onCreate();
+        } else if (item.id === "refresh") {
           props.onRefresh();
         } else if (agentId && item.id === "copy") {
           void copyAgentId(agentId);
