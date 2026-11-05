@@ -28,6 +28,8 @@ Setup-generated dependencies and build output survive into the session. Session 
 
 An empty committed workspace uses the profile's shared runtime image instead of a repository snapshot. With no prepared project, capture happens at eligible worker teardown. A failed detected dependency install skips capture and lets the session start cold; a failed declared recipe stops dispatch. Explicitly skipped setup has a separate snapshot identity.
 
+Before capture, scrubbing tolerates recorded node processes that have exited or whose process metadata is no longer accessible. A readable live process whose working directory, environment, or process group does not match the worker still blocks capture.
+
 Environment status reports `stopping` while teardown is pending. Stop cloud worker can finish after session shutdown and a claimed warm-image capture, while the environment remains `destroying`. Capture and confirmed lease release continue under the environment lifecycle owner; only confirmed release changes the environment to `destroyed`. Failures remain visible and retryable. If the Gateway exits mid-capture, Crabbox's idle timeout or TTL can reap the lease, and the next Gateway reconciles the retained cleanup request.
 
 ### Later sessions and refresh
