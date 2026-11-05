@@ -43,7 +43,7 @@ type Scenario = {
   retainedSource?: "symlink" | "link";
 };
 
-function fixture(scenario: Scenario, withDatabase = true) {
+function fixture(scenario: Omit<Scenario, "name">, withDatabase = true) {
   const home = dirs.make("heartbeat-admission-");
   const state = path.join(home, "state");
   const workspace = path.join(home, "workspace");
@@ -63,10 +63,8 @@ function fixture(scenario: Scenario, withDatabase = true) {
   } else {
     fs.writeFileSync(sourcePath, scenario.source ?? source);
   }
-  for (const key of Object.keys(process.env)) {
-    if (isUpdateAdmissionAuthorityEnvKey(key)) {
-      vi.stubEnv(key, undefined);
-    }
+  for (const key of Object.keys(process.env).filter(isUpdateAdmissionAuthorityEnvKey)) {
+    vi.stubEnv(key, undefined);
   }
   for (const [key, value] of Object.entries({
     HOME: home,
@@ -155,10 +153,10 @@ async function expectUnchangedHeartbeatAdmission(
     verdict: refusalMessage ? "refuse" : "admit",
     reasons: refusalMessage
       ? [
-          expect.objectContaining({
+          {
             code: "heartbeat-migration",
             message: expect.stringContaining(refusalMessage),
-          }),
+          },
         ]
       : [],
   });
@@ -170,7 +168,6 @@ it.each(["absent", "file", "unreadable"] as const)(
   "checks unresolved cron update admission (heartbeat source: %s)",
   async (sourceKind) => {
     const f = fixture({
-      name: sourceKind,
       scratch: source,
       invalidSource: sourceKind === "unreadable",
     });
@@ -254,14 +251,9 @@ it.each<Scenario>([
     expect(database.prepare("SELECT job_id, payload_kind FROM cron_jobs").all()).toEqual([
       { job_id: "july-monitor", payload_kind: "agentTurn" },
     ]);
-    expect(notes).toHaveBeenCalledWith(
-      expect.stringContaining("different cron scratch"),
-      "Doctor notices",
-    );
-    expect(notes).toHaveBeenCalledWith(
-      expect.stringContaining("HEARTBEAT.md was retained for review"),
-      "Doctor notices",
-    );
+    for (const message of ["different cron scratch", "HEARTBEAT.md was retained for review"]) {
+      expect(notes).toHaveBeenCalledWith(expect.stringContaining(message), "Doctor notices");
+    }
   }
 });
 
@@ -270,6 +262,7 @@ it.each([
   "reported defaults",
   "unsafe TMPDIR",
   "invalid projected model policy",
+  "duplicate default markers",
   "retired July reasoning",
   "unrelated invalid field",
   "invalid heartbeat",
@@ -278,38 +271,40 @@ it.each([
   "included",
   "changed source",
 ] as const)("inspects %s heartbeat config without changing live data", async (kind) => {
-  const f = fixture({ name: kind, scratch: source }, kind === "unsafe TMPDIR");
-  const reported = [
-    "reported defaults",
-    "unsafe TMPDIR",
-    "invalid projected model policy",
-  ].includes(kind);
-  const agents = reported
+  const f = fixture({ scratch: source }, kind === "unsafe TMPDIR");
+  const reported =
+    kind === "reported defaults" ||
+    kind === "unsafe TMPDIR" ||
+    kind === "invalid projected model policy";
+  const heartbeat = reported
     ? {
-        defaults: {
-          heartbeat: {
-            every: "1h",
-            activeHours: { start: "08:00", end: "22:00", timezone: "local" },
-            model: "deepseek/deepseek-v4-flash",
-            lightContext: true,
-            isolatedSession: true,
-          },
-          ...(kind === "invalid projected model policy"
-            ? { modelPolicy: { allow: ["private-invalid-value"] } }
-            : {}),
-        },
+        every: "1h",
+        activeHours: { start: "08:00", end: "22:00", timezone: "local" },
+        model: "deepseek/deepseek-v4-flash",
+        lightContext: true,
+        isolatedSession: true,
       }
     : {
-        entries: {
-          main: {
-            heartbeat: {
-              every: kind === "invalid heartbeat" ? "private-invalid-value" : "30m",
-              ...(kind === "retired July reasoning" ? { includeReasoning: true } : {}),
-              target: "none",
-            },
-          },
-        },
+        every: kind === "invalid heartbeat" ? "private-invalid-value" : "30m",
+        ...(kind === "retired July reasoning" ? { includeReasoning: true } : {}),
+        target: "none",
       };
+  const agents =
+    kind === "duplicate default markers"
+      ? {
+          defaults: { heartbeat: { every: "1h" } },
+          entries: { main: { default: true }, ops: { default: true } },
+        }
+      : reported
+        ? {
+            defaults: {
+              heartbeat,
+              ...(kind === "invalid projected model policy"
+                ? { modelPolicy: { allow: ["private-invalid-value"] } }
+                : {}),
+            },
+          }
+        : { entries: { main: { heartbeat } } };
   if (kind === "included") {
     writeFixtureJsonSync(path.join(path.dirname(f.configPath), "agents.json"), agents);
   }
@@ -344,6 +339,7 @@ it.each([
   }
   const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
   const errors = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  const preflight = vi.spyOn(schemaPreflight, "captureTargetDatabaseSchemaContext");
 
   await updateAdmitCommand(f.contextPath);
 
@@ -352,8 +348,7 @@ it.each([
   const admitted =
     kind === "supported" ||
     kind === "retired July reasoning" ||
-    kind === "reported defaults" ||
-    kind === "unsafe TMPDIR";
+    (reported && kind !== "invalid projected model policy");
   expect(verdict).toMatchObject(
     admitted
       ? {
@@ -379,6 +374,14 @@ it.each([
   if (kind === "invalid projected model policy") {
     expect(verdict?.reasons[0]?.message).toContain("agents.defaults.modelPolicy.allow.0");
   }
+  if (kind === "duplicate default markers") {
+    expect(verdict?.reasons[0]?.message.match(/^- .+/gm)).toEqual([
+      "- agents.entries: Invalid configuration field",
+    ]);
+    await expect(preflight.mock.results[0]?.value).rejects.toMatchObject({
+      failureFacts: [{ affectedKey: "agents.entries", message: "Invalid configuration field" }],
+    });
+  }
   expect(JSON.stringify(output.mock.calls)).not.toContain("private-invalid-value");
   expect(errors).not.toHaveBeenCalled();
   expect(f.snapshot()).toEqual(before);
@@ -396,7 +399,7 @@ it.each([
     const content = incomplete
       ? "tasks:\n- name: inbox\n  interval: 1h\n"
       : "# Checklist\n\ntasks:\n- check the queue\n- review alerts\n";
-    const f = fixture({ name: location, scratch: content }, location === "imported scratch");
+    const f = fixture({ scratch: content }, location === "imported scratch");
     if (location === "file") {
       fs.writeFileSync(f.sourcePath, content);
     } else {
@@ -410,7 +413,6 @@ it.each([false, true])(
   "inspects configured PostgreSQL heartbeat scratch before activation (incomplete: %s)",
   async (incomplete) => {
     const f = fixture({
-      name: "postgres",
       scratch: incomplete ? "tasks:\n- name: inbox\n  interval: 1h\n" : source,
     });
     fs.unlinkSync(f.sourcePath);

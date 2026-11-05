@@ -24,6 +24,7 @@ import {
   validateConfigObjectWithPlugins,
 } from "../../../config/validation.js";
 import { withDeferredPluginDoctorMigrations } from "../../../plugins/doctor-contract-registry.js";
+import { dedupeByKey } from "../../../shared/dedupe-by-key.js";
 import { tryProjectRetiredHeartbeatConfig } from "../../doctor-heartbeat-legacy.js";
 import {
   prepareDoctorConfigReferenceSource,
@@ -156,10 +157,11 @@ async function planConfigRepair(
       validationConfig,
     );
     if (reportValidationFailure && (!validated.ok || issues.length > 0)) {
-      throw createConfigValidationFailedError([
-        ...(!validated.ok ? validated.issues : []),
-        ...issues,
-      ]);
+      throw createConfigValidationFailedError(
+        dedupeByKey([...(!validated.ok ? validated.issues : []), ...issues], (issue) =>
+          JSON.stringify([issue.path, issue.message]),
+        ),
+      );
     }
     return validated.ok && issues.length === 0 ? validated : null;
   });
