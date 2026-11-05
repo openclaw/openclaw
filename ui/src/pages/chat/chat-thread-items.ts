@@ -27,6 +27,7 @@ import {
   type ChatMessageRecovery,
 } from "./chat-message-recovery.ts";
 import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
+import { copyLiveTerminalIdentity } from "./terminal-message-identity.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
 export function appendCanvasBlockToAssistantMessage(
@@ -52,7 +53,7 @@ export function appendCanvasBlockToAssistantMessage(
   ) {
     return message;
   }
-  return {
+  const projection = {
     ...raw,
     content: [
       ...existingContent,
@@ -63,6 +64,8 @@ export function appendCanvasBlockToAssistantMessage(
       },
     ],
   };
+  copyLiveTerminalIdentity(message, projection);
+  return projection;
 }
 
 export function messageMatchesSearchQuery(
@@ -157,6 +160,7 @@ export function createCanvasAssistantMessage(
     {
       role: "assistant",
       content: [],
+      ...(source.runId ? { runId: source.runId } : {}),
       ...(timestamp != null ? { timestamp } : {}),
     },
     source.preview,

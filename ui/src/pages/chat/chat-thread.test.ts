@@ -29,7 +29,7 @@ import {
   syncToolCardExpansionState,
 } from "./chat-thread.ts";
 import { publishChatSessionProjectionMessages } from "./history-merge.ts";
-import { rememberLiveTerminalRun } from "./terminal-message-identity.ts";
+import { readLiveTerminalRevision, rememberLiveTerminalRun } from "./terminal-message-identity.ts";
 
 const { extractToolCardsCached: extractToolCards } = toolCards;
 
@@ -1570,6 +1570,210 @@ describe("buildCachedChatItems", () => {
     expect(groups.flatMap(normalizedBlocks)).toContainEqual({ type: "text", text: "\n\nReady." });
     expect(assistant).toEqual(original);
   });
+  it.each([
+    {
+      savedReceipt: false,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 1,
+    },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 1,
+    },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 1,
+      tailFirst: true,
+    },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 1,
+      shortcode: true,
+    },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 2,
+      shortcode: true,
+      otherShortcode: true,
+    },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 1,
+      steer: true,
+    },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 1,
+      steer: true,
+      includeOriginal: false,
+    },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 1,
+      steer: true,
+      savedReply: false,
+    },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: true,
+      count: 1,
+      search: true,
+    },
+    { savedReceipt: true, finalRun: "other-run", finalView: "cv_final", live: true, count: 2 },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_other",
+      live: true,
+      count: 2,
+    },
+    {
+      savedReceipt: true,
+      finalRun: "final-widget-run",
+      finalView: "cv_final",
+      live: false,
+      count: 2,
+    },
+  ])(
+    "reconciles only the owned final Canvas tail: %j",
+    ({
+      savedReceipt,
+      finalRun,
+      finalView,
+      live,
+      count,
+      tailFirst = false,
+      shortcode = false,
+      otherShortcode = false,
+      steer = false,
+      includeOriginal = true,
+      savedReply = true,
+      search = false,
+    }) => {
+      const textBlock = (text: string) => ({ type: "text", text });
+      const nativeUser = (id: string, content: string, timestamp: number, metadata: object) =>
+        userMessage(content, timestamp, {
+          __openclaw: { idempotencyKey: id + ":user", ...metadata },
+        });
+      const runId = "final-widget-run";
+      const parentToolCallId = "call_widget|fc_widget";
+      const output = canvasToolOutput("cv_final", "Counter", 100);
+      const nested = {
+        role: "custom",
+        runId,
+        timestamp: 1_002,
+        __openclaw: { id: "nested-receipt", seq: 2, runId },
+        content: [
+          { type: "toolCall", id: "nested-widget", name: "show_widget", runId, parentToolCallId },
+          {
+            type: "toolResult",
+            role: "toolResult",
+            toolCallId: "nested-widget",
+            toolName: "show_widget",
+            runId,
+            parentToolCallId,
+            content: [{ type: "text", text: output }],
+          },
+        ],
+      };
+      const canvas = {
+        type: "canvas",
+        preview: {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          viewId: "cv_final",
+        },
+      };
+      const saved = assistantMessage([textBlock("Your counter is ready."), canvas], 1_003, {
+        __openclaw: { id: "saved-final", seq: 3, runId },
+      });
+      const final = assistantMessage(
+        [
+          textBlock(
+            "Final tail." +
+              (shortcode ? ' [embed ref="cv_final" /]' : "") +
+              (otherShortcode ? ' [embed ref="cv_other" /]' : ""),
+          ),
+          { ...canvas, preview: { ...canvas.preview, viewId: finalView } },
+        ],
+        1_005,
+        { __openclaw: { runId: finalRun } },
+      );
+      const terminal = live ? rememberLiveTerminalRun(final, finalRun) : final;
+      const messages = [
+        ...(includeOriginal ? [nativeUser(runId, "Show a counter", 1_000, { runId })] : []),
+        ...(tailFirst ? [terminal] : []),
+        ...(savedReceipt ? [nested] : []),
+        ...(savedReply ? [saved] : []),
+        ...(steer
+          ? [
+              nativeUser("steer-input", "Keep going", 1_004, {
+                id: "steer",
+                seq: 4,
+                steerTargetRunId: runId,
+              }),
+            ]
+          : []),
+        ...(tailFirst ? [] : [terminal]),
+      ];
+      const original = structuredClone(messages);
+      const terminalRevision = readLiveTerminalRevision();
+      const groups = messageGroups({
+        messages,
+        toolMessages: savedReceipt ? [] : [nested],
+        showToolCalls: true,
+        searchOpen: search,
+        searchQuery: search ? "Final tail." : "",
+      });
+      expect(groups.flatMap(canvasBlocksAcross)).toHaveLength(count);
+      if (!search) {
+        expect(
+          groups
+            .flatMap((group) => group.messages.flatMap(({ message }) => extractToolCards(message)))
+            .some((card) => card.callId === "nested-widget"),
+        ).toBe(true);
+      }
+      expect(
+        groups
+          .flatMap(normalizedBlocks)
+          .flatMap((block) => (block.type === "text" ? [block.text?.trim()] : [])),
+      ).toContain("Final tail.");
+      if (savedReply && !search) {
+        expect(groups.flatMap(normalizedBlocks)).toContainEqual(
+          textBlock("Your counter is ready."),
+        );
+      }
+      expect(messages).toEqual(original);
+      expect(readLiveTerminalRevision()).toBe(terminalRevision);
+    },
+  );
+
   it("deduplicates untimestamped echoes without merging reused call IDs across turns", () => {
     const persisted = { ...mcpAppResult("first", "shared", 1_001), timestamp: undefined };
     const groups = messageGroups({
