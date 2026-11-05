@@ -182,6 +182,9 @@ To check model credentials, run `openclaw doctor --lint --only core/doctor/auth-
 This opt-in check inspects shared credentials and each configured agent's local
 auth store, including fleets without a default agent. Shared credential problems
 are reported once; agent-specific cooldowns remain attributed to their local store.
+It also warns when a stored provider order references a profile missing from that
+agent's effective auth store. Shared and inherited profiles count as present;
+Doctor leaves the order unchanged and reports how to inspect available profiles.
 
 `core/doctor/runtime-tool-schemas` does not check OAuth-backed MCP servers in read-only
 Doctor reports, including triage and update checks. A check can rotate a refresh token

@@ -35,6 +35,7 @@ import {
   resolveAuthProfileDatabaseOwnerId,
 } from "../agents/auth-profiles/sqlite.js";
 import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -253,6 +254,7 @@ type AuthIssue = AuthHealthSummary["profiles"][number];
 
 type AuthProfileHealthTarget = {
   label: string;
+  agentId?: string;
   agentDir?: string;
 };
 
@@ -271,7 +273,7 @@ async function listAuthProfileHealthTargets(
     const agentDir = resolveAgentDir(cfg, agentId);
     const databasePath = resolveAuthProfileDatabasePath(agentDir);
     if (!targets.has(databasePath) && (await hasLocalAuthProfileStoreSourceAsync(agentDir))) {
-      targets.set(databasePath, { label: `Agent ${agentId}`, agentDir });
+      targets.set(databasePath, { label: `Agent ${agentId}`, agentId, agentDir });
     }
   }
 
@@ -402,6 +404,37 @@ async function collectAuthProfileTargetFindings(params: {
   const findings: HealthFinding[] = [];
   const owner = params.labelStores ? `${params.target.label} auth profile` : "Auth profile";
   const path = resolveAuthStorePathForDisplay(params.target.agentDir);
+  // Health uses a same-store read; a local order can still select inherited shared credentials.
+  const effectiveStore =
+    params.target.agentDir &&
+    Object.values(params.store.order ?? {}).some((ids) =>
+      ids.some((id) => !params.store.profiles[id]),
+    )
+      ? await loadAuthProfileStoreForRuntimeAsync(params.target.agentDir, {
+          readOnly: true,
+          allowKeychainPrompt: false,
+        })
+      : params.store;
+  for (const [provider, profileIds] of Object.entries(effectiveStore.order ?? {})) {
+    for (const profileId of new Set(profileIds)) {
+      if (effectiveStore.profiles[profileId]) {
+        continue;
+      }
+      const agentOption = params.target.agentId
+        ? ` --agent ${quoteCliArg(params.target.agentId)}`
+        : "";
+      findings.push({
+        checkId: AUTH_PROFILES_CHECK_ID,
+        severity: "warning",
+        category: "fix-now",
+        message: `${owner} ${profileId} is referenced by ${provider} auth order but missing from the effective auth profile store.`,
+        path,
+        target: profileId,
+        fixHint: `Run openclaw models auth list${agentOption} --provider ${quoteCliArg(provider)} to inspect available profiles, then select an available profile with openclaw models auth order set or sign in again to restore the intended profile.`,
+        docsUrl: "https://docs.openclaw.ai/concepts/oauth",
+      });
+    }
+  }
   for (const cooldown of await collectAuthProfileCooldowns(params.store)) {
     findings.push({
       checkId: AUTH_PROFILES_CHECK_ID,
