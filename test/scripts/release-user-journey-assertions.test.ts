@@ -435,6 +435,9 @@ describe("release user journey assertions", () => {
           await fetch(`http://127.0.0.1:${port}/fixture/state`).then((response) => response.text()),
         ),
       ).toMatchObject({ socketCount: 1, socketGeneration: 2 });
+      const pong = once(socket, "pong");
+      socket.ping();
+      await pong;
     } finally {
       if (socket) {
         await closeClickClackSocket(socket);
