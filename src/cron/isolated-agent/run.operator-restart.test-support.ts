@@ -4,12 +4,16 @@ import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { captureGatewayAuthPolicy } from "../../gateway/auth-policy.js";
+import * as cronSourceRuntime from "../../gateway/cron-operator-source.js";
 import * as operatorCapture from "../../gateway/operator-run-authority.js";
 import { createGatewayControlUiIngressFactory } from "../../gateway/remote-control-ui-ingress.js";
 import { registerIngressPrincipalRecovery } from "../../gateway/remote-ingress-principal-recovery.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import { createOperatorClient } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { recordSessionOperatorSource } from "../../gateway/session-operator-sources.js";
 import { prepareSessionSystemTurnAuthority } from "../../gateway/session-system-turn-authority.js";
 import type { CronStoredJob } from "../types.js";
@@ -101,6 +105,8 @@ export async function captureRealIngressOperator(params: {
   scopes: string[];
 }) {
   const lifetime = new AbortController();
+  const getConfig = () =>
+    params.context.getCommittedRuntimeConfig?.() ?? params.context.getRuntimeConfig();
   const factory = createGatewayControlUiIngressFactory({
     pluginId: "mcp-relay",
     signal: lifetime.signal,
@@ -108,13 +114,14 @@ export async function captureRealIngressOperator(params: {
     host: {
       signal: lifetime.signal,
       controlUiBasePath: "",
-      getRuntimeConfig: () => params.config,
+      getRuntimeConfig: getConfig,
       getResolvedAuth: () => ({
         mode: "trusted-proxy",
         allowTailscale: false,
         trustedProxy: {
           userHeader: "cf-access-authenticated-user-email",
           requiredHeaders: ["cf-access-jwt-assertion"],
+          allowUsers: getConfig().gateway?.auth?.trustedProxy?.allowUsers,
         },
       }),
       resolveGatewayContext: () => params.context,
@@ -255,4 +262,105 @@ export function expectRetryableOriginalOneShot(
   const next = expectDefined(job.state.nextRunAtMs, "rearmed original occurrence");
   expect(next).toBeGreaterThan(now);
   return next;
+}
+
+export function principalGatewayPolicy(
+  allowlisted = false,
+): NonNullable<OpenClawConfig["gateway"]> {
+  return {
+    roles: {
+      default: "writer",
+      definitions: {
+        writer: {
+          scopes: ["operator.read", "operator.write"],
+          agents: "*",
+          sessions: { others: "none" },
+        },
+      },
+    },
+    ...(allowlisted
+      ? {
+          auth: {
+            mode: "trusted-proxy",
+            trustedProxy: {
+              userHeader: "cf-access-authenticated-user-email",
+              requiredHeaders: ["cf-access-jwt-assertion"],
+              allowUsers: ["scheduled-operator@example.test"],
+            },
+          },
+        }
+      : {}),
+  };
+}
+
+export function bindPersonAllowlistRevocation(
+  context: GatewayRequestContext,
+  config: OpenClawConfig,
+) {
+  let current = config;
+  context.getRuntimeConfig = () => current;
+  context.getCommittedRuntimeConfig = () => current;
+  return () => {
+    current = {
+      ...config,
+      gateway: {
+        ...config.gateway,
+        auth: {
+          ...config.gateway?.auth,
+          trustedProxy: {
+            ...config.gateway?.auth?.trustedProxy,
+            userHeader: "cf-access-authenticated-user-email",
+            allowUsers: ["other-person@example.test"],
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(current);
+  };
+}
+
+export function revokeAfterNextPrincipalRestore(revoke: () => void) {
+  const restore = cronSourceRuntime.restoreCronOperatorSource;
+  vi.spyOn(cronSourceRuntime, "restoreCronOperatorSource").mockImplementationOnce(
+    async (params) => {
+      const actual = await restore(params);
+      expect(actual?.authority.recoverySnapshot?.sourceIngress).toBe("principal");
+      revoke();
+      return actual;
+    },
+  );
+}
+
+/** Shared synthetic caller I/O; the principal source itself is still captured by real ingress. */
+export function prepareContinuationClient(params: {
+  config: OpenClawConfig;
+  context: GatewayRequestContext;
+  profileId: string;
+  scenario: string;
+}) {
+  const { config, context, profileId, scenario } = params;
+  const client = createOperatorClient({
+    profileId,
+    scopes: scenario.startsWith("restart before scheduling")
+      ? ["operator.read", "operator.write"]
+      : scenario === "guest"
+        ? ["operator.sessions.write"]
+        : scenario === "write-scoped operator"
+          ? ["operator.write"]
+          : scenario === "cron-scoped operator"
+            ? ["operator.sessions.write", "operator.cron"]
+            : ["operator.admin"],
+  });
+  client.connect.client.id = "openclaw-control-ui";
+  client.connect.client.mode = "webchat";
+  client.internal = {
+    authenticatedOperator: true,
+    ...(client.connect.scopes?.includes("operator.admin") ? { controlUiAdmin: true } : {}),
+  };
+  client.authPolicy = captureGatewayAuthPolicy(config, { role: "operator", authMethod: "token" });
+  context.getRuntimeConfig = () => config;
+  const removePersonFromAllowlist = scenario.startsWith("principal allowlist")
+    ? bindPersonAllowlistRevocation(context, config)
+    : undefined;
+  return { client, removePersonFromAllowlist };
 }

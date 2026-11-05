@@ -25,6 +25,7 @@ import {
 } from "../state/user-profile-list.js";
 import { ensureCanonicalGatewayOwnerProfile } from "../state/user-profile-writes.js";
 import type { ResolvedGatewayAuth } from "./auth-resolve.js";
+import { isTrustedProxyUserAllowed } from "./auth.js";
 import { validateRemoteControlUiFrameAncestors } from "./control-ui-csp.js";
 import { filterRemoteControlUiPluginReadCookies } from "./control-ui-plugin-auth-cookie.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
@@ -321,14 +322,12 @@ export function createGatewayControlUiIngressFactory(params: {
             const currentIdentity = prepared.readCurrentFacts(emailBindingIds);
             const current = currentIdentity.profile;
             const row = resident.assertCurrent();
-            const allowedUsers = host.getResolvedAuth().trustedProxy?.allowUsers;
             if (
               !isDeepStrictEqual(currentIdentity.aliases, initialIdentity.aliases) ||
               initial.emails.some((email) => !current.emails.includes(email)) ||
               initial.githubAccountIds?.some((id) => !current.githubAccountIds?.includes(id)) ||
               (principal.kind === "person" &&
-                allowedUsers?.length &&
-                !current.emails.some((email) => allowedUsers.includes(email))) ||
+                !isTrustedProxyUserAllowed(host.getResolvedAuth().trustedProxy, current.emails)) ||
               !isDeepStrictEqual(role, principal.kind === "person" ? readRole(current) : undefined)
             ) {
               throw new Error("Principal identity or role changed");

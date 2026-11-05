@@ -18,7 +18,6 @@ import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
-import { captureGatewayAuthPolicy } from "../../gateway/auth-policy.js";
 import * as publicationIdentity from "../../gateway/github-publication-availability.js";
 import * as publicationTransport from "../../gateway/github-publication-git-transport.js";
 import { createGitHubPublicationCoordinator } from "../../gateway/github-publication.js";
@@ -34,7 +33,6 @@ import {
   SESSION_ID,
   stateDir,
 } from "../../gateway/server-methods/requester-cron-authority.test-support.js";
-import { createOperatorClient } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
 import { createWorkerSessionPlacementStore } from "../../gateway/worker-environments/placement-store.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -64,6 +62,9 @@ import {
   publicationCommandResult,
 } from "./run.operator-continuation.test-support.js";
 import {
+  prepareContinuationClient,
+  revokeAfterNextPrincipalRestore,
+  principalGatewayPolicy,
   captureRealIngressOperator,
   expectRetryableOriginalOneShot,
   principalRecoveryFixture,
@@ -136,6 +137,9 @@ it.each([
   "paused force run",
   "restart",
   "principal reload",
+  "principal allowlist allowed",
+  "principal allowlist removed before restore",
+  "principal allowlist removed before effect",
   "principal owner unavailable",
   "principal store unavailable",
   "restart before scheduling",
@@ -161,8 +165,13 @@ it.each([
   const principalSource = scenario.startsWith("principal") || restartBeforeScheduling;
   const unavailableSource =
     scenario === "principal owner unavailable" || scenario === "principal store unavailable";
+  const allowlistSource = scenario.startsWith("principal allowlist");
+  const allowUsersRemoved = allowlistSource && scenario !== "principal allowlist allowed";
   const realPrincipal =
-    restartBeforeScheduling || unavailableSource || scenario === "principal reload";
+    restartBeforeScheduling ||
+    unavailableSource ||
+    scenario === "principal reload" ||
+    allowlistSource;
   let restoreIngressOwner: (() => void) | undefined;
   let releaseIngressOwner: (() => void) | undefined;
   const roleRevoked = scenario === "role revoked" || scenario === "principal role revoked";
@@ -177,22 +186,7 @@ it.each([
     scenario === "write-scoped operator" || scenario === "cron-scoped operator";
   const config = await prepareAuthorityConfig({
     tools: { allow: [AUTOMATIONS_TOOL_NAME, "github_publish"] },
-    ...(realPrincipal
-      ? {
-          gateway: {
-            roles: {
-              default: "writer",
-              definitions: {
-                writer: {
-                  scopes: ["operator.read", "operator.write"],
-                  agents: "*",
-                  sessions: { others: "none" },
-                },
-              },
-            },
-          },
-        }
-      : {}),
+    ...(realPrincipal ? { gateway: principalGatewayPolicy(allowlistSource) } : {}),
     ...(recurring ? { cron: { triggers: { enabled: true } } } : {}),
   });
   const fixture = createCronFixture(undefined, config);
@@ -203,26 +197,12 @@ it.each([
   if (realPrincipal) {
     await setCanonicalUserProfileRole(profile.id, "writer");
   }
-  const client = createOperatorClient({
+  const { client, removePersonFromAllowlist } = prepareContinuationClient({
+    config,
+    context,
     profileId: profile.id,
-    scopes: restartBeforeScheduling
-      ? ["operator.read", "operator.write"]
-      : scenario === "guest"
-        ? ["operator.sessions.write"]
-        : scenario === "write-scoped operator"
-          ? ["operator.write"]
-          : scenario === "cron-scoped operator"
-            ? ["operator.sessions.write", "operator.cron"]
-            : ["operator.admin"],
+    scenario,
   });
-  client.connect.client.id = "openclaw-control-ui";
-  client.connect.client.mode = "webchat";
-  client.internal = {
-    authenticatedOperator: true,
-    ...(client.connect.scopes?.includes("operator.admin") ? { controlUiAdmin: true } : {}),
-  };
-  client.authPolicy = captureGatewayAuthPolicy(config, { role: "operator", authMethod: "token" });
-  context.getRuntimeConfig = () => config;
   const target = {
     agentId: "main",
     sessionKey: SESSION,
@@ -496,6 +476,14 @@ it.each([
     restoreIngressOwner = recovery.restore;
     releaseIngressOwner = recovery.release;
   }
+  if (scenario === "principal allowlist removed before restore") {
+    removePersonFromAllowlist?.();
+  }
+  if (scenario === "principal allowlist removed before effect") {
+    revokeAfterNextPrincipalRestore(
+      expectDefined(removePersonFromAllowlist, "current allowlist owner"),
+    );
+  }
   // No operator request, original admitted run or human follow-up survives this point.
   const job = expectDefined((await fixture.read())[0], "durably stored continuation");
   if (scopedOperator) {
@@ -673,6 +661,9 @@ it.each([
         if (publish) {
           expect(JSON.stringify(offered)).toContain('"inspect"');
           expect(JSON.stringify(offered)).toContain("merge");
+          if (scenario === "principal allowlist removed before effect") {
+            removePersonFromAllowlist?.();
+          }
           for (const args of [
             { action: "inspect" },
             {
@@ -835,6 +826,13 @@ it.each([
       expect((await fixture.read()).map((item) => item.id)).toEqual([job.id]);
     }
     const state = expectDefined(execution.getJob(job.id), "finished scheduled job").state;
+    if (allowUsersRemoved) {
+      expect(reads, "Current allowUsers must fence protected RPC reads").toBe(0);
+      expect(writes).toEqual([]);
+      expect(rejected ?? finishedEvent?.error).toMatch(/allow|authority|principal|policy/i);
+      expect(entered).toBe(0);
+      return;
+    }
     if (managerRename || captureRace) {
       expect(admittedOperator).toBe(false);
       expect((await fixture.read())[0]?.operatorSource).toBeUndefined();
@@ -905,6 +903,7 @@ it.each([
       if (
         unavailableSource ||
         scenario === "restart before scheduling" ||
+        scenario === "principal allowlist allowed" ||
         scenario === "principal reload" ||
         scenario === "operator" ||
         scenario === "write-scoped operator" ||
@@ -949,6 +948,7 @@ it.each([
       !unavailableSource &&
       scenario !== "restart before scheduling" &&
       scenario !== "principal reload" &&
+      scenario !== "principal allowlist allowed" &&
       scenario !== "operator" &&
       scenario !== "write-scoped operator" &&
       scenario !== "paused force run" &&

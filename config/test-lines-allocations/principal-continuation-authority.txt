@@ -4,4 +4,5 @@
 # Owning-boundary fixtures caught real admission and settlement defects that
 # helper-only tests missed. Preserve those distinct contracts; scalar unchanged.
 # Includes exact-issuance migration, awaited startup and declared warning feedback.
-1008
+# Adds +108 counted lines for genuine person allowlist revocation before/after restore.
+1116

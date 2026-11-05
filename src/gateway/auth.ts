@@ -182,6 +182,15 @@ export function assertGatewayAuthConfigured(
   }
 }
 
+/** Match the current trusted-proxy allowlist against an identity's canonical names. */
+export function isTrustedProxyUserAllowed(
+  trustedProxy: Pick<GatewayTrustedProxyConfig, "allowUsers"> | undefined,
+  users: readonly string[],
+): boolean {
+  const allowUsers = trustedProxy?.allowUsers;
+  return !allowUsers?.length || users.some((user) => allowUsers.includes(user));
+}
+
 function authorizeTrustedProxy(params: {
   req?: IncomingMessage;
   trustedProxies?: string[];
@@ -226,8 +235,7 @@ function authorizeTrustedProxy(params: {
 
   const user = userHeaderValue.trim();
 
-  const allowUsers = trustedProxyConfig.allowUsers ?? [];
-  if (allowUsers.length > 0 && !allowUsers.includes(user)) {
+  if (!isTrustedProxyUserAllowed(trustedProxyConfig, [user])) {
     return { reason: "trusted_proxy_user_not_allowed" };
   }
 

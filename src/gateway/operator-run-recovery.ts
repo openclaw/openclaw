@@ -1,3 +1,4 @@
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
@@ -19,6 +20,8 @@ import {
 } from "../state/user-profile-list.js";
 import { captureGatewayAuthPolicy, isGatewayAuthGrantCurrent } from "./auth-policy.js";
 import type { GatewayAuthPolicy } from "./auth-policy.types.js";
+import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
+import { isTrustedProxyUserAllowed } from "./auth.js";
 import { prepareChannelOperatorAuthority } from "./channel-operator-authority.js";
 import {
   captureGatewayDeviceRevocation,
@@ -255,6 +258,18 @@ async function restoreGatewayOperatorSnapshot(params: {
         githubAccountIds ??= profile.githubAccountIds ?? [];
         profileFacts = profile;
         profileRevision = revision;
+      }
+      if (
+        snapshot.sourceIngress === "principal" &&
+        snapshot.profileId !== GATEWAY_OWNER_PROFILE_ID &&
+        !isTrustedProxyUserAllowed(
+          resolveGatewayAuthForConfig({ config: cfg }).trustedProxy,
+          profileFacts.emails,
+        )
+      ) {
+        throw new GatewayOperatorRecoveryAuthorizationError(
+          "Person principal is no longer permitted by gateway.auth.trustedProxy.allowUsers.",
+        );
       }
       return { cfg, profile: profileFacts };
     };
