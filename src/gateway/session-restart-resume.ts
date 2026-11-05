@@ -49,6 +49,7 @@ import { withAgentInputRecovery } from "../state/agent-database-preparation-cont
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-agent-db.paths.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { waitForRestartStoreWriteAdmission } from "./session-restart-resume-admission.js";
 import { recordRestartResumeFailure } from "./session-restart-resume-failure.js";
 import { createRestartResumeSummary } from "./session-restart-resume-log.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
@@ -374,7 +375,11 @@ function resumePreparedRestartStore(
       withAgentInputRecovery(
         params.context.agentDatabaseStartup,
         prepared.target.physicalAgentId,
-        () => resumeRestartStore(params, prepared),
+        async () => {
+          if (await waitForRestartStoreWriteAdmission(params, prepared.target)) {
+            await resumeRestartStore(params, prepared);
+          }
+        },
       ),
     );
     recovery.stores.set(prepared.target.storePath, work);

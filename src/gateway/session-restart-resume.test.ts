@@ -26,7 +26,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
+import {
+  publishPendingAgentDatabaseReadAdmission,
+  recordAgentDatabaseAdmissions,
+} from "../state/agent-database-admission.js";
 import { createAgentDatabaseStartupObservation } from "../state/agent-database-startup-observation.js";
 import type { PendingAgentDatabaseRecovery } from "../state/agent-database-startup.types.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -121,6 +124,106 @@ it("reuses a prepared restart snapshot and joins its queue admission before star
       discover.mockRestore();
     }
   }));
+
+it.each(["ready", "failed"] as const)(
+  "joins shared-store writable startup admission (%s)",
+  (admission) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const storePath = state.statePath("shared.sqlite");
+      const cfg = {
+        agents: { ownership: "explicit" as const, entries: { main: {}, other: {} } },
+        session: { store: storePath },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      const target = { agentId: "other", sessionKey: "agent:other:read-ready-restart", storePath };
+      replaceSessionEntrySync(target, { sessionId: "read-ready-restart", updatedAt: 1 });
+      replaceSessionEntrySync(target, {
+        ...loadExactSessionEntry(target)!.entry,
+        resumeAfterRestart: { queuedInputIds: [] },
+      });
+      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
+        queuedInputIds: [],
+      });
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const completion = createDeferredCore();
+      const observed = createDeferredCore();
+      const refusal: PendingAgentDatabaseRecovery["refusal"] = {
+        agentId: "main",
+        paths: [database.path],
+        code: "agent-database-inspection-pending",
+        reason: "Native writable preparation is still pending",
+        repairHint: "Wait for startup preparation",
+      };
+      recordAgentDatabaseAdmissions([refusal], { source: "startup" });
+      const revoke = publishPendingAgentDatabaseReadAdmission(refusal, {
+        paths: [database.path, storePath],
+        assertCurrent() {},
+      });
+      const pending = new Map<string, PendingAgentDatabaseRecovery>([
+        [
+          "main",
+          {
+            refusal,
+            get completion() {
+              observed.resolve();
+              return completion.promise;
+            },
+            readReady: Promise.resolve(),
+            startedAt: 0,
+            phase: "publication",
+            phaseStartedAt: 0,
+            phaseDurationsMs: {},
+          },
+        ],
+      ]);
+      const signal = new AbortController().signal;
+      const context = createContext([], () => cfg);
+      context.agentDatabaseStartup = createAgentDatabaseStartupObservation(pending, signal);
+      const warn = vi.fn();
+      const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockReturnValue({
+        accepted: Promise.resolve({ ok: true }),
+        id: "read-ready-resume",
+        settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
+        cancel: () => false,
+      });
+      let work: Promise<void> | undefined;
+      try {
+        work = resumeMarkedSessions({ context, signal, log: { warn } });
+        await Promise.race([observed.promise, work]);
+        recordAgentDatabaseAdmissions(
+          admission === "ready"
+            ? []
+            : [
+                {
+                  ...refusal,
+                  code: "agent-database-inspection-failed",
+                  reason: "Native preparation failed",
+                },
+              ],
+          { source: "startup" },
+        );
+        completion.resolve();
+        await work;
+        await resumeMarkedSessions({ context, signal, log: { warn } });
+        if (admission === "ready") {
+          expect({
+            warnings: warn.mock.calls,
+            resumed: resume.mock.calls.length,
+            marker: loadExactSessionEntry(target)?.entry.resumeAfterRestart,
+          }).toEqual({ warnings: [], resumed: 1, marker: undefined });
+        } else {
+          expect(warn).toHaveBeenCalledWith(expect.stringContaining("Native preparation failed"));
+          expect(resume).not.toHaveBeenCalled();
+        }
+      } finally {
+        recordAgentDatabaseAdmissions([], { source: "startup" });
+        completion.resolve();
+        await work;
+        revoke();
+        resume.mockRestore();
+      }
+    }),
+);
 
 it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)(
   "bounds orphan recovery to the predecessor and settles abandoned runs (%s)",
