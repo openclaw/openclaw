@@ -353,6 +353,115 @@ describe("dispatch retry after queued ingress abandonment", () => {
   });
 });
 
+it.each(["old", "new", "summarize"] as const)(
+  "skips redelivery after an exclusive queue-cap %s drop",
+  async (dropPolicy) => {
+    await withTempState(async (stateDir) => {
+      const key = `agent:main:discord:direct:cap-${dropPolicy}`;
+      const messageId = `cap-${dropPolicy}`;
+      const ctx = buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        ChatType: "direct",
+        From: "user:ingress-fixture",
+        To: "channel:ingress-fixture",
+        SessionKey: key,
+        MessageSid: messageId,
+        BodyForAgent: "Queued source",
+      });
+      const queue = createTestIngressQueue(stateDir);
+      const failed = observeChannelIngressQueueWrite(queue, "fail", messageId);
+      const settings = { mode: "followup", debounceMs: 0, cap: 1, dropPolicy } as const;
+      const addSibling = (index: number) =>
+        enqueueFollowupRun(
+          key,
+          createQueueTestRun({ prompt: `Sibling ${index}`, messageId: `sibling-${index}` }),
+          settings,
+          "message-id",
+          undefined,
+          false,
+        );
+      if (dropPolicy === "new") {
+        expect(addSibling(0)).toBe(true);
+      }
+      let source: FollowupRun | undefined;
+      let lifecycle: ChannelIngressDispatchLifecycle | undefined;
+      const dispatcher = createDispatcher();
+      const resolver = vi.fn(async (_ctx: MsgContext, options?: GetReplyOptions) => {
+        source = createQueueTestRun({ prompt: "Queued source", messageId });
+        source.turnAdoptionLifecycle = options?.turnAdoptionLifecycle;
+        expect(enqueueFollowupRun(key, source, settings, "message-id", undefined, false)).toBe(
+          dropPolicy !== "new",
+        );
+        const runState = resolveReplyOperationRunState(options);
+        if (!runState) {
+          throw new Error("dispatch did not bind its run state");
+        }
+        runState.admission = {
+          status: "accepted",
+          mode: "followup",
+        };
+        return undefined;
+      });
+      const drain = createChannelIngressDrain({
+        queue,
+        dispatchClaimedEvent: async (_event, incoming) => {
+          lifecycle = incoming;
+          await dispatchReplyFromConfig({
+            ctx,
+            cfg: automaticDirectReplyConfig,
+            dispatcher,
+            replyOptions: bindIngressLifecycleToReplyOptions(incoming),
+            replyResolver: resolver,
+          });
+        },
+      });
+      try {
+        await queue.enqueue(messageId, { text: "Queued source" });
+        await drain.drainOnce();
+        await drain.waitForIdle();
+        if (dropPolicy !== "new") {
+          expect(addSibling(1)).toBe(true);
+          if (dropPolicy === "summarize") {
+            expect(addSibling(2)).toBe(true);
+            expect(addSibling(3)).toBe(true);
+          }
+        }
+        await expect(failed).resolves.toBe(true);
+        if (!source?.controllerInput || !lifecycle) {
+          throw new Error("dispatch did not retain the queued source and ingress lifecycle");
+        }
+        await source.controllerInput.settlement.promise;
+        expect(await queue.listFailed?.()).toMatchObject([
+          {
+            id: messageId,
+            attempts: 0,
+            reason: dropPolicy === "new" ? "queue-cap-new" : "queue-cap-old",
+          },
+        ]);
+        const duplicateDispatcher = createDispatcher();
+        const duplicateReplyOptions = bindIngressLifecycleToReplyOptions(lifecycle);
+        const duplicate = await withDispatchProcessedOutcomeSink(() =>
+          dispatchReplyFromConfig({
+            ctx,
+            cfg: automaticDirectReplyConfig,
+            dispatcher: duplicateDispatcher,
+            replyOptions: duplicateReplyOptions,
+            replyResolver: resolver,
+          }),
+        );
+        expect(duplicate.processedOutcome).toEqual({ outcome: "skipped", reason: "duplicate" });
+        expect(resolver).toHaveBeenCalledOnce();
+        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+        expect(duplicateDispatcher.sendFinalReply).not.toHaveBeenCalled();
+      } finally {
+        drain.dispose();
+        clearSessionQueues([key]);
+      }
+    });
+  },
+);
+
 it.each(["completed", "cancelled", "adoption-rejected", "non-finalized-context"] as const)(
   "holds ACP ingress custody through %s",
   async (outcome) => {
