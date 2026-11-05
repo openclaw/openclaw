@@ -254,9 +254,17 @@ main model can read the screenshot directly.
   also works because `status` does not define its own `--json`. The command reports
   `headlessSource` as `env`, `profile`, `config`,
   `request`, or `default`.
-- Fresh headless profiles are seeded before one browser launch; they do not run
-  a temporary browser solely to create preference files. Existing profile preferences
-  and cookie encryption settings are preserved.
+- Fresh headless profiles are seeded directly without a temporary browser solely
+  to create preference files. Existing profile preferences and cookie encryption
+  settings are preserved.
+- Managed headless startup reads the launched browser's native user-agent. If it
+  contains `HeadlessChrome/` and no explicit `--user-agent` argument is configured,
+  OpenClaw relaunches its owned process once with only that marker changed to
+  `Chrome/`, preserving the native version and platform. This adds startup work;
+  the initial discovery launch may restore saved tabs and send requests before
+  normalization. Explicit user-agent arguments, headed browsers, and remote CDP
+  browsers keep their existing behavior. Normalization does not guarantee access
+  to every site.
 - When no installed Chromium-family browser is found, OpenClaw searches the
   Playwright cache for full Chromium. Automatic discovery never switches to
   headless shell, even if the full browser is removed. Discovery does not load
