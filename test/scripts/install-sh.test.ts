@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import {
   chmodSync,
   chownSync,
@@ -2684,7 +2684,7 @@ EOF
         expect([0, 1], probe.stderr).toContain(probe.status);
         dropReadCapabilities = probe.status === 0;
       }
-      let result: ReturnType<typeof spawnSync>;
+      let result: SpawnSyncReturns<string>;
       if (process.getuid?.() === 0) {
         chmodSync(tmp, 0o755);
         chownSync(home, 65534, 65534);
