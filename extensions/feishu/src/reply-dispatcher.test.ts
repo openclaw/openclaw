@@ -1071,7 +1071,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["two throws", ["X.", ["X."], 3, "X. X.", ["X."], 3, "X. X. D."], ["X.", "X.", "X. D."]],
     ["next message", [["X."], 2, 3, "X. Y.", ["X."], 3, "X. Y. Z."], ["X.", "X. Y.", "X. Y. Z."]],
     ["same message", [["X."], 3, "X.", ["X."], 3, "X. Z."], ["X.", "X.", "X. Z."]],
-    ["fence", ["~~~py\nx", null, "~~~py\nx y\n~~~\nD."], ["~~~py\nx", "~~~py\ny\n~~~\nD."]],
+    ["fence", ["~~~a\nx", null, "~~~a\nxy", null, "~~~a\nxy\n~~~\nD"], ["~~~a\nx", "~~~a\ny", "D"]],
+    ["fence cut", ["~~~\nx\n~~", null, "~~~\nx\n~~~\nD"], ["~~~\nx\n~~", "D"]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
@@ -1127,7 +1128,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const closeCalls = streamingInstances.map((stub) => stub.closeWithResult.mock.calls);
     expect(closeCalls).toEqual(cards.map((text) => [[text, { note: "Agent: agent" }]]));
   });
-
   it("keeps an over-limit block in its active streaming card", async () => {
     useStreamingBlockAccount();
     const text = makeTableText(6);
