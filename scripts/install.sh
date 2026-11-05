@@ -2716,12 +2716,14 @@ warn_shell_path_missing_dir() {
         managed_node_bin=""
         managed_node_home_form=""
     fi
-    local shell_name="${SHELL:-}" quoted_dir fish_dir
+    local shell_name="${SHELL:-}" quoted_dir fish_dir quote_escape
     shell_name="${shell_name##*/}"
     # Keep path bytes literal, including history expansion in interactive Bash.
     quoted_dir="${managed_node_bin:-$dir}"
     fish_dir="$quoted_dir"
-    quoted_dir="${quoted_dir//\'/\'\\\'\'}"
+    # Bash 3.2 retains backslashes in a quoted literal replacement.
+    quote_escape="'\\''"
+    quoted_dir="${quoted_dir//\'/$quote_escape}"
     quoted_dir="'$quoted_dir'"
     fish_dir="${fish_dir//\\/\\\\}"
     fish_dir="${fish_dir//\"/\\\"}"
