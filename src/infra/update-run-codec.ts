@@ -33,6 +33,7 @@ const RETAINED_STEP_NAMES = [
   "candidate-gateway-startup",
   "candidate-state-cleanup",
   "post-stop-checks",
+  "warning:post-stop-checks",
   "git-checkout",
   "git-runtime-activation",
   "openclaw doctor",
@@ -174,6 +175,7 @@ function boundedJson(
           item.step !== "diagnostic:database migration writes" &&
           item.step !== "warning:database migration writes" &&
           item.step !== "warning:post-plugin doctor" &&
+          item.step !== "warning:post-stop-checks" &&
           item.step !== "warning:reconcile:driver-lost-after-verification" &&
           item.step !== "diagnostic:database rollback" &&
           item.step !== "finalize:data-at-risk" &&
