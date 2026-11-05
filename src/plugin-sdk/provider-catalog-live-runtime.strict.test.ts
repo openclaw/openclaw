@@ -341,7 +341,10 @@ describe("strict catalog acquisition", () => {
     await expect(acquire(0)).resolves.toMatchObject({ models: seed.models });
     await expect(acquire()).resolves.toMatchObject({ models: [] });
     expect(fetchGuard).toHaveBeenCalledTimes(3);
+    // `setSystemTime` moves `Date` without advancing the elapsed clock the cache
+    // now expires on, so pad the jump with the elapsed time it represents.
     vi.setSystemTime(1_000);
+    await vi.advanceTimersByTimeAsync(1_000);
     await expect(acquire()).resolves.toMatchObject({ models: seed.models });
     await expect(acquire()).resolves.toMatchObject({ models: seed.models });
     expect(fetchGuard).toHaveBeenCalledTimes(4);
