@@ -8,6 +8,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/skill-library.ts";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { uploadsDisabledMessage } from "../../lib/uploads.ts";
@@ -20,6 +21,8 @@ import { createSkillLibrary, type SkillLibraryModel } from "./library-state.ts";
 import { SkillLibrary, SkillLibraryDialogs } from "./library-view.tsx";
 import { connectedGateway, libraryEntry, libraryList, requestFor } from "./skills.test-support.ts";
 
+// mock-isolation: removal confirmations resolve without mounting the shared dialog.
+vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 registerSkillsBrowserEnglish();
 
 function harness() {
@@ -157,7 +160,7 @@ it.each([
 
 it("keeps removal confirmation outside mutation presentation", async () => {
   const { library, request } = await openSkill();
-  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  const confirm = vi.mocked(showConfirmDialog).mockResolvedValue(false);
   const mounted = mountLibrary(library, true);
   flush();
   const remove = buttonIn(mounted.container, "Remove skill");

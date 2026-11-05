@@ -118,6 +118,7 @@ function sameMessageGroup(previous: MessageGroup, next: MessageGroup): boolean {
     JSON.stringify(previous.sender) === JSON.stringify(next.sender) &&
     JSON.stringify(previous.replyToSender) === JSON.stringify(next.replyToSender) &&
     sameReplySource(previous.replyToMessage, next.replyToMessage) &&
+    previous.replyPreviousMessageId === next.replyPreviousMessageId &&
     previous.replyShared === next.replyShared &&
     sameReplySource(previous.replyTurnSource, next.replyTurnSource) &&
     sameReplySource(previous.replyCurrentSource, next.replyCurrentSource) &&
@@ -197,6 +198,7 @@ function sameChatItem(previous: RenderChatItem, next: RenderChatItem): boolean {
         previous.isStreaming === next.isStreaming &&
         JSON.stringify(previous.replyToSender) === JSON.stringify(next.replyToSender) &&
         sameReplySource(previous.replyToMessage, next.replyToMessage) &&
+        previous.replyPreviousMessageId === next.replyPreviousMessageId &&
         previous.runId === next.runId &&
         previous.boundaryId === next.boundaryId
       );
@@ -365,7 +367,8 @@ function sameChatItemsStructuralInput(
     previous.subagentWait?.runId === next.subagentWait?.runId &&
     (previous.subagentWait === undefined) === (next.subagentWait === undefined) &&
     previous.questionPrompts === next.questionPrompts &&
-    previous.loading === next.loading &&
+    // Loading only suppresses progress indicators on an initially empty thread.
+    (previous.loading === next.loading || (!next.runWorking && !next.subagentWait)) &&
     sameEntries(previous.replyPeople, next.replyPeople) &&
     previous.replyLocalPerson === next.replyLocalPerson &&
     previous.searchOpen === next.searchOpen &&

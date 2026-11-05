@@ -568,37 +568,6 @@ export async function prepareOpenClawStateRead(
       agentIds: readRetainedAgentDeletionIds(db),
     });
   }
-  if (command.type === "sandboxRegistry.list") {
-    const { readSandboxRegistryInDatabase } = await import("../agents/sandbox/registry.kernel.js");
-    return (db: EngineConnection) => ({
-      type: command.type,
-      entries: readSandboxRegistryInDatabase(db, command.workspaceDir),
-    });
-  }
-  if (command.type === "sandboxRegistry.get") {
-    const { readSandboxRegistryEntryInDatabase } =
-      await import("../agents/sandbox/registry.kernel.js");
-    return (db: EngineConnection) => ({
-      type: command.type,
-      entry: readSandboxRegistryEntryInDatabase(db, command.containerName),
-    });
-  }
-  if (command.type === "sandboxRegistry.runtimeIds") {
-    const { readSandboxRuntimeIdsInDatabase } =
-      await import("../agents/sandbox/registry.kernel.js");
-    return (db: EngineConnection) => ({
-      type: command.type,
-      runtimeIds: readSandboxRuntimeIdsInDatabase(db, command),
-    });
-  }
-  if (command.type === "sandboxRegistry.browsers") {
-    const { readSandboxBrowserRegistryInDatabase } =
-      await import("../agents/sandbox/registry.kernel.js");
-    return (db: EngineConnection) => ({
-      type: command.type,
-      entries: readSandboxBrowserRegistryInDatabase(db, command.workspaceDir),
-    });
-  }
   if (command.type === "worktrees.cleanupState") {
     const { listRegistryWorktreesInDatabase } =
       await import("../agents/worktrees/registry-read.kernel.js");

@@ -1,4 +1,5 @@
-import { createMemo, For } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { ErrorDetails } from "../components/config-error.tsx";
 import { Icon, type IconName } from "../components/solid/icon.tsx";
 import { AgentIdentityAvatar } from "../components/solid/identity-avatar.tsx";
 import { formatUiExternalText } from "./format-error.ts";
@@ -14,6 +15,7 @@ import {
   type ToastPlacement,
   type ToastSeverity,
 } from "./toast.ts";
+import toastStyles from "../styles/toast.css?inline";
 
 type ToastController = ReturnType<typeof toastOwnerFor>;
 
@@ -33,6 +35,7 @@ export function ToastView(props: {
   const anchored = createMemo(() => props.toasts.filter((entry) => entry.lane === "anchored"));
   return (
     <>
+      <style>{toastStyles}</style>
       <div class="app-toast-lanes">
         <For each={TOAST_LANES}>
           {(lane) => (
@@ -108,6 +111,30 @@ function ToastCard(props: { entry: ToastEntry; open: boolean; owner: ToastContro
   const lane = (): ToastLane => props.entry.lane;
   const dismiss = (reason: "action" | "dismiss") => props.owner.dismiss(props.entry.id, reason);
   const content = createMemo(() => toast().message);
+  const hasAction = () => Boolean(toast().actionLabel && toast().onAction);
+  const [singleRow, setSingleRow] = createSignal(false);
+  let contentElement!: HTMLDivElement;
+  let bodyElement!: HTMLDivElement;
+  let messageElement!: HTMLSpanElement;
+  let actionElement: HTMLAnchorElement | HTMLButtonElement | undefined;
+  onSettled(() => {
+    const measure = () => {
+      const action = hasAction() ? actionElement : undefined;
+      const titleHeight = messageElement.offsetHeight;
+      // Measure the contents, not the card: padding must not feed back into the
+      // decision, and collapsed stack cards borrow the newest card's height.
+      setSingleRow(
+        titleHeight > 0 &&
+          titleHeight <= Number.parseFloat(getComputedStyle(messageElement).lineHeight) + 1 &&
+          (!action || action.offsetTop < bodyElement.offsetTop + bodyElement.offsetHeight),
+      );
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(contentElement);
+    observer.observe(messageElement);
+    measure();
+    return () => observer.disconnect();
+  });
   // Two-sentence copy reads as a title and a muted description, without rewording.
   const copy = createMemo(() => {
     const value = content();
@@ -137,7 +164,8 @@ function ToastCard(props: { entry: ToastEntry; open: boolean; owner: ToastContro
           "app-toast--error": toast().severity === "error",
           "app-toast--progress": toast().severity === "progress",
           "app-toast--avatar": Boolean(toast().avatar),
-          "app-toast--action": Boolean(toast().actionLabel && toast().onAction),
+          "app-toast--action": hasAction(),
+          "app-toast--single-row": !copy().description && toast().detail == null && singleRow(),
         },
       ]}
       data-active={props.entry.active ? "true" : "false"}
@@ -205,17 +233,23 @@ function ToastCard(props: { entry: ToastEntry; open: boolean; owner: ToastContro
           <Icon name={SEVERITY_ICONS[toast().severity!]} />
         </span>
       ) : undefined}
-      <div class="app-toast__content">
-        <div class="app-toast__body">
-          <span class="app-toast__message">{message()}</span>
+      <div class="app-toast__content" ref={(element) => (contentElement = element)}>
+        <div class="app-toast__body" ref={(element) => (bodyElement = element)}>
+          <span class="app-toast__message" ref={(element) => (messageElement = element)}>
+            {message()}
+          </span>
           {copy().description ? " " : undefined}
           {copy().description ? (
             <span class="app-toast__description">{formatUiExternalText(copy().description)}</span>
           ) : undefined}
+          <Show when={toast()} keyed>
+            {(options) => <ErrorDetails error={options.detail} />}
+          </Show>
         </div>
-        {toast().actionLabel && toast().onAction ? (
+        {hasAction() ? (
           toast().actionHref ? (
             <a
+              ref={(element) => (actionElement = element)}
               class={["app-toast__action", { "app-toast__action--primary": toast().actionPrimary }]}
               href={toast().actionHref}
               onClick={(event) => {
@@ -232,6 +266,7 @@ function ToastCard(props: { entry: ToastEntry; open: boolean; owner: ToastContro
             </a>
           ) : (
             <button
+              ref={(element) => (actionElement = element)}
               type="button"
               class={["app-toast__action", { "app-toast__action--primary": toast().actionPrimary }]}
               onClick={() => {

@@ -143,17 +143,12 @@ extension OpenClawChatViewModel {
         let initiatingSession = self.currentSessionSnapshot()
         let requestedAgentID = ChatPayloadDecoding.trimmedNonEmptyString(agentID)?.lowercased()
         let requested = self.generatedNewSessionKey(agentID: requestedAgentID)
-        // Only authoritative identities decide agent ownership; scanning the roster
-        // could adopt an unrelated agent and hand sessions.create a cross-agent parent.
-        let currentAgentID = (
-            OpenClawChatSessionKey.agentID(from: self.sessionKey) ??
-                self.explicitSessionAgentID ??
-                self.activeAgentId ??
-                OpenClawChatSessionKey.agentID(from: self.resolvedMainSessionKey))?
-            .lowercased()
-        let parentSessionKey = requestedAgentID == nil || requestedAgentID == currentAgentID
-            ? self.sessionKey
-            : nil
+        // Ordinary native creation must stay standalone: handing sessions.create the
+        // selected session as an explicit parent persists nested lineage and hides the
+        // new conversation under an unrelated parent in cross-client sidebars (#189432).
+        // The generated key already carries the agent identity, the gateway groups
+        // standalone roots on its own, and forks/children keep dedicated creation paths.
+        let parentSessionKey: String? = nil
         let next: String
         do {
             let create: OpenClawChatNewSessionRouteLease.CreateSession = if let routeLease {
