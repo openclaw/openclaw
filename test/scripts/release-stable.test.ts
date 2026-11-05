@@ -74,87 +74,8 @@ const parentRuns = (runs: object[]) =>
 const children = (runs: object[]) =>
   step("gh", ["api", "*"], JSON.stringify({ workflow_runs: runs }));
 
-const jsonStep = (command: string, args: string[], value: unknown) =>
+const jsonStep = (command: FakeStep["bin"], args: string[], value: unknown) =>
   step(command, args, JSON.stringify(value));
-function publicationWatchFixture(approvalPending = false) {
-  const state = publishState(true);
-  state.publish.publishRunId = "301";
-  state.publish.dispatchedAt = state.startedAt;
-  const release = fixture(state);
-  const identity = {
-    head_branch: state.validate.toolingTag,
-    head_sha: TOOLING_SHA,
-    repository: { full_name: REPOSITORY },
-    event: "workflow_dispatch",
-  };
-  const parent = {
-    ...identity,
-    id: 301,
-    run_attempt: 3,
-    path: ".github/workflows/openclaw-release-publish.yml",
-    actor: { login: "release-test" },
-    status: approvalPending ? "in_progress" : "completed",
-    conclusion: approvalPending ? null : "success",
-    html_url: "https://github.com/openclaw/openclaw/actions/runs/301",
-  };
-  const plugin = {
-    ...identity,
-    id: 701,
-    run_attempt: 1,
-    path: ".github/workflows/plugin-npm-release.yml",
-    actor: { login: "github-actions[bot]" },
-    display_title: `Plugin NPM Release [default] ${CUT_SHA}`,
-    created_at: state.startedAt,
-    status: approvalPending ? "waiting" : "completed",
-    conclusion: approvalPending ? null : "success",
-    html_url: "https://github.com/openclaw/openclaw/actions/runs/701",
-  };
-  const readRun = (run: typeof parent) =>
-    jsonStep("gh", ["api", `repos/${REPOSITORY}/actions/runs/${run.id}`], run);
-  return {
-    state,
-    release,
-    plugin,
-    observe: (observedChildren = [plugin], json = true) => {
-      const inventory = [
-        "plugin-npm-release.yml",
-        "plugin-clawhub-release.yml",
-        "plugin-clawhub-new.yml",
-        "openclaw-npm-release.yml",
-      ].map((file) =>
-        jsonStep("gh", ["api", "*"], {
-          workflow_runs: observedChildren.filter((run) => run.path.endsWith(`/${file}`)),
-        }),
-      );
-      return release.run(
-        [
-          readRun(parent),
-          ...inventory,
-          ...observedChildren.map(readRun),
-          ...[parent, ...observedChildren].flatMap((run) => [
-            jsonStep(
-              "gh",
-              ["api", `repos/${REPOSITORY}/actions/runs/${run.id}/pending_deployments`],
-              approvalPending && run.id === 701
-                ? [
-                    {
-                      environment: { id: 81, name: "npm-release" },
-                      current_user_can_approve: false,
-                    },
-                  ]
-                : [],
-            ),
-            jsonStep("gh", ["api", "*"], { total_count: 0, jobs: [] }),
-          ]),
-          ...inventory,
-          readRun(parent),
-        ],
-        ["--watch", "--once", ...(json ? ["--json"] : [])],
-      );
-    },
-  };
-}
-
 describe("release:stable CLI", () => {
   it("previews all seven phases without executing a binary or writing release state", () => {
     const release = fixture();

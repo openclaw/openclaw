@@ -329,12 +329,6 @@ export async function runCiGitStep(options: {
             readFileSync("scripts/plugin-npm-release-admission.py"),
           );
         }
-        if (isWorkflow("plugin-npm-release")) {
-          write(
-            path.join(workspace, ".release-tooling/scripts/plugin-npm-release-admission.py"),
-            read("scripts/plugin-npm-release-admission.py"),
-          );
-        }
         if (pluginRelease) {
           writeFileSync(path.join(workspace, "package.json"), '{"version":"2026.8.33"}\n');
         }
