@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isUserInitiatedAgentRunAbortReason } from "../../agents/run-termination.js";
 import { bindUserTurnInputActor } from "../../config/sessions/session-input-actor.js";
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import { prepareSessionSystemTurnAuthority } from "../../gateway/session-system-turn-authority.js";
@@ -48,7 +49,10 @@ export async function prepareReplySourceAdmission(params: {
   const release = ownsCustody
     ? async () => {
         try {
-          recorder.finishPendingInput?.("cancelled");
+          recorder.finishPendingInput?.(
+            "cancelled",
+            isUserInitiatedAgentRunAbortReason(operation.abortSignal.reason) ? true : undefined,
+          );
         } finally {
           await recorder.waitForPendingInputSettlement?.();
         }
