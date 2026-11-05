@@ -488,6 +488,169 @@ describe("Templates discovery", () => {
     expect(page.querySelector("[data-templates-explore] [role=alert]")).toBeNull();
   });
 
+  it("adds from the catalog without opening details, stays busy, and waits for the roster before chat", async () => {
+    const apply = createDeferredCore();
+    const roster = createDeferredCore<unknown>();
+    const { page, request, navigate } = createPage({
+      templatesEnabled: true,
+      applyWait: apply.promise,
+    });
+    await waitForSolid(() =>
+      expect(page.querySelector(".agents-home__template-add")).not.toBeNull(),
+    );
+    const original = request.getMockImplementation()!;
+    request.mockImplementation((method, params, options) =>
+      method === "agents.list" ? roster.promise : original(method, params, options),
+    );
+    const add = page.querySelector<HTMLButtonElement>(".agents-home__template-add")!;
+    add.click();
+    add.click();
+    expect(request.mock.calls.filter(([method]) => method === "templates.add.apply")).toHaveLength(
+      1,
+    );
+    expect(navigate).not.toHaveBeenCalled();
+    expect(request.mock.calls.some(([method]) => method === "templates.catalog.detail")).toBe(
+      false,
+    );
+    await waitForSolid(() => {
+      expect(add.disabled).toBe(true);
+      expect(add.getAttribute("aria-busy")).toBe("true");
+      expect(add.querySelector(".btn__spinner")).not.toBeNull();
+    });
+    expect(page.querySelector("[data-templates-explore]")).not.toBeNull();
+    apply.resolve();
+    await waitForSolid(() =>
+      expect(request.mock.calls.some(([method]) => method === "agents.list")).toBe(true),
+    );
+    expect(navigate).not.toHaveBeenCalled();
+    expect(add.getAttribute("aria-busy")).toBe("true");
+    roster.resolve({
+      defaultId: "harbor",
+      mainKey: "team-room",
+      scope: "per-sender",
+      agents: [{ id: "workflow-operator", name: "Workflow Operator" }],
+    });
+    await waitForSolid(() =>
+      expect(navigate).toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ pathname: "/chat/workflow-operator" }),
+      ),
+    );
+    expect(navigate.mock.calls.filter(([route]) => route === "chat")).toHaveLength(1);
+    expect(request.mock.calls.filter(([method]) => method === "templates.add.apply")).toHaveLength(
+      1,
+    );
+  });
+
+  it.each(["risk", "plugin", "skill"] as const)(
+    "opens the existing %s review only when direct Add requires consent",
+    async (kind) => {
+      const { page, request, navigate } = createPage({
+        templatesEnabled: true,
+        riskConsentRequired: kind === "risk",
+        reviewRequiredOnce: kind === "risk" ? undefined : kind,
+      });
+      await waitForSolid(() =>
+        expect(page.querySelector(".agents-home__template-add")).not.toBeNull(),
+      );
+      page.querySelector<HTMLButtonElement>(".agents-home__template-add")!.click();
+      await waitForSolid(() =>
+        expect(page.querySelector(".templates-add-consent__actions .btn.primary")).toHaveProperty(
+          "disabled",
+          false,
+        ),
+      );
+      expect(navigate).not.toHaveBeenCalled();
+      const applications = () =>
+        request.mock.calls.filter(([method]) => method === "templates.add.apply");
+      expect(applications()).toHaveLength(1);
+      expect(applications()[0]?.[1]).toEqual({
+        source: { packageName: "@openclaw/workflow-operator", version: "1.2.0" },
+      });
+      page
+        .querySelector<HTMLButtonElement>(".templates-add-consent__actions .btn.primary")!
+        .click();
+      await waitForSolid(() => expect(navigate).toHaveBeenCalledWith("chat", expect.anything()));
+      expect(applications()).toHaveLength(2);
+      expect(applications()[1]?.[1]).toHaveProperty(
+        kind === "risk"
+          ? "acknowledgeClawHubRisk"
+          : kind === "plugin"
+            ? "acknowledgeCapabilities"
+            : "acknowledgeSkillWarnings",
+      );
+    },
+  );
+
+  it.each(["error", "partial"])(
+    "keeps a direct Add %s visible on the catalog and permits an explicit retry",
+    async (kind) => {
+      const { page, request, navigate } = createPage({ templatesEnabled: true });
+      await waitForSolid(() =>
+        expect(page.querySelector(".agents-home__template-add")).not.toBeNull(),
+      );
+      const original = request.getMockImplementation()!;
+      let attempts = 0;
+      request.mockImplementation((method, params, options) => {
+        if (method === "templates.add.apply" && attempts++ === 0) {
+          return kind === "error"
+            ? Promise.reject(new Error("Install failed"))
+            : Promise.resolve({
+                agentId: "workflow-operator",
+                status: "partial",
+                error: { code: "FAILED", message: "Install failed" },
+              });
+        }
+        return original(method, params, options);
+      });
+      const add = page.querySelector<HTMLButtonElement>(".agents-home__template-add")!;
+      add.click();
+      await waitForSolid(() => {
+        expect(page.querySelector("[role=alert]")?.textContent).toContain("Install failed");
+        expect(add.disabled).toBe(false);
+      });
+      expect(page.querySelector("[data-templates-explore]")).not.toBeNull();
+      expect(navigate).not.toHaveBeenCalled();
+      add.click();
+      await waitForSolid(() => expect(navigate).toHaveBeenCalledWith("chat", expect.anything()));
+    },
+  );
+
+  it.each(["apply", "roster"])(
+    "ignores a catalog %s result after the user opens card details",
+    async (stage) => {
+      const pending = createDeferredCore();
+      const { page, request, navigate } = createPage({
+        templatesEnabled: true,
+        applyWait: stage === "apply" ? pending.promise : undefined,
+      });
+      await waitForSolid(() =>
+        expect(page.querySelector(".agents-home__template-add")).not.toBeNull(),
+      );
+      const original = request.getMockImplementation()!;
+      request.mockImplementation(async (method, params, options) => {
+        if (method === "agents.list" && stage === "roster") {
+          await pending.promise;
+        }
+        return original(method, params, options);
+      });
+      page.querySelector<HTMLButtonElement>(".agents-home__template-add")!.click();
+      if (stage === "roster") {
+        await waitForSolid(() =>
+          expect(request.mock.calls.some(([method]) => method === "agents.list")).toBe(true),
+        );
+      }
+      page.querySelector<HTMLButtonElement>(".agents-home__template-card-link")!.click();
+      expect(navigate).toHaveBeenCalledWith("templates", {
+        pathname: "/templates/packages/%40openclaw%2Fworkflow-operator",
+      });
+      pending.resolve();
+      await nextTurn();
+      flush();
+      expect(navigate).not.toHaveBeenCalledWith("chat", expect.anything());
+    },
+  );
+
   it("reads contents before Add and opens the newly added agent chat", async () => {
     const { detail, request, navigate } = createDetail({ templatesEnabled: true });
 

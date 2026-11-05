@@ -142,7 +142,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
 
   async function openDetail(page: Page) {
     const card = page.locator("[data-templates-explore] [data-templates-entry]").first();
-    await card.getByRole("button", { name: "Add" }).click();
+    await card.locator(".agents-home__template-card-link").click();
     const detail = page.locator(".plugin-catalog-detail");
     await detail.getByRole("heading", { name: "Workspace files" }).waitFor();
     return detail;
@@ -300,6 +300,45 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     await page.getByText("No templates match your search.", { exact: true }).waitFor();
     await search.fill("");
     await page.getByText("No templates yet.", { exact: true }).waitFor();
+  });
+
+  it("adds directly from a catalog card and opens chat only after install and roster confirmation", async () => {
+    const { page, gateway } = await fixture();
+    const card = page.locator("[data-templates-featured] [data-templates-entry]").first();
+    await card.waitFor();
+    await capture(page, "direct-add-before", card);
+    await gateway.deferNext("templates.add.apply");
+    const rosterBefore = await gateway.deferNext("agents.list");
+    const add = card.getByRole("button", { name: "Add Workflow Operator", exact: true });
+    await add.click();
+    await gateway.waitForRequest("templates.add.apply");
+    await add.locator(".btn__spinner").waitFor();
+    expect(await add.isDisabled()).toBe(true);
+    expect(await add.getAttribute("aria-busy")).toBe("true");
+    expect(new URL(page.url()).pathname).toBe("/templates");
+    expect(await gateway.getRequests("templates.catalog.detail")).toHaveLength(0);
+    expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    await capture(page, "direct-add-pending", card);
+    await gateway.resolveDeferred("templates.add.apply", {
+      agentId: "workflow-operator",
+      status: "complete",
+      readiness: { ready: false, requirements: [{ kind: "oauth", owner: "workflows" }] },
+    });
+    await gateway.waitForRequest("agents.list", { after: rosterBefore });
+    expect(new URL(page.url()).pathname).toBe("/templates");
+    expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    await gateway.resolveDeferred("agents.list", {
+      ...agentsList,
+      agents: [...agentsList.agents, { id: "workflow-operator", name: "Workflow Operator" }],
+    });
+    await page.waitForURL(/\/chat\/workflow-operator$/u);
+    const send = await gateway.waitForRequest("chat.send");
+    expect(send.params).toMatchObject({
+      sessionKey: "agent:workflow-operator:main",
+      message: "Workflow Operator, what can you do?",
+    });
+    expect(await gateway.getRequests("templates.add.apply")).toHaveLength(1);
+    await capture(page, "direct-add-chat", page.locator("openclaw-chat-page"));
   });
 
   it("uses the accepted publisher to add a personal Template and start chat despite pending setup", async () => {
