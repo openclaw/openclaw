@@ -13,14 +13,22 @@ vi.mock("./archive-cache-budget.js", () => ({
   },
 }));
 
+// Give this suite its own cache root: the shared /tmp directory is also used by
+// the non-budget suite, and parallel files would otherwise evict each other's
+// entries mid-assertion.
+let cacheRoot = "";
+vi.mock("../../infra/tmp-openclaw-dir.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/tmp-openclaw-dir.js")>()),
+  resolvePreferredOpenClawTmpDir: () => cacheRoot,
+}));
+
 type ArchiveModule = typeof import("./archive-compression.js");
 let archive: ArchiveModule;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const CACHE_DIR = path.join(fs.realpathSync("/tmp"), "openclaw", "session-archive-read-cache");
 
 beforeEach(async () => {
-  fs.rmSync(CACHE_DIR, { recursive: true, force: true });
+  cacheRoot = tempDirs.make("openclaw-archive-cache-root-");
   // The TTL sweep is rate limited by module state; reload so every case starts
   // from a clean sweep clock instead of inheriting the previous case's.
   vi.resetModules();
@@ -35,11 +43,13 @@ function writeArchive(dir: string, name: string, content: string): string {
   return archivePath;
 }
 
+const cacheDir = () => path.join(cacheRoot, "session-archive-read-cache");
+
 const cacheDirSize = () =>
   fs
-    .readdirSync(CACHE_DIR)
+    .readdirSync(cacheDir())
     .filter((name) => name.endsWith(".jsonl"))
-    .reduce((total, name) => total + fs.statSync(path.join(CACHE_DIR, name)).size, 0);
+    .reduce((total, name) => total + fs.statSync(path.join(cacheDir(), name)).size, 0);
 
 const body = (fill: string, bytes: number) =>
   `${JSON.stringify({ type: "message", body: fill.repeat(bytes) })}\n`;
@@ -84,16 +94,16 @@ describe("materialized archive cache aggregate budget", () => {
     budgetBytes = 8 * 1024 * 1024;
     const dir = tempDirs.make("openclaw-archive-ttl-");
     const aged = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
-    fs.mkdirSync(CACHE_DIR, { recursive: true, mode: 0o700 });
-    const stale = path.join(CACHE_DIR, `${"f".repeat(32)}-expired-${process.pid}.jsonl`);
+    fs.mkdirSync(cacheDir(), { recursive: true, mode: 0o700 });
+    const stale = path.join(cacheDir(), `${"f".repeat(32)}-expired-${process.pid}.jsonl`);
     fs.writeFileSync(stale, "stale");
     fs.utimesSync(stale, aged, aged);
 
     const plaintext = body("z", 64 * 1024);
     const file = writeArchive(dir, "aged", plaintext);
     await archive.materializeSessionArchiveForRead(file);
-    for (const name of fs.readdirSync(CACHE_DIR)) {
-      fs.utimesSync(path.join(CACHE_DIR, name), aged, aged);
+    for (const name of fs.readdirSync(cacheDir())) {
+      fs.utimesSync(path.join(cacheDir(), name), aged, aged);
     }
 
     const served = await archive.materializeSessionArchiveForRead(file);
