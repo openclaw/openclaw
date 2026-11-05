@@ -962,7 +962,7 @@ export function attachActiveEmbeddedRun(
   attachNativeAttempt(attachment);
   handle[embeddedRunCleanupAttachment] = attachment;
   if (watchdogAttempt && handle.ownsLiveness) {
-    const wait = watchdogAttempt.beginWait({
+    attachment.closeWatchdogWait = watchdogAttempt.beginWait({
       kind: "runtime_owned",
       releaseStartsSemanticWindow: true,
       isCurrent: () => {
@@ -975,8 +975,7 @@ export function attachActiveEmbeddedRun(
         toolAuthority?.assertActive();
         return handle.ownsLiveness?.() === true && !handle.isAborted?.() && !handle.isStopped?.();
       },
-    });
-    attachment.closeWatchdogWait = () => wait.close();
+    }).close;
   }
   if (operation) {
     if (toolAuthority?.sourceTurnId) {
