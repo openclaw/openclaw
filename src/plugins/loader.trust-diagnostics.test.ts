@@ -23,6 +23,7 @@ import {
   writePluginMetadata,
 } from "./loader.test-fixtures.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import { PluginTrustRefusalError } from "./plugin-trust.js";
 import { disposePluginRegistryInstances } from "./runtime.js";
 import { buildPluginInspectReport, buildPluginSnapshotReport } from "./status.js";
 
@@ -198,6 +199,28 @@ describe("recorded plugin trust diagnostics", () => {
       repairTrusted: true,
     },
     {
+      name: "consistent third-party npm install",
+      pluginId: "third-party-demo",
+      packageName: "@vendor/third-party-demo",
+      version: "1.0.0",
+      reason: "third-party-npm",
+      trusted: false,
+    },
+    {
+      name: "conflicting third-party npm identity",
+      pluginId: "third-party-demo",
+      packageName: "@vendor/third-party-demo",
+      override: { resolvedName: "@vendor/other" },
+      reason: "provenance-invalid",
+      trusted: false,
+    },
+    {
+      name: "official package recorded under another plugin id",
+      pluginId: "third-party-demo",
+      reason: "provenance-invalid",
+      trusted: false,
+    },
+    {
       name: "unendorsed AgentMail npm namesake",
       pluginId: "agentmail",
       packageName: "@agentmail/agentmail",
@@ -300,6 +323,15 @@ describe("recorded plugin trust diagnostics", () => {
           origin: "global",
         });
         expect(loaded.status).toBe("loaded");
+        if (reason === "third-party-npm") {
+          const refusal = new PluginTrustRefusalError({
+            pluginId,
+            source: plugin.file,
+            trust: loaded.trust,
+          });
+          expect(refusal.message).toContain("Reinstalling the same package will not change that");
+          expect(refusal.message).not.toContain("Reinstall from the official");
+        }
         const warnings = warn.mock.calls.filter(([message]) =>
           String(message).includes("OpenClaw can't verify where this plugin came from"),
         );

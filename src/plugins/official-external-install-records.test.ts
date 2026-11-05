@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
+  isThirdPartyNpmInstallRecord,
   isOfficialCatalogLookupPluginIdReplacement,
   isTrustedOfficialCatalogLookupDuplicate,
   isTrustedOfficialPluginInstallRecord,
@@ -267,4 +268,29 @@ describe("trusted official npm install records", () => {
       }),
     ).toBeUndefined();
   });
+});
+
+describe("third-party npm install identity", () => {
+  it.each([
+    { resolvedName: "@vendor/other" },
+    { resolvedSpec: "@vendor/other@1.0.0" },
+    { clawhubPackage: "@vendor/other" },
+    { spec: "file:/tmp/plugin.tgz" },
+    { artifactKind: "npm-pack" },
+    { sourcePath: "/tmp/plugin" },
+    { source: "clawhub" },
+  ] satisfies Partial<PluginInstallRecord>[])(
+    "rejects conflicting or local evidence %j",
+    (override) => {
+      expect(
+        isThirdPartyNpmInstallRecord("demo", "@vendor/demo", {
+          source: "npm",
+          spec: "@vendor/demo@1.0.0",
+          resolvedName: "@vendor/demo",
+          resolvedSpec: "@vendor/demo@1.0.0",
+          ...override,
+        }),
+      ).toBe(false);
+    },
+  );
 });
