@@ -242,6 +242,9 @@ A join code and a paired device have separate lifecycles:
 
 ## Troubleshooting
 
+Startup failures show the redacted top-level reason. Use `--debug` when you need
+stack traces and nested error details.
+
 If the join URL reports that it is missing or expired, mint a new one with
 `openclaw devices join-code`. A used code intentionally returns the same result
 as an unknown code. If this machine already redeemed it, reconnect with the
