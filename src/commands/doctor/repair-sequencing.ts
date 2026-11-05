@@ -87,6 +87,8 @@ export async function runDoctorRepairSequence(params: {
   /** Notes for candidate-config mutations that are durable only after the config write. */
   configChangeNotes: string[];
   warningNotes: string[];
+  repairWarningNotes: string[];
+  advisoryNotes: string[];
   displayWarningNotes: string[];
   findings: readonly HealthFinding[];
   authProfilesRepaired: boolean;
@@ -102,6 +104,7 @@ export async function runDoctorRepairSequence(params: {
   const changeNotes: string[] = [];
   const configChangeNotes: string[] = [];
   const warningNotes: string[] = [];
+  const advisoryNotes: string[] = [];
   const env = params.env ?? process.env;
   await assertInstalledPluginIdRecoveryCurrent(
     state.candidate,
@@ -218,6 +221,7 @@ export async function runDoctorRepairSequence(params: {
     changes: codexRouteRepair.changes,
     warnings: codexRouteRepair.warnings,
   });
+  appendNotes(advisoryNotes, codexRouteRepair.advisories);
   // Auth JSON is archived below; retain its exact collision-aware profile map
   // so durable session selections can follow the same account after import.
   let openAICodexAuthProfileIdMap: ReadonlyMap<string, string> =
@@ -433,11 +437,14 @@ export async function runDoctorRepairSequence(params: {
     state,
     changeNotes,
     configChangeNotes,
-    warningNotes,
+    warningNotes: [...warningNotes, ...advisoryNotes],
+    repairWarningNotes: warningNotes,
+    advisoryNotes,
     displayWarningNotes: [
       ...warningNotes.slice(0, authFieldWarningsStart),
       ...warningNotes.slice(authFieldWarningsEnd, authWarningsStart),
       ...warningNotes.slice(authWarningsEnd),
+      ...advisoryNotes,
     ],
     findings: authRepair.findings,
     authProfilesRepaired,
