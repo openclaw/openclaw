@@ -724,7 +724,7 @@ it("renders new viewport rows next frame when a measurement reads a fast scroll"
   }
 });
 
-it("keeps a pending native jump when outgoing rows resize", async () => {
+it("keeps a pending native jump when outgoing rows resize before paint", async () => {
   let onResize: (() => void) | undefined;
   // Deliver the native jump before the transcript's row observers in the same
   // resize delivery, with its scroll event still waiting for the next frame.
@@ -740,7 +740,7 @@ it("keeps a pending native jump when outgoing rows resize", async () => {
   });
 
   const target = 1800;
-  const committedFrame = await new Promise<{
+  const firstPaint = await new Promise<{
     offset: number;
     top: number;
     bottom: number;
@@ -750,30 +750,26 @@ it("keeps a pending native jump when outgoing rows resize", async () => {
     onResize = () => {
       onResize = undefined;
       viewport.scrollTop = target;
-      // This observer queues before the transcript's observer and its layout
-      // frame. Sample after that frame's writes, not before its callback runs.
-      requestAnimationFrame(() =>
-        requestAnimationFrame(() => {
-          const bounds = viewport.getBoundingClientRect();
-          const rows = [
-            ...host.querySelectorAll<HTMLElement>(".chat-virtual-row:not([data-prepared-row])"),
-          ].map((row) => row.getBoundingClientRect());
-          resolve({
-            offset: viewport.scrollTop,
-            top: Math.min(...rows.map((row) => row.top)),
-            bottom: Math.max(...rows.map((row) => row.bottom)),
-            viewportTop: bounds.top,
-            viewportBottom: bounds.bottom,
-          });
-        }),
-      );
+      requestAnimationFrame(() => {
+        const bounds = viewport.getBoundingClientRect();
+        const rows = [
+          ...host.querySelectorAll<HTMLElement>(".chat-virtual-row:not([data-prepared-row])"),
+        ].map((row) => row.getBoundingClientRect());
+        resolve({
+          offset: viewport.scrollTop,
+          top: Math.min(...rows.map((row) => row.top)),
+          bottom: Math.max(...rows.map((row) => row.bottom)),
+          viewportTop: bounds.top,
+          viewportBottom: bounds.bottom,
+        });
+      });
     };
     outgoing.style.height = "180px";
   });
 
-  expect(committedFrame.offset).toBe(target);
-  expect(committedFrame.top).toBeLessThanOrEqual(committedFrame.viewportTop);
-  expect(committedFrame.bottom).toBeGreaterThanOrEqual(committedFrame.viewportBottom);
+  expect(firstPaint.offset).toBe(target);
+  expect(firstPaint.top).toBeLessThanOrEqual(firstPaint.viewportTop);
+  expect(firstPaint.bottom).toBeGreaterThanOrEqual(firstPaint.viewportBottom);
   await settleLayout();
   expect(viewport.scrollTop).toBe(target);
 });

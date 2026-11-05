@@ -250,7 +250,12 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
             onOffset: (delta) => void (delta && this.initialRange.recordReaderMovement(delta)),
             onComposerLayout: (changed) => this.commitComposerResize(changed),
             onReaderScroll: (towardEnd) => this.callbacks.onReaderScroll?.(towardEnd),
-            onNativeScroll: callbacks.onNativeScroll,
+            onNativeScroll: (event) => {
+              // Measurement may have consumed this offset before its native event.
+              // Commit its queued rows now, ahead of this frame's paint.
+              this.presentation.flushChange();
+              callbacks.onNativeScroll?.(event);
+            },
           },
           instance,
           callback,
