@@ -176,14 +176,21 @@ describe("Memory watch configuration", () => {
     }
   });
 
-  it.each([false, true])(
-    "recovers missed files within five minutes while continuously busy (watch unavailable=%s)",
-    async (unavailable) => {
+  it.each([
+    { unavailable: false, sessions: false },
+    { unavailable: true, sessions: false },
+    { unavailable: false, sessions: true },
+    { unavailable: true, sessions: true },
+  ])(
+    "recovers missed files within five minutes (watch unavailable=$unavailable, sessions=$sessions)",
+    async ({ unavailable, sessions }) => {
       vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
-      const { active, idle } = await openManager("Amber lantern baseline.", true);
+      const { active, idle } = await openManager("Amber lantern baseline.", sessions);
       await idle();
-      expect(activity.listener).toBeTypeOf("function");
-      activity.listener!(true);
+      if (sessions) {
+        expect(activity.listener).toBeTypeOf("function");
+        activity.listener!(true);
+      }
       if (unavailable) {
         observer.observations[0]!.health({
           state: "unavailable",

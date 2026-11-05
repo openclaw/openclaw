@@ -76,19 +76,12 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
         this.markMemoryWatchDirty();
         return this.syncBackground({ reason: "watch" });
       },
-      onState: ({ health }) => {
-        if (health.length && health.every((entry) => entry.state === "ready")) {
-          this.memoryWatchUnavailable = false;
-        }
-      },
       onUnavailable: () => {
-        this.memoryWatchUnavailable = true;
         this.dirty = true;
       },
     });
     this.memoryWatcherReady = this.fileWatcher.start().catch((error: unknown) => {
       if (!this.closed) {
-        this.memoryWatchUnavailable = true;
         this.dirty = true;
         log.warn(`memory workspace watcher unavailable: ${String(error)}`);
       }

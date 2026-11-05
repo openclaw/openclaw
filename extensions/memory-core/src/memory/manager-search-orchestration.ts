@@ -183,10 +183,12 @@ export abstract class MemorySearchOrchestration extends MemorySearchRetrieval {
     const runSearch = async () => {
       opts?.onDebug?.({ backend: "builtin" });
       if (this.purpose === "cli") {
-        // One-shot readers have no resident recovery timer. The normal CLI sync
-        // discovers source drift and publishes it before acquiring a read lease.
+        // One-shot readers refresh before taking a lease; they have no resident timer.
         this.dirty ||= this.sources.has("memory");
-        await this.syncAdmitted({ reason: "cli" }).catch((error: unknown) => {
+        await this.syncAdmitted(
+          { reason: "cli-search" },
+          { allowEmbeddingBootstrapFallback: true },
+        ).catch((error: unknown) => {
           log.warn(`memory sync failed (cli-search): ${formatErrorMessage(error)}`);
         });
       }

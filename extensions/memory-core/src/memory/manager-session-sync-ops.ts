@@ -445,39 +445,33 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
           failed(err);
         }
       },
-      Math.max(0, deadline - performance.now()),
+      Math.max(0, Math.ceil(deadline - performance.now())),
     );
     this.sessionWatchTimer.unref();
   }
 
   private async processSessionUpdateBatch(): Promise<void> {
-    if (performance.now() >= this.sessionRecoveryAt) {
-      this.sessionBackgroundIndexing = true;
-      try {
-        // The existing idle timer also bounds missed-event recovery. A busy turn
-        // cannot defer this pass; the detached writer keeps serving reads available.
-        this.dirty ||= this.sources.has("memory");
-        await this.markSessionStartupCatchupDirtyFiles();
-        await this.syncPublishedIndexInBackground({ reason: "reconcile" });
-      } finally {
-        this.sessionRecoveryAt = performance.now() + SESSION_MAX_DEFERRAL_MS;
-        this.sessionBackgroundIndexing = false;
+    const recovery = performance.now() >= this.sessionRecoveryAt;
+    if (recovery) {
+      this.sessionRecoveryAt = performance.now() + SESSION_MAX_DEFERRAL_MS;
+      if (performance.now() < this.sessionRetryAt) {
         this.scheduleSessionIndexPass();
+        return;
       }
-      return;
     }
-    if (this.sessionAgentBusy) {
+    if (this.sessionAgentBusy && !recovery) {
       this.scheduleSessionIndexPass();
       return;
     }
     if (
+      !recovery &&
       !this.sessionFullSyncPending &&
       this.sessionPendingFiles.size === 0 &&
       this.sessionPendingTargets.size === 0
     ) {
       return;
     }
-    const fullSync = this.sessionFullSyncPending;
+    const fullSync = recovery || this.sessionFullSyncPending;
     this.sessionFullSyncPending = false;
     const pending = Array.from(this.sessionPendingFiles);
     const pendingTargets = Array.from(this.sessionPendingTargets.values());
@@ -489,19 +483,30 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       this.sessionsDirtyFiles.add(sessionFile);
     }
     if (fullSync || pending.length > 0 || pendingTargets.length > 0) {
-      this.sessionsDirty = true;
+      this.sessionsDirty ||= !recovery;
       // Resolve identities once in the sync owner, after queued work can proceed.
       this.sessionBackgroundIndexing = true;
       this.sessionIndexRetryRequested = false;
       let completed = false;
       let interrupted = false;
       try {
-        await this.syncBackground(
-          fullSync
-            ? { reason: "session-startup-catchup" }
-            : { reason: "session-delta", sessions: pendingTargets, archiveFiles: pending },
-        );
-        completed = !this.sessionIndexRetryRequested;
+        if (recovery) {
+          // Recovery bypasses activity deferral, but shares the existing retry settlement.
+          this.dirty ||= this.sources.has("memory");
+          await this.markSessionStartupCatchupDirtyFiles();
+          if (this.dirty || this.sessionsDirty) {
+            await this.syncPublishedIndexInBackground({ reason: "reconcile" });
+          }
+        } else {
+          await this.syncBackground(
+            fullSync
+              ? { reason: "session-startup-catchup" }
+              : { reason: "session-delta", sessions: pendingTargets, archiveFiles: pending },
+          );
+        }
+        completed =
+          !this.sessionIndexRetryRequested &&
+          !(recovery && (this.memoryFullRetryDirty || this.sessionsFullRetryDirty));
       } catch (error) {
         if (!(error instanceof MemoryBackgroundRebuildInterruptedError)) {
           throw error;
@@ -512,7 +517,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
         if (completed) {
           this.sessionRetryAttempt = 0;
           this.sessionRetryAt = 0;
-        } else {
+        } else if (!recovery || this.sources.has("sessions")) {
           this.sessionFullSyncPending ||= fullSync;
           this.sessionPendingFiles = new Set([...pending, ...this.sessionPendingFiles]);
           this.sessionPendingTargets = new Map([

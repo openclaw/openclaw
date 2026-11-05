@@ -491,6 +491,7 @@ describe("memory index", () => {
   );
 
   it("keeps search usable while maintenance syncs a full memory retry", async () => {
+    vi.useFakeTimers({ toFake: ["performance", "setTimeout", "clearTimeout"] });
     const manager = await syncedKeyword({ sources: ["memory", "sessions"], sessionMemory: true });
     const searchCurrent = () =>
       manager.search("current dirty search sync", { maxResults: 5, minScore: 0 });
@@ -498,15 +499,10 @@ describe("memory index", () => {
     await writeMemory("search-sync.md", content);
     markDirty(manager);
     const maintenance = pauseMaintenance(true);
-    const lifecycle = manager as unknown as {
-      sessionRecoveryAt: number;
-      processSessionUpdateBatch(): Promise<void>;
-    };
-    lifecycle.sessionRecoveryAt = performance.now();
-    const recovery = lifecycle.processSessionUpdateBatch();
 
     try {
       const firstSearch = manager.search("zebra", { maxResults: 5, minScore: 0 });
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
       await maintenance.ready;
       expect(manager.status()).toMatchObject({ dirty: true });
       expect(maintenance.state.fields!.runInPlaceReindex).toHaveBeenCalledTimes(1);
@@ -515,7 +511,7 @@ describe("memory index", () => {
       await expect(searchCurrent()).resolves.toEqual([]);
 
       maintenance.release();
-      await recovery;
+      await awaitIdle(manager);
       expect(manager.status().dirty).toBe(false);
 
       expect(await searchCurrent()).toEqual(
@@ -524,7 +520,7 @@ describe("memory index", () => {
       expect(maintenance.state.closed).toBe(true);
     } finally {
       maintenance.release();
-      await recovery;
+      await awaitIdle(manager);
       maintenance.spy.mockRestore();
     }
   });
