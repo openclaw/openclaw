@@ -42,6 +42,63 @@ import {
   prepareAgentRestartRecovery,
   resumeMarkedSessions,
 } from "./session-restart-resume.js";
+import * as systemTurnAuthority from "./session-system-turn-authority.js";
+
+it("requests original recorded custody only at the actual marked restart admission", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const person = ensureProfileForEmail("restart-source-intent@example.test");
+    const target = {
+      agentId: "main",
+      sessionKey: "agent:main:restart-source-intent",
+      sessionId: "restart-source-intent",
+    };
+    replaceSessionEntrySync(target, {
+      sessionId: target.sessionId,
+      updatedAt: Date.now(),
+      createdActor: { type: "human", source: "profile", id: person.id },
+    });
+    await persistGatewaySessionLifecycleEvent({
+      sessionKey: target.sessionKey,
+      event: {
+        runId: "restart-source-run",
+        sessionId: target.sessionId,
+        ts: Date.now(),
+        data: { phase: "start", startedAt: Date.now() },
+      },
+    });
+    const background = createProcessSessionFixture({
+      id: "restart-source-background",
+      backgrounded: true,
+    });
+    background.agentId = target.agentId;
+    background.sessionKey = target.sessionKey;
+    addSession(background);
+    await persistRunningSessionsForRestart({ cfg });
+    resetProcessRegistryForTests();
+    expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeDefined();
+    const context = createContext([], () => cfg);
+    const admission = vi
+      .spyOn(systemTurnAuthority, "prepareSessionSystemTurnAuthority")
+      .mockRejectedValue(new Error("Stop after observing restart admission intent"));
+    try {
+      await resumeMarkedSessions({
+        context,
+        signal: new AbortController().signal,
+        log: { warn() {} },
+      });
+      expect(admission).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: target.sessionKey,
+          sessionId: target.sessionId,
+          preserveRecordedSource: true,
+        }),
+      );
+    } finally {
+      admission.mockRestore();
+    }
+  }));
 
 it("reuses a prepared restart snapshot and joins its queue admission before startup unlocks", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {

@@ -283,13 +283,21 @@ export const cronAddHandler: GatewayRequestHandler = async ({
   });
   respond(
     true,
-    cronAddResultReadView({
-      result,
-      deliveryPreview:
-        "job" in result && !result.created
-          ? await resolveCronDeliveryPreview({ ...previewContext, job })
-          : deliveryPreview,
-    }),
+    {
+      ...cronAddResultReadView({
+        result,
+        deliveryPreview:
+          "job" in result && !result.created
+            ? await resolveCronDeliveryPreview({ ...previewContext, job })
+            : deliveryPreview,
+      }),
+      ...(creatorOptions?.operatorSourceUnavailable && !job.operatorSource
+        ? {
+            warning:
+              "This automation cannot retain the initiating operator grant. Protected operator actions require an interactive turn; its ingress owner must support principal recovery to run them unattended.",
+          }
+        : {}),
+    },
     undefined,
   );
 };

@@ -406,6 +406,18 @@ export async function captureCronCreatorSession(
   return {
     ...inference,
     ...(operatorSource ? { operatorSource } : {}),
+    operatorSourceUnavailable: Boolean(
+      callerScope &&
+      loaded &&
+      creatorSession &&
+      operatorAuthority &&
+      job.payload.kind === "agentTurn" &&
+      isCronOperatorSourceParent(
+        { sessionTarget: job.sessionTarget, sourceConversation },
+        loaded.canonicalKey,
+      ) &&
+      !operatorSource,
+    ),
     assertOperatorSourceCurrent: operatorSource ? operatorAuthority?.assertCurrent : undefined,
     ...(sourceConversation ? { sourceConversation } : {}),
     ...(createdActor ? { createdActor } : {}),
