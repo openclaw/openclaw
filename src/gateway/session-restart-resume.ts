@@ -613,6 +613,7 @@ async function resumeRestartStore(
             agentId,
             sessionKey,
             sessionId: entry.sessionId,
+            preserveRecordedSource: true,
             assertCurrent: () => signal.throwIfAborted(),
           });
           admissionStage = "target";
