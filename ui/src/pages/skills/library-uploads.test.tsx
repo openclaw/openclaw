@@ -40,6 +40,25 @@ function harness() {
   library.state.view = "mine";
   return { library, config, request, connection };
 }
+it("submits a URL through the existing server import owner without browser fetching", async () => {
+  const { library, request } = harness();
+  library.setImportOpen(true);
+  library.state.importSlug = "url-skill";
+  const mounted = mountLibrary(library, true);
+  flush();
+  const input = mounted.container.querySelector<HTMLInputElement>('[name="library-import-url"]')!;
+  input.value = "https://forge.example.test/team/repo/tree/main/skills/guide";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
+  mounted.container.querySelector("form")!.requestSubmit();
+  await waitForFast(() =>
+    expect(request).toHaveBeenCalledWith("skills.library.import", {
+      slug: "url-skill",
+      source: { kind: "url", url: input.value, path: "", ref: undefined },
+    }),
+  );
+});
+
 function mountLibrary(library: SkillLibraryModel, dialogsOnly = false) {
   return mountSolid(() =>
     dialogsOnly ? (
@@ -194,7 +213,7 @@ it.each(["files", "clawhub"])(
     const operation =
       kind === "files"
         ? library.importFiles([fileWithReader("SKILL.md", () => reading.promise)])
-        : library.importClawHub("imported-skill", "@fixture/calendar");
+        : library.importSource({ kind: "clawhub", slug: "@fixture/calendar" });
     await waitForFast(() => {
       expect(submit.disabled).toBe(true);
       expect(submit.textContent).toContain("Importing");

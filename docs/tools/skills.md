@@ -153,6 +153,36 @@ configuration. Open **Plugins → Skills** to create a skill, import a `SKILL.md
 or ZIP bundle, or add a skill from ClawHub. The editor keeps supporting scripts,
 references, and assets with the instructions.
 
+URL imports download on the Gateway, not in your browser. Paste an HTTPS raw
+`SKILL.md` or archive URL, or a GitHub-, GitLab-, Gitea-, or Forgejo-style folder
+link. Recognized URL shapes work on self-hosted forges too. For other folder
+webpages, provide a direct archive URL and the directory relative to its unpacked
+root. The optional ref override and directory fields handle ambiguous branch
+names without probing remote refs. Imports keep companion files and nested paths;
+fetched scripts are never executed.
+
+Repository archive downloads may include the whole repository. They share the
+existing upload and extraction limits, including 1 MiB per file and 8 MiB per
+bundle, so a small selected skill in a large repository can still exceed them.
+Use a smaller skill-only archive or upload the files instead. Publicly reachable
+self-hosted forges can use these URL forms. Private/internal-address HTTPS
+sources are blocked by default. An operator can grant exact origins through
+`skills.library.import.allowedOrigins`, for example `https://forge.corp.example:8443`.
+This is an additional private-address grant for all admitted personal URL-import
+callers, not a public-target allowlist or path restriction. HTTPS, DNS pinning,
+per-redirect origin checks, and metadata/link-local protections remain in force.
+A redirect to another private origin or port requires its own grant. Policy changes
+during an import abort it rather than settling an old grant. Request parameters
+cannot supply this permission.
+
+The Gateway itself needs corporate DNS/VPN reachability and normal TLS trust.
+Operator install-policy approval does not grant network access. Browser cookies
+and private-auth sessions are not forwarded; this option supplies no credentials.
+Authenticated private forges still need separately authorized host-bound
+authentication or a usable direct/presigned bundle URL. Explicit loopback origins
+follow the shared guard's existing exception; a non-loopback hostname that
+rebinds to loopback remains blocked. Operator source policy and scanning still apply.
+
 The ordinary single-admin setup stays unchanged: workspace authoring still
 uses `<workspace>/skills`, and existing file-backed skills are not moved into
 the library. A shared token does not identify a person. Personal library

@@ -17,6 +17,7 @@ import {
   type SkillsLibraryReceipt,
   type SkillsLibraryMutateParams,
   type SkillsLibraryUploadResult,
+  type SkillsLibraryImportParams,
   SKILL_LIBRARY_MAX_BUNDLE_BYTES,
   SKILL_LIBRARY_MAX_FILE_BYTES,
   SKILL_LIBRARY_MAX_FILES,
@@ -105,6 +106,9 @@ export function createSkillLibrary(
     importSlug: string;
     importSource: { slug: string; version?: string } | null;
     importSelection: File[];
+    importUrl: string;
+    importPath: string;
+    importRef: string;
   }>({
     list: null,
     listRead: null,
@@ -118,6 +122,9 @@ export function createSkillLibrary(
     importSlug: "",
     importSource: null,
     importSelection: [],
+    importUrl: "",
+    importPath: "",
+    importRef: "",
   });
   const data = observation.state;
   const [local, setLocal] = createStore({ importOpen: false, newFilePath: "", query: "" });
@@ -185,6 +192,9 @@ export function createSkillLibrary(
       data.importSlug = "";
       data.importSource = null;
       data.importSelection = [];
+      data.importUrl = "";
+      data.importPath = "";
+      data.importRef = "";
     }
   }
   function canWrite() {
@@ -643,7 +653,7 @@ export function createSkillLibrary(
         }
       }, true);
     },
-    async importClawHub(slug: string, sourceSlug: string, version?: string) {
+    async importSource(source: SkillsLibraryImportParams["source"]) {
       const connection = gateway.capture();
       if (!connection || !data.list?.profileId || !canWrite()) {
         return;
@@ -651,7 +661,7 @@ export function createSkillLibrary(
       await perform(async () => {
         const receipt = await connection.client.request<SkillsLibraryReceipt>(
           "skills.library.import",
-          { slug, source: { kind: "clawhub", slug: sourceSlug, ...(version ? { version } : {}) } },
+          { slug: data.importSlug, source },
         );
         if (gateway.isCurrent(connection)) {
           setImportOpen(false);

@@ -82,6 +82,11 @@ const enSkillLibrary = {
       "Choose SKILL.md together with its supporting files, or a folder containing SKILL.md at its root.",
     uploadFailed: "Couldn’t confirm the upload. Check your library before importing again.",
     importHelp: "Import a skill into your private library.",
+    sourceUrl: "Skill URL",
+    sourceUrlHelp:
+      "Paste an HTTPS SKILL.md, archive, or recognized forge folder link. Repository archives share the upload limits; use a smaller bundle URL if too large.",
+    sourcePath: "Archive directory (optional, relative to the unpacked root)",
+    sourceRef: "Repository ref override (optional; use an explicit directory for ambiguous refs)",
     importClawHub: "Import {source} into your private library.",
     files: "Files",
     filesHelp: "SKILL.md with supporting files, a folder, or a ZIP (saved on import).",

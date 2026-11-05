@@ -14,7 +14,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { uploadsDisabledMessage } from "../../lib/uploads.ts";
-import { LibraryDialog } from "./library-dialog.tsx";
+import { LibraryDialog, LibrarySourceFields } from "./library-dialog.tsx";
 import { libraryFileText } from "./library-file-text.ts";
 import type { LibraryDetailOutcome, SkillLibraryModel } from "./library-state.ts";
 import { SkillLibraryToolbar } from "./library-toolbar.tsx";
@@ -552,6 +552,7 @@ function LibraryImport(props: { library: SkillLibraryModel }) {
               busy() ||
               !props.library.canWrite() ||
               (!current().importSource &&
+                !current().importUrl.trim() &&
                 (!props.library.uploadsEnabled() || current().importSelection.length === 0))
             }
           >
@@ -592,6 +593,7 @@ function LibraryImport(props: { library: SkillLibraryModel }) {
           }
         />
       </label>
+      <LibrarySourceFields library={props.library} />
       <Show when={!current().importSource && props.library.uploadsEnabled()}>
         <div class="field" role="group" aria-labelledby="library-import-files-label">
           <span id="library-import-files-label">{t("skillLibrary.files")}</span>
@@ -637,6 +639,7 @@ function LibraryImport(props: { library: SkillLibraryModel }) {
                         : [];
                       props.library.edit((state) => {
                         state.importSelection = files;
+                        state.importUrl = "";
                       });
                       input.value = "";
                     }}

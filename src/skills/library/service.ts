@@ -9,6 +9,7 @@ import {
   type SkillsLibraryReadResult,
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { evaluateSkillInstallPolicy } from "../../plugins/install-security-scan.js";
+import type { InstallPolicySource } from "../../security/install-policy.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import {
   assertSkillBundleHasNoLiteralSecrets,
@@ -24,6 +25,8 @@ import {
 } from "./bundle.js";
 import { captureSkillLibraryAccess } from "./store-access.js";
 import { assertSkillLibraryRevision, type SkillLibraryAuthority } from "./store.js";
+export type SkillLibraryImportPolicy = { source: InstallPolicySource; requestedSpecifier: string };
+
 export { skillLibraryReceipt } from "./receipt.js";
 /** Prepared at human ingress without host database access. */
 export async function resolveSkillLibraryPresentation(
@@ -81,6 +84,7 @@ export async function saveSkillLibrary(
   params: SkillsLibrarySaveParams,
   options: OpenClawStateDatabaseOptions = {},
   uploadId?: string,
+  importPolicy?: SkillLibraryImportPolicy,
 ): Promise<SkillsLibraryReceipt> {
   if (!validateSkillsLibrarySaveParams(params)) {
     throw new SkillLibraryError("INVALID_BUNDLE", "Invalid skill save parameters.");
@@ -128,7 +132,13 @@ export async function saveSkillLibrary(
       installId: "library",
       logger: {},
       origin: { type: "skill-library" },
-      source: { kind: "local-path", authority: "user", mutable: false, network: false },
+      source: importPolicy?.source ?? {
+        kind: "local-path",
+        authority: "user",
+        mutable: false,
+        network: false,
+      },
+      requestedSpecifier: importPolicy?.requestedSpecifier,
       skillName: params.slug,
       sourceDir: staged.staging,
       mode: previous ? "update" : "install",

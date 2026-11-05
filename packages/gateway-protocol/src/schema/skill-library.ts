@@ -73,11 +73,19 @@ export const SkillsLibraryActivateParamsSchema = closedObject({
 });
 export const SkillsLibraryImportParamsSchema = closedObject({
   slug,
-  source: closedObject({
-    kind: Type.Literal("clawhub"),
-    slug: Type.String({ minLength: 1, maxLength: 256 }),
-    version: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
-  }),
+  source: Type.Union([
+    closedObject({
+      kind: Type.Literal("clawhub"),
+      slug: Type.String({ minLength: 1, maxLength: 256 }),
+      version: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+    }),
+    closedObject({
+      kind: Type.Literal("url"),
+      url: Type.String({ minLength: 1, maxLength: 4096 }),
+      path: Type.Optional(Type.String({ maxLength: 512 })),
+      ref: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+    }),
+  ]),
 });
 export const SkillsLibraryUploadParamsSchema = Type.Union([
   closedObject({
