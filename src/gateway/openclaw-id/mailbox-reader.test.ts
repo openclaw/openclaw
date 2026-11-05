@@ -1,6 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { MailboxMessage } from "../../../packages/openclaw-id-protocol/src/index.js";
+import {
+  fingerprint,
+  formatEd25519PublicKey,
+  formatIrohEndpointKey,
+  generateEd25519Signer,
+  OWNER_CAPABILITIES,
+  randomBytes,
+  ROOT_EPOCH,
+  signStatement,
+  type MailboxMessage,
+} from "../../../packages/openclaw-id-protocol/src/index.js";
 import { applyMailboxMessage, startMailboxReader } from "./mailbox-reader.js";
+import { linkedClaw } from "./openclaw-id.test-support.js";
 
 const rootMail: MailboxMessage = {
   message_id: "m1",
@@ -137,5 +148,50 @@ describe("mailbox reader callbacks", () => {
       stop.signal,
     );
     expect(submit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("mailbox revocation replay", () => {
+  it("refuses a captured revocation replayed after the device is approved again", async () => {
+    const claw = await linkedClaw();
+    const now = Math.floor(Date.now() / 1000);
+    const laptop = await generateEd25519Signer();
+    const peer = formatIrohEndpointKey(randomBytes(32));
+    const body = {
+      ...{ device_pub: formatEd25519PublicKey(laptop.publicKey), peer_keys: [peer] },
+      ...{ label: "laptop", scope: "owner" as const, caps: [...OWNER_CAPABILITIES] },
+      ...{ issued_at: now, expires_at: null, root_epoch: ROOT_EPOCH },
+    };
+    const cert = await signStatement("OwnerDeviceCert", body, claw.device);
+    const approve = async () =>
+      expect(
+        await claw.authority.submit(await claw.sign({ op: "add_owner_device", cert }), "tunnel"),
+      ).toMatchObject({ ok: true });
+    await approve();
+    const revocation = await signStatement(
+      "Revocation",
+      {
+        ...{ claw_id: claw.clawId, seq: (await claw.authority.load())!.authority!.seq },
+        ...{ target_fp: await fingerprint(body.device_pub), target_kind: "owner_device" as const },
+        ...{ reason: "lost", root_epoch: ROOT_EPOCH, issued_at: now },
+      },
+      claw.device,
+    );
+    const message = {
+      ...rootMail,
+      claw_id: claw.clawId,
+      payload: { kind: "revocation" as const, revocation },
+    };
+    const sink = { submit: (s: unknown) => claw.authority.submit(s, "mailbox"), redeem: vi.fn() };
+    const [removed] = await applyMailboxMessage(message, sink);
+    expect(removed).toMatchObject({ ok: true });
+    expect(removed?.ok && removed.events).toContainEqual({
+      type: "invalidate_tokens",
+      peer_keys: [peer],
+    });
+    await approve();
+    const [replayed] = await applyMailboxMessage(message, sink);
+    expect(replayed).toMatchObject({ ok: false, code: "seq_conflict" });
+    expect((await claw.authority.admittedPeerKeys()).admitted).toContain(peer);
   });
 });

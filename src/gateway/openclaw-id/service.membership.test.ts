@@ -79,7 +79,7 @@ async function linkedClaw() {
       { claw_id: prep.claw_id, seq, target, issued_at: now() },
       signer,
     );
-  return { authority, cert, device, root, w1, sign };
+  return { authority, cert, device, root, w1, sign, clawId: prep.claw_id };
 }
 
 function serviceFor(authority: Awaited<ReturnType<typeof linkedClaw>>["authority"]) {
@@ -300,6 +300,8 @@ describe("Gateway membership authority and enforcement", () => {
     const revocation = await signStatement(
       "Revocation",
       {
+        claw_id: claw.clawId,
+        seq: 2,
         target_fp: await fingerprint(laptopCert.body.device_pub),
         target_kind: "owner_device",
         reason: "lost",

@@ -138,6 +138,23 @@ describe("Gateway invites (spec section 6.3)", () => {
     expect((await service.linkStatus()).invites?.[0]).toMatchObject({ status: "expired" });
   });
 
+  it("deletes a spent invite and its report on the next write", async () => {
+    const { claw, service, invite } = await invitedClaw();
+    await redeem(claw, invite);
+    const deny = await claw.sign({ op: "deny_invite", invite_id: invite.inviteId });
+    expect(await service.submitStatement("local_operator", deny)).toMatchObject({ ok: true });
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + (7 * 86400 + 301) * 1000);
+    const next = await ownerInvite(claw, { email: "carol@example.com" });
+    const proofKey = next.proofKey;
+    await expect(
+      service.registerInvite("local_operator", { cap: next.cap, proofKey }),
+    ).resolves.toMatchObject({ ok: true });
+    const stored = await claw.authority.load();
+    expect(Object.keys(stored?.authority?.invites ?? {})).toEqual([next.inviteId]);
+    expect(stored?.invite_reports?.[invite.inviteId]).toBeUndefined();
+  });
+
   it("keeps a redemption pending inside the seven-day window", async () => {
     const { claw, service, invite } = await invitedClaw();
     await redeem(claw, invite);

@@ -321,6 +321,8 @@ async function revocationOfD1(claw: LinkedClaw) {
   return await signStatement(
     "Revocation",
     {
+      claw_id: claw.clawId,
+      seq: 1,
       target_fp: await fingerprint(formatEd25519PublicKey(claw.device.publicKey)),
       target_kind: "owner_device",
       reason: "lost",

@@ -133,6 +133,8 @@ describe("OpenClaw ID People invalidations", () => {
     const removal = await signStatement(
       "Revocation",
       {
+        claw_id: h.claw.clawId,
+        seq: 1,
         target_fp: await fingerprint(h.claw.cert.body.device_pub),
         target_kind: "owner_device",
         reason: "lost",

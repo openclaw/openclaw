@@ -17,6 +17,7 @@ import {
   bytesToHex,
   submitRedemption,
   submitStatement,
+  withoutSpentInvites,
   type AuthorityEvent,
   type AuthorityState,
   type Channel,
@@ -89,9 +90,11 @@ export type RedemptionSender = {
   location_hint?: string | null;
 };
 
-// Consumes expired pending redemptions before a write sees the state, and
-// records them as expired. Returns the record to write from and the owner notices.
-function withExpiredRedemptions(
+// Sweeps invites before a write sees the state: consumes expired pending redemptions
+// (recorded as expired), then deletes spent invite records with their reports, so
+// stored invites stay within the protocol's cap. Returns the record to write from
+// and the owner notices.
+function withSweptInvites(
   record: StoredClaw & { authority: NonNullable<StoredClaw["authority"]> },
   now: number,
 ): {
@@ -99,7 +102,8 @@ function withExpiredRedemptions(
   events: AuthorityEvent[];
 } {
   const swept = expirePendingRedemptions(record.authority, now);
-  if (swept.expired.length === 0) {
+  const spent = withoutSpentInvites(swept.state, now);
+  if (swept.expired.length === 0 && spent.removed.length === 0) {
     return { record, events: [] };
   }
   let reports = record.invite_reports;
@@ -107,13 +111,29 @@ function withExpiredRedemptions(
     reports = resolveReport(reports, inviteId, "expired", now);
   }
   return {
-    record: { ...record, authority: swept.state, invite_reports: reports },
+    record: {
+      ...record,
+      authority: spent.state,
+      invite_reports: withoutReports(reports, spent.removed),
+    },
     events: swept.expired.map((ref) => ({
       type: "notify_owners" as const,
       event: "redemption_resolved" as const,
       ref,
     })),
   };
+}
+
+// Drops the reports of deleted invites.
+function withoutReports(
+  reports: StoredClaw["invite_reports"],
+  inviteIds: readonly string[],
+): StoredClaw["invite_reports"] {
+  if (!reports || inviteIds.length === 0) {
+    return reports;
+  }
+  const gone = new Set(inviteIds);
+  return Object.fromEntries(Object.entries(reports).filter(([inviteId]) => !gone.has(inviteId)));
 }
 
 // Marks how an invite ended in its report (kept for display).
@@ -363,7 +383,7 @@ export function createOpenClawIdAuthority(
         }
         const now = nowSeconds();
         // Expired redemptions are consumed first, so a late approval cannot admit anyone.
-        const { record: current, events: expiry } = withExpiredRedemptions(
+        const { record: current, events: expiry } = withSweptInvites(
           { ...stored, authority: stored.authority },
           now,
         );
@@ -412,7 +432,7 @@ export function createOpenClawIdAuthority(
           return { ok: false, code: "not_linked", detail: "this claw is not linked" };
         }
         const now = nowSeconds();
-        const { record: current, events } = withExpiredRedemptions(
+        const { record: current, events } = withSweptInvites(
           { ...stored, authority: stored.authority },
           now,
         );
@@ -442,7 +462,7 @@ export function createOpenClawIdAuthority(
           return { ok: false, code: "not_linked", detail: "this claw is not linked" };
         }
         const now = nowSeconds();
-        const { record: current, events } = withExpiredRedemptions(
+        const { record: current, events } = withSweptInvites(
           { ...stored, authority: stored.authority },
           now,
         );
