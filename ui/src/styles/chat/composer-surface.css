@@ -974,7 +974,7 @@
 /* Running returns the primary slot to the established soft-danger Stop state:
    a quiet red ground and red square distinguish interruption from Send without
    turning the control into a high-contrast white disc. */
-.agent-chat__input .chat-send-btn--stop {
+.agent-chat__input .chat-send-btn.chat-send-btn--stop {
   background: color-mix(in srgb, var(--danger) 14%, transparent);
   color: var(--danger);
 }

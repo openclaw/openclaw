@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Cached composer display reconciliation" });
@@ -14,13 +15,25 @@ suite.define(() => {
         const text = "The synthetic conversation stays in place while its settings refresh.";
         const cached = createControlUiSessionRow(sessionKey, "Cached composer example", 1, {
           model: "reasoning-example",
-          modelProvider: "example",
+          modelProvider: "openai",
           modelOverrideSource: "user",
           thinkingLevel: "high",
+          fastMode: true,
+          effectiveFastMode: true,
+          status: "running",
+          hasActiveRun: true,
+          activeRunIds: ["synthetic-active-run"],
+          lastRunId: "synthetic-active-run",
           permissionMode: "full",
           totalTokens: 14_000,
           contextTokens: 100_000,
           totalTokensFresh: true,
+          contextWindow: "large",
+          contextWindowDefault: "standard",
+          contextWindows: [
+            { id: "standard", label: "Standard", contextWindow: 100_000 },
+            { id: "large", label: "Large", contextWindow: 200_000 },
+          ],
         });
         const thinkingLevels = [
           { id: "low", label: "Low" },
@@ -32,14 +45,14 @@ suite.define(() => {
           authMethod: "trusted-proxy",
           authMode: "trusted-proxy",
           deferredMethods: ["connect"],
-          agentModel: "example/reasoning-example",
+          agentModel: "openai/reasoning-example",
           sessions: [cached],
           historyMessages: [{ role: "assistant", content: text }],
           models: [
             {
               id: "reasoning-example",
               name: "Reasoning example",
-              provider: "example",
+              provider: "openai",
               reasoning: true,
               thinkingDefault: "medium",
               thinkingLevels,
@@ -47,7 +60,7 @@ suite.define(() => {
             {
               id: "alternate-example",
               name: "Alternate example",
-              provider: "example",
+              provider: "openai",
               reasoning: true,
               thinkingDefault: "medium",
               thinkingLevels,
@@ -63,6 +76,12 @@ suite.define(() => {
         const effort = pane.locator("[data-chat-thinking-select]");
         const permission = pane.locator("[data-chat-permission-select]");
         const ring = pane.locator(".context-ring");
+        const stop = pane.getByRole("button", { name: "Stop", exact: true });
+        const stopAppearance = () =>
+          stop.evaluate((element) => {
+            const style = getComputedStyle(element);
+            return [style.color, style.backgroundColor, style.opacity];
+          });
         const flushSnapshot = () =>
           page.evaluate(async () => {
             const active = document.querySelector(".chat-pane-cache__pane--active");
@@ -71,9 +90,10 @@ suite.define(() => {
         await expect.poll(() => model.getAttribute("aria-disabled")).toBe("false");
         await expect
           .poll(() => model.getAttribute("data-chat-select-value"))
-          .toBe("example/reasoning-example");
+          .toBe("openai/reasoning-example");
         await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("high");
         await expect.poll(() => permission.getAttribute("data-chat-select-value")).toBe("full");
+        await openChatDetails(page);
         await flushSnapshot();
 
         const appearance = () =>
@@ -93,24 +113,61 @@ suite.define(() => {
               }),
             );
         const liveAppearance = await appearance();
+        const liveStopAppearance = await stopAppearance();
         await expect.poll(() => ring.getAttribute("aria-label")).toContain("14%");
         await page.addInitScript(() => {
+          const frames: {
+            at: number;
+            controls: { selector: string; x: number; width: number; text: string }[];
+          }[] = [];
+          Reflect.set(window, "composerControlFrames", frames);
+          let previous = "";
           const sample = () => {
+            const selectors = [
+              ".agent-chat__composer-trail",
+              ".agent-chat__composer-controls",
+              ".context-usage",
+              "[data-chat-model-select]",
+              "[data-chat-thinking-select]",
+              ".agent-chat__composer-actions",
+            ];
+            const controls = selectors.flatMap((selector) => {
+              const element = document.querySelector(selector);
+              const box = element?.getBoundingClientRect();
+              return element && box?.width
+                ? [
+                    {
+                      selector,
+                      x: box.x,
+                      width: box.width,
+                      text: element.textContent?.trim() ?? "",
+                    },
+                  ]
+                : [];
+            });
+            const signature = JSON.stringify(controls);
+            if (controls.length && signature !== previous) {
+              frames.push({ at: performance.now(), controls });
+              previous = signature;
+            }
             if (document.querySelector(".agent-chat__input")) {
               const sampledRing = document.querySelector(".context-ring");
-              Reflect.set(window, "firstComposerContext", {
-                label: sampledRing?.getAttribute("aria-label"),
-                opacity: sampledRing ? getComputedStyle(sampledRing).opacity : null,
-              });
-            } else {
-              requestAnimationFrame(sample);
+              if (!Reflect.has(window, "firstComposerContext"))
+                Reflect.set(window, "firstComposerContext", {
+                  label: sampledRing?.getAttribute("aria-label"),
+                  opacity: sampledRing ? getComputedStyle(sampledRing).opacity : null,
+                });
             }
+            if (!Reflect.get(window, "composerControlFramesStopped")) requestAnimationFrame(sample);
           };
           requestAnimationFrame(sample);
         });
         await page.reload();
         await gateway.waitForRequest("connect");
         await page.getByText(text, { exact: true }).waitFor();
+        await pane
+          .locator(".agent-chat__input")
+          .screenshot({ path: `${suite.artifactDir}/cached-composer.png` });
         expect(await appearance()).toEqual(liveAppearance);
         expect(
           await page.evaluate(async () => {
@@ -122,6 +179,10 @@ suite.define(() => {
           opacity: "1",
         });
         expect(await ring.getAttribute("aria-label")).toContain("14%");
+        expect(await stopAppearance()).toEqual(liveStopAppearance);
+        expect(await stop.isDisabled()).toBe(true);
+        await stop.click({ force: true });
+        expect(await gateway.getRequests("sessions.abort")).toHaveLength(0);
         for (const control of [model, effort, permission]) {
           expect(await control.getAttribute("aria-disabled")).toBe("true");
           expect(await control.getAttribute("aria-description")).toContain("Refreshing");
@@ -133,6 +194,30 @@ suite.define(() => {
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
         await gateway.resolveDeferred("connect");
         await expect.poll(() => permission.isEnabled()).toBe(true);
+        await expect.poll(() => model.getAttribute("aria-disabled")).toBe("false");
+        expect(await stop.isEnabled()).toBe(true);
+        await pane
+          .locator(".agent-chat__input")
+          .screenshot({ path: `${suite.artifactDir}/live-composer.png` });
+        const frames = await page.evaluate(async () => {
+          await new Promise(requestAnimationFrame);
+          Reflect.set(window, "composerControlFramesStopped", true);
+          return Reflect.get(window, "composerControlFrames");
+        });
+        for (const frame of frames) {
+          expect(frame.controls).toHaveLength(frames[0].controls.length);
+          for (const [index, control] of frame.controls.entries()) {
+            expect(
+              Math.abs(control.x - frames[0].controls[index].x),
+              control.selector,
+            ).toBeLessThanOrEqual(1);
+            expect(
+              Math.abs(control.width - frames[0].controls[index].width),
+              control.selector,
+            ).toBeLessThanOrEqual(1);
+            expect(control.text, control.selector).toBe(frames[0].controls[index].text);
+          }
+        }
         expect(await appearance()).toEqual(liveAppearance);
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
 
@@ -164,7 +249,7 @@ suite.define(() => {
         await gateway.resolveDeferred("connect");
         await expect
           .poll(() => model.getAttribute("data-chat-select-value"))
-          .toBe("example/alternate-example");
+          .toBe("openai/alternate-example");
         await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("low");
         await expect
           .poll(() => permission.getAttribute("data-chat-select-value"))

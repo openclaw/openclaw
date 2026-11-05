@@ -81,6 +81,13 @@ limit. `contextRingFrames` retains changed composer/ring display samples, and
 in the first visible composer DOM sample. Inspect the correlated compositor frame
 and its predecessor before claiming first-paint presence.
 
+Add `--composer-controls` to select the bundled Anthropic model's nondefault
+200K window and High effort through the real session owner. This uses synthetic
+credentials and makes no model request. The same per-frame samples include each
+composer group's x/width and text so a late badge or effort replacement stays
+visible in the attribution data. Use `--active-targets` for active chat and omit
+it for the archived secondary; the dashboard route retains the same controls.
+
 For plugin-publication attribution, add `--plugin-activation`. This enables bundled
 Workboard and two isolated native modules: a neutral CSS theme with a header
 accessory, and a board-like module that awaits two lazy chunks before registering

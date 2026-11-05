@@ -45,6 +45,7 @@ const { values } = parseArgs({
     "plugin-activation": { type: "boolean", default: false },
     "details-session-facts": { type: "boolean", default: false },
     "active-targets": { type: "boolean", default: false },
+    "composer-controls": { type: "boolean", default: false },
     "reload-after-navigation": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
     "init-script": { type: "string", multiple: true, default: [] },
@@ -769,6 +770,7 @@ try {
     pluginActivation: values["plugin-activation"],
     detailsSessionFacts: values["details-session-facts"],
     activeTargets: values["active-targets"],
+    composerControls: values["composer-controls"],
     ...(admission
       ? {
           admission: {
@@ -934,7 +936,7 @@ try {
             await page.addInitScript({ content: extraInitScripts.join("\n") });
           }
           await page.addInitScript({
-            content: `globalThis.__name = (fn) => fn; const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome); (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["transcript-late-paint"]}, ${values["active-targets"]});`,
+            content: `globalThis.__name = (fn) => fn; const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome); (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["transcript-late-paint"]}, ${values["active-targets"] || values["composer-controls"]});`,
           });
           const cdp = await context.newCDPSession(page);
           await cdp.send("Page.enable");
