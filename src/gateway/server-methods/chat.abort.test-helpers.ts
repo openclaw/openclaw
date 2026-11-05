@@ -176,8 +176,10 @@ export async function invokeChatAbortHandler(params: {
   request: ChatAbortParams;
   client?: {
     authenticatedUserProfile?: { profileId: string };
+    internal?: { authenticatedOperator: true };
     connId?: string;
     connect?: {
+      role?: "operator";
       device?: { id?: string };
       scopes?: string[];
     };

@@ -149,7 +149,8 @@ it.each(["initiator", "foreign writer", "reset incarnation"])(
         context,
         client: {
           connId: profileId === "bob" ? "bob-device" : "alice-other-device",
-          connect: { scopes: ["operator.write"] },
+          connect: { role: "operator", scopes: ["operator.write"] },
+          internal: { authenticatedOperator: true },
           authenticatedUserProfile: { profileId },
         },
       });
