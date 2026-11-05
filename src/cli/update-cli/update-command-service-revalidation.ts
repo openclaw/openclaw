@@ -93,7 +93,7 @@ export async function assertGatewayArtifactConsumerStopped(params: {
     const failure = params.verdict
       ? createUpdatePreflightFailure("gateway-stop-unverified", params.verdict.message)
       : {
-          message: `Cannot replace Git runtime artifacts before the Gateway is confirmed stopped. Stop it through its service manager or original terminal, then rerun \`${formatCliCommand("openclaw update", params.env)}\`. The serving runtime was left unchanged.`,
+          message: `Cannot replace Git runtime artifacts before the affected Gateway is confirmed stopped. Run \`${formatCliCommand("openclaw gateway status --deep", params.env)}\`, stop it through its service manager or original terminal (\`${formatCliCommand("openclaw gateway stop", params.env)}\` for a managed Gateway), then retry the original command. The serving runtime was left unchanged.`,
           failureFacts: [],
         };
     throw new UpdatePreMutationError(
