@@ -386,6 +386,10 @@ workflow honors its `runner_group` input. Release Decision, Diagnostic Drain,
 and the nightly watcher keep their existing runner selection and 720-minute
 budgets; standard hosted runners cannot preserve that lifetime.
 
+Mantis Discord and web UI actor authorization, request resolution, and ref
+validation use `ubuntu-24.04`. Their live proof jobs retain separate runtime
+placement and deadlines.
+
 Ordinary iOS smoke CI builds the app and embedded Watch targets for the runner's
 architecture, using the same iPhone simulator for compilation and voice-cleanup
 tests. It omits compiler indexes, which CI does not consume, and finishes
