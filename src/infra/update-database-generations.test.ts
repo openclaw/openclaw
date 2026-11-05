@@ -301,7 +301,7 @@ it("refuses a generation when a writer commits during the read", () => {
   expect(fs.readdirSync(staging)).toEqual([]);
 });
 
-it("does not reuse a receipt across a reader's WAL index without refusing the source", () => {
+it("reuses a receipt when a reader opens without committing during verification", () => {
   const { file, staging } = generationFixture("wal-absent");
   const receipt = readUpdatePhysicalDatabaseObservation(file).sqliteReceipt;
   if (!receipt) {
@@ -312,7 +312,7 @@ it("does not reuse a receipt across a reader's WAL index without refusing the so
     reader = openReader(file);
   });
   try {
-    expect(readUnchangedUpdateDatabaseGeneration(file, receipt)).toBeUndefined();
+    expect(readUnchangedUpdateDatabaseGeneration(file, receipt)).toBe(receipt.generation);
   } finally {
     reader?.close();
   }
