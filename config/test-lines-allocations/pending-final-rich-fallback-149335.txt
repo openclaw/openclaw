@@ -1,0 +1,2 @@
+# Pending-final rich-text-only recovery as plain text plus chart/table fallback (#149335): re-applied onto current main with 7 recovery tests
+104
