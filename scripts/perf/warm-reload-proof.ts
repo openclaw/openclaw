@@ -153,6 +153,10 @@ async function readProbe(page: Page) {
     data.stopped = true;
     return {
       ...data,
+      attribution: {
+        loaf: Reflect.get(window, "__perf")?.loaf ?? null,
+        rpc: Reflect.get(window, "__wsLog") ?? null,
+      },
       paneChrome: Reflect.get(window, "__paneChrome").read(data.firstTranscriptDomMs),
       timeOrigin: performance.timeOrigin,
       capturedUntilMs: performance.now(),
