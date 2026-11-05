@@ -17,3 +17,13 @@ it("rejects --agent when usage is not requested", async () => {
   ).rejects.toThrow("--agent is only valid with --usage");
   expect(scanStatusJsonFast).not.toHaveBeenCalled();
 });
+
+it("rejects a blank --agent even when usage is requested", async () => {
+  await expect(
+    runStatusJsonCommand({
+      opts: { ...createStatusGatewayProbeBudget(), usage: true, agent: "" },
+      runtime: createTestRuntime(),
+    }),
+  ).rejects.toThrow("--agent must not be blank");
+  expect(scanStatusJsonFast).not.toHaveBeenCalled();
+});
