@@ -17,6 +17,7 @@ import {
   type ColdLoadCpuProfile,
   type ColdLoadTraceEvent,
 } from "../../scripts/lib/control-ui-cold-load-trace.ts";
+import { createControlUiCpuCensus } from "../../scripts/lib/control-ui-cpu-census.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -58,6 +59,47 @@ function event(
 }
 
 describe("cold-load trace accounting", () => {
+  it("aggregates active leaf time across flows without charging ancestors or idle", () => {
+    const census = createControlUiCpuCensus();
+    census.add("route", {
+      nodes: [
+        node(1, frame("render", "ui/src/app.ts"), [2, 3, 4, 5, 6, 7]),
+        node(2, frame("flush", "node_modules/@solidjs/signals/dist/index.js")),
+        node(3, frame("(garbage collector)", "")),
+        node(4, frame("(idle)", "")),
+        node(5, frame("parse", "node_modules/parser/index.js")),
+        node(6, frame("evaluate", "__playwright_evaluation_script__")),
+        node(7, frame("minified", "http://localhost/assets/missing-map.js")),
+      ],
+      samples: [1, 2, 3, 4, 5, 6, 7],
+      timeDeltas: [3000, 2000, 4000, 100000, 5000, 6000, 1000],
+    });
+    census.add("route", singleProfile("render", "ui/src/app.ts"));
+    census.add("filter", singleProfile("render", "ui/src/app.ts"));
+    const report = census.report();
+    expect(report.activeMs).toBe(23);
+    expect(report.owners).toEqual({
+      app: 5,
+      Solid: 2,
+      browser: 4,
+      dependency: 5,
+      automation: 6,
+      unmapped: 1,
+    });
+    expect(report.observations[0]?.idleMs).toBe(100);
+    expect(report.functions.find(({ name }) => name === "render")).toMatchObject({
+      selfMs: 5,
+      flowCount: 2,
+      sharePercent: 500 / 23,
+      flows: [
+        { flow: "route", selfMs: 4 },
+        { flow: "filter", selfMs: 1 },
+      ],
+    });
+    expect(report.files.find(({ file }) => file === "ui/src/app.ts")?.selfMs).toBe(5);
+    expect(report.functions.some(({ name }) => name === "(idle)")).toBe(false);
+  });
+
   it("recognizes bundle scripts beneath root and deep-link paths", () => {
     const assets = new URL(assetBaseUrl);
     for (const pathname of [

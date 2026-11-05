@@ -367,7 +367,10 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
           'openclaw-cloud-workers-page input[aria-label="Crabbox backend"]',
         );
         assert.equal(await editor.filter({ visible: true }).count(), 0);
-        await page.locator(".cloud-environments__advanced > summary").click();
+        await page
+          .locator("openclaw-cloud-workers-page summary")
+          .filter({ hasText: "Advanced" })
+          .click();
         await page.waitForFunction(
           () =>
             document.querySelectorAll('openclaw-cloud-workers-page button[aria-label^="Edit"]')
@@ -467,32 +470,20 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   devices: {
     ready: "openclaw-devices-page .device-entry",
     action: {
-      label: "Open the first device action menu and focus its enabled Copy item",
+      label: "Expand the first paired device and reveal its identity and actions",
       run: async (page) => {
-        const trigger = page.locator("openclaw-devices-page .device-entry__menu-trigger").first();
-        assert.equal(await trigger.getAttribute("aria-expanded"), "false");
-        const menuId = await trigger.getAttribute("aria-controls");
-        assert(menuId, "The device action trigger must identify its own menu");
-        const menu = page.locator(`[role="menu"][id=${JSON.stringify(menuId)}]`);
-        await trigger.click();
-        await menu.waitFor({ state: "visible" });
-        await page.waitForFunction((id) => {
-          const surface = document.getElementById(id);
-          return (
-            surface?.matches(":popover-open") &&
-            surface.querySelector('[role="menuitem"][data-value="copy"]') === document.activeElement
-          );
-        }, menuId);
-        assert.equal(await trigger.getAttribute("aria-expanded"), "true");
-        assert.equal(await menu.locator('[role="menuitem"][data-value="copy"]').isEnabled(), true);
-        assert.equal(
-          await menu.locator('[role="menuitem"][data-value="remove"]').isEnabled(),
-          true,
-        );
-        const menuItems = await menu.locator('[role="menuitem"]').count();
-        assert.equal(menuItems, 2);
+        const row = page.locator("openclaw-devices-page details.device-entry").first();
+        assert.equal(await row.getAttribute("open"), null);
+        await row.locator(":scope > summary").click();
+        await row.locator(".device-entry__body").waitFor({ state: "visible" });
+        assert.equal(await row.getAttribute("open"), "");
+        const deviceId = await row.getAttribute("data-device-id");
+        assert(deviceId);
+        assert((await row.locator(".device-fact__id").textContent())?.includes(deviceId));
+        assert.equal(await row.locator(".device-fact__id button").isEnabled(), true);
+        assert.equal(await row.locator(".device-entry__remove").isEnabled(), true);
         await frames(page);
-        return { firstMenuOpened: true, copyFocused: true, menuItems };
+        return { deviceExpanded: true, copyEnabled: true, removeEnabled: true };
       },
     },
   },
@@ -657,10 +648,7 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
             document.querySelector('.portals-rail__item[aria-current="true"] .portals-rail__title')
               ?.textContent === "Census portal 1",
         );
-        await page
-          .locator(".portals-preview__notice")
-          .getByText("This portal requires an operator with write access.", { exact: true })
-          .waitFor();
+        await page.getByText("Write access required", { exact: true }).waitFor();
         assert.equal(await page.locator("openclaw-portals-page iframe").count(), 0);
         await frames(page);
         return {
@@ -706,7 +694,7 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   search: {
     ready: 'openclaw-search-page input[aria-label="Search query"]',
     action: {
-      label: "Run a mock search and present its result",
+      label: "Run a search health check and present its success",
       run: async (page, gateway) => {
         const before = (await gateway.getRequests("webSearch.test")).length;
         const input = page.locator('openclaw-search-page input[aria-label="Search query"]');
@@ -714,11 +702,11 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
         await input.press("Enter");
         await gateway.waitForRequest("webSearch.test", { after: before });
         await page
-          .locator("openclaw-search-page .settings-row__title")
-          .getByText("Synthetic census search result", { exact: true })
+          .locator("openclaw-search-page .search-test-status")
+          .getByText("Search succeeded", { exact: true })
           .waitFor();
         await frames(page);
-        return { searchResults: 1 };
+        return { searchTests: 1 };
       },
     },
   },
