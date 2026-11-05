@@ -285,7 +285,7 @@ describe("Liquid native Decision provider", () => {
   it("rejects a deadline that expires during image inspection before HTTP", async () => {
     const ctx = context();
     getImageMetadata.mockImplementationOnce(async () => {
-      vi.mocked(performance.now).mockReturnValue(ctx.deadlineMonotonicMs);
+      vi.spyOn(performance, "now").mockReturnValue(ctx.deadlineMonotonicMs);
       return { width: 32, height: 32 };
     });
     expect(await provider.evaluate(image, ctx)).toEqual({
