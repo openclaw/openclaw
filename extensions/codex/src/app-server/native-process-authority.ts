@@ -349,6 +349,23 @@ export class CodexNativeProcessAuthority {
   }
 
   bindTurn(client: CodexAppServerClient, threadId: string, turnId: string): void {
+    this.assertCurrent();
+    const previous = this.parentTurn;
+    if (
+      previous?.client === client &&
+      previous.threadId === threadId &&
+      previous.turnId === turnId
+    ) {
+      return;
+    }
+    if (previous) {
+      for (const command of this.commands) {
+        // Independently admitted children retain their own process custody.
+        if (command.parentTurn === previous && command.threadId === previous.threadId) {
+          command.client.closeAdmission(command);
+        }
+      }
+    }
     this.parentTurn = { client, threadId, turnId };
   }
 

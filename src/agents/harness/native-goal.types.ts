@@ -10,6 +10,8 @@ export type AgentHarnessNativeGoal = Readonly<{
   assertCurrent(): void;
   /** Own real Goal-tool verdict, retained only through this execution's final settlement. */
   readToolStatus?(): "complete" | "blocked" | undefined;
+  /** Join native pursuit suspension before an own terminal tool returns; not run revocation. */
+  subscribeToolStatus?(listener: () => Promise<void>): () => void;
   /** Project observed native state, never infer completion from a successful model turn. */
   onStatus(update: {
     status: "active" | "paused" | "blocked" | "complete";

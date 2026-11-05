@@ -13,7 +13,7 @@ title: "Goal"
 
 A **goal** is one durable objective attached to the current OpenClaw session.
 It gives the agent and the operator a shared target for long-running work.
-In built-in chat runs, supported local or cloud-worker Codex sessions, and the Claude Code CLI backend,
+In built-in chat runs, supported Codex sessions, and the Claude Code CLI backend,
 OpenClaw continues pursuing an active goal after a normal turn finishes. A final
 reply alone does not mean the objective is complete. A goal is not a reminder, cron job, or standing order.
 
@@ -239,10 +239,10 @@ goal remains an explicit operator action, not something the continuation does.
 Each settled automatic Goal turn increments `continuationTurns` once, including
 the turn that completes the Goal. Human Start and Resume turns do not increment it.
 
-Automatic nudges apply to built-in chat/auto-reply execution and supported local
-and cloud-worker Codex sessions, not other external runtimes, heartbeat turns, or independent
-scheduled work. They use the existing queue and run lifecycle rather than a
-periodic background scanner.
+Automatic nudges apply to built-in chat/auto-reply execution, not heartbeat turns
+or independent scheduled work. Supported native providers can own the pursuit
+inside the admitted run instead, as described below. These are alternative owners,
+not concurrent loops.
 
 ### Restart recovery
 
@@ -273,6 +273,11 @@ across native iterations, and releases them only after native execution has
 stopped. OpenClaw does not send another goal nudge while that native loop owns
 execution.
 
+- **Codex:** the owned app-server uses its native goal API. Each autonomous native
+  turn is admitted and projected separately under the same host run. Existing
+  native goals are reconciled before resume; a different native objective is not
+  overwritten. Explicit native goal commands retain user provenance. The adapter
+  pauses native pursuit before releasing its process and tool authority.
 - **Claude Code:** version-qualified CLI runs use native `/goal` and its Stop-hook
   evaluator within a single stdio invocation. User/project settings stay excluded
   in managed runs; bundled skills stay disabled and native tool calls still pass
@@ -288,6 +293,8 @@ an objective representable by its native command (at most 4,000 characters and
 not a reserved clear command). Exact OpenClaw token budgets, forks, and rewinds
 are not supported by that adapter. Unsupported requests fail explicitly rather
 than truncating the objective, dropping the budget, or replacing a foreign goal.
+Codex native pursuit requires an owned app-server transport; external shared
+servers are not given autonomous goal authority.
 
 Terminal provider errors and exhausted context recovery remain visible pauses.
 Existing native retry and compaction preserve history; recovery does not reset a
@@ -321,12 +328,10 @@ runtimes remain unsupported. The Claude Code CLI backend runs through core-owned
 local admission and applies its native compatibility checks before execution. Goals are not queued or steered into another run.
 The UI reports unsupported or busy sessions rather than creating an inactive Goal.
 
-Codex worker Goals use the same OpenClaw Goal ID, history, budgets, accounting,
-and continuation queue. Codex's separate autonomous Goal engine stays disabled;
-the core `get_goal`, `create_goal`, and `update_goal` tools remain available when
-native shell tools are enabled, subject to normal tool policy.
-Continuation retains the original operator authority; a restart never reconstructs
-it from a broader session owner.
+Supported native Goals retain the same OpenClaw Goal ID, history, budgets where
+supported, and accounting. The core `get_goal`, `create_goal`, and `update_goal`
+tools remain subject to ordinary tool policy. Continuation retains the original
+operator authority; a restart never reconstructs it from a broader session owner.
 
 The web Control UI shows the goal as a compact pill above the chat composer:
 a status icon, the status label (for example `Pursuing goal`), the truncated

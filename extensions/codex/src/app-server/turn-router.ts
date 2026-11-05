@@ -16,7 +16,10 @@ import { abortReason, waitForPromiseOrAbort } from "./timeout.js";
 import type {
   CodexAppServerServerRequest,
   CodexThreadRouteScope,
-  CodexThreadRequestHandler,
+  CodexThreadNotificationHandler,
+  CodexThreadRouteHandlers,
+  PendingNotification,
+  Route,
 } from "./turn-router.types.js";
 
 const DEFAULT_PREBIND_NOTIFICATION_LIMIT = 256;
@@ -24,21 +27,6 @@ const DEFAULT_GLOBAL_WARNING_LIMIT = 32;
 export const CODEX_APP_SERVER_NATIVE_TURN_WAIT_TIMEOUT_MS = 30_000;
 
 export type { CodexAppServerServerRequest, CodexThreadRouteScope } from "./turn-router.types.js";
-type CodexThreadNotificationHandler = (
-  notification: CodexPreparedServerNotification,
-  scope: CodexThreadRouteScope,
-) => Promise<void> | void;
-type CodexThreadNotificationReceivedHandler = (
-  notification: CodexPreparedServerNotification,
-  scope: CodexThreadRouteScope,
-  receivedAtMs: number,
-) => void;
-type CodexThreadRouteHandlers = {
-  onNotificationReceived?: CodexThreadNotificationReceivedHandler;
-  onNotification?: CodexThreadNotificationHandler;
-  onRequest?: CodexThreadRequestHandler;
-};
-
 export type CodexThreadRouteReservation = {
   readonly threadId: string;
   readonly signal: AbortSignal;
@@ -46,6 +34,9 @@ export type CodexThreadRouteReservation = {
   readonly completed: boolean;
   activate: (handlers: CodexThreadRouteHandlers) => Promise<void>;
   armTurn: () => void;
+  /** Retain native successor frames and requests under the same admitted pursuit. */
+  enableNativeSuccessors: () => void;
+  rearmNativeTurn: () => void;
   bindTurn: (
     turnId: string,
     options?: { completed?: boolean; beforeNotifications?: Promise<void> },
@@ -73,31 +64,6 @@ type CodexNativeTurnCompletionWatch = {
   cancel: () => void;
 };
 
-type Deferred = ReturnType<typeof createDeferred<void>>;
-type PendingNotification = {
-  notification: CodexPreparedServerNotification;
-  receivedAtMs: number;
-  scope: CodexThreadRouteScope;
-  receiptObserved?: true;
-};
-type Route = {
-  threadId: string;
-  controller: AbortController;
-  handlers?: CodexThreadRouteHandlers;
-  released?: Error;
-  ended: Deferred;
-  activated: Deferred;
-  gate: "open" | "armed" | "bound";
-  binding?: Deferred;
-  turnId?: string;
-  pending: PendingNotification[];
-  notificationPause?: Promise<void>;
-  notificationTail: Promise<void>;
-  observedNativeTurn?: { id: string; completed: boolean };
-  completedNativeTurnIds: Set<string>;
-  ignoredTurnNotificationKeys: Set<string>;
-  detachReleaseOn?: () => void;
-};
 type NativeTurnCompletionWatcher = {
   turnId: string;
   finish: (completed: boolean) => void;
@@ -208,6 +174,27 @@ class ClientTurnRouter {
       },
       activate: (handlers) => this.activate(route, handlers),
       armTurn: () => this.armTurn(route),
+      enableNativeSuccessors: () => {
+        route.nativeSuccessors = true;
+        route.retiredNativeTurnIds ??= new Set();
+        route.successorBinding ??= createDeferred<void>();
+      },
+      rearmNativeTurn: () => {
+        this.assertRoute(route);
+        if (
+          !route.nativeSuccessors ||
+          route.gate !== "bound" ||
+          !route.completedNativeTurnIds.has(route.turnId!)
+        ) {
+          throw new Error("Cannot rebind an unsettled native goal turn");
+        }
+        route.retiredNativeTurnIds?.add(route.turnId!);
+        route.handlers = undefined;
+        route.gate = "armed";
+        route.turnId = undefined;
+        route.binding = route.successorBinding;
+        route.successorBinding = createDeferred<void>();
+      },
       bindTurn: (turnId, bindingOptions) => this.bindTurn(route, turnId, bindingOptions),
       cancelTurn: () => this.cancelTurn(route),
       drain: () => this.waitForNotifications(route),
@@ -451,14 +438,17 @@ class ClientTurnRouter {
       ...(scope.turnId ? { turnId: scope.turnId } : {}),
     };
     const receivedAtMs = Date.now();
-    if (scope.turnId && (route.gate !== "bound" || scope.turnId === route.turnId)) {
+    if (
+      scope.turnId &&
+      (route.nativeSuccessors || route.gate !== "bound" || scope.turnId === route.turnId)
+    ) {
       if (notification.method === "turn/started") {
         route.completedNativeTurnIds.delete(scope.turnId);
         route.observedNativeTurn = { id: scope.turnId, completed: false };
       } else if (completedTurn) {
         // A bound route retains only its own terminal fact until the next arm.
         // Cleanup can then confirm completion without trusting an interrupt error.
-        if (route.gate === "bound") {
+        if (route.gate === "bound" && !route.nativeSuccessors) {
           route.completedNativeTurnIds.clear();
         }
         route.completedNativeTurnIds.add(scope.turnId);
@@ -480,6 +470,10 @@ class ClientTurnRouter {
       return undefined;
     }
     if (route.gate === "bound" && scope.turnId && scope.turnId !== route.turnId) {
+      if (route.nativeSuccessors && !route.retiredNativeTurnIds?.has(scope.turnId)) {
+        this.bufferNotification(route, notification, routeScope, receivedAtMs);
+        return undefined;
+      }
       this.warnDroppedStaleTurnNotification(route, notification, routeScope);
       return undefined;
     }
@@ -523,9 +517,19 @@ class ClientTurnRouter {
     if (!route.handlers && !(await waitForPromiseOrAbort(route.activated.promise, requestSignal))) {
       return undefined;
     }
-    const handler = !requestSignal.aborted && route.handlers?.onRequest;
-    if (!handler) {
-      return undefined;
+    if (
+      route.nativeSuccessors &&
+      route.gate === "bound" &&
+      scope.turnId &&
+      scope.turnId !== route.turnId
+    ) {
+      if (
+        route.completedNativeTurnIds.has(scope.turnId) ||
+        !route.successorBinding ||
+        !(await waitForPromiseOrAbort(route.successorBinding.promise, requestSignal))
+      ) {
+        return undefined;
+      }
     }
     // Open routes service a resumed native turn. Arming starts the handoff to a
     // new OpenClaw turn, whose requests must wait for its accepted turn id.
@@ -546,6 +550,10 @@ class ClientTurnRouter {
       !(await waitForPromiseOrAbort(this.waitForNotifications(route), requestSignal)) ||
       requestSignal.aborted
     ) {
+      return undefined;
+    }
+    const handler = !requestSignal.aborted && route.handlers?.onRequest;
+    if (!handler) {
       return undefined;
     }
     try {
@@ -590,7 +598,11 @@ class ClientTurnRouter {
         continue;
       }
       if (route.gate === "bound" && pending.scope.turnId && pending.scope.turnId !== route.turnId) {
-        this.warnDroppedStaleTurnNotification(route, pending.notification, pending.scope);
+        if (route.nativeSuccessors && !route.retiredNativeTurnIds?.has(pending.scope.turnId)) {
+          route.pending.push(pending);
+        } else {
+          this.warnDroppedStaleTurnNotification(route, pending.notification, pending.scope);
+        }
         continue;
       }
       this.observeNotificationReceipt(route, pending);
@@ -646,7 +658,7 @@ class ClientTurnRouter {
     receivedAtMs: number,
   ): void {
     const pending = { notification, receivedAtMs, scope };
-    if (route.gate === "bound") {
+    if (route.gate === "bound" && (!scope.turnId || scope.turnId === route.turnId)) {
       this.observeNotificationReceipt(route, pending);
     }
     if (route.pending.length < DEFAULT_PREBIND_NOTIFICATION_LIMIT) {
@@ -703,6 +715,7 @@ class ClientTurnRouter {
     route.ended.resolve();
     route.activated.resolve();
     route.binding?.resolve();
+    route.successorBinding?.resolve();
     route.detachReleaseOn?.();
     route.controller.abort(error);
     if (this.routes.get(route.threadId) === route) {

@@ -784,3 +784,5 @@ export function classifyAgentHarnessTerminalOutcome(
 }
 
 export const toolPolicy = Object.freeze({ createToolPolicyMatcher, expandToolGroups });
+
+export type { AgentHarnessNativeGoal } from "../agents/harness/native-goal.types.js";

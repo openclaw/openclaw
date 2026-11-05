@@ -38,6 +38,7 @@ import {
   type CodexAppServerClientOptions,
 } from "./shared-client.js";
 import { fingerprintJsonObject } from "./thread-fingerprints.js";
+import type { CodexStartOrResumeThreadParams } from "./thread-lifecycle-types.js";
 import { resolveCodexAppServerThreadModelSelection } from "./thread-model-selection.js";
 import { resolveCodexWebSearchPlan, type CodexNativeWebSearchSupport } from "./web-search.js";
 
@@ -164,7 +165,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     maxTokens: undefined,
   } as unknown as EmbeddedRunAttemptParams["model"];
   const legacyScheduledAppRecoveryPrompt = buildLegacyScheduledCodexAppRecoveryPrompt(params);
-  const runtimeParams: EmbeddedRunAttemptParams = usesSupervisionConnection
+  const runtimeParams: typeof params = usesSupervisionConnection
     ? {
         ...paramsWithoutOuterNativeOwnership,
         provider: "codex",
@@ -438,4 +439,25 @@ function isSameCodexModelId(a: string | undefined, b: string | undefined): boole
     return false;
   }
   return left === right || left.endsWith(`/${right}`) || right.endsWith(`/${left}`);
+}
+
+export function resolveCodexNativeModelAdmission(
+  runtime: Pick<CodexAttemptRuntime, "connection" | "nativeToolSurfaceEnabled">,
+): CodexStartOrResumeThreadParams["nativeModelAdmission"] {
+  const { params, options } = runtime.connection;
+  const modelAdmissionSource = runtime.nativeToolSurfaceEnabled
+    ? params.hostCapabilities.retainSourceAuthority?.()
+    : undefined;
+  try {
+    // Private completions keep the owner's optional hook configuration without its source grant.
+    return runtime.nativeToolSurfaceEnabled && params.hostCapabilities.retainSourceAuthority
+      ? modelAdmissionSource && modelAdmissionSource.modelPolicyRequired !== false
+        ? "required"
+        : options.nativeHookRelay?.enabled === false
+          ? "disabled"
+          : "optional"
+      : undefined;
+  } finally {
+    modelAdmissionSource?.release();
+  }
 }

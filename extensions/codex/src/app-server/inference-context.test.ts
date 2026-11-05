@@ -1,8 +1,10 @@
-import { describe, expect, it, onTestFinished } from "vitest";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   CODEX_INFERENCE_GENERATION_KEY,
   createCodexInferenceContext,
 } from "./inference-context.js";
+import { createCodexInferenceDispatch } from "./inference-dispatch.js";
 import { readCodexInferenceMetadata } from "./inference-metadata.js";
 import type { JsonObject } from "./protocol.js";
 
@@ -423,4 +425,201 @@ describe("native inference context", () => {
     expect(prepared.signal?.aborted).toBe(true);
     rejects(source, "current admitted");
   });
+});
+
+it("admits only receipt-bound native goal turns under the current host registration", async () => {
+  let current = true;
+  const f = fixture(() => {
+    if (!current) {
+      throw new Error("host run closed");
+    }
+  });
+  const owner = await f.context.register({
+    threadId: "root",
+    text: "private native goal context",
+    signal: f.controller.signal,
+    assertCurrent: () => {
+      if (!current) {
+        throw new Error("host run closed");
+      }
+    },
+    nativeGoal: true,
+  });
+  const successor = request("root", undefined, { turn_id: "native-successor" });
+  f.rejects(successor, "current admitted parent generation");
+  owner.admitNativeTurn("native-successor");
+  const firstPrepared = f.prepare(successor);
+  expect(firstPrepared.body.instructions).toContain("private native goal context");
+  f.rejects(
+    request("root", undefined, { turn_id: "foreign-turn" }),
+    "current admitted parent generation",
+  );
+  f.rejects(
+    request("root", "stale-generation", { turn_id: "native-successor" }),
+    "current admitted parent generation",
+  );
+  owner.admitNativeTurn("next-native-successor");
+  expect(() => firstPrepared.assertCurrent()).toThrow("native inference turn was replaced");
+  f.rejects(successor, "current admitted parent generation");
+  const nextSuccessor = request("root", undefined, { turn_id: "next-native-successor" });
+  const prepared = f.prepare(nextSuccessor);
+  current = false;
+  expect(() => prepared.assertCurrent()).toThrow("host run closed");
+  f.rejects(nextSuccessor, "host run closed");
+  expect(() => owner.admitNativeTurn("late-turn")).toThrow("host run closed");
+  owner.release();
+  f.rejects(successor, "current admitted parent generation");
+});
+
+function receiptDispatch(context: ReturnType<typeof createCodexInferenceContext>) {
+  const bind = vi.fn(() => ({ assertCurrent: () => {}, release: () => {} }));
+  const dispatch = createCodexInferenceDispatch({
+    context,
+    assertCurrent: () => {},
+    requireAdmission: true,
+    bindModelExecution: bind,
+  });
+  const prepare = (body: JsonObject, signal = new AbortController().signal) =>
+    dispatch.prepare(Buffer.from(JSON.stringify(body)), "/responses", {}, signal, "http");
+  return { bind, prepare };
+}
+
+it.each(["Pause", "request abort", "release", "replacement", "forget", "close"] as const)(
+  "settles pre-receipt native inference on %s without preparing or binding",
+  async (end) => {
+    const f = fixture();
+    const registration = {
+      threadId: "root",
+      text: "private",
+      signal: f.controller.signal,
+      assertCurrent: () => {},
+      nativeGoal: true,
+    };
+    const owner = await f.context.register(registration);
+    const requestAbort = new AbortController();
+    const d = receiptDispatch(f.context);
+    const prepare = vi.spyOn(f.context, "prepare");
+    const pending = d.prepare(
+      request("root", undefined, { turn_id: "successor" }),
+      requestAbort.signal,
+    );
+    const refused = expect(pending).rejects.toThrow();
+    try {
+      expect(d.bind).not.toHaveBeenCalled();
+      expect(prepare).not.toHaveBeenCalled();
+      if (end === "Pause") {
+        f.controller.abort();
+      } else if (end === "request abort") {
+        requestAbort.abort();
+      } else if (end === "release") {
+        owner.release();
+      } else if (end === "replacement") {
+        await f.context.register(registration);
+      } else if (end === "forget") {
+        f.context.forget("root");
+      } else {
+        f.context.close();
+      }
+      await refused;
+      expect(d.bind).not.toHaveBeenCalled();
+      expect(prepare).not.toHaveBeenCalled();
+    } finally {
+      requestAbort.abort();
+      f.context.close();
+      await pending.catch(() => undefined);
+      prepare.mockRestore();
+    }
+  },
+);
+
+it("waits only for a registered pursuit's exact receipt and never revives retired turns", async () => {
+  const f = fixture();
+  const ordinary = await f.register("ordinary");
+  const d = receiptDispatch(f.context);
+  const successor = request("root", undefined, { turn_id: "next" });
+  await expect(d.prepare(successor)).rejects.toThrow("current admitted");
+  expect(() => ordinary.admitNativeTurn("next")).toThrow("registered goal");
+  const owner = await f.context.register({
+    threadId: "root",
+    text: "goal",
+    signal: f.controller.signal,
+    assertCurrent: () => {},
+    nativeGoal: true,
+  });
+  const source = (turn: string) => request("root", undefined, { turn_id: turn });
+  owner.admitNativeTurn("previous");
+  const pending = d.prepare(successor);
+  const joined = pending.catch(() => undefined);
+  try {
+    const count = d.bind.mock.calls.length;
+    owner.admitNativeTurn("unrelated");
+    await Promise.resolve();
+    expect(d.bind).toHaveBeenCalledTimes(count);
+    owner.admitNativeTurn("next");
+    const prepared = await pending;
+    prepared.assertCurrent();
+    expect(JSON.parse(prepared.bytes.toString()).instructions).toBe("native base\n\ngoal");
+    prepared.release();
+    for (const body of [
+      request("other", undefined, { turn_id: "next" }),
+      request("root", ordinary.generation, { turn_id: "next" }),
+      request("root", undefined, { turn_id: "next", parent_thread_id: "parent" }),
+      { instructions: "no metadata" },
+    ]) {
+      await expect(d.prepare(body)).rejects.toThrow();
+    }
+    owner.admitNativeTurn("newest");
+    owner.admitNativeTurn("previous");
+    await expect(d.prepare(source("previous"))).rejects.toThrow("turn was replaced");
+    await expect(d.prepare(source("next"))).rejects.toThrow("turn was replaced");
+  } finally {
+    owner.release();
+    await joined;
+  }
+});
+
+it("rechecks the pinned receipt after awaited model binding and releases a revoked capture", async () => {
+  const f = fixture();
+  const owner = await f.context.register({
+    threadId: "root",
+    text: "goal",
+    signal: f.controller.signal,
+    assertCurrent: () => {},
+    nativeGoal: true,
+  });
+  const binding = createDeferred<void>();
+  const bound = createDeferred<void>();
+  const release = vi.fn();
+  const prepare = vi.spyOn(f.context, "prepare");
+  const dispatch = createCodexInferenceDispatch({
+    context: f.context,
+    assertCurrent: () => {},
+    bindModelExecution: async () => {
+      bound.resolve();
+      await binding.promise;
+      return { assertCurrent: () => {}, release };
+    },
+  });
+  owner.admitNativeTurn("turn");
+  const pending = dispatch.prepare(
+    Buffer.from(JSON.stringify(request("root", undefined, { turn_id: "turn" }))),
+    "/responses",
+    {},
+    new AbortController().signal,
+    "http",
+  );
+  const refused = expect(pending).rejects.toThrow();
+  try {
+    await Promise.race([bound.promise, pending]);
+    owner.release();
+    binding.resolve();
+    await refused;
+    expect(prepare).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledExactlyOnceWith();
+  } finally {
+    owner.release();
+    binding.resolve();
+    await pending.catch(() => undefined);
+    prepare.mockRestore();
+  }
 });

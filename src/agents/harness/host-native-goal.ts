@@ -218,6 +218,7 @@ export function bindHostNativeGoal(
     }
     owner.goal.assertCurrent();
   };
+  const subscribeToolStatus = owner.goal.subscribeToolStatus;
   const borrowed = Object.freeze({
     ...owner.goal,
     signal: AbortSignal.any([owner.goal.signal, ownerSignal]),
@@ -229,6 +230,21 @@ export function bindHostNativeGoal(
       assertBorrowed();
       return owner.goal.readToolStatus?.();
     },
+    ...(subscribeToolStatus && {
+      subscribeToolStatus(listener: () => Promise<void>) {
+        assertBorrowed();
+        const unsubscribe = subscribeToolStatus(async () => {
+          assertBorrowed();
+          await listener();
+        });
+        const release = () => {
+          ownerSignal.removeEventListener("abort", release);
+          unsubscribe();
+        };
+        ownerSignal.addEventListener("abort", release, { once: true });
+        return release;
+      },
+    }),
     async onStatus(update: Parameters<AgentHarnessNativeGoal["onStatus"]>[0]) {
       assertBorrowed();
       await owner.goal.onStatus(update);
@@ -271,6 +287,7 @@ function bindIndependentHostNativeGoal(
       let terminal: SessionGoal | undefined;
       let settled = false;
       let toolTerminal = false;
+      const toolStatusListeners = new Set<() => Promise<void>>();
       let projecting = false;
       const release = () => {
         retained?.release();
@@ -282,6 +299,7 @@ function bindIndependentHostNativeGoal(
         release();
         ownerSignal.removeEventListener("abort", onOwnerAbort);
         controller.abort(reason);
+        toolStatusListeners.clear();
       };
       const onOwnerAbort = () => revoke(ownerSignal.reason);
       const assertOwner = () => {
@@ -445,6 +463,11 @@ function bindIndependentHostNativeGoal(
             if (!toolTerminal) {
               release();
             }
+            // Suspend provider-native pursuit before returning the tool, without
+            // revoking this turn's final-reply/accounting custody.
+            if (toolTerminal) {
+              await Promise.all([...toolStatusListeners].map((listener) => listener()));
+            }
             if (changed) {
               await recordSessionGoalChanged({
                 sessionKey,
@@ -502,6 +525,13 @@ function bindIndependentHostNativeGoal(
               (terminal?.status === "complete" || terminal?.status === "blocked")
               ? terminal.status
               : undefined;
+          },
+          subscribeToolStatus(listener: () => Promise<void>) {
+            assertGoalCurrent();
+            toolStatusListeners.add(listener);
+            return () => {
+              toolStatusListeners.delete(listener);
+            };
           },
           async onStatus(update: Parameters<AgentHarnessNativeGoal["onStatus"]>[0]) {
             await projectStatus(update, { type: "system" });

@@ -94,7 +94,9 @@ export async function startCodexAttemptThread(params: {
   shellPathPrepend?: readonly string[];
   shellGitConfigParameters?: string;
   disableLoginShell?: boolean;
-  buildAttemptParams: () => EmbeddedRunAttemptParams;
+  buildAttemptParams: () => EmbeddedRunAttemptParams & {
+    nativeGoal?: import("openclaw/plugin-sdk/agent-harness-runtime").AgentHarnessNativeGoal;
+  };
   runtimeModelId?: string;
   sessionAgentId: string;
   effectiveWorkspace: string;

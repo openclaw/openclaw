@@ -9,6 +9,7 @@ import {
   runAgentCleanupStep,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { collectTerminalAssistantText } from "./attempt-results.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import { codexWorkspaceDirCache } from "./workspace-dir-cache.js";
@@ -73,6 +74,49 @@ export function emitCodexAppServerEvent(
     label: "codex app-server",
     log: embeddedAgentLog,
   });
+}
+
+export function emitCodexTerminalAssistantSnapshot(
+  params: EmbeddedRunAttemptParams,
+  result: EmbeddedRunAttemptResult,
+  {
+    streamState,
+    assistantTranscriptIdempotencyKey,
+    terminalSourceKey,
+    finalAborted,
+    finalPromptError,
+  }: {
+    streamState: { eventEmitted: boolean; needsTerminalSnapshot: boolean };
+    assistantTranscriptIdempotencyKey?: string;
+    terminalSourceKey?: string;
+    finalAborted: boolean;
+    finalPromptError: unknown;
+  },
+): void {
+  const terminalAssistantText = collectTerminalAssistantText(result);
+  const terminalAssistantItemId = assistantTranscriptIdempotencyKey ?? terminalSourceKey;
+  if (
+    terminalAssistantText &&
+    (assistantTranscriptIdempotencyKey ||
+      ((!streamState.eventEmitted || streamState.needsTerminalSnapshot) &&
+        !finalAborted &&
+        !finalPromptError))
+  ) {
+    void emitCodexAppServerEvent(params, {
+      stream: "assistant",
+      data: {
+        text: terminalAssistantText,
+        // Source identity survives a receipt wait timeout without claiming durability.
+        ...(terminalAssistantItemId
+          ? {
+              itemId: terminalAssistantItemId,
+              replace: true,
+              replaceable: true,
+            }
+          : {}),
+      },
+    });
+  }
 }
 
 type CodexAgentEndHookParams = Parameters<typeof runAgentEndSideEffectsAsync>[0];

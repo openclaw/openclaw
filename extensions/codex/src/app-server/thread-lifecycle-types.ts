@@ -68,7 +68,9 @@ export type CodexStartOrResumeThreadParams = Omit<
   abandonClient?: () => Promise<void>;
   reserveResumeThread?: (threadId: string) => { release: () => void };
   bindingStore: CodexAppServerBindingStore;
-  params: AgentHarnessSessionRuntimeParamsV1;
+  params: AgentHarnessSessionRuntimeParamsV1 & {
+    nativeGoal?: import("openclaw/plugin-sdk/agent-harness-runtime").AgentHarnessNativeGoal;
+  };
   authority?: CodexBindingAuthority;
   /** Caller liveness; durable lineage is owned by authority. */
   assertCurrent?: () => void;

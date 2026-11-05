@@ -139,7 +139,9 @@ const CODEX_RING_ZERO_RESTRICTED_FEATURE_ALIASES = new Map<string, string>([
   ["codex_hooks", "hooks"],
 ]);
 
-export type CodexThreadConfigurationContext = CodexThreadPromptContext &
+export type CodexThreadConfigurationContext = {
+  nativeGoal?: { objective: string };
+} & CodexThreadPromptContext &
   Pick<
     AgentHarnessSessionRuntimeParamsV1,
     | "pluginHarnessToolPolicyRestricted"
@@ -267,6 +269,7 @@ export async function buildThreadResumeParams(
 export function buildCodexRuntimeThreadConfig(
   config: JsonObject | undefined,
   options: {
+    nativeGoalsEnabled?: boolean;
     nativeCodeModeEnabled?: boolean;
     nativeCodeModeOnlyEnabled?: boolean;
     directOnlyToolNamespaces?: readonly string[];
@@ -290,8 +293,8 @@ export function buildCodexRuntimeThreadConfig(
         // catalog and install-suggestion tools out of managed prompts without disabling plugins.
         "features.tool_suggest": false,
         "features.recommended_plugins": false,
-        // Native goals start autonomous turns; OpenClaw owns both continuation and progress cards.
-        "features.goals": false,
+        // Only the admitted native pursuit owner may enable autonomous turns.
+        "features.goals": options.nativeGoalsEnabled === true,
         "tools.update_plan.enabled": false,
         ...(!enabled
           ? {
@@ -440,7 +443,7 @@ export function buildCodexRuntimeThreadConfigForRun(
   }).threadConfig;
   const baseConfig = buildCodexRuntimeThreadConfig(
     mergeCodexThreadConfigs(config, webSearchConfig),
-    options,
+    { ...options, nativeGoalsEnabled: Boolean(params.nativeGoal) },
   );
   const runtimeConfig =
     mergeCodexThreadConfigs(
@@ -485,6 +488,9 @@ export function buildCodexRuntimeThreadConfigForRun(
             options.hostSystemAgentActive,
             restrictedToolSurfaceMcpServerNames,
           ),
+      // Goal bookkeeping and continuation belong to the admitted pursuit owner,
+      // independently of native shell/MCP/plugin policy. Keep every other deny.
+      params.nativeGoal ? { "features.goals": true } : undefined,
       restrictedTurnDisablesProjectDocs ? CODEX_NO_PROJECT_DOCS_CONFIG : undefined,
       params.authoredContextTokenCap === undefined
         ? undefined
@@ -586,6 +592,7 @@ export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
   options: {
     restrictedToolSurface: boolean;
     requiredNativeShell?: boolean;
+    nativeGoalsEnabled?: boolean;
     additionalDeniedFeatures?: readonly string[];
     allowedManagedRequirementsFingerprint?: string;
     allowConfiguredManagedHooks?: boolean;
@@ -645,6 +652,12 @@ export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
         throw new Error(
           "Codex native code mode requires shell_tool, but managed requirements disable it. Ask your administrator to allow the shell, or select a tool policy that disables native code mode; no automation authority was captured.",
         );
+      }
+      if (canonicalFeature === "goals" && options.nativeGoalsEnabled) {
+        if (!enabled) {
+          throw new Error("Codex native goals are disabled by managed requirements");
+        }
+        continue;
       }
       const deniedByToolPolicy =
         (options.restrictedToolSurface &&

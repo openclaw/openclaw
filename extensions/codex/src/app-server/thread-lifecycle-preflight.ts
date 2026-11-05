@@ -532,6 +532,7 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
   if (
     restrictedToolSurface ||
     additionalDeniedFeatures.length > 0 ||
+    params.params.nativeGoal ||
     params.nativeCodeModeEnabled !== false
   ) {
     await lifecycleTiming.measure("tool-policy-config-requirements-read", () =>
@@ -540,6 +541,7 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
         {
           restrictedToolSurface,
           requiredNativeShell: params.nativeCodeModeEnabled !== false,
+          nativeGoalsEnabled: Boolean(params.params.nativeGoal),
           additionalDeniedFeatures:
             additionalDeniedFeatures.length > 0 ? additionalDeniedFeatures : undefined,
           allowedManagedRequirementsFingerprint:

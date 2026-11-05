@@ -2447,10 +2447,32 @@ describe("codex command", () => {
         index + 1,
         {},
         method,
-        { threadId: "thread-goal", ...(objective ? { objective } : {}) },
+        {
+          threadId: "thread-goal",
+          ...(method === CODEX_CONTROL_METHODS.getThreadGoal ? {} : { origin: "user" }),
+          ...(objective ? { objective } : {}),
+        },
         expect.any(Object),
       );
     }
+  });
+
+  it.each([
+    ["pause", "paused"],
+    ["resume", "active"],
+    ["block", "blocked"],
+    ["complete", "complete"],
+  ])("preserves user provenance for native goal %s", async (action, status) => {
+    await bindThread("thread-goal");
+    const codexControlRequest = vi.fn(async (): Promise<JsonValue> =>
+      goalResponse("thread-goal", "Ship native goals", 120),
+    );
+    await runCommand(`goal ${action}`, { codexControlRequest });
+    expect(requestParams(codexControlRequest)).toEqual({
+      threadId: "thread-goal",
+      origin: "user",
+      status,
+    });
   });
 
   it("recovers the predecessor binding before enabling fast mode", async () => {

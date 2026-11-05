@@ -137,7 +137,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
           assertCurrent: () => assertCurrent(),
           workspaceReadiness: params.hostCapabilities.workspaceReadiness,
         })
-      : isCodexPairedNodeRemoteExecPlacementSandbox(sandbox)
+      : params.nativeGoal || isCodexPairedNodeRemoteExecPlacementSandbox(sandbox)
         ? createIsolatedCodexAppServerClient
         : getLeasedSharedCodexAppServerClient);
   preDynamicStartupStages.mark("sandbox");

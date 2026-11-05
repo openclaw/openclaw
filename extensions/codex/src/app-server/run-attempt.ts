@@ -1,6 +1,7 @@
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createCodexAttemptPreparationTiming } from "./attempt-preparation-timing.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import type { CodexAppServerClient } from "./client.js";
 import { codexPrewriteRejectionCause } from "./rpc-error.js";
 import { activateCodexAttemptTurn } from "./run-attempt-active-turn.js";
 import { cleanupCodexAttempt } from "./run-attempt-cleanup.js";
@@ -8,6 +9,7 @@ import { prepareCodexAttemptConnection } from "./run-attempt-connection.js";
 import { prepareCodexAttemptContext } from "./run-attempt-context.js";
 import { finalizeCodexAttempt } from "./run-attempt-finalize.js";
 import { createCodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
+import { reportCodexBackgroundCleanupFailure } from "./run-attempt-lifecycle.js";
 import { createCodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
 import { prepareCodexAttemptPrompt } from "./run-attempt-prompt.js";
 import { prepareCodexAttemptResources } from "./run-attempt-resources.js";
@@ -20,6 +22,8 @@ import { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import { startCodexAttemptTurn } from "./run-attempt-turn-start.js";
 import { createCodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import type { CodexRunAttemptOptions } from "./run-attempt-types.js";
+import { runCodexNativeGoalPursuit } from "./run-native-goal.js";
+import { retainIsolatedCodexCloseCleanup } from "./shared-client-lifecycle.js";
 
 export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParamsV2,
@@ -32,15 +36,37 @@ export async function runCodexAppServerAttempt(
   ) {
     throw new Error("Codex required-root execution requires an enabled host-mediated tool surface");
   }
+  const nativeGoal = await params.hostCapabilities.prepareNativeGoal?.();
+  nativeGoal?.assertCurrent();
+  const nativeParams = {
+    ...params,
+    ...(nativeGoal
+      ? {
+          nativeGoal,
+          abortSignal: params.abortSignal
+            ? AbortSignal.any([params.abortSignal, nativeGoal.signal])
+            : nativeGoal.signal,
+        }
+      : {}),
+  };
   const preparation = createCodexAttemptPreparationTiming(params);
   const connection = await preparation.measure("connection", () =>
     prepareCodexAttemptConnection({
       params: params.continuation
-        ? { ...params, prompt: `${params.continuation.prompt}\n\n${params.prompt}` }
-        : params,
+        ? { ...nativeParams, prompt: `${params.continuation.prompt}\n\n${params.prompt}` }
+        : nativeParams,
       options,
     }),
   );
+  let deferredClient: CodexAppServerClient | undefined;
+  const deferredCleanup: Array<() => Promise<void> | void> = [];
+  const cleanupOrRetain = async (cleanup: () => Promise<void> | void) => {
+    if (deferredClient) {
+      deferredCleanup.push(cleanup);
+    } else {
+      await cleanup();
+    }
+  };
   try {
     const runtime = await preparation.measure("runtime", () =>
       prepareCodexAttemptRuntime(connection),
@@ -74,6 +100,10 @@ export async function runCodexAppServerAttempt(
             startCodexAttemptRuntime(resources),
           );
 
+          if (nativeGoal) {
+            activeTurnOwnsCleanup = true;
+            return await runCodexNativeGoalPursuit(startedResources, nativeGoal);
+          }
           const turnRuntime = createCodexAttemptTurnState(startedResources);
           try {
             const lifecycle = createCodexAttemptLifecycleController(startedResources, turnRuntime);
@@ -180,17 +210,25 @@ export async function runCodexAppServerAttempt(
             turnRuntime.deadlines.dispose();
           }
         } finally {
+          if (resources.state.nativeGoalCleanupUnsettled) {
+            deferredClient = resources.state.client;
+            if (resources.state.deferredNativeGoalCleanup) {
+              deferredCleanup.push(resources.state.deferredNativeGoalCleanup);
+            }
+          }
           if (!activeTurnOwnsCleanup) {
             await resources.cleanupBeforeActiveTurn();
           }
         }
       } finally {
-        await attemptTools.disposeTools(
-          connection.runAbortController.signal.aborted ? "cancel" : "error",
+        await cleanupOrRetain(() =>
+          attemptTools.disposeTools(
+            connection.runAbortController.signal.aborted ? "cancel" : "error",
+          ),
         );
       }
     } finally {
-      runtime.nativeExecutionPolicy.release();
+      await cleanupOrRetain(() => runtime.nativeExecutionPolicy.release());
     }
   } catch (error) {
     throw codexPrewriteRejectionCause(error);
@@ -198,10 +236,27 @@ export async function runCodexAppServerAttempt(
     // Preparation can fail before the active turn installs its terminal freeze.
     try {
       connection.cancellation.dispose();
-      connection.releaseModelExecution();
-      connection.releaseSandboxContext();
+      await cleanupOrRetain(() => connection.releaseModelExecution());
+      await cleanupOrRetain(() => connection.releaseSandboxContext());
     } finally {
-      connection.releaseBindingAuthority();
+      await cleanupOrRetain(() => connection.releaseBindingAuthority());
+      if (deferredClient) {
+        retainIsolatedCodexCloseCleanup(
+          deferredClient,
+          async () => {
+            // Shift only after settlement: retries retain the exact unresolved step.
+            for (let cleanup = deferredCleanup[0]; cleanup; cleanup = deferredCleanup[0]) {
+              await cleanup();
+              deferredCleanup.shift();
+            }
+          },
+          (error) => reportCodexBackgroundCleanupFailure(params, error),
+        );
+        reportCodexBackgroundCleanupFailure(
+          params,
+          new Error("Native goal shutdown is uncertain; exact-client cleanup custody retained"),
+        );
+      }
     }
   }
 }

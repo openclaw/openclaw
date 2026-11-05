@@ -165,6 +165,8 @@ export class CodexAppServerClient {
   );
   private readonly notificationDispatch = new CodexAppServerNotifications();
   private readonly closeHandlers = new Set<(client: CodexAppServerClient) => void>();
+  private retainedCloseCleanup: (() => Promise<void>) | undefined;
+  private closeCleanupJoin: Promise<void> | undefined;
   private nextId = 1;
   private initialized = false;
   private modelCatalogRevision = 0;
@@ -515,6 +517,18 @@ export class CodexAppServerClient {
     return () => this.child.off?.("exit", onExit);
   }
 
+  /** Physical custody only: closing admission cannot discharge uncertain effects. */
+  retainUnsettledCloseCleanup(cleanup: () => Promise<void>): void {
+    if (this.retainedCloseCleanup) {
+      throw new Error("Codex close cleanup already has an owner");
+    }
+    this.retainedCloseCleanup = cleanup;
+  }
+
+  hasUnsettledCloseCleanup(): boolean {
+    return this.retainedCloseCleanup !== undefined || this.closeCleanupJoin !== undefined;
+  }
+
   close(): void {
     this.closeWithError(new Error("codex app-server client is closed"));
   }
@@ -535,6 +549,22 @@ export class CodexAppServerClient {
     // containment cannot discharge a command whose descendants already reparented.
     if (this.nativeExecutionObserved) {
       return { ...result, cleanup: "uncertain" };
+    }
+    if (
+      result.exited &&
+      result.cleanup !== "uncertain" &&
+      this.retainedCloseCleanup &&
+      !this.closeCleanupJoin
+    ) {
+      const cleanup = this.retainedCloseCleanup;
+      // Nested closure during resource disposal must not join itself.
+      this.closeCleanupJoin = Promise.resolve().then(cleanup);
+      try {
+        await this.closeCleanupJoin;
+        this.retainedCloseCleanup = undefined;
+      } finally {
+        this.closeCleanupJoin = undefined;
+      }
     }
     if (result.cleanup === "terminated") {
       embeddedAgentLog.warn("Codex app-server required forced shutdown; process cleanup confirmed");

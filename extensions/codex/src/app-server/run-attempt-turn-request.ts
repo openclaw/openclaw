@@ -45,6 +45,7 @@ import { buildCodexUserPromptMessage } from "./user-prompt-message.js";
 export type CodexStartedTurn = {
   turn: CodexTurnStartResponse;
   upstreamUserText: string;
+  nativeContinuation?: boolean;
 };
 
 export async function prepareCodexAttemptTurnRequest(
@@ -277,6 +278,23 @@ export async function prepareCodexAttemptTurnRequest(
             authorizedModel,
           }
         : undefined;
+    let boundTurnId: string | undefined;
+    const bindAdmittedTurn = (turnId: string) => {
+      assertTurnCurrent();
+      params.nativeGoal?.assertCurrent();
+      if (boundTurnId === turnId) {
+        return;
+      }
+      if (boundTurnId && params.nativeGoal?.readToolStatus?.()) {
+        throw new Error("Host Goal tool ended native pursuit; successor admission refused");
+      }
+      resources.nativeProcessAuthority?.bindTurn(turnClient, threadId, turnId);
+      resourceState.nativeSubagentMonitor?.bindTurn(turnId, modelMapping);
+      resourceState.nativeHookRelay?.bindForegroundTurn(threadId, turnId);
+      boundTurnId = turnId;
+    };
+    // Native command-auth routes need the same custody rotation as local inference.
+    resourceState.admitNativeGoalTurn = params.nativeGoal ? bindAdmittedTurn : undefined;
     if (inferenceRoute) {
       resourceState.releaseInferenceContext?.();
       const inferenceThread = resourceState.thread;
@@ -297,9 +315,11 @@ export async function prepareCodexAttemptTurnRequest(
       const registration = await inferenceRoute.context.register({
         threadId: resourceState.thread.threadId,
         text: inferenceInstructions,
+        nativeGoal: params.nativeGoal !== undefined,
         signal: runAbortController.signal,
         assertCurrent: () => {
           params.hostCapabilities.assertActive();
+          params.nativeGoal?.assertCurrent();
           connection.assertLegacyCurrent();
           if (
             resourceState.thread !== inferenceThread ||
@@ -312,6 +332,12 @@ export async function prepareCodexAttemptTurnRequest(
         },
       });
       resourceState.releaseInferenceContext = registration.release;
+      resourceState.admitNativeGoalTurn = params.nativeGoal
+        ? (turnId) => {
+            bindAdmittedTurn(turnId);
+            registration.admitNativeTurn(turnId);
+          }
+        : undefined;
       prompt.setInferenceInstructions(inferenceInstructions);
       turnStartParams.responsesapiClientMetadata = {
         ...turnStartParams.responsesapiClientMetadata,
@@ -382,9 +408,7 @@ export async function prepareCodexAttemptTurnRequest(
       );
       acceptedTurnId = startedTurn.turn.id;
       recordCodexTurnForkSettings(turnClient, turnStartParams);
-      resources.nativeProcessAuthority?.bindTurn(turnClient, threadId, acceptedTurnId);
-      assertTurnCurrent();
-      resourceState.nativeSubagentMonitor?.bindTurn(acceptedTurnId, modelMapping);
+      bindAdmittedTurn(acceptedTurnId);
       // Fitting may drop or truncate references; only acknowledge the complete block.
       if (upstreamUserText.includes(workspaceBootstrapContext.promptContext ?? "")) {
         references.accepted();
@@ -402,7 +426,6 @@ export async function prepareCodexAttemptTurnRequest(
         error.name = "AbortError";
         throw error;
       }
-      resourceState.nativeHookRelay?.bindForegroundTurn(threadId, acceptedTurnId);
       await continuation?.accept(acceptedTurnId);
       return { turn: startedTurn, upstreamUserText };
     } catch (error) {

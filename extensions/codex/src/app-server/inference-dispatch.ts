@@ -313,6 +313,7 @@ export function createCodexInferenceDispatch(params: {
         throw new Error(FAILURE);
       }
       let metadata: CodexInferenceMetadata | undefined;
+      let nativeReceipt: Awaited<ReturnType<typeof context.waitForNativeTurn>> = undefined;
       if (isJsonObject(value)) {
         try {
           metadata = readCodexInferenceMetadata(value, headers, transport, path);
@@ -322,16 +323,23 @@ export function createCodexInferenceDispatch(params: {
           }
           throw error;
         }
+        // Model source capture can reject an unseen successor too. Wait before
+        // either binding or preparing, pinned to the original pursuit lifetime.
+        nativeReceipt = await context.waitForNativeTurn(metadata, signal);
+        assertCurrent();
+        signal.throwIfAborted();
+        nativeReceipt?.assertCurrent();
         execution = await params.bindModelExecution?.({
           path,
           body: value,
           headers,
           metadata,
           transport,
-          signal,
+          signal: nativeReceipt?.signal ?? signal,
         });
       }
       signal.throwIfAborted();
+      nativeReceipt?.assertCurrent();
       // Instruction injection remains parent-only, independently of model authorization.
       const prepared =
         sampling && isJsonObject(value)
@@ -343,6 +351,7 @@ export function createCodexInferenceDispatch(params: {
         }
         assertCurrent();
         signal.throwIfAborted();
+        nativeReceipt?.assertCurrent();
         prepared?.assertCurrent();
         execution?.assertCurrent();
       };
@@ -357,6 +366,7 @@ export function createCodexInferenceDispatch(params: {
       }
       const requestSignal = AbortSignal.any([
         signal,
+        ...(nativeReceipt ? [nativeReceipt.signal] : []),
         ...(prepared?.signal ? [prepared.signal] : []),
         ...(execution?.signal ? [execution.signal] : []),
       ]);

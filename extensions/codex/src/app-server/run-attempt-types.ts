@@ -1,5 +1,6 @@
 import type {
   EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+  AgentHarnessNativeGoal,
   NativeHookRelayEvent,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
@@ -24,6 +25,6 @@ export type CodexRunAttemptOptions = {
 };
 
 export type CodexRunAttemptInput = {
-  params: EmbeddedRunAttemptParams;
+  params: EmbeddedRunAttemptParams & { nativeGoal?: AgentHarnessNativeGoal };
   options: CodexRunAttemptOptions;
 };

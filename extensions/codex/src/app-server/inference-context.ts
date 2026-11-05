@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { defineCodexBuildState } from "../build-state.js";
 import { readCodexInferenceMetadata, type CodexInferenceMetadata } from "./inference-metadata.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
+import { waitForPromiseOrAbort } from "./timeout.js";
 
 export { CODEX_INFERENCE_GENERATION_KEY } from "./inference-metadata.js";
 
@@ -64,6 +66,11 @@ function retainRequest(prefix: PreparedPrefix, body: JsonObject) {
 
 type Registration = {
   generation: string;
+  nativeTurnId?: string;
+  nativeGoal?: {
+    seen: Set<string>;
+    receipts: Set<{ turnId: string; resolve: () => void }>;
+  };
   text: string;
   forkPrefix?: JsonObject;
   denyToolCalls: boolean;
@@ -99,6 +106,7 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
       retainPrefix?: boolean;
       forkPrefix?: JsonObject;
       denyToolCalls?: boolean;
+      nativeGoal?: boolean;
     }) {
       assertOpen();
       params.signal.throwIfAborted();
@@ -122,6 +130,7 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
         const controller = new AbortController();
         const registration: Registration = {
           generation: randomUUID(),
+          nativeGoal: params.nativeGoal ? { seen: new Set(), receipts: new Set() } : undefined,
           text: params.text,
           forkPrefix: params.forkPrefix,
           denyToolCalls: params.denyToolCalls === true,
@@ -157,7 +166,29 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
           }
         }
         params.signal.addEventListener("abort", registration.release, { once: true });
-        return { generation: registration.generation, release: registration.release };
+        return {
+          generation: registration.generation,
+          release: registration.release,
+          // Only the owner of this live registration can admit a native turn.
+          // A thread id or model-supplied marker never grants this authority.
+          admitNativeTurn: (turnId: string) => {
+            registration.assertCurrent();
+            if (!registration.nativeGoal || !turnId) {
+              throw new Error("Native inference admission requires a registered goal and turn id");
+            }
+            // Duplicate receipts must not resurrect a retired native turn.
+            if (registration.nativeGoal.seen.has(turnId)) {
+              return;
+            }
+            registration.nativeGoal.seen.add(turnId);
+            registration.nativeTurnId = turnId;
+            for (const receipt of registration.nativeGoal.receipts) {
+              if (receipt.turnId === turnId) {
+                receipt.resolve();
+              }
+            }
+          },
+        };
       };
       if (roots.has(params.threadId) || roots.size < MAX_ACTIVE_ROOTS) {
         return admit();
@@ -189,6 +220,51 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
         waiters.add(waiter);
         params.signal.addEventListener("abort", onAbort, { once: true });
       });
+    },
+    /** Synchronize independent native HTTP/notification transports, not authority from HTTP. */
+    async waitForNativeTurn(metadata: CodexInferenceMetadata, signal: AbortSignal) {
+      assertOpen();
+      signal.throwIfAborted();
+      if (
+        metadata.generation !== undefined ||
+        !metadata.threadId ||
+        !metadata.turnId ||
+        metadata.parentThreadId ||
+        metadata.subagentKind ||
+        metadata.subagent ||
+        (metadata.requestKind !== "turn" && metadata.requestKind !== "compaction")
+      ) {
+        return undefined;
+      }
+      const registration = roots.get(metadata.threadId);
+      const goal = registration?.nativeGoal;
+      if (!registration || !goal) {
+        return undefined;
+      }
+      registration.assertCurrent();
+      const turnId = metadata.turnId;
+      const requestSignal = AbortSignal.any([signal, registration.controller.signal]);
+      const assertCurrent = () => {
+        requestSignal.throwIfAborted();
+        registration.assertCurrent();
+        if (registration.nativeTurnId !== turnId) {
+          throw new Error("Codex native inference turn was replaced");
+        }
+      };
+      if (registration.nativeTurnId !== turnId && !goal.seen.has(turnId)) {
+        const received = createDeferred<void>();
+        const receipt = { turnId, resolve: () => received.resolve() };
+        goal.receipts.add(receipt);
+        try {
+          // Request abort, the existing run deadline, Pause, owner replacement
+          // and transport close cancel these signals. Do not start a new timer.
+          await waitForPromiseOrAbort(received.promise, requestSignal);
+        } finally {
+          goal.receipts.delete(receipt);
+        }
+      }
+      assertCurrent();
+      return { assertCurrent, signal: requestSignal };
     },
     /** A retained prefix is data; only the new root's caller grants model authority. */
     async fork(params: {
@@ -224,7 +300,7 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
       roots.get(threadId)?.release();
     },
     /** Caller must authenticate its private transport before parsing any model request. */
-    // Host-held OAuth may fund only admitted generations; native background work has no such grant.
+    // Host-held OAuth funds only admitted generations or exact receipt-bound native pursuits.
     prepare(body: JsonObject, preparedMetadata?: CodexInferenceMetadata, requireAdmission = false) {
       assertOpen();
       const metadata = preparedMetadata ?? readCodexInferenceMetadata(body);
@@ -251,10 +327,20 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
       ) {
         return { body, assertCurrent: assertOpen, signal: undefined };
       }
-      if (!registration || generation !== registration.generation) {
+      const admittedNativeTurn =
+        generation == null &&
+        metadata.turnId !== undefined &&
+        registration?.nativeTurnId === metadata.turnId;
+      if (!registration || (generation !== registration.generation && !admittedNativeTurn)) {
         throw new Error("Codex inference has no current admitted parent generation");
       }
-      registration.assertCurrent();
+      const assertInferenceCurrent = () => {
+        registration.assertCurrent();
+        if (admittedNativeTurn && registration.nativeTurnId !== metadata.turnId) {
+          throw new Error("Codex native inference turn was replaced");
+        }
+      };
+      assertInferenceCurrent();
       let preparedBody = body;
       if (kind !== "compaction") {
         // Responses Lite carries native base instructions in input and omits this optional field.
@@ -331,7 +417,7 @@ export function createCodexInferenceContext(assertClientCurrent: () => void) {
       }
       return {
         body: preparedBody,
-        assertCurrent: registration.assertCurrent,
+        assertCurrent: assertInferenceCurrent,
         signal: registration.controller.signal,
       };
     },

@@ -69,6 +69,20 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     startupAuthProfileId,
   } = connection;
   let pluginAppServer = withCodexAppServerFastModeServiceTier(appServer, runtimeParams);
+  if (params.nativeGoal) {
+    connection.assertCurrent();
+    params.nativeGoal.assertCurrent();
+    if (pluginAppServer.start.transport !== "stdio") {
+      throw new Error("Native Codex goals require an owned stdio app-server with goals enabled");
+    }
+    pluginAppServer = {
+      ...pluginAppServer,
+      start: {
+        ...pluginAppServer.start,
+        args: [...pluginAppServer.start.args, "-c", "features.goals=true"],
+      },
+    };
+  }
   const loopDetectionEnabled =
     (sessionAgentId && params.config
       ? resolveAgentConfig(params.config, sessionAgentId)?.tools?.loopDetection?.enabled

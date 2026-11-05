@@ -16,6 +16,7 @@ import { hasCodexAppServerSiblingThreadWork } from "./client-runtime.js";
 import { createCodexEphemeralThreadPolicy } from "./client-thread-owner.js";
 import { CodexAppServerRpcError, isCodexAppServerOverloadError } from "./client.js";
 import { seedCodexHistory } from "./context-engine-history.js";
+import { prepareCodexNativeGoalResume } from "./native-goal-control.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
   attestCodexThreadToolSurface,
@@ -53,6 +54,7 @@ import {
   withCodexThreadWriteCurrent,
   type CodexThreadRequestContext,
 } from "./thread-lifecycle-preflight.js";
+import { recordCodexThreadReady } from "./thread-lifecycle-timing.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
@@ -88,31 +90,6 @@ export type CodexStartThreadContext = CodexThreadRequestContext & {
   rotatedContextEngineBinding: boolean;
   replacementPredecessor?: CodexAppServerThreadBinding;
 };
-
-function recordCodexThreadReady(
-  params: CodexStartOrResumeThreadParams,
-  context: Pick<CodexResumeThreadContext, "contextEngineBinding" | "lifecycleTiming">,
-  threadId: string,
-  action: "resumed" | "rotated" | "started",
-): void {
-  const { contextEngineBinding, lifecycleTiming } = context;
-  const event = {
-    sessionId: params.params.sessionId,
-    sessionKey: params.params.sessionKey,
-    threadId,
-    action,
-  };
-  if (contextEngineBinding) {
-    embeddedAgentLog.info("codex app-server wrote context-engine thread binding", {
-      ...event,
-      engineId: contextEngineBinding.engineId,
-      epoch: contextEngineBinding.projection?.epoch,
-      fingerprint: contextEngineBinding.projection?.fingerprint,
-    });
-  }
-  lifecycleTiming.mark("thread-ready");
-  lifecycleTiming.logSummary({ runId: params.params.runId, ...event });
-}
 
 export async function resumeExistingCodexThread(
   params: CodexStartOrResumeThreadParams,
@@ -231,6 +208,15 @@ export async function resumeExistingCodexThread(
       withCurrent: (write: () => void) => withCodexThreadWriteCurrent(params, write),
       assertCurrent: assertResumeCurrent,
     };
+    if (params.params.nativeGoal) {
+      await prepareCodexNativeGoalResume(
+        params.client,
+        resumeBinding.threadId,
+        params.params.nativeGoal,
+        assertResumeCurrent,
+        params.signal,
+      );
+    }
     const response = await lifecycleTiming.measure("thread-resume-request", () =>
       resumeCodexAppServerThread({
         client: params.client,

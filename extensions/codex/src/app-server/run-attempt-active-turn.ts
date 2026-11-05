@@ -1,4 +1,3 @@
-import path from "node:path";
 import {
   detectAndLoadAgentHarnessPromptImages,
   embeddedAgentLog,
@@ -8,7 +7,6 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-local-roots";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { composeSessionTranscriptWriteAssertion } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { terminateCodexBackgroundTerminals } from "./attempt-client-cleanup.js";
@@ -22,7 +20,6 @@ import {
   type CodexSteeringQueueOptions,
   type CodexSteeringPreparation,
 } from "./attempt-steering.js";
-import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
 import type { CodexAppServerEventProjectorOptions } from "./event-projector-options.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
@@ -36,11 +33,10 @@ import {
 } from "./plan-compaction-state.js";
 import { isJsonObject } from "./protocol.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
-import { createCodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
-import { mapCodexAppServerRemoteWorkspacePath } from "./remote-workspace-path.js";
 import { restoreCodexAttemptCompactionContext } from "./run-attempt-compaction.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
+import { createCodexAttemptReplyMedia } from "./run-attempt-reply-media.js";
 import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import { prependCurrentInboundContext } from "./run-attempt-state.js";
 import type { CodexStartedTurn } from "./run-attempt-turn-request.js";
@@ -59,7 +55,7 @@ export function activateCodexAttemptTurn(
   turnRuntime: CodexAttemptTurnState,
   lifecycle: CodexAttemptLifecycleController,
   notifications: CodexAttemptNotificationController,
-  { turn, upstreamUserText }: CodexStartedTurn,
+  { turn, upstreamUserText, nativeContinuation }: CodexStartedTurn,
   onResponseObserved: CodexAppServerEventProjectorOptions["onResponseObserved"],
 ) {
   const {
@@ -115,38 +111,10 @@ export function activateCodexAttemptTurn(
         },
       }
     : dynamicToolParams;
-  const hostPrepareReplyMedia = params.hostCapabilities.prepareReplyMedia;
-  const remoteWorkspaceRoot = connection.appServer.remoteWorkspaceRoot;
-  const readRemoteWorkspaceFile = createCodexRemoteWorkspaceFileReader(
+  const { readRemoteWorkspaceFile, prepareReplyMedia } = createCodexAttemptReplyMedia(
+    connection,
     resourceState.client,
-    connection.authority,
   );
-  const prepareReplyMedia =
-    hostPrepareReplyMedia && remoteWorkspaceRoot
-      ? async (
-          content:
-            | { kind: "attempt"; attempt: EmbeddedRunAttemptResult }
-            | { kind: "payload"; payload: ReplyPayload },
-          transferSignal?: AbortSignal,
-        ) =>
-          hostPrepareReplyMedia({
-            ...content,
-            workspaceRoot: remoteWorkspaceRoot,
-            signal: runAbortController.signal,
-            readWorkspaceFile: (relativePath, { maxBytes, signal }) =>
-              readRemoteWorkspaceFile({
-                path: mapCodexAppServerRemoteWorkspacePath({
-                  value: path.resolve(params.workspaceDir, relativePath),
-                  localWorkspaceRoot: params.workspaceDir,
-                  remoteWorkspaceRoot,
-                }),
-                workspaceRoot: remoteWorkspaceRoot,
-                maxBytes,
-                signal: transferSignal ? AbortSignal.any([signal, transferSignal]) : signal,
-                timeoutMs: connection.appServer.requestTimeoutMs,
-              }),
-          })
-      : undefined;
   const progressCardTool = toolBridge.availableTools.find((tool) => tool.name === "progress_card");
   let nativePlanUpdateOrdinal = 0;
   const prepareNativeMcpAppResultDetails = createCodexNativeMcpAppResultDetailsPreparer({
@@ -241,38 +209,43 @@ export function activateCodexAttemptTurn(
   const activeProjector = projectorRef.current;
   let activationFailed = false;
   const abortListener = () => {
-    state.abortCleanup = interruptTurn(activeTurnId).then(async (confirmed) => {
-      if (
-        !activationFailed &&
-        !terminalState.explicitCancellationObserved &&
-        !state.permissionChangeRestart &&
-        !state.timeout
-      ) {
-        return;
-      }
-      if (!confirmed) {
-        throw new Error(
-          state.permissionChangeRestart
-            ? "Permission change could not confirm the previous Codex turn stopped."
-            : "Codex cancellation could not confirm the turn stopped; background terminals may still be running.",
-        );
-      }
-      if (resources.nativeProcessAuthority?.requiresProcessAdmission) {
-        await resources.nativeProcessAuthority.cancelTurn(
-          resourceState.client,
-          resourceState.thread.threadId,
-          activeTurnId,
-        );
-      } else {
-        await terminateCodexBackgroundTerminals(
-          resourceState.client,
-          resourceState.thread.threadId,
-        );
-      }
-      if (state.permissionChangeRestart) {
-        state.permissionChangeRestart = "confirmed";
-      }
-    });
+    state.abortCleanup = Promise.resolve()
+      .then(async () => {
+        await resourceState.pauseNativeGoal?.();
+        return await interruptTurn(activeTurnId);
+      })
+      .then(async (confirmed) => {
+        if (
+          !activationFailed &&
+          !terminalState.explicitCancellationObserved &&
+          !state.permissionChangeRestart &&
+          !state.timeout
+        ) {
+          return;
+        }
+        if (!confirmed) {
+          throw new Error(
+            state.permissionChangeRestart
+              ? "Permission change could not confirm the previous Codex turn stopped."
+              : "Codex cancellation could not confirm the turn stopped; background terminals may still be running.",
+          );
+        }
+        if (resources.nativeProcessAuthority?.requiresProcessAdmission) {
+          await resources.nativeProcessAuthority.cancelTurn(
+            resourceState.client,
+            resourceState.thread.threadId,
+            activeTurnId,
+          );
+        } else {
+          await terminateCodexBackgroundTerminals(
+            resourceState.client,
+            resourceState.thread.threadId,
+          );
+        }
+        if (state.permissionChangeRestart) {
+          state.permissionChangeRestart = "confirmed";
+        }
+      });
     void state.abortCleanup.then(completeTurn, (error: unknown) => {
       embeddedAgentLog.warn("codex app-server cancellation cleanup failed", { error });
       completeTurn();
@@ -587,14 +560,18 @@ export function activateCodexAttemptTurn(
     queueMessage,
     messageInjection,
     messageInjectionV2: messageInjection,
-    isStreaming: () => !state.completed && !runAbortController.signal.aborted,
+    isStreaming: () =>
+      (resourceState.nativeGoalPursuing || !state.completed) && !runAbortController.signal.aborted,
     isAborted: () => runAbortController.signal.aborted,
-    isStopped: () => state.completed || runAbortController.signal.aborted,
+    isStopped: () =>
+      (!resourceState.nativeGoalPursuing && state.completed) || runAbortController.signal.aborted,
     ownsLiveness: () =>
-      deadlines.ownsExecutionWait() &&
       resourceState.turnRoute?.signal.aborted === false &&
-      !state.completed &&
-      !state.terminalTurnNotificationQueued,
+      !runAbortController.signal.aborted &&
+      (resourceState.nativeGoalPursuing ||
+        (deadlines.ownsExecutionWait() &&
+          !state.completed &&
+          !state.terminalTurnNotificationQueued)),
     isAbortable: () =>
       !terminalState.terminalOutcomeFrozen || terminalState.sharedAbortAllowedAfterTerminalOutcome,
     isCompacting: () => projectorRef.current?.isCompacting() ?? false,
@@ -677,16 +654,18 @@ export function activateCodexAttemptTurn(
         runAbortController.abort("permission-change");
       }
       await bindProjection(
-        mirrorPromptAtTurnStartBestEffort({
-          params,
-          agentId: sessionAgentId,
-          notifyUserMessagePersisted,
-          sessionKey: contextSessionKey,
-          cwd: effectiveCwd,
-          threadId: resourceState.thread.threadId,
-          turnId: activeTurnId,
-          upstreamUserText,
-        }),
+        nativeContinuation
+          ? Promise.resolve()
+          : mirrorPromptAtTurnStartBestEffort({
+              params,
+              agentId: sessionAgentId,
+              notifyUserMessagePersisted,
+              sessionKey: contextSessionKey,
+              cwd: effectiveCwd,
+              threadId: resourceState.thread.threadId,
+              turnId: activeTurnId,
+              upstreamUserText,
+            }),
       );
     } catch (error) {
       activationFailed = true;

@@ -39,6 +39,7 @@ import {
   runCodexCleanupStep,
 } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptPrompt } from "./run-attempt-prompt.js";
+import { resolveCodexNativeModelAdmission } from "./run-attempt-runtime.js";
 import {
   releaseCodexSandboxExecServerEnvironment,
   type CodexSandboxExecEnvironment,
@@ -50,7 +51,6 @@ import {
 } from "./shared-client.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
-  CodexStartOrResumeThreadParams,
   CodexThreadFinalConfigPatchDecision,
 } from "./thread-lifecycle-types.js";
 import {
@@ -77,23 +77,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     options,
     nativeHookRelayEvents,
   } = connection;
-  const modelAdmissionSource = runtime.nativeToolSurfaceEnabled
-    ? params.hostCapabilities.retainSourceAuthority?.()
-    : undefined;
-  let nativeModelAdmission: CodexStartOrResumeThreadParams["nativeModelAdmission"];
-  try {
-    // Private completions keep the owner's optional hook configuration without its source grant.
-    nativeModelAdmission =
-      runtime.nativeToolSurfaceEnabled && params.hostCapabilities.retainSourceAuthority
-        ? modelAdmissionSource && modelAdmissionSource.modelPolicyRequired !== false
-          ? "required"
-          : options.nativeHookRelay?.enabled === false
-            ? "disabled"
-            : "optional"
-        : undefined;
-  } finally {
-    modelAdmissionSource?.release();
-  }
+  const nativeModelAdmission = resolveCodexNativeModelAdmission(runtime);
   let nativeProcessAuthorityReleased = false;
   // Cancellation still owes cleanup. Keep host/lineage authority until this
   // resource owner closes, without inheriting the foreground abort signal.
@@ -128,6 +112,11 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     releaseInferenceContext: undefined,
   };
   const state = {
+    nativeGoalPursuing: false,
+    nativeGoalCleanupUnsettled: false,
+    deferredNativeGoalCleanup: undefined as (() => Promise<void>) | undefined,
+    admitNativeGoalTurn: undefined as ((turnId: string) => void) | undefined,
+    pauseNativeGoal: undefined as (() => Promise<void>) | undefined,
     runtimeArtifact: undefined as AgentHarnessRuntimeArtifactBinding | undefined,
     turnRoute: undefined as CodexThreadRouteReservation | undefined,
     routeActivated: false,

@@ -293,7 +293,7 @@ export async function handleNativeGoal(
       const response = await codexControlRequest(
         pluginConfig,
         CODEX_CONTROL_METHODS.clearThreadGoal,
-        { threadId: binding.threadId },
+        { threadId: binding.threadId, origin: "user" },
         { ...goalRequestOptions, assertOwnerCurrent: () => assertCodexHostOwnerCurrent(ctx) },
       );
       return isJsonObject(response) && response.cleared
@@ -331,6 +331,9 @@ export async function handleNativeGoal(
       CODEX_CONTROL_METHODS.setThreadGoal,
       {
         threadId: binding.threadId,
+        // This is an authorized user command, not an autonomous model mutation.
+        // Codex records the instruction only when its provenance is explicit.
+        origin: "user",
         ...(objective ? { objective } : {}),
         // Upstream thread/goal/set creates or partially updates the native goal;
         // omitted status and budget preserve Codex's canonical state.

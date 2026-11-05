@@ -239,7 +239,7 @@ export type CodexThreadResumeResponse = CodexThreadStartResponse & {
   initialTurnsPage?: CodexThreadPage<Pick<CodexTurn, "id" | "status">> | null;
 };
 
-type CodexThreadGoalStatus =
+export type CodexThreadGoalStatus =
   | "active"
   | "paused"
   | "blocked"
@@ -247,7 +247,7 @@ type CodexThreadGoalStatus =
   | "budgetLimited"
   | "complete";
 
-type CodexThreadGoal = {
+export type CodexThreadGoal = {
   threadId: string;
   objective: string;
   status: CodexThreadGoalStatus;
@@ -628,6 +628,7 @@ type CodexAppServerRequests = {
   "thread/goal/set": CodexRequestContract<
     JsonObject & {
       threadId: string;
+      origin?: "user" | "automatic";
       objective?: string;
       status?: CodexThreadGoalStatus;
       tokenBudget?: number | null;
@@ -635,7 +636,10 @@ type CodexAppServerRequests = {
     { goal: CodexThreadGoal }
   >;
   "thread/goal/get": CodexRequestContract<CodexThreadIdParams, { goal: CodexThreadGoal | null }>;
-  "thread/goal/clear": CodexRequestContract<CodexThreadIdParams, { cleared: boolean }>;
+  "thread/goal/clear": CodexRequestContract<
+    CodexThreadIdParams & { origin?: "user" | "automatic" },
+    { cleared: boolean }
+  >;
   "turn/interrupt": CodexRequestContract<
     JsonObject & { threadId: string; turnId: string },
     JsonValue

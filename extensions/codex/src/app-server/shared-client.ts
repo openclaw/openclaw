@@ -1054,7 +1054,12 @@ export async function clearSharedCodexAppServerClientAndWait(
   lifetime.controller.abort();
   state.clients.clear();
   const closing = Promise.all(
-    [...state.liveClients].map((client) => ownCodexStartup(lifetime, client.closeAndWait(options))),
+    [
+      ...new Set([
+        ...state.liveClients,
+        ...[...state.isolatedClients].filter((client) => client.hasUnsettledCloseCleanup()),
+      ]),
+    ].map((client) => ownCodexStartup(lifetime, client.closeAndWait(options))),
   );
   void closing.catch(() => undefined);
   // Startup can add a late-registration close after its acquire is aborted.

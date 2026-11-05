@@ -13,6 +13,7 @@ import {
 import { preparedSharingReads } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { useTempSessionsFixture } from "../../config/sessions/test-helpers.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
+import { createUpdateGoalTool } from "../tools/goal-tools.js";
 import { bindHostNativeGoal, withRequiredHostGoal } from "./host-native-goal.js";
 
 describe("admitted native goal projection", () => {
@@ -92,6 +93,44 @@ describe("admitted native goal projection", () => {
     }
     expect(() => guard()).toThrow();
     expect(native!.signal.aborted).toBe(true);
+  });
+
+  it("retires a borrowed tool-verdict subscriber when only that borrower closes", async () => {
+    await start();
+    let release = () => {};
+    const listener = vi.fn(async () => {});
+    try {
+      await withRequiredHostGoal({
+        target: target(),
+        identity: {
+          sessionId: target().sessionId,
+          lifecycleRevision: "generation-1",
+          goalId: read().goal!.id,
+        },
+        assertCurrent: () => {},
+        onAcquired: (_assertCurrent, close) => {
+          release = close;
+        },
+        onRevoked: vi.fn(),
+        run: async () => {
+          const borrower = new AbortController();
+          const borrowed = await bindHostNativeGoal(target(), () => {}, borrower.signal)();
+          expect(borrowed).toBeDefined();
+          borrowed!.subscribeToolStatus!(listener);
+          borrower.abort();
+          expect(() => borrowed!.subscribeToolStatus!(listener)).toThrow();
+          const tool = createUpdateGoalTool({
+            agentSessionKey: target().sessionKey,
+            config: { session: { store: fixture.storePath() } },
+          });
+          await tool.execute("verdict", { status: "complete" });
+          expect(read().goal?.status).toBe("complete");
+          expect(listener).not.toHaveBeenCalled();
+        },
+      });
+    } finally {
+      release();
+    }
   });
 
   it("rejects the wrong required Goal before transferring any receipt", async () => {

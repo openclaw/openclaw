@@ -740,3 +740,38 @@ describe("CodexAppServerTurnRouter lifecycle", () => {
     },
   );
 });
+
+it("buffers a native goal successor and binds its request to the successor handlers", async () => {
+  const harness = createHarness();
+  const first = vi.fn(() => ({ owner: "first" }));
+  const second = vi.fn(() => ({ owner: "second" }));
+  const projected = vi.fn();
+  const route = await bindRoute(harness, "turn-1", { onNotification: vi.fn(), onRequest: first });
+  route.enableNativeSuccessors();
+  harness.complete("turn-1");
+  harness.notify("turn/started", {
+    threadId: "thread-1",
+    turn: { id: "turn-2", status: "inProgress", items: [] },
+  });
+  harness.request("successor-tool", "item/tool/call", {
+    threadId: "thread-1",
+    turnId: "turn-2",
+    callId: "call-2",
+    tool: "test",
+    arguments: {},
+  });
+  await settleInput();
+  expect(first).not.toHaveBeenCalled();
+  expect(second).not.toHaveBeenCalled();
+  await route.drain();
+  route.rearmNativeTurn();
+  await route.activate({ onNotification: projected, onRequest: second });
+  await route.bindTurn("turn-2");
+  await harness.expectResponse("successor-tool", { owner: "second" });
+  expect(projected).toHaveBeenCalledWith(
+    expect.objectContaining({ method: "turn/started", turnId: "turn-2" }),
+    { threadId: "thread-1", turnId: "turn-2" },
+  );
+  expect(first).not.toHaveBeenCalled();
+  route.release();
+});

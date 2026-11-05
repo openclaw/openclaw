@@ -150,7 +150,32 @@ export function trackIsolatedCodexAppServerClient(client: CodexAppServerClient):
   const state = getSharedCodexAppServerClientState();
   state.isolatedClients.add(client);
   client.addTransportExitHandler((exitedClient) => {
-    state.isolatedClients.delete(exitedClient);
+    if (!exitedClient.hasUnsettledCloseCleanup()) {
+      state.isolatedClients.delete(exitedClient);
+    }
+  });
+}
+
+/** Keep the existing physical-client owner reachable after uncertain native shutdown. */
+export function retainIsolatedCodexCloseCleanup(
+  client: CodexAppServerClient,
+  cleanup: () => Promise<void>,
+  onFailure: (error: unknown) => void,
+): void {
+  const state = getSharedCodexAppServerClientState();
+  state.isolatedClients.add(client);
+  client.retainUnsettledCloseCleanup(async () => {
+    await cleanup();
+    state.isolatedClients.delete(client);
+  });
+  // One receipt-driven retry, not a polling loop. Already-exited but uncertain
+  // descendants remain explicitly owned for later disposal/operator recovery.
+  client.addTransportExitHandler(() => {
+    void client.closeAndWait().then((receipt) => {
+      if (!receipt.exited || receipt.cleanup === "uncertain") {
+        onFailure(new Error("Codex native goal process cleanup remains uncertain"));
+      }
+    }, onFailure);
   });
 }
 
@@ -280,6 +305,17 @@ export async function retainSharedCodexAppServerClientByInstanceId(
     return undefined;
   }
   const state = getSharedCodexAppServerClientState();
+  // An uncertain isolated shutdown still owns its persisted binding. A later
+  // Stop/disposal may retry closure; a writer must not replace that custody.
+  for (const client of state.isolatedClients) {
+    if (client.getInstanceId() !== id || !client.hasUnsettledCloseCleanup()) {
+      continue;
+    }
+    await client.closeAndWait();
+    if (client.hasUnsettledCloseCleanup()) {
+      throw new Error("Codex native goal cleanup remains unsettled; replacement refused");
+    }
+  }
   for (const client of state.liveClients) {
     if (client.getInstanceId() !== id) {
       continue;
