@@ -934,6 +934,18 @@ It leaves unverified service definitions unchanged and skips their automatic
 restart. Restart the Gateway you launched manually after the update, or use its
 actual supervisor. Doctor still checks for active state writers before migrations.
 
+Git updates also check persisted Gateway ownership before replacing checkout or
+runtime files. When native service discovery misses a live or unverifiable owner,
+the update continues with a warning in the terminal, JSON result, and update
+history. The warning names the PID and installation root when known: the Gateway
+keeps running the previous runtime and may fail to load lazily loaded chunks until
+restarted. A Gateway that detects replacement of its runtime may stop itself and
+require relaunch. Restart it through its actual service manager, or press Ctrl+C
+in its original terminal and rerun its Gateway command. Positively identified
+disjoint installations stay silent. Existing managed-service and database-capture
+refusals still apply. The installed update driver must contain this warning behavior; a
+newer candidate cannot change an older driver's publication behavior.
+
 On Linux, unmask a managed systemd unit before updating. A masked unit
 (`masked` or `masked-runtime`), `RefuseManualStart=yes`, or a disabled and inactive
 unit with no start path causes preflight to refuse before replacing files or
