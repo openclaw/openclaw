@@ -42,6 +42,37 @@ function message(id: string | undefined, content: string, parentId?: string | nu
   return JSON.stringify({ type: "message", id, parentId, message: { role, content } });
 }
 
+test.each([
+  { type: "compaction", summary: "Saved deployment plan.", expected: "Saved deployment plan." },
+  { type: "compaction", summary: "", expected: "Compaction" },
+  { type: "compaction", summary: undefined, expected: "Compaction" },
+  { type: "reset", summary: "Not a compaction summary", expected: "Reset" },
+])("inspects retained $type summary without expanding default reads ($summary)", async (entry) => {
+  const file = await fixture(
+    [
+      message("prompt", "Remember the deployment plan."),
+      JSON.stringify({
+        type: entry.type,
+        id: "boundary",
+        parentId: "prompt",
+        firstKeptEntryId: "prompt",
+        summary: entry.summary,
+      }),
+    ].join("\n"),
+  );
+  const reader = new ArchivedTranscriptReader({ sessionId: "test", exactArchivePath: file });
+  await expect(reader.readById("boundary")).resolves.toMatchObject({
+    found: true,
+    message: { content: [{ type: "text", text: entry.type === "reset" ? "Reset" : "Compaction" }] },
+  });
+  await expect(
+    reader.readById("boundary", { includeCompactionSummary: true }),
+  ).resolves.toMatchObject({
+    found: true,
+    message: { content: [{ type: "text", text: entry.expected }] },
+  });
+});
+
 async function openIndex(file: string) {
   const index = (await readSessionTranscriptIndex(file, "test"))!;
   return {
