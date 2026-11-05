@@ -125,6 +125,7 @@ describe("release:prepush", () => {
       CI: "1",
       OPENCLAW_LOCAL_CHECK: "0",
       OPENCLAW_OXLINT_TRUSTED_POLICY_REF: BASE_SHA,
+      OPENCLAW_RELEASE_CONTEXT_REF: undefined,
     });
   });
 
@@ -153,6 +154,9 @@ describe("release:prepush", () => {
     expect(await run({ push: true })).toBe(0);
     expect(deps.refreshMain).toHaveBeenCalledOnce();
     expect(deps.currentBranch).toHaveBeenCalledTimes(2);
+    expect(deps.runCommand.mock.calls[1]?.[0].env?.OPENCLAW_RELEASE_CONTEXT_REF).toBe(
+      "release/2026.10.6",
+    );
     expect(deps.runCommand.mock.calls[1]?.[0].args).toEqual([
       "check:changed",
       "--base",
@@ -170,6 +174,9 @@ describe("release:prepush", () => {
     expect(await run({ branch: "release/2026.10.6", head: HEAD_SHA, push: true })).toBe(0);
     expect(deps.resolveCommit).toHaveBeenCalledWith(HEAD_SHA);
     expect(deps.currentBranch).not.toHaveBeenCalled();
+    expect(deps.runCommand.mock.calls[1]?.[0].env?.OPENCLAW_RELEASE_CONTEXT_REF).toBe(
+      "release/2026.10.6",
+    );
     expect(deps.pushValidatedHead).toHaveBeenCalledWith(HEAD_SHA, "release/2026.10.6");
   });
 

@@ -269,7 +269,7 @@ export async function runReleasePrepush(
       comparisonBaseSha,
       headSha,
       validationCheckout,
-      process.env,
+      { ...process.env, OPENCLAW_RELEASE_CONTEXT_REF: branch },
       baseSha,
     )) {
       const status = await dependencies.runCommand(command);
