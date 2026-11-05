@@ -294,7 +294,7 @@ describe("handleAbortChat", () => {
     expect(hasAbortableSessionRun(host)).toBe(true);
     await handleAbortChat(host, { preserveDraft: true });
 
-    expect(host.chatError).toBe("Reconnect to answer this question.");
+    expect(host.chatError).toBe("Reconnect to try again.");
     expect(host.lastError).toBe(host.chatError);
     expect(host.chatMessage).toBe("keep this draft");
     expect(host.pendingAbort).toBeUndefined();

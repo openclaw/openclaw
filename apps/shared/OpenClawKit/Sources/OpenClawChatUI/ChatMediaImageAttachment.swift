@@ -76,28 +76,15 @@ struct ChatMediaImageAttachment: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(self.label)
                 .accessibilityHint(String(localized: "Opens image preview"))
+                #if os(macOS)
                 .sheet(isPresented: self.$showsFullImage) {
-                    ZStack(alignment: .topTrailing) {
-                        Color.black.ignoresSafeArea()
-                        ScrollView([.horizontal, .vertical]) {
-                            OpenClawPlatformImageFactory.image(image)
-                                .resizable()
-                                .scaledToFit()
-                                .padding(20)
-                        }
-                        Button {
-                            self.showsFullImage = false
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .font(.title2)
-                                .symbolRenderingMode(.hierarchical)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.white)
-                        .padding(16)
-                        .accessibilityLabel(String(localized: "Close image preview"))
-                    }
+                    ChatMediaImagePreview(image: image) { self.showsFullImage = false }
                 }
+                #else
+                .fullScreenCover(isPresented: self.$showsFullImage) {
+                    ChatMediaImagePreview(image: image) { self.showsFullImage = false }
+                }
+                #endif
             case .unavailable:
                 ChatMediaUnavailableRow(
                     systemImage: "photo.badge.exclamationmark",

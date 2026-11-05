@@ -50,7 +50,26 @@ export function installMarkdownTables(markdownParser: MarkdownIt): void {
 
 export function markdownTableCopyText(table: HTMLTableElement): string {
   return [...table.rows]
-    .map((row) => [...row.cells].map((cell) => cell.textContent?.trim() ?? "").join("\t"))
+    .map((row) =>
+      [...row.cells]
+        .map((cell) => {
+          const walker = cell.ownerDocument.createTreeWalker(
+            cell,
+            NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+          );
+          let text = "";
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            if (node.nodeType === Node.TEXT_NODE) {
+              text += node.textContent;
+            } else if (node.nodeName === "BR") {
+              text += "\n";
+            }
+          }
+          text = text.trim();
+          return /[\t\r\n"]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+        })
+        .join("\t"),
+    )
     .join("\n");
 }
 

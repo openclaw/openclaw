@@ -92,13 +92,17 @@ it.each([undefined, true, false])(
     expect(anchor().matches(":hover")).toBe(false);
     await userEvent.keyboard("{Tab}");
     expect(document.activeElement).toBe(copyButton().element());
+    const closed = new Promise<void>((resolve) => {
+      tooltipOwner().addEventListener("overlay-after-hide", () => resolve(), { once: true });
+    });
     await userEvent.keyboard(copied === undefined ? "{Escape}" : "{Enter}");
     if (copied !== undefined) {
       expect(fallback).toHaveBeenCalledWith("copy");
     }
     expect(document.activeElement).toBe(anchor());
+    await closed;
     if (copied === false) {
-      await expect.element(page.getByRole("status")).toHaveTextContent("Couldn’t copy. Try again.");
+      await expect.element(page.getByRole("alert")).toHaveTextContent("Couldn’t copy. Try again.");
     }
     expect(card()).toBeNull();
     expect(anchor().hasAttribute("title")).toBe(false);
