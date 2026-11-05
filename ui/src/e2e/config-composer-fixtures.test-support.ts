@@ -87,20 +87,21 @@ export function computedStyles(control: Locator, names: readonly string[]) {
   }, names);
 }
 
-export async function revealControl(control: Locator) {
-  const closedObjects = control
-    .page()
-    .locator("details.cfg-object:not([open])")
-    .filter({ visible: true });
-  while ((await control.count()) === 0) {
-    await expect
-      .poll(async () => (await control.count()) > 0 || (await closedObjects.count()) > 0)
-      .toBe(true);
-    if ((await control.count()) === 0) {
-      await closedObjects.first().locator(":scope > summary").click();
-    }
+// Closed sections render their fields on first open, so callers name the sections that
+// hold a nested control. Opening sections in document order until it appears re-renders
+// the form once per section; the complete Gateway schema made that walk outlast the test.
+export async function revealControl(control: Locator, sections: readonly string[] = []) {
+  const page = control.page();
+  for (const title of sections) {
+    await page
+      .locator("details.cfg-object:not([open]) > summary")
+      .filter({ has: page.locator(".settings-row__title").getByText(title, { exact: true }) })
+      .first()
+      .click();
   }
-  await expect.poll(() => control.count()).toBe(1);
+  await expect
+    .poll(() => control.count(), { message: "Pass the closed sections that hold this control" })
+    .toBe(1);
   for (const details of await control.locator("xpath=ancestor::details").all()) {
     if ((await details.getAttribute("open")) === null) {
       await details.locator(":scope > summary").click();
