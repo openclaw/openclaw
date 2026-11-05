@@ -23,15 +23,6 @@ export type AgentHarnessQuestionGatewayCall = (
   extra?: { signal?: AbortSignal },
 ) => Promise<unknown>;
 
-type QuestionDispatchAuthority =
-  | { kind: "unscoped" }
-  | {
-      kind: "source-bound";
-      /** @deprecated For preparation, await assertCurrentAsync; keep the final effect assertion. Sync preparation is supported through 2026-12-31. Removal in the first January 2027 stable release. */
-      assertCurrent: () => void;
-      assertCurrentAsync?: () => Promise<void>;
-    };
-
 export class QuestionDispatchRefusedError extends Error {
   override name = "QuestionDispatchRefusedError";
 }
@@ -106,7 +97,14 @@ export type AgentQuestionDispatcher = {
     options: { timeoutMs?: number };
     params?: unknown;
     signal?: AbortSignal;
-    authority: QuestionDispatchAuthority;
+    authority:
+      | { kind: "unscoped" }
+      | {
+          kind: "source-bound";
+          /** @deprecated For preparation, await assertCurrentAsync; keep the final effect assertion. Sync preparation is supported through 2026-12-31. Removal in the first January 2027 stable release. */
+          assertCurrent: () => void;
+          assertCurrentAsync?: () => Promise<void>;
+        };
   }) => Promise<unknown>;
 };
 

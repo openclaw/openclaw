@@ -1,4 +1,5 @@
 // Threads inherit admission; forks also run this bootstrap in their own process.
+import "../helpers/postgres-pool-roots.ts";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +17,7 @@ import {
   BUNDLED_PLUGIN_ROOT_DIR,
   BUNDLED_PLUGIN_TEST_GLOB,
 } from "./vitest.bundled-plugin-paths.ts";
+import { createVitestDeclaredInputsPlugin } from "./vitest.declared-inputs.ts";
 import { sharedVitestExcludePatterns } from "./vitest.pattern-file.ts";
 import {
   createVitestProjectCachePlugin,
@@ -128,6 +130,7 @@ export const sharedVitestConfig = {
       `${repoRoot.replaceAll("\\", "/")}/extensions/*/src/control-ui.tsx`,
     ]),
     createStateSchemaInlinePlugin(repoRoot),
+    createVitestDeclaredInputsPlugin(repoRoot),
     compiledSubprocessesPlugin(),
     createVitestProjectCachePlugin(),
     createRedactingReporterPlugin(),

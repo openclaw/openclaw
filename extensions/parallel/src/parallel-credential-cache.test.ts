@@ -1,4 +1,5 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
+import { jsonResponse } from "openclaw/plugin-sdk/test-env";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, expect, it, vi } from "vitest";
 import { createParallelWebSearchProvider } from "../web-search-contract-api.js";
@@ -23,13 +24,10 @@ it("keeps paid Parallel search results scoped to the request credential", async 
     if (!account) {
       throw new Error("Unexpected synthetic Parallel credential");
     }
-    return new Response(
-      JSON.stringify({
-        search_id: account,
-        results: [{ url: `https://example.com/${account}`, title: account }],
-      }),
-      { headers: { "content-type": "application/json" } },
-    );
+    return jsonResponse({
+      search_id: account,
+      results: [{ url: `https://example.com/${account}`, title: account }],
+    });
   });
   const provider = createParallelWebSearchProvider();
   const tool = (apiKey: string) => {

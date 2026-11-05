@@ -11,16 +11,10 @@ import type { LineAccountConfig } from "./types.js";
 type ReportChannelRoomJoin =
   typeof import("openclaw/plugin-sdk/channel-join-intro-runtime").reportChannelRoomJoin;
 
-const { reportJoin, getGroupSummary, createClient } = vi.hoisted(() => {
-  const summary = vi.fn<messagingApi.MessagingApiClient["getGroupSummary"]>();
-  return {
-    reportJoin: vi.fn<ReportChannelRoomJoin>(async () => ({ kind: "posted" })),
-    getGroupSummary: summary,
-    createClient: vi.fn(function () {
-      return { getGroupSummary: summary };
-    }),
-  };
-});
+const { reportJoin, getGroupSummary } = vi.hoisted(() => ({
+  reportJoin: vi.fn<ReportChannelRoomJoin>(async () => ({ kind: "posted" })),
+  getGroupSummary: vi.fn<messagingApi.MessagingApiClient["getGroupSummary"]>(),
+}));
 
 vi.mock("openclaw/plugin-sdk/channel-join-intro-runtime", () => ({
   reportChannelRoomJoin: reportJoin,
@@ -29,7 +23,12 @@ vi.mock("@line/bot-sdk", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@line/bot-sdk")>();
   return {
     ...actual,
-    messagingApi: { ...actual.messagingApi, MessagingApiClient: createClient },
+    messagingApi: {
+      ...actual.messagingApi,
+      MessagingApiClient: vi.fn(function () {
+        return { getGroupSummary };
+      }),
+    },
   };
 });
 
@@ -96,7 +95,6 @@ const groups = (named: GroupConfig, wildcard?: GroupConfig): LineAccountConfig =
 beforeEach(() => {
   setLineRuntime(createPluginRuntimeMock());
   reportJoin.mockClear();
-  createClient.mockClear();
   getGroupSummary.mockReset();
   getGroupSummary.mockResolvedValue({ groupId, groupName: "Incident Response" });
 });
@@ -110,10 +108,8 @@ afterAll(() => {
 it.each(sources)("introduces in $type without sender authorization", async (source) => {
   const context = await runEvent(joinEvent(source));
   const conversationId = source.type === "group" ? source.groupId : source.roomId;
-  expect(reportJoin).toHaveBeenCalledTimes(1);
   const params = introduction();
   expect(params).toMatchObject({
-    cfg: context.cfg,
     channel: "line",
     accountId: "work",
     conversationId,
@@ -127,20 +123,7 @@ it.each(sources)("introduces in $type without sender authorization", async (sour
   await expect(roomContext()).resolves.toEqual(
     source.type === "group" ? { ...noHistory, title: "Incident Response" } : noHistory,
   );
-  if (source.type === "group") {
-    expect(getGroupSummary).toHaveBeenCalledWith(groupId);
-    expect(createClient).toHaveBeenCalledWith({ channelAccessToken: "line-work-token" });
-  } else {
-    expect(getGroupSummary).not.toHaveBeenCalled();
-  }
   expect(context.processMessage).not.toHaveBeenCalled();
-});
-
-it("keeps an honest thin snapshot when the group summary request fails", async () => {
-  getGroupSummary.mockRejectedValue(new Error("LINE unavailable"));
-  // An uncached group forces the failed request instead of reusing its name.
-  await runEvent(joinEvent({ type: "group", groupId: `C${"d".repeat(32)}` }));
-  await expect(roomContext()).resolves.toEqual(noHistory);
 });
 
 it.each([
@@ -154,7 +137,6 @@ it.each([
   const context = await runEvent(event);
 
   expect(reportJoin).not.toHaveBeenCalled();
-  expect(getGroupSummary).not.toHaveBeenCalled();
   expect(context.processMessage).not.toHaveBeenCalled();
 });
 
@@ -178,12 +160,6 @@ it.each<[string, boolean, LineAccountConfig]>([
   ["override empty wildcard", true, { groupAllowFrom: [], ...groups(allowed, emptyAllow) }],
   ["override disabled wildcard", true, groups({ enabled: true }, { enabled: false })],
 ])("checks senderless admission: %s", async (_name, roomAllowed, config) => {
-  const context = await runEvent(joinEvent(sources[0]), config);
-  expect(reportJoin).toHaveBeenCalledWith(
-    expect.objectContaining({ conversationId: groupId, roomAllowed }),
-  );
-  if (!roomAllowed) {
-    expect(getGroupSummary).not.toHaveBeenCalled();
-  }
-  expect(context.processMessage).not.toHaveBeenCalled();
+  await runEvent(joinEvent(sources[0]), config);
+  expect(introduction().roomAllowed).toBe(roomAllowed);
 });

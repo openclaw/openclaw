@@ -6,6 +6,7 @@ import { openUrlPrivately } from "../infra/browser-handoff.js";
 import { copyToClipboard } from "../infra/clipboard.js";
 import { isRemoteEnvironment } from "../infra/remote-env.js";
 import { defaultRuntime, ExitError, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { sleep } from "../utils/sleep.js";
 import {
   hasVerifiedControlUiLoopbackAlias,
@@ -15,12 +16,6 @@ import {
 } from "./control-ui-handoff.js";
 import { gatewayProbeResultSawGateway } from "./gateway-health-auth-diagnostic.js";
 import { detectBrowserOpenSupport, formatControlUiSshHint } from "./onboard-helpers.js";
-
-type DashboardOptions = {
-  json?: boolean;
-  noOpen?: boolean;
-  yes?: boolean;
-};
 
 const quietRuntime: RuntimeEnv = {
   log: () => {},
@@ -158,11 +153,11 @@ async function ensureDashboardTargetReady(params: {
   const prompt = shouldInstall
     ? "No background Gateway service was detected for this profile. Install and start one to open the dashboard?"
     : "The background Gateway service is not running. Start it to open the dashboard?";
-  const approved =
-    yes || (allowRecovery !== false && process.stdin.isTTY && (await promptYesNo(prompt, true)));
+  const interactive = allowRecovery !== false && process.stdin.isTTY;
+  const approved = yes || (interactive && (await promptYesNo(prompt, true)));
   if (!approved) {
     printGatewayNotReadyHints(runtime, reason);
-    return { ready: false as const, reason };
+    return { ready: false as const, reason, declined: interactive };
   }
 
   if (shouldInstall) {
@@ -201,70 +196,75 @@ function dashboardJsonFailure(runtime: RuntimeEnv, reason: string): void {
   runtime.exit(1);
 }
 
-async function dashboardJsonCommand(runtime: RuntimeEnv): Promise<void> {
-  try {
-    const target = await resolveDashboardTarget();
-    const readiness = await ensureDashboardTargetReady({
-      target,
-      runtime: quietRuntime,
-      allowRecovery: false,
-    });
-    if (!readiness.ready) {
-      dashboardJsonFailure(runtime, readiness.reason);
-      return;
-    }
-    if (!(await hasVerifiedControlUiLoopbackAlias(target))) {
-      dashboardJsonFailure(
-        runtime,
-        "Dashboard loopback listener could not be verified as the configured Gateway.",
-      );
-      return;
-    }
-
-    const document = await waitForControlUiDocument({
-      url: target.documentUrl,
-      tlsConfig: target.tlsConfig,
-      waitForPending: false,
-    });
-    if (!document.ready) {
-      dashboardJsonFailure(runtime, document.reason);
-      return;
-    }
-    const browserHandoff = await issueControlUiBrowserHandoff(target.links);
-
-    writeRuntimeJson(
-      runtime,
-      {
-        ok: true,
-        url: target.dashboardUrl,
-        httpUrl: target.links.httpUrl,
-        wsUrl: target.links.wsUrl,
-        port: target.port,
-        tokenIncluded: target.includeTokenInUrl,
-        browserUrl: browserHandoff.browserUrl,
-        browserBootstrapExpiresAtMs: browserHandoff.expiresAtMs,
-        ...(target.gatewayAuthHandoff
-          ? { [gatewayPasswordJsonKey]: target.gatewayAuthHandoff }
-          : {}),
-        ...(document.tlsFingerprint ? { tlsFingerprint: document.tlsFingerprint } : {}),
-      },
-      0,
-    );
-  } catch (err) {
-    if (err instanceof ExitError) {
-      throw err;
-    }
-    const reason = err instanceof Error ? err.message : String(err);
-    dashboardJsonFailure(runtime, reason || "Dashboard target resolution failed.");
-  }
-}
-
 export async function dashboardCommand(
   runtime: RuntimeEnv = defaultRuntime,
-  options: DashboardOptions = {},
+  options: {
+    json?: boolean;
+    noOpen?: boolean;
+    yes?: boolean;
+  } = {},
 ) {
   if (options.json) {
-    await dashboardJsonCommand(runtime);
+    try {
+      const target = await resolveDashboardTarget();
+      const readiness = await ensureDashboardTargetReady({
+        target,
+        runtime: quietRuntime,
+        allowRecovery: false,
+      });
+      if (!readiness.ready) {
+        dashboardJsonFailure(runtime, readiness.reason);
+        return;
+      }
+      if (!(await hasVerifiedControlUiLoopbackAlias(target))) {
+        dashboardJsonFailure(
+          runtime,
+          "Dashboard loopback listener could not be verified as the configured Gateway.",
+        );
+        return;
+      }
+
+      const documentSignal = getAsyncWorkSignal();
+      const document = await waitForControlUiDocument({
+        url: target.documentUrl,
+        tlsConfig: target.tlsConfig,
+        waitForPending: false,
+        ...(documentSignal ? { signal: documentSignal } : {}),
+      });
+      if (documentSignal?.aborted) {
+        return;
+      }
+      if (!document.ready) {
+        dashboardJsonFailure(runtime, document.reason);
+        return;
+      }
+      const browserHandoff = await issueControlUiBrowserHandoff(target.links);
+
+      writeRuntimeJson(
+        runtime,
+        {
+          ok: true,
+          url: target.dashboardUrl,
+          httpUrl: target.links.httpUrl,
+          wsUrl: target.links.wsUrl,
+          port: target.port,
+          tokenIncluded: target.includeTokenInUrl,
+          browserUrl: browserHandoff.browserUrl,
+          browserBootstrapExpiresAtMs: browserHandoff.expiresAtMs,
+          ...(target.gatewayAuthHandoff
+            ? { [gatewayPasswordJsonKey]: target.gatewayAuthHandoff }
+            : {}),
+          ...(document.tlsFingerprint ? { tlsFingerprint: document.tlsFingerprint } : {}),
+        },
+        0,
+      );
+    } catch (err) {
+      if (err instanceof ExitError) {
+        throw err;
+      }
+      const reason = err instanceof Error ? err.message : String(err);
+      dashboardJsonFailure(runtime, reason || "Dashboard target resolution failed.");
+    }
     return;
   }
 
@@ -282,6 +282,9 @@ export async function dashboardCommand(
     yes: options.yes,
   });
   if (!readiness.ready) {
+    if (!readiness.declined) {
+      runtime.exit(1);
+    }
     return;
   }
 
@@ -296,6 +299,7 @@ export async function dashboardCommand(
       allowRecovery: false,
     });
     if (!finalReadiness.ready) {
+      runtime.exit(1);
       return;
     }
   }
@@ -304,13 +308,19 @@ export async function dashboardCommand(
       "Dashboard loopback listener could not be verified as the configured Gateway; refusing to copy or open an authenticated URL.",
     );
     runtime.log("Restart the Gateway, then run `openclaw gateway status --deep` for details.");
+    runtime.exit(1);
     return;
   }
+  const documentSignal = getAsyncWorkSignal();
   const document = await waitForControlUiDocument({
     url: target.documentUrl,
     tlsConfig: target.tlsConfig,
     onPending: () => runtime.log("Control UI assets are preparing; waiting for the dashboard…"),
+    ...(documentSignal ? { signal: documentSignal } : {}),
   });
+  if (documentSignal?.aborted) {
+    return;
+  }
   if (!document.ready) {
     runtime.error(document.reason);
     runtime.log("Run `openclaw gateway status --deep` for details.");
@@ -325,6 +335,7 @@ export async function dashboardCommand(
       `Could not create a one-time browser pairing link: ${error instanceof Error ? error.message : String(error)}`,
     );
     runtime.log("Run `openclaw doctor`, then retry `openclaw dashboard`.");
+    runtime.exit(1);
     return;
   }
   const { port, basePath, links, includeTokenInUrl, tlsConfig } = target;

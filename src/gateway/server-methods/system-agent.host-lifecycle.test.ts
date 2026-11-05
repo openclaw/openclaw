@@ -20,6 +20,7 @@ import * as systemAgentAudit from "../../system-agent/audit.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 import { readLastSystemAgentAuditEntry } from "../../system-agent/system-agent.test-helpers.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import type { GatewayHostLifecycle } from "../server-public.js";
 import type { WorkerSessionTurnClaim } from "../worker-environments/placement-record.js";
@@ -184,17 +185,12 @@ it.for([
     const appendHistory = transcriptStoreMocks.appendTurn;
     const pendingChat = withGatewayToolCallerIdentity(identity, () =>
       handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "delegated-gateway-lifecycle",
-          method: "openclaw.chat",
-          params: {
-            sessionId: "delegate-1",
-            message: `${action} Gateway.`,
-            context: { page: "channels" },
-            delegation,
-          },
-        },
+        req: gatewayRequest("delegated-gateway-lifecycle", "openclaw.chat", {
+          sessionId: "delegate-1",
+          message: `${action} Gateway.`,
+          context: { page: "channels" },
+          delegation,
+        }),
         respond: (ok, payload, error) => {
           rootsAtResponse.push(getActiveGatewayRootWorkCount());
           persistedHistoryAtResponse.push(appendHistory.mock.calls.map(([turn]) => turn));

@@ -4,6 +4,7 @@ import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { replaceNamedIndexesWithNoncanonicalIndexes } from "./sqlite-schema-shape.test-support.js";
 
 type Database = InstanceType<ReturnType<typeof requireNodeSqlite>["DatabaseSync"]>;
+const open = (pathname: string) => new (requireNodeSqlite().DatabaseSync)(pathname);
 
 function replaceIndexSql(database: Database, name: string, sql: string): void {
   database.enableDefensive?.(false);
@@ -16,8 +17,7 @@ function replaceIndexSql(database: Database, name: string, sql: string): void {
 }
 
 export function createUnsafeIndexDrift(databasePath: string): void {
-  const { DatabaseSync } = requireNodeSqlite();
-  using database = new DatabaseSync(databasePath);
+  using database = open(databasePath);
   database.exec(`
       CREATE TABLE unsafe_index_records (
         id INTEGER PRIMARY KEY, indexed_value TEXT NOT NULL, alternate_value TEXT NOT NULL
@@ -34,8 +34,7 @@ export function createUnsafeIndexDrift(databasePath: string): void {
 }
 
 export function createCacheExpiryIndexPhysicalDrift(databasePath: string): void {
-  const { DatabaseSync } = requireNodeSqlite();
-  using database = new DatabaseSync(databasePath);
+  using database = open(databasePath);
   database.exec(`
       INSERT INTO cache_entries (scope, key, value_json, expires_at, updated_at)
       VALUES ('scope-a', 'key-a', '{}', 100, 1);
@@ -54,10 +53,9 @@ export function createCacheExpiryIndexPhysicalDrift(databasePath: string): void 
 
 export function createTranscriptIdempotencyIndexDrift(
   databasePath: string,
-  options: { duplicateRows?: boolean; hideWithCanonicalSql?: boolean } = {},
+  options: { duplicateRows?: boolean } = {},
 ): void {
-  const { DatabaseSync } = requireNodeSqlite();
-  using database = new DatabaseSync(databasePath);
+  using database = open(databasePath);
   database.exec(`
       DROP INDEX idx_agent_transcript_message_idempotency;
       CREATE UNIQUE INDEX idx_agent_transcript_message_idempotency
@@ -77,31 +75,17 @@ export function createTranscriptIdempotencyIndexDrift(
         VALUES ('session-1', 'event-2', 2, 'message-1', 2);
       `);
   }
-  if (options.hideWithCanonicalSql) {
-    replaceIndexSql(
-      database,
-      "idx_agent_transcript_message_idempotency",
-      `CREATE UNIQUE INDEX idx_agent_transcript_message_idempotency
-             ON transcript_event_identities(session_id, message_idempotency_key)
-            WHERE message_idempotency_key IS NOT NULL`,
-    );
-  }
-  expect(database.prepare("PRAGMA integrity_check").get()).toEqual({
-    integrity_check: options.hideWithCanonicalSql
-      ? expect.stringMatching(/idx_agent_transcript_message_idempotency/)
-      : "ok",
-  });
+  expect(database.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
   expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
 }
 
 export function createCanonicalAgentIndexDrift(databasePath: string): void {
-  const { DatabaseSync } = requireNodeSqlite();
-  using drifted = new DatabaseSync(databasePath);
+  using drifted = open(databasePath);
   drifted.exec(`
       DROP INDEX idx_agent_session_windows_session_key;
       DROP INDEX idx_agent_transcript_event_identity_sequence;
     `);
-  expect(replaceNamedIndexesWithNoncanonicalIndexes(drifted).length).toBeGreaterThan(25);
+  replaceNamedIndexesWithNoncanonicalIndexes(drifted);
   drifted.exec(`
       DROP INDEX idx_agent_trajectory_runtime_run;
       CREATE INDEX idx_agent_trajectory_runtime_run

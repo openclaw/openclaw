@@ -357,11 +357,23 @@ describe("failed update recovery restart", () => {
     { mutationStarted: false, stopped: true, waitForStartup: true },
     { mutationStarted: true, stopped: false, waitForStartup: true },
   ])(
-    "retains activation effects (mutation=$mutationStarted, stop=$stopped)",
+    "observes recovery after activation effects (mutation=$mutationStarted, stop=$stopped)",
     async ({ mutationStarted, stopped, waitForStartup }) => {
       const root = await installedRoot("update-recovery-startup-policy-");
-      await finishFailedUpdate({ ...failedResult(undefined), root }, { mutationStarted, stopped });
-      expect(mocks.verifyGateway).toHaveBeenCalledWith(expect.objectContaining({ waitForStartup }));
+      const failure = await finishFailedUpdate(
+        { ...failedResult(undefined), root },
+        { mutationStarted, stopped },
+      );
+      if (mutationStarted || stopped) {
+        expect(mocks.verifyGateway).toHaveBeenCalledWith(
+          expect.objectContaining({ waitForStartup }),
+        );
+      } else {
+        expectIdle(mocks.verifyGateway);
+        expect(failure.result.steps).toContainEqual(
+          expect.objectContaining({ name: "gateway recovery observation", exitCode: 0 }),
+        );
+      }
       expectIdle(mocks.restart, mocks.restartCandidate);
     },
   );
@@ -569,9 +581,7 @@ describe("failed update recovery restart", () => {
       expect(report).toContain("triage");
       expect(report).toContain("update repair");
       expect(report).not.toContain("remains stopped");
-      expect(renderUpdateRunNotice(recorded, "finished")).toBe(
-        "⚠️ OpenClaw couldn't finish updating.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
-      );
+      expect(renderUpdateRunNotice(recorded, "finished")).not.toContain("is still serving.");
     },
   );
 });

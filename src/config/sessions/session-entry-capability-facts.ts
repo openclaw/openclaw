@@ -1,9 +1,10 @@
 import type { SessionEntryCurrentFacts } from "./session-entry-current.types.js";
 
-/** Both native publication and worker reads carry the same content-free capability facts. */
+/** Capability readers share authority facts; model/auth routing belongs to the admitted turn. */
 export function projectSessionEntryCapabilityFacts(entry: SessionEntryCurrentFacts) {
   return {
     sessionId: entry.sessionId,
+    clientCapabilities: entry.clientCapabilities,
     createdVia: entry.createdVia,
     incognito: entry.incognito,
     lifecycleRevision: entry.lifecycleRevision,
@@ -19,12 +20,6 @@ export function projectSessionEntryCapabilityFacts(entry: SessionEntryCurrentFac
     sandboxMode: entry.sandboxMode,
     permissionMode: entry.permissionMode,
     sessionRoot: entry.sessionRoot,
-    authProfileOverride: entry.authProfileOverride,
-    authProfileOverrideSource: entry.authProfileOverrideSource,
-    modelOverride: entry.modelOverride,
-    providerOverride: entry.providerOverride,
-    model: entry.model,
-    modelProvider: entry.modelProvider,
     spawnedBy: entry.spawnedBy,
     spawnDepth: entry.spawnDepth,
     completionOwnerSessionKey: entry.completionOwnerSessionKey,

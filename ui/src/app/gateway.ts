@@ -13,6 +13,7 @@ import type {
   GatewayEventListener,
   GatewayHelloOk,
 } from "../api/gateway.ts";
+import type { PresenceEntry } from "../api/types.ts";
 import type { AuthenticatedUser } from "./user-profile.ts";
 
 export type ApplicationGatewayPhase =
@@ -88,12 +89,18 @@ export type ApplicationGatewayOptions = {
 
 export type ApplicationGatewayDeferredIntent = {
   key: string;
+  /** Related intents that a terminal desired state may supersede. */
+  group?: string;
+  discardGroup?: boolean;
+  preservePosition?: boolean;
   run: (client: GatewayBrowserClient) => Promise<void>;
   discard?: () => void;
 };
 
 export type ApplicationGateway = {
   readonly snapshot: ApplicationGatewaySnapshot;
+  /** Full normalized roster; unresolved until this connection's first presence reset. */
+  readonly readPresence?: () => readonly PresenceEntry[] | undefined;
   readonly connection: ApplicationGatewayConnection;
   readonly connectionRevision: number;
   /** Raw history is captured only while subscribeEventLog has consumers. */

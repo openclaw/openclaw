@@ -256,9 +256,11 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       stateScenario: "empty",
       weight: 3,
     });
-    expect(script).toContain("npm:@openclaw/kitchen-sink@latest");
-    expect(script).toContain("npm-latest-conformance");
-    expect(script).toContain("npm-latest-adversarial");
+    const recordedVersion = readFileSync(
+      "scripts/e2e/lib/kitchen-sink-plugin/npm-version.txt",
+      "utf8",
+    ).trim();
+    expect(recordedVersion).toMatch(/^\d+\.\d+\.\d+(?:[+-][0-9A-Za-z.-]+)?$/);
     expect(script).toContain("npm:@openclaw/kitchen-sink@beta");
     expect(script).toContain("clawhub:@openclaw/kitchen-sink@latest");
     expect(script).toContain("clawhub:@openclaw/kitchen-sink@beta");
@@ -355,6 +357,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(extensionStep.env.FRV_TEST_EXCLUDE_PATHS_JSON).toBe(
       "${{ needs.preflight.outputs.extension_test_exclude_patterns_json }}",
     );
+    expect(extensionStep.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI).toBe("1");
     expect(extensionStep.run).not.toContain("extensions/codex/src/app-server/run-attempt.test.ts");
   });
 

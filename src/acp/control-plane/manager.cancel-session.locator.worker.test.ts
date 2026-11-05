@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import { readAcpSessionEntryAsync } from "../runtime/session-meta.js";
 import {
@@ -38,9 +39,7 @@ it.each([
             return { summary: "ready" };
           });
         } else if (boundary === "cancel-rpc") {
-          f.cancel.mockImplementationOnce(async () => {
-            await runtimeGate.wait();
-          });
+          f.cancel.mockImplementationOnce(runtimeGate.wait);
         }
         const writer = boundary === "metadata-write" ? holdMetadataWrite(runtimeGate) : undefined;
         const close = vi.spyOn(f.runtime, "close");
@@ -168,9 +167,7 @@ it.each([
           await turnGate.wait();
           yield { type: "done", status: terminalStatus };
         });
-        f.cancel.mockImplementationOnce(async () => {
-          await cancelGate.wait();
-        });
+        f.cancel.mockImplementationOnce(cancelGate.wait);
         const reader = observeControlRead(undefined, {
           when: () => boundary === "post-abort-read" && Boolean(signal?.aborted),
           wait: readGate.wait,
@@ -207,9 +204,7 @@ it.each([
           readGate.open();
           turnGate.open();
           if (boundary === "cancel-rpc") {
-            await new Promise<void>((resolve) => {
-              setImmediate(resolve);
-            });
+            await nextTurn();
             expect([turnSettled, cancelSettled]).toEqual([false, false]);
           }
           expect(close).not.toHaveBeenCalled();

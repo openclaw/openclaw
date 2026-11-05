@@ -1,3 +1,4 @@
+import { observeDiagnosticsTimelinePhases } from "../../../infra/diagnostics-timeline.js";
 import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
 import { TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
@@ -39,6 +40,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   isRawModelRun: boolean;
   preparedToolBase: PreparedToolBase;
 }) {
+  using phases = observeDiagnosticsTimelinePhases("attempt.bundle-tools.normalize");
   const {
     cronCreatorToolAllowlist,
     cronCreatorToolAllowlistCaptureRef,
@@ -78,12 +80,12 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   const tools = await withRuntimeToolSchemaQuarantine((record) =>
     normalizeTools(toolsEnabled ? toolsRaw : [], record),
   );
+  phases.mark("attempt.bundle-tools.mcp-config");
   const auxiliaryToolsEnabled =
     toolsEnabled &&
     params.attempt.trigger !== "memory" &&
     !params.attempt.disableTools &&
-    !params.isRawModelRun &&
-    !params.attempt.forceRestartSafeTools;
+    !params.isRawModelRun;
   let clientTools = auxiliaryToolsEnabled ? params.attempt.clientTools : undefined;
   // Client functions share the attempt's authority; filter before their names
   // can reserve bundled tools or enter deferred catalogs and provider requests.
@@ -126,6 +128,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       });
     },
   });
+  phases.mark("attempt.bundle-tools.mcp-acquire");
   const bundleMcpAcquisition = bundleMcpEnabled
     ? await acquireSessionMcpRuntime({
         ...mcpConfig,
@@ -141,6 +144,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         messageChannel: params.attempt.messageChannel ?? params.attempt.messageProvider,
       })
     : undefined;
+  phases.mark("attempt.bundle-tools.mcp-materialize");
   const bundleMcpRuntime = bundleMcpAcquisition
     ? await materializeBundleMcpToolsForRun({
         ...bundleMcpAcquisition,
@@ -153,6 +157,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     : undefined;
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
   try {
+    phases.mark("attempt.bundle-tools.lsp");
     const bundleLspEnabled = shouldCreateBundleLspRuntimeForAttempt({
       toolsEnabled: auxiliaryToolsEnabled,
       toolsAllow: params.attempt.toolsAllow,
@@ -170,6 +175,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
           ],
         })
       : undefined;
+    phases.mark("attempt.bundle-tools.policy");
     const applyRuntimeAllowlist = (bundleTools: typeof toolsRaw) =>
       applyEmbeddedAttemptToolsAllow(bundleTools, effectiveToolsAllow, {
         toolMeta: (tool) => getPluginToolMeta(tool),
@@ -195,6 +201,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         ),
       );
     }
+    phases.mark("attempt.bundle-tools.bundle-normalize");
     const normalizedBundledTools = (
       filteredBundledTools.length > 0
         ? await withRuntimeToolSchemaQuarantine((record) =>
@@ -244,6 +251,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       });
       return schemaProjection.tools;
     };
+    phases.mark("attempt.bundle-tools.project");
     const uncompactedEffectiveTools = await withRuntimeToolSchemaQuarantine((record) =>
       projectTools(tools, record),
     );
@@ -265,6 +273,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       },
     };
   } catch (error) {
+    phases.mark("attempt.bundle-tools.cleanup");
     const cleanup = await Promise.allSettled(
       [bundleMcpRuntime, bundleLspRuntime].map(async (runtime) => await runtime?.dispose()),
     );

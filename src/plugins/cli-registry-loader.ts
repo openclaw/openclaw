@@ -34,15 +34,10 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
 import {
   buildPluginRuntimeLoadOptions,
-  pluginRuntimeLoaderLogger,
   type PluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
-import type {
-  OpenClawPluginCliContext,
-  OpenClawPluginCliRootCommandDescriptor,
-  PluginLogger,
-} from "./types.js";
+import type { OpenClawPluginCliContext, OpenClawPluginCliRootCommandDescriptor } from "./types.js";
 
 export type PluginCliLoaderOptions = Pick<PluginLoadOptions, "pluginSdkResolution">;
 
@@ -51,7 +46,6 @@ export type PluginCliPublicLoadParams = {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   loaderOptions?: PluginCliLoaderOptions;
-  logger?: PluginLogger;
   primaryCommand?: string;
   session?: PluginCliLoadSession;
 };
@@ -90,7 +84,6 @@ export function createPluginCliLoadSession(
   let current:
     | {
         key: string;
-        logger?: PluginLogger;
         env: NodeJS.ProcessEnv;
         sdk?: PluginCliLoaderOptions["pluginSdkResolution"];
         prepared: PreparedPluginCliLoad;
@@ -133,7 +126,6 @@ export function createPluginCliLoadSession(
         // Equal values permit package reuse, but raw/source identities retain private provenance.
         if (
           current?.key === key &&
-          current.logger === params.logger &&
           current.env === env &&
           current.sdk === sdk &&
           current.prepared.context.rawConfig === config &&
@@ -157,7 +149,6 @@ export function createPluginCliLoadSession(
           env: preparedEnv,
           workspaceDir,
           metadataSnapshot,
-          logger: params.logger ?? pluginRuntimeLoaderLogger,
         });
         const prepared: PreparedPluginCliLoad = {
           context,
@@ -166,7 +157,7 @@ export function createPluginCliLoadSession(
           // Metadata stays captured for this preparation; invocation closure still gates use.
           assertCurrent: assertOpen,
         };
-        current = { key, sdk, logger: params.logger, env, prepared };
+        current = { key, sdk, env, prepared };
         return prepared;
       }),
   };
@@ -239,8 +230,17 @@ async function loadPluginCliMetadataRegistryWithContext(
   primaryCommand?: string,
   loaderOptions?: PluginCliLoaderOptions,
 ): Promise<PluginRegistry> {
-  const onlyPluginIds = resolvePrimaryCommandManifestPluginIds(prepared.context, primaryCommand);
+  let onlyPluginIds = resolvePrimaryCommandManifestPluginIds(prepared.context, primaryCommand);
+  if (onlyPluginIds?.length === 0) {
+    // Declared CLI roots are complete; only undeclared legacy registrars need discovery.
+    onlyPluginIds = (prepared.context.manifestRegistry?.plugins ?? [])
+      .filter((plugin) => plugin.cliCommands === undefined)
+      .map((plugin) => plugin.id);
+  }
   prepared.assertCurrent();
+  if (onlyPluginIds?.length === 0) {
+    return createEmptyPluginRegistry();
+  }
   const registry = await (prepared.metadataRegistry ??= prepared.withCache(() => {
     const options = buildPluginRuntimeLoadOptions(prepared.context, {
       ...loaderOptions,
@@ -306,14 +306,13 @@ async function loadPluginCliCommandRegistryWithContext(params: {
 }
 
 export async function loadPluginCliDescriptors(
-  params: PluginCliPublicLoadParams,
+  params: Omit<PluginCliPublicLoadParams, "loaderOptions">,
 ): Promise<OpenClawPluginCliRootCommandDescriptor[]> {
   try {
     const prepared = resolvePreparedPluginCliLoad(params);
     const registry = await loadPluginCliMetadataRegistryWithContext(
       prepared,
       params.primaryCommand,
-      params.loaderOptions,
     );
     return collectUniqueCommandDescriptors(
       registry.cliRegistrars
@@ -321,9 +320,7 @@ export async function loadPluginCliDescriptors(
         .map((entry) => entry.descriptors),
     );
   } catch (error) {
-    // Callers pass a muted per-plugin logger for descriptor scans; a total
-    // load failure still removes every plugin command from help/dispatch and
-    // must not vanish with it.
+    // A total load failure removes plugin commands from help/dispatch; keep it visible.
     log.warn(`plugin CLI descriptor load failed: ${String(error)}`);
     return [];
   }
@@ -380,17 +377,13 @@ export async function loadPluginCliRegistrationEntriesWithDefaults(
 }
 
 export async function resolvePluginCliRootOwnerIds(
-  params: PluginCliPublicLoadParams,
+  params: Omit<PluginCliPublicLoadParams, "loaderOptions">,
 ): Promise<string[] | null> {
   const primaryCommand = normalizeLowercaseStringOrEmpty(params.primaryCommand);
   if (!primaryCommand) {
     return null;
   }
   const prepared = resolvePreparedPluginCliLoad(params);
-  const ownerIds = await resolvePrimaryCommandPluginIds(
-    prepared,
-    primaryCommand,
-    params.loaderOptions,
-  );
+  const ownerIds = await resolvePrimaryCommandPluginIds(prepared, primaryCommand);
   return ownerIds ?? null;
 }

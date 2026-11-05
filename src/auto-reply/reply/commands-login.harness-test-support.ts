@@ -109,6 +109,16 @@ export function blockReplyOpts(): NonNullable<HandleCommandsParams["opts"]> {
   return { onBlockReply: vi.fn(async () => {}) };
 }
 
+export function loginResult(profileId = "openai:owner", authRefresh = "refreshed") {
+  const provider = profileId.split(":")[0];
+  return {
+    providerId: provider,
+    methodId: provider === "openrouter" ? "oauth" : "device-code",
+    authRefresh,
+    profiles: [{ profileId, provider, mode: provider === "openrouter" ? "api_key" : "oauth" }],
+  };
+}
+
 export async function dispatchLoginCommand(params: HandleCommandsParams) {
   const { handleCommands } = await import("./commands-core.js");
   return handleCommands({
@@ -128,7 +138,6 @@ export function setupLoginCommandTests() {
     runModelsAuthLoginFlowMock.mockReset();
     patchSessionEntryMock.mockReset();
     loginFlows.current?.logins.clear();
-    loginFlows.current?.modelAccess.clear();
   });
 
   afterEach(() => {

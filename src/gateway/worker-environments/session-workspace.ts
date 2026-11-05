@@ -58,13 +58,14 @@ export function createWorkerWorkspaceReconcileRequest(params: {
   }
   return {
     remoteWorkspaceDir,
-    // Repository results are cumulative from the pinned commit. The placement
-    // journal advances independently as setup, turns, and editor saves settle.
+    // Preserve pinned provenance; the node transfer diffs against the separately
+    // acknowledged session checkpoint, not a placement/startup capture.
     baseManifestRef: workspace.repository.baseManifestHash,
     source: {
       kind: "repository",
       authorize: params.assertCurrent,
       referenceManifestRef: workspace.repository.manifestHash,
+      acceptedManifestRef: workspace.repository.manifestHash,
       prepareCheckpoint: async (payload) => {
         const prepared = await stageSessionRepositoryCheckpoint({
           ...payload,

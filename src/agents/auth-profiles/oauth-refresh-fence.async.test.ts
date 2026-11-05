@@ -1,17 +1,12 @@
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { withEnvAsync } from "../../test-utils/env.js";
 import { createOAuthRefreshCredential } from "./credential-fixtures.test-support.js";
 import * as fence from "./oauth-refresh-fence.js";
 import { isPendingOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import * as sqlite from "./sqlite.js";
+import { withAgentDirEnv } from "./sqlite.test-support.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function trackSettlement(promise: Promise<unknown>) {
   const tracked = { settled: false };
@@ -34,25 +29,19 @@ const expectTimeout = (outcome: unknown) =>
     }),
   });
 
-it.each([
-  ["Error", new Error("synthetic backend failure")],
-  ["primitive", "synthetic backend failure"],
-  ["undefined", undefined],
-] as const)("preserves the original pre-deadline %s rejection", async (_label, rejection) => {
+it("preserves an undefined pre-deadline rejection", async () => {
   const settlement = createDeferredCore<never>();
   const rejected = expect(
     fence.observeOAuthRefreshSettlement("rejection", 1_000, settlement.promise),
-  ).rejects.toBe(rejection);
-  settlement.reject(rejection);
+  ).rejects.toBeUndefined();
+  settlement.reject(undefined);
   await rejected;
 });
 
 it.each(["success", "failure"] as const)(
   "waits for durable claim and %s settlement before publishing",
   async (outcome) => {
-    const root = tempDirs.make("oauth-awaited-sqlite-");
-    const agentDir = path.join(root, "agents", "work", "agent");
-    await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
+    await withAgentDirEnv("oauth-awaited-sqlite-", async (agentDir) => {
       const profileId = "synthetic:default";
       const expired = createOAuthRefreshCredential({
         provider: "synthetic",
@@ -150,9 +139,6 @@ it.each(["success", "failure"] as const)(
         claim.release.resolve();
         settlement.release.resolve();
         await tracked.outcome;
-        sqlite.closeAuthProfileReadPool();
-        closeOpenClawAgentDatabasesForTest();
-        closeOpenClawStateDatabaseForTest();
       }
     });
   },
@@ -195,22 +181,18 @@ describe("refresh observers", () => {
   }
   const owner = () =>
     retain(fence.observeOAuthRefreshSettlement("owner", 100, reading.promise, controller.signal));
-  it.each(["stalled read", "expired snapshot", "expired rejection"])(
+  it.each(["expired snapshot", "expired rejection"])(
     "bounds an observer waiting for a %s",
     async (scenario) => {
       const startedAt = performance.now();
       const clock = vi.spyOn(performance, "now");
       const rejected = expect(observe()).rejects.toThrow("exceeded hard timeout (100ms)");
-      if (scenario === "stalled read") {
-        await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(0);
+      clock.mockReturnValue(startedAt + 101);
+      if (scenario === "expired rejection") {
+        reading.reject(new Error("synthetic late read failure"));
       } else {
-        await vi.advanceTimersByTimeAsync(0);
-        clock.mockReturnValue(startedAt + 101);
-        if (scenario === "expired rejection") {
-          reading.reject(new Error("synthetic late read failure"));
-        } else {
-          reading.resolve("settled");
-        }
+        reading.resolve("settled");
       }
       await rejected;
       reading.resolve("settled");

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, expectTypeOf, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
@@ -7,11 +8,16 @@ import {
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import { createPluginRuntimeMock } from "../plugin-sdk/test-helpers/plugin-runtime-mock.js";
+import { InvocationFrame } from "./plugin-instance-invocation.js";
 import { markPluginRegistryRetired } from "./registry-lifecycle.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
+import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import { createPluginToolFactoryContext } from "./tool-factory-context.js";
-import { bindPluginToolCallbacks } from "./tool-factory-runtime.js";
+import {
+  bindPluginToolCallbacks,
+  createPluginToolFactoryResolver,
+} from "./tool-factory-runtime.js";
 import type { OpenClawPluginToolContext, OpenClawPluginToolFactory } from "./tool-types.js";
 
 const probe = (effect: () => void, assertCurrent?: () => void) => ({
@@ -79,6 +85,42 @@ const continuation = (isCurrent: () => boolean) => ({
   senderId: "original-owner",
   channel: "discord",
   accountId: "original-account",
+});
+
+it("enters the registered owner's scopes and retains the execution cancellation scope", async () => {
+  const observed: string[] = [];
+  const observe = () => {
+    const scope = getPluginRuntimeGatewayRequestScope();
+    expect(scope?.pluginId).toBe("probe");
+    expect(scope?.pluginRegistry).toBe(registration.registry);
+    observed.push(scope!.pluginId!);
+  };
+  const registration = register(() => {
+    observe();
+    return {
+      ...probe(observe),
+      prepareArguments(args: unknown) {
+        observe();
+        return args;
+      },
+    };
+  });
+  const frames = vi.spyOn(AsyncLocalStorage.prototype, "enterWith");
+  try {
+    const resolver = createPluginToolFactoryResolver((error) => assert.fail(error));
+    const { resolved } = resolver.resolve(registration.entry, registration.context, ["probe"]);
+    assert(resolved && !Array.isArray(resolved));
+    const tool = bindPluginToolCallbacks(registration.entry, registration.registry, resolved);
+    const args = {};
+    expect(tool.prepareArguments?.(args)).toBe(args);
+    await tool.execute("probe", args);
+    expect(observed).toEqual(["probe", "probe", "probe"]);
+    // Count invocation/recovery frames independently of the source-authority store.
+    expect(frames.mock.calls.filter(([frame]) => frame instanceof InvocationFrame)).toHaveLength(4);
+    expect(getPluginRuntimeGatewayRequestScope()).toBeUndefined();
+  } finally {
+    frames.mockRestore();
+  }
 });
 
 it("prepares detached, ordered, case-sensitive declarations once per record", () => {

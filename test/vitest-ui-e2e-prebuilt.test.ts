@@ -117,21 +117,16 @@ it("finishes before the generation check", () => {
   git("commit", "--quiet", "-m", "native fixture");
   stampBuild();
   const reportFile = path.join(root, ".git/report.json");
-  const configFile = path.join(root, ".git/probe.config.mts");
-  write(
-    ".git/probe.config.mts",
-    `import { sharedVitestConfig } from ${JSON.stringify(path.join(repoRoot, "test/vitest/vitest.shared.config.ts"))};
-export default { resolve: sharedVitestConfig.resolve };`,
-  );
   const result = spawnNodeEvalSync(
     `import { startVitest } from "vitest/node";
+import { sharedVitestConfig } from ${JSON.stringify(path.join(repoRoot, "test/vitest/vitest.shared.config.ts"))};
 await startVitest("test", [], {
-  root: ${JSON.stringify(root)}, config: ${JSON.stringify(configFile)},
+  root: ${JSON.stringify(root)}, config: false,
   configLoader: "runner", watch: false,
   include: ["probe.test.ts"], pool: "forks", maxWorkers: 1,
   globalSetup: [${JSON.stringify(path.join(repoRoot, "test/vitest/vitest.ui-e2e-prebuilt.global-setup.ts"))}],
   reporters: ["json"], outputFile: ${JSON.stringify(reportFile)},
-});`,
+}, { resolve: sharedVitestConfig.resolve });`,
     { cwd: repoRoot, timeout: 15_000 },
   );
   expect(result.error, result.stderr).toBeUndefined();

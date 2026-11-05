@@ -22,6 +22,7 @@ export type EmbeddedAttemptTranscriptLifecycle = {
   withTranscriptWrite<T>(run: () => Promise<T> | T): Promise<T>;
   /** Retire callbacks after the actual drain, including when owner release fails. */
   beginCleanup(onDrained?: () => void): Promise<void>;
+  /** Bounds the teardown wait; accepted descendants retain custody until the real drain. */
   dispose(): Promise<void>;
 };
 

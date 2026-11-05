@@ -19,6 +19,7 @@ import {
   resolvePlaywrightChromiumExecutablePath,
 } from "../src/test-helpers/control-ui-e2e.ts";
 import controlUiViteConfig from "../vite.config.ts";
+import { deferControlUiBootSpeculation } from "./control-ui-boot-capture.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const manifestPath = path.join(repoRoot, "ui", "config", "control-ui-boot-modules.json");
@@ -26,7 +27,10 @@ const SETTLE_MS = 3_000;
 const READY_TIMEOUT_MS = 60_000;
 // Idle decoration must not become a route preload just because the capture
 // waits for background work to settle after the composer is already visible.
-const idleEntries = new Set(["ui/src/components/lobster-pet.tsx"]);
+const idleEntries = new Set([
+  "ui/src/app/app-shell-idle.runtime.ts",
+  "ui/src/components/lobster-pet.tsx",
+]);
 
 const mime: Record<string, string> = {
   ".html": "text/html",
@@ -104,7 +108,12 @@ async function collectBootChunkPaths(
       // the next capture. Keep cold sign-in and authorized warm boot distinct.
       const context = await browser.newContext({ serviceWorkers: "block" });
       try {
+        await context.addInitScript(deferControlUiBootSpeculation);
         const page = await context.newPage();
+        // Capture required boot code, not the shell's optional idle menu/route warmups.
+        // Removing navigation metadata alone does not disable registered menu warmups.
+        const protocol = await context.newCDPSession(page);
+        await protocol.send("Emulation.setDataSaverOverride", { dataSaverEnabled: true });
         page.on("request", (request) => {
           const { pathname } = new URL(request.url());
           if (pathname.startsWith("/assets/") && pathname.endsWith(".js")) {
@@ -203,7 +212,10 @@ function routeModuleKeys(
       }
     }
   }
-  return new Set([...seen].map(controlUiBootManifestKey));
+  // Inline style text does not request a sheet; its external counterpart may be lazy.
+  return new Set(
+    [...seen].filter((id) => !/[?&]inline(?:[=&]|$)/u.test(id)).map(controlUiBootManifestKey),
+  );
 }
 
 function partitionBootKeys(routes: Record<"new" | "chat", Set<string>>) {
@@ -283,7 +295,12 @@ async function main(): Promise<void> {
         // imports; keep the modules reachable from what this route requested.
         const needed = routeModuleKeys(graph, chunks, [...graph.entryModules, ...requestedEntries]);
         const fetched = manifestKeysForChunks(chunks, distDir);
-        routes[route] = new Set(fetched.filter((key) => needed.has(key)));
+        // Extracted styles can have empty JS stubs and disappear from source maps.
+        // Their static import graph still proves which ready route needs them.
+        routes[route] = new Set([
+          ...fetched.filter((key) => needed.has(key)),
+          ...[...needed].filter((key) => key.endsWith(".css")),
+        ]);
         if (routes[route].size < 100) {
           throw new Error(
             `Boot capture looks truncated: ${route} recorded only ${routes[route].size} modules`,

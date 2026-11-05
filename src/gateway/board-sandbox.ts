@@ -7,6 +7,9 @@ type BoardWidgetSandboxMetadata = Pick<BoardWidgetHtmlViewMetadata, "declared" |
   resourceOrigins?: readonly string[];
 };
 
+// This policy depends only on frozen process constants, never a widget or viewer.
+let fixedSandboxPath: string | undefined;
+
 function grantedConnectOrigins(document: BoardWidgetSandboxMetadata): string[] | undefined {
   if (document.grantState !== "granted") {
     return undefined;
@@ -17,7 +20,11 @@ function grantedConnectOrigins(document: BoardWidgetSandboxMetadata): string[] |
 
 export function buildBoardWidgetSandboxPath(document: BoardWidgetSandboxMetadata): string {
   const connectDomains = grantedConnectOrigins(document);
-  return buildSandboxHostPath({
+  const fixedPolicy = !connectDomains && !document.resourceOrigins?.length;
+  if (fixedPolicy && fixedSandboxPath !== undefined) {
+    return fixedSandboxPath;
+  }
+  const pathname = buildSandboxHostPath({
     // Best-effort hardening for the documented WebRTC residual; the DOM guard
     // reduces fresh descendant realms but is not an authorization boundary.
     blockDescendantFrames: true,
@@ -25,6 +32,10 @@ export function buildBoardWidgetSandboxPath(document: BoardWidgetSandboxMetadata
     resourceDomains: [...new Set([...WIDGET_CDN_ORIGINS, ...(document.resourceOrigins ?? [])])],
     ...(connectDomains ? { connectDomains } : {}),
   });
+  if (fixedPolicy) {
+    fixedSandboxPath = pathname;
+  }
+  return pathname;
 }
 
 /** Defense in depth for direct/legacy widget document loads outside the proxy host. */

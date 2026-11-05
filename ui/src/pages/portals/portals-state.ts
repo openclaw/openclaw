@@ -5,15 +5,16 @@ import type {
   PortalSummary,
   UiPortalPresentation,
 } from "@openclaw/gateway-protocol";
-import { onCleanup } from "solid-js";
+import { onCleanup, onSettled } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
-import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
+import { isLocalPortalHostname } from "../../lib/gateway-locality.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { projectMutableSource } from "../../lib/reactive/projection.ts";
+import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { probePortalReachable, type PortalReachability } from "./portal-reachability.ts";
 
 export type PortalsPresentation = {
@@ -109,7 +110,7 @@ export function createPortals(
   };
   let presentationRequest: { requestId: string; portalId?: string } | null = null;
   let environmentLoading = false;
-  let environmentTimer: ReturnType<typeof setInterval> | undefined;
+  const environmentPoll = useVisiblePoll(2_000, () => void loadPendingEnvironment());
   let publish = () => {};
   const portalProbeCache = new Map<string, PortalReachability>();
   const lifecycle = createGatewayConnectionLifecycle(context.gateway.snapshot);
@@ -152,15 +153,16 @@ export function createPortals(
     lifecycle.dispose();
     resetGatewayState();
   });
-  if (state.connected) {
-    void loadPresentation();
-  }
+  onSettled(() => {
+    if (state.connected) {
+      void loadPresentation();
+    }
+  });
   function pollEnvironment(enabled: boolean) {
-    if (!enabled) {
-      clearInterval(environmentTimer);
-      environmentTimer = undefined;
-    } else if (environmentTimer === undefined) {
-      environmentTimer = setInterval(() => void loadPendingEnvironment(), 2_000);
+    if (enabled) {
+      environmentPoll.start();
+    } else {
+      environmentPoll.stop();
     }
   }
 
@@ -359,8 +361,8 @@ export function createPortals(
     const portalAddress = new URL(url);
     // A remote Gateway's loopback endpoint points at the browser, not the Gateway.
     if (
-      isLoopbackHostname(portalAddress.hostname) &&
-      !isLoopbackHostname(new URL(context.gateway.connection.gatewayUrl).hostname)
+      isLocalPortalHostname(portalAddress.hostname) &&
+      !isLocalPortalHostname(new URL(context.gateway.connection.gatewayUrl).hostname)
     ) {
       state.portalProbeState = { key, status: "ingress-required", result: Promise.resolve() };
       notify();

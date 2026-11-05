@@ -92,11 +92,7 @@ export async function resolveOutboundTargetWithPlugin(params: {
     if (reservedLiteral) {
       return {
         ok: false,
-        error: reservedTargetLiteralError(
-          plugin.meta.label ?? params.target.channel,
-          reservedLiteral,
-          hint,
-        ),
+        error: reservedTargetLiteralError(plugin.meta.label, reservedLiteral, hint),
       };
     }
   }
@@ -114,6 +110,6 @@ export async function resolveOutboundTargetWithPlugin(params: {
       ? { ok: true, to: effectiveTo }
       : {
           ok: false,
-          error: missingTargetError(plugin.meta.label ?? params.target.channel, hint),
+          error: missingTargetError(plugin.meta.label, hint),
         };
 }

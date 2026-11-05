@@ -103,6 +103,7 @@ async function pairSilentDevice(baseDir: string, deviceId: string, roles = ["ope
 
 async function makeStateDir() {
   const baseDir = await suiteRootTracker.make("case");
+  vi.stubEnv("OPENCLAW_STATE_DIR", baseDir);
   pairingStateDirs.push(baseDir);
   return baseDir;
 }
@@ -115,18 +116,14 @@ const registerApns = (baseDir: string, nodeId: string) =>
     topic: "ai.openclaw.ios",
     environment: "sandbox",
   });
-const prune = (
-  context: ReturnType<typeof createPruneContext>,
-  baseDir: string,
-  deviceId = "cli-anchor",
-) =>
-  pruneSupersededSilentPairingsAfterApproval({
+const prune = async (context: ReturnType<typeof createPruneContext>, deviceId = "cli-anchor") => {
+  using _ = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 120_000);
+  return await pruneSupersededSilentPairingsAfterApproval({
     deviceId,
     context,
     connectedDeviceIds: context.connectedDeviceIds,
-    baseDir,
-    nowMs: Date.now() + 120_000,
   });
+};
 
 describe("pruneSupersededSilentPairingsAfterApproval", () => {
   beforeAll(() => suiteRootTracker.setup());
@@ -141,6 +138,7 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
   });
 
   afterEach(resetNodeWakeStateForTest);
+  afterEach(() => vi.unstubAllEnvs());
 
   test("revokes the full batch before worker cleanup can wait or fail", async () => {
     const baseDir = await makeStateDir();
@@ -172,7 +170,7 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
         return [];
       },
     );
-    const pruning = prune(context, baseDir).catch((error: unknown) => error);
+    const pruning = prune(context).catch((error: unknown) => error);
     try {
       try {
         await entered.promise;
@@ -231,7 +229,7 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
     const context = createPruneContext({
       workerEnvironmentIds: { "node-stale": ["environment-node-stale"] },
     });
-    await expect(prune(context, baseDir, anchor.deviceId)).resolves.toMatchObject([
+    await expect(prune(context, anchor.deviceId)).resolves.toMatchObject([
       { deviceId: "node-stale" },
     ]);
     await expect(listDevicePairing(baseDir)).resolves.toMatchObject({
@@ -265,9 +263,11 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
     const baseDir = await makeStateDir();
     await pairSilentDevice(baseDir, "cli-stale", ["operator", "node"]);
     await registerApns(baseDir, "cli-stale");
-    await expect(
-      removePairedDeviceRole({ deviceId: "cli-stale", role: "node", baseDir }),
-    ).resolves.toEqual({ deviceId: "cli-stale", role: "node", removedDevice: false });
+    await expect(removePairedDeviceRole({ deviceId: "cli-stale" })).resolves.toEqual({
+      deviceId: "cli-stale",
+      role: "node",
+      removedDevice: false,
+    });
     await expect(loadApnsRegistration("cli-stale", baseDir)).resolves.toMatchObject({
       nodeId: "cli-stale",
     });
@@ -275,7 +275,7 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
     const anchor = await pairSilentDevice(baseDir, "cli-anchor");
 
     const context = createPruneContext({ connectedDeviceIds: ["cli-live"] });
-    const pruned = await prune(context, baseDir, anchor.deviceId);
+    const pruned = await prune(context, anchor.deviceId);
 
     expect(pruned.map((entry) => entry.deviceId)).toEqual(["cli-stale"]);
     const devices = await listDevicePairing(baseDir);

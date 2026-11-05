@@ -14,11 +14,9 @@ import {
 import { sendDurableMessageBatchCore } from "../../channels/message/runtime.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import { resolveChannelThreadAddressing } from "../../channels/thread-addressing.js";
-import {
-  createChannelPartialDeliveryError,
-  isChannelPartialDeliveryError,
-} from "../../channels/turn/partial-delivery-error.js";
+import { createChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
+import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveImplicitMessageActionTarget } from "../../infra/outbound/message-action-normalization.js";
 import {
@@ -30,16 +28,7 @@ import {
   ensureOutboundSessionEntry,
   resolveOutboundSessionRoute,
 } from "../../infra/outbound/outbound-session.js";
-import {
-  createOutboundPayloadPlan,
-  projectOutboundPayloadPlanForMirror,
-} from "../../infra/outbound/payloads.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
-import {
-  beginTerminalSourceReplyDelivery,
-  cancelTerminalSourceReplyDelivery,
-  reconcileTerminalSourceReplyDelivery,
-} from "../../infra/outbound/source-reply-mirror.js";
 import { maybeResolvePluginMessagingTarget } from "../../infra/outbound/target-normalization.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
@@ -64,9 +53,7 @@ import { resolveSandboxedSessionCreation } from "../operator-session-run.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
-import { formatForLog } from "../ws-log.js";
 import {
-  createGatewayMessageActionInput,
   createMessageActionRuntimeAuthority,
   resolveAgentRuntimeMessageActionAuthorization,
   resolveAgentRuntimeMessageActionConfig,
@@ -81,9 +68,9 @@ import {
   scheduleDeliveredSourceReplyTranscriptMirror,
 } from "./message-operation-result.js";
 import { withMessageOperationRoute } from "./message-operation-route.js";
+import { respondError } from "./response.js";
 import {
   resolveGatewayOutboundTarget,
-  resolveMessageActionRuntimeConfig,
   resolveRequestedChannel,
 } from "./send-channel-resolution.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -95,6 +82,7 @@ export const sendHandlers: GatewayRequestHandlers = {
     respond,
     context,
     client,
+    signal,
     sessionMutationCommitGuard,
   }) => {
     if (!assertValidParams(request, validateMessageActionParams, "message.action", respond)) {
@@ -164,8 +152,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           return undefined;
         }
         const { cfg: selectedCfg, channel } = resolved;
-        const cfg =
-          trustedContext.messageActionConfig ?? resolveMessageActionRuntimeConfig(selectedCfg);
+        const cfg = trustedContext.messageActionConfig ?? selectLiveRuntimeConfig(selectedCfg);
         const plugin = resolveOutboundChannelPlugin({ channel, cfg });
         const canonicalAction =
           ((request.action === "send" &&
@@ -174,13 +161,10 @@ export const sendHandlers: GatewayRequestHandlers = {
           (!plugin?.actions?.handleAction ||
             plugin.actions.supportsAction?.({ action: request.action }) === false);
         if (!plugin || (!plugin.actions?.handleAction && !canonicalAction)) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `Channel ${channel} does not support action ${request.action}.`,
-            ),
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            `Channel ${channel} does not support action ${request.action}.`,
           );
           return undefined;
         }
@@ -244,7 +228,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                 !resolveImplicitMessageActionTarget(trustedContext.toolContext)
               ) {
                 // Native sends could use account defaults without a target. Resolve that
-                // owner fact before core routing and source-reply receipts require it.
+                // owner fact before core routing requires it.
                 const target = await resolveOutboundTarget({ channel, plugin, cfg, accountId });
                 if (!target.ok) {
                   throw target.error;
@@ -303,23 +287,8 @@ export const sendHandlers: GatewayRequestHandlers = {
                   ? { sourceReplyFinal: trustedContext.sourceReplyFinal }
                   : {}),
               };
-              const terminalDeliveryStart =
-                trustedContext.sourceReplyFinal === true
-                  ? await beginTerminalSourceReplyDelivery(sourceReplyMirror)
-                  : undefined;
-              if (terminalDeliveryStart && "outcome" in terminalDeliveryStart) {
-                return createGatewayInflightSuccess({
-                  context,
-                  dedupeKey,
-                  payload: terminalDeliveryStart.result,
-                  channel,
-                });
-              }
-              const terminalDeliveryReceipt = terminalDeliveryStart;
-              // Attachment and receipt preparation can outlive the admitted run.
-              // Close the receipt and stop before the provider-owned action boundary.
+              // Attachment preparation can outlive the admitted run.
               if (!authorize()) {
-                await cancelTerminalSourceReplyDelivery(terminalDeliveryReceipt);
                 return createGatewayInflightAuthorityFailure({ context, dedupeKey, channel });
               }
               const gatewayClientScopes = client?.connect?.scopes ?? [];
@@ -330,6 +299,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                 action: request.action as never,
                 cfg,
                 params: request.params,
+                abortSignal: signal,
                 reply: request.reply,
                 accountId,
                 // Only the model's message tool mints an agent-runtime turn context, and
@@ -361,84 +331,58 @@ export const sendHandlers: GatewayRequestHandlers = {
                   (request.action === "send" ||
                     Boolean(trustedContext.messageActionAuthorization?.scheduled)),
               };
-              const settleTerminalDelivery = async (
-                deliveredPayload: unknown,
-                mirrorTranscript = true,
-              ) => {
-                try {
-                  await reconcileTerminalSourceReplyDelivery({
-                    deliveredPayload,
-                    mirror: sourceReplyMirror,
-                    receipt: terminalDeliveryReceipt,
-                  });
-                } catch (err) {
-                  // The pre-send intent remains durable. Return the provider result so
-                  // the model does not retry an external effect with an unknown outcome.
-                  context.logGateway?.warn?.(
-                    "Terminal source reply receipt reconciliation failed.",
-                    {
-                      error: formatForLog(err),
-                      channel,
-                      sessionKey,
-                    },
-                  );
-                }
-                if (mirrorTranscript) {
-                  await scheduleDeliveredSourceReplyTranscriptMirror({
-                    context,
-                    mirror: {
-                      ...sourceReplyMirror,
-                      deliveredPayload,
-                    },
-                  });
-                }
-              };
               let payload: unknown;
-              try {
-                if (
-                  canonicalAction ||
-                  messageAuthority.assertScheduledWriteCurrent ||
-                  request.allowNativeChannelNamespace === false
-                ) {
-                  const { runMessageAction } =
-                    await import("../../infra/outbound/message-action-runner.js");
-                  const result = await runMessageAction(
-                    createGatewayMessageActionInput({
-                      context: actionContext,
-                      request,
-                      runtimeAgentId: trustedContext.runtimeAgentId,
-                    }),
-                  );
-                  payload = result.payload;
+              if (
+                canonicalAction ||
+                messageAuthority.assertScheduledWriteCurrent ||
+                request.allowNativeChannelNamespace === false
+              ) {
+                const { runMessageAction } =
+                  await import("../../infra/outbound/message-action-runner.js");
+                const result = await runMessageAction({
+                  ...actionContext,
+                  gatewayOwnedDelivery: true,
+                  allowNativeChannelNamespace: request.allowNativeChannelNamespace,
+                  // The delegating client records the confirmed send in its destination.
+                  callerRecordsDestinationHistory: true,
+                  ...(request.action === "send"
+                    ? {
+                        actionOrigin: trustedContext.runtimeAgentId
+                          ? ("message-tool" as const)
+                          : undefined,
+                      }
+                    : {}),
+                  params: {
+                    ...request.params,
+                    channel,
+                    ...(accountId ? { accountId } : {}),
+                    idempotencyKey: request.idempotencyKey,
+                  },
+                });
+                payload = result.payload;
+              } else {
+                await messageAuthority.beforeDeliveryAttempt();
+                assertDirectAdapterHandoff?.();
+                const handled = await dispatchChannelMessageAction(actionContext);
+                if (handled) {
+                  payload = extractToolPayload(handled);
                 } else {
-                  await messageAuthority.beforeDeliveryAttempt();
-                  assertDirectAdapterHandoff?.();
-                  const handled = await dispatchChannelMessageAction(actionContext);
-                  if (handled) {
-                    payload = extractToolPayload(handled);
-                  } else {
-                    await cancelTerminalSourceReplyDelivery(terminalDeliveryReceipt);
-                    const error = errorShape(
-                      ErrorCodes.INVALID_REQUEST,
-                      `Message action ${request.action} not supported for channel ${channel}.`,
-                    );
-                    return createGatewayInflightResult({
-                      context,
-                      dedupeKey,
-                      channel,
-                      result: { ok: false, error },
-                    });
-                  }
+                  const error = errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `Message action ${request.action} not supported for channel ${channel}.`,
+                  );
+                  return createGatewayInflightResult({
+                    context,
+                    dedupeKey,
+                    channel,
+                    result: { ok: false, error },
+                  });
                 }
-              } catch (err) {
-                if (isChannelPartialDeliveryError(err)) {
-                  // Accepted delivery evidence settles the terminal receipt, but it
-                  // cannot prove which requested parts should enter the transcript.
-                  await settleTerminalDelivery(err.deliveryResult, false);
-                }
-                throw err;
               }
-              await settleTerminalDelivery(payload);
+              await scheduleDeliveredSourceReplyTranscriptMirror({
+                context,
+                mirror: { ...sourceReplyMirror, deliveredPayload: payload },
+              });
               // A downloaded artifact is not cacheable until the enclosing read
               // has accepted its provider/caller lifetime and resource identity.
               return request.action === "download-file"
@@ -480,10 +424,10 @@ export const sendHandlers: GatewayRequestHandlers = {
     const mediaUrls = normalizeArrayBackedTrimmedStringList(request.mediaUrls);
     const buffer = readStringValue(request.buffer);
     if (!message && !mediaUrl && (mediaUrls?.length ?? 0) === 0 && !buffer) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid send params: text or media is required"),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "invalid send params: text or media is required",
       );
       return;
     }
@@ -531,11 +475,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         const { cfg, channel } = resolved;
         const plugin = resolveOutboundChannelPlugin({ channel, cfg });
         if (!plugin) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, `unsupported channel: ${channel}`),
-          );
+          respondError(respond, ErrorCodes.INVALID_REQUEST, `unsupported channel: ${channel}`);
           return undefined;
         }
         return { cfg, channel, plugin };
@@ -616,9 +556,6 @@ export const sendHandlers: GatewayRequestHandlers = {
               ...(request.asVoice === true ? { audioAsVoice: true } : {}),
             },
           ];
-          const outboundPayloadPlan = createOutboundPayloadPlan(outboundPayloads);
-          const { text: mirrorText, mediaUrls: mirrorMediaUrls } =
-            projectOutboundPayloadPlanForMirror(outboundPayloadPlan);
           const derivedRoute = await resolveOutboundSessionRoute({
             cfg,
             channel,
@@ -639,8 +576,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             normalizeOptionalLowercaseString(derivedRoute?.baseSessionKey) ===
               normalizeOptionalLowercaseString(providedSessionBaseKey) &&
             normalizeOptionalLowercaseString(derivedRoute?.sessionKey) !== providedSessionKey;
-          // sessionKey selects the transcript mirror, not the saved delivery route.
-          // Message-scoped threads may refine that mirror within the same base session.
+          // Explicit session hints retain routing policy; only an admitted runtime is a producer.
           const outboundSessionKey = shouldUseDerivedThreadSessionKey
             ? derivedRoute?.sessionKey
             : (providedSessionKey ?? derivedRoute?.sessionKey);
@@ -675,8 +611,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           }
           // Durable route/session persistence commits only after platform
           // evidence: a failed send must not rebind the folded main session's
-          // delivery route. Once-only across multi-payload results, and before
-          // the in-delivery transcript mirror so first contacts have a row.
+          // delivery route. First contacts bind before the canonical delivered row.
           let outboundRoutePersisted = false;
           const commitOutboundSessionRoute = async () => {
             if (outboundRoutePersisted || !derivedRoute) {
@@ -688,7 +623,6 @@ export const sendHandlers: GatewayRequestHandlers = {
               channel,
               accountId,
               route: derivedRoute,
-              mirrorSessionKey: outboundSessionKey,
               workerGuard: { assertCurrent: commitAgentRuntimeAuthority },
               creation: resolveSandboxedSessionCreation(client, cfg),
               sourceSessionKey: client?.internal?.agentRuntimeIdentity?.sessionKey,
@@ -697,7 +631,8 @@ export const sendHandlers: GatewayRequestHandlers = {
           const outboundSession = buildOutboundSessionContext({
             cfg,
             agentId: effectiveAgentId,
-            sessionKey: outboundSessionKey,
+            sessionKey: client?.internal?.agentRuntimeIdentity?.sessionKey,
+            policySessionKey: outboundSessionKey,
             conversationType: derivedRoute?.chatType,
           });
           // Target, attachment, route, and session preparation may all yield.
@@ -736,15 +671,7 @@ export const sendHandlers: GatewayRequestHandlers = {
               onPlatformSendDispatch,
               assertDirectAdapterHandoff: commitAgentRuntimeAuthority,
               skipQueue: hasAgentRuntimeAuthority,
-              mirror: outboundSessionKey
-                ? {
-                    sessionKey: outboundSessionKey,
-                    agentId: effectiveAgentId,
-                    text: mirrorText || message,
-                    mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
-                    idempotencyKey: idem,
-                  }
-                : undefined,
+              transcriptRoute: derivedRoute ?? undefined,
             },
             undefined,
             undefined,
@@ -834,23 +761,16 @@ export const sendHandlers: GatewayRequestHandlers = {
           ["isAnonymous", "supportsAnonymousPolls"],
         ] as const) {
           if (request[parameter] !== undefined && outbound?.[capability] !== true) {
-            respond(
-              false,
-              undefined,
-              errorShape(
-                ErrorCodes.INVALID_REQUEST,
-                `${parameter} is not supported for ${channel} polls`,
-              ),
+            respondError(
+              respond,
+              ErrorCodes.INVALID_REQUEST,
+              `${parameter} is not supported for ${channel} polls`,
             );
             return undefined;
           }
         }
         if (!plugin || !outbound?.sendPoll) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, `unsupported poll channel: ${channel}`),
-          );
+          respondError(respond, ErrorCodes.INVALID_REQUEST, `unsupported poll channel: ${channel}`);
           return undefined;
         }
         return { cfg, channel, plugin, outbound, sendPoll: outbound.sendPoll };

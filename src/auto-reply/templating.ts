@@ -1,12 +1,12 @@
+import type {
+  MediaUnderstandingDecision,
+  MediaUnderstandingOutput,
+} from "../../packages/media-understanding-common/src/types.js";
 /** Shared inbound message context types used by prompt templating and reply dispatch. */
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { DmScope, ReplyToMode } from "../config/types.base.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
 import type { GatewayUiCommandTarget } from "../gateway/ui-command-target.types.js";
-import type {
-  MediaUnderstandingDecision,
-  MediaUnderstandingOutput,
-} from "../media-understanding/types.js";
 import type { LegacyMediaContextKey, MediaFact } from "../media/media-facts.js";
 import type { PluginHookChannelContext } from "../plugins/hook-channel-context.types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";

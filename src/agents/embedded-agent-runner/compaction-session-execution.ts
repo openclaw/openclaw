@@ -131,10 +131,16 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       memoryTranscript?.assertActive ?? captureOwnedTranscriptWriteAssertion(sessionTarget);
     assertActive();
     const transcriptPolicy = runtimePlan.transcript.resolvePolicy(runtimePlanModelContext);
+    // Exclude obsolete history without clipping the current context or previous summary.
     const preparedSessionManager =
       memoryTranscript?.sessionManager ??
       preparedSession?.sessionManager ??
-      (await SessionManager.openAsync(sessionTarget, undefined, undefined, params.abortSignal));
+      (await SessionManager.openAsync(
+        sessionTarget,
+        undefined,
+        { compaction: true },
+        params.abortSignal,
+      ));
     assertActive();
     const responsesApi =
       effectiveModel.api === "openai-responses" ||
@@ -235,7 +241,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       setCompactionSafeguardCancellation(sessionManager, undefined);
       // Rebuild on retry so provider wrappers and payload shaping use the fallback effort.
       attemptedThinking.add(thinkLevel);
-      const systemPromptText = buildSystemPromptText();
+      const systemPromptText = await buildSystemPromptText();
       let session: AgentSession | undefined;
       let diagnosticOwner: DiagnosticEmbeddedRunOwner | undefined;
       let resetCompactionTimeout: (() => void) | undefined;
@@ -517,6 +523,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                   summaryOutputPolicy,
                   {
                     requestBudget: accountingRecorder?.requestBudget,
+                    requestFromEntryId: accountingRecorder?.requestFromEntryId,
                     pendingUserEntryId: accountingRecorder?.pendingUserEntryId,
                     onSummaryReady: () => {
                       summaryReady = true;

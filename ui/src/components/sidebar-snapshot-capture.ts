@@ -5,16 +5,18 @@ import { loadSettings } from "../app/settings.ts";
 import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { presenceViewerLastActivity, profilePresenceViewer } from "../lib/presence-users.ts";
-import { resolveSidebarOnline, sidebarOnlineOrder } from "./app-sidebar-online.tsx";
 import { readSidebarBrandPresentation, type AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { SidebarVisibleSections } from "./app-sidebar-session-projection.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { hasSidebarListFilter } from "./session-data-events.ts";
+import { sidebarSessionBadgeFacts } from "./session-row-badge-presentation.ts";
 import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
+import { resolveSidebarOnline, sidebarOnlineOrder } from "./sidebar-online-state.ts";
 import {
   parseSidebarSnapshot,
   snapshotSections,
   snapshotSessions,
+  snapshotIssuesCount,
   type SidebarSnapshotModel,
 } from "./sidebar-snapshot-model.ts";
 
@@ -39,7 +41,7 @@ export function isSidebarSnapshotSettled(host: AppSidebarRenderHost): boolean {
   const sessions = context.sessions;
   const rootsSettled =
     !sessions.state.loading &&
-    (Boolean(host.sessionData.sessionMutationError ?? sessions.state.error) ||
+    (Boolean(host.sessionData.sessionListError ?? sessions.state.error) ||
       (sessions.canonicalListReady &&
         Boolean(sessions.presentation.result) &&
         !sessions.presentation.resultCached));
@@ -98,7 +100,7 @@ export function captureSidebarSnapshotModel(
     host.sidebarSnapshot ||
     (host.navigationView === "pages" &&
       host.navigationCatalog.dashboards?.readSucceeded !== true) ||
-    host.sessionData.sessionMutationError !== null ||
+    host.sessionData.sessionListError !== null ||
     context.sessions.state.error !== null ||
     host.sessionData.ownerCounts.error !== null ||
     (host.sidebarAgentsMode === "roster" && roster.error !== null) ||
@@ -119,16 +121,20 @@ export function captureSidebarSnapshotModel(
   }
   const presentation = (row: SidebarRecentSession) => ({
     childrenDisplayMode: host.sessionProjection.children.capture(row.key),
-    snapshotSubtitle: resolveSidebarSessionRowSubtitle(host, row),
+    snapshotSubtitle: row.snapshot
+      ? row.snapshotSubtitle
+      : resolveSidebarSessionRowSubtitle(host, row),
+    state: sidebarSessionBadgeFacts(host.sessionPullRequests, row),
   });
-  const sessions = snapshotSessions(rows, presentation);
   return parseSidebarSnapshot({
     routingDefaults: {
       mainKey: agents.mainKey,
       scope: agents.scope,
     },
-    roster: bootRoster,
+    // The read receipt is not a display change.
+    roster: { ...bootRoster, result: { ...bootRoster.result, ts: 0 } },
     mode: host.sidebarAgentsMode,
+    grouping: host.effectiveSessionsGrouping(),
     navigationView: host.navigationView,
     pages: snapshotSessions(
       (host.navigationCatalog.dashboards?.result?.sessions ?? []).map((row) =>
@@ -147,9 +153,12 @@ export function captureSidebarSnapshotModel(
     ),
     entries: zone.sidebarEntries.filter((value) => {
       const entry = parseSidebarEntry(value);
-      return entry?.type !== "session" || !isIncognitoSessionKey(entry.key);
+      return (
+        entry?.type !== "session" ||
+        (!isIncognitoSessionKey(entry.key) && !context.sessions.deletionState(entry.key))
+      );
     }),
-    sessions,
+    issuesCount: snapshotIssuesCount(context.sidebarAttention.entries),
     ...snapshotSections(sections, host.collapsedSessionSections, presentation),
     cards: roster.cards,
     collapsedAgentIds:

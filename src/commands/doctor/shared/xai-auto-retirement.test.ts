@@ -7,6 +7,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
+import { createTestModelDefinition } from "../../test-runtime-config-helpers.js";
 import {
   createRetiredModelRefRepairResolver as createResolver,
   repairRetiredConfigModelRefs as repairConfig,
@@ -88,15 +89,11 @@ it("repairs a session override without changing its selected profile", () => {
 
 it("preserves a custom endpoint's explicit auto model", async () => {
   cfg = configForRoute("https://custom-models.example/v1", [
-    {
-      id: "auto",
+    createTestModelDefinition("auto", {
       name: "Custom automatic model",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 1024,
       maxTokens: 256,
-    },
+    }),
   ]);
   await state.writeConfig(cfg);
   const resolve = resolver();

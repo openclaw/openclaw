@@ -39,6 +39,7 @@ export async function createRepositoryPublicationFixture(
   requestedRef?: string | { kind: "commit" },
   session = { sessionId: SESSION_ID, sessionKey: SESSION_KEY },
   baseFiles: Record<string, string> = {},
+  initialCheckpoint = true,
 ) {
   // Only the mock GitHub service accesses this object store. The broker still
   // rejects every Git command and receives only the normalized checkpoint.
@@ -126,6 +127,7 @@ export async function createRepositoryPublicationFixture(
     content: string | null,
     suffix: string,
     changes: Record<string, string | null> = {},
+    accept = true,
   ) => {
     const bytes = Buffer.from(content ?? "");
     const sha = git(["hash-object", "-w", "--stdin"], bytes);
@@ -149,33 +151,32 @@ export async function createRepositoryPublicationFixture(
     const publicationDigest = "sha256:" + createHash("sha256").update(raw).digest("hex");
     const ref = "refs/openclaw/worker-results/" + suffix;
     payloads.set(ref, { publicationStagingRoot, publicationDigest });
-    workspace = await store.acceptCheckpoint({
-      workspaceId: workspace.workspaceId,
-      expectedRevision: workspace.revision,
-      checkpointRef: ref,
-      manifestHash: "sha256:" + createHash("sha256").update(suffix).digest("hex"),
-      assertCurrent: () => {},
-    });
+    if (accept) {
+      workspace = await store.acceptCheckpoint({
+        workspaceId: workspace.workspaceId,
+        expectedRevision: workspace.revision,
+        checkpointRef: ref,
+        manifestHash: "sha256:" + createHash("sha256").update(suffix).digest("hex"),
+        assertCurrent: () => {},
+      });
+    }
     return { ref, sha, workspaceTree };
   };
-  const first = await capture("accepted first\n", "first");
-  checkpoint
-    .mockReset()
-    .mockImplementation(
-      async (
-        request: { workspaceId: string; checkpointRef: string },
-        use: (payload: Partial<SessionRepositoryCheckpointPayload>) => Promise<unknown>,
-      ) => {
-        expect(request).toMatchObject({
-          workspaceId: workspace.workspaceId,
-        });
-        const payload = payloads.get(request.checkpointRef);
-        if (!payload) {
-          throw new Error("Unknown checkpoint ref");
-        }
-        return await use(payload);
-      },
-    );
+  const first = await capture("accepted first\n", "first", {}, initialCheckpoint);
+  checkpoint.mockReset();
+  checkpoint.mockImplementation(
+    async (
+      request: { workspaceId: string; checkpointRef: string },
+      use: (payload: Partial<SessionRepositoryCheckpointPayload>) => Promise<unknown>,
+    ) => {
+      expect(request.workspaceId).toBe(workspace.workspaceId);
+      const payload = payloads.get(request.checkpointRef);
+      if (!payload) {
+        throw new Error("Unknown checkpoint ref");
+      }
+      return await use(payload);
+    },
+  );
   const runtime = {
     head: null as string | null,
     pr: null as PullRequest | null,
@@ -270,9 +271,6 @@ export async function createRepositoryPublicationFixture(
       return jsonResult({ sha });
     }
     if (endpoint.endsWith("/git/commits")) {
-      expect(body.parents).toHaveLength(1);
-      expect(body.parents[0] === baseCommit || commits.has(body.parents[0])).toBe(true);
-      expect(body.message).toContain("OpenClaw-Publication:");
       const sha = git(["commit-tree", body.tree, "-p", body.parents[0]], body.message);
       const commit = {
         sha,

@@ -30,8 +30,6 @@ type Props = {
   store?: CustodianSessionStore;
   onStore?: (store: CustodianSessionStore) => void;
 };
-export type OpenClawAssistantPanelContent = SolidBridgeElement<Props>;
-
 function ActiveCustodian(props: {
   store: CustodianSessionStore;
   variant: CustodianSessionStore["activeVariant"];
@@ -115,7 +113,7 @@ export const AssistantPanelContent = defineSolidBridge<Props>(
 
 declare global {
   interface HTMLElementTagNameMap {
-    "openclaw-assistant-panel-content": OpenClawAssistantPanelContent;
+    "openclaw-assistant-panel-content": SolidBridgeElement<Props>;
   }
 }
 

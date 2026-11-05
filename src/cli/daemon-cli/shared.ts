@@ -94,13 +94,12 @@ export function resolveDaemonServiceInstallGuidance(
 
 export function formatGatewayServiceInstallationDrift(
   drift: GatewayServiceInstallationDrift,
-  targetRole?: "target" | "diagnostic-only",
   env: NodeJS.ProcessEnv = process.env,
   service?: { stopped?: boolean; port?: number },
 ): string {
   const { serviceRoot, serviceVersion, activeRoot, activeVersion } = drift;
-  const facts = `Gateway service targets a different OpenClaw install: ${serviceRoot} (${serviceVersion ?? "version unknown"}); active CLI: ${activeRoot} (${activeVersion ?? "version unknown"}).`;
-  const guidance = resolveDaemonServiceInstallGuidance(targetRole, env, service);
+  const facts = `CLI ${activeVersion ?? "version unknown"} at ${activeRoot} differs from the Gateway service's ${serviceVersion ?? "version unknown"} at ${serviceRoot}. Run \`${formatCliCommand("openclaw update", env)}\` or use the CLI from ${serviceRoot}.`;
+  const guidance = resolveDaemonServiceInstallGuidance(undefined, env, service);
   return guidance ? `${facts} ${guidance}` : facts;
 }
 

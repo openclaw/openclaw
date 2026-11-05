@@ -5,8 +5,8 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { captureSessionActorTranscriptRead } from "./session-actor-transcript-read.js";
-import { readRestoredSessionTranscriptInWorker } from "./session-cold-storage-read.js";
 import { runLockedSessionTranscriptRead } from "./session-transcript-execution-read.js";
+import { getSessionTranscriptHydrationCaller } from "./session-transcript-hydration-caller.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
 import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
@@ -20,6 +20,7 @@ import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-
 export async function loadSessionTranscriptEvents(
   scope: SessionTranscriptReadScope,
 ): Promise<TranscriptEvent[]> {
+  const caller = getSessionTranscriptHydrationCaller("raw-events");
   const memory = captureSessionActorTranscriptRead(scope);
   if (memory) {
     if (memory.missing) {
@@ -63,22 +64,18 @@ export async function loadSessionTranscriptEvents(
         owner.assertCurrent();
       };
       try {
-        return await readRestoredSessionTranscriptInWorker(
-          { scope: captured, resolved: target, owner, assertCurrent },
-          async () => {
-            const result = await owner.readTranscript({
-              target: captured,
-              resolvedScope: target,
-              admission,
-              expectedIdentity: identity,
-            });
-            assertCurrent();
-            if (result.kind !== "full") {
-              throw new Error("Transcript events received a bounded hydration result");
-            }
-            return result.snapshot.events;
-          },
-        );
+        const result = await owner.readTranscript({
+          caller,
+          target: captured,
+          resolvedScope: target,
+          admission,
+          expectedIdentity: identity,
+        });
+        assertCurrent();
+        if (result.kind !== "full") {
+          throw new Error("Transcript events received a bounded hydration result");
+        }
+        return result.snapshot.events;
       } finally {
         assertCurrent();
       }

@@ -53,8 +53,7 @@ const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
     handle: async (paramsJSON, io) => {
       const { handleFileFetch } = await import("./src/node-host/file-fetch.js");
       const params = readNodeCommandParams(paramsJSON) as Parameters<typeof handleFileFetch>[0];
-      const result = await handleFileFetch(params, io);
-      return JSON.stringify(result);
+      return JSON.stringify(await handleFileFetch(params, io));
     },
   },
   {
@@ -65,8 +64,7 @@ const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
     handle: async (paramsJSON) => {
       const { handleDirList } = await import("./src/node-host/dir-list.js");
       const params = readNodeCommandParams(paramsJSON) as Parameters<typeof handleDirList>[0];
-      const result = await handleDirList(params);
-      return JSON.stringify(result);
+      return JSON.stringify(await handleDirList(params));
     },
   },
   {
@@ -77,8 +75,7 @@ const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
     handle: async (paramsJSON) => {
       const { handleDirFetch } = await import("./src/node-host/dir-fetch.js");
       const params = readNodeCommandParams(paramsJSON) as Parameters<typeof handleDirFetch>[0];
-      const result = await handleDirFetch(params);
-      return JSON.stringify(result);
+      return JSON.stringify(await handleDirFetch(params));
     },
   },
   {
@@ -101,8 +98,7 @@ const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
     handle: async (paramsJSON) => {
       const { handleFileWrite } = await import("./src/node-host/file-write.js");
       const params = readNodeCommandParams(paramsJSON) as Parameters<typeof handleFileWrite>[0];
-      const result = await handleFileWrite(params);
-      return JSON.stringify(result);
+      return JSON.stringify(await handleFileWrite(params));
     },
   },
 ];

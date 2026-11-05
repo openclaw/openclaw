@@ -16,7 +16,7 @@ export function* tabbableElements(elements: Iterable<Element>): Generator<HTMLEl
       continue;
     }
     if (
-      element instanceof HTMLElement &&
+      isHtmlElement(element) &&
       element.matches(TABBABLE_SELECTOR) &&
       !element.matches(":disabled, [data-modal-focus-edge]") &&
       (element.tabIndex >= 0 ||
@@ -28,7 +28,9 @@ export function* tabbableElements(elements: Iterable<Element>): Generator<HTMLEl
       yield element;
     }
     const assigned =
-      element instanceof HTMLSlotElement ? element.assignedElements({ flatten: true }) : [];
+      isHtmlElement(element) && element.localName === "slot"
+        ? HTMLSlotElement.prototype.assignedElements.call(element, { flatten: true })
+        : [];
     yield* tabbableElements(assigned.length ? assigned : (element.shadowRoot ?? element).children);
   }
 }

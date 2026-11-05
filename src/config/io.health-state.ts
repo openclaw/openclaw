@@ -175,7 +175,7 @@ export function captureConfigHealthStateStore(
         const reply = await executeExistingOpenClawStateRead(
           options,
           { type: "config.health.read", input: undefined },
-          { context: captured.context },
+          { context: captured.context, snapshotPreparation: "awaited" },
         );
         assertCurrent();
         const snapshot = reply?.snapshot ?? { state: {}, basis: {} };

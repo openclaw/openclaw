@@ -101,21 +101,6 @@ function createDesktopViewport(host: HTMLElement) {
   };
 }
 
-type DesktopConnectOptions = {
-  background?: string;
-  credentials?: { username?: string; password?: string };
-  gatewayUrl?: string;
-  isCurrent: () => boolean;
-  onConnect?: () => void;
-  onDisconnect?: (detail: DesktopDisconnectDetail) => void;
-  onSecurityFailure?: (detail: DesktopSecurityFailureDetail) => void;
-  canResize?: boolean;
-  sizingMode?: DesktopSizingMode;
-  target: HTMLElement;
-  viewOnly: boolean;
-  wsUrl: string;
-};
-
 export type DesktopConnectionHandle = {
   disconnect(): void;
   disableInput(): void;
@@ -150,7 +135,20 @@ const loadDefaultRfb = async () => {
 
 /** Thin owner for one noVNC RFB lifecycle. */
 export class DesktopClient {
-  async connect(options: DesktopConnectOptions): Promise<DesktopConnectionHandle> {
+  async connect(options: {
+    background?: string;
+    credentials?: { username?: string; password?: string };
+    gatewayUrl?: string;
+    isCurrent: () => boolean;
+    onConnect?: () => void;
+    onDisconnect?: (detail: DesktopDisconnectDetail) => void;
+    onSecurityFailure?: (detail: DesktopSecurityFailureDetail) => void;
+    canResize?: boolean;
+    sizingMode?: DesktopSizingMode;
+    target: HTMLElement;
+    viewOnly: boolean;
+    wsUrl: string;
+  }): Promise<DesktopConnectionHandle> {
     const Rfb = await loadDefaultRfb();
     const wsUrl = resolveGatewayWebSocketUrl(options.wsUrl, options.gatewayUrl);
     // The socket claims control before RFB authentication; canceled lazy loads must not open it.
@@ -162,8 +160,7 @@ export class DesktopClient {
     const trackSocketClose = (event: CloseEvent) => {
       closeDetail = { code: event.code, reason: event.reason };
     };
-    socket.addEventListener("close", trackSocketClose, { once: true });
-    const stopSocketClose = () => socket.removeEventListener("close", trackSocketClose);
+    const stopSocketClose = listen(socket, "close", trackSocketClose, { once: true });
     const viewport = createDesktopViewport(options.target);
     let rfb: RfbClient;
     try {

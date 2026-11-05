@@ -169,12 +169,10 @@ export function checkGatewayInstallationReplacement(): Promise<void> {
   return observer.check;
 }
 
-type GatewayStaleInstall = {
+export function classifyGatewayStaleInstall(error: unknown): {
   error: ErrorShape;
   restartCommand: string;
-};
-
-export function classifyGatewayStaleInstall(error: unknown): GatewayStaleInstall | null {
+} | null {
   const observer = installationState.observer;
   const root = observer?.root ?? gatewayInstallRoot;
   const missingRuntime = collectErrorGraphCandidates(error, readErrorCauses).some((candidate) =>

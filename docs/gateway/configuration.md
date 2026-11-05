@@ -9,7 +9,7 @@ title: "Configuration"
 
 OpenClaw reads an optional <Tooltip tip="JSON5 supports comments and trailing commas">**JSON5**</Tooltip> config from `~/.openclaw/openclaw.json`. If the file is missing, OpenClaw uses safe defaults.
 
-The active config path must be a regular file. OpenClaw-owned writes replace it atomically (rename onto the path), so a symlinked `openclaw.json` gets its target replaced rather than written through - avoid symlinked config layouts. If you keep config outside the default state directory, point `OPENCLAW_CONFIG_PATH` directly at the real file.
+Config writes require the active config path to be a regular file. Snapshot reads, including `backup create`, can follow a config-file symlink. The configured state directory may be a symlink: OpenClaw resolves its directory for atomic writes while retaining the configured path, and rejects a directory alias that changes during a write. To write config outside the default state directory, point `OPENCLAW_CONFIG_PATH` directly at the real file.
 
 Common reasons to add a config:
 
@@ -103,7 +103,7 @@ Startup migration uses the same fixed, prompt-free transforms as `openclaw docto
 
 When validation still fails:
 
-- The Gateway does not boot
+- `openclaw gateway run` reports the config issues and exits with code `78`, with SQLite or PostgreSQL state
 - Only diagnostic commands work (`openclaw doctor`, `openclaw logs`, `openclaw health`, `openclaw status`)
 - Run `openclaw doctor` to see exact issues
 - Run `openclaw doctor --fix` (`--repair` is the same flag, and `--yes` skips prompts) to apply repairs

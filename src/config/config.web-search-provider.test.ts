@@ -74,13 +74,12 @@ it("allows bundled web search config outside the explicit plugin allowlist", () 
     },
   });
   expect(res.ok).toBe(true);
-  expect(
-    res.warnings.some(
-      (warning) =>
-        warning.path === "plugins.entries.brave" &&
-        warning.message.includes("plugin disabled (not in allowlist) but config is present"),
-    ),
-  ).toBe(false);
+  expect(res.warnings).not.toContainEqual(
+    expect.objectContaining({
+      path: "plugins.entries.brave",
+      message: expect.stringContaining("plugin disabled (not in allowlist) but config is present"),
+    }),
+  );
 });
 
 it("detects legacy scoped provider config for bundled providers", () => {
@@ -94,9 +93,9 @@ it("accepts provider ids registered by installed plugin manifests", () => {
 
 it.each([
   [
-    "brave",
+    "Brave",
     missingPlugins,
-    'web_search provider is not available: brave (install or enable plugin "brave", then run openclaw doctor --fix)',
+    'web_search provider is not available: Brave (install or enable plugin "brave", then run openclaw doctor --fix)',
     ["brave"],
   ],
   ["brvae", undefined, "unknown web_search provider: brvae", ["acme-search", "brave", "gemini"]],
@@ -112,21 +111,25 @@ it.each([
   );
 });
 
-it("warns for unavailable installable providers with stale plugin config", () => {
-  const res = validateWebSearchConfig(searchConfig("brave", {}), missingPlugins);
-  expect(res.ok).toBe(true);
-  const warning = res.warnings.find((entry) => entry.path === "tools.web.search.provider");
-  expect(warning?.message).toContain("web_search provider is not available: brave");
-  expect(warning?.message).toContain('configured plugin "brave" is unavailable');
-});
-
-it("warns for unknown provider ids with stale plugin config", () => {
-  const res = validateWebSearchConfig(searchConfig("missing-third-party", {}));
+it.each([
+  [
+    "brave",
+    missingPlugins,
+    'web_search provider is not available: brave (configured plugin "brave" is unavailable',
+  ],
+  ["missing-third-party", undefined, "unknown web_search provider: missing-third-party"],
+] as const)("warns for stale plugin config for %s", (provider, options, message) => {
+  const res = validateWebSearchConfig(searchConfig(provider, {}), options);
   expect(res.ok).toBe(true);
   expect(res.warnings).toContainEqual(
     expect.objectContaining({
       path: "tools.web.search.provider",
-      message: expect.stringContaining("unknown web_search provider: missing-third-party"),
+      message: expect.stringContaining(message),
     }),
   );
+});
+
+it("accepts provider ids that differ from the manifest only in case or padding", () => {
+  const res = validateWebSearchConfig(searchConfig(" BRAVE "));
+  expect(res).toMatchObject({ ok: true, warnings: [] });
 });

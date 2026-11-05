@@ -5,8 +5,7 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../../config/sessions.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -22,26 +21,22 @@ import { withEnvAsync } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import {
   createSubagentRunRecord,
-  type SubagentRunRecordOverrides,
   type SubagentRegistryHarness,
 } from "../../subagent-test-fixtures.test-helpers.js";
-import type { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type SessionStore = Record<string, Record<string, unknown>>;
 
-/** Policy-owner stub for delivery bookkeeping; security restoration has separate real-owner proof. */
-export async function prepareSubagentRecoveryFixture(
+/** Seed the requester identity for completion bookkeeping. */
+export async function prepareSubagentRequesterFixture(
   run: SubagentRunRecord,
   fixture: { stateDir?: string; entries?: Record<string, SessionEntry>; storePath?: string },
 ): Promise<void> {
-  const recovery = await import("../../../gateway/operator-run-recovery.js");
   const { resolveSessionStorePathCore } = await import("../../../config/sessions.js");
-  const { createAdmittedRunOperatorAuthority } = await import("../../admitted-run-context.js");
   const requester = fixture.entries?.[run.requesterSessionKey];
-  const sessionId = requester?.sessionId ?? "recovery-requester-session";
-  const lifecycleRevision = requester?.lifecycleRevision ?? "recovery-requester-revision";
+  const sessionId = requester?.sessionId ?? "requester-session";
+  const lifecycleRevision = requester?.lifecycleRevision ?? "requester-revision";
   const agentId = run.requesterAgentId ?? "main";
   const storePath = fixture.stateDir
     ? await writeSubagentSessionEntry({
@@ -64,156 +59,12 @@ export async function prepareSubagentRecoveryFixture(
       await replaceSessionEntry({ storePath, sessionKey: run.requesterSessionKey }, entry);
     }
   }
-  const source: NonNullable<SubagentRunRecord["operatorRecoverySource"]> = {
-    version: 1,
-    agentId,
-    sessionKey: run.requesterSessionKey,
-    sessionId,
-    lifecycleRevision,
-    sourceRunId: run.requesterTurnRunId ?? "recovery-requester-turn",
-    snapshot: {
-      profileId: "registry-bookkeeping-operator",
-      scopes: ["operator.write"],
-      assignedRole: null,
-      githubLogin: null,
-      grant: null,
-      aliasBindingIds: [],
-      authPolicy: {
-        generation: "",
-        grantGeneration: "registry-bookkeeping-policy",
-        role: "operator",
-        authMethod: "token",
-      },
-      controlUiAdmin: false,
-      localOperator: false,
-      sourceIngress: "internal",
-    },
-  };
   Object.assign(run, {
     requesterAgentId: agentId,
     requesterStorePath: storePath,
     completionRequesterSessionId: sessionId,
     completionRequesterLifecycleRevision: lifecycleRevision,
-    operatorRecoverySource: source,
   });
-  const original = vi.isMockFunction(recovery.restoreGatewayOperatorSource)
-    ? vi.mocked(recovery.restoreGatewayOperatorSource).getMockImplementation()!
-    : recovery.restoreGatewayOperatorSource;
-  const lifetimes = new Set<AbortController>();
-  const restore = vi
-    .spyOn(recovery, "restoreGatewayOperatorSource")
-    .mockImplementation(async (params) => {
-      if (params.snapshot.profileId !== source.snapshot.profileId) {
-        return await original(params);
-      }
-      params.assertCurrent();
-      await params.prepareCurrent?.();
-      params.assertCurrent();
-      const lifetime = new AbortController();
-      lifetimes.add(lifetime);
-      let references = 0;
-      const assertCurrent = () => {
-        lifetime.signal.throwIfAborted();
-        params.assertCurrent();
-      };
-      const retain = () => {
-        assertCurrent();
-        references++;
-        let released = false;
-        return () => {
-          if (!released && --references === 0) {
-            lifetime.abort();
-          }
-          released = true;
-        };
-      };
-      return {
-        controlUiAdmin: false,
-        assertPolicyCurrent: assertCurrent,
-        authenticatedUserProfile: {
-          profileId: params.snapshot.profileId,
-          displayName: null,
-          avatarRevision: "1",
-          hasAvatar: false,
-          updatedAt: 1,
-        },
-        authority: createAdmittedRunOperatorAuthority({
-          profileId: params.snapshot.profileId,
-          scopes: params.snapshot.scopes,
-          recoverySnapshot: params.snapshot,
-          gatewayAccessGrant: null,
-          signal: lifetime.signal,
-          assertCurrent,
-          retain,
-        }),
-        release: retain(),
-      };
-    });
-  onTestFinished(() => {
-    for (const lifetime of lifetimes) {
-      lifetime.abort();
-    }
-    restore.mockRestore();
-  });
-}
-
-export function expectDeferredSubagentAnnouncement(
-  entry: SubagentRunRecord | undefined,
-  runId: string,
-) {
-  expect(entry, "deferred announcement committed").toMatchObject({
-    cleanupHandled: false,
-    delivery: { status: "pending", attemptCount: 1, payload: { childRunId: runId } },
-  });
-  expect(entry?.cleanupCompletedAt, "deferred cleanup remains unfinished").toBeUndefined();
-  expect(Number.isFinite(entry?.delivery?.nextAttemptAt), "durable retry deadline").toBe(true);
-}
-
-/** Hold the real lazy settlement dependency without replacing its completion policy. */
-export function gateSubagentRequesterSettlement(
-  settle: typeof maybeWakeRequesterAfterAllChildrenSettled,
-) {
-  const released = createDeferred();
-  let pending: Promise<boolean> | undefined;
-  const calls = observeSubagentRequesterWake((params) => {
-    pending = (async () => {
-      await released.promise;
-      return await settle(params);
-    })();
-    return pending;
-  });
-  return {
-    ...calls,
-    async release() {
-      released.resolve();
-      await pending;
-    },
-  };
-}
-
-/** Observe admission after real worker IO without racing a fake-clock polling deadline. */
-export function observeSubagentRequesterWake(
-  wake: typeof maybeWakeRequesterAfterAllChildrenSettled,
-) {
-  let calls = 0;
-  const admitted = new Map<number, ReturnType<typeof createDeferred<void>>>();
-  return {
-    run: vi.fn<typeof maybeWakeRequesterAfterAllChildrenSettled>((params) => {
-      admitted.get(++calls)?.resolve();
-      return wake(params);
-    }),
-    waitForCalls(this: void, count: number): Promise<void> {
-      if (calls >= count) {
-        return Promise.resolve();
-      }
-      let waiter = admitted.get(count);
-      if (!waiter) {
-        waiter = createDeferred();
-        admitted.set(count, waiter);
-      }
-      return waiter.promise;
-    },
-  };
 }
 
 /** Gates owned by a test must be released before waiting for imports and detached tails. */
@@ -346,28 +197,6 @@ export async function removeSubagentSessionEntry(params: {
     skipMaintenance: true,
   });
   return storePath;
-}
-
-export function createDeliveredWake(
-  runId: string,
-  requesterSettleWake?: NonNullable<SubagentRunRecord["requesterSettleWake"]>,
-  overrides: Partial<SubagentRunRecordOverrides> = {},
-): SubagentRunRecord {
-  const endedAt = overrides.endedAt ?? Date.now();
-  return createSubagentRunRecord({
-    runId,
-    childSessionKey: `agent:main:subagent:${runId}`,
-    childSessionIdentity: { sessionId: `sess-${runId}` },
-    endedAt,
-    outcome: { status: "ok" },
-    expectsCompletionMessage: true,
-    completion: { required: true, resultText: "done", capturedAt: endedAt },
-    delivery: { status: "delivered", deliveredAt: endedAt },
-    cleanupHandled: true,
-    cleanupCompletedAt: endedAt,
-    requesterSettleWake,
-    ...overrides,
-  });
 }
 
 export function writeChildSession(
@@ -597,25 +426,5 @@ export function registerSubagentRegistrationPersistenceTests({
     const run = findRequesterRun(runId);
     expect(run?.execution.endedAt).toBeUndefined();
     expect(run?.endedReason).toBeUndefined();
-  });
-}
-
-export function createRestoredRequesterWakeRuns(endedAt: number): SubagentRunRecord[] {
-  return Array.from({ length: 3 }, (_, index): SubagentRunRecord => {
-    const runId = `run-restored-wake-${index}`;
-    return createDeliveredWake(runId, undefined, {
-      childSessionKey: `agent:main:subagent:restored-wake-${index}`,
-      childSessionIdentity: { sessionId: `sess-restored-wake-${index}` },
-      requesterSessionKey: `agent:main:requester-${index}`,
-      requesterDisplayKey: `requester-${index}`,
-      task: "resume a durable requester wake",
-      createdAt: endedAt - 1_000,
-      endedReason: "subagent-complete",
-      startedAt: endedAt - 500,
-      endedAt,
-      requesterTurnRunId: `requester-turn-${index}`,
-      requesterTurnYielded: true,
-      taskRunId: runId,
-    });
   });
 }

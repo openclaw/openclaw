@@ -48,6 +48,7 @@ export function resolveImageModelConfigForOverride(params: {
 export async function prepareImageCompressionPolicy(params: {
   abortSignal?: AbortSignal;
   cfg?: OpenClawConfig;
+  /** Model references already resolved by the image tool. */
   imageModelConfig?: ImageModelConfig | null;
   modelOverride?: string;
   imageCount: number;
@@ -56,17 +57,8 @@ export async function prepareImageCompressionPolicy(params: {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   operatorAuthority?: AdmittedRunOperatorAuthority;
 }): Promise<ImageCompressionPolicy> {
-  const overrideConfig = resolveImageModelConfigForOverride({
-    cfg: params.cfg,
-    modelOverride: params.modelOverride,
-  });
-  const configuredImageModelConfig = params.imageModelConfig
-    ? resolveConfiguredImageModelRefs({
-        cfg: params.cfg,
-        imageModelConfig: params.imageModelConfig,
-      })
-    : null;
-  const effectiveImageModelConfig = overrideConfig ?? configuredImageModelConfig;
+  const overrideConfig = resolveImageModelConfigForOverride(params);
+  const effectiveImageModelConfig = overrideConfig ?? params.imageModelConfig;
   const effectiveCfg = effectiveImageModelConfig
     ? applyAgentDefaultModelConfig(params.cfg, "imageModel", effectiveImageModelConfig)
     : params.cfg;
@@ -108,10 +100,7 @@ function matchesImageTimeoutEntry(params: {
   if (
     !configuredProvider ||
     configuredProvider !== selectedProvider ||
-    !matchesImageEntryCapability({
-      entry: params.entry,
-      providerRegistry: params.providerRegistry,
-    })
+    !matchesImageEntryCapability(params)
   ) {
     return false;
   }
@@ -140,12 +129,7 @@ export async function runImagePrompt(params: {
   signal?: AbortSignal;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   assertCurrent?: () => void;
-}): Promise<{
-  text: string;
-  provider: string;
-  model: string;
-  attempts: Array<{ provider: string; model: string; error: string }>;
-}> {
+}) {
   const effectiveCfg = applyAgentDefaultModelConfig(
     params.cfg,
     "imageModel",
