@@ -23,12 +23,14 @@ import type {
   ChatQueueItem,
   ChatSelectionSource,
   ChatStreamSegment,
+  MessageGroup,
 } from "../../../lib/chat/chat-types.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 // Pane-local search, context menus, selection actions, and presentation resets.
 import type { TurnRecapWatch } from "../chat-progress.ts";
 import type { SubagentRoster } from "../chat-spawned-subagent.ts";
+import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { ChatTranscriptMetadata } from "../chat-transcript-metadata.ts";
 import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
@@ -184,7 +186,6 @@ export type ChatThreadProps = Omit<
     onOpenManagedArtifact?: (href: string) => boolean;
     onOpenSessionLink?: (target: SessionLinkTarget) => void;
     onNavigate?: (routeId: "cron", options: { search: string }) => void;
-    onChatScroll?: (event: Event) => void;
     onHistoryIntent?: (event: Event) => void;
     onHistorySentinelRef?: (element: HTMLElement) => void | (() => void);
     onTranscriptAnnouncementRef?: (element: HTMLElement) => void | (() => void);
@@ -478,6 +479,32 @@ function selectionIntersectsElement(selection: Selection | null, element: Elemen
   return false;
 }
 
+function rewindTranscriptMessage(
+  props: Pick<ChatThreadProps, "onRewindMessage" | "onFocusComposer">,
+  entryId: string,
+): void {
+  void Promise.resolve(props.onRewindMessage?.(entryId)).then((rewound) => {
+    if (rewound) {
+      props.onFocusComposer?.();
+    }
+  });
+}
+
+export function transcriptRewindOptions(
+  group: MessageGroup,
+  props: Pick<ChatThreadProps, "onRewindMessage" | "onFocusComposer" | "runActive" | "runWorking">,
+) {
+  const entryId =
+    group.role.toLowerCase() === "user"
+      ? persistedMessageEntryId(group.messages.at(-1)?.message)
+      : null;
+  return {
+    onRewind:
+      entryId && props.onRewindMessage ? () => rewindTranscriptMessage(props, entryId) : undefined,
+    rewindDisabled: Boolean(props.runActive || props.runWorking),
+  };
+}
+
 export function handleTranscriptContextMenu(
   event: MouseEvent,
   props: TranscriptInteractionProps,
@@ -577,11 +604,7 @@ export function handleTranscriptContextMenu(
         // SAFETY: Menu actions bind directly to their native button.
         openChatRewindConfirmation(rewindEvent.currentTarget as HTMLButtonElement, () => {
           removeReplyContextMenu();
-          void Promise.resolve(props.onRewindMessage?.(entryId)).then((rewound) => {
-            if (rewound) {
-              props.onFocusComposer?.();
-            }
-          });
+          rewindTranscriptMessage(props, entryId);
         });
       },
     });

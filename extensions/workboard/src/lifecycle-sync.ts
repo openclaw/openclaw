@@ -213,7 +213,7 @@ export async function syncWorkboardSubagentEnded(params: {
   return synced.count;
 }
 
-export async function syncWorkboardRunSettled(params: {
+async function syncWorkboardRunSettled(params: {
   store: WorkboardStore;
   event: WorkboardRunEvent;
   isCurrent?: () => boolean;

@@ -7,7 +7,10 @@ import {
   createWorkerProjectPreparation,
   readWorkerProjectEnvironmentRecipe,
 } from "./project-preparation.js";
-import { createProjectPreparationFixture } from "./project-preparation.test-support.js";
+import {
+  createProjectPreparationFixture,
+  runProjectScriptWithGitProbe,
+} from "./project-preparation.test-support.js";
 import { prepareWorkerProjectSnapshot } from "./workspace-git-base.js";
 import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
@@ -24,6 +27,40 @@ async function advanceProject(repository: string) {
   await requireGit(repository, ["commit", "--quiet", "-am", "B"]);
   return (await prepareWorkerProjectSnapshot({ localPath: repository, namespace: "gateway" }))!;
 }
+
+it("verifies transferred objects once and reuses completed worker objects with phase timings", async () => {
+  const f = await fixture();
+  let fscks = 0;
+  f.runScript.mockImplementation((script) =>
+    runProjectScriptWithGitProbe(script, f.home, (args) => {
+      if (args.includes("fsck")) {
+        fscks++;
+      }
+      return undefined;
+    }),
+  );
+  for (const [project, expectedFscks] of [
+    [f.project, 1],
+    [f.project, 0],
+    [await advanceProject(f.repository), 1],
+  ] as const) {
+    fscks = 0;
+    const operation = await f.preparedOperation(undefined, { project });
+    try {
+      const result = await operation.project.prepare(f);
+      expect.soft(fscks).toBe(expectedFscks);
+      expect.soft(result.recipePreparation?.phaseDurationsMs).toMatchObject({
+        inspection: expect.any(Number),
+        seedVerification: expect.any(Number),
+      });
+      for (const duration of Object.values(result.recipePreparation?.phaseDurationsMs ?? {})) {
+        expect(Number.isSafeInteger(duration) && duration >= 0).toBe(true);
+      }
+    } finally {
+      operation.close();
+    }
+  }
+});
 
 it.each(["absent", "skipped"] as const)(
   "completes seed transfer without setup authority (%s recipe)",

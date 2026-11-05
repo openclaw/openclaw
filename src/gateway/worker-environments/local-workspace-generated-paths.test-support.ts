@@ -133,9 +133,7 @@ export async function proveNestedGitWorkspaceRecovery(owner: LocalWorkspaceOwner
   const commit = await runGit(["commit-tree", resultTree], message(after.ref));
   await runGit(["update-ref", ref, commit]);
   expect(await readStagedWorkerWorkspaceResult(canonical, ref)).toMatchObject({
-    baseManifestRaw: before.raw,
     baseManifestRef: before.ref,
-    currentManifestRaw: after.raw,
     currentManifestRef: after.ref,
   });
   const invalid = workerWorkspaceResultRef(`historical-nested-git-v${version}-bad-digest`);

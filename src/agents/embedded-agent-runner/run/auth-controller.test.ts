@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
-import { beforeEach, expect, it, onTestFinished, vi, type Mock } from "vitest";
+import { beforeAll, beforeEach, expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { isSecretValueRegisteredForRedaction } from "../../../logging/secret-redaction-registry.js";
 import { SecretSurfaceUnavailableError } from "../../../secrets/runtime-degraded-state.js";
@@ -24,6 +24,7 @@ import { resolveAuthProfileOrder } from "../../auth-profiles/order.js";
 import { loadPersistedAuthProfileStore } from "../../auth-profiles/persisted.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "../../auth-profiles/store-runtime.js";
 import { FailoverError } from "../../failover-error.js";
+import { isNonSecretApiKeyMarker } from "../../model-auth-markers.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 
 const mocks = vi.hoisted(() => ({
@@ -129,6 +130,11 @@ function createController(params: Partial<ControllerParams> = {}) {
   });
 }
 
+beforeAll(() => {
+  // Load lazy auth metadata before fake timers can capture tsx's disk-cache maintenance.
+  isNonSecretApiKeyMarker("synthetic-runtime");
+});
+
 beforeEach(() => {
   harness = {
     models: { runtime: createTestModel(), effective: createTestModel() },
@@ -148,9 +154,7 @@ it.each(["credential resolution", "runtime auth exchange", "AWS runtime auth exc
   "ends a hung %s at the run timeout without installing credentials",
   async (step) => {
     vi.useFakeTimers();
-    onTestFinished(() => {
-      vi.useRealTimers();
-    });
+    onTestFinished(() => void vi.useRealTimers());
     let exchangeSignal: AbortSignal | undefined;
     const late = createDeferred<{ apiKey: string }>();
     mocks.getApiKeyForModelCore.mockImplementation(({ signal }) => {
@@ -193,9 +197,7 @@ it.each([false, true])(
   "settles slow runtime auth inside the budget (cancelled: %s)",
   async (cancelled) => {
     vi.useFakeTimers();
-    onTestFinished(() => {
-      vi.useRealTimers();
-    });
+    onTestFinished(() => void vi.useRealTimers());
     const abort = new AbortController();
     let exchangeSignal: AbortSignal | undefined;
     mocks.getApiKeyForModelCore.mockResolvedValue(apiKeyAuth("synthetic-source"));
@@ -229,9 +231,7 @@ it.each([false, true])(
 
 it("shares the run deadline across credential lookup and token exchange", async () => {
   vi.useFakeTimers();
-  onTestFinished(() => {
-    vi.useRealTimers();
-  });
+  onTestFinished(() => void vi.useRealTimers());
   mocks.getApiKeyForModelCore.mockImplementation(
     () =>
       new Promise((resolve) => {
@@ -840,9 +840,7 @@ it("rejects privileged runtime transport overrides on the first auth exchange", 
 
 it("ignores stale scheduled refresh results after auth profile rotation", async () => {
   vi.useFakeTimers();
-  onTestFinished(() => {
-    vi.useRealTimers();
-  });
+  onTestFinished(() => void vi.useRealTimers());
   const staleRefresh = createDeferred<ReturnType<typeof runtimeAuth>>();
   mocks.getApiKeyForModelCore.mockImplementation(async ({ profileId }) => {
     const selected = profileId === "backup" ? "backup" : "default";
@@ -914,9 +912,7 @@ it.each([false, true, "provider-abort"])(
   "injects the AWS SDK sentinel and clears stale refresh state (exchange throws: %s)",
   async (exchangeThrows) => {
     vi.useFakeTimers();
-    onTestFinished(() => {
-      vi.useRealTimers();
-    });
+    onTestFinished(() => void vi.useRealTimers());
     const warn = vi.fn<(message: string) => void>();
     if (!exchangeThrows) {
       harness.runtimeAuthState = {

@@ -290,5 +290,10 @@
       }
     }
   },
-  "commandAliases": [{ "name": "wiki" }]
+  "commandAliases": [{ "name": "wiki" }],
+  "recommendedPrompts": [
+    "Help me plan Memory Wiki setup alongside my current memory provider.",
+    "Preview how a few of my sources could become a navigable Memory Wiki.",
+    "Explore a topic in my Memory Wiki and trace claims to sources without editing pages."
+  ]
 }

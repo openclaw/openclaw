@@ -11,7 +11,6 @@ import {
 import {
   createWorkboardLifecycleService,
   readWorkboardLifecycleSessions,
-  syncWorkboardRunSettled,
   syncWorkboardSubagentEnded,
 } from "./lifecycle-sync.js";
 import { createLinkedCard } from "./lifecycle-sync.test-support.js";
@@ -336,16 +335,15 @@ describe("Workboard gateway lifecycle sync", () => {
     async (exact) => {
       const sessionKey = "subagent:workboard-ops-card";
       const { card, read } = await runningCard(sessionKey);
-      await syncWorkboardRunSettled({
-        store,
-        event: {
-          stream: "lifecycle",
-          runId: "run-agent",
-          seq: 1,
-          ts: card.updatedAt + 1,
-          ...(exact ? { sessionKey: `agent:alpha:${sessionKey}` } : {}),
-          data: { phase: "error", executionSettled: true, error: "PRIVATE_ERROR" },
-        },
+      const service = managedService(async () => lifecycleSnapshot());
+      await service.start(serviceContext());
+      await service.onRunSettled({
+        stream: "lifecycle",
+        runId: "run-agent",
+        seq: 1,
+        ts: card.updatedAt + 1,
+        ...(exact ? { sessionKey: `agent:alpha:${sessionKey}` } : {}),
+        data: { phase: "error", executionSettled: true, error: "PRIVATE_ERROR" },
       });
       const result = await read();
       expect(result?.status).toBe(exact ? "blocked" : "running");

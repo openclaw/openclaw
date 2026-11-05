@@ -7,7 +7,7 @@ import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.ty
 import type { AdmissionState } from "./plugin-native-admission-state.js";
 import type { PluginSourceSnapshotDescriptor } from "./plugin-source-snapshot.types.js";
 
-export type PluginGenerationInspection =
+type PluginGenerationInspection =
   | {
       kind: "dependencies";
       entries: readonly { rootDir: string; entryFile: string }[];
