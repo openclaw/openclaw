@@ -9,10 +9,10 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { createServer } from "node:net";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
+import { createSocketInode } from "../helpers/socket-inode.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -343,6 +343,7 @@ describe("Docker E2E source and harness inputs", () => {
     "keeps candidate product inputs for $script",
     async ({ script, dockerfiles, harnessDockerfile, reuse }) => {
       const root = tempDirs.make("e2e-src-");
+      writeFileSync(path.join(root, "package.json"), '{"type":"commonjs"}\n');
       const target = path.join(root, "candidate source");
       const bin = path.join(root, "bin");
       const log = path.join(root, "commands.jsonl");
@@ -396,95 +397,82 @@ if (${JSON.stringify(command)} === 'git') {
         );
         chmodSync(file, 0o755);
       }
-      const socketPath = path.join(root, "docker.sock");
-      const socket = createServer();
-      await new Promise<void>((resolve, reject) => {
-        socket.once("error", reject);
-        socket.listen(socketPath, resolve);
-      });
-      try {
-        const sourceEnv = {
-          PATH: bin,
-          HOME: path.join(root, "capture-home"),
-          TMPDIR: root,
-          LANG: "C",
-          OPENCLAW_DOCKER_E2E_REPO_ROOT: target,
-          OPENCLAW_CURRENT_PACKAGE_TGZ: packageTgz,
-          OPENCLAW_SKIP_DOCKER_BUILD: "1",
-          OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1",
-          OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS: "2",
-          OPENCLAW_DOCKER_SOCKET: socketPath,
-        };
-        const result = captureSource
-          ? await runFixtureBash(
-              [path.join(harness, "scripts/e2e", script)],
-              target,
-              sourceEnv,
-              30_000,
-            )
-          : spawnSync("bash", [path.join(harness, "scripts/e2e", script)], {
-              cwd: target,
-              encoding: "utf8",
-              timeout: 30_000,
-              env: {
-                ...process.env,
-                PATH: `${bin}${path.delimiter}${process.env.PATH}`,
-                TMPDIR: root,
-                OPENCLAW_DOCKER_E2E_REPO_ROOT: target,
-                OPENCLAW_CURRENT_PACKAGE_TGZ: packageTgz,
-                OPENCLAW_SKIP_DOCKER_BUILD: reuse ? "1" : "0",
-                OPENCLAW_DOCKER_SOCKET: socketPath,
-              },
-            });
-        expect(result.status).not.toBe(0);
-        expect(result.stdout + result.stderr).toContain("fixture-stop at product input boundary");
-        const calls = readCommandCalls(log);
-        if (dockerfiles) {
-          const builds = calls.filter(
-            (call) =>
-              call.command === "docker" &&
-              (call.args[0] === "build" || call.args[0] === "buildx") &&
-              call.args.at(-1) === target,
-          );
-          expect(builds.map((build) => build.args[build.args.indexOf("-f") + 1])).toEqual(
-            dockerfiles.map((dockerfile) =>
-              path.join(harnessDockerfile ? harness : target, dockerfile),
-            ),
-          );
-        } else if (script === "compose-setup.sh") {
-          expect(calls.find((call) => call.args[0] === "compose")?.args).toContain(
-            path.join(target, "docker-compose.yml"),
-          );
-        } else {
-          const gitCalls = calls.filter((call) => call.command === "git");
-          expect(gitCalls.map((call) => call.args.slice(0, 2))).toEqual([
-            ["-C", target],
-            ["-C", target],
-          ]);
-          expect(
-            calls.find((call) => call.args[0] === "run" && call.args.includes("-d"))
-              ?.installerSource,
-          ).toBe("#!/bin/bash\necho installer\n");
-          expect(existsSync(path.join(target, "dist"))).toBe(false);
-          const runs = calls.filter(
-            (call) =>
-              call.command === "docker" && call.args[0] === "run" && call.args.includes("-d"),
-          );
-          expect(runs).toHaveLength(2);
-          expect(runs.map((call) => call.args[call.args.indexOf("--name") + 1])).toEqual([
-            expect.stringMatching(/^openclaw-hosted-installer-proof-[0-9]+$/),
-            expect.stringMatching(/^openclaw-source-installer-proof-[0-9]+$/),
-          ]);
-          const sourceRun = runs[1];
-          if (!sourceRun) {
-            throw new Error("missing captured source container run");
-          }
-          await assertSourceBootstrapIsolation(sourceRun.args, root);
+      const socketPath = createSocketInode(root, "docker.sock");
+      const sourceEnv = {
+        PATH: bin,
+        HOME: path.join(root, "capture-home"),
+        TMPDIR: root,
+        LANG: "C",
+        OPENCLAW_DOCKER_E2E_REPO_ROOT: target,
+        OPENCLAW_CURRENT_PACKAGE_TGZ: packageTgz,
+        OPENCLAW_SKIP_DOCKER_BUILD: "1",
+        OPENCLAW_DOCKER_E2E_REQUIRE_LOCAL_IMAGE: "1",
+        OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS: "2",
+        OPENCLAW_DOCKER_SOCKET: socketPath,
+      };
+      const result = captureSource
+        ? await runFixtureBash(
+            [path.join(harness, "scripts/e2e", script)],
+            target,
+            sourceEnv,
+            30_000,
+          )
+        : spawnSync("bash", [path.join(harness, "scripts/e2e", script)], {
+            cwd: target,
+            encoding: "utf8",
+            timeout: 30_000,
+            env: {
+              ...process.env,
+              PATH: `${bin}${path.delimiter}${process.env.PATH}`,
+              TMPDIR: root,
+              OPENCLAW_DOCKER_E2E_REPO_ROOT: target,
+              OPENCLAW_CURRENT_PACKAGE_TGZ: packageTgz,
+              OPENCLAW_SKIP_DOCKER_BUILD: reuse ? "1" : "0",
+              OPENCLAW_DOCKER_SOCKET: socketPath,
+            },
+          });
+      expect(result.status).not.toBe(0);
+      expect(result.stdout + result.stderr).toContain("fixture-stop at product input boundary");
+      const calls = readCommandCalls(log);
+      if (dockerfiles) {
+        const builds = calls.filter(
+          (call) =>
+            call.command === "docker" &&
+            (call.args[0] === "build" || call.args[0] === "buildx") &&
+            call.args.at(-1) === target,
+        );
+        expect(builds.map((build) => build.args[build.args.indexOf("-f") + 1])).toEqual(
+          dockerfiles.map((dockerfile) =>
+            path.join(harnessDockerfile ? harness : target, dockerfile),
+          ),
+        );
+      } else if (script === "compose-setup.sh") {
+        expect(calls.find((call) => call.args[0] === "compose")?.args).toContain(
+          path.join(target, "docker-compose.yml"),
+        );
+      } else {
+        const gitCalls = calls.filter((call) => call.command === "git");
+        expect(gitCalls.map((call) => call.args.slice(0, 2))).toEqual([
+          ["-C", target],
+          ["-C", target],
+        ]);
+        expect(
+          calls.find((call) => call.args[0] === "run" && call.args.includes("-d"))?.installerSource,
+        ).toBe("#!/bin/bash\necho installer\n");
+        expect(existsSync(path.join(target, "dist"))).toBe(false);
+        const runs = calls.filter(
+          (call) => call.command === "docker" && call.args[0] === "run" && call.args.includes("-d"),
+        );
+        expect(runs).toHaveLength(2);
+        expect(runs.map((call) => call.args[call.args.indexOf("--name") + 1])).toEqual([
+          expect.stringMatching(/^openclaw-hosted-installer-proof-[0-9]+$/),
+          expect.stringMatching(/^openclaw-source-installer-proof-[0-9]+$/),
+        ]);
+        const sourceRun = runs[1];
+        if (!sourceRun) {
+          throw new Error("missing captured source container run");
         }
-      } finally {
-        await new Promise<void>((resolve, reject) => {
-          socket.close((error) => (error ? reject(error) : resolve()));
-        });
+        await assertSourceBootstrapIsolation(sourceRun.args, root);
       }
     },
   );
