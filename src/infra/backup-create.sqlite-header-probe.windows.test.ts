@@ -69,7 +69,7 @@ fs.readSync = function(fd, ...args) {
 };
 `,
   );
-  const ready = createDeferredCore<void>();
+  const ready = createDeferredCore();
   const controller = new AbortController();
   let output = "";
   const holder = runUtf8CommandWithTimeout(
