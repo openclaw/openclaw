@@ -352,7 +352,6 @@ const enCron = {
       transcriptUnavailable:
         "Couldn’t identify this conversation. Refresh the activity history and try again.",
       next: "Next {rel}",
-      due: "Due {rel}",
     },
     events: {
       label: "Event",

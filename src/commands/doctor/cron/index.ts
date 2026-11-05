@@ -339,7 +339,7 @@ export async function maybeRepairLegacyCronStore(params: {
     return;
   }
   noteCronModelOverrides({ cfg: params.cfg, jobs: rawJobs });
-  noteCronDeliveryTargetAdvisory({ cfg: params.cfg, jobs: rawJobs });
+  await noteCronDeliveryTargetAdvisory({ cfg: params.cfg, jobs: rawJobs });
 
   const { inFlightCount, chronicFailureCount, autoDisabledJobs } = inspectCronJobHealth(rawJobs);
   if (inFlightCount > 0) {
