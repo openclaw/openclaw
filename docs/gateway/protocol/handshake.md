@@ -300,17 +300,18 @@ infer support from the protocol version or method list. Examples:
 Declare optional capabilities in `connect.params.caps`. Older Gateways ignore
 unsupported capability declarations.
 
-| Capability                 | Effect                                                                                                                                                                          |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hello-health-on-demand`   | Sends `snapshot.health: {}` instead of cached health; required snapshot fields, version counters, health RPCs, and events remain.                                               |
-| `health-summary`           | Omits `agents` and `sessions` from health events and cached hello health. Other health fields remain; the `health` RPC retains full diagnostics.                                |
-| `hello-presence-self`      | Sends only the connecting client's hello presence row. The presence event stream supplies the full roster, including the initial reset for `presence-deltas` clients.           |
-| `tool-events`              | Accepts structured tool lifecycle events.                                                                                                                                       |
-| `inline-widgets`           | Renders hosted inline widget tool results.                                                                                                                                      |
-| `no-question-input`        | Cannot collect structured answers; turns omit `ask_user` and ask in ordinary text (used by the ACP bridge).                                                                     |
-| `ultrafast`                | Accepts the explicit `"ultrafast"` value. Without it, session responses/events project it as Fast (`true`) for released decoders; stored selection and execution are unchanged. |
-| `chat-only-assistant-text` | Renders assistant text from `chat`, omitting redundant assistant-text `agent` events. See [event families](/gateway/protocol/rpc-bootstrap-and-events#common-event-families).   |
-| `chat-queue-status`        | Displays authoritative pending-input receipts instead of transient successful queue acknowledgments. Refusals, drops, and errors remain visible.                                |
+| Capability                     | Effect                                                                                                                                                                          |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `github-publication-unchanged` | Includes `unchanged: true` when a publication receipt confirms reuse of an existing PR without a push.                                                                          |
+| `hello-health-on-demand`       | Sends `snapshot.health: {}` instead of cached health; required snapshot fields, version counters, health RPCs, and events remain.                                               |
+| `health-summary`               | Omits `agents` and `sessions` from health events and cached hello health. Other health fields remain; the `health` RPC retains full diagnostics.                                |
+| `hello-presence-self`          | Sends only the connecting client's hello presence row. The presence event stream supplies the full roster, including the initial reset for `presence-deltas` clients.           |
+| `tool-events`                  | Accepts structured tool lifecycle events.                                                                                                                                       |
+| `inline-widgets`               | Renders hosted inline widget tool results.                                                                                                                                      |
+| `no-question-input`            | Cannot collect structured answers; turns omit `ask_user` and ask in ordinary text (used by the ACP bridge).                                                                     |
+| `ultrafast`                    | Accepts the explicit `"ultrafast"` value. Without it, session responses/events project it as Fast (`true`) for released decoders; stored selection and execution are unchanged. |
+| `chat-only-assistant-text`     | Renders assistant text from `chat`, omitting redundant assistant-text `agent` events. See [event families](/gateway/protocol/rpc-bootstrap-and-events#common-event-families).   |
+| `chat-queue-status`            | Displays authoritative pending-input receipts instead of transient successful queue acknowledgments. Refusals, drops, and errors remain visible.                                |
 
 Without the health/presence options, clients retain full cached hello health and
 presence. The Control UI advertises `hello-health-on-demand` and

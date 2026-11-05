@@ -162,6 +162,13 @@ describe("session GitHub publication protocol", () => {
     options.accepts(
       sharedOnly,
       { ...sharedOnly, latestShared },
+      {
+        ...sharedOnly,
+        latestShared: {
+          ...latestShared,
+          result: { ...latestShared.result, unchanged: true },
+        },
+      },
       { ...sharedOnly, pendingPersonal },
     );
     for (const field of ["pendingPersonal", "latestShared"]) {

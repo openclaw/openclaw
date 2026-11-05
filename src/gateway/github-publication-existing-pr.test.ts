@@ -375,6 +375,7 @@ describe("shared publication to a prepared original PR", () => {
       status: "published",
       url: f.pr.html_url,
       headCommit: revertedHead,
+      unchanged: true,
     });
     expect(await f.local.git("rev-parse", "HEAD")).toBe(revertedHead);
     f.expectWrites(1);
@@ -434,7 +435,9 @@ describe("shared publication to a prepared original PR", () => {
         await f.coordinator.deferOrphanedRequestsAsync();
       }
       await f.coordinator.resumeSessionRequests();
-      expect(await f.coordinator.sharedStatus(session, pending.requestId)).toMatchObject({
+      const recovered = await f.coordinator.sharedStatus(session, pending.requestId);
+      expect(recovered?.result).not.toHaveProperty("unchanged");
+      expect(recovered).toMatchObject({
         result: {
           requestId: pending.requestId,
           status: "published",

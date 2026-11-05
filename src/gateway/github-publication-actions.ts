@@ -18,6 +18,7 @@ import {
   matchesCurrentGitHubPublicationIdentity,
   prepareCurrentGitHubPublicationIdentity,
 } from "./github-publication-availability.js";
+import { presentGitHubPublicationReceipt } from "./github-publication-client.js";
 import { uploadGitHubPublicationEvidence } from "./github-publication-evidence.js";
 import {
   githubPublicationApiArgs,
@@ -292,7 +293,9 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   ): void => {
     const { nodeId: _, title, body, ...facts } = state;
     const result: SessionGitHubActionResult = {
-      ...(publication ? { publication } : { pullRequest }),
+      ...(publication
+        ? { publication: presentGitHubPublicationReceipt(options.client, publication) }
+        : { pullRequest }),
       publishingSessionKey: session.sessionKey,
       ...facts,
       ...(edit ? { title, body } : {}),

@@ -1480,7 +1480,7 @@ var External = [
     /(^requestId$|^effect$|^status$)/u,
     /(^kind$|^status$|^headCommit$|^url$)/u,
     /(^requestId$|^effect$|^status$)/u,
-    /(^requestId$|^effect$|^status$|^url$|^repository$|^branch$|^headCommit$)/u,
+    /(^requestId$|^effect$|^status$|^url$|^repository$|^branch$|^headCommit$|^unchanged$)/u,
     /(^requestId$|^effect$|^status$|^code$)/u,
     /(^kind$|^selection$)/u,
     /(^kind$|^reason$|^selectedRequestId$)/u,
@@ -17049,7 +17049,8 @@ var External = [
     check_6(value.url) &&
     check_6(value.repository) &&
     check_6(value.branch) &&
-    check_6(value.headCommit),
+    check_6(value.headCommit) &&
+    (value.unchanged === void 0 || !("unchanged" in value) || check_326(value.unchanged)),
   check_2571 = (value) => typeof value == "string" && value === "published",
   check_2572 = (value) =>
     typeof value == "object" &&

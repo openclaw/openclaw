@@ -1,7 +1,7 @@
 import { Value } from "typebox/value";
 import { expect, it } from "vitest";
-import { isSessionGitHubReadinessResult } from "./compiled/protocol.generated/predicates.js";
 import { SessionGitHubReadinessResultSchema } from "./schema/session-github-publication.js";
+import { validateSessionGitHubReadinessResult } from "./validators/sessions.js";
 
 it.each([
   { status: "requested" },
@@ -25,10 +25,18 @@ it.each([
   };
   const checks = [
     (value: unknown) => Value.Check(SessionGitHubReadinessResultSchema, value),
-    isSessionGitHubReadinessResult,
+    validateSessionGitHubReadinessResult,
   ];
   for (const check of checks) {
     expect(check(result)).toBe(true);
+    if (fields.status === "published") {
+      expect(
+        check({
+          ...result,
+          request: { ...result.request, receipt: { ...receipt, unchanged: true } },
+        }),
+      ).toBe(true);
+    }
     for (const property of ["publisher", "message", "nextAction", "confirmation", "unexpected"]) {
       expect(
         check({

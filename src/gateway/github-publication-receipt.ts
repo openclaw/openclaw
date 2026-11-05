@@ -101,6 +101,7 @@ export function projectGitHubPublicationResult(
     | "identity_login"
     | "status"
     | "head_commit"
+    | "source_head_commit"
     | "pull_request_url"
     | "repository"
     | "branch"
@@ -144,6 +145,12 @@ export function projectGitHubPublicationResult(
       repository: row.repository,
       branch: row.branch,
       headCommit: row.head_commit ?? "unknown",
+      // Personal execution records the existing PR lookup as an observation even on reuse.
+      ...(row.source_head_commit &&
+      row.head_commit === row.source_head_commit &&
+      (!row.last_effect || (row.last_effect === "pull_request" && row.effect_state === "observed"))
+        ? { unchanged: true as const }
+        : {}),
     };
   }
   if (row.status === "failed" && row.error_code && row.next_action) {

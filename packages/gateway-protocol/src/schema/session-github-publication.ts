@@ -218,6 +218,7 @@ export const SessionGitHubPublicationPublishedSchema = closedObject({
   repository: NonEmptyString,
   branch: NonEmptyString,
   headCommit: NonEmptyString,
+  unchanged: Type.Optional(Type.Literal(true)),
 });
 const SessionGitHubActionState = {
   publishingSessionKey: NonEmptyString,

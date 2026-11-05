@@ -107,7 +107,33 @@ async function observe(f: ReadFixture, params: Record<string, unknown> = {}, int
   assert(Value.Check(SessionGitHubReadinessResultSchema, value), JSON.stringify(value));
   return value;
 }
-
+async function expectUnknownRequest(f: ReadFixture, requestId: string, reason = "not-observable") {
+  expect((await observe(f, { requestId })).request).toEqual({
+    kind: "unknown",
+    reason,
+    selectedRequestId: requestId,
+  });
+}
+const readerSession = { agentId: "main", sessionKey };
+async function bindRepository(owner = sessionKey, branch?: string) {
+  const workspace = await getSessionRepositoryWorkspaceStore().create({
+    agentId: "main",
+    sessionKey: owner,
+    url: githubOrigin,
+    branch,
+    assertCurrent() {},
+  });
+  await upsertSessionEntryCore(readerSession, { repositoryWorkspaceId: workspace.workspaceId });
+  return workspace;
+}
+function publishedFields(branch: string) {
+  return {
+    url: "https://github.com/example/project/pull/1",
+    repository: "example/project",
+    branch,
+    headCommit: "a".repeat(40),
+  };
+}
 function seed(worktree: Awaited<ReturnType<typeof bind>>, key = sessionKey) {
   ensureGitHubPublicationSchema(openOpenClawStateDatabase().db);
   const requestId = randomUUID();
@@ -260,11 +286,7 @@ it("reads current pending rows without a second request or settlement", async ()
     runOpenClawStateWriteTransaction(({ db }) =>
       db.exec("DELETE FROM github_publication_session_lifecycles"),
     );
-    expect((await observe(f, { requestId: row.request_id })).request).toEqual({
-      kind: "unknown",
-      reason: "unavailable",
-      selectedRequestId: row.request_id,
-    });
+    await expectUnknownRequest(f, row.request_id, "unavailable");
   });
 });
 it("keeps exact terminal history when source is unavailable and excludes foreign receipts", async () => {
@@ -276,10 +298,7 @@ it("keeps exact terminal history when source is unavailable and excludes foreign
     createGitHubPublicationExecutionStoreFixture("readiness-fixture").complete(claimed, {
       requestId: row.request_id,
       status: "published",
-      repository: "example/project",
-      branch: worktree.branch,
-      url: "https://github.com/example/project/pull/1",
-      headCommit: "a".repeat(40),
+      ...publishedFields(worktree.branch),
     });
     vi.spyOn(managedWorktrees, "resolveRepositoryIdentity").mockRejectedValue(
       new Error("synthetic unavailable repository"),
@@ -292,27 +311,13 @@ it("keeps exact terminal history when source is unavailable and excludes foreign
         receipt: { requestId: row.request_id, status: "published" },
       },
     });
-    expect((await observe(f, { requestId: foreign.request_id })).request).toEqual({
-      kind: "unknown",
-      reason: "not-observable",
-      selectedRequestId: foreign.request_id,
-    });
+    await expectUnknownRequest(f, foreign.request_id);
   });
 });
 it("observes repository-only shared receipts while personal receipts remain private", async () => {
   await fixture(
     async (f) => {
-      const workspace = await getSessionRepositoryWorkspaceStore().create({
-        agentId: "main",
-        sessionKey,
-        url: githubOrigin,
-        branch: "feature",
-        assertCurrent() {},
-      });
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        { repositoryWorkspaceId: workspace.workspaceId },
-      );
+      const workspace = await bindRepository(sessionKey, "feature");
       const requestId = randomUUID();
       const row = {
         ...repositoryRow(requestId),
@@ -348,11 +353,7 @@ it("observes repository-only shared receipts while personal receipts remain priv
         kind: "observe_request",
         requestId,
       });
-      expect((await observe(f, { requestId: personal.request_id })).request).toEqual({
-        kind: "unknown",
-        reason: "not-observable",
-        selectedRequestId: personal.request_id,
-      });
+      await expectUnknownRequest(f, personal.request_id);
       expect(backups).not.toHaveBeenCalled();
     },
     { personal: true },
@@ -363,16 +364,7 @@ it.each([false, true])(
   async (personal) => {
     await fixture(
       async (f) => {
-        const workspace = await getSessionRepositoryWorkspaceStore().create({
-          agentId: "main",
-          sessionKey,
-          url: githubOrigin,
-          assertCurrent() {},
-        });
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey },
-          { repositoryWorkspaceId: workspace.workspaceId },
-        );
+        await bindRepository();
         await cold();
         const before = await databaseArtifacts();
         expect((await observe(f)).custody).toEqual({ kind: "qualified", source: "repository" });
@@ -391,11 +383,7 @@ it("keeps an absent shared database absent and does not manufacture an exact rec
     }
     const before = await databaseArtifacts();
     const requestId = randomUUID();
-    expect((await observe(f, { requestId })).request).toEqual({
-      kind: "unknown",
-      reason: "not-observable",
-      selectedRequestId: requestId,
-    });
+    await expectUnknownRequest(f, requestId);
     expect(await databaseArtifacts()).toEqual(before);
   });
 });
@@ -466,14 +454,11 @@ it.each([
             registerOpenClawAgentDatabase({ agentId: "main", path: original });
           }
         } else if (kind === "session-metadata") {
-          await upsertSessionEntryCore({ agentId: "main", sessionKey }, { label: "Changed title" });
+          await upsertSessionEntryCore(readerSession, { label: "Changed title" });
         } else if (kind === "visibility") {
-          await upsertSessionEntryCore({ agentId: "main", sessionKey }, { visibility: "draft" });
+          await upsertSessionEntryCore(readerSession, { visibility: "draft" });
         } else {
-          await upsertSessionEntryCore(
-            { agentId: "main", sessionKey },
-            { lifecycleRevision: randomUUID() },
-          );
+          await upsertSessionEntryCore(readerSession, { lifecycleRevision: randomUUID() });
         }
         held.release();
         const [ok, payload, error] = await pending;
@@ -548,48 +533,29 @@ it("distinguishes prepared imports, incomplete imports, archived and missing cus
       head: { repository: "example/project", repositoryId: 1, branch: "feature", commit: head },
     };
     const selected = { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot };
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      {
-        worktree: { ...selected, githubPullRequest: binding },
-      },
-    );
+    const imported = { ...selected, githubPullRequest: binding };
+    await upsertSessionEntryCore(readerSession, { worktree: imported });
     expect((await observe(f)).custody).toEqual({ kind: "changed" });
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      {
-        worktree: { ...selected, githubPullRequest: { ...binding, preparedHeadCommit: head } },
-      },
-    );
+    await upsertSessionEntryCore(readerSession, {
+      worktree: { ...selected, githubPullRequest: { ...binding, preparedHeadCommit: head } },
+    });
     expect(await observe(f)).toMatchObject({
       custody: { kind: "qualified", source: "imported-pr" },
       target: { kind: "supported", basis: "prepared-imported-pr", freshness: "observed" },
     });
-    await upsertSessionEntryCore({ agentId: "main", sessionKey }, { archivedAt: 100 });
+    await upsertSessionEntryCore(readerSession, { archivedAt: 100 });
     expect((await observe(f)).custody).toEqual({ kind: "archived" });
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      {
-        archivedAt: undefined,
-        worktree: { ...selected, id: randomUUID() },
-      },
-    );
+    await upsertSessionEntryCore(readerSession, {
+      archivedAt: undefined,
+      worktree: { ...selected, id: randomUUID() },
+    });
     expect((await observe(f)).custody).toEqual({ kind: "changed" });
   });
 });
 
 it("keeps wrong repository ownership distinct from a genuinely unbound workspace", async () => {
   await fixture(async (f) => {
-    const workspace = await getSessionRepositoryWorkspaceStore().create({
-      agentId: "main",
-      sessionKey: "agent:main:another-owner",
-      url: githubOrigin,
-      assertCurrent() {},
-    });
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      { repositoryWorkspaceId: workspace.workspaceId },
-    );
+    await bindRepository("agent:main:another-owner");
     expect((await observe(f)).custody).toEqual({ kind: "changed" });
   });
 });
@@ -855,29 +821,21 @@ it.each(["requested", "publishing", "published", "failed"] as const)(
     await fixture(async (f) => {
       const worktree = await bind();
       const row = seed(worktree);
+      const published = publishedFields(worktree.branch);
       const details =
-        status === "published"
-          ? {
-              url: "https://github.com/example/project/pull/1",
-              repository: "example/project",
-              branch: worktree.branch,
-              headCommit: "a".repeat(40),
-            }
-          : status === "failed"
-            ? { code: "unavailable" as const }
-            : {};
+        status === "published" ? published : status === "failed" ? { code: "unavailable" } : {};
       if (status !== "requested") {
         const claim = claimGitHubPublicationExecutionFixture(row.request_id, "projection-fixture");
         const store = createGitHubPublicationExecutionStoreFixture("projection-fixture");
         if (status === "published") {
-          store.complete(claim, {
-            requestId: row.request_id,
-            status,
-            url: "https://github.com/example/project/pull/1",
-            repository: "example/project",
-            branch: worktree.branch,
-            headCommit: "a".repeat(40),
+          const tree = "b".repeat(40);
+          const captured = store.bindWorkspaceSnapshot({
+            row: claim,
+            sourceHeadCommit: published.headCommit,
+            sourceIndexTree: tree,
+            workspaceTree: tree,
           });
+          store.complete(captured, { requestId: row.request_id, status, ...published });
         } else if (status === "failed") {
           store.complete(claim, {
             requestId: row.request_id,
@@ -888,11 +846,22 @@ it.each(["requested", "publishing", "published", "failed"] as const)(
           });
         }
       }
-      expect((await observe(f, { requestId: row.request_id })).request).toEqual({
+      const params = { requestId: row.request_id };
+      const legacyReceipt = { requestId: row.request_id, status, ...details };
+      expect((await observe(f, params)).request).toEqual({
         kind: "observed",
         selection: "exact",
-        receipt: { requestId: row.request_id, status, ...details },
+        receipt: legacyReceipt,
       });
+      if (status === "published") {
+        const current = { ...legacyReceipt, unchanged: true };
+        expect((await tool(f, { action: "readiness", ...params })).details).toMatchObject({
+          request: { receipt: current },
+        });
+        assert(f.client.connect);
+        f.client.connect.caps = ["github-publication-unchanged"];
+        expect((await observe(f, params)).request).toMatchObject({ receipt: current });
+      }
     });
   },
 );
