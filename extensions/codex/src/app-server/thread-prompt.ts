@@ -179,13 +179,17 @@ export function resolveCodexOpenClawBaseInstructions(
 export function resolveCodexRetainedOpenClawBaseInstructions(
   params: CodexThreadPromptContext,
   options: CodexThreadConfigurationOptions,
-  creationBaseInstructions: string | undefined,
 ): string | undefined {
   if (!options.systemPromptReplaced) {
     return resolveCodexOpenClawBaseInstructions(params, options);
   }
-  return hasAuthoredCodexBaseInstructions(options) ? undefined : creationBaseInstructions;
+  return hasAuthoredCodexBaseInstructions(options)
+    ? undefined
+    : options.openClawCreationBaseInstructions;
 }
+
+const CODEX_RETAINED_BASE_WITHDRAWAL =
+  "The OpenClaw-supplied generic policy in this conversation's base instructions is withdrawn and no longer applies: a configured system prompt replaced it. Follow the developer instructions below in its place; when there are none, no OpenClaw generic policy applies.";
 
 /**
  * A request base outranks `model_instructions_file` and `instructions`
@@ -205,7 +209,15 @@ export function placeCodexBaseInstructions(
   }
   const baseInstructions = resolveCodexOpenClawBaseInstructions(params, options);
   if (baseInstructions === undefined) {
-    return { developerInstructions };
+    // The resumed thread keeps its OpenClaw creation base, so the withdrawal rides the
+    // configured developer instructions that local compaction rebuilds from, not only the
+    // injected handoff it drops (codex-rs/core/src/compact.rs).
+    return {
+      developerInstructions:
+        resolveCodexRetainedOpenClawBaseInstructions(params, options) === undefined
+          ? developerInstructions
+          : joinPresentSections(CODEX_RETAINED_BASE_WITHDRAWAL, developerInstructions),
+    };
   }
   return hasAuthoredCodexBaseInstructions(options)
     ? { developerInstructions: joinPresentSections(baseInstructions, developerInstructions) }

@@ -53,9 +53,7 @@ describe("buildAgentHarnessBasePrompt", () => {
     expect(withTools).not.toContain("turn-only suffix");
 
     expect(buildAgentHarnessBasePrompt({ toolNames: [] })).not.toContain("image_generate");
-  });
-
-  it("stays lean for minimal and none prompt modes", () => {
+    // Minimal and none prompt modes stay lean.
     const minimal = buildAgentHarnessBasePrompt({ toolNames, promptMode: "minimal" });
     expect(minimal).not.toContain("## Execution Bias");
     expect(minimal).not.toContain("## Documentation");

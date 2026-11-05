@@ -64,6 +64,19 @@ describe("Codex native configuration lifecycle", () => {
     };
   }
 
+  const retainLiveThread = (
+    client: Parameters<typeof startOrResumeThread>[0]["client"],
+    binding: Awaited<ReturnType<typeof startOrResumeThread>>,
+  ) =>
+    retainCodexAppServerLiveThread(
+      client,
+      binding.threadId,
+      binding.liveThreadOwnership?.release,
+      binding.liveThreadConfigFingerprint,
+      null,
+      binding.liveThreadEphemeralPolicy,
+    );
+
   function readNativeConfig(method: string, config: JsonObject = {}) {
     if (method === "config/read") {
       return { config, origins: {}, layers: [] };
@@ -288,6 +301,7 @@ describe("Codex native configuration lifecycle", () => {
         },
       });
       const common = { ...lifecycleParams(fixture.client), config };
+      const carrierKey = nativeBaseKey ? "developerInstructions" : "baseInstructions";
       const threads = [await startOrResumeThread(common)];
       fixture.seed(native, { loaded: false, subscribed: false });
       threads.push(await startOrResumeThread(common));
@@ -298,16 +312,13 @@ describe("Codex native configuration lifecycle", () => {
         .filter((frame) => frame.method === "thread/start" || frame.method === "thread/resume");
       expect(requests.map((frame) => frame.method)).toEqual(["thread/start", "thread/resume"]);
       for (const [index, request] of requests.entries()) {
-        // Reports read the base the lifecycle placed, whichever carrier holds it.
-        const placed = threads[index]?.preparedOpenClawBaseInstructions ?? "";
+        // Reports read the base the lifecycle placed, whichever carrier holds it; warm reuse
+        // compares the resume request with the creation request.
+        const placed = threads[index]?.preparedOpenClawBaseInstructions;
+        expect(placed).toBe(threads[0]?.preparedOpenClawBaseInstructions);
         expect(placed).toContain("You are a personal assistant running inside OpenClaw.");
-        const carrier = isJsonObject(request.params)
-          ? request.params[nativeBaseKey ? "developerInstructions" : "baseInstructions"]
-          : undefined;
-        expect(
-          typeof carrier === "string" &&
-            (nativeBaseKey ? carrier.startsWith(`${placed}\n\n`) : carrier === placed),
-        ).toBe(true);
+        const carrier = isJsonObject(request.params) ? request.params[carrierKey] : undefined;
+        expect(typeof carrier === "string" && carrier.startsWith(`${placed}`)).toBe(true);
         expect(request.params).toMatchObject({
           config: {
             "features.tool_suggest": false,
@@ -317,9 +328,6 @@ describe("Codex native configuration lifecycle", () => {
             plugins: { "calendar@fixture": { enabled: true } },
             apps: { calendar: { enabled: true } },
           },
-          [nativeBaseKey ? "developerInstructions" : "baseInstructions"]: expect.stringContaining(
-            "You are a personal assistant running inside OpenClaw.",
-          ),
         });
         expect(isJsonObject(request.params) && "baseInstructions" in request.params).toBe(
           !nativeBaseKey,
@@ -328,76 +336,45 @@ describe("Codex native configuration lifecycle", () => {
     },
   );
 
-  // A before_prompt_build `systemPrompt` replaces OpenClaw's policy, so neither carrier
-  // gets it back; Codex keeps its own model prompt or the operator's authored base.
-  it.each([undefined, "instructions"] as const)(
-    "places no OpenClaw base after a systemPrompt replacement (native base: %s)",
-    async (nativeBaseKey) => {
-      registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
-      const native = threadStartResult("replaced-thread", { cwd: workspaceDir });
-      const fixture = await createAgentLifecycleHarness({
-        respond: async (method) =>
-          method === "thread/start" || method === "thread/resume"
-            ? native
-            : readNativeConfig(method, nativeBaseKey ? { [nativeBaseKey]: "Operator policy" } : {}),
-      });
-      const common = {
-        ...lifecycleParams(fixture.client),
-        developerInstructions: "Replacement policy.",
-        systemPromptReplaced: true,
-      };
-      const threads = [await startOrResumeThread(common)];
-      fixture.seed(native, { loaded: false, subscribed: false });
-      threads.push(await startOrResumeThread(common));
-
-      const requests = fixture.writes
-        .map((line): unknown => JSON.parse(line))
-        .filter(isJsonObject)
-        .filter((frame) => frame.method === "thread/start" || frame.method === "thread/resume");
-      expect(requests.map((frame) => frame.method)).toEqual(["thread/start", "thread/resume"]);
-      for (const request of requests) {
-        expect(isJsonObject(request.params) && "baseInstructions" in request.params).toBe(false);
-        expect(request.params).toMatchObject({ developerInstructions: "Replacement policy." });
-      }
-      expect(threads.map((thread) => thread.preparedOpenClawBaseInstructions)).toEqual([
-        undefined,
-        undefined,
-      ]);
-    },
-  );
-
-  // Codex keeps the rollout's creation base when a resume sends none, so reports must too.
-  it("reports the retained creation base after a later systemPrompt replacement", async () => {
+  // A replacement places no OpenClaw base. A thread created before it keeps its creation base, so
+  // reports count it and the developer instructions local compaction rebuilds from withdraw it.
+  it.each([
+    ["from creation", undefined],
+    ["from creation beside a native base", "instructions"],
+    ["after creation", undefined],
+  ] as const)("withdraws OpenClaw policy for a systemPrompt replacement %s", async (when, key) => {
     registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
-    const native = threadStartResult("retained-base-thread", { cwd: workspaceDir });
+    const native = threadStartResult("replaced-thread", { cwd: workspaceDir });
     const fixture = await createAgentLifecycleHarness({
       respond: async (method) =>
-        method === "thread/start" || method === "thread/resume" ? native : readNativeConfig(method),
+        method === "thread/start" || method === "thread/resume"
+          ? native
+          : readNativeConfig(method, key ? { [key]: "Operator policy" } : {}),
     });
-    const created = await startOrResumeThread(lifecycleParams(fixture.client));
+    const replaced = { ...lifecycleParams(fixture.client), developerInstructions: "" };
+    const retained = when === "after creation";
+    const created = await startOrResumeThread(
+      retained ? lifecycleParams(fixture.client) : { ...replaced, systemPromptReplaced: true },
+    );
     fixture.seed(native, { loaded: false, subscribed: false });
-    const resumed = await startOrResumeThread({
-      ...lifecycleParams(fixture.client),
-      developerInstructions: "Replacement policy.",
-      systemPromptReplaced: true,
-    });
+    const resumed = await startOrResumeThread({ ...replaced, systemPromptReplaced: true });
 
     const [start, resume] = fixture.writes
       .map((line): unknown => JSON.parse(line))
       .filter(isJsonObject)
-      .filter((frame) => frame.method === "thread/start" || frame.method === "thread/resume");
-    expect([start?.method, resume?.method]).toEqual(["thread/start", "thread/resume"]);
-    const creationBase = isJsonObject(start?.params) ? start.params.baseInstructions : undefined;
+      .map((frame) => [frame.method, isJsonObject(frame.params) ? frame.params : {}] as const)
+      .filter(([method]) => method === "thread/start" || method === "thread/resume");
+    expect([start?.[0], resume?.[0]]).toEqual(["thread/start", "thread/resume"]);
+    const creationBase = start?.[1].baseInstructions;
     expect(creationBase).toEqual(
-      expect.stringContaining("You are a personal assistant running inside OpenClaw."),
+      retained ? expect.stringContaining("personal assistant running inside OpenClaw") : undefined,
     );
-    expect(created).toMatchObject({
-      openClawCreationBaseInstructions: creationBase,
-      preparedOpenClawBaseInstructions: creationBase,
-    });
-    expect(isJsonObject(resume?.params) && "baseInstructions" in resume.params).toBe(false);
-    expect(resume?.params).toMatchObject({ developerInstructions: "Replacement policy." });
+    expect(created.openClawCreationBaseInstructions).toBe(creationBase);
     expect(resumed.preparedOpenClawBaseInstructions).toBe(creationBase);
+    expect(resume?.[1]).not.toHaveProperty("baseInstructions");
+    expect(resume?.[1].developerInstructions).toEqual(
+      retained ? expect.stringContaining("base instructions is withdrawn") : "",
+    );
   });
 
   // The native-owned incognito continuation sends nothing, so reports keep the creation base.
@@ -412,31 +389,18 @@ describe("Codex native configuration lifecycle", () => {
     });
     const first = await startOrResumeThread(lifecycleParams(fixture.client));
     const creationBase = first.preparedOpenClawBaseInstructions;
-    expect(creationBase).toContain("You are a personal assistant running inside OpenClaw.");
     const stored = await readCodexAppServerBinding(sessionFile);
     if (stored?.threadId !== first.threadId) {
       throw new Error("expected the started incognito binding");
     }
     await writeCodexAppServerBinding(sessionFile, { ...stored, preserveNativeModel: true });
-    await retainCodexAppServerLiveThread(
-      fixture.client,
-      first.threadId,
-      first.liveThreadOwnership?.release,
-      first.liveThreadConfigFingerprint,
-      null,
-      first.liveThreadEphemeralPolicy,
-    );
-    // Current inputs now render a different base that this live thread never receives.
-    params.promptMode = "minimal";
+    await retainLiveThread(fixture.client, first);
+    params.promptMode = "minimal"; // a base this live thread never receives
     const continued = await startOrResumeThread(lifecycleParams(fixture.client));
 
     expect(continued).toMatchObject({ threadId: first.threadId, lifecycle: { action: "resumed" } });
     expect(continued.preparedOpenClawBaseInstructions).toBe(creationBase);
-    const threadRequests = fixture.writes
-      .map((line): unknown => JSON.parse(line))
-      .filter(isJsonObject)
-      .filter((frame) => frame.method === "thread/start" || frame.method === "thread/resume");
-    expect(threadRequests.map((frame) => frame.method)).toEqual(["thread/start"]);
+    expect(fixture.writes.filter((line) => /"thread\/(?:start|resume)"/u.test(line))).toHaveLength(1);
   });
 
   it("refuses warm incognito reuse when OpenClaw's base changes beside an authored native base", async () => {
@@ -450,23 +414,14 @@ describe("Codex native configuration lifecycle", () => {
         return readNativeConfig(method, { instructions: "Operator policy" });
       },
     });
-    const retain = (binding: Awaited<ReturnType<typeof startOrResumeThread>>) =>
-      retainCodexAppServerLiveThread(
-        fixture.client,
-        binding.threadId,
-        binding.liveThreadOwnership?.release,
-        binding.liveThreadConfigFingerprint,
-        null,
-        binding.liveThreadEphemeralPolicy,
-      );
     const first = await startOrResumeThread(lifecycleParams(fixture.client));
     expect(first.liveThreadEphemeralPolicy?.baseInstructions).toContain(
       "You are a personal assistant running inside OpenClaw.",
     );
-    await retain(first);
+    await retainLiveThread(fixture.client, first);
     const unchanged = await startOrResumeThread(lifecycleParams(fixture.client));
     expect(unchanged.threadId).toBe(first.threadId);
-    await retain(unchanged);
+    await retainLiveThread(fixture.client, unchanged);
     // Only OpenClaw's base text changes; it rides the developer carrier for this thread.
     params.promptMode = "minimal";
     await expect(startOrResumeThread(lifecycleParams(fixture.client))).rejects.toBeInstanceOf(

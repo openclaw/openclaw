@@ -852,13 +852,6 @@ describe("Codex app-server turn params", () => {
         ),
         developerInstructions: resumeParams.developerInstructions,
       });
-      const startParams = await buildThreadStartParams(params, {
-        cwd: params.workspaceDir ?? "/workspace",
-        dynamicTools: [],
-        appServer,
-      });
-      // Warm reuse compares the resume request with the creation request.
-      expect(startParams.baseInstructions).toBe(resumeParams.baseInstructions);
       expect(resumeParams.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
       const turnParams = await buildTurnStartParams(params, {
         threadId: "thread-1",

@@ -255,6 +255,7 @@ export async function prepareCodexThreadRequestContext(
     preserveNativeModel: binding.preserveNativeModel === true,
     nativeModelProvider:
       binding.connectionScope === "supervision" ? binding.modelProvider : undefined,
+    openClawCreationBaseInstructions: binding.openClawCreationBaseInstructions,
     hostSystemAgentActive: options.preflight.hostSystemAgentActive,
     restrictedToolSurfaceInheritedMcpServerNames:
       options.preflight.restrictedToolSurfaceInheritedMcpServerNames,
@@ -305,11 +306,7 @@ export async function prepareCodexThreadRequestContext(
       ),
     // Reports for a resumed thread count the base it holds, including a retained creation base.
     resolveRetainedOpenClawBaseInstructions: (binding: CodexAppServerThreadBinding) =>
-      resolveCodexRetainedOpenClawBaseInstructions(
-        params.params,
-        resumeOptions(binding),
-        binding.openClawCreationBaseInstructions,
-      ),
+      resolveCodexRetainedOpenClawBaseInstructions(params.params, resumeOptions(binding)),
     throwIfAborted: options.throwIfAborted,
   };
 }

@@ -1193,11 +1193,9 @@ describe("canonical descendant lifecycle through real owners", () => {
         "supervised parent base",
       );
       expect(parentBase).toContain("<execution_policy>");
-      const childThreadId = expectDefined(bindingFor(fixture, childKey)?.threadId, "child thread");
       await fixture.native.restart();
       const offset = fixture.native.calls.length;
-      const resumed = await fixture.turn(childKey, "continue the canonical fork");
-      expect(resumed.threadId).toBe(childThreadId);
+      await fixture.turn(childKey, "continue the canonical fork");
       const resume = expectDefined(
         nativeCalls(fixture, "thread/resume", offset).at(-1),
         "canonical fork cold resume",

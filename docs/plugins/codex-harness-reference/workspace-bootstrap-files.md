@@ -48,7 +48,9 @@ instructions only on new threads. OpenClaw then sends no base and does not move 
 policy into the developer instructions, so a new thread keeps Codex's own model
 prompt or the authored native base. An existing thread keeps the base saved when it
 was created until it rotates to a fresh thread, because Codex restores that saved
-base when a resume sends none. Reports count that saved text while it stays active.
+base when a resume sends none. Reports count that saved text while it stays active,
+and that thread's configured developer instructions start with a notice withdrawing it, so
+the withdrawal survives native compaction.
 
 Ordinary incognito turns can reuse unchanged generic policy, but changed or emptied
 policy is rejected without sending another native turn or discarding the live
