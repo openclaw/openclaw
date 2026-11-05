@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +15,7 @@ import {
 } from "./project-preparation.test-support.js";
 import { createProjectSetupScript } from "./project-setup-script.js";
 import { prepareWorkerProjectSnapshot, workerProjectSeedKey } from "./workspace-git-base.js";
+import { workspaceStatIdentity } from "./workspace-hash-memo.js";
 import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -564,6 +565,21 @@ cat input.txt >> "$HOME/count"
     expect(completed.entries.some((entry) => entry.path === "generated/result")).toBe(true);
     expect(await readText(f.seed, "input.txt")).toBe("prepared base\n");
     expect(await readText(a.workspaceDir, "input.txt")).toBe("prepared base\nbuilt\n");
+    const savedHashes = JSON.parse(
+      await readText(
+        a.homeDir,
+        ".openclaw-worker",
+        "manifests",
+        `${a.preparedManifestRef.slice(7)}.memo`,
+      ),
+    );
+    expect(savedHashes).toContainEqual([
+      workspaceStatIdentity(
+        "worker",
+        await fs.stat(path.join(a.workspaceDir, "input.txt"), { bigint: true }),
+      ),
+      createHash("sha256").update("prepared base\nbuilt\n").digest("hex"),
+    ]);
     expect((await prepare(f)).preparedWorkspace).toEqual(a);
     expect(await readText(a.homeDir, "count")).toBe("prepared base\nbuilt\n");
     await fs.writeFile(path.join(f.repository, "input.txt"), "changed B\n");

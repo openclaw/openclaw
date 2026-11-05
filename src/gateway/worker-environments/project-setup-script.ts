@@ -321,6 +321,9 @@ const runSetup = (command, workspaceDir, homeDir) => {
   if (fresh || changed) {
     const completed = new Map([[sourceManifestRef, sourceBytes], [preparedManifestRef, preparedBytes]]);
     for (const [ref, bytes] of completed) fs.writeFileSync(path.join(manifestRoot, ref.slice(7) + ".json"), bytes, { flag: "wx", mode: 0o600 });
+    // Carry the prepared tree's stat hashes into the captured home; seed inodes differ.
+    try { fs.copyFileSync(path.join(workerRoot, "manifests", preparedManifestRef.slice(7) + ".memo"), path.join(manifestRoot, preparedManifestRef.slice(7) + ".memo")); }
+    catch { /* Optional cache: registration can always hash the tree. */ }
     const completionDirectory = ownedDirectory(completionRoot, sourceManifestRef.slice(7), true);
     // Publish this content-addressed pair last. Root B/P artifacts alone cannot
     // turn an interrupted setup into a reusable completed environment.
