@@ -33,7 +33,9 @@ public enum GatewayCustomHeaders {
         return result
     }
 
-    private static func isValidName(_ name: String) -> Bool {
+    /// HTTP token check for an already trimmed name. An empty string is not a stored name;
+    /// callers reject that separately.
+    public static func isValidName(_ name: String) -> Bool {
         name.utf8.allSatisfy { byte in
             switch byte {
             case 48...57, 65...90, 97...122:
