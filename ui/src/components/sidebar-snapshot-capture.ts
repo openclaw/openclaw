@@ -11,7 +11,7 @@ import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { hasSidebarListFilter } from "./session-data-events.ts";
 import { sidebarSessionBadgeFacts } from "./session-row-badge-presentation.ts";
 import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
-import { sidebarOnlineOrder } from "./sidebar-online-state.ts";
+import { resolveSidebarOnline, sidebarOnlineOrder } from "./sidebar-online-state.ts";
 import {
   parseSidebarSnapshot,
   snapshotSections,
@@ -60,7 +60,10 @@ export function isSidebarSnapshotSettled(host: AppSidebarRenderHost): boolean {
     return false;
   }
   if (
-    host.sessionData.ownerCountsRequired &&
+    host.navigationView === "online" &&
+    host.navigationVisible &&
+    !host.navigationCollapsed &&
+    resolveSidebarOnline(host).users.some((person) => person.identity?.type === "profile") &&
     host.sessionData.ownerCounts.counts === null &&
     host.sessionData.ownerCounts.error === null
   ) {
@@ -101,7 +104,7 @@ export function captureSidebarSnapshotModel(
       host.navigationCatalog.dashboards?.readSucceeded !== true) ||
     host.sessionData.sessionListError !== null ||
     context.sessions.state.error !== null ||
-    host.sessionData.ownerCounts.error !== null ||
+    (host.navigationView === "online" && host.sessionData.ownerCounts.error !== null) ||
     (host.sidebarAgentsMode === "roster" && roster.error !== null) ||
     (context.plugins.registryStatus !== "complete" && !host.sidebarPluginSnapshot)
   ) {
