@@ -130,7 +130,7 @@ describe("memory index", () => {
         code: "ERR_INVALID_STATE",
       }),
     });
-    using sync = vi
+    using _sync = vi
       .spyOn(manager as unknown as MaintenanceFields, "syncMemoryFiles")
       .mockRejectedValue(failure);
     memoryWarnings.mockClear();
