@@ -260,13 +260,14 @@ describe("ClickClack discussion service", () => {
     expect(other.updateChannel).not.toHaveBeenCalled();
   });
 
-  it.each([1, 2])("rechecks a reset during session read %s", async (changedRead) => {
+  it.each(["initial", "after-create"])("rechecks a reset during %s session read", async (phase) => {
     h.setSessionEntry({ sessionId: "old", label: "Old" });
     const key = "agent:main:reset";
-    let reads = 0;
+    let reset = false;
     h.runtime.agent.session.getSessionEntryAsync = async (params) => {
       const prepared = h.runtime.agent.session.getSessionEntry(params);
-      if (++reads === changedRead) {
+      if (!reset && (phase === "initial" || h.createChannel.mock.calls.length > 0)) {
+        reset = true;
         h.setSessionEntry({ sessionId: "new", label: "Next", category: "Next" });
       }
       return prepared;
