@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { publishSqliteCommittedState } from "../../infra/sqlite-post-commit.js";
 import {
@@ -6,7 +7,9 @@ import {
   type SqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { isStateDatabaseReadAdmissionInvalidatedError } from "../../state/openclaw-state-db-async-lifecycle.js";
 import {
+  assertPublishedOpenClawStateDatabaseLifecycle,
   registerOpenClawStateDatabaseAsyncResource,
   registerOpenClawStateDatabaseLifecycleListener,
 } from "../../state/openclaw-state-db-cache.js";
@@ -71,17 +74,21 @@ registerOpenClawStateDatabaseLifecycleListener((event) => {
 export async function createWorkerEnvironmentStore(
   options: { database?: OpenClawStateDatabase; now?: () => number } = {},
 ) {
-  const context = captureOpenClawStateWorkerContext(
+  const inCreationScope = AsyncLocalStorage.snapshot();
+  let context = captureOpenClawStateWorkerContext(
     options.database ? { path: options.database.path } : {},
   );
   const pathname = context.admission.databasePath;
   const now = options.now ?? Date.now;
-  const owner = workerEnvironmentProjections.acquire(() => context.admission.identity);
-  const releaseOwner = owner.retain();
+  let owner = workerEnvironmentProjections.acquire(() => context.admission.identity);
+  let releaseOwner = owner.retain();
   const revocationSubscriptions = new Set<() => void>();
   const operations = new Set<Promise<unknown>>();
   let closed = false;
   let closing: Promise<void> | undefined;
+  let retiring: Promise<void> | undefined;
+  let recovering: Promise<void> | undefined;
+  let versionOffset = 0;
   const assertActive = () => {
     if (closed || !owner.active) {
       throw new WorkerEnvironmentInventoryClosedError();
@@ -270,23 +277,34 @@ export async function createWorkerEnvironmentStore(
     });
     return track(operation);
   }
+  const retire = (retireInventory = true) =>
+    (retiring ??= (async () => {
+      await Promise.allSettled(operations);
+      if (retireInventory) {
+        owner.close();
+      }
+      if (releaseOwner() && !retireInventory) {
+        workerEnvironmentProjections.remove(owner);
+      }
+    })());
   const close = () =>
     (closing ??= (async () => {
-      await Promise.allSettled(operations);
+      await retire(false);
+      await Promise.allSettled(recovering ? [recovering] : []);
       closed = true;
       for (const unsubscribe of revocationSubscriptions) {
         unsubscribe();
       }
       revocationSubscriptions.clear();
       unregister();
-      if (releaseOwner()) {
-        workerEnvironmentProjections.remove(owner);
-      }
     })());
   const unregister = registerOpenClawStateDatabaseAsyncResource({
     close: async (identity) => {
-      if (!identity || identity.key === context.admission.identity.key) {
+      if (!identity) {
         await close();
+      } else if (identity.key === context.admission.identity.key) {
+        // Database drainage retires this generation, not the live store facade.
+        await retire();
       }
     },
   });
@@ -313,7 +331,61 @@ export async function createWorkerEnvironmentStore(
     return reservations;
   };
   const ready = async () => {
-    assertActive();
+    if (closing) {
+      throw new WorkerEnvironmentInventoryClosedError();
+    }
+    try {
+      assertActive();
+    } catch (error) {
+      if (
+        closed ||
+        closing ||
+        (!(error instanceof WorkerEnvironmentInventoryClosedError) &&
+          !isStateDatabaseReadAdmissionInvalidatedError(error))
+      ) {
+        throw error;
+      }
+      await (recovering ??= (async () => {
+        await retire();
+        if (closing) {
+          throw new WorkerEnvironmentInventoryClosedError();
+        }
+        assertPublishedOpenClawStateDatabaseLifecycle();
+        const previous = context.admission.identity;
+        const next = inCreationScope(() =>
+          captureOpenClawStateWorkerContext({
+            path: pathname,
+            env: context.initializationEnvironment,
+          }),
+        );
+        if (
+          next.admission.identity.key !== previous.key ||
+          next.admission.identity.birthtime !== previous.birthtime
+        ) {
+          throw new Error("Worker environment inventory database identity changed", {
+            cause: error,
+          });
+        }
+        versionOffset += owner.version() + 1;
+        context = next;
+        owner = workerEnvironmentProjections.acquire(() => context.admission.identity);
+        releaseOwner = owner.retain();
+        retiring = undefined;
+        reservationVersion = -1;
+        try {
+          await owner.enqueue(async () => {
+            const facts = await inCreationScope(() => snapshot());
+            owner.install(facts, owner.nextSequence(), false);
+          });
+          sessionChanges.emit({ all: true, scope: "worker-environments" });
+        } catch (recoveryError) {
+          await retire();
+          throw recoveryError;
+        }
+      })().finally(() => {
+        recovering = undefined;
+      }));
+    }
     await owner.ready();
     assertActive();
   };
@@ -326,7 +398,7 @@ export async function createWorkerEnvironmentStore(
         owner.hasSessionAttachment(requireWorkerEnvironmentString(environmentId, "id")),
       );
     },
-    inventoryVersion: () => read(owner.version),
+    inventoryVersion: () => read(() => versionOffset + owner.version()),
     get: (id: string) => read(() => owner.get(requireWorkerEnvironmentString(id, "id"))),
     list: () => read(() => owner.list()),
     listForReconcile: () => read(() => owner.list(true)),

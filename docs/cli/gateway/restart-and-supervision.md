@@ -51,6 +51,12 @@ If the worker inventory has already retired when shutdown starts, the Gateway
 still drains its retained worker tunnels and workspace transfers. Inventory
 retirement alone does not fail shutdown; other cleanup failures still do.
 
+While the Gateway is running, a temporary state-database read-admission seal
+pauses worker inventory access. After the same database is admitted again, the
+next reconciliation reloads the inventory and resumes worker maintenance without
+a Gateway restart. Closed stores stay closed during shutdown, and database
+replacement or corruption still requires recovery through the database owner.
+
 If work still ignores cancellation at the shutdown deadline under systemd or launchd,
 a native service stop or supervisor-owned restart logs
 the remaining work categories and pending owners (including command lanes and
