@@ -109,53 +109,59 @@ function sentProgress(sourceProgress: boolean): Partial<EmbeddedRunAttemptResult
 
 beforeEach(() => vi.clearAllMocks());
 
-it("keeps an unfinished compaction timeout out of successful command settlement", async () => {
-  const { result } = await resolveTerminal({
-    terminal: { kind: "timeout", phase: "compaction", source: "runtime", aborted: true },
-  });
-  expect(result.meta.error).toMatchObject({ kind: "incomplete_turn", fallbackSafe: false });
-  expect(result.payloads).toContainEqual({
-    text: expect.stringContaining("compaction"),
-    isError: true,
-  });
-  const terminal = buildRunEntryTerminal({
-    result,
-    outcome: resolveRunEntryTerminalOutcome({ result, fallbackExhausted: false }),
-    behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
-    runId: "compaction-timeout",
-    sessionId: "session",
-    requested: { provider: "openai", model: "synthetic" },
-  });
-  expect(terminal.outcome.status).toBe("timeout");
-  const emitted: agentEvents.AgentEventPayload[] = [];
-  const unsubscribe = agentEvents.onAgentEvent((event) => emitted.push(event));
-  try {
-    createAgentCommandLifecycle({
-      runId: "compaction-timeout",
-      lifecycleGeneration: agentEvents.getAgentEventLifecycleGeneration,
-      startedAt: 1,
-      state: {
-        lifecycleFinishing: false,
-        lifecycleEnded: false,
-      },
-    }).emitResultError(result, false, terminal);
-    const event = emitted.find((candidate) => candidate.runId === "compaction-timeout");
-    expect(event).toBeDefined();
-    if (!event) {
-      throw new Error("Missing command terminal event");
-    }
-    expect(deriveGatewaySessionLifecycleSnapshot({ event })).toMatchObject({
-      status: "timeout",
-      lastRunError: expect.stringContaining("compaction"),
+it.each(["compaction", "tool_execution"] as const)(
+  "keeps an unfinished %s timeout out of successful command settlement",
+  async (phase) => {
+    const explanation = phase === "compaction" ? "compaction" : "unknown outcome";
+    const { result } = await resolveTerminal({
+      terminal: { kind: "timeout", phase, source: "runtime", aborted: true },
     });
-  } finally {
-    unsubscribe();
-  }
-  expect(result.meta.timeoutPhase).toBeUndefined();
-  expect(result.meta.providerStarted).toBeUndefined();
-  expect(markEmbeddedRunAuthProfileSuccess).not.toHaveBeenCalled();
-  expect(reportEmbeddedRunSuccessfulAuthBinding).not.toHaveBeenCalled();
-});
+    expect(result.meta.error).toMatchObject({ kind: "incomplete_turn", fallbackSafe: false });
+    expect(result.payloads).toContainEqual({
+      text: expect.stringContaining(explanation),
+      isError: true,
+    });
+    const terminal = buildRunEntryTerminal({
+      result,
+      outcome: resolveRunEntryTerminalOutcome({ result, fallbackExhausted: false }),
+      behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
+      runId: "compaction-timeout",
+      sessionId: "session",
+      requested: { provider: "openai", model: "synthetic" },
+    });
+    expect(terminal.outcome.status).toBe("timeout");
+    const emitted: agentEvents.AgentEventPayload[] = [];
+    const unsubscribe = agentEvents.onAgentEvent((event) => emitted.push(event));
+    try {
+      createAgentCommandLifecycle({
+        runId: "compaction-timeout",
+        lifecycleGeneration: agentEvents.getAgentEventLifecycleGeneration,
+        startedAt: 1,
+        state: {
+          lifecycleFinishing: false,
+          lifecycleEnded: false,
+        },
+      }).emitResultError(result, false, terminal);
+      const event = emitted.find((candidate) => candidate.runId === "compaction-timeout");
+      expect(event).toBeDefined();
+      if (!event) {
+        throw new Error("Missing command terminal event");
+      }
+      expect(deriveGatewaySessionLifecycleSnapshot({ event })).toMatchObject({
+        status: "timeout",
+        lastRunError: expect.stringContaining(explanation),
+      });
+    } finally {
+      unsubscribe();
+    }
+    expect(result.meta.timeoutPhase).toBe(
+      phase === "tool_execution" ? "tool_execution" : undefined,
+    );
+    expect(result.meta.providerStarted).toBeUndefined();
+    expect(markEmbeddedRunAuthProfileSuccess).not.toHaveBeenCalled();
+    expect(reportEmbeddedRunSuccessfulAuthBinding).not.toHaveBeenCalled();
+  },
+);
 
 it("keeps an external cancellation during compaction distinct from a timeout", async () => {
   const text = "Completed answer must not escape an external cancellation.";
@@ -228,12 +234,13 @@ it.each<[string, number, Partial<EmbeddedRunAttemptResult>?, string?]>([
       expect(result.payloads?.[0]?.mediaUrls).toEqual(attempt.toolMediaUrls);
     }
     expect(result.payloads?.at(-1)).toEqual({
-      text: expect.stringContaining("Request timed out"),
+      text: "Tool execution timed out with an unknown outcome. Check the current state before repeating the operation.",
       isError: true,
     });
     expect(result.meta).toMatchObject({
       modelFallbackStopReason: "agent_run_terminal_timeout",
       livenessState: "blocked",
+      timeoutPhase: "tool_execution",
       error: { kind: "incomplete_turn", fallbackSafe: false },
     });
     expect(result.meta.executionTrace?.attempts ?? []).not.toContainEqual(

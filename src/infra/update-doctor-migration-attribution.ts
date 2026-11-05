@@ -151,7 +151,7 @@ export function runUpdateSqliteMigration<T>(
   db: DatabaseSync,
   pathname: string,
   operation: () => T,
-  options?: { retainExclusive?: boolean; created?: boolean },
+  options?: { retainExclusive?: boolean; created?: boolean; close?: () => void },
 ): T {
   const context = captures.getStore();
   if (!context?.capture) {
@@ -177,6 +177,9 @@ export function runUpdateSqliteMigration<T>(
   return runWithSqliteCleanup(
     {
       release() {
+        if (options?.close) {
+          capture.openedSqlitePaths?.delete(key);
+        }
         try {
           if (db.isOpen && mode !== "exclusive" && !options?.retainExclusive) {
             if (db.isTransaction) {
@@ -238,6 +241,7 @@ export function runUpdateSqliteMigration<T>(
           assertCurrent();
           // Checkpoint under native exclusion so this postimage survives the source handle closing.
           truncateSqliteWal(db, pathname);
+          options?.close?.();
           const after = readSqliteGeneration(pathname);
           assertCurrent();
           capture.accept(key, before, after);

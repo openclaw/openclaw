@@ -31,8 +31,10 @@ import { routeLogsToStderr } from "../logging/console.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { installDatabaseProcessRole } from "./database-engine/admission-scope.js";
@@ -45,6 +47,7 @@ import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import { createDoctorServiceInspectionBudget } from "./update-doctor-deadline.js";
 import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+  createUpdateDoctorDatabaseWriteCapture,
   recordUpdateDoctorConfigWriteRefusal,
   writeUpdatePostInstallDoctorResult,
 } from "./update-doctor-result.js";
@@ -338,7 +341,19 @@ async function runDelegatedDoctor(input: DecodedUpdateDoctorInput): Promise<void
       const { runDoctorHealthFlow } = await import("../flows/doctor-health.js");
       assertCurrent();
       remaining();
+      const databaseWriteCapture = isStatePostgres()
+        ? undefined
+        : createUpdateDoctorDatabaseWriteCapture(input.databaseGenerations, {
+            env: process.env,
+            root: input.root,
+            signal: getAsyncWorkSignal() ?? new AbortController().signal,
+            pluginOwners: input.databasePluginOwners,
+            assertCurrent,
+            warn: (message) => process.stderr.write(message + "\n"),
+          });
+      await databaseWriteCapture?.admit();
       await stopSupervisedPredecessorGateway(input, {
+        databaseWriteCapture,
         root: input.root,
         assertCurrent,
         serviceInspectionBudget: remaining,
@@ -366,6 +381,7 @@ async function runDelegatedDoctor(input: DecodedUpdateDoctorInput): Promise<void
           inputHash: input.configInputHash,
           assertCurrent,
           commandAuthority,
+          databaseWriteCapture,
           originalRecoveryCapture: {
             runId: input.runId,
             installRoot: captureUpdateCommandExecutorAuthority(fence, input.runId).installKey,

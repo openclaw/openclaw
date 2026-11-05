@@ -41,7 +41,7 @@ describe("screen tool", () => {
     ).toBe(true);
   });
 
-  it("uses a flat action enum and requires the UI capability", () => {
+  it("omits unsupported actions and requires the base UI capability", () => {
     const tool = createScreenTool();
     expect(tool.requiredClientCaps).toEqual([GATEWAY_CLIENT_CAPS.UI_COMMANDS]);
     expect(tool.parameters).toMatchObject({
@@ -52,6 +52,18 @@ describe("screen tool", () => {
         },
       },
     });
+    expect(tool.parameters).not.toMatchObject({
+      properties: { action: { enum: expect.arrayContaining(["github_identity_settings"]) } },
+    });
+  });
+
+  it("exposes GitHub identity settings only for a capable Control UI", () => {
+    const tool = createScreenTool({ githubIdentitySettingsAvailable: true });
+
+    expect(tool.parameters).toMatchObject({
+      properties: { action: { enum: expect.arrayContaining(["github_identity_settings"]) } },
+    });
+    expect(tool.description).toContain("github_identity_settings");
   });
 
   it.each([
@@ -75,6 +87,35 @@ describe("screen tool", () => {
     await tool.execute("call", { action });
 
     expect(calls).toEqual([["ui.command", { command, sessionKey: "agent:main:main" }]]);
+    expect(Value.Check(UiCommandParamsSchema, calls[0]?.[1])).toBe(true);
+  });
+
+  it("maps GitHub identity settings for a capable Control UI", async () => {
+    const { calls } = createGatewayRecorder();
+    const tool = createScreenTool({
+      agentSessionKey: "agent:main:main",
+      githubIdentitySettingsAvailable: true,
+    });
+
+    await tool.execute("call", { action: "github_identity_settings" });
+
+    expect(calls).toEqual([
+      [
+        "ui.command",
+        {
+          command: { kind: "agent-github-settings" },
+          sessionKey: "agent:main:main",
+        },
+      ],
+    ]);
+  });
+
+  it("rejects GitHub identity settings for an older Control UI", async () => {
+    const tool = createScreenTool();
+
+    await expect(tool.execute("call", { action: "github_identity_settings" })).rejects.toThrow(
+      "unavailable in this Control UI",
+    );
   });
 
   it.each(["terminal_show", "browser_show"])("passes dock for %s", async (action) => {

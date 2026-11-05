@@ -153,11 +153,11 @@ export async function sendGatewayHello(
     buildRequestContext().getGatewayMethodRegistry?.(),
   );
   const ingress = getRemoteControlUiIngressContext(context.handler.upgradeReq);
+  const controlUiBasePath = normalizeControlUiBasePath(
+    context.configSnapshot.gateway?.controlUi?.basePath,
+  );
   const controlUiLocation = ingress
-    ? {
-        origin: ingress.publicOrigin,
-        basePath: normalizeControlUiBasePath(context.configSnapshot.gateway?.controlUi?.basePath),
-      }
+    ? { origin: ingress.publicOrigin, basePath: controlUiBasePath }
     : resolveControlUiLinkLocation(context.configSnapshot);
   // Gateway runtime provenance is independent of the UI artifact source.
   // Consumers use the source field to decide whether UI build comparison applies.
@@ -246,6 +246,9 @@ export async function sendGatewayHello(
     snapshot,
     ...(controlUiLocation
       ? { controlUiUrl: `${controlUiLocation.origin}${controlUiLocation.basePath}` }
+      : {}),
+    ...(controlUiBasePath && context.configSnapshot.gateway?.controlUi?.enabled !== false
+      ? { controlUiBasePath }
       : {}),
     ...(controlUiTabs.length > 0 ? { controlUiTabs } : {}),
     ...(controlUiWidgetKinds.length > 0 ? { controlUiWidgetKinds } : {}),

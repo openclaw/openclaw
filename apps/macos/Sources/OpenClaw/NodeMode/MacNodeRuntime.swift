@@ -795,6 +795,9 @@ extension MacNodeRuntime {
 
     func shutdown() async {
         await self.codexThreadCatalogClient.shutdown()
+        // Terminal stop settles computer actions through releaseHeldComputerInput
+        // first, so no window observation can still write a capture.
+        WindowObservationArtifacts.removeAll(in: WindowObservationArtifacts.processDirectory)
     }
 }
 

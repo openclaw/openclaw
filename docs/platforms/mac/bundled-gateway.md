@@ -31,8 +31,11 @@ their always-on service.
 For local connections, the app prefers the configured `gateway.auth.token` or
 `gateway.auth.password` over `OPENCLAW_GATEWAY_TOKEN` or
 `OPENCLAW_GATEWAY_PASSWORD` inherited by the app, matching Gateway startup.
-Environment credentials remain fallbacks when no configured credential resolves.
-Remote connections retain their environment overrides.
+Typed env SecretRefs use the selected provider and its allowlist. The app reads
+the referenced value from the Gateway service environment first, then the app
+environment. An invalid, denied, or missing active typed reference does not fall
+back to an unrelated credential. Only the selected authentication surface is sent
+to the Gateway. Remote connections retain their environment overrides.
 
 Before launching an app-hosted Gateway, the app saves a local authentication
 token when neither configuration nor the child environment supplies credentials
@@ -86,7 +89,10 @@ credential preparation before native admission. That native handoff also settles
 pending local runtime-pin migration before the app chooses its Gateway runtime.
 It preserves explicit pin data rather than forcing a new seed; a migration
 conflict prevents startup and retains recovery guidance. Gateway and node
-startup use the same credential migration owner. Ordinary pending migrations
+startup use the same credential migration owner. When an in-place app update
+leaves the previous build's app-managed Gateway service running, that Gateway
+still owns the state, so the app stops it, prepares credentials, and then
+installs the service on its own runtime. Ordinary pending migrations
 and validated remounts
 complete automatically without a manual Doctor command or a recovery prompt.
 A recognized credential-only native version-zero database can be

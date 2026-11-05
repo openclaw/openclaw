@@ -17,6 +17,7 @@ export type DoctorMaintenanceParams = {
   runId?: string;
   assertCurrent?: () => void;
   databaseGenerations?: UpdateDatabaseGenerations;
+  databaseWriteCapture?: import("../infra/update-doctor-result.js").UpdateDoctorWriteAuthority["databaseWriteCapture"];
   databasePluginOwners?: import("../infra/database-engine/port-descriptor.js").DatabasePortPluginOwners;
   /** Public update repair names the next step when it leaves a managed Gateway stopped. */
   reportStoppedService?: boolean;

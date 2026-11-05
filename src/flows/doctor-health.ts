@@ -226,6 +226,7 @@ async function runDoctorHealthFlowWithResult(
         runtime: repairRuntime,
         assertCurrent: writeAuthority?.assertCurrent,
         databaseGenerations: writeAuthority?.databaseGenerations,
+        databaseWriteCapture: writeAuthority?.databaseWriteCapture,
         databasePluginOwners: writeAuthority?.databasePluginOwners,
         serviceInspectionDeadlineAtMs: writeAuthority?.serviceInspectionDeadlineAtMs,
         beforeStateMutation: createDoctorOriginalCaptureHook({

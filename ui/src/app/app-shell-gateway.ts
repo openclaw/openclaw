@@ -1,7 +1,7 @@
 import type { UiCommandParams } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../api/gateway.ts";
-import { isSessionRouteId } from "../app-route-paths.ts";
+import { isSessionRouteId, pathForAgentPanel } from "../app-route-paths.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
@@ -327,6 +327,15 @@ export class ShellGatewayOwner {
     const commandParams = event.payload as UiCommandParams;
     const { command } = commandParams;
     if (!command) {
+      return;
+    }
+    if (command.kind === "agent-github-settings") {
+      const agentId = commandParams.agentId?.trim();
+      if (agentId) {
+        context.navigate("agents", {
+          pathname: pathForAgentPanel(agentId, "tools", context.basePath),
+        });
+      }
       return;
     }
     if (command.kind === "sidebar") {
