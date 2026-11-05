@@ -3,7 +3,7 @@ import type { CDPSession } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
+import { scrollChatThreadToTop, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Expanded video gallery" });
@@ -111,7 +111,7 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}chat`);
           await gateway.waitForRequest("sessions.messages.subscribe");
           // Lazy media admission creates the expand button only near the viewport.
-          await page.getByText("before.mp4", { exact: true }).scrollIntoViewIfNeeded();
+          await scrollChatThreadToTop(page);
           const expand = page.getByRole("button", {
             name: "Expand before.mp4 in the media overlay",
             exact: true,

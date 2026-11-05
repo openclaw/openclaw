@@ -584,7 +584,9 @@ async function resolveCodexBoundedTurnModel(params: {
     "model/list",
     { limit: null, cursor: null, includeHidden: params.selection.mode === "required" },
     {
-      timeoutMs: Math.min(params.timeoutMs, 5_000),
+      // Native cold discovery can spend five seconds refreshing before returning its catalog.
+      // The enclosing turn deadline already bounds this request.
+      timeoutMs: params.timeoutMs,
       signal: params.signal,
       assertCurrent: params.assertCurrent,
     },
@@ -606,7 +608,12 @@ async function resolveCodexBoundedTurnModel(params: {
   const model = params.selection.id;
   const match = listed.find((entry) => entry.model === model || entry.id === model);
   if (!match) {
-    throw new Error(`Codex app-server model not found: ${model}`);
+    throw Object.assign(
+      new Error(
+        `Codex app-server model not found: ${model}. Choose a model advertised by this account/runtime in model/list.`,
+      ),
+      { code: "model_not_found", model },
+    );
   }
   if (params.requiredModalities.includes("image") && !match.inputModalities.includes("image")) {
     throw new Error(`Codex app-server model does not support images: ${model}`);

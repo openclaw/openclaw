@@ -7,7 +7,11 @@ import type { ModelRef } from "../../agents/model-ref-shared.js";
 import { captureAmbientGatewayOperatorAuthority } from "../../gateway/operator-invocation-authority.js";
 import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
 import { createLlmOperatorAuthorizationError } from "./runtime-llm-error.js";
-import type { LlmCompleteCaller, LlmCompleteParams, LlmCompleteResult } from "./types-core.js";
+import type {
+  LlmCompleteCaller,
+  LlmCompleteParams,
+  LlmCompleteResult,
+} from "./runtime-llm.types.js";
 
 type CompletionOperatorSource = {
   operatorAuthority?: AdmittedRunOperatorAuthority;

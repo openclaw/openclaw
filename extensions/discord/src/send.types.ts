@@ -51,7 +51,13 @@ export type DiscordReactOpts = {
   rest?: RequestClient;
   verbose?: boolean;
   retry?: RetryConfig;
+  /** Client/account lifetime; aborting it also stops an issued request's transport. */
   signal?: AbortSignal;
+  /**
+   * Originating invocation cancellation. Drops queued REST work that was never
+   * issued and stops retry waits; already-dispatched requests settle normally.
+   */
+  callerSignal?: AbortSignal;
   timeoutMs?: number;
 };
 

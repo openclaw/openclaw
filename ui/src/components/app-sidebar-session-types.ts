@@ -226,7 +226,6 @@ export type SidebarSessionHovercardRow = Pick<
   | "hasActiveSubagentRun"
   | "lastRunError"
   | "label"
-  | "lastMessagePreview"
   | "expandedParticipants"
   | "participantCount"
   | "participants"

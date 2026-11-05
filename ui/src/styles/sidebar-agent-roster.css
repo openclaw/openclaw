@@ -13,7 +13,7 @@ openclaw-sidebar-agent-roster {
   column-gap: 8px;
   margin-inline: -6px;
   padding-inline: 6px 13px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   corner-shape: superellipse(1.5);
   color: var(--muted);
   font-size: 12px;
@@ -60,7 +60,7 @@ openclaw-sidebar-agent-roster {
   height: auto;
   overflow: visible;
   min-height: 0;
-  margin: 0 0 0 16px;
+  margin: 0 0 0 6px;
   padding-inline-end: 7px;
 }
 .sidebar-recent-session--team:has(> .sidebar-child-session-toggle)
@@ -213,7 +213,7 @@ openclaw-sidebar-agent-roster {
   grid-template-columns: var(--roster-avatar-size) minmax(0, 1fr);
   align-items: center;
   gap: 10px;
-  border-radius: 10px;
+  border-radius: var(--radius-md);
   corner-shape: superellipse(1.5);
   flex: 1;
   align-self: stretch;
@@ -329,6 +329,7 @@ openclaw-sidebar-agent-roster {
 }
 .sidebar-session-team-state .session-glyph__ring {
   inset: 0;
+  mask: var(--spinner-mask);
 }
 @media (hover: none), (pointer: coarse) {
   .sidebar-agent-roster__actions {

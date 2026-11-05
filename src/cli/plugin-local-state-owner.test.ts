@@ -3,23 +3,21 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
+import type { MemorySearchManager } from "../../packages/memory-host-sdk/src/host/search-manager.types.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import { runWithLocalStateMutationOwner } from "../gateway/server-methods/local-state-owner.js";
 import { memorySearchHandlers } from "../gateway/server-methods/memory-search.js";
-import type {
-  GatewayRequestHandler,
-  GatewayRequestHandlerOptions,
-} from "../gateway/server-methods/types.js";
+import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 import {
   acquireGatewayLock,
   readLockPayloadSync,
   resolveGatewayLockPaths,
   type GatewayLockHandle,
 } from "../infra/gateway-lock.js";
-import type { MemoryCliSearchOutcome, MemorySearchManager } from "../memory-host-sdk/host/types.js";
+import type { MemoryCliSearchOutcome } from "../memory-host-sdk/host/types.js";
 import { runWithLocalStateOwner } from "../plugin-sdk/cli-state-owner.js";
 import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
 import { createPluginRuntimeMock } from "../plugin-sdk/test-helpers/plugin-runtime-mock.js";
@@ -240,7 +238,7 @@ let root: string;
 let owner: GatewayLockHandle | null = null;
 let ownerId: string | undefined;
 let registrar: OpenClawPluginCliRegistrar;
-const methods = new Map<string, GatewayRequestHandler>();
+const methods = new Map<string, Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]>();
 const gatewayConfig = {
   plugins: { entries: { "memory-core": { config: { dreaming: { enabled: false } } } } },
   agents: { entries: { main: {} } },

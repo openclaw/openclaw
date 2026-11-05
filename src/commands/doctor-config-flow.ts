@@ -27,6 +27,7 @@ import type { AutomaticHeartbeatRepairAdmission } from "./doctor-automatic-heart
 import { noteConfigAdvisories, noteDoctorHookConfigWarnings } from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
+import { resolveDoctorRepairMode } from "./doctor-repair-mode.js";
 import { createWorkspaceAliasMigrationRepair } from "./doctor-workspace-alias.js";
 import { createDoctorChangesPanelSink } from "./doctor/changes-panel-sink.js";
 import { cronCodexRuntimePolicyTargetKey } from "./doctor/cron/store-migration.js";
@@ -65,7 +66,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   reportFindings?: notes.DoctorFindingReporter;
 }) {
   await using preparingResources = new AsyncDisposableStack();
-  const shouldRepair = params.options.repair === true || params.options.yes === true;
+  const { shouldRepair, nonInteractive } = resolveDoctorRepairMode(params.options);
   const preflight = await runDoctorConfigPreflight({
     retiredStateAdmitted: params.retiredStateAdmitted,
     stateSchemaPreparation: params.stateSchemaPreparation,
@@ -74,6 +75,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     invocationPurpose: "doctor",
     repairPrefixedConfig: shouldRepair,
     doctorOnlyStateMigrations: shouldRepair,
+    deferPluginPackageRepair: nonInteractive && !shouldRepair,
     preparePluginMetadataSnapshot: true,
     ...(params.automaticHeartbeatRepair
       ? { automaticHeartbeatRepair: params.automaticHeartbeatRepair }
@@ -93,7 +95,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     const { collectRecoveryDiskUsage, formatRecoveryDiskUsage } =
       await import("./recovery-disk-usage.js");
     note(
-      formatRecoveryDiskUsage(collectRecoveryDiskUsage({ cfg: baseCfg, env: process.env })),
+      formatRecoveryDiskUsage(await collectRecoveryDiskUsage({ cfg: baseCfg, env: process.env })),
       "Recovery copies (read-only)",
     );
   }

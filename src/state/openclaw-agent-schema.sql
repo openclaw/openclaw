@@ -425,6 +425,20 @@ CREATE INDEX IF NOT EXISTS idx_agent_message_tool_run_outcomes_occurred
 
 -- Receipts outlive Goal clear and session reset so a delayed retry cannot recreate a Goal.
 -- They intentionally have no session FK; bounded retention belongs to the operation owner.
+CREATE TABLE IF NOT EXISTS session_creation_operations (
+  operation_digest TEXT PRIMARY KEY,
+  request_fingerprint TEXT NOT NULL,
+  session_key TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  lifecycle_revision TEXT,
+  role TEXT,
+  scopes_json TEXT NOT NULL,
+  expires_at INTEGER NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS idx_agent_session_creation_operations_expiry
+  ON session_creation_operations(expires_at);
+-- END SESSION CREATION OPERATIONS
+
 CREATE TABLE IF NOT EXISTS session_goal_operations (
   session_key TEXT NOT NULL,
   operation_id TEXT NOT NULL,

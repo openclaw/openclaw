@@ -4,6 +4,7 @@ import path from "node:path";
 import { hasErrnoCode } from "../infra/errno.js";
 import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { isPathInside, relativePluginPathInsideRootSync } from "./path-safety.js";
+import type { BundledPluginReloadSource } from "./plugin-bundled-reload.js";
 import { getPluginCache } from "./plugin-cache.js";
 import { getPluginGenerationMetrics } from "./plugin-generation-metrics.js";
 import type {
@@ -29,6 +30,7 @@ import {
   type PluginPackageCapture,
 } from "./plugin-package-metadata-capture.js";
 import type { PluginNativeArtifactFact } from "./plugin-source-admission.types.js";
+import { readPluginCapturedCode } from "./plugin-source-file.js";
 import type { PluginCapturedSourceFact } from "./plugin-source-verification.js";
 // These owner-defined operations copy captured source trees; their cost scales with
 // package size and filesystem latency rather than the ordinary method deadline.
@@ -55,6 +57,7 @@ type PluginGenerationCaptureArguments = [
   moduleSource?: (filename: string) => string,
   nativeRecovery?: PluginNativeRecovery,
   dependencyLookupBoundary?: Parameters<typeof createPluginDependencyResolver>[0],
+  bundledReloadSource?: BundledPluginReloadSource,
 ];
 const sourceCustody = new AsyncLocalStorage<{
   sources: Map<string, SourceCustody>;
@@ -106,8 +109,15 @@ export function createPluginGenerationCapture<
   ) => T,
 ) {
   return (...args: PluginGenerationCaptureArguments): T => {
-    const [rootDir, entryFile, execute, moduleSource, nativeRecovery, dependencyLookupBoundary] =
-      args;
+    const [
+      rootDir,
+      entryFile,
+      execute,
+      moduleSource,
+      nativeRecovery,
+      dependencyLookupBoundary,
+      bundledReloadSource,
+    ] = args;
     const custody =
       execute && !nativeRecovery && !dependencyLookupBoundary && sourceCustody.getStore();
     if (!custody) {
@@ -118,6 +128,7 @@ export function createPluginGenerationCapture<
       typeof entryFile === "string"
         ? path.resolve(entryFile)
         : entryFile?.map((file) => path.resolve(file)),
+      bundledReloadSource,
     ]);
     let retained = custody.sources.get(key);
     if (!retained) {
@@ -129,6 +140,7 @@ export function createPluginGenerationCapture<
         undefined,
         undefined,
         undefined,
+        bundledReloadSource,
         undefined,
         true,
       );
@@ -142,10 +154,19 @@ export function createPluginGenerationCapture<
     const fork = retained.source.fork();
     try {
       fork.native?.retain(getPluginCache());
-      return create(rootDir, entryFile, execute, moduleSource, undefined, undefined, {
-        source: fork,
-        files: retained.files,
-      });
+      return create(
+        rootDir,
+        entryFile,
+        execute,
+        moduleSource,
+        undefined,
+        undefined,
+        bundledReloadSource,
+        {
+          source: fork,
+          files: retained.files,
+        },
+      );
     } catch (error) {
       fork.dispose();
       throw error;
@@ -463,6 +484,7 @@ export function createPluginGenerationSourceLookup({
 /** Keep first-demand module lookup and admission with the captured source graph. */
 export function createPluginGenerationModuleLookup({
   capturedPaths,
+  capturedDirectories,
   originalSources,
   moduleCaptures,
   metadataCapture,
@@ -474,6 +496,7 @@ export function createPluginGenerationModuleLookup({
   directory,
 }: {
   capturedPaths: Map<string, string>;
+  capturedDirectories: ReadonlySet<string>;
   originalSources: ReadonlyMap<string, string>;
   moduleCaptures: ReadonlyMap<string, PluginModuleCapture>;
   metadataCapture: ReturnType<typeof createPluginPackageMetadataCapture>;
@@ -495,6 +518,10 @@ export function createPluginGenerationModuleLookup({
       originalSources.has(filename) ? packageForFile(filename)?.capturedRoot : undefined,
     assertModuleAvailable,
     prepareModule: markPluginSourcePreparationOperation((filename: string) => {
+      // Directory capture is valid, but selecting that directory as a module is not.
+      if (capturedDirectories.has(filename)) {
+        readPluginCapturedCode(filename, true);
+      }
       const owner = packageForFile(filename);
       const source = originalSources.get(filename);
       const needsEntry =

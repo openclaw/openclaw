@@ -17,6 +17,7 @@ const fail = (message: string) => async () => {
 };
 const lifecycleLease = (leaseId: string) => ({
   leaseId,
+  assertCurrent: expect.any(Function),
   profile: { region: "test" },
   signal: expect.any(AbortSignal),
 });

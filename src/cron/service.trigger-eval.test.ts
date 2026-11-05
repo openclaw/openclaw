@@ -472,6 +472,39 @@ describe("cron trigger evaluation", () => {
     expectScheduled(h, job.id, persisted?.state.nextRunAtMs);
   });
 
+  it("keeps a once trigger armed after malformed evaluator output", async () => {
+    const h = await createHarness({
+      evaluateCronTrigger: async () => ({
+        kind: "error",
+        code: "internal_error",
+        error: "cron trigger script must return an object with boolean fire",
+      }),
+    });
+    const job = await h.cron.add(watcher({ trigger: { script: "return malformed", once: true } }));
+    const dueAt = job.state.nextRunAtMs!;
+
+    await runWhenDue(h.cron, job.id);
+
+    expect(h.runIsolatedAgentJob).not.toHaveBeenCalled();
+    expect(h.cron.getJob(job.id)).toMatchObject({
+      enabled: true,
+      trigger: { once: true },
+      state: {
+        lastRunStatus: "error",
+        triggerEvalCount: 1,
+        nextRunAtMs: expect.any(Number),
+      },
+    });
+    expect(h.cron.getJob(job.id)?.state.lastTriggerFireAtMs).toBeUndefined();
+    expect(h.cron.getJob(job.id)!.state.nextRunAtMs!).toBeGreaterThan(dueAt);
+    expect(readHistory(h.storePath, job.id)).toEqual([
+      expect.objectContaining({
+        status: "error",
+        error: expect.stringContaining("must return an object with boolean fire"),
+      }),
+    ]);
+  });
+
   it("recovers the once lifecycle after a failed state edit", async () => {
     const pending = await pendingWatcher({});
     const { h, jobId } = pending;
@@ -583,6 +616,37 @@ describe("cron trigger evaluation", () => {
       lastRunStatus: "error",
       lastError: "cron trigger evaluator is unavailable",
     });
+  });
+});
+
+describe("cron trigger startup", () => {
+  it("evaluates a condition added before the scheduler starts instead of deferring it as missed work", async () => {
+    const evaluateCronTrigger = vi.fn<Evaluator>(async () => evaluated(false));
+    const { storePath } = await makeStorePath();
+    const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
+      storePath,
+      cronEnabled: true,
+      cronConfig: { triggers: { enabled: true } },
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      evaluateCronTrigger,
+    });
+    try {
+      // The Gateway accepts cron.add while its scheduler start is still pending.
+      const job = await cron.add(
+        watcher({ sessionTarget: "main", payload: { kind: "systemEvent", text: "quiet" } }),
+      );
+      vi.setSystemTime(job.state.nextRunAtMs! + 5_000);
+      await cron.start();
+      await vi.waitFor(() => expect(evaluateCronTrigger).toHaveBeenCalledOnce());
+      expect(cron.getJob(job.id)?.state).toMatchObject({ triggerEvalCount: 1 });
+    } finally {
+      cron.stop();
+      await cron.waitForIdle();
+    }
   });
 });
 

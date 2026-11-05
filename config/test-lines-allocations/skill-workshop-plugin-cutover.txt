@@ -1,0 +1,2 @@
+# Skill Workshop plugin cutover: plugin-scope test harness, plugin-loaded pin setup, the retired-path boundary case, real-loader caller-authority proofs (authorized, revoked mid-preparation, retained worker tool) and the plugin service scheduler in the maintenance contract.
+730
