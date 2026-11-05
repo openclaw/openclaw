@@ -1,4 +1,4 @@
 # Reused distribution and locale seeds need complete byte/tree/object isolation proof.
-# Preserve deferred-wake cancellation, workflow admission and failure diagnostics.
+# Preserve deferred-wake cancellation, workflow admission, diagnostics and E2E lifecycle callbacks.
 # Exact net tracked test-line growth against bae191254328d6a032052cd705a05e21f75bc025.
-154
+158
