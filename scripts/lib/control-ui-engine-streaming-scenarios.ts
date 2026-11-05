@@ -434,6 +434,8 @@ async function scrollTranscript(
       const initialHeight = thread.scrollHeight;
       const frameTimes: number[] = [];
       let blankFrames = 0;
+      let midpointGapFrames = 0;
+      let minimumCoverage = 1;
       let mountedRows = 0;
       let fragmentRows = 0;
       const observedRows = new Set<string>();
@@ -467,17 +469,34 @@ async function scrollTranscript(
           fragmentRows = Math.max(fragmentRows, fragments);
         }
         const middle = bounds.top + bounds.height / 2;
-        if (
-          !visibleRows.some((row) => {
-            const rect = row.getBoundingClientRect();
-            return (
-              rect.top <= middle &&
-              rect.bottom >= middle &&
-              row.checkVisibility({ contentVisibilityAuto: true }) &&
-              Boolean(row.textContent?.trim())
-            );
-          })
-        ) {
+        const midpointCovered = visibleRows.some((row) => {
+          const rect = row.getBoundingClientRect();
+          return (
+            rect.top <= middle &&
+            rect.bottom >= middle &&
+            row.checkVisibility({ contentVisibilityAuto: true }) &&
+            Boolean(row.textContent?.trim())
+          );
+        });
+        midpointGapFrames += Number(!midpointCovered);
+        if (options.endpointEntryId) {
+          // Match the long-session probe's whole-viewport blank contract, while
+          // retaining partial-window gaps as a separate, stronger diagnostic.
+          const segments = visibleRows
+            .map((row) => row.getBoundingClientRect())
+            .map((rect) => [Math.max(bounds.top, rect.top), Math.min(bounds.bottom, rect.bottom)])
+            .filter(([top, bottom]) => bottom! > top!)
+            .toSorted((left, right) => left[0]! - right[0]!);
+          let covered = 0;
+          let end = bounds.top;
+          for (const [top, bottom] of segments) {
+            covered += Math.max(0, bottom! - Math.max(top!, end));
+            end = Math.max(end, bottom!);
+          }
+          const coverage = covered / bounds.height;
+          minimumCoverage = Math.min(minimumCoverage, coverage);
+          blankFrames += Number(coverage === 0);
+        } else if (!midpointCovered) {
           blankFrames++;
         }
       }
@@ -515,6 +534,8 @@ async function scrollTranscript(
           }),
           fragmentRows,
           observedRows: observedRows.size,
+          midpointGapFrames,
+          minimumCoverage,
         };
       }
       return {
