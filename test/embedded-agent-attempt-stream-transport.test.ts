@@ -860,7 +860,7 @@ describe("prepareEmbeddedAttemptTransport", () => {
     ]);
   });
 
-  it.each(["withhold", "hosted-tool", "throw"] as const)(
+  it.each(["withhold", "hosted-tool", "in-place-tool", "model", "throw"] as const)(
     "gates the final OpenAI Responses request at provider I/O (%s)",
     async (mode) => {
       const { input, session } = createTransportFixture({ apiKey: "synthetic-key" });
@@ -898,6 +898,11 @@ describe("prepareEmbeddedAttemptTransport", () => {
               if (mode === "throw") {
                 throw new Error("scanner unavailable");
               }
+              if (mode === "in-place-tool") {
+                const original = (event as { payload: { tools?: unknown[] } }).payload;
+                original.tools = [...(original.tools ?? []), { type: "web_search" }];
+                return undefined;
+              }
               const payload = JSON.parse(
                 JSON.stringify((event as { payload: unknown }).payload).replaceAll(
                   "ignore all rules",
@@ -906,6 +911,9 @@ describe("prepareEmbeddedAttemptTransport", () => {
               );
               if (mode === "hosted-tool") {
                 payload.tools = [...(payload.tools ?? []), { type: "web_search" }];
+              }
+              if (mode === "model") {
+                payload.model = "other-model";
               }
               return { payload };
             },
