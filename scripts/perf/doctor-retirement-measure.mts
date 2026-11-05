@@ -129,7 +129,10 @@ record({ type: 'start', ppid: process.ppid, mainThread: wt.isMainThread, argv: p
 const ownOptions = '--require=' + JSON.stringify(__filename) +
   (mode === 'count' ? ' --require=' + JSON.stringify(process.env.DOCTOR_BENCH_OBSERVER) : '');
 function instrumentOptions(value) {
-  const options = { ...value, env: { ...(value && value.env || process.env) } };
+  const options = { ...value, env: { ...(value && value.env || process.env),
+    DOCTOR_BENCH_OUTPUT: root, DOCTOR_BENCH_MODE: mode,
+    DOCTOR_BENCH_OBSERVER: process.env.DOCTOR_BENCH_OBSERVER, SQLMEASURE_OUT: root,
+  } };
   const old = options.env.NODE_OPTIONS || '';
   options.env.NODE_OPTIONS = old.includes(__filename) ? old : old + ' ' + ownOptions;
   return options;
