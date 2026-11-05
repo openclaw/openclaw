@@ -37,45 +37,65 @@ const noSearchRuntime = (): MemoryPluginRuntime => ({
 
 type MemoryPath = [path: string, origin: "agent" | "untrusted", source?: string | null];
 
-it("loads personal files and quarantines an untrusted tool write", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    registerMemoryCapability("memory-core", {
-      runtime: createMemoryRuntime({ runInBackgroundContext: (run) => run() }),
-    });
-    const workspaceDir = state.statePath("workspace");
-    const profile = ensureProfileForEmail("person@example.test");
-    ensureProfileForEmail("other@example.test");
-    const personalFile = path.join(workspaceDir, "users", profile.id, "USER.md");
-    await fs.mkdir(path.dirname(personalFile), { recursive: true });
-    await fs.writeFile(path.join(workspaceDir, "USER.md"), "Shared preferences");
-    await fs.writeFile(personalFile, "Personal preferences");
-    const warnings: string[] = [];
-    const load = async () => {
-      const { contextFiles } = await resolveBootstrapContextForRun({
-        workspaceDir,
-        config: {},
-        agentId: "main",
-        sessionKey: "agent:main:person",
-        bootstrapUserProfileId: profile.id,
-        warn: (message) => warnings.push(message),
+it.each(["agent", "worktree"] as const)(
+  "loads configured personal instructions in %s sessions and quarantines untrusted writes",
+  (mode) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      registerMemoryCapability("memory-core", {
+        runtime: createMemoryRuntime({ runInBackgroundContext: (run) => run() }),
       });
-      return contextFiles
-        .filter((file) => file.path.endsWith("USER.md"))
-        .map((file) => file.content);
-    };
-    expect(await load()).toEqual(["Shared preferences", "Personal preferences"]);
-    expect(warnings).toEqual([]);
-    const operations = withMemoryWriteProvenance(
-      { readFile: fs.readFile, writeFile: fs.writeFile },
-      createMemoryWriteProvenanceObserver({
-        mutationRoot: workspaceDir,
-        workspaceDir,
-        resolveOriginClass: () => "untrusted",
-      }),
-    );
-    await operations.writeFile(personalFile, "Untrusted preferences");
-    expect(await load()).toEqual(["Shared preferences"]);
-  }));
+      const workspaceDir = state.statePath("workspace");
+      const profile = ensureProfileForEmail("person@example.test");
+      ensureProfileForEmail("other@example.test");
+      const personalFile = path.join(workspaceDir, "users", profile.id, "USER.md");
+      await fs.mkdir(path.dirname(personalFile), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "USER.md"), "Shared preferences");
+      await fs.writeFile(personalFile, "Personal preferences");
+      const bootstrapDir = mode === "worktree" ? state.statePath("task") : workspaceDir;
+      if (mode === "worktree") {
+        const decoy = path.join(bootstrapDir, "users", profile.id, "USER.md");
+        await fs.mkdir(path.dirname(decoy), { recursive: true });
+        await fs.writeFile(decoy, "Worktree profile must not override saved preferences");
+        await fs.writeFile(path.join(bootstrapDir, "USER.md"), "Shared preferences");
+        await fs.writeFile(path.join(bootstrapDir, "AGENTS.md"), "Task project instructions");
+        await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Canonical soul must stay out");
+      }
+      const warnings: string[] = [];
+      const load = async () => {
+        const { contextFiles } = await resolveBootstrapContextForRun({
+          workspaceDir: bootstrapDir,
+          config: { agents: { entries: { main: { workspace: workspaceDir } } } },
+          agentId: "main",
+          sessionKey: "agent:main:person",
+          bootstrapUserProfileId: profile.id,
+          warn: (message) => warnings.push(message),
+        });
+        if (mode === "worktree") {
+          expect(contextFiles.some((file) => file.content === "Task project instructions")).toBe(
+            true,
+          );
+          expect(contextFiles.some((file) => file.content === "Canonical soul must stay out")).toBe(
+            false,
+          );
+        }
+        return contextFiles
+          .filter((file) => file.path.endsWith("USER.md"))
+          .map((file) => file.content);
+      };
+      expect(await load()).toEqual(["Shared preferences", "Personal preferences"]);
+      expect(warnings).toEqual([]);
+      const operations = withMemoryWriteProvenance(
+        { readFile: fs.readFile, writeFile: fs.writeFile },
+        createMemoryWriteProvenanceObserver({
+          mutationRoot: workspaceDir,
+          workspaceDir,
+          resolveOriginClass: () => "untrusted",
+        }),
+      );
+      await operations.writeFile(personalFile, "Untrusted preferences");
+      expect(await load()).toEqual(["Shared preferences"]);
+    }),
+);
 it.each(["local", "remote", "legacy"] as const)(
   "classifies %s paths without trusting aliases, missing files, or local decoys",
   (mode) =>
