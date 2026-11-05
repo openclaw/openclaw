@@ -166,7 +166,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
     retainWorkAdmission: retainGatewayWorkAdmission,
     armOperatorRunCancellation: admission.armOperatorRunCancellation,
     retireOperatorRunCancellation: admission.retireOperatorRunCancellation,
-    recordUnstartedFailure: (failure) => dispatchErrorLifecycle.recordUnstartedFailure(failure),
+    recordUnstartedFailure: (failure) => dispatchErrorLifecycle.recordUnstartedOutcome(failure),
   });
   const injectionDisposition = createChatSendInjectionDisposition(
     {
@@ -612,7 +612,7 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
             (hasReturnedAgentError && (runtimeFailed || !finalizedSourceReply));
           if (!context.chatRunState.hasAbortMarker(clientRunId)) {
             if (hasTerminalAgentError && !dispatchResult.collaborativeSteeringRefused) {
-              await dispatchErrorLifecycle.recordUnstartedFailure({
+              await dispatchErrorLifecycle.recordUnstartedOutcome({
                 error: returnedAgentErrorMessage ?? "agent returned an error payload",
                 notice: returnedAgentErrorMessage,
               });

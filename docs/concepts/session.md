@@ -334,6 +334,7 @@ special recovery predecessor.
 
 A crash or `SIGKILL` writes no shutdown markers. Startup uses the existing persisted
 nonterminal run identity to resume an eligible root whose execution owner is gone.
+Completed chat commands are terminal and do not trigger a recovery turn.
 Both sources produce one resume input per session. The agent must inspect uncertain
 effects before repeating them. The Control UI shows the ordinary
 conversation and resume turn without restart banners or interrupted-input notices.
