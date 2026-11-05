@@ -151,9 +151,9 @@ export function isUserChannelPolicyUnchanged(
     return false;
   }
   const configured = configuredOwnersHash
-    ? (previous.configured?.fingerprint === configuredOwnersHash
-        ? previous.configured
-        : { fingerprint: configuredOwnersHash, id: generateSecureUuid() })
+    ? previous.configured?.fingerprint === configuredOwnersHash
+      ? previous.configured
+      : { fingerprint: configuredOwnersHash, id: generateSecureUuid() }
     : undefined;
   return isDeepStrictEqual(previous.configured, configured);
 }
