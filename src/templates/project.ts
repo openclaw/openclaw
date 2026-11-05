@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readdir, realpath, rmdir, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, realpath, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, parse, resolve } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -110,7 +110,7 @@ async function isConfinedManifestFile(root: string): Promise<boolean> {
 
 async function discoverTemplateProjectRoot(projectPath: string): Promise<string> {
   const input = resolve(projectPath);
-  const inputStat = await lstat(input).catch(() => undefined);
+  const inputStat = await stat(input).catch(() => undefined);
   if (!inputStat) {
     throw new TemplateProjectError(
       "project_not_found",

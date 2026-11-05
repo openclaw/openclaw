@@ -8,6 +8,7 @@ import type { SelectPicker } from "../../components/select-picker.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import "../../lib/toast-host.tsx";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import { choosePickerValue, openPicker, updatePickers } from "../../test-helpers/select-picker.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
@@ -283,7 +284,7 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.querySelector(".model-providers__profiles")).toBeNull();
     expect(page.renderRoot.textContent).not.toContain("owner@example.com");
     expect(page.querySelector(".model-providers__credentials")?.textContent).toContain(
-      "OAuth profiles: 1",
+      "Signed-in accounts: 1",
     );
   });
 
@@ -386,7 +387,7 @@ describe("ModelProvidersPage agent scope", () => {
       await updatePickers(page.renderRoot);
       const fallback = [...page.querySelectorAll<SelectPicker>("openclaw-select-picker")].find(
         (select) =>
-          select.querySelector('[role="listbox"]')?.getAttribute("aria-label") === "Fallback Model",
+          select.querySelector('[role="listbox"]')?.getAttribute("aria-label") === "Fallback model",
       );
       expect(fallback).toBeDefined();
       expect(page.querySelector(".model-providers__defaults")?.textContent).toContain(
@@ -494,7 +495,7 @@ describe("ModelProvidersPage agent scope", () => {
     expect(page.view.props.keyEditorProvider).toBeNull();
     expect(page.view.props.messages.openai).toEqual({
       kind: "success",
-      text: "Secret saved.",
+      text: "API key saved and verified.",
       warning: "Authentication refresh failed. Provider refresh failed.",
     });
     await page.updateComplete;
@@ -519,11 +520,7 @@ describe("ModelProvidersPage agent scope", () => {
     );
     const row = await expandProvider(page, "openai");
     row.querySelector<HTMLButtonElement>(".provider-row__remove")!.click();
-    const modal = await vi.waitFor(() => {
-      const dialog = document.body.querySelector<HTMLElement>("openclaw-modal-dialog");
-      expect(dialog).not.toBeNull();
-      return dialog!;
-    });
+    const { modal } = await getRenderedModalDialog(document.body);
     expect(modal.textContent).toContain("Remove OpenAI");
     expect(requestCount(request, "models.authLogout")).toBe(0);
     modal.querySelector<HTMLButtonElement>("button.danger")!.click();
@@ -566,27 +563,34 @@ describe("ModelProvidersPage agent scope", () => {
     const form = page.querySelector("[data-models-key-dialog]");
     expect(
       [...form!.querySelectorAll('[role="status"]')].map((message) => message.textContent?.trim()),
-    ).toEqual(["Provider anthropic added.", "config.get failed after provider add"]);
+    ).toEqual(["Added anthropic. Access verified.", "config.get failed after provider add"]);
   });
 
   it.each([
     ["another provider fails", "ready", undefined],
-    ["the added provider fails", "unavailable", "More models could not be discovered."],
+    ["the added provider is pending", "pending", undefined],
+    ["the added provider fails", "unavailable", "Couldn’t load more models. Try again."],
+    ["the catalog request fails", "request-failed", "Catalog request failed."],
   ] as const)("provider-add feedback warns only when %s", async (_case, ownStatus, warning) => {
     const { context, runtimeConfig, request } = createHarness("main");
     const originalRequest = request.getMockImplementation()!;
-    request.mockImplementation(async (method) =>
-      method === "models.list"
-        ? {
-            models: [],
-            refreshFailed: true,
-            providerOutcomes: [
-              { provider: "anthropic", status: ownStatus },
-              { provider: "ollama", status: "unavailable" },
-            ],
-          }
-        : originalRequest(method),
-    );
+    request.mockImplementation(async (method) => {
+      if (method === "models.list") {
+        if (ownStatus === "request-failed") {
+          throw new Error("Catalog request failed.");
+        }
+        return {
+          models: [],
+          refreshFailed: true,
+          pendingProviders: ownStatus === "pending" ? ["anthropic"] : [],
+          providerOutcomes: [
+            ...(ownStatus === "pending" ? [] : [{ provider: "anthropic", status: ownStatus }]),
+            { provider: "ollama", status: "unavailable" },
+          ],
+        };
+      }
+      return originalRequest(method);
+    });
     const page = appendPage(context);
     await waitForProviders(page);
     await openApiKeyProvider(page, "anthropic");
@@ -598,9 +602,10 @@ describe("ModelProvidersPage agent scope", () => {
 
     expect(page.view.props.messages.add).toEqual({
       kind: "success",
-      text: "Provider anthropic added.",
+      text: "Added anthropic. Access verified.",
       ...(warning ? { warning } : {}),
     });
+    expect(page.view.props.addProviderOpen).toBe(Boolean(warning));
   });
 
   it("keeps a newer global-model draft after an agent switch and earlier save", async () => {
@@ -773,11 +778,15 @@ describe("ModelProvidersPage agent scope", () => {
         agentId: "main",
       }),
     );
-    await vi.waitFor(() => expect(toast.toast?.message).toBe("Priority could not be saved"));
+    await vi.waitFor(() =>
+      expect(toast.toasts[0]?.options.message).toBe(
+        "Couldn’t complete the request. Try again. Priority could not be saved",
+      ),
+    );
     await toast.updateComplete;
     await vi.dynamicImportSettled();
     await vi.waitFor(() =>
-      expect(toast.querySelector('[role="status"]')?.textContent).toContain(
+      expect(toast.querySelector('[role="alert"]')?.textContent).toContain(
         "Priority could not be saved",
       ),
     );
@@ -785,7 +794,7 @@ describe("ModelProvidersPage agent scope", () => {
 
     expect(page.querySelector('[role="alert"]')).toBeNull();
     expect(page.view.props.messages.openai).toBeUndefined();
-    expect(toast.querySelector(".app-toast--bottom .app-toast__icon")).not.toBeNull();
+    expect(toast.querySelector(".app-toast-lane--top-center .app-toast__icon")).not.toBeNull();
     expect(
       [...page.querySelectorAll<HTMLElement>(".model-providers__profile")].map(
         (row) => row.dataset.profileId,
@@ -967,5 +976,6 @@ it("applies provider navigation without replacing an edited search during revali
   page.routeData = { ...routeData, provider: "minimax-portal" };
   await waitForSolid(() => expect(search()?.value).toBe("minimax"));
   page.routeData = { ...routeData, provider: "" };
-  await waitForSolid(() => expect(search()?.value).toBe(""));
+  // Setup with nothing connected and nothing typed has no list to filter.
+  await waitForSolid(() => expect(search()?.value ?? "").toBe(""));
 });

@@ -192,6 +192,7 @@ describe("chat pane header state", () => {
       // operator needs a distinct, visible outcome or their lost intent reads
       // as a click that simply did nothing.
       expect(showToast).toHaveBeenCalledWith({
+        severity: "error",
         message: t("sessionsView.deleteSessionStale", { session: "Current session" }),
       });
     } finally {
@@ -232,7 +233,10 @@ describe("chat pane header state", () => {
       await pending;
 
       expect(patch).not.toHaveBeenCalled();
-      expect(showToast).toHaveBeenCalledWith({ message: t("sessionsView.newGroupMoveSkipped") });
+      expect(showToast).toHaveBeenCalledWith({
+        severity: "error",
+        message: t("sessionsView.newGroupMoveSkipped"),
+      });
     } finally {
       document.body.replaceChildren();
       restoreDialogPolyfill();
@@ -253,7 +257,7 @@ describe("chat pane header state", () => {
     await runPaneHeaderAction(pane, { kind: "move-to-group", category: "Projects" }, session);
 
     expect(patch).not.toHaveBeenCalled();
-    expect(showToast).toHaveBeenCalledWith({ message: t("common.refresh") });
+    expect(showToast).toHaveBeenCalledWith({ severity: undefined, message: t("common.refresh") });
   });
 
   it("copies the resolved workspace path and branch", async () => {
@@ -276,9 +280,12 @@ describe("chat pane header state", () => {
 
     pane.handleHeaderMenuAction("copy-path", workspaceSession, "/src/openclaw", "feature/header");
 
-    await vi.waitFor(() => expect(state.chatError).toBe("Copy failed"));
+    await vi.waitFor(() => expect(state.chatError).toBe("Couldn’t copy. Try again."));
     flush();
-    expect(errors()).toEqual({ lastError: "Copy failed", chatError: "Copy failed" });
+    expect(errors()).toEqual({
+      lastError: "Couldn’t copy. Try again.",
+      chatError: "Couldn’t copy. Try again.",
+    });
   });
 
   it("does not query gateway-local branches for exec-node sessions", async () => {
@@ -340,7 +347,11 @@ describe("chat pane header state", () => {
       spawnedWorkspaceDir: "/src/spawned-repo",
     } satisfies GatewaySessionRow;
     await pane.loadHeaderMenuData(session, "/plain/agent-workspace", false);
-    expect(request).toHaveBeenCalledWith("worktrees.branches", { repoRoot: "/src/spawned-repo" });
+    expect(request).toHaveBeenCalledWith(
+      "worktrees.branches",
+      { repoRoot: "/src/spawned-repo" },
+      { signal: expect.any(AbortSignal) },
+    );
 
     // The agent-workspace root keeps honoring the agent's workspaceGit flag.
     request.mockClear();
@@ -374,9 +385,11 @@ describe("chat pane header state", () => {
       key: "agent:main:reused",
     } satisfies GatewaySessionRow;
     await pane.loadHeaderMenuData(resetRow, "/src/agent-workspace", true);
-    expect(request).toHaveBeenLastCalledWith("worktrees.branches", {
-      repoRoot: "/src/agent-workspace",
-    });
+    expect(request).toHaveBeenLastCalledWith(
+      "worktrees.branches",
+      { repoRoot: "/src/agent-workspace" },
+      { signal: expect.any(AbortSignal) },
+    );
   });
 
   it("skips branch lookups while the session runs remotely", async () => {

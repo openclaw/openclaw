@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { PluginsControlUiCatalog } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -6,6 +6,8 @@ import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { createApplicationConfigCapability } from "../app/config.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { createGatewayEvent } from "../app/gateway-store.test-support.ts";
+import { i18n } from "../i18n/lib/translate.ts";
+import { runControlUiPluginAction } from "./control-ui-actions.ts";
 import { controlUiPluginAssetUrls } from "./control-ui-assets.ts";
 import type { ControlUiPluginDistribution } from "./control-ui-distribution.ts";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
@@ -606,5 +608,84 @@ it.each(["plugins.changed", "plugins.controlUi.changed"] as const)(
     } finally {
       runtime.dispose();
     }
+  },
+);
+
+it.each(["session", "header", "composer"] as const)(
+  "localizes missing %s actions with complete recovery copy",
+  async (placement) => {
+    const runtime = runtimeForRequest(async () => catalog([]));
+    const translate = vi.spyOn(i18n, "t").mockReturnValue("localized action failure");
+    onTestFinished(() => translate.mockRestore());
+    await expect(
+      runControlUiPluginAction({
+        runtime,
+        id: "review/missing",
+        placement,
+        sessionKey: "agent:main:test",
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("localized action failure");
+    expect(translate).toHaveBeenCalledWith(
+      placement === "session" ? "pluginUi.actionSessionUnavailable" : "pluginUi.actionInactiveView",
+    );
+  },
+);
+
+it.each(["header", "session"] as const)("localizes unavailable %s actions", async (placement) => {
+  initializeWith((host) => {
+    host.ui.registerAction({
+      id: "blocked",
+      label: "Plugin label",
+      placement,
+      resolve: () => ({ disabled: true }),
+      run: vi.fn(),
+    });
+  });
+  const runtime = runtimeForRequest(async () => catalog([pluginDescriptor()]));
+  runtime.start();
+  await runtime.refresh();
+  const translate = vi.spyOn(i18n, "t").mockReturnValue("localized unavailable action");
+  onTestFinished(() => translate.mockRestore());
+  await expect(
+    runControlUiPluginAction({
+      runtime,
+      id: "review/blocked",
+      placement,
+      sessionKey: "agent:main:test",
+      session: { key: "agent:main:test", kind: "direct", updatedAt: 1 },
+      signal: new AbortController().signal,
+    }),
+  ).rejects.toThrow("localized unavailable action");
+  expect(translate).toHaveBeenCalledWith(
+    placement === "session"
+      ? "pluginUi.actionUnavailableSession"
+      : "pluginUi.actionUnavailableView",
+  );
+});
+
+it.each([true, false])(
+  "localizes activation timeouts (catalog available=%s)",
+  async (catalogAvailable) => {
+    vi.useFakeTimers();
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const message = catalogAvailable ? "localized activation timeout" : "localized recovery";
+    const translate = vi
+      .spyOn(i18n, "t")
+      .mockImplementation((key) =>
+        key === "pluginUi.activationTimedOut" && !catalogAvailable ? key : message,
+      );
+    onTestFinished(() => translate.mockRestore());
+    initializeWith(() => new Promise<void>(() => {}));
+    const runtime = runtimeForRequest(async () => catalog([pluginDescriptor()]));
+    runtime.start();
+    const pending = runtime.refresh();
+    await vi.waitFor(() => expect(controlUiLoader.initializeControlUiPlugin).toHaveBeenCalled());
+    await vi.advanceTimersByTimeAsync(15_000);
+    await pending;
+    expect(runtime.errors).toContainEqual(expect.objectContaining({ message }));
+    expect(translate).toHaveBeenCalledWith("pluginUi.activationTimedOut");
   },
 );

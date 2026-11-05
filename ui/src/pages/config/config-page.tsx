@@ -5,8 +5,8 @@ import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
 import { hasNativeBrowserBridge } from "../../app/native-browser-host.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
+import { localizedHintForPath } from "../../components/config-form.shared.ts";
 import {
   SettingsPageHeader,
   LearnMoreLink,
@@ -19,9 +19,9 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createConfigPage } from "./config-page-state.ts";
 import { defaultConfigSelection, type ConfigPageId } from "./config-sections.ts";
+import { mcpSettingsSchema, readMcpAppsEnabled } from "./mcp-schema.ts";
 import { memorySettingsSchema } from "./memory-schema.ts";
 import type { ConfigRouteData } from "./route-data.ts";
-import { extractQuickSettingsSecurity } from "./security-model.ts";
 import { preloadConfigSection } from "./view-lazy.ts";
 import { ConfigReadError, ConfigReadLoading } from "./view-readiness.tsx";
 import type { ConfigProps } from "./view-types.ts";
@@ -31,13 +31,17 @@ registerRouteSubtitlesEnglish();
 export type { ConfigPageId } from "./config-sections.ts";
 
 const Mcp = lazy(() => import("./mcp.tsx"), { export: "Mcp" });
+// Stays lazy: it pulls in the schema form, which pages without an editor never load.
+const McpServerEditor = lazy(() => import("./mcp-server-editor.tsx"), {
+  export: "McpServerEditor",
+});
 const MeetingCaptureSettings = lazy(() => import("./meeting-capture.tsx"), {
   export: "MeetingCaptureSettings",
 });
 const MemorySettingsPage = lazy(() => import("./memory-page.tsx"), {
   export: "MemorySettingsPage",
 });
-const Security = lazy(() => import("./security.tsx"), { export: "Security" });
+const SecurityPage = lazy(() => import("./security.tsx"), { export: "SecurityPage" });
 const SessionStorageSettings = lazy(() => import("./session-storage.tsx"), {
   export: "SessionStorageSettings",
 });
@@ -60,7 +64,7 @@ export function preloadConfigPage(
   return Promise.all([
     preloadConfigSection(section),
     ...(pageId === "mcp" ? [Mcp.preload()] : []),
-    ...(pageId === "security" ? [Security.preload()] : []),
+    ...(pageId === "security" ? [SecurityPage.preload()] : []),
     ...(pageId === "communications" && section === "transcripts"
       ? [MeetingCaptureSettings.preload()]
       : []),
@@ -80,24 +84,22 @@ function renderConfigPageSubtitle(pageId: ConfigPageId) {
     case "mcp":
       return (
         <>
-          {t("mcpPage.intro")} <LearnMoreLink url="https://docs.openclaw.ai/tools/mcp" />
+          {t("subtitles.mcp")} <LearnMoreLink url="https://docs.openclaw.ai/tools/mcp" />
         </>
       );
     case "security":
       return (
         <>
-          {t("quickSettings.security.intro")}{" "}
+          {t("subtitles.security")}{" "}
           <LearnMoreLink url="https://docs.openclaw.ai/gateway/security" />
         </>
       );
     case "talk":
       return (
         <>
-          {t("talkPage.intro")} <LearnMoreLink url="https://docs.openclaw.ai/nodes/talk" />
+          {t("subtitles.talk")} <LearnMoreLink url="https://docs.openclaw.ai/nodes/talk" />
         </>
       );
-    case "updates":
-      return t("updates.page.intro");
     default:
       return subtitleForRoute(pageId);
   }
@@ -208,34 +210,72 @@ function ConfigBody(props: {
       </Show>
       <Show when={props.pageId === "mcp"}>
         <Mcp
-          configObject={props.configObject}
-          pluginsHref={pathForRoute("plugins", context().basePath)}
-          editor={editor("mcp", "MCP")}
+          editor={
+            <Config
+              {...config()}
+              schema={mcpSettingsSchema(config().schema)}
+              activeSection="mcp"
+              activeSubsection={null}
+              showModeToggle={false}
+              showSectionDocs={false}
+              embeddedEditor
+              navRootLabel="MCP"
+              sectionTitle={t("mcpPage.settings")}
+              sectionPrelude={
+                <SettingsToggleRow
+                  title={t("mcpPage.apps")}
+                  description={
+                    localizedHintForPath(["mcp", "apps", "enabled"], config().uiHints)?.help
+                  }
+                  checked={readMcpAppsEnabled(config().formValue)}
+                  disabled={
+                    config().loading ||
+                    config().saving ||
+                    config().applying ||
+                    config().updating ||
+                    !config().formValue ||
+                    config().mutationAllowed === false
+                  }
+                  onChange={(enabled) => config().onFormPatch(["mcp", "apps", "enabled"], enabled)}
+                />
+              }
+            />
+          }
+          renderServerEditor={(server, onRenamed) => (
+            <Loading>
+              <McpServerEditor config={config()} server={server} onRenamed={onRenamed} />
+            </Loading>
+          )}
         />
       </Show>
       <Show when={props.pageId === "security"}>
-        <Security
-          security={extractQuickSettingsSecurity(props.configObject)}
+        <SecurityPage
+          context={context()}
           configBusy={props.state.mutationDisabled()}
-          canPairDevice={
-            context().runtimeConfig.state.connected &&
-            hasOperatorAdminAccess(context().gateway.snapshot.hello?.auth ?? null)
-          }
-          onPairMobile={() => void context().overlays.openDevicePairSetup()}
-          onBrowserEnabledToggle={(enabled) =>
-            enabled
-              ? context().runtimeConfig.removeFormValue(["browser", "enabled"])
-              : context().runtimeConfig.patchForm(["browser", "enabled"], false)
-          }
-          onToolProfileChange={(profile) =>
-            context().runtimeConfig.patchForm(["tools", "profile"], profile)
-          }
-          editor={<Config {...config()} embeddedEditor />}
+          configObject={props.configObject}
+          configLoaded={props.config.configLoaded}
+          gatewayUrl={props.config.gatewayUrl}
+          buildEditor={(curatedSections) => (
+            <Config
+              {...config()}
+              activeSection={null}
+              activeSubsection={null}
+              settingsLayout="stack"
+              embeddedEditor
+              curatedSections={curatedSections}
+            />
+          )}
         />
       </Show>
       <Show when={!["updates", "memory", "talk", "mcp", "security"].includes(props.pageId)}>
-        <Show when={props.pageId === "advanced"} fallback={<Config {...config()} />}>
-          <Config {...config()} progressive />
+        <Show
+          when={
+            props.pageId === "advanced" ||
+            (props.pageId === "ai-agents" && props.config.activeSection === "agents")
+          }
+          fallback={<Config {...config()} />}
+        >
+          <Config {...config()} progressive={!props.routeData?.targetBlockId} />
         </Show>
       </Show>
     </>

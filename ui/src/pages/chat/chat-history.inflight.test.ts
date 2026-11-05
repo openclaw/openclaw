@@ -163,6 +163,19 @@ it("restores cleared activity alongside an owned run's current text", async () =
   });
 });
 
+it("retains unchanged stream segments when history replaces the live text", async () => {
+  const snapshot = activeSnapshot("run-live", "Before refresh.");
+  const state = createState(snapshot);
+  await loadChatHistory(state);
+  const segments = state.chatStreamSegments;
+  snapshot.inFlightRun!.text = "After refresh.";
+
+  await loadChatHistory(state);
+
+  expect(state.chatStream).toBe("After refresh.");
+  expect(state.chatStreamSegments).toBe(segments);
+});
+
 it("keeps live tool authority until history records its outcome, not just its call", async () => {
   const runId = "run-live";
   const toolCallId = "build";
@@ -565,7 +578,7 @@ describe("chat history run ownership recovery", () => {
     await handleAbortChat(state, { preserveDraft: true });
 
     expect(abortCalls()).toEqual([
-      ["chat.abort", { sessionKey: "main", runId: "run-missed-terminal" }],
+      ["chat.abort", { sessionKey: "main", runId: "run-missed-terminal", userInitiated: true }],
     ]);
     expect(state.chatRunId).toBe("run-current");
     expect(state.chatStream).toBe("The current response.");
@@ -575,8 +588,8 @@ describe("chat history run ownership recovery", () => {
     await handleAbortChat(state, { preserveDraft: true });
 
     expect(abortCalls()).toEqual([
-      ["chat.abort", { sessionKey: "main", runId: "run-missed-terminal" }],
-      ["chat.abort", { sessionKey: "main", runId: "run-current" }],
+      ["chat.abort", { sessionKey: "main", runId: "run-missed-terminal", userInitiated: true }],
+      ["chat.abort", { sessionKey: "main", runId: "run-current", userInitiated: true }],
     ]);
   });
 

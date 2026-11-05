@@ -583,6 +583,7 @@ export function createUserTurnTranscriptRecorder(
           pendingInput = await stageUserTurnPendingInput(recorder, target, {
             ...options,
             requestFingerprint: params.pendingInputRequestFingerprint,
+            reclaimCancelledSourceTurn: params.reclaimCancelledSourceTurn,
             trackCompletion: params.trackInputCompletion,
             retryCancelled: options.retryCancelled || params.sessionTurnMutation?.kind === "goal",
             replaySourceSessionKeys: params.pendingInputReplaySourceSessionKeys,

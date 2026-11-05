@@ -21,8 +21,9 @@ where to run the Gateway see
     ```
 
     The installer starts guided onboarding for you, so there is no separate
-    onboarding command to run. When onboarding finishes, press **Ctrl+C** to
-    stop the foreground Gateway and install the background service:
+    onboarding command to run. If you answered no to Quick start's background
+    question, press **Ctrl+C** to stop the foreground Gateway and install the
+    background service:
 
     ```bash
     openclaw gateway install
@@ -491,8 +492,8 @@ where to run the Gateway see
 
     - **Quick start** detects the AI access you already have, waits for you to
       choose a connection, verifies that one choice with a real completion,
-      prepares the agent workspace, and then starts the Gateway in the
-      foreground and opens the browser dashboard. It uses the default agent
+      prepares the agent workspace, offers to keep the Gateway running in the
+      background, and opens the browser dashboard. It uses the default agent
       name `main` and full access, and skips memory import and app
       recommendations. Choose **Skip for now** in the picker to prepare the
       local baseline and exit without starting the Gateway or AI chat.

@@ -764,15 +764,15 @@ describe("buildCachedChatItems", () => {
       ],
     });
 
-    expect(groups).toHaveLength(1);
-    const entries = groupAt(groups, 0).messages;
+    expect(groups.map((group) => group.role)).toEqual(["user", "tool"]);
+    expect(firstMessageContent(groupAt(groups, 0))).toEqual([mixedContent[0]]);
+    const entries = groupAt(groups, 1).messages;
     expect(entries).toHaveLength(1);
     const cards = entries.flatMap((entry) => extractToolCards(entry.message));
     expect(cards.map((card) => [card.callId, card.args, card.outputText])).toEqual([
       ["call-a", { path: "a.ts" }, "contents of a"],
       ["call-b", { path: "b.ts" }, "contents of b"],
     ]);
-    expect(firstMessageContent(groupAt(groups, 0))).toContainEqual(mixedContent[0]);
   });
 
   describe("distinct tool invocations", () => {

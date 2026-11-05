@@ -253,9 +253,8 @@ export function resolveTranscriptMessageAppendParent<TMessage>(
   options: Pick<TranscriptMessageAppendOptions<TMessage>, "appendIntent" | "parentId">,
   prepared?: TranscriptAppendParentPreparation,
 ): string | null {
-  const tailId = readActiveTranscriptAppendParentId(database, sessionId, prepared);
   return resolveTranscriptAppendParent({
-    tailId,
+    readTailId: () => readActiveTranscriptAppendParentId(database, sessionId, prepared),
     parentId: options.parentId,
     appendIntent: options.appendIntent,
     isAncestor: (leafId, candidateId) =>

@@ -332,7 +332,7 @@ function updateChatScrollPosition(
   const programmatic = native ? native.programmatic : host.chatIsProgrammaticScroll?.();
   const isUserScrollUp = takeover !== false || (delta < 0 && !maintenance);
   const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-  if (programmatic && !isUserScrollUp) {
+  if ((programmatic || maintenance) && !isUserScrollUp) {
     // A measured arrival clears the affordance even when maintenance must not
     // change the reader's follow policy.
     if (distanceFromBottom <= CHAT_TRANSCRIPT_END_THRESHOLD_PX) {

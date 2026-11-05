@@ -134,6 +134,7 @@ export async function createBackupResourcePlan(params: {
   pluginResources: readonly ResolvedPluginBackupResource[];
   pluginRoots: readonly string[];
   onlyConfig?: boolean;
+  localCompanion?: boolean;
 }): Promise<BackupResourcePlan> {
   const stateDir = path.resolve(params.stateDir);
   const pluginResourceRoots: string[] = [];
@@ -172,6 +173,9 @@ export async function createBackupResourcePlan(params: {
     exclude("plugin skills", path.join(stateDir, "plugin-skills"));
 
     for (const resource of params.pluginResources) {
+      if (resource.profile === "local-companion" && !params.localCompanion) {
+        continue;
+      }
       const anchors = resource.scope === "state" ? [{ sourcePath: stateDir }] : agentRoots;
       for (const anchor of anchors) {
         const sourcePath = path.resolve(anchor.sourcePath, ...resource.relativePath.split("/"));

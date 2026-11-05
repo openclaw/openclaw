@@ -11,7 +11,7 @@ import {
 import type { ChatHistoryParams } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { readAcpSessionMetaForEntries } from "../../acp/runtime/session-meta-readonly.js";
 import { resolveAgentConfig, resolveAgentVerboseDefault } from "../../agents/agent-scope.js";
-import { findModelCatalogEntry } from "../../agents/model-catalog.js";
+import { findModelCatalogEntry } from "../../agents/model-catalog-lookup.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import {
   getSubagentSessionListReadSnapshotIdentity,
@@ -23,6 +23,7 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createChannelMentionProjector } from "../chat-display-projection.channel-mentions.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.js";
 import {
   boundInFlightRunSnapshotForChatHistory,
@@ -57,6 +58,7 @@ import {
   resolveEmbeddedAgentRunRecoverySnapshot,
   respondChatHistoryReadError,
   respondChatHistoryUnavailable,
+  respondChatHistoryReadError,
   type ChatHistoryMethod,
 } from "./chat-history-recovery.js";
 import { prepareChatHistorySessionRead } from "./chat-history-session-read.js";
@@ -228,6 +230,7 @@ export async function handleChatHistoryRequest({
         ? [{ runId: receipt.runId, consumedByEventId: receipt.consumedByEventId }]
         : [],
     );
+    const projectMentions = createChannelMentionProjector(context, client, canonicalKey);
     let historyPage: Awaited<ReturnType<typeof readChatHistoryPage>>;
     // Internal adapters may inspect message objects before responding.
     const encodeResponse = acceptsSerializedJson && method === req.method;
@@ -265,6 +268,7 @@ export async function handleChatHistoryRequest({
                     ...(continuity ? { continuity } : {}),
                   },
                   signal,
+                  projectMentions,
                 ),
               {
                 config: cfg,
@@ -544,6 +548,7 @@ export async function handleChatHistoryRequest({
                 incognito: entry?.incognito,
               },
               signal,
+              projectMentions,
             );
           } catch (error) {
             respondChatHistoryReadError(method, respond, error);

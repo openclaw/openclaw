@@ -34,9 +34,11 @@ override explicit tool denies, narrower policies, or Knowledge store access.
 
 Definitions default to 10 per page; other views to 50. `limit` accepts 1–100.
 Follow `nextOffset` with unchanged view and filters, and compare fingerprints
-across definition pages. Source text offsets count characters (`maxChars`
-256–65,536). Raw YAML is for debugging a manifest; normal authoring uses
-`definitions`. See [Records and ontology](/plugins/knowledge/records-and-ontology).
+across definition pages. Source text offsets count UTF-16 code units (`maxChars`
+256–65,536). Pages preserve surrogate pairs and may stop one unit before the cap;
+use the returned `nextOffset`. An offset inside a surrogate pair is refused.
+Raw YAML is for debugging a manifest; normal authoring uses `definitions`.
+See [Records and ontology](/plugins/knowledge/records-and-ontology).
 
 ## Reading records
 

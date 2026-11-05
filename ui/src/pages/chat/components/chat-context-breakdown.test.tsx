@@ -160,7 +160,7 @@ it("offers retry after a rejected read and keeps loading until recovery settles"
   first.reject(new Error("Context read failed"));
   await expect
     .poll(() => view.container.textContent)
-    .toContain("Couldn't load the context breakdown");
+    .toContain("Couldn’t load the context breakdown. Try again.");
   view.getByRole("button", { name: "Retry" }).click();
   await expect.poll(() => request.mock.calls.length).toBe(2);
   expect(view.container.querySelector(".chat-context-page--loading")).not.toBeNull();
@@ -409,12 +409,16 @@ it.each([20, 21])(
 
 it.each([
   { options: { empty: true }, message: "Send a message to capture context usage.", retry: false },
-  { options: { offline: true }, message: "Connect to the Gateway", retry: false },
+  { options: { offline: true }, message: "Reconnect to load the context breakdown.", retry: false },
   { options: { missing: true }, message: "No matching context report", retry: false },
-  { options: { failure: true }, message: "Couldn't load the context breakdown", retry: true },
+  {
+    options: { failure: true },
+    message: "Couldn’t load the context breakdown. Try again.",
+    retry: true,
+  },
   {
     options: { restricted: true },
-    message: "You don't have permission to view the context breakdown",
+    message: "Couldn’t view the context breakdown. Ask an admin to grant read access.",
     retry: false,
   },
 ])("shows only the standard empty state for $message", async ({ options, message, retry }) => {

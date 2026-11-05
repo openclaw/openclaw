@@ -33,6 +33,7 @@ Behavior:
 - When backgrounded (explicit or via `yieldMs` timeout), the tool returns `status: "running"` + `sessionId` and a short output tail. On the Gateway and in its sandbox, a yielded handle does not make an ordinary command independent: the browser's **Stop** button and typed `/stop` cancel the selected request's commands. Stop waits for process cleanup and reports when cleanup could not be confirmed. Completed output remains available, and canceled commands do not emit a new completion notification. Managed workers retain the separate behavior described below.
 - Use `background: true` only for a deliberately independent service. Request Stop leaves that service running; use its process handle to stop it separately. Normal turn completion also preserves ordinary commands that are still running.
 - Launch failures return the operating-system error and release worker cleanup even when no process starts.
+- Ordinary non-PTY Gateway-hosted exec on Linux and macOS completes when its root command exits, after up to 250 ms to drain output. Later descendant output is discarded. Background descendants retain their existing cleanup and memory ownership; completion does not terminate them. Keep long-running work in the foreground of the shell when you need its eventual output.
 - Native Windows command shells retain `SystemRoot` when launched with a replacement environment, including on ARM64. Other omitted variables stay absent, and an explicitly supplied `SystemRoot` takes precedence.
 - Managed sandbox workspace finalization bounds each container inspection, pause, and resume command to 30 seconds. A failed or timed-out operation preserves its recovery receipt rather than treating an uncertain pause or resume as successful.
 - Backgrounded and `yieldMs` runs inherit `tools.exec.timeoutSeconds` unless the call passes an explicit `timeoutSeconds`.
@@ -56,7 +57,7 @@ Behavior:
 - Manually canceled commands do not trigger completion notifications, even when they produced output. Retained output remains available through `process poll` or `process log`. Cleanup failures from `process kill` still notify; request Stop reports cleanup failures through its error response without starting a completion turn.
 - Request Stop also retires the ordinary command's queued or running completion turn, including after its retained process output expires. A stopped continuation cannot deliver a late reply or retry itself. Unrelated queued events and later human requests remain eligible to run.
 - If automatic completion wake is unavailable, or you need quiet-success confirmation where empty successes do not wake (`tools.exec.notifyOnExitEmptySuccess`), poll with `process`.
-- Background exec does not automatically wake subagent sessions. A subagent must collect its command result with `process poll` before yielding without another completion source. A requested stop also needs its terminal result collected.
+- Background exec does not automatically wake hidden subagent sessions; visible spawned sessions are woken like other sessions. A hidden subagent must collect its command result with `process poll` before yielding without another completion source. A requested stop also needs its terminal result collected.
 - A quiet foreground command with an unexpired execution allowance is reported as long-running. Once that allowance expires, stalled-session recovery can abort the owning run. Repeated `process poll` or `process log` calls with unchanged output count toward loop detection; elapsed idle time alone is not progress.
 - Don't emulate reminders or delayed follow-ups with `sleep` loops or repeated polling — use cron for future work.
 
@@ -136,9 +137,11 @@ Durable commands have no interactive input: `pty: true`
 and `awaitResults: true` are refused, as are `process write`, `send-keys`, `submit`,
 and `paste`. Exec security policy, approvals, managed environment preparation, cwd
 restrictions, and process timeouts remain in effect. `timeoutSeconds` maps to
-`RuntimeMaxSec`; `timeoutSeconds: 0` disables that lifetime bound. The ordinary
-host-exec memory calculation supplies `MemoryMax`, enforced by the unit's cgroup
-instead of the sampled watchdog. Durable processes do not block safe Gateway
+`RuntimeMaxSec`; `timeoutSeconds: 0` disables that lifetime bound. Durable work shares the automatic
+[host-exec memory budget](/tools/exec#host-memory-protection) with ordinary commands.
+The shared sampler accounts their cgroup usage, including descendants after the
+initial shell exits. Each new unit also has hard RAM and swap bounds equal to the
+full shared allowance. Durable processes do not block safe Gateway
 restart or cooperative suspension. Ordinary background processes retain their
 existing restart and suspension behavior.
 
@@ -308,6 +311,10 @@ Older builds do not reinterpret the new certificate as lineage completion.
 macOS and retained Bun process-group owners still require kernel group
 disappearance. Permission-denied checks never prove absence. A completed command
 or closed output pipe alone does not establish that its descendants stopped.
+A descendant that leaves the process group, such as a daemonized tmux server,
+can outlive cleanup there. Exec then still reports the command's own exit, adds a
+note that a detached process may still be running, and records the cleanup as
+uncertain; a failed or canceled command keeps reporting the cleanup failure.
 Local TUI shell shutdown uses the same cleanup owner for its own commands.
 If the host was busy, cleanup processes queued native completion events before
 reporting a timeout.

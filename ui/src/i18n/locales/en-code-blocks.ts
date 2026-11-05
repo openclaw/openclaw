@@ -27,10 +27,10 @@ const enCodeBlocks = {
       expand: "Expand diagram",
       expandNamed: "Expand diagram: {title}",
       rendering: "Rendering diagram…",
-      error: "This diagram could not be rendered. Check the source or simplify the diagram.",
+      error: "Couldn’t render this diagram. Check the source or simplify it.",
       rendererError:
-        "The Mermaid renderer could not load or finish. Reload the dashboard; if this continues, check proxy or authentication rules for its renderer asset URLs.",
-      imageError: "The diagram image could not be displayed. Reload the dashboard to try again.",
+        "Couldn’t load or finish the Mermaid renderer. Reload the dashboard; if this continues, check proxy or authentication rules for its renderer asset URLs.",
+      imageError: "Couldn’t display the diagram image. Reload the dashboard to try again.",
     },
   },
 } satisfies TranslationMap;

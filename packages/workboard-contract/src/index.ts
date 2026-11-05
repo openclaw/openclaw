@@ -1,6 +1,7 @@
 import type { WorkboardSessionsBoardSpec } from "./sessions-board.js";
 
 export type WorkboardDatabasePortApi<Database, Input> = {
+  postgres: string;
   inspectWorkboardPortSource(db: Database): {
     version: number;
     migrationRequired: boolean;

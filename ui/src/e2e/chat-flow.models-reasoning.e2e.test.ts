@@ -176,7 +176,7 @@ suite.define(() => {
 
       await page.setViewportSize({ height: 320, width: 1280 });
       await controls.evaluate((element) => {
-        (element as HTMLElement).style.top = "24px";
+        (element as HTMLElement).style.top = "48px"; // Keep the fixture below the pane header.
       });
       await expectMenuPlacement(menu, trigger, false, 320);
       await trigger.click();
@@ -383,7 +383,7 @@ suite.define(() => {
     await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
     await page.getByRole("button", { name: "Send message" }).click();
 
-    await page.locator(".chat-queue").getByText("Applying chat settings").waitFor({
+    await page.locator(".chat-queue").getByText("Applying session settings").waitFor({
       timeout: 10_000,
     });
     await page.locator(".chat-queue").getByText(prompt).waitFor({ timeout: 10_000 });

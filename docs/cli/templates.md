@@ -24,8 +24,11 @@ Enable **Templates** in **Settings → Labs** before adding one. On a headless i
 `gateway.controlUi.experimental.templates` to `true` in OpenClaw config.
 Authoring and inspecting local Template packages do not require the Labs toggle.
 
-The CLI accepts a local package directory, `CLAW.md`, or grouped JSON manifest.
-JSON manifests, `package.json`, and OpenClaw YAML profiles must contain valid UTF-8.
+The CLI accepts a canonical local package directory or `CLAW.md` with YAML frontmatter.
+Packages must declare `package.json.openclaw.template` as a safe package-relative
+path whose filename is `CLAW.md`, such as `CLAW.md` or `nested/CLAW.md`. The obsolete
+`openclaw.claw` selector and JSON Template manifests are rejected, including in downloaded archives.
+`CLAW.md`, `package.json`, and OpenClaw YAML profiles must contain valid UTF-8.
 If inspection reports an encoding error, re-encode the source file as UTF-8 and retry;
 Add refuses it before creating an agent or workspace.
 Publishing and searching Templates through ClawHub use the separate registry
@@ -83,6 +86,13 @@ requirements locally without installing packages, contacting ClawHub,
 starting an agent turn, enabling automations, or changing OpenClaw state.
 Requirements needing online preflight appear as blockers. `build` creates a
 deterministic `.tgz` and refuses to overwrite an existing file.
+
+`validate` and `build` accept a project-directory symlink and resolve the
+canonical project root. Manifest confinement and managed source-file checks
+remain unchanged.
+
+For `create`, omit `--name` and `--agent-id` to use default identities. Explicitly
+empty values are invalid and fail before project files are written.
 
 A minimal `package.json` identifies the package and its manifest:
 
@@ -237,6 +247,9 @@ and starts with "What can you do?" after a successful Add.
 unused ID or new path. Ordinary Add does not require a separate plan or
 review token. Exceptional trust warnings can still require explicit consent.
 
+For `add` and `dev`, an explicitly empty `--agent-id` is invalid. Omit the option
+to use the default unused ID.
+
 Gateway Add review responses describe schedules as either `{ cron, timezone }`
 or `{ everyMs }`, where `everyMs` is a positive integer in milliseconds. Delivery
 values are `none`, `last-channel`, or `owner`.
@@ -270,7 +283,7 @@ There is no Template ownership record or reverse-install operation.
 | `templates validate [path]`          | Validate project inputs and package contents.    |
 | `templates dev [path]`               | Build and preview locally without mutation.      |
 | `templates build [path] --out <tgz>` | Build a deterministic package artifact.          |
-| `templates inspect <source>`         | Inspect a package or grouped manifest.           |
+| `templates inspect <source>`         | Inspect a canonical package or `CLAW.md`.        |
 | `templates add <source>`             | Create a new agent and install its requirements. |
 
 Use `--json` for experimental machine-readable output. Validation errors,

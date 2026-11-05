@@ -215,7 +215,9 @@ The snapshot and lookup table keep repeated startup decisions on the fast path:
 - plugin config schema and channel config schema validation
 - startup auto-enable decisions
 
-Startup and hot replacement share one prepared registry publisher and the same inventory across all configured agent workspaces. Reload preserves workspace provenance so an unchanged linked plugin is not replaced when another plugin changes. Replacement retains unchanged plugin instances and validates candidate metadata before draining affected services and channels. A retained instance keeps its original registration and `api` object; it is not registered again. Plugin-wide runtime capabilities such as `api.runtime.llm.complete` select the committed plugin inventory when each call starts, so a retained context engine can still start new completions after another plugin is replaced, including from work that restores an earlier turn's context. Reordering object keys in equivalent metadata or settings does not replace a registration; changed values, ordered lists, and explicit reload requests still do. It stops and disposes the previous registration before registering its replacement, then publishes runtime methods and metadata together. Connected clients refresh their plugin capabilities after publication. If replacement fails before publication and cleanup succeeds, recovery registers captured previous code and configuration with fresh resource ownership. A failure after publication reports the committed generation. Plugin runtime imports remain lazy; retaining metadata does not activate every discovered plugin.
+Startup and hot replacement share one prepared registry publisher and the same inventory across all configured agent workspaces. Reload preserves workspace provenance so an unchanged linked plugin is not replaced when another plugin changes. Replacement retains unchanged plugin instances and validates candidate metadata before draining affected services and channels. A retained instance keeps its original registration and `api` object; it is not registered again. Plugin-wide runtime capabilities such as `api.runtime.llm.complete` select the committed plugin inventory when each call starts, so a retained context engine can still start new completions after another plugin is replaced, including from work that restores an earlier turn's context. Reordering object keys in equivalent metadata or settings does not replace a registration; changed registration settings, ordered lists, and explicit reload requests still do. It stops and disposes the previous registration before registering its replacement, then publishes runtime methods and metadata together. Connected clients refresh their plugin capabilities after publication. If replacement fails before publication and cleanup succeeds, recovery registers captured previous code and configuration with fresh resource ownership. A failure after publication reports the committed generation. Plugin runtime imports remain lazy; retaining metadata does not activate every discovered plugin.
+
+When an accepted in-place config change retains a plugin, newly prepared agent runtimes borrow its running service only when their plugin settings match the Gateway's committed config. Pending edits and differently scoped settings do not borrow that service, even when they match its original registration settings. Plugins with hot or no-op config policies must read those settings from the current runtime config; their original `api.pluginConfig` snapshot remains unchanged.
 
 Config-only service reloads keep a pending restart when cleanup exceeds the five-second observation deadline. The Gateway logs the deferred restart, retains the original cleanup work, and automatically starts the replacement after cleanup succeeds. Newer config reloads and registry handoffs supply the replacement configuration; shutdown cancels the pending restart. Rejected cleanup remains a visible service failure and never permits a replacement to acquire its resources.
 
@@ -230,6 +232,8 @@ A delivery-enabled requester continuation refused at its initial runtime acquisi
 While admitted work drains, ordinary model catalog, auth-status, and chat metadata reads continue using the active publication. Catalog refresh work, downloaded catalog adoption, and new execution still wait. Published facts retire when resource replacement begins; an admitted-work timeout keeps those facts available without rebuilding them. An unfinished startup publication still follows its existing cancellation and recovery path.
 
 Session lists wait for replacement provider policy when the previous runtime has retired. Disconnecting a reader cancels only that reader’s wait; other readers and the reload continue. Lists resume with the published replacement catalog and never invoke retired provider callbacks.
+
+Queued replies refused during plugin replacement wait for that replacement to settle instead of repeatedly preparing the same input. They retain FIFO custody and recheck live authority before execution. Channel shutdown cancels the wait and returns unexecuted durable input to ingress, where the replacement channel can reclaim it. A failed reload can resume the original instance. If the plugin stays disabled, the source records abandonment and remains durable for re-enablement; it does not keep an in-process retry loop alive.
 
 Retained work and in-flight calls share a 60-second pre-stop budget. Retained runs finish before ordinary call admission closes. Existing calls then settle while published metadata remains readable. Sidecars release their capability consumers before the remaining finite consumers drain; memory teardown retains cleanup authority for its exact retiring provider instances until the raw cleanup settles. Replacement stops services and channels only after that handoff. Idle service and channel custody stops later with its owners. If work does not finish, the reload fails once, resumes admission, and clears the reload status; the previous plugin generation keeps serving. The deadline does not cancel agent runs or permit disposal of unfinished writes. Retry `openclaw plugins reload <id>` after that work finishes, or explicitly select `--wait` for a shared ten-minute pre-stop drain budget, matching the plugin lifecycle wait budget. Both modes hold new agent runs behind the replacement gate until completion or rollback; `status` exposes the pending reload and its drain deadline in JSON. The extended wait also expires with the previous generation serving. The explicit wait belongs to its requesting connection: Ctrl+C or disconnect cancels the pre-publication wait and runs the same rollback. Cancellation never disposes admitted work, bypasses cleanup, or reverses a committed publication. Service shutdown and recovery retain their bounded deadlines. Successful publication logs the applied replacement and emits `plugins.changed`.
 
@@ -296,6 +300,14 @@ rebuild first when the installation loads compiled output. Embedded executable c
 changes require a newly built executable. External on-disk plugins continue to
 capture updated source and dependencies on explicit reload.
 
+For development, `OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS=1` lets an explicit reload
+capture a bundled plugin's own code: its package tree and the build chunks that
+`dist/runtime-dependency-ownership.json` lists for that plugin. Those chunks are used
+only by plugins, though other plugins may share them. Imports of host,
+SDK, and core-shared chunks resolve to the Gateway's loaded modules, including from
+captured Workers. Standalone executables ignore the variable. See
+[Development: reload edited bundled code](/cli/plugins/uninstall-and-update#development-reload-edited-bundled-code).
+
 WebAssembly libraries remain ordinary captured assets even when they use a `.so`
 filename. Directory asset references reuse an active capture walk; filesystem
 directory cycles still fail capture.
@@ -306,6 +318,10 @@ progress hint only: the host still services the transport and checks the actual
 task receipt and deadline. Readers retain bounded polling for worker failures.
 
 Doctor retains an unexecuted source snapshot across its maintenance phases.
+Selected setup sources are prepared by the existing plugin preparation worker
+before Doctor binds callbacks, so source capture does not block its main event
+loop. Preparation rechecks the selected inventory after awaiting the worker;
+canceled or retired work settles its cleanup before releasing source custody.
 Each phase admits fresh callback instances with private module files and settles
 their cleanup before releasing its lifecycle lease. The snapshot is reused for
 the whole operation; edit plugin sources between Doctor runs, not between phases.
@@ -518,6 +534,12 @@ system-temporary instance and reports a warning. Normal disposal still removes
 that instance; automatic cleanup does not scan unrelated system-temporary roots.
 There is no total disk quota, and an active instance may legitimately exceed the
 one-hour cleanup grace period.
+Before allocating a capture or staging an installed source snapshot, OpenClaw
+checks the destination volume and refuses when less than 512 MiB is available.
+The error asks the operator to free space and retry. State-volume refusal keeps
+the existing temporary-volume fallback; setup preparation records source failure
+without stopping startup. Unavailable disk statistics keep best-effort loading.
+This preflight is a free-space floor, not a size reservation for an in-flight copy.
 If its payload directory is removed while the instance still holds custody, the
 next capture recreates that directory under the same lease. This does not restore
 previously deleted captured files or recreate a missing ownership directory.

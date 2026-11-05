@@ -57,7 +57,6 @@ type OperatorSource = {
     device: object | undefined,
     access: object | null | undefined,
     ingress: object | undefined,
-    invocation: object | undefined,
   ];
   membership: string | undefined;
   token: object;
@@ -292,7 +291,11 @@ export async function captureGatewayOperatorRunAuthority(input: {
     release?: () => void;
   }> | null;
   /** Additional request lifetime; never replaces the authenticated access grant. */
-  invocationAuthority?: Readonly<{ assertCurrent: () => void; signal?: AbortSignal }>;
+  invocationAuthority?: Readonly<{
+    assertCurrent: () => void;
+    signal?: AbortSignal;
+    release?: () => void;
+  }>;
 }): Promise<{ authority: AdmittedRunOperatorAuthority; release: () => void } | undefined> {
   const params = { ...input };
   const inherited = params.client?.internal?.operatorRunAuthority;
@@ -380,7 +383,6 @@ export async function captureGatewayOperatorRunAuthority(input: {
       (params.hasCurrentClientAuthority ? {} : undefined),
     sourceAuthority,
     ingressPrincipal,
-    params.invocationAuthority,
   ];
   let releaseSource: (() => void) | undefined;
   let references = 1;
@@ -472,8 +474,15 @@ export async function captureGatewayOperatorRunAuthority(input: {
             unsubscribe?.();
           }
           preparedProfile?.release();
-          params.sourceAuthority?.release?.();
-          releaseDevice?.();
+          try {
+            params.sourceAuthority?.release?.();
+          } finally {
+            try {
+              params.invocationAuthority?.release?.();
+            } finally {
+              releaseDevice?.();
+            }
+          }
         }
       }
     };
@@ -594,6 +603,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
       rolePolicy: prepareRunRolePolicy(capturedSourcePolicy),
       readCurrentRoleFacts: assertProfileCurrent,
       source: source.token,
+      invocation: params.invocationAuthority,
       signal: revocation.signal,
       retain: () => {
         assertCurrent();
@@ -639,6 +649,37 @@ function captureGatewayOperatorRecoverySnapshot(params: {
   config: OpenClawConfig;
 }): OperatorRunRecoverySnapshot | undefined {
   const { client, authority, identity } = params;
+  const principal = client.internal?.remoteIngressPrincipal;
+  if (principal?.recoverySource) {
+    principal.assertCurrent();
+    authority.assertCurrent();
+    const modelPolicy = captureOperatorModelPolicySnapshot(params.modelPolicy);
+    if (params.modelPolicy && !modelPolicy) {
+      return undefined;
+    }
+    const profile = identity.readCurrentProfile();
+    return normalizeGatewayOperatorRecoverySnapshot({
+      profileId: authority.profileId,
+      scopes: [...authority.scopes],
+      assignedRole: profile.assignedRole,
+      githubLogin: profile.githubLogin ?? null,
+      rolePolicy: sourceRolePolicy(
+        resolveOperatorRolePolicyForAssignment(
+          profile.profileId,
+          profile.assignedRole,
+          params.config,
+          profile.githubLogin ?? null,
+        ),
+      ),
+      modelPolicy,
+      grant: authority.gatewayAccessGrant,
+      aliasBindingIds: identity.emailBindingIds,
+      sourceIngress: "principal",
+      ingress: principal.recoverySource,
+      controlUiAdmin: false,
+      localOperator: false,
+    });
+  }
   if (
     !client.internal?.authenticatedOperator ||
     client.internal.syntheticClient ||

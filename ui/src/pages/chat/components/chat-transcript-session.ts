@@ -10,7 +10,7 @@ import type { ChatReadingBookmark, ChatSessionScrollPosition } from "../scroll.t
 import type { ChatMessageEntryAnimations } from "./chat-message-entry.ts";
 import { flushMessageOverflowMeasurements } from "./chat-message-overflow.ts";
 import type { TranscriptAnnouncement } from "./chat-transcript-announcement.ts";
-import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
+import { measureTranscriptRow, readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
 import type {
   ComposerActivityLayout,
   TranscriptLayoutOwner,
@@ -51,7 +51,9 @@ export type TranscriptCallbacks = {
 };
 
 export const CHAT_TRANSCRIPT_ESTIMATED_ROW_PX = 120;
-export const CHAT_TRANSCRIPT_OVERSCAN = 2;
+// Keep one measured neighbor on either side; farther rows are prepared
+// separately by TranscriptInitialRange.
+export const CHAT_TRANSCRIPT_OVERSCAN = 1;
 // Initial virtual rows can correct their estimates for several frames. Observe
 // the range for ~200ms before accepting a saved offset that remains unreachable.
 export const CHAT_TRANSCRIPT_SCROLL_RESTORE_STABLE_FRAMES = 12;
@@ -115,8 +117,11 @@ export function createTranscriptPresentation(
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
   rowElements: () => Iterable<HTMLElement>,
   beforeMeasure: () => void,
+  measureRow = measureTranscriptRow,
   onMeasured?: (row: HTMLElement, height: number) => void,
 ) {
+  const redraw = {};
+  let resizeOffsetSynced = false;
   const readConnectedRows = (): (() => boolean) | null => {
     flushMessageOverflowMeasurements();
     const apply = readConnectedTranscriptRows(
@@ -134,6 +139,37 @@ export function createTranscriptPresentation(
   };
 
   const presentation = {
+    commitChange(commit: () => void, defer: boolean) {
+      if (defer) {
+        scheduleLayout(redraw, () => commit);
+      } else {
+        cancelLayout(redraw);
+        commit();
+      }
+    },
+    cancelChange() {
+      cancelLayout(redraw);
+    },
+    measureElement(element: HTMLElement, entry: ResizeObserverEntry | undefined) {
+      if (entry && !resizeOffsetSynced) {
+        // Observer entries share one native reader position. Keep the virtualizer's
+        // accumulated correction between entries, including clamped scroll writes.
+        resizeOffsetSynced = true;
+        queueMicrotask(() => {
+          resizeOffsetSynced = false;
+        });
+        beforeMeasure();
+      } else if (!entry && !virtualizer.targetWindow?.ResizeObserver) {
+        beforeMeasure();
+      }
+      return measureRow(element, entry, virtualizer);
+    },
+    measureInitialRows(messages: TranscriptMessageElements) {
+      const applyRows = readConnectedRows();
+      // Bubble reads share the row pass's layout; publish only the accepted range.
+      const applyRail = messages.prepareInitialLayout();
+      return [applyRows?.() ?? false, applyRail] as const;
+    },
     measureRows: () => readConnectedRows()?.() ?? false,
     measureRowsWithoutScrollAdjustment() {
       const adjustScroll = virtualizer.shouldAdjustScrollPositionOnItemSizeChange;
@@ -150,7 +186,10 @@ export function createTranscriptPresentation(
         element === scrollElement() ? (readConnectedRows() ?? undefined) : undefined,
       );
     },
-    disconnect: () => cancelLayout(presentation),
+    disconnect() {
+      cancelLayout(presentation);
+      presentation.cancelChange();
+    },
   };
   return presentation;
 }

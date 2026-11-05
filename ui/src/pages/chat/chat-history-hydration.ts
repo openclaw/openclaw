@@ -7,10 +7,8 @@ import {
   isVisibleChatHistoryMessage,
   visibleChatHistoryMessages,
 } from "../../lib/chat/message-visibility.ts";
-import {
-  formatMissingOperatorReadScopeMessage,
-  isMissingOperatorReadScopeError,
-} from "../../lib/gateway-errors.ts";
+import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
+import { formatMissingOperatorReadScopeMessage } from "../../lib/permission-error.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import { subscribeToSharedRequest } from "../../lib/shared-request-subscription.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
@@ -607,7 +605,7 @@ export async function hydrateChatHistory(
       requestAgentId,
       startup: method === "chat.startup",
       message: missingReadScope
-        ? formatMissingOperatorReadScopeMessage("existing chat history")
+        ? formatMissingOperatorReadScopeMessage("session history")
         : formatChatHistoryLoadError(err),
       retryable:
         isRetryableChatReadError(err, method) ||
