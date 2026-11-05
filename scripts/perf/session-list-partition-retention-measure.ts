@@ -98,6 +98,7 @@ const read = (opts: (typeof queries)[number], owner?: SessionListViewCache) => {
     partitions: selected.partitions,
     retained: owner && view ? owner.partitions(view) : undefined,
     getTarget: selected.get,
+    involvementKeys: selected.involvementKeys,
     configuredAgentIds: selected.configuredAgentIds,
     getRowContext: () => context,
   });
