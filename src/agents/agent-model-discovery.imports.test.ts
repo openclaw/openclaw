@@ -2,11 +2,12 @@ import { describe, expect, it } from "vitest";
 import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
 
 describe("agent model discovery imports", () => {
-  it("keeps prepared catalog metadata independent of streaming execution", () => {
+  it("keeps prepared catalog metadata independent of streaming and protocol validation", () => {
     expect(
       findSourceImportBackedges("src/agents/prepared-model-catalog.worker.ts", [
         "src/agents/ai-transport-runtime-host.ts",
         "packages/ai/src/transports.ts",
+        "packages/gateway-protocol/src/protocol-validator.ts",
       ]),
     ).toEqual([]);
   });

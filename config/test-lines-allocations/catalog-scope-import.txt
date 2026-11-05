@@ -1,0 +1,2 @@
+# Extend the existing catalog import boundary regression to protocol validation.
+1
