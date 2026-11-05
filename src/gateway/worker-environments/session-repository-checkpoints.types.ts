@@ -1,5 +1,5 @@
 import type { WorkerWorkspaceGitHistory } from "./workspace-result-inventory.js";
-import type { readStagedWorkerWorkspaceResult } from "./workspace-result-staging.js";
+import type { withStagedWorkerWorkspaceManifest } from "./workspace-result-staging.js";
 
 export type RepositoryGitHistory = {
   gitHistory?: WorkerWorkspaceGitHistory;
@@ -7,7 +7,7 @@ export type RepositoryGitHistory = {
   gitHistoryNote?: string;
 };
 
-type CheckpointSnapshot = Awaited<ReturnType<typeof readStagedWorkerWorkspaceResult>>;
+type CheckpointSnapshot = Parameters<Parameters<typeof withStagedWorkerWorkspaceManifest>[1]>[0];
 export type SessionRepositoryCheckpointPayload = CheckpointSnapshot &
   RepositoryGitHistory & {
     stagingRoot: string;

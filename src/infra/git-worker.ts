@@ -99,7 +99,7 @@ const SPAWN_OPERATIONS = {
   "workspace.manifest.overlay": "workspace.manifest",
   "workspace.manifest.pair": "workspace.manifest",
   "workspace.manifest.staged": "workspace.manifest",
-  "workspace.manifest.entries": "workspace.manifest",
+  "workspace.manifest.result": "workspace.manifest",
   "workspace.manifest.file": "workspace.manifest",
   "workspace.manifest.nodes": "workspace.manifest",
   "workspace.manifest.stage-input": "workspace.manifest",

@@ -9,6 +9,7 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { resolveGitHubPublicationFailure } from "../github-publication-failure.js";
 import { withWorkspaceHashMemo } from "./workspace-hash-memo.js";
 import { useAgedWorkspaceHashClock } from "./workspace-hash-memo.test-support.js";
 import { sha256 as digest, workspaceFile } from "./workspace-manifest-fixtures.test-support.js";
@@ -446,6 +447,42 @@ it("admits a large rebase against its original synchronization manifest", async 
   expect(
     result.entries.reduce((bytes, entry) => bytes + (entry.type === "file" ? entry.size : 0), 0),
   ).toBe(586_579_968);
+});
+
+it("bounds changed paths and preserves actionable guidance across the worker and publisher", async () => {
+  const files = (prefix: string, count: number, hash: string) =>
+    Array.from({ length: count }, (_, index) => ({
+      ...workspaceFile(`${prefix}-${index}`, ""),
+      sha256: hash.repeat(64),
+    }));
+  const baseRaw = JSON.stringify({
+    version: 1,
+    baseCommit: null,
+    entries: [
+      ...files("deleted", 24_999, "a"),
+      ...files("modified", 25_000, "a"),
+      { path: "removed", type: "directory", mode: 0o700 },
+    ].toSorted((left, right) => (left.path < right.path ? -1 : 1)),
+  });
+  const base = { raw: baseRaw, ref: `sha256:${digest(baseRaw)}` };
+  const currentEntries = files("modified", 25_000, "b");
+  expect((await parseWorkspaceManifestPair(pair(base, encode(currentEntries)))).paths).toHaveLength(
+    25_000,
+  );
+  const failure: unknown = await parseWorkspaceManifestPair(
+    pair(base, encode([...currentEntries, workspaceFile("new", "")])),
+  ).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  expect(failure).toMatchObject({
+    code: "WORKSPACE_RESULT_LIMIT",
+    message: expect.stringContaining("50001"),
+  });
+  expect(resolveGitHubPublicationFailure(failure)).toMatchObject({
+    code: "workspace_changed",
+    nextAction: expect.stringContaining(".gitignore"),
+  });
 });
 
 it("admits a pair of manifests at the exact supported byte limit", async () => {

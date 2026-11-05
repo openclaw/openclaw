@@ -10,6 +10,7 @@ import {
   emptyJournal,
   workspaceManifest as makeManifest,
 } from "./workspace-manifest-fixtures.test-support.js";
+import { loadStagedWorkspaceManifest } from "./workspace-manifest-worker.js";
 import {
   parseWorkerWorkspaceReconciliationPlan,
   serializeWorkerWorkspaceManifest,
@@ -20,7 +21,6 @@ import {
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
   applyStagedWorkerWorkspaceResult,
-  readStagedWorkerWorkspaceResult,
   workerWorkspaceResultRef,
   workerWorkspaceResultStaging,
 } from "./workspace-result-staging.js";
@@ -157,10 +157,10 @@ it("recovers the shipped v1 full tree while applying only changed entries", asyn
   await expect(fixture.read("keep.txt")).resolves.toBe("local edit\n");
 });
 
-it("recovers a converged shipped v1 deletion above the historical 25,000-record limit", async () => {
+it("recovers a converged shipped v1 deletion above the new changed-path limit", async () => {
   const fixture = await workspaceFixture(
     fileManifest(
-      numberedPaths("deleted", 25_001).map((name) => `${name}.txt`),
+      numberedPaths("deleted", 50_001).map((name) => `${name}.txt`),
       "a",
     ),
     makeManifest({}),
@@ -188,7 +188,7 @@ it("stages a directory-only v2 result above 25,000 reconciliation records", asyn
   });
   const fixture = await workspaceFixture(manifest("base"), manifest("current"));
   await fixture.stage();
-  const staged = await readStagedWorkerWorkspaceResult(fixture.root, fixture.ref);
+  const staged = await loadStagedWorkspaceManifest(fixture.root, fixture.ref);
   expect(staged).toMatchObject({ changed: true, changedEntries: [] });
   expect(staged.base.directories).toHaveLength(directoryCount);
   expect(staged.current.directories).toHaveLength(directoryCount);

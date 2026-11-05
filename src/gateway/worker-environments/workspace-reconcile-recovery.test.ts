@@ -521,7 +521,7 @@ describe("worker workspace manifest validation and transfer", () => {
     expect(workerWorkspaceTransferPaths(extra, current)).toEqual([lastFile.path, "link"]);
   });
 
-  it("accepts a directory replacement spanning two complete supported inventories", () => {
+  it("rejects an oversized directory replacement without truncating the inventory diff", () => {
     const manifest = (prefix: string): WorkerWorkspaceManifest => ({
       version: 1,
       baseCommit: null,
@@ -534,7 +534,9 @@ describe("worker workspace manifest validation and transfer", () => {
     const base = manifest("removed");
     const current = manifest("added");
 
-    expect(workerWorkspaceTransferPaths(current, base)).toEqual([]);
+    expect(() => workerWorkspaceTransferPaths(current, base)).toThrow(
+      "Workspace result changes 500000 files/directories (limit 50000)",
+    );
     expect(changedPaths(base, current).size).toBe(2 * MAX_WORKSPACE_INVENTORY_ENTRIES);
   });
 });
