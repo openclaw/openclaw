@@ -40,6 +40,11 @@ vi.mock("../gateway/worker-environments/placement-turn-claim-events.js", async (
   return importOriginal();
 });
 
+vi.mock("../acp/runtime/session-meta-source.worker.js", async (importOriginal) => {
+  loaded.push("acp-session-source");
+  return importOriginal();
+});
+
 import { stateWorkerRegistry } from "./openclaw-state-worker-registry.js";
 
 it("loads only the requested domain and routes exact operation names after preparation", async () => {
@@ -110,6 +115,17 @@ it("prepares exact operations before their namespace fallback", async () => {
   expect(registry.prepare("session.write")).toBe(refused);
   expect(loadWrite).toHaveBeenCalledOnce();
   expect(registry.has({ type: "session.write", input: "entry" })).toBe(false);
+});
+
+it("prepares session maintenance without loading ACP recording", async () => {
+  for (const type of ["sessionState.prune", "sessionState.sweep"]) {
+    await stateWorkerRegistry.prepare(type);
+    expect(stateWorkerRegistry.has({ type, input: undefined })).toBe(true);
+  }
+  expect(loaded).not.toContain("acp-session-source");
+  await stateWorkerRegistry.prepare("sessionState.record");
+  expect(stateWorkerRegistry.has({ type: "sessionState.record", input: undefined })).toBe(true);
+  expect(loaded.filter((name) => name === "acp-session-source")).toHaveLength(1);
 });
 
 it("prepares placement recovery and reads without loading dispatch or turn execution", async () => {
