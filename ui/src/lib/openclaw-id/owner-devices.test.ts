@@ -1,6 +1,13 @@
-import { describe, expect, it } from "vitest";
-import { approverOf, devicesApprovedBy } from "./owner-devices.ts";
-import type { OpenClawIdOwnerDevice } from "./types.ts";
+import { describe, expect, it, vi } from "vitest";
+import {
+  formatEd25519PublicKey,
+  generateEd25519Signer,
+} from "../../../../packages/openclaw-id-protocol/src/index.ts";
+import { loadOwnerDeviceSigner } from "./device-key.ts";
+import { approverOf, devicesApprovedBy, signOwnerDeviceRevocation } from "./owner-devices.ts";
+import type { OpenClawIdOwnerDevice, OpenClawIdPeopleLink } from "./types.ts";
+
+vi.mock("./device-key.ts", () => ({ loadOwnerDeviceSigner: vi.fn() }));
 
 // A listed owner device `name`, approved by the device `approvedBy` (or the kit: "root").
 function device(name: string, approvedBy: string): OpenClawIdOwnerDevice {
@@ -33,5 +40,20 @@ describe("owner devices", () => {
     expect(approverOf(all, local)).toEqual({ kind: "kit" });
     expect(approverOf(all, phone)).toEqual({ kind: "device", label: "laptop" });
     expect(approverOf(all, orphan)).toEqual({ kind: "removed" });
+  });
+});
+
+describe("owner device revocation", () => {
+  it("signs for this claw at the seq it last read, and refuses without one", async () => {
+    const signer = await generateEd25519Signer();
+    vi.mocked(loadOwnerDeviceSigner).mockResolvedValue(signer);
+    const own = { ...device("own", "root"), devicePub: formatEd25519PublicKey(signer.publicKey) };
+    const targetKey = formatEd25519PublicKey((await generateEd25519Signer()).publicKey);
+    const target = { ...device("laptop", "own"), devicePub: targetKey };
+    const link = { clawId: "c".repeat(32), seq: 7, ownerDevices: [own, target] };
+    const signed = await signOwnerDeviceRevocation(link as OpenClawIdPeopleLink, target);
+    expect(signed.body).toMatchObject({ claw_id: "c".repeat(32), seq: 7 });
+    const stale = { ...link, seq: undefined } as OpenClawIdPeopleLink;
+    await expect(signOwnerDeviceRevocation(stale, target)).rejects.toThrow("not an owner device");
   });
 });
