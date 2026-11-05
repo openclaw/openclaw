@@ -20,6 +20,7 @@ import { createPluginRuntimeStore } from "../../plugin-sdk/runtime-store.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import type { HookRunner } from "../../plugins/hooks.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
+import { PluginInvocationScope } from "../../plugins/plugin-invocation-scope.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { createRuntimeChannel } from "../../plugins/runtime/runtime-channel.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
@@ -383,6 +384,42 @@ describe("channel turn delivery", () => {
       }
     },
   );
+
+  it("runs reply callbacks in the channel instance inside a reply run that exits it", async () => {
+    const channel = new PluginInstance("telegram");
+    const overlap = new PluginInstance("memory-core");
+    const runtime = createPluginRuntimeStore<PluginRuntime>({
+      pluginId: "reply-callback-owner",
+      errorMessage: "Telegram runtime not initialized",
+    });
+    channel.run(() => runtime.setRuntime(createPluginRuntimeMock()));
+    // A prepared-model lease with a generationOverlap consumer exits the caller's instance.
+    const lease = new PluginInvocationScope(createEmptyPluginRegistry(), [overlap], {
+      retained: true,
+    });
+    const reads: string[] = [];
+    const read = () => void reads.push(runtime.tryGetRuntime() ? "runtime" : "missing");
+    try {
+      await channel.run(() =>
+        runAssembled({
+          replyOptions: { onPartialReply: read },
+          dispatchReplyWithBufferedBlockDispatcher: async ({ replyOptions }) => {
+            await replyOptions?.onPartialReply?.({ text: "outside" });
+            await lease.run(async () => {
+              read();
+              await replyOptions?.onPartialReply?.({ text: "inside" });
+            });
+            return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+          },
+        }),
+      );
+      expect(reads).toEqual(["runtime", "missing", "runtime"]);
+    } finally {
+      lease.release();
+      await channel.dispose();
+      await overlap.dispose();
+    }
+  });
 
   it("preserves prepared payload custody and literals through preparation and message hooks", async () => {
     const order: string[] = [];
