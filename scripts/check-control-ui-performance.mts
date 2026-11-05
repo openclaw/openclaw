@@ -50,8 +50,9 @@ const controlUiPerformanceBudgets = {
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
   // Long-session windowing plus lazy Settings/layout changes preserve boot request counts.
-  // Measured Chat/New are 1,294,100/801,486 B; retain 192 B headroom.
-  chatBootJsGzipBytes: 1_294_292,
+  // Medium-row preparation cuts scroll CPU 18.6%; Chat measures 1,294,303 B.
+  // Retain 192 B headroom; New remains measured at 801,486 B.
+  chatBootJsGzipBytes: 1_294_495,
   newBootJsGzipBytes: 801_678,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
