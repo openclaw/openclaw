@@ -137,7 +137,12 @@ suite.define(() => {
                 currentRect: DOMRectReadOnly;
               }>;
             };
-            const rect = ({ x, y, width, height }: DOMRectReadOnly) => ({ x, y, width, height });
+            const rect = (bounds: DOMRectReadOnly) => ({
+              x: bounds.x,
+              y: bounds.y,
+              width: bounds.width,
+              height: bounds.height,
+            });
             const snapshot = (shift: LayoutShift) => ({
               startTime: shift.startTime,
               value: shift.value,
