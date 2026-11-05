@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-config.mjs";
 import { generateTeamShapeFixture, parseTeamShapeOptions } from "./team-shape-fixture.ts";
 import type { startWarmReloadAdmission } from "./warm-reload-admission.ts";
+import { seedWarmReloadMcpApp } from "./warm-reload-mcp-app.ts";
 import { seedWarmReloadPlugins } from "./warm-reload-plugins.ts";
 
 type RequestGateway = (method: string, params: Record<string, unknown>) => Promise<unknown>;
@@ -21,6 +22,7 @@ export type WarmReloadFixtureOptions = {
   transcriptLatePaint?: boolean;
   dashboardEndAnchor?: boolean;
   dashboardPaneChrome?: boolean;
+  dashboardMcpApp?: boolean;
   pluginActivation?: boolean;
   detailsSessionFacts?: boolean;
   activeTargets?: boolean;
@@ -334,6 +336,9 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       },
     };
     config.models = { ...config.models, catalogRefresh: { enabled: false } };
+    if (options.dashboardMcpApp) {
+      config.mcp = seedWarmReloadMcpApp(stateDir);
+    }
     config.plugins = { enabled: true, allow: ["openai"], entries: { openai: { enabled: true } } };
     const pluginFixture = options.pluginActivation ? seedWarmReloadPlugins(stateDir) : undefined;
     if (pluginFixture) {
@@ -658,6 +663,7 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
       targets,
       dashboardEndAnchor: options.dashboardEndAnchor ?? false,
       dashboardPaneChrome: options.dashboardPaneChrome ?? false,
+      dashboardMcpApp: options.dashboardMcpApp ?? false,
       dashboardOutsideOperatorRoster: options.dashboardPaneChrome ?? false,
       pluginActivation: pluginFixture?.ids ?? [],
       viewerId,
@@ -723,16 +729,40 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
           names: sidebarGroups,
           sectionOrder: sidebarSectionOrder,
         });
-        await request("board.widget.put", {
-          sessionKey: targets[1]!.key,
-          name: "warm-reload-verification",
-          title: "Synthetic reload dashboard",
-          placement: { size: "full" },
-          content: {
-            kind: "html",
-            html: "<!doctype html><html><head><style>body{font:18px system-ui;background:#10262c;color:#edf8f6;padding:36px}section{display:flex;gap:24px}article{background:#1d4248;border-radius:12px;padding:28px;flex:1}strong{font-size:48px;display:block}</style></head><body><h1>Synthetic reload dashboard</h1><p>Isolated Gateway • synthetic Team-shaped state</p><section><article><strong>3,000</strong>retained sessions</article><article><strong>9</strong>complete assistant rows</article><article><strong>11</strong>warm reload samples</article></section><h2>Verification queue</h2><p>Cache the full page, reconnect live authority, and update facts in place.</p><script>document.fonts.ready.then(() => requestAnimationFrame(() => requestAnimationFrame(() => window.top.postMessage({type: 'warm-reload-proof:dashboard-content-ready'}, '*'))));</script></body></html>",
-          },
-        });
+        if (options.dashboardMcpApp) {
+          const launched = await request("mcp.app.launch", {
+            sessionKey: targets[1]!.key,
+            serverName: "warm-reload",
+            toolName: "dashboard",
+            entrypointType: "thread",
+          });
+          if (!launched || typeof launched !== "object" || !("viewId" in launched)) {
+            throw new Error("Synthetic dashboard MCP App did not launch");
+          }
+          await request("board.widget.put", {
+            sessionKey: targets[1]!.key,
+            name: "warm-reload-verification",
+            title: "Synthetic reload dashboard",
+            placement: { size: "full" },
+            content: { kind: "mcp-app", viewId: launched.viewId },
+          });
+          await request("board.update", {
+            sessionKey: targets[1]!.key,
+            ops: [
+              { kind: "widget_resize", name: "warm-reload-verification", sizeW: 12, sizeH: 20 },
+            ],
+          });
+        } else
+          await request("board.widget.put", {
+            sessionKey: targets[1]!.key,
+            name: "warm-reload-verification",
+            title: "Synthetic reload dashboard",
+            placement: { size: "full" },
+            content: {
+              kind: "html",
+              html: "<!doctype html><html><head><style>body{font:18px system-ui;background:#10262c;color:#edf8f6;padding:36px}section{display:flex;gap:24px}article{background:#1d4248;border-radius:12px;padding:28px;flex:1}strong{font-size:48px;display:block}</style></head><body><h1>Synthetic reload dashboard</h1><p>Isolated Gateway • synthetic Team-shaped state</p><section><article><strong>3,000</strong>retained sessions</article><article><strong>9</strong>complete assistant rows</article><article><strong>11</strong>warm reload samples</article></section><h2>Verification queue</h2><p>Cache the full page, reconnect live authority, and update facts in place.</p><script>document.fonts.ready.then(() => requestAnimationFrame(() => requestAnimationFrame(() => window.top.postMessage({type: 'warm-reload-proof:dashboard-content-ready'}, '*'))));</script></body></html>",
+            },
+          });
         if (options.dashboardPaneChrome && options.pluginActivation) {
           await request("workboard.boards.upsert", {
             id: "warm-reload-proof",

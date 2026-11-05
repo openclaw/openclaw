@@ -1,8 +1,25 @@
 // Synthetic warm-reload panel metrics; never records widget or message contents.
 (() => {
   if (window !== window.top) {
+    window.top.postMessage(
+      { type: "warm-reload-proof:mcp-document", at: performance.timeOrigin + performance.now() },
+      "*",
+    );
     return;
   }
+  const appEvents = [];
+  const boardFrames = [];
+  window.addEventListener("message", (event) => {
+    const message = event.data;
+    if (
+      message?.type === "warm-reload-proof:mcp-app" ||
+      message?.type === "warm-reload-proof:mcp-document"
+    ) {
+      appEvents.push({ at: performance.now(), phase: message.phase ?? "document" });
+    } else if (typeof message?.method === "string" && message.method.startsWith("ui/")) {
+      appEvents.push({ at: performance.now(), phase: message.method });
+    }
+  });
   let previousAt = 0;
   let skeletonCount = 0;
   let skeletonMs = 0;
@@ -52,6 +69,24 @@
       })),
     }));
     const now = performance.now();
+    const pane = document.querySelector("[data-cached-session]");
+    const cell = document.querySelector(".board-widget--page-chrome");
+    const app = cell?.querySelector("mcp-app-view");
+    const frameState = {
+      pane: Boolean(pane),
+      cached: pane?.getAttribute("data-cached-session"),
+      cell: Boolean(cell),
+      app: Boolean(app),
+      frames: cell?.querySelectorAll("iframe").length ?? 0,
+      skeletons: skeletons
+        .filter((item) => item.variant === "board")
+        .reduce((count, item) => count + item.shimmers, 0),
+      opacity: cell ? getComputedStyle(cell).opacity : null,
+    };
+    const signature = JSON.stringify(frameState);
+    if (boardFrames.at(-1)?.signature !== signature) {
+      boardFrames.push({ at: now, signature, ...frameState });
+    }
     if (document.querySelector("openclaw-board-view .board-widget")) {
       cachedBoardLayoutMs ??= now;
     }
@@ -80,6 +115,7 @@
       proof.boardWidgetSkeletonMs = skeletonMs;
       proof.allBoardWidgetsVisibleMs = allWidgetsVisibleMs;
       proof.cachedBoardLayoutMs = cachedBoardLayoutMs;
+      proof.boardMcpAppAttribution = { appEvents, boardFrames };
     }
     requestAnimationFrame(sample);
   }
