@@ -3760,7 +3760,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
   );
 
   /* Stacked headers and pages without a toolbar clear floating chrome with padding. */
-  &:not(.content--toolbar-header) {
+  &:not(.content--toolbar-header, .content--plugin-embed) {
     padding-top: calc(var(--page-toolbar-height) + var(--page-toolbar-clearance) + 16px);
   }
 
@@ -3784,7 +3784,7 @@ html.openclaw-native-web-chrome
       var(--shell-native-titlebar-controls-width) + 8px - var(--content-inline-padding)
   );
 
-  &:not(.content--toolbar-header) {
+  &:not(.content--toolbar-header, .content--plugin-embed) {
     padding-top: calc(var(--page-toolbar-height) + 16px);
   }
 }
