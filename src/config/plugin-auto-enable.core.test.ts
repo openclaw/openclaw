@@ -83,7 +83,7 @@ it("prepares the selected setup probes before applying auto-enable policy", asyn
   setupRegistryMock.resolvePluginSetupRegistryAsync.mockReturnValueOnce(prepared.promise);
   setupRegistryMock.resolvePluginSetupAutoEnableReasons.mockClear();
   const operation = applyPluginAutoEnableAsync({
-    config: { plugins: { entries: { browser: { enabled: true } } } },
+    config: { plugins: { entries: { browser: {} } } },
     manifestRegistry: makeRegistry([{ id: "browser", channels: [] }]),
     env: makeIsolatedEnv(),
   });

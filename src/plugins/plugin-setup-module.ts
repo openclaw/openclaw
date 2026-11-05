@@ -7,14 +7,48 @@ import {
   retainPluginCache,
   retirePluginCacheInstance,
 } from "./plugin-cache.js";
-import { hasPluginGenerationSourceCustody } from "./plugin-generation-source-lookup.js";
+import {
+  hasPluginGenerationSourceCustody,
+  withPluginGenerationSourceCustody,
+} from "./plugin-generation-source-lookup.js";
 import type { PreparedPluginGenerationArtifact } from "./plugin-generation-worker.js";
 import { isPluginSourceAcquisitionError } from "./plugin-instance-error.js";
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { resolveBundledPluginStateOperationCapture } from "./plugin-state-operation-module-loader.js";
 
-export class PluginSetupPreparationRequiredError extends Error {}
+export class PluginSetupPreparationRequiredError extends Error {
+  constructor(
+    readonly record: PluginManifestRecord,
+    readonly source: string,
+    readonly rootDir: string,
+    readonly stateOperations?: false,
+  ) {
+    super(`Plugin ${record.id} Doctor source must be prepared before loading`);
+  }
+}
+
+/** Prepare only sources requested by a read, retaining its original selection and raw input. */
+export async function withPreparedPluginSetupRead<T>(read: () => T): Promise<T> {
+  return withPluginGenerationSourceCustody(() =>
+    withPluginSetupPreparation({}, async ({ assertCurrent }) => {
+      for (;;) {
+        try {
+          return read();
+        } catch (error) {
+          if (!(error instanceof PluginSetupPreparationRequiredError)) {
+            throw error;
+          }
+          await preparePluginSetupModuleLoader(error.record, error.source, error.rootDir, {
+            stateOperations: error.stateOperations,
+            assertCurrent,
+          });
+          assertCurrent();
+        }
+      }
+    }),
+  );
+}
 
 function setupKey(record: PluginManifestRecord, source: string, stateOperations?: false) {
   return `setup:${record.id}:${source}${stateOperations === false ? ":no-state-operations" : ""}`;
@@ -48,9 +82,7 @@ export function getPluginSetupModuleLoader(
       (options.stateOperations !== false &&
         resolveBundledPluginStateOperationCapture({ rootDir, source })))
   ) {
-    throw new PluginSetupPreparationRequiredError(
-      `Plugin ${record.id} Doctor source must be prepared before loading`,
-    );
+    throw new PluginSetupPreparationRequiredError(record, source, rootDir, options.stateOperations);
   }
   const instance = cached ?? new PluginInstance(record.id, { cache });
   const discard = () => {

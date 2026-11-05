@@ -174,7 +174,7 @@ export async function preparePluginDoctorMigrationBackupResources(
           const { preparePluginDoctorMigrationResources } =
             await import("./doctor-migration-resources.js");
           assertCurrent();
-          return await preparePluginDoctorMigrationResources(entries, { ...params, assertCurrent });
+          return await preparePluginDoctorMigrationResources(entries, params, assertCurrent);
         },
       ),
     ),

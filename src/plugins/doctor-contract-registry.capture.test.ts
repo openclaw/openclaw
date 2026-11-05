@@ -10,6 +10,7 @@ import {
 } from "../infra/worker-native-lifecycle.js";
 import { preparePluginDoctorContractModules } from "./doctor-contract-preparation.js";
 import {
+  listPluginDoctorLegacyConfigRules,
   listPluginDoctorSessionRouteStateOwners,
   listPluginDoctorStateMigrationEntries,
 } from "./doctor-contract-registry.js";
@@ -19,7 +20,9 @@ import {
   createPluginGenerationMetrics,
   withPluginGenerationMetrics,
 } from "./plugin-generation-metrics.js";
+import { withPluginGenerationSourceCustody } from "./plugin-generation-source-lookup.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
+import { withPreparedPluginSetupRead } from "./plugin-setup-module.js";
 import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -176,5 +179,38 @@ it("keeps other plugin migrations available after a dependency link cannot be cr
   expect(warnings).toEqual([expect.stringContaining("Plugin unprepared-plugin is not prepared")]);
   expect(await collected.plans[0]!.migration.migrateLegacyState(migrationInput(roots[1]!))).toEqual(
     { changes: ["healthy migration ran"], warnings: [] },
+  );
+});
+
+it("prepares only the raw diagnostic read's selected sources before resuming", async () => {
+  const records = ["first", "second"].map((id) => {
+    const rootDir = dirs.make(`doctor-raw-${id}-`);
+    writeTree(rootDir, {
+      "package.json": { type: "module" },
+      "doctor-contract-api.mjs": `export const legacyConfigRules = [{
+        path: ["${id}"], message: "${id} legacy value"
+      }];`,
+    });
+    return createPluginManifestRecordFixture({
+      id,
+      rootDir,
+      source: path.join(rootDir, "doctor-contract-api.mjs"),
+      origin: "config",
+      doctorContract: { configRepair: true },
+    });
+  });
+  await using cache = createPluginCache();
+  await withPluginCache(cache, () =>
+    withPluginGenerationSourceCustody(async () => {
+      const read = () =>
+        listPluginDoctorLegacyConfigRules({
+          manifestRegistry: { plugins: records, diagnostics: [] },
+        });
+      expect(() => read()).toThrow("Doctor source must be prepared");
+      const rules = await withPreparedPluginSetupRead(read);
+      expect(rules.map((rule) => rule.path)).toEqual([["first"], ["second"]]);
+      expect(cache.setupModules.size).toBe(2);
+      expect(read()).toEqual(rules);
+    }),
   );
 });

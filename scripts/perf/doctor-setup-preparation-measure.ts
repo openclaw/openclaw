@@ -137,25 +137,26 @@ fs.writeFileSync(
 `,
 );
 if (!large) {
-  for (const [index, name] of payloads.entries())
+  for (const [index, name] of payloads.entries()) {
     fs.writeFileSync(path.join(sourceRoot, name), bytes[index]!);
+  }
   payloadHash.update(bytes.join(""));
 }
 function inspectFixture() {
-  let files = 0;
-  let bytes = 0;
+  let fileCount = 0;
+  let byteCount = 0;
   const hash = large ? createHash("sha256") : undefined;
   const visit = (directory: string) => {
     for (const entry of fs
       .readdirSync(directory, { withFileTypes: true })
-      .sort((left, right) => left.name.localeCompare(right.name))) {
+      .toSorted((left, right) => left.name.localeCompare(right.name))) {
       const filename = path.join(directory, entry.name);
       if (entry.isDirectory()) {
         visit(filename);
       } else {
         assert(entry.isFile(), "Synthetic fixture must contain only directories and regular files");
-        files++;
-        bytes += fs.statSync(filename).size;
+        fileCount++;
+        byteCount += fs.statSync(filename).size;
         hash
           ?.update(path.relative(sourceRoot, filename))
           .update("\0")
@@ -164,7 +165,7 @@ function inspectFixture() {
     }
   };
   visit(sourceRoot);
-  return { files, bytes, digest: hash?.digest("hex") };
+  return { files: fileCount, bytes: byteCount, digest: hash?.digest("hex") };
 }
 const original = inspectFixture();
 const originalBytes = original.bytes;
@@ -241,8 +242,9 @@ const run = () =>
           {
             await using cache = createPluginCache();
             await withPluginCache(cache, async () => {
-              if (values.route === "prepared")
+              if (values.route === "prepared") {
                 await prepare!({ inventory, surfaces: ["stateMigrations"] });
+              }
               const entry = doctor.listPluginDoctorStateMigrationEntries({ inventory })[0];
               assert(entry, "Doctor contribution must not be silently skipped");
               const result = await entry.migration.migrateLegacyState(fixture.input);
@@ -310,8 +312,9 @@ try {
 const elapsedMs = performance.now() - start;
 const cpu = process.cpuUsage(cpuStart);
 const hostCpu = process.threadCpuUsage(hostCpuStart);
-if (large)
+if (large) {
   assert.deepEqual(inspectFixture(), original, "Callbacks must preserve all original source bytes");
+}
 const result = {
   route: values.route,
   ...(large ? { fixture: values.fixture } : {}),

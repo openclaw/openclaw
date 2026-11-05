@@ -33,6 +33,7 @@ export type PluginDoctorMigrationResourceCollectionParams = {
 export async function preparePluginDoctorMigrationResources(
   entries: readonly { pluginId: string; migration: PluginDoctorStateMigration }[],
   params: PluginDoctorMigrationResourceCollectionParams,
+  assertPreparationCurrent?: () => void,
 ) {
   const rehearsalRoot = resolveUpdateRehearsalRoot(params.env);
   const resources = new Map<string, PluginDoctorMigrationBackupResource>();
@@ -41,6 +42,7 @@ export async function preparePluginDoctorMigrationResources(
   for (const { pluginId, migration } of entries) {
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
+    assertPreparationCurrent?.();
     const notice = sqliteOnlyMigrationNotice(migration, params.config);
     if (notice) {
       notices.push(notice);
@@ -67,6 +69,7 @@ export async function preparePluginDoctorMigrationResources(
     });
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
+    assertPreparationCurrent?.();
     if (!Array.isArray(resolved)) {
       throw new Error(`Invalid migration backup inventory from ${pluginId}/${migration.id}`);
     }
@@ -107,6 +110,7 @@ export async function preparePluginDoctorMigrationResources(
     .filter((resource) => selectedPaths.has(resource.path))
     .toSorted((left, right) => left.path.localeCompare(right.path));
   const assertCurrent = () => {
+    // Collected facts outlive the preparation scope; caller and path authority remain live.
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
     if (!rehearsalRoot) {

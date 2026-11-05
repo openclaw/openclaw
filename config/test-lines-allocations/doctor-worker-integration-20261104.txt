@@ -1,2 +1,2 @@
-# Exact additional net test lines after integrating current Doctor migration cases and snapshot-custody isolation coverage.
-26
+# Exact additional net test lines for snapshot isolation, selected raw diagnostic preparation, and authority/cache lifetime regressions.
+116

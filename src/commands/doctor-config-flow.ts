@@ -22,6 +22,7 @@ import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-mig
 import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
 import { preparePluginDoctorContractModules } from "../plugins/doctor-contract-preparation.js";
 import { resolvePluginDoctorProviderRenames } from "../plugins/doctor-contract-registry.js";
+import { withPreparedPluginSetupRead } from "../plugins/plugin-setup-module.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
 import type { AutomaticHeartbeatRepairAdmission } from "./doctor-automatic-heartbeat-repair.js";
@@ -251,13 +252,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }
     const { findDoctorLegacyConfigIssues } =
       await import("./doctor/shared/legacy-config-issues.js");
-    return runWithCurrentPluginMetadata(state.candidate, async () => {
-      await preparePluginDoctorContractModules({
-        config: snapshot.parsed as OpenClawConfig,
-        surfaces: ["configRepair"],
-      });
-      return findDoctorLegacyConfigIssues(snapshot.parsed, snapshot.parsed);
-    });
+    return runWithCurrentPluginMetadata(state.candidate, () =>
+      withPreparedPluginSetupRead(() =>
+        findDoctorLegacyConfigIssues(snapshot.parsed, snapshot.parsed),
+      ),
+    );
   })();
   const seenLegacyIssues = new Set(
     snapshot.legacyIssues.map((issue) => `${issue.path}:${issue.message}`),
