@@ -87,6 +87,9 @@ starting an agent turn, enabling automations, or changing OpenClaw state.
 Requirements needing online preflight appear as blockers. `build` creates a
 deterministic `.tgz` and refuses to overwrite an existing file.
 
+For `create`, omit `--name` and `--agent-id` to use default identities. Explicitly
+empty values are invalid and fail before project files are written.
+
 A minimal `package.json` identifies the package and its manifest:
 
 ```json
@@ -239,6 +242,9 @@ and starts with "What can you do?" after a successful Add.
 `--agent-id` and `--workspace` override the default destination with an
 unused ID or new path. Ordinary Add does not require a separate plan or
 review token. Exceptional trust warnings can still require explicit consent.
+
+For `add` and `dev`, an explicitly empty `--agent-id` is invalid. Omit the option
+to use the default unused ID.
 
 Gateway Add review responses describe schedules as either `{ cron, timezone }`
 or `{ everyMs }`, where `everyMs` is a positive integer in milliseconds. Delivery

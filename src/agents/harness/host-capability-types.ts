@@ -6,7 +6,15 @@ import type {
 import type { ImageContent } from "../../../packages/llm-core/src/types.js";
 import type { AnyAgentTool } from "../tools/common.js";
 
-export type AgentHarnessContextMedia = { text?: string; images: ImageContent[] };
+export type AgentHarnessContextMedia = {
+  text?: string;
+  images: ImageContent[];
+  /** User native-image sources, including intentionally suppressed or unavailable pixels. */
+  hasImageAttachments?: boolean;
+  /** User attachments are exclusively native images, even if restoration failed. */
+  imageOnly?: boolean;
+};
+/** maxChars=0 classifies the user source without hydrating attachment content. */
 export type AgentHarnessContextMediaRequest = { message: AgentMessage; maxChars: number };
 
 type AgentHarnessHostApprovalResult = Readonly<{

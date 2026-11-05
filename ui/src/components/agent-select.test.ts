@@ -3,7 +3,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
-import { i18n, t } from "../i18n/index.ts";
+import { i18n } from "../i18n/index.ts";
+import { loadLazyLocaleTranslation } from "../i18n/lib/registry.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
@@ -456,21 +457,19 @@ it("keeps avatar text out of typeahead and announces option metadata", async () 
 });
 
 it("refreshes translated labels when the locale changes while mounted", async () => {
+  const chinese = await loadLazyLocaleTranslation("zh-CN");
   await i18n.setLocale("en");
   const element = await createAgentSelect({ options: [], value: "" });
-
   try {
-    const label = element.querySelector(".agent-select__label");
-    const englishLabel = label?.textContent?.trim();
-
+    i18n.registerTranslation("zh-CN", { agents: { noAgents: "暂无测试智能体" } });
+    const label = () => element.querySelector(".agent-select__label")?.textContent?.trim();
+    expect(label()).toBe("No agents yet");
     await i18n.setLocale("zh-CN");
     await element.updateComplete;
-
-    const translatedLabel = element.querySelector(".agent-select__label");
-    expect(translatedLabel?.textContent?.trim()).toBe(t("agents.noAgents"));
-    expect(translatedLabel?.textContent?.trim()).not.toBe(englishLabel);
+    expect(label()).toBe("暂无测试智能体");
   } finally {
     element.remove();
+    i18n.registerTranslation("zh-CN", chinese ?? {});
     await i18n.setLocale("en");
   }
 });

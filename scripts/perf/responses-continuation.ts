@@ -16,7 +16,9 @@
  * Explicit previous_response_id isolates commit from history comparison; it is not a
  * Gateway or model-turn latency measurement. Prefix flow hashes full prefixes.
  * Resolve flow measures the continuation decision with cloned replay history;
- * preparation, commit accounting, and wire encoding are outside that window.
+ * --reuse-input --frozen carries conversion-owned immutable identities forward;
+ * --image-every 0 isolates text/tool history (default: one mutable image per 25 turns).
+ * Preparation, commit accounting, and wire encoding are outside that window.
  * Allocation sampling includes collected objects. Its CPU is diagnostic only.
  */
 import assert from "node:assert/strict";
@@ -43,6 +45,8 @@ const { values } = parseArgs({
     flow: { type: "string", default: "commit" },
     conversations: { type: "string", default: "10" },
     frozen: { type: "boolean", default: false },
+    "reuse-input": { type: "boolean", default: false },
+    "image-every": { type: "string", default: "25" },
     "initial-turns": { type: "string", default: "0" },
     allocation: { type: "boolean", default: false },
   },
@@ -64,6 +68,8 @@ assert(Number.isSafeInteger(initialTurns) && initialTurns >= 0);
 if (values.frozen) {
   configureAiTransportHost({ immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData } });
 }
+const imageEvery = Number(values["image-every"]);
+assert(Number.isSafeInteger(imageEvery) && imageEvery >= 0);
 const history: NonNullable<ResponsesContinuationRequest["input"]> = [];
 const fixtures = Array.from({ length: turns + initialTurns }, (_, index) => {
   const callId = `call_bench_${index}`;
@@ -86,7 +92,7 @@ const fixtures = Array.from({ length: turns + initialTurns }, (_, index) => {
     summary: [],
     encrypted_content: `sealed-${index}`,
   });
-  if (index % 25 === 0) {
+  if (imageEvery > 0 && index % imageEvery === 0) {
     history.push({
       role: "user",
       content: [
@@ -147,11 +153,13 @@ const continuations = (values.flow === "resolve" ? fixtures : []).map(({ request
   request: {
     ...request,
     previous_response_id: undefined,
-    input: structuredClone([
-      ...(request.input ?? []),
-      ...response.output,
+    input: [
+      ...(request.input ?? []).map((item) =>
+        values["reuse-input"] && isDeeplyFrozenPlainData(item) ? item : structuredClone(item),
+      ),
+      ...structuredClone(response.output),
       { type: "message" as const, role: "user" as const, content: "Continue" },
-    ]),
+    ],
   },
 }));
 let lastHash = "";
@@ -231,6 +239,8 @@ console.log(
     turnsPerConversation: turns,
     initialTurns,
     frozen: values.frozen,
+    reuseInput: values["reuse-input"],
+    imageEvery,
     firstInputItems: fixtures[0]?.request.input?.length,
     conversations,
     iterations,

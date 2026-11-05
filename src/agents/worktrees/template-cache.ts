@@ -15,6 +15,7 @@ import {
 } from "./allocation.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
 import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
+import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 import {
   listGitWorktrees,
   requireGit,
@@ -126,7 +127,7 @@ async function retireWorktreeTemplate(
         timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS,
       });
     } else {
-      await fs.rm(record.path, { recursive: true, force: true });
+      await nativeWorktreeFilesystem.remove(record.path, options);
     }
     await deleteTemplateAsync(env, record.id, assertCurrent);
     return true;
@@ -328,7 +329,23 @@ export async function prepareWorktreeTemplate(params: {
           });
           return undefined;
         }
-        setWorktreePreparationTemplate("cold", { reason: "template-disk-admission" });
+        // Preserve the observed miss after build progress replaces reason with ready.
+        setWorktreePreparationTemplate("cold", {
+          reason: "template-disk-admission",
+          missReason: !existing
+            ? "no-generation"
+            : existing.status !== "ready"
+              ? "invalid"
+              : existing.backend !== params.backend
+                ? "backend-changed"
+                : existing.sourceCommit !== params.sourceCommit
+                  ? "commit-changed"
+                  : existing.contentKey !== params.contentKey
+                    ? "content-changed"
+                    : "invalid",
+          priorSourceCommit: existing?.sourceCommit.slice(0, 12),
+          requestedSourceCommit: params.sourceCommit.slice(0, 12),
+        });
         await params.requireSpace();
         if (
           existing &&

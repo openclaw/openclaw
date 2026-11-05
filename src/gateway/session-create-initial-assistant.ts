@@ -9,6 +9,7 @@ type FreshSessionConstraints = {
   params: Pick<
     CreateGatewaySessionParams,
     | "initialEntry"
+    | "initialCatalogContinuation"
     | "initialAssistantMessage"
     | "fork"
     | "atomicInitialization"
@@ -40,7 +41,7 @@ export function validateFreshSessionConstraints(input: FreshSessionConstraints) 
       "initial assistant transcript requires a new session without fork or deferred initialization",
     );
   }
-  if (params.initialEntry && existingEntry !== undefined) {
+  if ((params.initialEntry || params.initialCatalogContinuation) && existingEntry !== undefined) {
     return invalidSessionRequest("trusted initial session state requires a new session");
   }
   if (

@@ -55,6 +55,7 @@ import {
 } from "./monitor/sanitize-outbound.js";
 import { withIMessageRemoteFile } from "./remote-file.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";
+import { clearIMessageSendFailure, withIMessageSendFailureStatus } from "./send-status.js";
 import {
   bindIMessageCliSend,
   requestIMessageRpcSend,
@@ -263,6 +264,18 @@ export async function sendMessageIMessage(
       cfg,
       accountId: opts.accountId,
     });
+  return await withIMessageSendFailureStatus(account.accountId, () =>
+    sendMessageIMessageForAccount(to, text, opts, cfg, account),
+  );
+}
+
+async function sendMessageIMessageForAccount(
+  to: string,
+  text: string,
+  opts: IMessageSendOpts,
+  cfg: OpenClawConfig,
+  account: ResolvedIMessageAccount,
+): Promise<IMessageSendResult> {
   const cliPath = opts.cliPath?.trim() || account.config.cliPath?.trim() || "imsg";
   const dbPath = opts.dbPath?.trim() || account.config.dbPath?.trim();
   const remoteHost = await resolveIMessageRemoteHost({
@@ -487,6 +500,9 @@ export async function sendMessageIMessage(
         approvalKind: opts.approvalPrompt.approvalKind,
         allowedDecisions: opts.approvalPrompt.allowedDecisions,
       });
+    }
+    if (messageId !== "unknown") {
+      clearIMessageSendFailure(account.accountId);
     }
     const replyToId = isMessage ? effectiveReplyToId : resolvedReplyToId;
     const receiptMessageId = messageId.trim();

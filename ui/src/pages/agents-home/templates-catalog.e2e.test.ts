@@ -12,7 +12,7 @@ import {
   type ControlUiE2eServer,
 } from "../../test-helpers/control-ui-e2e.ts";
 
-const proofDir = createControlUiE2eArtifactDir("templates-rename-after");
+const proofDir = createControlUiE2eArtifactDir("templates-catalog");
 const capture = async (page: Page, name: string, content: Locator, scrollTo?: Locator) => {
   const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [content], {
     animations: "disabled",
@@ -65,6 +65,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     viewport = { width: 1440, height: 900 },
     entry = workflowOperator,
     detailPublisher: Partial<Pick<typeof workflowOperator, "ownerHandle" | "official">> = {},
+    loading = false,
   ) {
     const context = await browser.newContext({
       locale: "en-US",
@@ -74,6 +75,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     onTestFinished(() => context.close());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
+      heldMethods: loading ? ["templates.catalog.search"] : [],
       featureMethods: [
         "openclaw.chat",
         "templates.catalog.search",
@@ -94,7 +96,10 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
           issues: [],
         },
         "agents.list": agentsList,
-        "templates.catalog.search": { entries: [entry] },
+        "templates.catalog.search": {
+          entries: [entry],
+          overview: { featured: [entry], sections: [{ category: "research", entries: [entry] }] },
+        },
         "templates.catalog.detail": {
           detail: {
             ...entry,
@@ -139,6 +144,50 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     await page.goto(`${server.baseUrl}templates`);
     return { page, gateway };
   }
+
+  it.each([
+    { name: "desktop", width: 1200, height: 697 },
+    { name: "tall-desktop", width: 1440, height: 1200 },
+    { name: "mobile", width: 390, height: 844 },
+    { name: "tall-mobile", width: 390, height: 1200 },
+  ])("fills the visible catalog while loading at $name size", async (viewport) => {
+    const { page, gateway } = await fixture(viewport, undefined, undefined, true);
+    const loading = page.getByRole("status", { name: "Loading templates…" });
+    await loading.waitFor();
+    await capture(page, `loading-${viewport.name}`, loading);
+    const geometry = await loading.evaluate((grid) => {
+      const cards = Array.from(grid.children, (card) => card.getBoundingClientRect());
+      return {
+        bottom: cards.at(-1)!.bottom,
+        cardHeight: cards[0]!.height,
+        gap: Number.parseFloat(getComputedStyle(grid).rowGap),
+        hidden: Array.from(grid.children).every(
+          (card) => card.getAttribute("aria-hidden") === "true",
+        ),
+      };
+    });
+    expect(geometry.bottom).toBeGreaterThanOrEqual(viewport.height - geometry.gap);
+    expect(geometry.bottom).toBeLessThan(viewport.height + geometry.cardHeight + geometry.gap);
+    expect(geometry.cardHeight).toBeGreaterThanOrEqual(140);
+    expect(geometry.cardHeight).toBeLessThanOrEqual(200);
+    expect(geometry.hidden).toBe(true);
+    expect(await loading.count()).toBe(1);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      viewport.width,
+    );
+    if (viewport.name === "desktop") {
+      await page.setViewportSize({ width: 820, height: 1024 });
+      await expect
+        .poll(() =>
+          loading.evaluate((grid) => grid.lastElementChild!.getBoundingClientRect().bottom),
+        )
+        .toBeGreaterThanOrEqual(1012);
+      await capture(page, "loading-resized-tablet", loading);
+    }
+    await gateway.resolveDeferred("templates.catalog.search");
+    await page.locator("[data-templates-entry]").first().waitFor();
+    expect(await loading.count()).toBe(0);
+  });
 
   async function openDetail(page: Page) {
     const card = page.locator("[data-templates-explore] [data-templates-entry]").first();
@@ -219,8 +268,9 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       }));
     expect(Math.abs(titleRow.head - titleRow.name)).toBeLessThan(1);
     await gateway.waitForRequest("templates.catalog.search", {
-      match: { featured: true, limit: 8 },
+      match: { overview: true, limit: 8 },
     });
+    expect(await gateway.getRequests("templates.catalog.search")).toHaveLength(1);
 
     await gateway.setMethodResponse("templates.catalog.search", {
       entries: [researchTemplate, workflowOperator],
@@ -290,6 +340,17 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       );
     },
   );
+
+  it("distinguishes an empty catalog from no matching templates", async () => {
+    const { page, gateway } = await fixture();
+    await page.locator("[data-templates-featured] [data-templates-entry]").first().waitFor();
+    await gateway.setMethodResponse("templates.catalog.search", { entries: [] });
+    const search = page.getByPlaceholder("Search templates");
+    await search.fill("unmatched");
+    await page.getByText("No templates match your search.", { exact: true }).waitFor();
+    await search.fill("");
+    await page.getByText("No templates yet.", { exact: true }).waitFor();
+  });
 
   it("uses the accepted publisher to add a personal Template and start chat despite pending setup", async () => {
     const community = {

@@ -54,6 +54,13 @@ export function describeJobNextRun(job: CronJob, absolute = false): string {
   if (!job.enabled) {
     return t("cron.list.paused");
   }
+  const waiting = job.state?.admissionDeferred;
+  if (waiting) {
+    return t("cron.jobState.waiting", {
+      reason: formatUiExternalText(waiting.reason),
+      since: formatMs(waiting.sinceMs),
+    });
+  }
   const next = job.state?.nextRunAtMs;
   return next === undefined
     ? t("cron.form.noNextRun")
@@ -65,6 +72,16 @@ export function describeJobNextRun(job: CronJob, absolute = false): string {
 export function JobStateIndicator(props: { job: CronJob }) {
   const presentation = (): [string, IconName | null, string] => {
     const autoDisabled = props.job.state?.autoDisabled;
+    const waiting = props.job.enabled && props.job.state?.admissionDeferred;
+    if (!isCronJobRunning(props.job) && waiting) {
+      return waiting.attempts >= 5
+        ? [
+            "warning",
+            "alertTriangle",
+            t("cron.jobState.waitingWarning", { count: String(waiting.attempts) }),
+          ]
+        : ["paused", "clock", describeJobNextRun(props.job)];
+    }
     return isCronJobRunning(props.job)
       ? ["running", "loader", t("cron.runs.runStatusRunning")]
       : autoDisabled

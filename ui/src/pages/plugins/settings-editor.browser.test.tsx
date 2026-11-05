@@ -467,7 +467,7 @@ describe("grouped editor field discovery", () => {
     }
     await searchSettings(editor, "does-not-match");
     expect(query(".cfg-map")).toBeNull();
-    expect(query(".settings-empty")?.textContent).toContain("No matching settings.");
+    expect(query(".settings-empty")?.textContent).toContain("No settings match your search.");
   });
 });
 
