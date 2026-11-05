@@ -1,0 +1,4 @@
+# Regression coverage for the recorded exec warning rendered in the approval
+# history request cell: warned row shows the note, unwarned row does not, and
+# markup in a recorded warning is escaped, not executed (PR #193598).
+40

@@ -69,8 +69,10 @@ const controlUiPerformanceBudgets = {
   largestCssGzipBytes: 58_315,
   // Separately indexed field selectors cut Usage style CPU by 20–24%.
   // Measured total CSS is 323,426 B gzip / 1,670,773 B raw; retain 64 B headroom.
+  // Approval history warning note (#193598) adds the recorded exec warning
+  // under the request; measured 323,457 B gzip / 1,671,033 B raw.
   totalCssGzipBytes: 323_490,
-  totalCssRawBytes: 1_670_837,
+  totalCssRawBytes: 1_671_097,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
