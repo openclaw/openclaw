@@ -1,6 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+// Canonical SQLite row helpers for exec approval policy state.
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { sha256Hex } from "./crypto-digest.js";
 import { formatErrorMessage } from "./errors.js";
@@ -26,8 +28,6 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-// Canonical SQLite row helpers for exec approval policy state.
-import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { EngineConnection } from "./sql-connection.js";
 
 const EXEC_APPROVALS_CONFIG_KEY = "current";
