@@ -14,6 +14,7 @@ import { hasNodeErrorCode } from "./path-guards.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
+import { resolveSqliteInspectionBudget } from "./sqlite-readonly-worker.js";
 import { measureUpdateStateFiles, withUpdateCandidateIoBudget } from "./update-candidate-io.js";
 import {
   readUpdateCandidatePluginCodeLinks,
@@ -116,6 +117,21 @@ async function measureInitialUpdateSnapshotState(params: InitialSnapshotParams) 
     capacity: measureSnapshotCapacity(params.stateDir, { ...size, pluginBytes: null }, params.env),
     families: size.families,
   };
+}
+
+/**
+ * Candidate admission inspects these stores from a staged package, so its allowance follows
+ * measured state like the rehearsal's checks. The update step deadline stays the outer bound.
+ */
+export async function resolveUpdateCandidateAdmissionTimeoutMs(
+  params: InitialSnapshotParams & { stepTimeoutMs: number },
+): Promise<number> {
+  const bytes = await measureInitialUpdateSnapshotState(params).then(
+    ({ capacity }) => capacity.sqliteBytes,
+    () => 0,
+  );
+  const { timeoutMs } = resolveSqliteInspectionBudget("update admission", params.stateDir, bytes);
+  return Math.min(params.stepTimeoutMs, timeoutMs);
 }
 
 export async function assessInitialUpdateSnapshotCapacity(
