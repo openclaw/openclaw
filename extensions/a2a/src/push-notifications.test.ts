@@ -11,22 +11,25 @@ import type { A2aTaskStore } from "./task-store.js";
 
 type GuardedFetchCall = { url: string; init: { headers?: Record<string, string>; body?: string } };
 
-const { createdStores, dispatchers, fetchCalls, fetchStarted, transportGate } = vi.hoisted(() => ({
-  createdStores: [] as A2aTaskStore[],
-  dispatchers: new WeakMap<
-    A2aTaskStore,
-    (message: Parameters<typeof dispatchA2aInbound>[0]) => Promise<void>
-  >(),
-  fetchCalls: [] as GuardedFetchCall[],
-  /** Counted the moment the mocked guard is entered, before transport preparation. */
-  fetchStarted: [] as number[],
-  /**
-   * When `promise` is set, the mocked guard parks the request in "transport
-   * preparation" until it resolves, mirroring the DNS/connect await of the
-   * real guard — the synchronous beforeRequest hook runs only after it.
-   */
-  transportGate: { promise: undefined as Promise<void> | undefined },
-}));
+const { createdStores, dispatchers, fetchCalls, fetchStarted, fetchStatus, transportGate } =
+  vi.hoisted(() => ({
+    createdStores: [] as A2aTaskStore[],
+    dispatchers: new WeakMap<
+      A2aTaskStore,
+      (message: Parameters<typeof dispatchA2aInbound>[0]) => Promise<void>
+    >(),
+    fetchCalls: [] as GuardedFetchCall[],
+    /** Counted the moment the mocked guard is entered, before transport preparation. */
+    fetchStarted: [] as number[],
+    /** Status the mocked guard reports for the delivery; tests override it. */
+    fetchStatus: { code: 200 },
+    /**
+     * When `promise` is set, the mocked guard parks the request in "transport
+     * preparation" until it resolves, mirroring the DNS/connect await of the
+     * real guard — the synchronous beforeRequest hook runs only after it.
+     */
+    transportGate: { promise: undefined as Promise<void> | undefined },
+  }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
@@ -45,7 +48,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
       params.beforeRequest?.();
       fetchCalls.push({ url: params.url, init: params.init ?? {} });
       return {
-        response: { ok: true, status: 200 },
+        response: { ok: fetchStatus.code < 400, status: fetchStatus.code },
         release: async () => undefined,
       };
     },
@@ -78,6 +81,7 @@ afterEach(async () => {
   }
   fetchCalls.length = 0;
   fetchStarted.length = 0;
+  fetchStatus.code = 200;
   transportGate.promise = undefined;
   resetPluginRuntimeStateForTest();
   vi.restoreAllMocks();
@@ -129,7 +133,7 @@ async function startPushHarness(options?: {
     );
     return { status: response.status(), json: async () => JSON.parse(response.body()) };
   };
-  return { taskStore, post };
+  return { taskStore, post, log: ctx.log };
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
@@ -261,6 +265,26 @@ describe("A2A push notification configuration", () => {
     });
 
     expect(fetchCalls).toEqual([]);
+  });
+
+  it("surfaces webhook delivery failures through the account logger", async () => {
+    // A receiver that rejects the notification must reach the operator's
+    // logs, not vanish behind the sender's default silent fallback.
+    fetchStatus.code = 403;
+    const { taskStore, post, log } = await startPushHarness();
+    const task = taskStore.create("ctx-logfail", "alpha");
+    taskStore.start(task.id);
+    await post(
+      rpc("CreateTaskPushNotificationConfig", {
+        taskId: task.id,
+        url: "https://peer.example.test/webhook",
+      }),
+    );
+
+    taskStore.complete(task.id, "final answer");
+    await waitFor(() => fetchCalls.length > 0);
+
+    expect(log?.warn).toHaveBeenCalledWith(expect.stringContaining("HTTP 403"));
   });
 
   it("registers a webhook supplied inline with SendMessage", async () => {

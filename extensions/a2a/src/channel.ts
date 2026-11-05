@@ -208,7 +208,15 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
         const store = new A2aTaskStore();
         const pushConfigs = new A2aPushConfigStore();
         const pushSender = capabilities.pushNotifications
-          ? new A2aPushSender({ settings: a2aConfig.pushNotifications })
+          ? new A2aPushSender({
+              settings: a2aConfig.pushNotifications,
+              // Delivery outcomes are background work: rejections and
+              // retry-exhaustion reports route to the account logger, so an
+              // operator can see a webhook that silently loses updates while
+              // its tasks still complete. The sink is optional on the public
+              // contract, so off-Gateway hosts keep the silent fallback.
+              log: (message) => ctx.log?.warn(message),
+            })
           : null;
         // Fan every task event out to the webhooks registered by that task's peer.
         const stopPushObserver = pushSender
