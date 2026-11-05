@@ -116,7 +116,7 @@ it.each(["authority", "copy", "cross-filesystem", "revoked", "aborted"])(
       sourceBytes: 128 * 1024,
       preflightMs: 0,
     });
-    expect(diagnostics.authorityWaitMs).toBe(blocked === "authority" ? expect.any(Number) : 0);
+    expect(diagnostics.authorityWaitMs).toEqual(blocked === "authority" ? expect.any(Number) : 0);
     expect(diagnostics.copyAwaitMs).toBe(
       blocked === "authority" ? diagnostics.authorityWaitMs - 160 : blocked === "copy" ? 160 : 0,
     );

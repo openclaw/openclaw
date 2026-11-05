@@ -83,11 +83,9 @@ it.each(["returned", "skipped", "waiting-failure", "copy-failure"] as const)(
     );
     expect(receipt.unattributedMs).toBe(0);
     if (outcome === "returned") {
-      expect(receipt.copyDetails).toMatchObject({
-        workerMs: 25,
-        authorityWaitMs: 10,
-        roundTripResidualApproxMs: 40,
-      });
+      expect(receipt.copyDetails.workerMs).toBe(25);
+      expect(receipt.copyDetails.authorityWaitMs).toBe(10);
+      expect(receipt.copyDetails.roundTripResidualApproxMs).toBe(40);
     }
     expect(receipt.copyDetails.roundTripMs).toBe(waiting ? 40 : 65);
     if (outcome === "waiting-failure" || outcome === "copy-failure") {
