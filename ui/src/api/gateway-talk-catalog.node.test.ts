@@ -1,33 +1,22 @@
 /** @vitest-environment node */
 import { PROTOCOL_VERSION } from "@openclaw/gateway-client/browser";
-import { beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { startConnect, useHandshakeHarness } from "./gateway-handshake.test-support.ts";
 import { GatewayRequestError } from "./gateway.ts";
 
 let nextRequestId = 0;
 const createClient = useHandshakeHarness({ randomUUID: () => `talk-request-${++nextRequestId}` });
 
-// The catalog retry window runs on monotonic time, so the fake clock must also
-// freeze performance.now; the socket harness only fakes Date and timers.
-beforeEach(() => {
+async function connect() {
+  // The socket harness fakes wall time; the retry deadline also needs performance.
   vi.useFakeTimers({
     toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
   });
-});
-
-async function connect() {
   const client = createClient({ token: "shared-auth-token" });
   const { ws, connectFrame } = await startConnect(client);
-  ws.emitMessage({
-    type: "res",
-    id: connectFrame.id,
-    ok: true,
-    payload: {
-      type: "hello-ok",
-      protocol: PROTOCOL_VERSION,
-      auth: { role: "operator", scopes: [] },
-    },
-  });
+  const auth = { role: "operator", scopes: [] };
+  const payload = { type: "hello-ok", protocol: PROTOCOL_VERSION, auth };
+  ws.emitMessage({ type: "res", id: connectFrame.id, ok: true, payload });
   await vi.advanceTimersByTimeAsync(0);
   expect(client.connected).toBe(true);
   return { client, ws };
@@ -52,7 +41,7 @@ it.each([
   expect(ws.sent.filter((raw) => JSON.parse(raw).method !== "health")).toHaveLength(2);
 });
 
-it.each(["ready", "abort", "disconnect", "stop", "timeout"] as const)(
+it.each(["ready", "clock", "abort", "disconnect", "stop", "timeout"] as const)(
   "bounds Talk catalog warming retries through %s",
   async (outcome) => {
     const { client, ws } = await connect();
@@ -63,18 +52,14 @@ it.each(["ready", "abort", "disconnect", "stop", "timeout"] as const)(
       (error: unknown) => ({ error }),
     );
     const first = JSON.parse(ws.sent.at(-1)!) as { id: string };
-    ws.emitMessage({
-      type: "res",
-      id: first.id,
-      ok: false,
-      error: {
-        code: "UNAVAILABLE",
-        message: "Talk catalog is warming",
-        retryable: true,
-        retryAfterMs: 250,
-        details: { reason: "talk-catalog-warming" },
-      },
-    });
+    const error = {
+      code: "UNAVAILABLE",
+      message: "Talk catalog is warming",
+      retryable: true,
+      retryAfterMs: 250,
+      details: { reason: "talk-catalog-warming" },
+    };
+    ws.emitMessage({ type: "res", id: first.id, ok: false, error });
     await vi.advanceTimersByTimeAsync(249);
     expect(ws.sent).toHaveLength(2);
     if (outcome === "abort" || outcome === "disconnect" || outcome === "stop") {
@@ -90,12 +75,15 @@ it.each(["ready", "abort", "disconnect", "stop", "timeout"] as const)(
       expect(ws.sent).toHaveLength(2);
       return;
     }
+    if (outcome === "clock") {
+      vi.setSystemTime(Date.now() + 120_000);
+    }
     await vi.advanceTimersByTimeAsync(1);
     expect(ws.sent).toHaveLength(3);
     const retry = JSON.parse(ws.sent.at(-1)!) as { id: string };
     expect(retry).toMatchObject({ method: "talk.catalog", params });
     expect(retry.id).not.toBe(first.id);
-    if (outcome === "ready") {
+    if (outcome !== "timeout") {
       ws.emitMessage({ type: "res", id: retry.id, ok: true, payload: { providers: [] } });
       expect(await result).toEqual({ value: { providers: [] } });
     } else {
@@ -108,41 +96,6 @@ it.each(["ready", "abort", "disconnect", "stop", "timeout"] as const)(
     expect(ws.sent.filter((raw) => JSON.parse(raw).method !== "health")).toHaveLength(3);
   },
 );
-
-it("keeps retrying warming while a host clock step advances", async () => {
-  const { client, ws } = await connect();
-  const params = { sessionKey: "agent:main:voice", model: "synthetic-voice" };
-  const result = client.request("talk.catalog", params).then(
-    (value) => ({ value }),
-    (error: unknown) => ({ error }),
-  );
-  const first = JSON.parse(ws.sent.at(-1)!) as { id: string };
-  ws.emitMessage({
-    type: "res",
-    id: first.id,
-    ok: false,
-    error: {
-      code: "UNAVAILABLE",
-      message: "Talk catalog is warming",
-      retryable: true,
-      retryAfterMs: 250,
-      details: { reason: "talk-catalog-warming" },
-    },
-  });
-  await vi.advanceTimersByTimeAsync(249);
-  expect(ws.sent).toHaveLength(2);
-  // A forward wall-clock step must not shorten the process-local retry window.
-  vi.setSystemTime(Date.now() + 120_000);
-  await vi.advanceTimersByTimeAsync(1);
-  expect(ws.sent).toHaveLength(3);
-  const retry = JSON.parse(ws.sent.at(-1)!) as { id: string };
-  expect(retry).toMatchObject({ method: "talk.catalog", params });
-  expect(retry.id).not.toBe(first.id);
-  ws.emitMessage({ type: "res", id: retry.id, ok: true, payload: { providers: [] } });
-  expect(await result).toEqual({ value: { providers: [] } });
-  await vi.advanceTimersByTimeAsync(10_000);
-  expect(ws.sent.filter((raw) => JSON.parse(raw).method !== "health")).toHaveLength(3);
-});
 
 it.each([
   { method: "config.get", reason: "talk-catalog-warming", retryable: true },

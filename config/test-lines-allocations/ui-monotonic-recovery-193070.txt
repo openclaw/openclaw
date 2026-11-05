@@ -1,3 +1,0 @@
-# Clock-step discriminant tests for the Talk catalog warming retry window and
-# the Control UI stale-chunk reachability wait (monotonic deadline regression, #193070).
-46
