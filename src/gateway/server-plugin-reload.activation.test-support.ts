@@ -420,7 +420,7 @@ export async function verifyIndependentRollbackRestoration(
     await manager.startChannel("first-restore");
     await manager.startChannel("healthy-restore");
     const result = await fixture.reload().catch((error: unknown) => error);
-    expect(result).toMatchObject({ details: { committed: false } });
+    expect(result).toMatchObject({ details: { committed: false, runtimeRestorationFailed: true } });
     expect(fixture.registryOwner.registry).not.toBe(fixture.previousRegistry);
     const restoredRecord = fixture.registryOwner.registry.plugins.find(
       (record) => record.id === "first",

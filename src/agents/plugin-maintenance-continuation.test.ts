@@ -15,6 +15,7 @@ import {
 import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import { captureSessionControllerStop, stopSession } from "../sessions/session-controller.stop.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const mocks = vi.hoisted(() => ({
   captureAuthority: vi.fn(),
@@ -237,4 +238,28 @@ it("holds a timed-out continuation until actual plugin cleanup, not bridge settl
   physical.resolve();
   await vi.waitFor(() => expect(mocks.enqueue).toHaveBeenCalledOnce());
   await vi.waitFor(() => expect(f.release).toHaveBeenCalledOnce());
+});
+
+it("keeps an internal turn private despite the session's recorded external route", async () => {
+  const f = await withGatewayToolCallerIdentity(
+    { agentId: "main", sessionKey: "agent:main:private", turnSourceChannel: "webchat" },
+    () => fixture(),
+  );
+  mocks.captureTarget.mockResolvedValue({
+    agentId: "main",
+    sessionKey: f.sessionKey,
+    sessionId: f.sessionId,
+    storePath: f.target.storeScope,
+    generation: "generation",
+    deliveryContext: { channel: "telegram", to: "external-recipient" },
+  });
+  const captured = await capturePluginMaintenanceContinuation(f.operation);
+  await captured!.interrupt();
+  f.operation.complete();
+  retireSessionControllerInput(f.source);
+  await captured!.finish({ ok: true, pluginIds: ["example"] }, true, async () => {});
+  await vi.waitFor(() => expect(mocks.enqueue).toHaveBeenCalledOnce());
+  expect(mocks.enqueue.mock.calls[0]?.[1]).toMatchObject({
+    deliveryContext: { channel: "webchat" },
+  });
 });

@@ -50,6 +50,15 @@ export function createPluginReloadLifecycle(requestedOperationId?: string) {
   return {
     operationId,
     replacementOperation: { operationId, settled: outcome.promise },
+    restorationFailure(
+      facts: Facts,
+      runtimeRestorationFailed: boolean,
+    ): { runtimeRestorationFailed?: true } {
+      return runtimeRestorationFailed ||
+        (!facts.committed && facts.phase !== "prepare" && !facts.restored)
+        ? { runtimeRestorationFailed: true }
+        : {};
+    },
     async run<T>(
       this: void,
       ports: {

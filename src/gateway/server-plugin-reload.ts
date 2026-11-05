@@ -709,7 +709,7 @@ export async function reloadGatewayPlugins(
             pluginIds: [...changedPluginIds].toSorted(),
             phase: facts.phase,
             committed: facts.committed,
-            ...(runtimeRestorationFailed ? { runtimeRestorationFailed: true } : {}),
+            ...lifecycle.restorationFailure(facts, runtimeRestorationFailed),
           },
           { cause: failure },
         );

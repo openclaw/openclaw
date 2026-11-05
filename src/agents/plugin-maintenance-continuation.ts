@@ -26,8 +26,11 @@ import {
 } from "../sessions/session-key-utils.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { isInternalRouteContext } from "../utils/delivery-context.shared.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { captureExecRequestCancellation } from "./bash-process-control.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 export type PluginMaintenanceOutcome = {
   ok: boolean;
@@ -77,7 +80,8 @@ export function registerPluginMaintenanceContinuation(
   ) {
     return () => undefined;
   }
-  // Capture the callable now, not from the later administrator's reload context.
+  // Capture the callable and route now, not from the later administrator's reload context.
+  const caller = getGatewayToolCallerIdentity();
   const runCapture = AsyncLocalStorage.snapshot();
   let captured: Promise<CapturedPluginMaintenanceContinuation> | undefined;
   const capture = () =>
@@ -142,6 +146,12 @@ export function registerPluginMaintenanceContinuation(
         if (!target.storePath || target.sessionId !== params.sessionId) {
           throw new Error("The native run's session changed before maintenance capture");
         }
+        // The admitted turn route, not the session's historical external recipient,
+        // decides where a privately initiated continuation may be delivered.
+        const internalResume =
+          !target.deliveryContext?.channel ||
+          (isInternalRouteContext({ channel: caller?.turnSourceChannel }) &&
+            (!caller?.turnSourceTo || caller.turnSourceTo === sessionKey));
         await withSessionEntryReadOnlyInWorker(
           { agentId, storePath: target.storePath, sessionKey },
           continuation.assertCurrent,
@@ -297,9 +307,9 @@ export function registerPluginMaintenanceContinuation(
                           expectedTarget: target,
                           abortSignal: lifetime.signal,
                           sourceTurnId: "plugin-maintenance:" + randomUUID(),
-                          ...(target.deliveryContext?.channel
-                            ? {}
-                            : { deliveryContext: { channel: "internal" } }),
+                          ...(internalResume
+                            ? { deliveryContext: { channel: INTERNAL_MESSAGE_CHANNEL } }
+                            : {}),
                         },
                       ),
                     ),

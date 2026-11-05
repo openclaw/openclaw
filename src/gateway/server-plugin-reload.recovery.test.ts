@@ -1057,7 +1057,11 @@ it("returns the applied reload before continuation admission can join its config
     capture.mockRestore();
   });
   await fixture.reload();
-  expect(finish).toHaveBeenCalledExactlyOnceWith({ ok: true, pluginIds: ["first"] }, true);
+  expect(finish).toHaveBeenCalledExactlyOnceWith(
+    { ok: true, pluginIds: ["first"] },
+    true,
+    expect.any(Function),
+  );
   // The caller releases the config admission gate only after reload() returns.
   delivery.resolve(undefined);
 });
