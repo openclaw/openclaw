@@ -142,11 +142,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let modelRetirementRepairRan = false;
   let modelRetirementOnly = false;
   let channelWorkObserved = false;
+  const configAdvisories: string[] = [];
   let retiredModelRefConfig: Pick<OpenClawConfig, "agents" | "models"> | undefined;
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
   const changesPanelSink = createDoctorChangesPanelSink(shouldRepair);
   const configRepairWarnings: string[] = [...(preflight.warnings ?? [])];
-  const configAdvisories: string[] = [];
   const applyConfigMutation = (
     mutation: DoctorConfigMutationResult & { warnings?: string[] },
     fixHint: string,

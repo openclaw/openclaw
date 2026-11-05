@@ -140,17 +140,15 @@ function collectCodexAppServerCommandWarnings(
   }
   const command = appServer.command.trim();
   const inlineArgs = detectWindowsSpawnCommandInlineArgs(command);
-  const warnings = [
-    ...(inlineArgs
-      ? [
-          [
-            "- Codex app-server command override includes inline arguments.",
-            `- plugins.entries.codex.config.appServer.command: "${command}" starts with "${inlineArgs.executable}" and embeds "${inlineArgs.arguments}". The command field must be only the executable path.`,
-            "- Remove the override to use managed Codex startup, or move script/options to plugins.entries.codex.config.appServer.args.",
-          ].join("\n"),
-        ]
-      : []),
-  ];
+  const warnings = inlineArgs
+    ? [
+        [
+          "- Codex app-server command override includes inline arguments.",
+          `- plugins.entries.codex.config.appServer.command: "${command}" starts with "${inlineArgs.executable}" and embeds "${inlineArgs.arguments}". The command field must be only the executable path.`,
+          "- Remove the override to use managed Codex startup, or move script/options to plugins.entries.codex.config.appServer.args.",
+        ].join("\n"),
+      ]
+    : [];
   (advisories ?? warnings).push(
     [
       "- Custom Codex app-server command bypasses OpenClaw's managed exact-version binary.",
