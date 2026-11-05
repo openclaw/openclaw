@@ -60,8 +60,12 @@ function toModelDefinition(
       ? ["text", "image"]
       : ["text"],
     // The gateway's base URL reads as a custom endpoint, which disables effort
-    // selection by default; Opper parses plain `reasoning_effort`.
-    ...(reasoning ? { compat: { supportsReasoningEffort: true } } : {}),
+    // selection and streamed usage by default; Opper parses plain
+    // `reasoning_effort` and sends a final usage chunk for `include_usage`.
+    compat: {
+      ...(reasoning ? { supportsReasoningEffort: true } : {}),
+      supportsUsageInStreaming: true,
+    },
     cost,
     contextWindow:
       asPositiveSafeInteger(row.context_length) ??

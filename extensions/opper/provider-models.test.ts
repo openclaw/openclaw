@@ -83,7 +83,7 @@ it("projects per-token prices to per-million and maps capability flags", () => {
     name: "claude-sonnet-4-6",
     reasoning: true,
     input: ["text", "image"],
-    compat: { supportsReasoningEffort: true },
+    compat: { supportsReasoningEffort: true, supportsUsageInStreaming: true },
     cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
     contextWindow: 1_000_000,
     maxTokens: 64_000,
@@ -101,7 +101,7 @@ it("treats missing cache prices and capability flags as absent", () => {
     input: ["text"],
     cost: { cacheWrite: 0 },
   });
-  expect(model).not.toHaveProperty("compat");
+  expect(model?.compat).toEqual({ supportsUsageInStreaming: true });
 });
 
 it("keeps an unpriced row free and leaves out a row whose prices do not parse", () => {

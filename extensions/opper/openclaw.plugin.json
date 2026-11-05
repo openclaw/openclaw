@@ -55,7 +55,11 @@
             },
             "contextWindow": 1000000,
             "maxTokens": 128000,
-            "compat": { "supportsReasoningEffort": true, "codeMode": "preferred" }
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportsUsageInStreaming": true,
+              "codeMode": "preferred"
+            }
           },
           {
             "id": "gpt-6-luna",
@@ -70,7 +74,11 @@
             },
             "contextWindow": 1050000,
             "maxTokens": 128000,
-            "compat": { "supportsReasoningEffort": true, "codeMode": "preferred" }
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportsUsageInStreaming": true,
+              "codeMode": "preferred"
+            }
           },
           {
             "id": "gemini-3.8-flash",
@@ -85,7 +93,11 @@
             },
             "contextWindow": 1048576,
             "maxTokens": 65536,
-            "compat": { "supportsReasoningEffort": true, "codeMode": "capable" }
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportsUsageInStreaming": true,
+              "codeMode": "capable"
+            }
           }
         ]
       }
