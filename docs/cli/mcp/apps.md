@@ -18,7 +18,7 @@ openclaw config set mcp.apps.enabled true --strict-json
 
 Restart the Gateway after changing this setting. When enabled, OpenClaw starts a sandbox-only HTTP(S) listener on the Gateway port plus one (for the default Gateway, `18790`). The Control UI loads Apps from that separate origin; the listener never serves Control UI, authenticated Gateway routes, or user data.
 
-Direct Gateway connections need access to both ports. If a reverse proxy or TLS terminator exposes the Control UI, give Apps a dedicated public origin and proxy only that origin to the sandbox listener:
+Direct Gateway connections need access to both ports. The macOS app's Remote over SSH tunnel forwards the default sandbox port along with the Gateway port. If a reverse proxy or TLS terminator exposes the Control UI, give Apps a dedicated public origin and proxy only that origin to the sandbox listener:
 
 ```json5
 {

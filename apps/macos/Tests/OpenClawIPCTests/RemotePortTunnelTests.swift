@@ -18,6 +18,66 @@ struct RemotePortTunnelTests {
         #expect(options.contains("UpdateHostKeys=yes"))
     }
 
+    @Test func `tunnel forwards the remote widget sandbox port to the same local port`() throws {
+        let sandbox = try Self.bindLoopbackPort()
+        Darwin.close(sandbox.fd)
+        let remotePort = Int(sandbox.port) - 1
+
+        let options = RemotePortTunnel.sshOptions(localPort: 28789, remotePort: remotePort, hostKeyPolicy: .strict)
+
+        #expect(options.contains("28789:127.0.0.1:\(remotePort)"))
+        #expect(options.contains("\(sandbox.port):127.0.0.1:\(sandbox.port)"))
+    }
+
+    @Test func `occupied local sandbox port keeps only the control forward`() throws {
+        let sandbox = try Self.bindLoopbackPort()
+        defer { Darwin.close(sandbox.fd) }
+        let remotePort = Int(sandbox.port) - 1
+
+        let options = RemotePortTunnel.sshOptions(localPort: 28789, remotePort: remotePort, hostKeyPolicy: .strict)
+
+        #expect(options.contains("28789:127.0.0.1:\(remotePort)"))
+        #expect(options.count(where: { $0 == "-L" }) == 1)
+    }
+
+    @Test func `hosted local Gateway keeps its ports from the sandbox forward`() throws {
+        let sandbox = try Self.bindLoopbackPort()
+        Darwin.close(sandbox.fd)
+        let remotePort = Int(sandbox.port) - 1
+        // Hosting repair moves this Mac's Gateway next to the tunnel port; its listener may not be bound yet.
+        let root: [String: Any] = ["gateway": ["port": Int(sandbox.port)]]
+        let reserved = RemotePortTunnel.reservedLocalPorts(
+            root: root, tunnelLocalPort: remotePort, localGatewayPort: Int(sandbox.port))
+
+        let options = RemotePortTunnel.sshOptions(
+            localPort: UInt16(remotePort), remotePort: remotePort, hostKeyPolicy: .strict,
+            reservedLocalPorts: reserved)
+
+        #expect(reserved == [Int(sandbox.port), Int(sandbox.port) + 1])
+        #expect(options.count(where: { $0 == "-L" }) == 1)
+        #expect(RemotePortTunnel.reservedLocalPorts(
+            root: root, tunnelLocalPort: remotePort, localGatewayPort: remotePort).isEmpty)
+    }
+
+    private static func bindLoopbackPort() throws -> (fd: Int32, port: UInt16) {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        var addr = sockaddr_in()
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let bound = withUnsafeMutablePointer(to: &addr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                Darwin.bind(fd, sa, length) == 0 && getsockname(fd, sa, &length) == 0
+            }
+        }
+        guard fd >= 0, bound, UInt16(bigEndian: addr.sin_port) > 1 else {
+            if fd >= 0 { Darwin.close(fd) }
+            throw POSIXError(.EADDRNOTAVAIL)
+        }
+        return (fd, UInt16(bigEndian: addr.sin_port))
+    }
+
     @Test func `tunnel requires explicit opt in to use SSH config host key policy`() {
         let options = RemotePortTunnel.sshOptions(
             localPort: 28789,
