@@ -281,6 +281,7 @@ async function executeClaim(
   let adoptionRefused = false;
   let waitForFreshKick = false;
   let pluginUnavailable = false;
+  let executionFailed = false;
   try {
     if (admissionSessionRebind && run.run.sessionId === admissionSessionRebind.from) {
       run = { ...run, admissionSessionId: admissionSessionRebind.to };
@@ -289,6 +290,7 @@ async function executeClaim(
       (source.controllerInput && followupSourceRunners.get(source.controllerInput)) ?? execute;
     await runFollowup(run);
   } catch (error) {
+    executionFailed = true;
     if (claim.retryBeforeExecution && error instanceof PluginInstanceUnavailableError) {
       pluginUnavailable = !error.replacement;
       if (error.replacement) {
@@ -384,7 +386,12 @@ async function executeClaim(
         continue;
       }
       try {
-        completeFollowupRunLifecycle(item, preparationRefused ? undefined : "consumed");
+        completeFollowupRunLifecycle(
+          item,
+          preparationRefused || (executionFailed && item.turnAdoptionLifecycle)
+            ? undefined
+            : "consumed",
+        );
       } catch (error) {
         defaultRuntime.error?.("mailbox custody settlement failed: " + String(error));
       }

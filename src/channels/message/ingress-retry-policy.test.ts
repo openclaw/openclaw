@@ -1,6 +1,7 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { describe, expect, it } from "vitest";
 import { PreparedModelRuntimeRecoveryError } from "../../agents/prepared-model-runtime-admission-errors.js";
+import { InboundDedupePendingError } from "../../auto-reply/reply/inbound-dedupe-error.js";
 import {
   createIngressRetryPolicy,
   DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
@@ -30,6 +31,31 @@ function disposition(
 }
 
 describe("ingress retry policy", () => {
+  it("delays pending custody without spending attempts or clearing recovery failures", () => {
+    const queue = {};
+    const policy = createIngressRetryPolicy(queue);
+    const event = { id: "input", receivedAt: 0, attempts: 8 };
+    const failure = (err: unknown) =>
+      policy.failure({
+        err,
+        event,
+        now: 2_000,
+        config: { deadLetterMinAgeMs: 0 },
+        formatError: coerceErrorMessage,
+      });
+    failure(new PreparedModelRuntimeRecoveryError("main", "attempt-failed", 7_000));
+    expect(failure(wrapError(new InboundDedupePendingError()))).toMatchObject({
+      kind: "release",
+      attempt: 8,
+      recordAttempt: false,
+    });
+    expect(createIngressRetryPolicy(queue).delay(event, undefined, 2_000)).toBe(1_000);
+    expect(policy.delay(event, undefined, 3_000)).toBe(0);
+    expect(
+      failure(new PreparedModelRuntimeRecoveryError("main", "attempt-failed", 7_000)),
+    ).toMatchObject({ kind: "fail", reason: "runtime-recovery-failed" });
+  });
+
   it("counts real recovery failures independently of other dispatch attempts", () => {
     const policy = createIngressRetryPolicy({});
     const error = wrapError(new PreparedModelRuntimeRecoveryError("main", "attempt-failed", 7_000));

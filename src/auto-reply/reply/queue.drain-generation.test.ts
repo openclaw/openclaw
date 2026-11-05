@@ -14,7 +14,12 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+import {
+  admitFollowupRunLifecycle,
+  enqueueFollowupRun,
+  scheduleFollowupDrain,
+  type FollowupRun,
+} from "./queue.js";
 import {
   createQueueTestRun,
   installQueueRuntimeErrorSilencer,
@@ -27,6 +32,41 @@ afterEach(resetGatewayWorkAdmission);
 afterEach(() => vi.useRealTimers());
 
 describe.each(["followup", "collect"] as const)("queued %s", (mode) => {
+  it.each(["unadopted", "adopted", "no-lifecycle"] as const)(
+    "settles a thrown runner with %s custody",
+    async (custody) => {
+      const key = `runner-throw-${mode}-${custody}`;
+      const onAbandoned = vi.fn();
+      const onSettled = vi.fn();
+      const finishCorrelation = vi.fn();
+      const queued = createQueueTestRun({
+        prompt: "accepted before runner failure",
+        turnAdoptionLifecycle:
+          custody === "no-lifecycle" ? undefined : { onAdopted() {}, onAbandoned, onSettled },
+        deliveryCorrelations: [{ begin: () => finishCorrelation }],
+      });
+      const execute = vi.fn(async (run: FollowupRun) => {
+        if (custody === "adopted") {
+          await admitFollowupRunLifecycle(run);
+        }
+        throw new Error("runner failed before returning a disposition");
+      });
+      try {
+        enqueueFollowupRun(key, queued, { mode, debounceMs: 0 });
+        scheduleFollowupDrain(key, execute);
+        await queued.controllerInput!.settlement.promise;
+        await queued.controllerInput!.claim?.settlement.promise;
+        expect(execute).toHaveBeenCalledOnce();
+        expect(onAbandoned).toHaveBeenCalledTimes(custody === "unadopted" ? 1 : 0);
+        expect(onSettled).toHaveBeenCalledTimes(custody === "no-lifecycle" ? 0 : 1);
+        expect(finishCorrelation).toHaveBeenCalledTimes(custody === "unadopted" ? 1 : 0);
+        expect(getExistingFollowupQueue(key)).toBeUndefined();
+      } finally {
+        clearFollowupQueue(key);
+      }
+    },
+  );
+
   it.each([
     "replacement",
     "rollback",

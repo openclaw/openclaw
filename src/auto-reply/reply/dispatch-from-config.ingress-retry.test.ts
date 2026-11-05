@@ -74,6 +74,8 @@ describe("dispatch retry after queued ingress abandonment", () => {
     "watchdog-after-deferral",
     "abandon-before-dispatch-return",
     "replay-before-abandon",
+    "signal-post-dispatch-failure",
+    "runner-throws-before-adoption",
     "explicit-consumption",
   ] as const)("preserves ingress custody after %s", async (abandonment) => {
     await withTempState(async (stateDir) => {
@@ -93,6 +95,7 @@ describe("dispatch retry after queued ingress abandonment", () => {
       });
       const queue = createTestIngressQueue(stateDir, { now: () => clock });
       const released = observeChannelIngressQueueWrite(queue, "release");
+      const onDeadLetter = vi.fn();
       await queue.enqueue(messageId, { text }, { laneKey: key });
       let dispatcher = createDispatcher();
       const outcomes: Array<DispatchProcessedNote | undefined> = [];
@@ -101,6 +104,9 @@ describe("dispatch retry after queued ingress abandonment", () => {
       const releasePreparation = createDeferred();
       let sourceSettlement: Promise<unknown> | undefined;
       const finishAbortedFollowup = vi.fn(async (run: FollowupRun) => {
+        if (abandonment === "runner-throws-before-adoption") {
+          throw new Error("correlation begin failed");
+        }
         if (abandonment === "replay-before-abandon") {
           preparationStarted.resolve();
           await releasePreparation.promise;
@@ -169,7 +175,8 @@ describe("dispatch retry after queued ingress abandonment", () => {
           queue,
           now: () => clock,
           adoptionStallTimeoutMs: 1_000,
-          retryPolicy: { baseMs: 1, maxMs: 1 },
+          retryPolicy: { baseMs: 1_000, maxMs: 30_000, deadLetterMinAgeMs: 0 },
+          onDeadLetter,
           dispatchClaimedEvent: async (_event, lifecycle) => {
             lifecycles.push(lifecycle);
             dispatcher = createDispatcher();
@@ -183,6 +190,12 @@ describe("dispatch retry after queued ingress abandonment", () => {
               }),
             );
             outcomes.push(processedOutcome);
+            if (
+              abandonment === "signal-post-dispatch-failure" &&
+              resolver.mock.calls.length === 1
+            ) {
+              throw new Error("retryable post-dispatch no-send failure");
+            }
           },
         });
       let drain = createDrain();
@@ -207,21 +220,43 @@ describe("dispatch retry after queued ingress abandonment", () => {
           expect((await queue.enqueue(messageId, { text })).kind).toBe("completed");
           return;
         }
-        if (abandonment === "replay-before-abandon") {
+        if (
+          abandonment === "replay-before-abandon" ||
+          abandonment === "signal-post-dispatch-failure"
+        ) {
           sourceSettlement = getExistingFollowupQueue(key)?.entries[0]?.settlement.promise;
           expect(sourceSettlement).toBeDefined();
-          scheduleFollowupDrain(key, finishAbortedFollowup);
-          await preparationStarted.promise;
-          drain.dispose();
-          drain = createDrain();
-          await drain.drainOnce();
-          await drain.waitForIdle();
+          if (abandonment === "replay-before-abandon") {
+            scheduleFollowupDrain(key, finishAbortedFollowup);
+            await preparationStarted.promise;
+            drain.dispose();
+            drain = createDrain();
+          }
+          for (let attempt = 0; attempt < 9; attempt += 1) {
+            clock += 30_000;
+            expect(await drain.drainOnce()).toEqual({ started: 1 });
+            await drain.waitForIdle();
+            expect(await drain.drainOnce()).toEqual({ started: 0 });
+          }
+          expect(onDeadLetter).not.toHaveBeenCalled();
           expect(resolver).toHaveBeenCalledOnce();
           expect((await queue.enqueue(messageId, { text })).kind).not.toBe("completed");
-          expect(await queue.listPending()).toMatchObject([{ id: messageId, attempts: 1 }]);
+          expect(await queue.listPending()).toMatchObject([
+            { id: messageId, attempts: abandonment === "replay-before-abandon" ? 0 : 1 },
+          ]);
+          if (abandonment === "signal-post-dispatch-failure") {
+            expect(lifecycles[0]?.abortSignal.aborted).toBe(false);
+            clearSessionQueues([key]);
+          }
           releasePreparation.resolve();
           await vi.advanceTimersByTimeAsync(250);
           await sourceSettlement;
+        }
+        if (abandonment === "runner-throws-before-adoption") {
+          sourceSettlement = getExistingFollowupQueue(key)?.entries[0]?.settlement.promise;
+          scheduleFollowupDrain(key, finishAbortedFollowup);
+          await sourceSettlement;
+          expect(await queue.listPending()).toMatchObject([{ id: messageId, attempts: 1 }]);
         }
         if (abandonment === "watchdog-after-deferral") {
           expect(await queue.listClaims()).toHaveLength(1);
@@ -231,8 +266,10 @@ describe("dispatch retry after queued ingress abandonment", () => {
           expect(lifecycles[0]?.abortSignal.aborted).toBe(true);
         }
         await expect(released).resolves.toBe(true);
-        expect(await queue.listPending()).toMatchObject([{ id: messageId, attempts: 1 }]);
-        clock += 1_000;
+        expect(await queue.listPending()).toMatchObject([
+          { id: messageId, attempts: abandonment === "replay-before-abandon" ? 0 : 1 },
+        ]);
+        clock += 30_000;
         expect(await drain.drainOnce()).toEqual({ started: 1 });
         await drain.waitForIdle();
         // The old bug tombstones this retry as a duplicate without invoking the resolver.
@@ -265,6 +302,7 @@ describe("dispatch retry after queued ingress abandonment", () => {
         expect(duplicateDispatcher.sendFinalReply).not.toHaveBeenCalled();
       } finally {
         releasePreparation.resolve();
+        clearSessionQueues([key]);
         if (sourceSettlement) {
           await vi.advanceTimersByTimeAsync(250);
         }

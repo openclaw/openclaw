@@ -5,6 +5,7 @@
  */
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { PreparedModelRuntimeRecoveryError } from "../../agents/prepared-model-runtime-admission-errors.js";
+import { InboundDedupePendingError } from "../../auto-reply/reply/inbound-dedupe-error.js";
 import { computeBackoff } from "../../infra/backoff.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 
@@ -104,6 +105,20 @@ export function resolveIngressFailureDisposition(params: {
   const now = params.now ?? Date.now();
   const attempt = (params.event.attempts ?? 0) + 1;
   const message = params.formatError(params.err);
+  const errors = collectNestedErrorCandidates(params.err);
+  const previousRetry = params.event.retry;
+  if (errors.some((error) => error instanceof InboundDedupePendingError)) {
+    return {
+      kind: "release",
+      attempt: params.event.attempts ?? 0,
+      message,
+      recordAttempt: false,
+      retry: {
+        recoveryFailures: previousRetry?.recoveryFailures ?? 0,
+        nextEligibleAt: now + DEFAULT_INGRESS_RETRY_BASE_MS,
+      },
+    };
+  }
   const nonRetryable = params.resolveNonRetryableFailure?.(params.err) ?? null;
   if (nonRetryable) {
     return {
@@ -113,8 +128,6 @@ export function resolveIngressFailureDisposition(params: {
       attempt,
     };
   }
-  const errors = collectNestedErrorCandidates(params.err);
-  const previousRetry = params.event.retry;
   const recovery = errors.find(
     (error): error is PreparedModelRuntimeRecoveryError =>
       error instanceof PreparedModelRuntimeRecoveryError,
