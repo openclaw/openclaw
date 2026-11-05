@@ -47,6 +47,7 @@ const { values } = parseArgs({
     "active-targets": { type: "boolean", default: false },
     "reload-after-navigation": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
+    "skip-animation-sampling": { type: "boolean", default: false },
     "init-script": { type: "string", multiple: true, default: [] },
     route: { type: "string", default: "both" },
     "audit-report": { type: "string" },
@@ -61,6 +62,7 @@ if (values.help) {
   --reloads 11 --sessions 3000 --rtt-ms 80 --capture-ms 8000 --route both|chat|dashboard
   --transcript-late-paint --plugin-activation --active-targets --reload-after-navigation --cpu-profile
   --init-script <browser-script.js> (repeatable)
+  --skip-animation-sampling (timing-only; no animation-normalized visual census)
 Creates fresh isolated state and Chromium, records cold + warm reloads, then stops both.
 Offline paint audit: --audit-report <report.json> --paint-audit <paint-audit.json>
 See scripts/perf/warm-reload-proof.md for metric definitions and limitations.`);
@@ -934,7 +936,7 @@ try {
             await page.addInitScript({ content: extraInitScripts.join("\n") });
           }
           await page.addInitScript({
-            content: `globalThis.__name = (fn) => fn; const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome); (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["transcript-late-paint"]}, ${values["active-targets"]});`,
+            content: `globalThis.__name = (fn) => fn; const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome); (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["transcript-late-paint"]}, ${values["active-targets"]}, ${!values["skip-animation-sampling"]});`,
           });
           const cdp = await context.newCDPSession(page);
           await cdp.send("Page.enable");

@@ -108,6 +108,20 @@ initial cold capture remains separate from these independently reset visits.
 For separate attribution, add `--cpu-profile --reloads 1` to save a Chrome timeline
 and V8 CPU profile for each warm capture. Profiled timings are not comparison results.
 
+For pane-task timing, add `--skip-animation-sampling` in both arms. This omits
+the diagnostic `getAnimations()` census and records `sampleAnimationState: false`;
+raw compositor frames, Element Timing, layout shifts, and LoAF remain recorded.
+Animation-normalized visual counts are unavailable in this mode. Keep separate
+fully sampled captures when investigating animation or certifying visible states.
+
+Pane-mount experiments use archived chat, active chat, and dashboard on one quiet
+AWS c7a.4xlarge, with eleven interleaved AB/BA pairs and A/A controls at 80 ms.
+Promotion requires shorter pane-task blocking and earlier painted rows in at
+least nine pairs on two routes, with no route regression. Report median/IQR,
+per-pair deltas, header plus rows under 500 ms, hello-handled, FCP, final rows,
+LoAF blocking, and CLS. Profile component mounts and layout separately; do not
+count an inclusive bridge aggregate as additional work beside its descendants.
+
 The default `--admission signed-in` installs a random HttpOnly session cookie in
 Chromium for the owned loopback proxy. The proxy checks that cookie for HTTP and
 WebSocket requests, strips client-supplied identity/forwarding/scope headers, and

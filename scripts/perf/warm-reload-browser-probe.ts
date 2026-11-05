@@ -15,6 +15,7 @@ export function installWarmReloadBrowserProbe(
   route: string,
   transcriptLatePaint = false,
   composerContext = false,
+  sampleAnimationState = true,
 ) {
   if (window !== window.top) {
     return undefined;
@@ -102,6 +103,7 @@ export function installWarmReloadBrowserProbe(
       } | null;
     }>,
     animationProbeMs: 0,
+    sampleAnimationState,
     animationPolicy:
       "Recognized skeleton shimmer or opacity/visibility-only fades with at most 64 elements; fades containing images, canvas, video or iframes are excluded. Signatures retain content, attributes, appearance and geometry, except intermediate opacity. No whole-page animation mask.",
     masks: [] as Array<{
@@ -499,7 +501,9 @@ export function installWarmReloadBrowserProbe(
       return;
     }
     Reflect.get(window, "__paneChrome").sample(performance.now());
-    sampleAnimations();
+    if (sampleAnimationState) {
+      sampleAnimations();
+    }
     if (composerContext) {
       const composer = document.querySelector(".agent-chat__input");
       const box = composer?.getBoundingClientRect();
