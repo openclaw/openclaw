@@ -2,7 +2,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { copyProvisionedPaths } from "./provisioned-copy.js";
 
@@ -34,7 +34,7 @@ function fixture(destinationParent?: string) {
   };
 }
 
-it.each(["authority", "copy", "cross-filesystem", "revoked", "aborted"])(
+it.for(["authority", "copy", "cross-filesystem", "revoked", "aborted"])(
   "attributes %s while preserving copy, skip and authority contracts",
   async (blocked, context) => {
     const crossFilesystem = blocked === "cross-filesystem";
@@ -47,11 +47,9 @@ it.each(["authority", "copy", "cross-filesystem", "revoked", "aborted"])(
           (await fs.stat(os.tmpdir())).dev === (await fs.stat("/dev/shm")).dev
         ) {
           context.skip();
-          return;
         }
       } catch {
         context.skip();
-        return;
       }
     }
     let clock = 0;
@@ -116,11 +114,12 @@ it.each(["authority", "copy", "cross-filesystem", "revoked", "aborted"])(
       sourceBytes: 128 * 1024,
       preflightMs: 0,
     });
+    assert.isDefined(diagnostics.authorityWaitMs);
     expect(diagnostics.authorityWaitMs).toEqual(blocked === "authority" ? expect.any(Number) : 0);
     expect(diagnostics.copyAwaitMs).toBe(
       blocked === "authority" ? diagnostics.authorityWaitMs - 160 : blocked === "copy" ? 160 : 0,
     );
-    expect(copiedOptions.mock.calls[0][0]).toMatchObject({
+    expect(copiedOptions.mock.calls[0]?.[0]).toMatchObject({
       clone: "auto",
       overwrite: false,
       preserveSourceMode: true,
