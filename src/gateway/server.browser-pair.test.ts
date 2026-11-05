@@ -1,4 +1,3 @@
-import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { signDevicePayload } from "../infra/device-identity.js";
@@ -201,9 +200,11 @@ describe("browser device-code pairing", () => {
     // Like tokens issued at connect, it retires when the shared Gateway secret rotates.
     expect(paired?.tokens?.operator?.issuer?.kind).toBe("shared-gateway-auth");
 
-    // Consecutive polls of one request are paced by the route.
-    await delay(1_100);
-    const collected = await collect(browser, requestId);
+    // Consecutive polls of one request are paced by the route, so move its clock past
+    // the pacing interval instead of waiting it out.
+    const realNow = Date.now.bind(Date);
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => realNow() + 1_100);
+    const collected = await collect(browser, requestId).finally(() => clock.mockRestore());
     expect(collected.status).toBe(200);
     const deviceToken = collected.body.deviceToken as string;
     expect(deviceToken).toBe(paired?.tokens?.operator?.token);
