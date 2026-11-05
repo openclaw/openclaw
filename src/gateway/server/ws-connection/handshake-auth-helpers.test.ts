@@ -1,5 +1,10 @@
 // Handshake auth helper tests cover browser-origin security, pairing locality, and auth error details.
+import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
+import {
+  buildDeviceAuthPayloadV3,
+  buildDeviceAuthPayloadV4,
+} from "../../../../packages/gateway-client/src/device-auth.js";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -9,6 +14,7 @@ import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import {
   resolveHandshakeBrowserSecurityContext,
   resolvePairingLocality,
+  resolveDeviceSignaturePayloadVersion,
   resolveUnauthorizedHandshakeContext,
   shouldAllowSilentLocalPairing,
   shouldPreserveLocalCliSharedAuthScopes,
@@ -146,6 +152,105 @@ function preserveLocalCliSharedAuthScopes(overrides: Partial<LocalCliSharedAuthS
 }
 
 describe("handshake auth helpers", () => {
+  it("requires a v4 device signature over the complete personal identity intent", () => {
+    const pair = crypto.generateKeyPairSync("ed25519");
+    const publicKey = pair.publicKey.export({ type: "spki", format: "pem" });
+    const privateKey = pair.privateKey;
+    const params = {
+      deviceId: "device-1",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      clientMode: GATEWAY_CLIENT_MODES.BACKEND,
+      role: "operator",
+      scopes: ["operator.read", "operator.write"],
+      signedAtMs: Date.now(),
+      token: "device-token",
+      nonce: "challenge-nonce",
+      platform: "macOS",
+      deviceFamily: "desktop",
+      personalIdentity: {
+        mode: "personal-identity" as const,
+        provider: "tailscale" as const,
+        phase: "use" as const,
+        bindingId: "binding-1",
+        profileId: "profile-1",
+        gatewayId: "gateway-1",
+        issuedAtMs: Date.now(),
+      },
+    };
+    const connectParams = {
+      client: {
+        id: params.clientId,
+        mode: params.clientMode,
+        platform: params.platform,
+        deviceFamily: params.deviceFamily,
+      },
+      auth: { token: params.token },
+      personalIdentity: params.personalIdentity,
+    } as ConnectParams;
+    const device = {
+      id: params.deviceId,
+      publicKey,
+      signature: crypto
+        .sign(null, Buffer.from(buildDeviceAuthPayloadV4(params)), privateKey)
+        .toString("base64url"),
+    };
+    const resolveVersion = (connectParamsOverride = connectParams, deviceOverride = device) =>
+      resolveDeviceSignaturePayloadVersion({
+        device: deviceOverride,
+        connectParams: connectParamsOverride,
+        role: params.role,
+        scopes: params.scopes,
+        signedAtMs: params.signedAtMs,
+        nonce: params.nonce,
+      });
+
+    expect(resolveVersion()).toBe("v4");
+    expect(
+      resolveVersion({
+        ...connectParams,
+        personalIdentity: { ...params.personalIdentity, profileId: "other" },
+      } as ConnectParams),
+    ).toBeNull();
+    expect(
+      resolveVersion(connectParams, {
+        ...device,
+        signature: crypto
+          .sign(
+            null,
+            Buffer.from(
+              buildDeviceAuthPayloadV3({
+                deviceId: params.deviceId,
+                clientId: params.clientId,
+                clientMode: params.clientMode,
+                role: params.role,
+                scopes: params.scopes,
+                signedAtMs: params.signedAtMs,
+                token: params.token,
+                nonce: params.nonce,
+                platform: params.platform,
+                deviceFamily: params.deviceFamily,
+              }),
+            ),
+            privateKey,
+          )
+          .toString("base64url"),
+      }),
+    ).toBeNull();
+    const staleIntent = { ...params.personalIdentity, issuedAtMs: Date.now() - 120_001 };
+    const staleSignature = crypto
+      .sign(
+        null,
+        Buffer.from(buildDeviceAuthPayloadV4({ ...params, personalIdentity: staleIntent })),
+        privateKey,
+      )
+      .toString("base64url");
+    expect(
+      resolveVersion({ ...connectParams, personalIdentity: staleIntent } as ConnectParams, {
+        ...device,
+        signature: staleSignature,
+      }),
+    ).toBeNull();
+  });
   it("isolates browser-origin loopback clients in the browser limiter", () => {
     const rateLimiter = createRateLimiter();
     const browserRateLimiter = createRateLimiter();

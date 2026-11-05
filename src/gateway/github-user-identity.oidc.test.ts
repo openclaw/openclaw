@@ -26,6 +26,7 @@ import {
 } from "./github-user-identity.oidc.test-support.js";
 import { resolveAuthenticatedHttpUserProfile } from "./http-auth-user-profile.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
 import { resolveGatewayConnectProfileAdmission } from "./server/ws-connection/connect-user-profile.js";
 
 const accessIdentityUrl = `${accessOrigin}/cdn-cgi/access/get-identity`;
@@ -72,10 +73,20 @@ async function resolveWsProfileAdmission(request: ReturnType<typeof accessReques
   const admission = await resolveGatewayConnectProfileAdmission({
     context: {
       configSnapshot: request.cfg,
+      connectParams: {},
+      isLocalClient: false,
       handler: {
         connId: "oidc-profile-admission",
         logWsControl: createSubsystemLogger("test/oidc-profile-admission"),
         close: vi.fn(),
+        clients: new GatewayClientRegistry(),
+        bootId: "test-boot",
+        ingressAttribution: {
+          kind: "direct-remote",
+          clientIp: "100.64.0.10",
+          rateLimit: { subject: { key: "test" }, resetOnSuccess: true },
+        },
+        buildRequestContext: () => ({}),
       },
       markHandshakeFailure: vi.fn(),
       sendHandshakeErrorResponse: vi.fn(),

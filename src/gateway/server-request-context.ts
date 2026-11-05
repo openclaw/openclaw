@@ -12,6 +12,7 @@ import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
 import { ScopeUpgradeCoordinator } from "./device-scope-upgrade.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
+import { revokeGatewayPersonalIdentityBindingsForDevice } from "./personal-identity-binding.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
@@ -452,6 +453,9 @@ export function createGatewayRequestContext(
     },
     invalidateClientsForDevice: (deviceId: string, opts?: { role?: string; reason?: string }) => {
       const reason = opts?.reason ?? "device-invalidated";
+      if (!opts?.role || opts.role === "operator") {
+        revokeGatewayPersonalIdentityBindingsForDevice(clients, deviceId);
+      }
       invalidateGatewayDeviceRevocation(context, deviceId, opts?.role);
       for (const gatewayClient of deviceClients(deviceId, opts?.role)) {
         // Retire node-owned projections and pending invokes synchronously; socket
@@ -465,6 +469,9 @@ export function createGatewayRequestContext(
       invalidateDeviceTransports?.(deviceId, opts);
     },
     disconnectClientsForDevice: (deviceId: string, opts?: { role?: string }) => {
+      if (!opts?.role || opts.role === "operator") {
+        revokeGatewayPersonalIdentityBindingsForDevice(clients, deviceId);
+      }
       invalidateGatewayDeviceRevocation(context, deviceId, opts?.role);
       for (const gatewayClient of deviceClients(deviceId, opts?.role)) {
         invalidateGatewayPolicyClient(gatewayClient, {

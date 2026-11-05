@@ -28,6 +28,7 @@ import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import type {
   NativeGatewayAuthorization,
   NativeGatewayConnectAuth,
+  NativeGatewayHelloExpectation,
 } from "../app/native-gateway-auth.ts";
 import { isNativeMobileHost } from "../app/native-web-chrome.ts";
 import { i18n } from "../i18n/index.ts";
@@ -100,7 +101,19 @@ export type ConnectPlan = {
   explicitGatewayToken?: string;
   selectedAuth: GatewayConnectAuthSelection;
   deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null;
+  expectedHelloAuth?: NativeGatewayHelloExpectation;
+  expectedGatewayId?: string;
 };
+
+export function matchesNativeGatewayHello(hello: GatewayHelloOk, plan: ConnectPlan): boolean {
+  const expected = plan.expectedHelloAuth;
+  return (
+    (!plan.expectedGatewayId || hello.server?.bootId === plan.expectedGatewayId) &&
+    (!expected ||
+      (hello.auth?.method === expected.method &&
+        hello.auth?.recoveryScope === expected.recoveryScope))
+  );
+}
 
 function browserDeviceFamily(): string | undefined {
   if (navigator.platform !== "MacIntel") {
@@ -329,5 +342,7 @@ export async function buildBrowserGatewayConnectPlan({
     explicitGatewayToken: nativeAuth ? undefined : explicitGatewayToken,
     selectedAuth,
     deviceIdentity,
+    ...(nativeAuth?.expectedHelloAuth ? { expectedHelloAuth: nativeAuth.expectedHelloAuth } : {}),
+    ...(nativeAuth?.expectedGatewayId ? { expectedGatewayId: nativeAuth.expectedGatewayId } : {}),
   };
 }

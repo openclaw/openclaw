@@ -6,6 +6,8 @@ import {
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import type { NativeGatewayAuthorization } from "../app/native-gateway-auth.ts";
 import * as nodes from "../lib/nodes/index.ts";
 import { startConnect, useHandshakeHarness } from "./gateway-handshake.test-support.ts";
 import { getLatestWebSocket, wsInstances } from "./gateway-socket.test-support.ts";
@@ -24,13 +26,19 @@ const CONTROL_UI_OPERATOR_SCOPES = [
 
 async function acceptConnect(
   { ws, connectFrame }: Awaited<ReturnType<typeof startConnect>>,
-  auth: { role: string; scopes: string[] },
+  auth: { role: string; scopes: string[]; method?: string; recoveryScope?: string },
+  gatewayId?: string,
 ) {
   ws.emitMessage({
     type: "res",
     id: connectFrame.id,
     ok: true,
-    payload: { type: "hello-ok", protocol: PROTOCOL_VERSION, auth },
+    payload: {
+      type: "hello-ok",
+      protocol: PROTOCOL_VERSION,
+      auth,
+      ...(gatewayId ? { server: { bootId: gatewayId } } : {}),
+    },
   });
   await vi.advanceTimersByTimeAsync(0);
 }
@@ -256,6 +264,172 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     expect(connectFrame.params).not.toHaveProperty("includeSessionMessageBodies");
     expect(connectFrame.params.client.id).toBe("openclaw-macos");
     expect(connectFrame.params.auth).toEqual({ deviceToken: "native-device-token" });
+  });
+
+  describe("native personal hello admission", () => {
+    const recoveryScope = " tailscale-person-a ";
+    const personalReply = (nonce: string, signedAt: number): NativeGatewayAuthorization => ({
+      client: { id: "openclaw-ios", mode: "ui", platform: "iOS", version: "test" },
+      scopes: ["operator.read"],
+      auth: {},
+      expectedHelloAuth: { method: "tailscale", recoveryScope },
+      device: { id: "native-device", publicKey: "test", signature: "test", nonce, signedAt },
+    });
+    const personalAuth = {
+      role: "operator",
+      scopes: ["operator.read"],
+      method: "tailscale",
+      recoveryScope,
+    };
+    const event = { type: "event", event: "test.personal", payload: { value: "private" } };
+
+    it.each([
+      { method: "token", recoveryScope },
+      { recoveryScope },
+      { method: "tailscale", recoveryScope: "another-person" },
+      { method: "tailscale", recoveryScope: recoveryScope.trim() },
+      { method: "tailscale" },
+    ])("rejects an unapproved hello before publishing native authority: %j", async (auth) => {
+      const onHello = vi.fn();
+      const onEvent = vi.fn();
+      const onClose = vi.fn();
+      client = createClient({
+        nativeConnectAuth: async ({ nonce, signedAt }) => personalReply(nonce, signedAt),
+        onHello,
+        onEvent,
+        onClose,
+      });
+      const { ws, connectFrame } = await startConnect(client);
+      const listener = vi.fn();
+      client.addEventListener(listener);
+      expect(client.connected).toBe(false);
+      ws.emitMessage(event);
+      for (const method of ["health", "talk.catalog"]) {
+        await expect(client.request(method)).rejects.toThrow("native Gateway hello");
+      }
+      await acceptConnect(
+        { ws, connectFrame },
+        { role: "operator", scopes: ["operator.read"], ...auth },
+      );
+      expect(client.connected).toBe(false);
+      expect(client.auth).toBeNull();
+      expect(client.hello).toBeNull();
+      expect(client.recoveryScopeReady).toBe(false);
+      expect(client.recoveryScope).toBe("");
+      expect(onHello).not.toHaveBeenCalled();
+      ws.emitMessage(event);
+      expect(onEvent).not.toHaveBeenCalled();
+      expect(listener).not.toHaveBeenCalled();
+      expect(ws.sent.map((frame) => JSON.parse(frame).method)).toEqual(["connect"]);
+      ws.emitClose(4008, "connect failed");
+      expect(onClose).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          willRetry: false,
+          error: expect.objectContaining({ code: "UNAVAILABLE", retryable: false }),
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(wsInstances).toHaveLength(1);
+    });
+
+    it.each([undefined, "cloned-gateway-boot"])(
+      "rejects a matching personal identity from an unapproved Gateway boot: %s",
+      async (bootId) => {
+        const onHello = vi.fn();
+        const onEvent = vi.fn();
+        client = createClient({
+          nativeConnectAuth: async ({ nonce, signedAt }) => ({
+            ...personalReply(nonce, signedAt),
+            expectedGatewayId: "primary-gateway-boot",
+          }),
+          onHello,
+          onEvent,
+        });
+        const { ws, connectFrame } = await startConnect(client);
+        const listener = vi.fn();
+        client.addEventListener(listener);
+        await acceptConnect({ ws, connectFrame }, personalAuth, bootId);
+        ws.emitMessage(event);
+        expect(client.connected).toBe(false);
+        expect(client.hello).toBeNull();
+        expect(client.auth).toBeNull();
+        expect(client.recoveryScopeReady).toBe(false);
+        expect(onHello).not.toHaveBeenCalled();
+        expect(onEvent).not.toHaveBeenCalled();
+        expect(listener).not.toHaveBeenCalled();
+        await expect(client.request("health")).rejects.toThrow("native Gateway hello");
+        expect(ws.sent.map((frame) => JSON.parse(frame).method)).toEqual(["connect"]);
+      },
+    );
+
+    it("admits matching native authority and retires it before a reconnect close callback", async () => {
+      const onHello = vi.fn();
+      const onEvent = vi.fn();
+      client = createClient({
+        nativeConnectAuth: async ({ nonce, signedAt }) => personalReply(nonce, signedAt),
+        onHello,
+        onEvent,
+      });
+      const { ws, connectFrame } = await startConnect(client);
+      const listener = vi.fn();
+      client.addEventListener(listener);
+      await acceptConnect({ ws, connectFrame }, personalAuth);
+      expect(client.connected).toBe(true);
+      expect(client.auth).toEqual(personalAuth);
+      expect(client.recoveryScopeReady).toBe(true);
+      expect(client.recoveryScope).toBe(recoveryScope);
+      expect(onHello).toHaveBeenCalledOnce();
+      ws.emitMessage(event);
+      expect(onEvent).toHaveBeenCalledOnce();
+      expect(listener).toHaveBeenCalledOnce();
+      const result = client.request("health");
+      const request = JSON.parse(ws.sent.at(-1)!);
+      ws.emitMessage({ type: "res", id: request.id, ok: true, payload: { status: "ok" } });
+      await expect(result).resolves.toEqual({ status: "ok" });
+      const close = ws.close.bind(ws);
+      vi.spyOn(ws, "close").mockImplementation((code, reason) => {
+        expect(client.hello).toBeNull();
+        expect(client.recoveryScopeReady).toBe(false);
+        close(code, reason);
+      });
+      client.forceReconnect("personal reconnect");
+      expect(client.connected).toBe(false);
+      expect(client.auth).toBeNull();
+      expect(client.hello).toBeNull();
+      expect(client.recoveryScopeReady).toBe(false);
+      await expect(client.request("talk.catalog")).rejects.toThrow("native Gateway hello");
+      ws.emitMessage(event);
+      expect(onEvent).toHaveBeenCalledOnce();
+      expect(listener).toHaveBeenCalledOnce();
+      expect(ws.sent.map((frame) => JSON.parse(frame).method)).toEqual(["connect", "health"]);
+    });
+
+    it("keeps a retired native reply from admitting or sending on the successor connection", async () => {
+      const held = createDeferred<NativeGatewayAuthorization>();
+      const nativeConnectAuth = vi.fn(
+        async ({ nonce, signedAt }: { nonce: string; signedAt: number }) =>
+          personalReply(nonce, signedAt),
+      );
+      nativeConnectAuth.mockImplementationOnce(() => held.promise);
+      client = createClient({ nativeConnectAuth });
+      const first = await startConnect(client, "retired-challenge");
+      first.ws.emitClose(1006, "replaced");
+      await vi.advanceTimersByTimeAsync(1_000);
+      const next = await startConnect(client, "successor-challenge");
+      held.resolve({
+        ...personalReply("retired-challenge", 1_800_000_000_000),
+        auth: { deviceToken: "retired-grant" },
+        expectedHelloAuth: undefined,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(first.ws.sent).toEqual([]);
+      expect(client.connected).toBe(false);
+      await expect(client.request("health")).rejects.toThrow("native Gateway hello");
+      await acceptConnect(next, personalAuth);
+      expect(client.connected).toBe(true);
+      expect(client.auth).toEqual(personalAuth);
+      expect(next.ws.sent.map((frame) => JSON.parse(frame).method)).toEqual(["connect"]);
+    });
   });
 
   it.each([

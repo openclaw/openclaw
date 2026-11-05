@@ -34,6 +34,7 @@ import {
 import {
   buildBrowserGatewayConnectPlan,
   deriveLegacyV4RecoveryScope,
+  matchesNativeGatewayHello,
   selectBrowserGatewayConnectAuth,
   CONTROL_UI_OPERATOR_ROLE,
   CONTROL_UI_OPERATOR_SCOPES,
@@ -220,7 +221,7 @@ export class GatewayBrowserClient {
         notifyBrowserWebSocketError(error, this.opts);
       },
       onEvent: (event) => {
-        if (this.pendingOwner) {
+        if (this.pendingOwner || (this.opts.nativeConnectAuth && this.connectionHello === null)) {
           return;
         }
         if (this.pendingPairing) {
@@ -311,7 +312,7 @@ export class GatewayBrowserClient {
   }
 
   get connected() {
-    return this.client.connected;
+    return this.client.connected && (!this.opts.nativeConnectAuth || this.connectionHello !== null);
   }
 
   private retireConnectDispatch() {
@@ -429,6 +430,7 @@ export class GatewayBrowserClient {
           this.pendingDeviceTokenRetry,
         ),
     });
+    assertCurrent();
     if (this.pendingDeviceTokenRetry && plan.selectedAuth.authDeviceToken) {
       this.pendingDeviceTokenRetry = false;
     }
@@ -436,6 +438,14 @@ export class GatewayBrowserClient {
   }
 
   private handleConnectHello(hello: GatewayHelloOk, plan: ConnectPlan) {
+    if (!matchesNativeGatewayHello(hello, plan)) {
+      this.nativeAuthError = new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "The Gateway did not return the app-approved Tailscale identity.",
+        retryable: false,
+      });
+      throw this.nativeAuthError;
+    }
     this.connectionHello = hello;
     // Publish this connection's identity before listeners can capture recovery intent.
     // A legacy hello must not retain its predecessor while its digest is pending.
@@ -490,7 +500,7 @@ export class GatewayBrowserClient {
       listSessionPlacementRecoveryStorageKeys(this.opts.url, legacyScope).length > 0
         ? (await import("../lib/sessions/session-placement-recovery-migration.runtime.ts")).default
         : undefined;
-    if (plan.generation !== this.recovery.generation || !this.client.connected) {
+    if (plan.generation !== this.recovery.generation || !this.connected) {
       return;
     }
     migrateRecoveryScope?.(this.opts.url, legacyScope, serverScope!);
@@ -677,6 +687,9 @@ export class GatewayBrowserClient {
     params?: unknown,
     options?: GatewayProtocolRequestOptions,
   ): Promise<T> {
+    if (this.opts.nativeConnectAuth && this.connectionHello === null) {
+      return Promise.reject(new Error("native Gateway hello not admitted"));
+    }
     const requestOptions: GatewayProtocolRequestOptions = {
       ...options,
       onSent: (requestId) => {
@@ -730,11 +743,19 @@ export class GatewayBrowserClient {
   }
 
   addEventListener(listener: GatewayEventListener): () => void {
-    return this.client.addEventListener((event) => this.chatEvents.dispatch(event, listener));
+    return this.client.addEventListener((event) =>
+      !this.opts.nativeConnectAuth || this.connectionHello !== null
+        ? this.chatEvents.dispatch(event, listener)
+        : undefined,
+    );
   }
 
   /** Drops a stale socket; the shared reconnect supervisor owns recovery. */
   forceReconnect(reason: string): void {
+    if (this.opts.nativeConnectAuth) {
+      this.connectionHello = null;
+      this.recovery.resolved = false;
+    }
     this.client.closeSocket(4000, reason);
   }
 }

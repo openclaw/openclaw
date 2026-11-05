@@ -189,6 +189,13 @@ export async function sendGatewayHello(
       ? resolveOperatorRolePolicy(context.handler.getClient(), context.configSnapshot)
       : undefined;
   const sessionCap = rolePolicy?.sessions.others;
+  const personalBinding =
+    connectParams.personalIdentity?.phase === "bind"
+      ? context.handler.getClient()?.internal?.personalIdentityBinding
+      : undefined;
+  const personalBindingTlsFingerprint = personalBinding
+    ? buildRequestContext().gatewayTlsFingerprint
+    : undefined;
   const activityClient = context.handler.getClient();
   const profileActivityViewerId =
     role === "operator" && activityClient
@@ -292,6 +299,18 @@ export async function sendGatewayHello(
     ...(controlUiWidgetKinds.length > 0 ? { controlUiWidgetKinds } : {}),
     ...(controlUiLinkReaders.length > 0 ? { controlUiLinkReaders } : {}),
     ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
+    ...(personalBinding && personalBindingTlsFingerprint
+      ? {
+          personalIdentityBinding: {
+            mode: personalBinding.mode,
+            provider: personalBinding.provider,
+            bindingId: personalBinding.bindingId,
+            profileId: personalBinding.profileId,
+            gatewayId: personalBinding.gatewayId,
+            tlsFingerprint: personalBindingTlsFingerprint,
+          },
+        }
+      : {}),
     auth: {
       method: authMethod,
       role,

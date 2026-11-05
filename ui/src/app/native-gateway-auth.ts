@@ -13,6 +13,11 @@ import { formatConnectionError, formatConnectionErrorSummary } from "../lib/conn
 import { listen } from "../lib/reactive/listener.ts";
 import { generateUUID } from "../lib/uuid.ts";
 
+export type NativeGatewayHelloExpectation = {
+  method: "tailscale";
+  recoveryScope: string;
+};
+
 export type NativeGatewayAuthorization = {
   client: ConnectParams["client"];
   scopes: string[];
@@ -22,6 +27,8 @@ export type NativeGatewayAuthorization = {
     | { password: string; token?: never; deviceToken?: never }
     | { deviceToken?: never; token?: never; password?: never };
   device: NonNullable<ConnectParams["device"]>;
+  expectedHelloAuth?: NativeGatewayHelloExpectation;
+  expectedGatewayId?: string;
 };
 
 export type NativeGatewayConnectAuth = (challenge: {
@@ -103,6 +110,26 @@ function readAuthorization(
   ) {
     throw new Error(t("runtimeErrors.nativeAuthorization"));
   }
+  const auth = readNativeCredential(result.auth);
+  const expectedGatewayId = result.expectedGatewayId;
+  if (
+    expectedGatewayId !== undefined &&
+    (typeof expectedGatewayId !== "string" || expectedGatewayId.trim().length === 0)
+  ) {
+    throw new Error(t("runtimeErrors.nativeAuthorization"));
+  }
+  let expectedHelloAuth: NativeGatewayHelloExpectation | undefined;
+  if (Object.keys(auth).length === 0) {
+    const recoveryScope = result.expectedRecoveryScope;
+    if (
+      result.requiredAuthMethod !== "tailscale" ||
+      typeof recoveryScope !== "string" ||
+      recoveryScope.trim().length === 0
+    ) {
+      throw new Error(t("runtimeErrors.nativeCredential"));
+    }
+    expectedHelloAuth = { method: "tailscale", recoveryScope };
+  }
   return {
     client: {
       id,
@@ -113,7 +140,9 @@ function readAuthorization(
       ...(typeof client.instanceId === "string" ? { instanceId: client.instanceId } : {}),
     },
     scopes: result.scopes,
-    auth: readNativeCredential(result.auth),
+    auth,
+    ...(expectedHelloAuth ? { expectedHelloAuth } : {}),
+    ...(expectedGatewayId !== undefined ? { expectedGatewayId } : {}),
     device: {
       id: device.id,
       publicKey: device.publicKey,

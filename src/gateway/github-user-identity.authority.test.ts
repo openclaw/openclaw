@@ -18,6 +18,7 @@ import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
+import { GatewayClientRegistry } from "./server/client-registry.js";
 import { createOperatorWsClient } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { resolveGatewayConnectProfileAdmission } from "./server/ws-connection/connect-user-profile.js";
 import { withTempConfig } from "./test-temp-config.js";
@@ -142,10 +143,20 @@ it.each(["tailscale", "onetimepin"])("gates %s privileged dispatch", async (prov
             const admission = await resolveGatewayConnectProfileAdmission({
               context: {
                 configSnapshot: cfg,
+                connectParams: {},
+                isLocalClient: false,
                 handler: {
                   connId: login,
                   logWsControl,
                   close: vi.fn(),
+                  clients: new GatewayClientRegistry(),
+                  bootId: "test-boot",
+                  ingressAttribution: {
+                    kind: "direct-remote",
+                    clientIp: "100.64.0.10",
+                    rateLimit: { subject: { key: "test" }, resetOnSuccess: true },
+                  },
+                  buildRequestContext: () => ({}),
                 },
                 markHandshakeFailure: vi.fn(),
                 sendHandshakeErrorResponse: vi.fn(),
