@@ -245,17 +245,20 @@ scheduled model falls back without retaining that model's account.
 To change an account deliberately, update the job with a model/profile selection,
 for example `--model "openai/gpt-4.1@work"`. This captures a fresh authorization.
 For legacy jobs without a recorded inference owner, `openclaw doctor --fix` records
-the account the job's next unbound run would use: an explicit selection, or else the
-first account in the run's normal account order, ignoring temporary rate-limit
-cooldowns. With `auth.order` set, that is the account every earlier run used; without
-it, runs rotated between accounts of the same type by last use, and Doctor records one
-of them. When several accounts are eligible, Doctor names the others and the command
-to change the choice.
+an explicit account selection, or the sole eligible stored account, ignoring temporary
+rate-limit cooldowns. When several accounts are eligible, Doctor leaves the job
+unchanged and names the accounts and the command to select one. Account order and
+past run telemetry do not establish which account an older job was authorized to use.
 Doctor can also adopt host-managed accounts on an explicitly selected Codex runtime; it records that runtime with the account. Native-owned or model-locked sessions remain unchanged.
 Doctor uses normal automation model selection, preserves inherited defaults and
 fallback lists, leaves existing bindings unchanged, and backs up cron state before
 committing. Missing accounts, and personal accounts needing their owner's
 authorization, are left unchanged with job-specific adoption instructions.
+Run `openclaw doctor --lint` to preview missing bindings. Add `--all` to inspect
+unavailable profiles referenced by saved account order. An empty per-agent credential store
+can be valid when credentials are inherited from the shared store; Doctor checks
+effective credentials before reporting a missing profile. It does not remove a
+missing profile from account order or recreate its credentials automatically.
 
 Managed updates and the standard container entrypoint run repairing Doctor before
 activation. A manual source upgrade must include `openclaw doctor --fix` before

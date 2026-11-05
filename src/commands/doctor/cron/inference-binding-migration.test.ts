@@ -24,12 +24,14 @@ import { resolveCronOperatorExecutionRevision } from "../../../cron/service/jobs
 import { loadCronJobsStore, saveCronJobsStore } from "../../../cron/store.js";
 import * as receipts from "../../../cron/store/run-receipt-store.test-support.js";
 import type { CronStoredJob } from "../../../cron/types.js";
+import { cronInferenceCheck } from "../../../flows/doctor-cron-checks.js";
 import { runLegacyCronHealth } from "../../../flows/doctor-health-contribution-runners.state.js";
 import { mintCronStandingGrantLocked } from "../../../gateway/operator-approval-standing-grants.worker.js";
 import * as grants from "../../../gateway/operator-approval-store.js";
 import * as snapshots from "../../../infra/sqlite-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../../../plugins/runtime/generation-scope.js";
+import { createNonExitingRuntime } from "../../../runtime.js";
 import * as stateDb from "../../../state/openclaw-state-db.js";
 import type { OpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
@@ -465,10 +467,13 @@ it("warns that an unbound job whose default moved to a stored account is refused
     const storePath = state.statePath("cron", "jobs.json");
     await saveJobs(storePath, legacyJob("hourly"));
     await doctor.withDoctorConfigMaintenance(async () => {
-      const preview = await migrate(cfg, false);
-      expect(preview.changes).toEqual([]);
+      const runtime = createNonExitingRuntime();
+      const findings = await cronInferenceCheck.detect({ cfg, mode: "lint", runtime });
+      expect(findings).toContainEqual(
+        expect.objectContaining({ requirement: "cron-inference-account" }),
+      );
       contains(
-        preview.warnings.join("\n"),
+        findings.map((finding) => finding.message).join("\n"),
         "Automation hourly (hourly): retain openai:manual for openai/gpt-5.5",
         "Its runs are refused until it records this account",
         "openclaw doctor --fix",
@@ -477,7 +482,7 @@ it("warns that an unbound job whose default moved to a stored account is refused
   });
 });
 
-it("records the planner's first account for ambiguous jobs, keeps direct keys unbound and refuses missing accounts instead of pinning a previous fallback", async () => {
+it("refuses ambiguous and missing accounts while retaining explicit selections and direct keys", async () => {
   await withAccounts(async (state) => {
     const cfg = config(state, {
       systemAgent: { agentId: "main" },
@@ -582,39 +587,32 @@ it("records the planner's first account for ambiguous jobs, keeps direct keys un
       const malformedBefore = (await inspectCronJobsForDoctor({ env: process.env })).jobs.find(
         (entry) => entry.id === "malformed",
       );
-      expect(malformedBefore?.definition?.sessionTarget).toBe("session:");
-      const preview = await migrate(cfg, false);
-      expect(preview.changes).toEqual([]);
-      expect(preview.warnings.join("\n")).toContain("openclaw doctor --fix");
+      await migrate(cfg, false);
       expect(await readJobs(storePath)).toEqual(original);
       const result = await migrate(cfg);
       const warnings = result.warnings.join("\n");
-      contains(warnings, "malformed", "invalid cron sessionTarget session id");
-      // Several eligible accounts: the run's first planned account is recorded, not refused.
-      expect(warnings).not.toContain("More than one inference account");
-      expect(result.changes.join("\n")).toContain(
-        "Automation ambiguous (ambiguous): retain openai:a for openai/gpt-5.5",
-      );
-      expect(result.changes.join("\n")).toContain("Also eligible: openai:b");
-      // A provider-config key needs no adoption: the job keeps running on it unbound.
-      expect(warnings).not.toContain("Automation direct (direct)");
       contains(
         warnings,
+        "malformed",
+        "invalid cron sessionTarget session id",
+        "Automation ambiguous",
+        "More than one inference account",
+        "openai:a",
+        "openai:b",
         "openai:missing",
         "deleted-agent",
         "unavailable-model",
         "modelPolicy.allow",
         "native-locked",
       );
+      // A provider-config key needs no adoption: the job keeps running on it unbound.
+      expect(warnings).not.toContain("Automation direct (direct)");
       expect(globalThis.fetch).not.toHaveBeenCalled();
       expect(warnings).not.toContain("synthetic-direct-key");
       const saved = await readJobs(storePath);
-      // A previous auto fallback is not the job's account: it keeps the default's first account.
       const bindings = {
         explicit: { profileId: "openai:a", source: "user" },
         session: { profileId: "openai:b", source: "user" },
-        ambiguous: { profileId: "openai:a", source: "auto" },
-        "previous-fallback": { provider: "openai", profileId: "openai:a" },
         "provider-account": { provider: "synthetic", profileId: "synthetic:stored" },
         "native-config": { profileId: "openai:a", runtime: "codex" },
         "native-session": { profileId: "openai:a", runtime: "codex" },
