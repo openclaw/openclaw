@@ -1,2 +1,2 @@
-26
-# Extend the existing warm-reload flow to observe the pane's first frame and connected dock flips.
+77
+# First-pane/dock regressions plus one held-module reload proving complete cached Environment geometry.

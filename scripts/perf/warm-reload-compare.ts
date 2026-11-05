@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import photon from "@silvia-odwyer/photon-node";
 import { stopChild } from "../lib/gateway-bench-child.ts";
+import type { summarizeDetailsGeometry } from "./warm-reload-browser-probe.ts";
 
 type Arm = "base" | "candidate";
 type Census = {
@@ -21,6 +22,7 @@ type ComparisonRun = {
     firstPaintedRowsMs: number | null;
     firstDetailsDomMs?: number | null;
     firstDetailsPaintMs?: number | null;
+    detailsGeometry?: ReturnType<typeof summarizeDetailsGeometry>;
     finalRowsDomMs: number | null;
     loafBlockingMs: number;
     cls: number;
@@ -147,7 +149,11 @@ function distribution(values: number[]) {
   return { median: quantile(0.5), q1: quantile(0.25), q3: quantile(0.75), samples: values.length };
 }
 
-function metrics(run: ComparisonRun): Record<string, number | null> {
+function metrics(
+  run: ComparisonRun,
+  cachedEnvironmentHeight: number | null,
+): Record<string, number | null> {
+  const geometry = run.probe.detailsGeometry;
   return {
     visibleStates: run.visual.visibleChangeCensus?.distinctStates ?? null,
     visibleStateOccurrences: run.visual.visibleChangeCensus?.timeline.length ?? null,
@@ -173,6 +179,20 @@ function metrics(run: ComparisonRun): Record<string, number | null> {
       run.probe.firstDetailsPaintMs != null && run.probe.firstPaintedRowsMs !== null
         ? run.probe.firstDetailsPaintMs - run.probe.firstPaintedRowsMs
         : null,
+    environmentFirstHeightErrorPx:
+      geometry?.firstEnvironmentHeightPx != null && cachedEnvironmentHeight !== null
+        ? Math.abs(geometry.firstEnvironmentHeightPx - cachedEnvironmentHeight)
+        : null,
+    environmentFirstBranchMissing:
+      geometry?.firstEnvironmentBranchVisible == null
+        ? null
+        : Number(!geometry.firstEnvironmentBranchVisible),
+    environmentHeightMovementPx:
+      geometry?.firstEnvironmentHeightPx == null ? null : geometry.environmentHeightMovementPx,
+    outputsTopMovementPx:
+      geometry?.firstEnvironmentHeightPx == null ? null : geometry.outputsTopMovementPx,
+    automationsTopMovementPx:
+      geometry?.firstEnvironmentHeightPx == null ? null : geometry.automationsTopMovementPx,
     finalRowsDomMs: run.probe.finalRowsDomMs,
     loafBlockingMs: run.probe.loafBlockingMs,
     cls: run.probe.cls,
@@ -265,11 +285,16 @@ export async function createWarmReloadComparison(results: ComparisonResult[], di
       throw new Error(`Comparison warm sample counts must match and be nonzero for ${route}`);
     }
     const pairs: ComparisonPair[] = [];
+    const cachedEnvironmentHeights = [base[0]!, candidate[0]!].map(
+      (result) =>
+        result.runs.find((run) => !run.warm)?.probe.detailsGeometry?.lastEnvironmentHeightPx ??
+        null,
+    );
     for (let index = 0; index < warm[0]!.length; index++) {
       const first = warm[0]![index]!;
       const second = warm[1]![index]!;
-      const a = metrics(first);
-      const b = metrics(second);
+      const a = metrics(first, cachedEnvironmentHeights[0]!);
+      const b = metrics(second, cachedEnvironmentHeights[1]!);
       const deltas = Object.fromEntries(
         Object.entries(a).map(([key, value]) => {
           const other = b[key];

@@ -59,6 +59,9 @@ and inspect the corresponding compositor frame and its predecessor. The comparis
 reports `detailsPaintLagMs`; a zero lag alone does not establish complete section
 geometry. Optional rig LoAF/mutation and Details placement probes are retained in
 `probe.rig`; placement wrappers belong only in separate attribution captures.
+`probe.modules` retains JavaScript resource start and response-end times in the same
+navigation time domain as row paints. These are file arrivals, not module evaluation
+or import-promise completion. Details section frames also record cached branch visibility.
 
 For tall dashboard-side transcript anchoring, add `--dashboard-end-anchor` with
 `--transcript-late-paint`. This uses a 1720 × 1515 viewport, a saved 320 px side

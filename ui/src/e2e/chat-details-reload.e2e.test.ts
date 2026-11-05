@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
@@ -11,18 +12,23 @@ import {
 import { createControlUiTeamScaleFixture } from "../test-helpers/control-ui-team-scale-fixture.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
 import { dashboardLayout } from "./chat-layout-fixtures.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
 import { sessionsListResponse } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Details progress warm reload" });
 suite.define(() => {
   it.each([
-    { face: "chat", archived: false },
-    { face: "dashboard", archived: false },
-    { face: "chat", archived: true },
+    { face: "chat", archived: false, delayedEnvironment: false },
+    { face: "dashboard", archived: false, delayedEnvironment: false },
+    { face: "chat", archived: true, delayedEnvironment: false },
+    { face: "chat", archived: false, delayedEnvironment: true },
   ] as const)(
-    "restores final Details geometry on $face (archived=$archived) until live facts differ",
-    async ({ face, archived }) => {
+    "restores final Details geometry on $face (archived=$archived, delayedEnvironment=$delayedEnvironment) until live facts differ",
+    async ({ face, archived, delayedEnvironment }) => {
       await suite.withPage(
         { viewport: { width: 2200, height: 1180 }, serviceWorkers: "block" },
         async ({ page }) => {
@@ -141,6 +147,10 @@ suite.define(() => {
             await details.locator('[data-details-group="processes"]').waitFor();
           }
           await page.evaluate(() => document.fonts.ready.then(() => undefined));
+          await waitForLayoutSettled(page, '.chat-details [data-details-group="environment"]');
+          const environmentHeight = (await details
+            .locator('[data-details-group="environment"]')
+            .boundingBox())!.height;
           await page.evaluate(async () => {
             await Reflect.get(
               document.querySelector(".chat-pane-cache__pane--active")!,
@@ -170,6 +180,7 @@ suite.define(() => {
             Reflect.set(window, "detailsDockFlips", dockFlips);
             const frames: Array<{
               details: boolean;
+              environment: string | null;
               progress: string | null;
               sections: Array<{ id: string; top: number; height: number }>;
             }> = [];
@@ -181,6 +192,8 @@ suite.define(() => {
                 const top = panel?.getBoundingClientRect().top ?? 0;
                 frames.push({
                   details: Boolean(session?.checkVisibility()),
+                  environment:
+                    panel?.querySelector(".chat-environment__branch-name")?.textContent ?? null,
                   progress:
                     panel?.querySelector('[data-progress-card-placement="details"]')?.textContent ??
                     null,
@@ -206,7 +219,29 @@ suite.define(() => {
             Reflect.set(window, "progressReloadFrames", frames);
             requestAnimationFrame(sample);
           });
-          await page.reload();
+          const [environmentModule, compositionModule] = delayedEnvironment
+            ? await Promise.all(
+                [
+                  "ui/src/pages/chat/components/chat-details-environment-body.tsx",
+                  "ui/src/pages/chat/components/chat-details-session.tsx",
+                ].map((source) => holdModuleResponse(page, controlUiE2eBuiltModuleRequest(source))),
+              )
+            : [];
+          await page.reload({ waitUntil: "domcontentloaded" });
+          if (environmentModule && compositionModule) {
+            // Let the pane paint after Desktop arrives while Environment is still in flight.
+            await compositionModule.request;
+            compositionModule.release();
+            await environmentModule.request;
+            await page.locator(".chat-pane-cache__pane--active .chat-pane__header").waitFor();
+            await page.evaluate(
+              () =>
+                new Promise((resolve) =>
+                  requestAnimationFrame(() => requestAnimationFrame(resolve)),
+                ),
+            );
+            environmentModule.release();
+          }
           await gateway.waitForRequest("connect");
           await details.locator("section.chat-details-session").waitFor();
           if (archived) {
@@ -225,7 +260,9 @@ suite.define(() => {
               );
             }
           }
-          await gateway.resolveDeferred("connect");
+          if (!delayedEnvironment) {
+            await gateway.resolveDeferred("connect");
+          }
           await details.getByText("feature/verification", { exact: true }).waitFor();
           if (!archived) {
             await details.locator('[data-details-group="processes"]').waitFor();
@@ -243,17 +280,27 @@ suite.define(() => {
                 )
             );
           });
-          const frames = await page.evaluate(async () => {
+          const captured = await page.evaluate(async () => {
             await new Promise(requestAnimationFrame);
             return Reflect.get(window, "progressReloadFrames") as Array<{
               details: boolean;
+              environment: string | null;
               progress: string | null;
               sections: Array<{ id: string; top: number; height: number }>;
             }>;
           });
+          const frames = delayedEnvironment ? captured.filter((frame) => frame.details) : captured;
           expect(frames.length).toBeGreaterThan(1);
           expect(await page.evaluate(() => Reflect.get(window, "detailsDockFlips"))).toEqual([]);
           expect(frames[0]!.details).toBe(true);
+          expect(frames[0]!.environment).toBe("feature/verification");
+          expect(
+            Math.abs(
+              frames[0]!.sections.find((section) => section.id === "environment")!.height -
+                environmentHeight,
+            ),
+            `Cached Environment height ${environmentHeight}; first populated frame ${JSON.stringify(frames[0]!.sections)}`,
+          ).toBeLessThanOrEqual(1);
           expect(frames[0]!.sections.some((section) => section.id === "automations")).toBe(true);
           const settled = frames.at(-1)!.sections;
           for (const frame of frames) {
@@ -271,6 +318,10 @@ suite.define(() => {
             });
           }
           expect(new Set(frames.map((frame) => frame.progress))).toEqual(new Set([loaded]));
+          if (delayedEnvironment) {
+            await gateway.resolveDeferred("connect");
+            return;
+          }
           if (!archived && face === "chat") {
             await details.locator(".chat-details-processes__stop").waitFor();
             await gateway.deferNext("sessions.processes.list");

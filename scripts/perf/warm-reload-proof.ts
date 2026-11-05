@@ -20,7 +20,11 @@ import { waitForControlUiGatewayReady } from "../../ui/src/test-helpers/control-
 import { installPaneChromeProbe } from "../lib/control-ui-pane-chrome-probe.ts";
 import { stopChild } from "../lib/gateway-bench-child.ts";
 import { freeProofPort, startWarmReloadAdmission } from "./warm-reload-admission.ts";
-import { installWarmReloadBrowserProbe, proofRegions } from "./warm-reload-browser-probe.ts";
+import {
+  installWarmReloadBrowserProbe,
+  proofRegions,
+  summarizeDetailsGeometry,
+} from "./warm-reload-browser-probe.ts";
 import { launchWarmReloadBrowser, calibrateWarmReloadPaintHolding } from "./warm-reload-browser.ts";
 import { prepareWarmReloadBuild, createWarmReloadComparison } from "./warm-reload-compare.ts";
 import { seedWarmReloadFixture } from "./warm-reload-fixture.ts";
@@ -144,7 +148,7 @@ async function waitForGateway(url: string, child: ChildProcess) {
 }
 
 async function readProbe(page: Page) {
-  return await page.evaluate(() => {
+  const probe = await page.evaluate(() => {
     const data: NonNullable<ReturnType<typeof installWarmReloadBrowserProbe>> = Reflect.get(
       window,
       "__warmReloadProof",
@@ -165,10 +169,19 @@ async function readProbe(page: Page) {
           }
         : undefined,
       paneChrome: Reflect.get(window, "__paneChrome").read(data.firstTranscriptDomMs),
+      modules: performance
+        .getEntriesByType("resource")
+        .flatMap((entry) =>
+          entry instanceof PerformanceResourceTiming &&
+          /\/assets\/.*\.js(?:\?.*)?$/u.test(entry.name)
+            ? [{ url: entry.name, startedAtMs: entry.startTime, arrivedAtMs: entry.responseEnd }]
+            : [],
+        ),
       timeOrigin: performance.timeOrigin,
       capturedUntilMs: performance.now(),
     };
   });
+  return { ...probe, detailsGeometry: summarizeDetailsGeometry(probe.paneChrome.detailsFrames) };
 }
 async function regionBoxes(page: Page) {
   return await page.evaluate((selectors) => {
@@ -502,6 +515,10 @@ async function captureReload(
     const finalDocumentTimeOrigin = probe.timeOrigin;
     const navigationOrigin = documents[0]?.epochMs ?? finalDocumentTimeOrigin;
     const documentOffsetMs = finalDocumentTimeOrigin - navigationOrigin;
+    for (const module of probe.modules) {
+      module.startedAtMs += documentOffsetMs;
+      module.arrivedAtMs += documentOffsetMs;
+    }
     for (const key of [
       "firstAppDomMs",
       "firstMainDomMs",
