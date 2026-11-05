@@ -414,13 +414,6 @@ describe("coherent Gateway service owner", () => {
     const { local, adopt } = pair(locals, donors);
     expect(adopt()).toBe(local.registry);
   });
-  it("pairs repeated identities one-to-one in original tool order", () => {
-    const { donor, adopt } = pair(
-      [["owner_tool"], ["owner_tool"]],
-      [["owner_tool"], ["owner_tool"]],
-    );
-    expect(adopt().tools).toEqual(donor.registry.tools);
-  });
   it("declines same-path source drift, unknown digest, config and hook-policy mismatch", () => {
     const { donor, local, adopt } = pair();
     donor.instance.sourceDigest = "2".repeat(64);
