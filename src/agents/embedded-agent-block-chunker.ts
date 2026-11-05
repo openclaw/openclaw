@@ -55,10 +55,10 @@ type BlockChunkDrain = {
   emit: (chunk: string, options?: BlockChunkMetadata) => void;
 };
 
-// `.`, `!` and `?` end a sentence only before whitespace, so "e.g." and "3.5" stay whole. CJK
-// and Devanagari, Urdu, Burmese, Khmer and Ethiopic full stops are followed directly by the
-// next sentence.
-const SENTENCE_END = /[.!?](?=\s|$)|[。！？｡।॥۔။។።]/gu;
+// `.`, `!`, `?` and the Arabic `؟` end a sentence only before whitespace, so "e.g.", "3.5" and
+// "؟!" stay whole. CJK, Devanagari, Urdu, Burmese, Khmer and Ethiopic full stops end one even
+// when the next sentence follows without a space.
+const SENTENCE_END = /[.!?؟](?=\s|$)|[。！？｡।॥۔။។።]/gu;
 
 function findFenceCloseLineStart(buffer: string, fence: FenceSpan, offset = 0): number {
   const relativeFenceEnd = Math.min(buffer.length, Math.max(0, fence.end - offset));

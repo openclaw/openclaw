@@ -345,6 +345,11 @@ describe("EmbeddedBlockChunker", () => {
       "आज मौसम बहुत अच्छा है। चलो पार्क में टहलते हैं। बाद में खाना खाएंगे।",
       ["आज मौसम बहुत अच्छा है।", " चलो पार्क में टहलते हैं।", " बाद में खाना खाएंगे।"],
     ],
+    [
+      "Arabic",
+      "الطقس جميل اليوم. هل نذهب إلى الحديقة؟ سنأكل معًا في المساء.",
+      ["الطقس جميل اليوم.", " هل نذهب إلى الحديقة؟", " سنأكل معًا في المساء."],
+    ],
   ])("breaks %s text at its own sentence ends", (_language, source, sentences) => {
     const { chunks } = streamChunks(
       paragraphChunker(8, 28, { breakPreference: "sentence" }),

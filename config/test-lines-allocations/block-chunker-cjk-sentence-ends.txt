@@ -1,2 +1,2 @@
-# Block streaming breaks Chinese, Japanese and Hindi replies at their own sentence ends instead of mid-word.
-26
+# Block streaming breaks Chinese, Japanese, Hindi and Arabic replies at their own sentence ends instead of mid-word or mid-sentence.
+31
