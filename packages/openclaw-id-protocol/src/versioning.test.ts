@@ -9,7 +9,6 @@ import type { SignedStatement } from "./statements/types.js";
 import { parseStatement } from "./statements/validate.js";
 import type { StatementVectors } from "./testing/vectors.js";
 import { buildWorld, signChange, WORLD_NOW } from "./testing/world.js";
-import { checkVersion, SUPPORTED_STATEMENT_VERSIONS } from "./version.js";
 
 const vectors = fixture as unknown as StatementVectors;
 const binding = vectors.valid.find((entry) => entry.name === "root signs server binding seq 1")!
@@ -23,22 +22,6 @@ const descriptor: ClawDescriptor = {
   binding,
   published_at: vectors.now,
 };
-
-describe("checkVersion", () => {
-  it("classifies listed, unlisted and invalid versions", () => {
-    expect(checkVersion(1, SUPPORTED_STATEMENT_VERSIONS)).toEqual({
-      kind: "supported",
-      version: 1,
-    });
-    expect(checkVersion(2, SUPPORTED_STATEMENT_VERSIONS)).toEqual({
-      kind: "unsupported",
-      version: 2,
-    });
-    for (const value of [undefined, null, 0, -1, 1.5, "1", Number.MAX_SAFE_INTEGER + 1]) {
-      expect(checkVersion(value, SUPPORTED_STATEMENT_VERSIONS)).toEqual({ kind: "malformed" });
-    }
-  });
-});
 
 describe("statement envelope versions", () => {
   it("keeps the v1 signing domain", () => {
@@ -58,7 +41,8 @@ describe("statement envelope versions", () => {
 
   it("refuses a missing or invalid envelope version as malformed", () => {
     const { v: _v, ...unversioned } = binding;
-    for (const bad of [unversioned, { ...binding, v: "1" }, { ...binding, v: 0 }]) {
+    const invalid = [null, 0, -1, 1.5, "1", Number.MAX_SAFE_INTEGER + 1];
+    for (const bad of [unversioned, ...invalid.map((v) => ({ ...binding, v }))]) {
       expect(parseStatement(bad)).toMatchObject({ ok: false, code: "malformed" });
     }
   });
