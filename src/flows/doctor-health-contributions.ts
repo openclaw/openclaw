@@ -229,11 +229,11 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
     const { detectLegacyStateMigrations, runLegacyStateMigrations } =
       await import("../infra/state-migrations.doctor.js");
     const { prepareLegacySessionSurfaces } = await import("../plugins/legacy-session-surfaces.js");
-    const legacySessionSurfaces = await prepareLegacySessionSurfaces({ config: ctx.cfg });
+    const legacySessionSurfaces = prepareLegacySessionSurfaces({ config: ctx.cfg });
     const legacyState = await detectLegacyStateMigrations({
       cfg: ctx.cfg,
       ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
-      legacySessionSurfaces,
+      legacySessionSurfaces: await legacySessionSurfaces,
     });
     const prior = ctx.configResult.stateMigrationStepReceipts?.find(
       (receipt) => receipt.id === "migration-detection",
@@ -256,7 +256,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
           detected: legacyState,
           integrityCheck: ctx.options.fullIntegrityCheck ? "full" : "quick",
           config: ctx.cfg,
-          legacySessionSurfaces,
+          legacySessionSurfaces: await legacySessionSurfaces,
         });
         recordDoctorHealthWarnings(
           ctx,
