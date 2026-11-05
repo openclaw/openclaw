@@ -9292,7 +9292,7 @@ test "$package_manager" = "pnpm@12.1.0"
       "release_execution_plan",
     ];
     expect(decision.uses).toBe(
-      "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@main",
+      "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@80d330dfe6d79833a6d5abffcad7478ec1b28b86",
     );
     expect(drain.uses).toBe(decision.uses);
     expect(decision.with?.mode).toBe("decision");
@@ -15735,7 +15735,7 @@ ${operation} plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     ) =>
       timeoutForProfile(
         workflow.jobs?.[job]?.uses ===
-          "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@main"
+          "openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@80d330dfe6d79833a6d5abffcad7478ec1b28b86"
           ? workflowJob(FULL_RELEASE_STATE_WATCHER, "watch")["timeout-minutes"]
           : workflow.jobs?.[job]?.["timeout-minutes"],
         profile,

@@ -385,11 +385,9 @@ describe("full release same-parent recovery workflow", () => {
   });
 
   it("keeps immutable plan artifacts parent-bound and non-overwriting", () => {
-    const artifactSteps = Object.values(workflow.jobs)
-      .flatMap(({ steps }) => steps)
-      .filter((entry) =>
-        /^(?:Upload|Download|Restore).*immutable release execution plan/u.test(String(entry.name)),
-      );
+    const artifactSteps = allSteps.filter((entry) =>
+      /^(?:Upload|Download|Restore).*immutable release execution plan/u.test(String(entry.name)),
+    );
     expect(artifactSteps.length).toBeGreaterThan(0);
     for (const entry of artifactSteps) {
       const options = entry.with as Record<string, unknown>;

@@ -2682,7 +2682,7 @@ jobs:
         release_execution_plan,
       ]
     if: always() && (vars.OPENCLAW_CI_RUNNER_BACKEND != 'boat' || needs.boat_release_runners.result == 'success')
-    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@main
+    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@80d330dfe6d79833a6d5abffcad7478ec1b28b86
     with:
       mode: decision
       runner_label: ${{ needs.boat_release_runners.outputs.decision_label }}
@@ -2709,7 +2709,7 @@ jobs:
         release_execution_plan,
       ]
     if: always() && (vars.OPENCLAW_CI_RUNNER_BACKEND != 'boat' || needs.boat_release_runners.result == 'success')
-    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@main
+    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@80d330dfe6d79833a6d5abffcad7478ec1b28b86
     with:
       mode: drain
       runner_label: ${{ needs.boat_release_runners.outputs.drain_label }}
