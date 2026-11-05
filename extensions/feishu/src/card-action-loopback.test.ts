@@ -139,11 +139,16 @@ it.each(["http-error", "nonzero", "missing-data", "missing-type", "visibility-on
           .mockResolvedValue({ admission: { kind: "dispatch" }, dispatched: false });
         setFeishuRuntime(runtime);
         const env = { ...createRuntimeEnv(), log: vi.fn(), error: vi.fn() };
+        const commandAction = createFeishuCardInteractionEnvelope({
+          k: "quick",
+          a: "feishu.payload.button",
+          q: "/help",
+        });
         const event: FeishuCardActionEvent = {
           operator: { open_id: "ou_card_operator" },
           token: "unknown-click",
           context: { chat_id: "oc_card_fixture" },
-          action: { tag: "button", value: { text: "/help", chat_type: "p2p" } },
+          action: { tag: "button", value: { ...commandAction, chat_type: "p2p" } },
         };
         const click = () =>
           handleFeishuCardAction({
@@ -185,7 +190,7 @@ it.each(["http-error", "nonzero", "missing-data", "missing-type", "visibility-on
         expect(notices()).toHaveLength(2);
         expect(run).not.toHaveBeenCalled();
         event.token = "recovered-click";
-        event.action.value = { text: "/help" };
+        event.action.value = commandAction;
         await click();
         expect(run).toHaveBeenCalledTimes(1);
         expect(run.mock.calls[0]?.[0].raw).toMatchObject({

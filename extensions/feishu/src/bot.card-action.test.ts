@@ -247,7 +247,7 @@ it.each(["response", "exception", "missing"])(
     } else {
       getChat.mockResolvedValueOnce({ code: 0, data: {} });
     }
-    await dispatch(cardEvent({ text: "/help" }));
+    await dispatch(cardEvent({ text: "/help", chat_type: "p2p" }));
     expect(handleFeishuMessage).not.toHaveBeenCalled();
     expectNotice(expect.stringContaining("action was not run"));
     expect(log.mock.calls.flat().join("\n")).not.toContain(detail);
