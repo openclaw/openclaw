@@ -43,84 +43,117 @@ import {
   resumeMarkedSessions,
 } from "./session-restart-resume.js";
 
-it("reuses a prepared restart snapshot and joins its queue admission before startup unlocks", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { entries: { main: {} } } };
-    setRuntimeConfigSnapshot(cfg);
-    const target = { agentId: "main", sessionKey: "agent:main:prepared" };
-    replaceSessionEntrySync(target, { sessionId: "prepared", updatedAt: 1 });
-    replaceSessionEntrySync(target, {
-      ...loadExactSessionEntry(target)!.entry,
-      resumeAfterRestart: { queuedInputIds: [] },
-    });
-    expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({ queuedInputIds: [] });
-    const signal = new AbortController().signal;
-    const pending = new Map<string, PendingAgentDatabaseRecovery>();
-    const context = createContext([], () => cfg);
-    context.agentDatabaseStartup = createAgentDatabaseStartupObservation(pending, signal);
-    context.resolveGatewayContext = () => context;
-    const accepted = createDeferredCore<{ ok: true }>();
-    const enqueued = createDeferredCore();
-    const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockImplementation(() => {
-      enqueued.resolve();
-      return {
-        accepted: accepted.promise,
-        id: "prepared-resume",
-        settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
-        cancel: () => false,
-      };
-    });
-    const discover = vi.spyOn(pendingInputWithdrawal, "listOrphanedSessionPendingInputTargets");
-    const params = { context, signal, log: { warn: vi.fn() } };
-    let recovering: Promise<void> | undefined;
-    let startup: Promise<void> | undefined;
-    try {
-      const prepared = await prepareAgentRestartRecovery({
-        ...params,
-        agentId: "main",
-        env: process.env,
-        assertCurrent() {},
+it.each([false, true])(
+  "reuses a prepared restart snapshot and joins its queue admission (native pending: %s)",
+  (nativePending) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const target = { agentId: "main", sessionKey: "agent:main:prepared" };
+      replaceSessionEntrySync(target, { sessionId: "prepared", updatedAt: 1 });
+      replaceSessionEntrySync(target, {
+        ...loadExactSessionEntry(target)!.entry,
+        resumeAfterRestart: { queuedInputIds: [] },
       });
-      expect(params.log.warn.mock.calls).toEqual([]);
-      assert(prepared, "Expected the persisted marker to prepare a continuation");
-      recovering = prepared().finally(() => pending.delete("main"));
-      // The database is writable; its prepared input still owns the admission fence.
-      pending.set("main", {
-        refusal: {
+      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
+        queuedInputIds: [],
+      });
+      const signal = new AbortController().signal;
+      const pending = new Map<string, PendingAgentDatabaseRecovery>();
+      const context = createContext([], () => cfg);
+      context.agentDatabaseStartup = createAgentDatabaseStartupObservation(pending, signal);
+      context.resolveGatewayContext = () => context;
+      const nativeReady = createDeferredCore();
+      const waitingForNative = createDeferredCore();
+      const waitForPreparation = context.agentDatabaseStartup.waitForAgentPreparation.bind(
+        context.agentDatabaseStartup,
+      );
+      const preparation = vi
+        .spyOn(context.agentDatabaseStartup, "waitForAgentPreparation")
+        .mockImplementation((agentId, options) => {
+          if (nativePending && options?.forWrite) {
+            waitingForNative.resolve();
+            return nativeReady.promise.then(() => waitForPreparation(agentId, options));
+          }
+          return waitForPreparation(agentId, options);
+        });
+      const accepted = createDeferredCore<{ ok: true }>();
+      const enqueued = createDeferredCore();
+      const resume = vi
+        .spyOn(sessionEvents, "enqueueSessionEventForHost")
+        .mockImplementation(() => {
+          enqueued.resolve();
+          return {
+            accepted: accepted.promise,
+            id: "prepared-resume",
+            settled: Promise.resolve({
+              status: "completed",
+              executionStarted: true,
+              delivered: false,
+            }),
+            cancel: () => false,
+          };
+        });
+      const discover = vi.spyOn(pendingInputWithdrawal, "listOrphanedSessionPendingInputTargets");
+      const params = { context, signal, log: { warn: vi.fn() } };
+      let recovering: Promise<void> | undefined;
+      let startup: Promise<void> | undefined;
+      try {
+        const prepared = await prepareAgentRestartRecovery({
+          ...params,
           agentId: "main",
-          paths: [],
-          code: "agent-database-inspection-pending",
-          reason: "Prepared fixture",
-          repairHint: "Wait for input recovery",
-        },
-        completion: Promise.resolve(),
-        inputReady: recovering,
-        startedAt: 0,
-        phase: "input-recovery",
-        phaseStartedAt: 0,
-        phaseDurationsMs: {},
-      });
-      expect(resume).not.toHaveBeenCalled();
-      let unlocked = false;
-      startup = resumeMarkedSessions(params).then(() => {
-        unlocked = true;
-      });
-      await Promise.race([enqueued.promise, recovering]);
-      expect(resume, JSON.stringify(params.log.warn.mock.calls)).toHaveBeenCalledOnce();
-      expect(unlocked).toBe(false);
-      expect(discover).toHaveBeenCalledOnce();
-      accepted.resolve({ ok: true });
-      await Promise.all([startup, recovering]);
-      await resumeMarkedSessions(params);
-      expect(resume).toHaveBeenCalledOnce();
-      expect(discover).toHaveBeenCalledOnce();
-    } finally {
-      accepted.resolve({ ok: true });
-      await Promise.allSettled([startup, recovering].flatMap((work) => work ?? []));
-      resume.mockRestore();
-      discover.mockRestore();
-    }
-  }));
+          env: process.env,
+          assertCurrent() {},
+        });
+        expect(params.log.warn.mock.calls).toEqual([]);
+        assert(prepared, "Expected the persisted marker to prepare a continuation");
+        recovering = prepared().finally(() => pending.delete("main"));
+        // The database is writable; its prepared input still owns the admission fence.
+        pending.set("main", {
+          refusal: {
+            agentId: "main",
+            paths: [],
+            code: "agent-database-inspection-pending",
+            reason: "Prepared fixture",
+            repairHint: "Wait for input recovery",
+          },
+          completion: Promise.resolve(),
+          inputReady: recovering,
+          startedAt: 0,
+          phase: "input-recovery",
+          phaseStartedAt: 0,
+          phaseDurationsMs: {},
+        });
+        expect(resume).not.toHaveBeenCalled();
+        let unlocked = false;
+        startup = resumeMarkedSessions(params).then(() => {
+          unlocked = true;
+        });
+        if (nativePending) {
+          await Promise.race([waitingForNative.promise, enqueued.promise, recovering]);
+          expect(resume).not.toHaveBeenCalled();
+          expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toBeDefined();
+          nativeReady.resolve();
+        }
+        await Promise.race([enqueued.promise, recovering]);
+        expect(resume, JSON.stringify(params.log.warn.mock.calls)).toHaveBeenCalledOnce();
+        expect(unlocked).toBe(false);
+        expect(discover).toHaveBeenCalledOnce();
+        accepted.resolve({ ok: true });
+        await Promise.all([startup, recovering]);
+        await resumeMarkedSessions(params);
+        expect(resume).toHaveBeenCalledOnce();
+        expect(discover).toHaveBeenCalledOnce();
+      } finally {
+        nativeReady.resolve();
+        accepted.resolve({ ok: true });
+        await Promise.allSettled([startup, recovering].flatMap((work) => work ?? []));
+        resume.mockRestore();
+        discover.mockRestore();
+        preparation.mockRestore();
+      }
+    }),
+);
 
 it.each(["crash", "markers", "failed-preparation", "clean-or-unknown"] as const)(
   "bounds orphan recovery to the predecessor and settles abandoned runs (%s)",

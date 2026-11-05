@@ -862,7 +862,7 @@ async function createGatewaySessionInScope(
             ? buildSessionCreationStamp({ ...creation, sandbox: creationSandbox, incognito })
             : {}),
           ...(createdNewEntry && inheritedSpawnOwner ? { owner: inheritedSpawnOwner } : {}),
-          ...(createdNewEntry ? { access: creationAccess } : {}),
+          ...(createdNewEntry && creationAccess ? { access: creationAccess } : {}),
           ...(visibility.value && createdNewEntry ? { visibility: visibility.value } : {}),
           ...projectPreparedSessionWorkspace(existingEntry, {
             projectId,

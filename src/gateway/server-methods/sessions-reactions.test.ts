@@ -4,6 +4,8 @@ import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { buildConversationIdentity } from "../../config/sessions/conversation-identity.js";
 import { registerConversationAddresses } from "../../config/sessions/conversation-registry.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import { runWithSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import { publishSystemEventStoreConfig } from "../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -19,6 +21,7 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -197,33 +200,64 @@ it("lets read-only viewers list everyone's reactions while hiding none-capped an
     ]);
 
     const incognitoKey = "agent:main:dashboard:incognito-reactions";
-    const incognitoScope = await seedSession(
-      { incognito: true, sessionId: "incognito-reactions" },
-      incognitoKey,
-    );
-    const incognitoMessageId = await appendMessage(undefined, incognitoScope);
-    for (const method of ["session.reactions.set", "session.reactions.list"] as const) {
-      const result = await call(
-        method,
-        {
-          sessionKey: incognitoKey,
-          ...(method.endsWith("set") ? { messageId: incognitoMessageId, emoji: "👍" } : {}),
-        },
-        client("owner"),
-      );
-      expect(result[0]).toBe(false);
-      expect(result[2]).toMatchObject({
-        message: `Incognito session "${incognitoKey}" was not found.`,
-      });
-    }
-    const admin = client("admin", "Admin", true);
-    expect((await setReaction(incognitoMessageId, { sessionKey: incognitoKey }, admin))[0]).toBe(
-      true,
-    );
-    expect((await listReactions(admin, undefined, incognitoKey))[1]).toMatchObject({
-      sessionId: "incognito-reactions",
-      reactions: { [incognitoMessageId]: [{ count: 1 }] },
+    const owner = memorySessionActorOwners.get({
+      agentId: "main",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
     });
+    const authority = { assertCurrent() {}, assertReadable() {}, authorize() {} };
+    const actor = await owner.acquire(
+      { sessionKey: incognitoKey, database: owner.identity },
+      authority,
+    );
+    const admin = client("admin", "Admin", true);
+    try {
+      const incognitoMessageId = await runWithSessionActorStorage(
+        { actor, authority, agentId: "main", path: owner.path },
+        async () => {
+          const scope = await seedSession(
+            { incognito: true, sessionId: "incognito-reactions" },
+            incognitoKey,
+          );
+          return appendMessage(undefined, scope);
+        },
+      );
+      for (const method of ["session.reactions.set", "session.reactions.list"] as const) {
+        const result = await call(
+          method,
+          {
+            sessionKey: incognitoKey,
+            ...(method.endsWith("set") ? { messageId: incognitoMessageId, emoji: "👍" } : {}),
+          },
+          client("owner"),
+        );
+        expect(result).toMatchObject([
+          false,
+          undefined,
+          { code: "INVALID_REQUEST", message: `unknown session: ${incognitoKey}` },
+        ]);
+      }
+      expect((await listReactions(admin, undefined, incognitoKey))[1]).toMatchObject({
+        sessionId: "incognito-reactions",
+        reactions: {},
+      });
+      expect((await setReaction(incognitoMessageId, { sessionKey: incognitoKey }, admin))[0]).toBe(
+        true,
+      );
+      expect((await listReactions(admin, undefined, incognitoKey))[1]).toMatchObject({
+        sessionId: "incognito-reactions",
+        reactions: { [incognitoMessageId]: [{ count: 1 }] },
+      });
+    } finally {
+      await actor.release();
+      memorySessionActorOwners.closeDatabase(owner);
+    }
+    expect(memorySessionActorOwners.read({ agentId: "main", path: owner.path })).toBeUndefined();
+    expect(await listReactions(admin, undefined, incognitoKey)).toMatchObject([
+      false,
+      undefined,
+      { message: `unknown session: ${incognitoKey}` },
+    ]);
+    expect(memorySessionActorOwners.read({ agentId: "main", path: owner.path })).toBeUndefined();
   }));
 
 it("requires an identified author and one emoji grapheme", () =>

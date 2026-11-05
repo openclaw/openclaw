@@ -233,6 +233,7 @@ export function resolveSessionKeyFromResolveParams(params: {
   const noSessionFoundResult = (message: string): SessionsResolveResult =>
     p.allowMissing ? { ok: true, missing: true } : invalidSessionRequest(message);
   const { cfg, policyConfig } = projection.state;
+  const configuredAgentIds = new Set(listAgentIds(cfg));
   const sharing = prepareProjectedSessionSharing({
     cfg: policyConfig,
     client,
@@ -247,7 +248,10 @@ export function resolveSessionKeyFromResolveParams(params: {
         const owner = resolveRequestedSessionAgentId(
           cfg,
           key,
-          selected?.agentId ?? p.agentId,
+          p.agentId ??
+            (selected?.agentId && configuredAgentIds.has(selected.agentId)
+              ? selected.agentId
+              : undefined),
           "read",
         );
         if (!owner.ok) {
@@ -280,7 +284,6 @@ export function resolveSessionKeyFromResolveParams(params: {
         : { candidateKeys, metadataPrepared: params.preparedRead !== undefined },
     );
   };
-  const configuredAgentIds = new Set(listAgentIds(cfg));
   const prepareAgentChecks = (
     entries: Array<[string, SessionEntry]>,
     getTarget: ReturnType<typeof prepare>["getTarget"],
@@ -327,10 +330,12 @@ export function resolveSessionKeyFromResolveParams(params: {
 
   const sessionIdMatches = (agentId?: string) => {
     const prepared = prepare(agentId, false, { sessionIdOrKey: sessionId });
+    const matches = filterAndSortSessionEntries({ ...prepared, entryFilter }).filter(
+      ([candidateKey, entry]) => entry.sessionId === sessionId || candidateKey === sessionId,
+    );
+    const checkAgent = prepareAgentChecks(matches, prepared.getTarget);
     return {
-      matches: filterAndSortSessionEntries({ ...prepared, entryFilter }).filter(
-        ([candidateKey, entry]) => entry.sessionId === sessionId || candidateKey === sessionId,
-      ),
+      matches: matches.filter(([candidateKey, entry]) => checkAgent(candidateKey, entry) === null),
       getTarget: prepared.getTarget,
     };
   };
@@ -584,15 +589,19 @@ export function resolveSessionKeyFromResolveParams(params: {
   }
 
   const prepared = prepare();
-  const matches = filterAndSortSessionEntries({
+  const candidates = filterAndSortSessionEntries({
     ...prepared,
     entryFilter,
     opts: {
       ...resolveSessionVisibilityFilterOptions(p),
       label: parsedLabel.label,
-      limit: 2,
     },
   });
+  // Invalid owners cannot claim a discovery winner or cause a false ambiguity.
+  const checkAgent = prepareAgentChecks(candidates, prepared.getTarget);
+  const matches = candidates
+    .filter(([candidateKey, entry]) => checkAgent(candidateKey, entry) === null)
+    .slice(0, 2);
   if (matches.length === 0) {
     return noSessionFoundResult(`No session found with label: ${parsedLabel.label}`);
   }

@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
 import { getRuntimeConfig } from "../config/io.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { PluginRegistry } from "../plugins/registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
+import type { SessionCatalogProvider } from "../plugins/session-catalog.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import { testState } from "./test-helpers.js";
 import { resetPersistentGatewaySessionStore } from "./test/persistent-session-store.test-support.js";
@@ -138,6 +142,28 @@ export function setupPersistentSessionCreateTestHarness() {
       return { dir, storePath };
     },
   };
+}
+
+export function installSessionCatalog(
+  resolveCreateSession: NonNullable<SessionCatalogProvider["resolveCreateSession"]>,
+  cliBackend?: PluginRegistry["cliBackends"][number],
+) {
+  const registry = createEmptyPluginRegistry();
+  if (cliBackend) {
+    registry.cliBackends.push(cliBackend);
+  }
+  registry.sessionCatalogs.push({
+    pluginId: "anthropic",
+    source: "test",
+    provider: {
+      id: "claude",
+      label: "Claude Code",
+      resolveCreateSession,
+      list: vi.fn(async () => []),
+      read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
+    },
+  });
+  setActivePluginRegistry(registry);
 }
 
 export function requireNonEmptyString(value: string | undefined, label: string): string {

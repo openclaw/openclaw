@@ -257,9 +257,16 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
     for (const scenario of scenarios) {
       void scenario.failed.promise.catch(() => {});
     }
-    state = await createOpenClawTestState(
-      kernelGatewayTestStateOptions("goal-child-authority-product"),
-    );
+    const stateOptions = kernelGatewayTestStateOptions("goal-child-authority-product");
+    state = await createOpenClawTestState({
+      ...stateOptions,
+      env: {
+        ...stateOptions.env,
+        // Provider replay is local; retain the ambient proxy for external traffic.
+        NO_PROXY: [process.env.NO_PROXY, "127.0.0.1", "localhost", "::1"].filter(Boolean).join(","),
+        no_proxy: [process.env.no_proxy, "127.0.0.1", "localhost", "::1"].filter(Boolean).join(","),
+      },
+    });
     cleanups.push(() => state.cleanup());
     const server = createServer((request, response) => {
       let owner: Scenario | undefined;
@@ -564,12 +571,12 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
             scenario.releaseDrain?.();
             const drained = await wait(waitForGatewayActiveWork(30_000));
             expect(drained.drained, JSON.stringify(drained.snapshot.blockers)).toBe(true);
-            // Even the refusal response orders earlier publications on this socket.
+            // Role revocation invalidates the existing transport, not only its next RPC.
             if (scenario.gate === "enqueue") {
-              await expect(client.request("users.self", {})).rejects.toMatchObject({
-                code: "FORBIDDEN",
-                message: expect.stringContaining("operator role changed"),
-              });
+              await wait(vi.waitFor(() => expect(client.connected).toBe(false)));
+              await expect(client.request("users.self", {})).rejects.toThrow(
+                "gateway not connected",
+              );
             } else {
               await client.request("users.self", {});
             }

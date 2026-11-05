@@ -131,7 +131,11 @@ export function applySessionEntryWritePolicy(
   // A logical key retains confidentiality through stale bookkeeping and transcript replacement.
   // Only the canonical access mutation owner may replace its committed ACL.
   if (canonicalPreviousEntry && !options.allowStoredAliases && !options.accessMutation) {
-    normalizedEntry.access = canonicalPreviousEntry.access;
+    if (canonicalPreviousEntry.access === undefined) {
+      delete normalizedEntry.access;
+    } else {
+      normalizedEntry.access = canonicalPreviousEntry.access;
+    }
   }
   if (previousEntry && previousEntry.sessionId !== normalizedEntry.sessionId) {
     // Fresh-child installation retains its current audience; a reset must not widen Draft.

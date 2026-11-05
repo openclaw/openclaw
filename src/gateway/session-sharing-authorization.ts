@@ -51,7 +51,6 @@ import type {
   PreparedMutationSharing,
   PreparedSessionSharingProfiles,
 } from "./session-sharing-read.js";
-import type { resolveSessionSharingMembership } from "./session-sharing-source.js";
 import {
   resolveChatSendAuthorizationParams,
   resolveTalkSessionTargetInput,
@@ -100,7 +99,12 @@ export function createSessionTargetPolicyAuthorizer(context: {
   authorizesRead: boolean;
   targetOwnership: { requireOwner: boolean; ownerAction?: string };
   sessionCap: (cfg: OpenClawConfig) => ReturnType<typeof operatorSessionCap> | undefined;
-  resolveMembership: typeof resolveSessionSharingMembership;
+  resolveMembership: (
+    target: SessionSharingTarget,
+    identityId: string | undefined,
+    members: readonly string[] | undefined,
+    projection: SessionRowProjection | undefined,
+  ) => boolean | undefined;
 }) {
   const {
     params,

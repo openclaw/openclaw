@@ -389,13 +389,13 @@ it("forks an exact active-path prefix without changing the source", async () => 
 
 it("forks a Shared parent's history into a private child under creation defaults", async () => {
   const { scope, params } = await createSession();
-  await updateSessionEntry(scope, (entry) => ({ ...entry, visibility: "shared" }));
+  await updateEntry(scope, (entry) => ({ ...entry, visibility: "shared" }));
   setRuntimeConfigSnapshot({ session: { sharing: { creationDefaults: { visibility: "draft" } } } });
   const targetKey = "agent:main:fork:private-history-child";
-  const forked = await forkSessionAtMessage({ ...params, targetKey }, sourceExpectedState);
+  const forked = await fork({ ...params, targetKey }, sourceExpectedState);
   expect(forked).toMatchObject({ status: "created" });
-  expect(loadSessionEntry({ ...scope, sessionKey: targetKey })).toMatchObject({
+  expect(readEntry({ ...scope, sessionKey: targetKey })).toMatchObject({
     visibility: "draft",
   });
-  expect(loadSessionEntry(scope)).toMatchObject({ visibility: "shared" });
+  expect(readEntry(scope)).toMatchObject({ visibility: "shared" });
 });
