@@ -12,6 +12,20 @@ import { withProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-tra
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { resetGoogleVertexAdcState } from "./google-oauth.test-support.js";
+import {
+  attachModelProviderRequestTransport,
+  buildDelayedSecondSseResponse,
+  buildGeminiModel,
+  buildGoogleVertexModel,
+  buildOpenRawSseResponse,
+  buildRawSseResponse,
+  buildSseResponse,
+  expectHeaders,
+  parseRequestJsonBody,
+  requireGenerationConfig,
+  requireMockCall,
+  requireRequestInit,
+} from "./transport-stream.test-support.js";
 
 const {
   buildGuardedModelFetchMock,
@@ -45,56 +59,6 @@ let buildGoogleGenerativeAiParams: typeof import("./transport-stream.js").buildG
 let createGoogleGenerativeAiTransportStreamFn: typeof import("./transport-stream.js").createGoogleGenerativeAiTransportStreamFn;
 let createGoogleVertexTransportStreamFn: typeof import("./transport-stream.js").createGoogleVertexTransportStreamFn;
 let resolveGoogleVertexAuthorizedUserHeaders: typeof import("./vertex-adc.js").resolveGoogleVertexAuthorizedUserHeaders;
-
-const MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL = Symbol.for(
-  "openclaw.modelProviderRequestTransport",
-);
-
-function attachModelProviderRequestTransport<TModel extends object>(
-  model: TModel,
-  request: unknown,
-): TModel {
-  return {
-    ...model,
-    [MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL]: request,
-  };
-}
-
-function buildGeminiModel(
-  overrides: Partial<Model<"google-generative-ai">> = {},
-): Model<"google-generative-ai"> {
-  return {
-    id: "gemini-2.5-pro",
-    name: "Gemini 2.5 Pro",
-    api: "google-generative-ai",
-    provider: "google",
-    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128000,
-    maxTokens: 8192,
-    ...overrides,
-  };
-}
-
-function buildGoogleVertexModel(
-  overrides: Partial<Model<"google-vertex">> = {},
-): Model<"google-vertex"> {
-  return {
-    id: "gemini-3.1-pro-preview",
-    name: "Gemini 3.1 Pro Preview",
-    api: "google-vertex",
-    provider: "google-vertex",
-    baseUrl: "https://{location}-aiplatform.googleapis.com",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128000,
-    maxTokens: 8192,
-    ...overrides,
-  };
-}
 
 function buildGeminiReplayParams(messages: Record<string, unknown>[]) {
   return buildGoogleGenerativeAiParams(
@@ -184,11 +148,6 @@ async function useGoogleAuthLibraryCredentials(label: string, token?: string): P
   }
 }
 
-function buildSseResponse(events: unknown[]): Response {
-  const sse = `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`;
-  return buildRawSseResponse(sse);
-}
-
 function mockGooglePartsResponse(parts: Array<Record<string, unknown>>): void {
   guardedFetchMock.mockResolvedValueOnce(
     buildSseResponse([{ candidates: [{ content: { parts }, finishReason: "STOP" }] }]),
@@ -206,108 +165,6 @@ function buildRateLimitResponse(): Response {
     },
     { status: 429 },
   );
-}
-
-function buildRawSseResponse(sse: string): Response {
-  const encoder = new TextEncoder();
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(encoder.encode(sse));
-      controller.close();
-    },
-  });
-  return new Response(body, {
-    status: 200,
-    headers: { "content-type": "text/event-stream" },
-  });
-}
-
-function buildOpenRawSseResponse(params: { sse: string; onCancel: () => void }): Response {
-  const encoder = new TextEncoder();
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(encoder.encode(params.sse));
-    },
-    cancel() {
-      params.onCancel();
-    },
-  });
-  return new Response(body, {
-    status: 200,
-    headers: { "content-type": "text/event-stream" },
-  });
-}
-
-function buildDelayedSecondSseResponse(params: {
-  first: unknown;
-  second: unknown;
-  delayMs: number;
-}): Response {
-  const encoder = new TextEncoder();
-  const first = `data: ${JSON.stringify(params.first)}\n\n`;
-  const second = `data: ${JSON.stringify(params.second)}\n\ndata: [DONE]\n\n`;
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const body = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(encoder.encode(first));
-      timeout = setTimeout(() => {
-        controller.enqueue(encoder.encode(second));
-        controller.close();
-      }, params.delayMs);
-    },
-    cancel() {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-    },
-  });
-  return new Response(body, {
-    status: 200,
-    headers: { "content-type": "text/event-stream" },
-  });
-}
-
-function requireMockCall<TArgs extends unknown[]>(
-  mock: { mock: { calls: TArgs[] } },
-  index: number,
-  label: string,
-): TArgs {
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected ${label} mock call ${index}`);
-  }
-  return call;
-}
-
-function requireRequestInit(call: unknown[], label: string): RequestInit {
-  const init = call[1];
-  if (!init || typeof init !== "object") {
-    throw new Error(`Expected ${label} request init`);
-  }
-  return init as RequestInit;
-}
-
-function expectHeaders(init: RequestInit, expected: Record<string, string>): void {
-  const headers = new Headers(init.headers);
-  for (const [key, value] of Object.entries(expected)) {
-    expect(headers.get(key)).toBe(value);
-  }
-}
-
-function parseRequestJsonBody(init: RequestInit): Record<string, unknown> {
-  const requestBody = init.body;
-  if (typeof requestBody !== "string") {
-    throw new Error("Expected request body to be serialized JSON");
-  }
-  return JSON.parse(requestBody) as Record<string, unknown>;
-}
-
-function requireGenerationConfig(params: { generationConfig?: unknown }): Record<string, unknown> {
-  const config = params.generationConfig;
-  if (!config || typeof config !== "object") {
-    throw new Error("Expected generationConfig");
-  }
-  return config as Record<string, unknown>;
 }
 
 type GoogleTestContentTurn = Record<string, unknown> & {
