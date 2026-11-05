@@ -32,7 +32,10 @@ function reverseByteBits(value: number): number {
   return output;
 }
 
-/** RFB VncAuth response. Single DES is the wire primitive. */
+/**
+ * RFB VncAuth response. Single DES is the wire primitive.
+ * rfb-preauth already imports this module, so the probe keeps its own copy.
+ */
 export function buildVncAuthResponse(password: string, challenge: Buffer): Buffer {
   const key = Buffer.alloc(8);
   Buffer.from(password, "utf8").copy(key, 0, 0, 8);

@@ -1,7 +1,7 @@
 import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import type { Duplex } from "node:stream";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
-import { buildVncAuthResponse, parseRfbVersionBanner } from "./rfb-probe.js";
+import { parseRfbVersionBanner } from "./rfb-probe.js";
 
 const RFB_VERSION_BYTES = 12;
 const RFB_3_8_VERSION = Buffer.from("RFB 003.008\n", "ascii");
@@ -267,6 +267,28 @@ async function negotiateArdAuth(params: {
     Buffer.concat([encryptedCredentials, leftPadBigInt(clientPublic, keyLength)]),
     params.signal,
   );
+}
+
+function reverseByteBits(value: number): number {
+  let input = value;
+  let output = 0;
+  for (let index = 0; index < 8; index += 1) {
+    output = (output << 1) | (input & 1);
+    input >>= 1;
+  }
+  return output;
+}
+
+function buildVncAuthResponse(password: string, challenge: Buffer): Buffer {
+  const key = Buffer.alloc(8);
+  Buffer.from(password, "utf8").copy(key, 0, 0, 8);
+  for (let index = 0; index < key.length; index += 1) {
+    key[index] = reverseByteBits(key[index] ?? 0);
+  }
+  // RFB mandates single DES. EDE with K1=K2 is the same primitive on OpenSSL builds without des-ecb.
+  const cipher = createCipheriv("des-ede", Buffer.concat([key, key]), null);
+  cipher.setAutoPadding(false);
+  return Buffer.concat([cipher.update(challenge), cipher.final()]);
 }
 
 async function negotiateVncAuth(params: {
