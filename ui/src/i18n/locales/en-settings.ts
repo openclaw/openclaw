@@ -1208,6 +1208,8 @@ const enSettings = {
         "This removes the saved accounts for {provider} available to this agent. Shared accounts are also removed for other agents that use them. Active replies for this provider on the selected agent may stop.",
       keys: "Saved API keys for {key} and its configured aliases will also be deleted. Provider settings and external secrets stay in place.",
       kept: "Kept: {source}. Remove account access at its source to stop using it fully.",
+      defaults:
+        "Defaults for all agents keep using {models}. Choose another model or add an account again so replies keep working.",
       secretReferences: "Secret references in {keys}",
       accessChanged:
         "The connection, agent, or access changed. No further credentials were removed.",
