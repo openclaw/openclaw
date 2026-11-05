@@ -1082,6 +1082,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["old block", ["X.", 3, 2, "X. Y.", ["X.", 0], 3, "X. Y. Z."], ["X.", "X. Y.X.", "X. Y. Z."]],
     ["mid block", [2, "B.", 2, "B. C.", ["B.", 1], 3, "B. C. D."], ["B.\n\nB. C.B.", "B. C. D."]],
     ["two starts", ["X.", 3, 2, 2, "X. Y.", ["X.", 0], 3, "X. Y."], ["X.", "X. Y.X.", "X. Y."]],
+    ["offset", [2, "B.", ["B.", 2], 2, "X. Y.", ["X.", 2], 3, "X. Y."], ["B.\n\nX. Y.X.", "X. Y."]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
@@ -1493,7 +1494,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
     expect(sendStructuredCardFeishuMock).toHaveBeenCalledOnce();
   });
-
   it("assigns an idle-closed card to its later matching final before media", async () => {
     const { result, options } = createDispatcherHarness();
     await options.onReplyStart?.();
