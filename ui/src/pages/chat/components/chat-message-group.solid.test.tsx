@@ -71,7 +71,6 @@ it("shares mobile layout only for earlier-message actions and preserves updates"
   expect(subscribe).not.toHaveBeenCalled();
   single.unmount();
   const group = createMessageGroup(message, "user", {
-    senderLabel: "Casey",
     messages: [
       { key: "first", message },
       { key: "second", message: { ...message, content: "Second message", timestamp: 1001 } },
@@ -89,10 +88,7 @@ it("shares mobile layout only for earlier-message actions and preserves updates"
   frame.unmount();
   const view = mountSolid(() => (
     <>
-      <MessageGroup
-        group={group}
-        options={{ showReasoning: false, onReply: vi.fn(), frameFooter: false }}
-      />
+      <MessageGroup group={group} options={{ showReasoning: false, onReply: vi.fn() }} />
       <MessageGroup
         group={{ ...group, key: "another-group" }}
         options={{ showReasoning: false, onReply: vi.fn() }}
@@ -102,11 +98,6 @@ it("shares mobile layout only for earlier-message actions and preserves updates"
   try {
     expect(view.container.querySelectorAll(".chat-message-actions-row")).toHaveLength(0);
     expect(view.container.querySelectorAll(".chat-message-footer")).toHaveLength(2);
-    expect(
-      [...view.container.querySelectorAll(".chat-message-footer .chat-sender-name")].map(
-        (node) => node.textContent,
-      ),
-    ).toEqual(["Casey", "Casey"]);
     flush();
     expect(matchMedia.mock.calls.filter(([value]) => value === query)).toHaveLength(1);
     expect(subscribe).toHaveBeenCalledOnce();

@@ -200,6 +200,27 @@ describe("long completed runs", () => {
     },
   );
 
+  it.each([400, 512, 514])("keeps ordered message coverage in %i-message fragments", (count) => {
+    const messages = [
+      makeMessage("question", 1, { role: "user", runId: "run-1" }),
+      ...Array.from({ length: count - 2 }, (_, index) =>
+        makeMessage(`body-${index}`, index + 2, { runId: "run-1" }),
+      ),
+      finalAnswer("answer", count, { runId: "run-1" }),
+    ];
+    const chain = projectHistory(messages, { sessionKey: "agent:main:telegram:direct:42" });
+    const index = indexFor(chain);
+    const items = index.rows.flatMap((row) => (row.kind === "item" ? [row.item] : []));
+    expect(messagesIn(items)).toEqual(messages);
+    expect(index.messageRowKeysById.get("answer")).toBe(onlyFrame(chain).key);
+    expect(index.messageRowKeysById.get("body-0") === index.messageRowKeysById.get("body-1")).toBe(
+      count <= 512,
+    );
+    for (const item of items) {
+      expect(messagesIn([item]).length).toBeLessThanOrEqual(count <= 512 ? 2 : 1);
+    }
+  });
+
   it("keeps widget-bearing completed runs in the retained frame", () => {
     const canvas = makeMessage("canvas", 602, {
       content: [

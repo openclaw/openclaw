@@ -47,7 +47,6 @@ import { CHAT_TRANSCRIPT_ESTIMATED_ROW_PX } from "./chat-transcript-session.ts";
 import type { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
 
 type ChatRenderItem = SystemEventRenderItem;
-const COMPLETED_FRAME_ROW_MESSAGE_LIMIT = 1;
 
 type TranscriptChain = Readonly<{
   searchActive: boolean;
@@ -390,7 +389,7 @@ export function projectTranscriptIndex(
     for (const item of chain.transcriptItems) {
       const rendered =
         windowCompletedFrames && item.kind === "agent-run-frame"
-          ? completedFrameRows(item, expandedToolCards)
+          ? completedFrameRows(item, expandedToolCards, prepareIdleFrameFragments ? 1 : 2)
           : [item];
       for (const rowItem of rendered) {
         // Rich work sources include their Markdown and paired tool output.
@@ -494,6 +493,7 @@ export function projectTranscriptIndex(
 function completedFrameRows(
   frame: AgentRunFrameRenderItem,
   expanded: ReadonlyMap<string, boolean>,
+  messageLimit: number,
 ): AgentRunFrameRenderItem[] {
   // Without an answer, the summary keeps the original row through disclosure changes.
   if (frame.outcome.kind !== "completed" || !frame.outcome.actionOwner) {
@@ -537,17 +537,9 @@ function completedFrameRows(
   };
   const append = (part: AgentRunFrameRenderItem["parts"][number]): void => {
     // Paired tool results can leave an entire run in one assistant group.
-    if (
-      part.kind === "group" &&
-      part.role === "assistant" &&
-      part.messages.length > COMPLETED_FRAME_ROW_MESSAGE_LIMIT
-    ) {
-      for (
-        let offset = 0;
-        offset < part.messages.length;
-        offset += COMPLETED_FRAME_ROW_MESSAGE_LIMIT
-      ) {
-        const messages = part.messages.slice(offset, offset + COMPLETED_FRAME_ROW_MESSAGE_LIMIT);
+    if (part.kind === "group" && part.role === "assistant" && part.messages.length > messageLimit) {
+      for (let offset = 0; offset < part.messages.length; offset += messageLimit) {
+        const messages = part.messages.slice(offset, offset + messageLimit);
         append(
           Object.assign({}, part, {
             key: offset === 0 ? part.key : `group:${part.role}:${messages[0]!.key}`,
@@ -558,7 +550,7 @@ function completedFrameRows(
       return;
     }
     const weight = chatItemGroups(part).reduce((total, group) => total + group.messages.length, 0);
-    if (count + weight > COMPLETED_FRAME_ROW_MESSAGE_LIMIT) {
+    if (count + weight > messageLimit) {
       finishChunk();
     }
     pending.push(part);
