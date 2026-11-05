@@ -40,9 +40,13 @@ function renderJsoncValue(
     const parts = value.items.map((v, i) => renderJsoncValue(v, guardPath, [...walked, String(i)]));
     return `[${parts.join(",")}]`;
   }
-  const parts = value.entries.map(
-    (e) => `${JSON.stringify(e.key)}:${renderJsoncValue(e.value, guardPath, [...walked, e.key])}`,
-  );
+  const parts = value.entries.map((e) => {
+    // Keys are emitted as JSON strings, so a sentinel key leaks the marker too.
+    if (e.key.includes(REDACTED_SENTINEL)) {
+      throw new OcEmitSentinelError(`${guardPath}/${[...walked, e.key].join("/")}`);
+    }
+    return `${JSON.stringify(e.key)}:${renderJsoncValue(e.value, guardPath, [...walked, e.key])}`;
+  });
   return `{${parts.join(",")}}`;
 }
 

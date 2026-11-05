@@ -133,9 +133,11 @@ function jsoncValueToJson(value: JsoncValue, guardPath: string): unknown {
     return value.items.map((item, index) => jsoncValueToJson(item, `${guardPath}/${index}`));
   }
   return Object.fromEntries(
-    value.entries.map((entry) => [
-      entry.key,
-      jsoncValueToJson(entry.value, `${guardPath}/${entry.key}`),
-    ]),
+    value.entries.map((entry) => {
+      // The key reaches disk as a string literal too, so it needs the same guard
+      // as the value: YAML already rejects a sentinel key in a mapping.
+      guardSentinel(entry.key, `${guardPath}/${entry.key}`);
+      return [entry.key, jsoncValueToJson(entry.value, `${guardPath}/${entry.key}`)];
+    }),
   );
 }

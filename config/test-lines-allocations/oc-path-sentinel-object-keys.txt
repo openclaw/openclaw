@@ -1,0 +1,2 @@
+18
+# Reject a redaction sentinel used as an object key in JSONC/JSONL writes.

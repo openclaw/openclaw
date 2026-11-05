@@ -2,6 +2,8 @@
 import { describe, expect, it } from "vitest";
 import { insertJsoncOcPath, setJsoncOcPath } from "../../jsonc/edit.js";
 import { parseJsonc } from "../../jsonc/parse.js";
+import { appendJsonlOcPath } from "../../jsonl/edit.js";
+import { parseJsonl } from "../../jsonl/parse.js";
 import { parseOcPath } from "../../oc-path.js";
 import { OcEmitSentinelError, REDACTED_SENTINEL } from "../../sentinel.js";
 
@@ -43,5 +45,21 @@ describe("sentinel guard cross-kind", () => {
         : insertJsoncOcPath(ast, parseOcPath("oc://config"), "x2", value),
     ).toThrow(`sentinel literal at oc://config/${operation === "set" ? "x" : "x2"}/tokens/0`);
     expect(ast.raw).toBe('{ "x": "ok" }');
+  });
+
+  it("rejects a sentinel used as an object key in jsonc and jsonl", () => {
+    const keyed = {
+      kind: "object" as const,
+      entries: [{ key: REDACTED_SENTINEL, line: 0, value: { kind: "number" as const, value: 1 } }],
+    };
+    const jsonc = parseJsonc('{ "x": "ok" }');
+    expect(() => setJsoncOcPath(jsonc, parseOcPath("oc://config/x"), keyed)).toThrow(
+      `sentinel literal at oc://config/x/${REDACTED_SENTINEL}`,
+    );
+    expect(jsonc.raw).toBe('{ "x": "ok" }');
+
+    const jsonl = parseJsonl('{"x":"ok"}\n');
+    expect(() => appendJsonlOcPath(jsonl, keyed)).toThrow(OcEmitSentinelError);
+    expect(jsonl.raw).toBe('{"x":"ok"}\n');
   });
 });
