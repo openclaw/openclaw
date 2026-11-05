@@ -271,7 +271,7 @@ Export files and existing source pages must resolve to regular files. Named pipe
 and other special files are rejected without waiting for data. Replace the affected
 path with a regular file and retry.
 
-Re-imports preserve handwritten Notes, including literal marker examples inside a complete Notes block. If a Notes marker is missing, restore it before retrying; the import leaves the affected page unchanged.
+Re-imports preserve handwritten Notes, including literal marker examples inside a complete Notes block. Markers inside transcript code blocks or inline code remain part of the transcript and do not prevent it from refreshing. If a Notes marker is missing, restore it before retrying; the import leaves the affected page unchanged.
 
 ### `wiki chatgpt rollback <run-id>`
 

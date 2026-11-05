@@ -152,6 +152,8 @@ describe(acceptanceTitle(4), () => {
     const revocation = await signStatement(
       "Revocation",
       {
+        claw_id: world.state.claw_id,
+        seq: world.state.seq,
         target_fp: await fingerprint(world.device1.pub),
         target_kind: "owner_device",
         reason: "lost",

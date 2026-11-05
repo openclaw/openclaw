@@ -127,7 +127,7 @@ describe("Markdown table interactions", () => {
       '| Label | Value | Empty |\n| --- | --- | --- |\n| **Alpha**<br>Beta | One | |\n| Quote "here"<br>next | Comma, kept | |\n| `A\tB` | End | |\n| Quote "only" | Plain | |',
       { ...interactiveOptions, progressBars: false },
     );
-    await copyTable(copy, "Copied!");
+    await copyTable(copy, "Copied");
     expect(writeText).toHaveBeenLastCalledWith(
       'Label\tValue\tEmpty\n"Alpha\nBeta"\tOne\t\n"Quote ""here""\nnext"\tComma, kept\t\n"A\tB"\tEnd\t\n"Quote ""only"""\tPlain\t',
     );

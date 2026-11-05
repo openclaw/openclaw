@@ -1,4 +1,5 @@
 /** Runtime-loaded channel target helpers used by cron delivery resolution. */
+import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
@@ -10,10 +11,25 @@ import {
   resolveChannelTarget,
   type ResolvedMessagingTarget,
 } from "../../infra/outbound/target-resolver.js";
+import { DEFAULT_ACCOUNT_ID } from "../../routing/account-id.js";
 export { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
 export { mapAllowFromEntries } from "../../plugin-sdk/channel-config-helpers.js";
 export { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
 export { resolveProactiveDeliveryTargetWithSessionRoute } from "../../infra/outbound/targets.js";
+
+/** Picks the channel's own default account for a delivery that names none and has no binding. */
+export function resolveChannelDefaultAccountIdForDelivery(params: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  agentId: string;
+}): string | undefined {
+  const plugin = resolveOutboundChannelPlugin({ ...params, allowBootstrap: true });
+  const accountId = plugin
+    ? resolveChannelDefaultAccountId({ plugin, cfg: params.cfg })
+    : undefined;
+  // Keep an unnamed default implicit; only a configured account changes the route.
+  return accountId === DEFAULT_ACCOUNT_ID ? undefined : accountId;
+}
 
 /** Resolves a cron delivery target through channel plugins with bootstrap allowed. */
 export async function resolveChannelTargetForDelivery(params: {
