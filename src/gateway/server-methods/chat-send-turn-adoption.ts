@@ -157,7 +157,10 @@ export function createChatSendTurnAdoptionLifecycle(params: {
         const result = finalizeReply
           ? await finalizeReply({
               ...batch,
-              isCurrent: () => batch.isCurrent() && ownsQueueIdentity(),
+              isCurrent: () =>
+                batch.isCurrent() &&
+                ownsQueueIdentity() &&
+                (batch.clientRunId !== params.runId || !terminalKnown),
             })
           : { kind: "dropped" as const, reason: "no-visible-content" as const };
         if (batch.clientRunId === params.runId && batch.completion.kind !== "progress") {
