@@ -1,8 +1,9 @@
 import XCTest
 
 // Reproduce with scripts/test-ios-shell-gateway.mjs --session-artifacts and an owned simulator.
-// Pair it using the synthetic setup code documented at the top of that script, select Main Session,
+// Pair it using the synthetic setup code documented at the top of that script,
 // then forward TEST_RUNNER_OPENCLAW_IOS_ARTIFACTS_PROOF=1 to xcodebuild test.
+// A separate fixture conversation can use TEST_RUNNER_OPENCLAW_IOS_ARTIFACTS_SESSION_LABEL.
 // apps/ios/Tests/Fixtures/session-artifacts.json owns the deterministic titles and bytes below.
 // This UI proof does not replace the transport's TLS, authorization, or cancellation tests.
 
@@ -11,7 +12,7 @@ final class SessionArtifactsUITests: XCTestCase {
     func testFindPreviewAndShareSessionArtifacts() throws {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["OPENCLAW_IOS_ARTIFACTS_PROOF"] == "1",
-            "Requires Debug already paired with an isolated synthetic Gateway and its Main Session selected")
+            "Requires Debug already paired with an isolated synthetic Gateway containing the artifact fixtures")
         continueAfterFailure = false
         let app = XCUIApplication()
         app.launchArguments = [
@@ -21,7 +22,23 @@ final class SessionArtifactsUITests: XCTestCase {
         app.launch()
         let composer = app.descendants(matching: .any)["chat-message-input"]
         XCTAssertTrue(composer.waitForExistence(timeout: 20), "Pair the isolated fixture Gateway before this proof")
-        let draft = composer.value as? String
+        if let label = ProcessInfo.processInfo.environment["OPENCLAW_IOS_ARTIFACTS_SESSION_LABEL"] {
+            let connected = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Gateway: Connected"))
+                .firstMatch
+            XCTAssertTrue(connected.waitForExistence(timeout: 20))
+            app.buttons["RootTabs.Sidebar.Show"].tap()
+            let session = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", label)).firstMatch
+            XCTAssertTrue(session.waitForExistence(timeout: 10))
+            session.tap()
+            XCTAssertTrue(app.staticTexts["Project brief.txt"].waitForExistence(timeout: 10))
+        }
+        let draft = "Keep this unsent artifact review note."
+        composer.tap()
+        if let previous = composer.value as? String, !previous.isEmpty {
+            composer.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: previous.count))
+        }
+        composer.typeText(draft)
+        XCTAssertEqual(composer.value as? String, draft)
         let openArtifacts = app.buttons["chat-session-artifacts"]
         XCTAssertTrue(openArtifacts.waitForExistence(timeout: 5))
         XCTAssertTrue(openArtifacts.isHittable)
