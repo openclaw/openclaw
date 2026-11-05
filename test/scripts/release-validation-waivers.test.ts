@@ -12,6 +12,7 @@ import { withRuntimePreload } from "../helpers/runtime-preload.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   child,
+  collectorEnv,
   canonicalCandidateRequest,
   executionPlan,
   githubRun,
@@ -311,7 +312,7 @@ if (endpoint === "repos/openclaw/openclaw/actions/jobs/2/logs") {
       );
       chmodSync(gh, 0o755);
       const result = runCollector("drain", {
-        ...withRuntimePreload(process.env, preload),
+        ...withRuntimePreload(collectorEnv({}), preload),
         FAIL_FAST: "false",
         FRV_GH_CALLS: callsPath,
         FULL_RELEASE_EXECUTION_PLAN_PATH: planPath,
