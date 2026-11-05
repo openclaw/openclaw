@@ -1,20 +1,21 @@
 import type { CronJob } from "../../api/types.ts";
-import { SettingsDisclosure } from "../../components/solid/settings-disclosure.tsx";
-import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { isCronJobRunning } from "../../lib/cron-status.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { createMsFormatter } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { CronProps } from "./view-types.ts";
 
-export function FailureDetails(props: { job: CronJob; onSelectJob: CronProps["onSelectJob"] }) {
+/** Compact failure summary; the run history entry owns the complete record. */
+export function FailureDetails(props: { job: CronJob; onReviewRun?: () => void }) {
   const formatTimestamp = () => createMsFormatter(undefined, t("common.na"));
-  const cause = () =>
-    formatUiExternalText(props.job.state.lastError, t("cron.attention.causeUnknown"));
-  const diagnostic = () => formatUiExternalText(props.job.state.lastDiagnosticSummary);
-  const consequence = () => {
+  const cause = () => {
+    const error = formatUiExternalText(props.job.state.lastError, t("cron.attention.causeUnknown"));
+    const diagnostic = formatUiExternalText(props.job.state.lastDiagnosticSummary);
+    return diagnostic && diagnostic !== error ? `${error} — ${diagnostic}` : error;
+  };
+  // A stopped job shows that state in its header; caution about repeated effects matters more here.
+  const outcome = () => {
     if (props.job.state.autoDisabled) {
-      return t("cron.attention.autoDisabledConsequence");
+      return t("cron.attention.effectsUnknown");
     }
     if (isCronJobRunning(props.job)) {
       return t("cron.attention.running");
@@ -25,44 +26,34 @@ export function FailureDetails(props: { job: CronJob; onSelectJob: CronProps["on
       : t("cron.attention.noNextRun");
   };
   return (
-    <SettingsDisclosure
-      class="cron-failure-details"
-      title={
-        <SettingsStatus
-          kind="danger"
-          label={t(
+    <div class="callout danger cron-failure-details">
+      <div>
+        <strong>
+          {t(
             props.job.state.autoDisabled
               ? "cron.attention.autoDisabledTitle"
               : "cron.attention.title",
           )}
-        />
-      }
-      description={cause()}
-      actions={
-        <button
-          type="button"
-          class="btn btn--ghost btn--sm"
-          data-test-id="cron-review-failed-run"
-          onClick={(event) => {
-            // Reviewing the run is independent of opening the diagnostic disclosure.
-            event.preventDefault();
-            props.onSelectJob(props.job);
-          }}
-        >
-          {t("cron.attention.reviewRun")}
-        </button>
-      }
-    >
-      <div class="settings-row cron-failure-details__body">
-        <div class="stack">
-          <span class="settings-row__desc cron-failure-details__cause">{cause()}</span>
-          {diagnostic() && diagnostic() !== cause() ? (
-            <span class="settings-row__desc">{diagnostic()}</span>
-          ) : undefined}
-          <span class="settings-row__desc">{consequence()}</span>
-          <span class="settings-row__desc">{t("cron.attention.effectsUnknown")}</span>
-        </div>
+        </strong>
+        {" · "}
+        {outcome()}
+        {props.onReviewRun ? (
+          <>
+            {" "}
+            <button
+              type="button"
+              class="settings-row__desc-action"
+              data-test-id="cron-review-failed-run"
+              onClick={() => props.onReviewRun?.()}
+            >
+              {t("cron.attention.reviewRun")}
+            </button>
+          </>
+        ) : undefined}
       </div>
-    </SettingsDisclosure>
+      <div class="muted cron-failure-details__cause" title={cause()}>
+        {cause()}
+      </div>
+    </div>
   );
 }

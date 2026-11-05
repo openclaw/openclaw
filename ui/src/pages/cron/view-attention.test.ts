@@ -21,7 +21,7 @@ it("distinguishes automatic shutdown from a manual pause in detail", async () =>
   const warning = container.querySelector(".cron-failure-details");
   expect(warning?.textContent).toContain("Provider rejected the request");
   expect(warning?.textContent).toContain("No response was recorded");
-  expect(warning?.textContent).toContain("Review the run before resuming");
+  expect(warning?.textContent).toContain("Check for completed actions before running again");
   expect(warning?.textContent).not.toContain("Paused");
 });
 

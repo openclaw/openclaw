@@ -13,7 +13,6 @@ export function SettingsDisclosure(props: {
   class?: string;
   title: JSX.Element;
   description?: JSX.Element;
-  actions?: JSX.Element;
   open?: boolean;
   quiet?: boolean;
   sections?: boolean;
@@ -46,7 +45,6 @@ export function SettingsDisclosure(props: {
           </Show>
         </div>
         <div class="settings-row__control">
-          {props.actions}
           <span class="settings-row__chevron settings-disclosure__chevron">
             <Icon name="chevronRight" />
           </span>

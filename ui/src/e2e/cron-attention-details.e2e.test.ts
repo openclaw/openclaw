@@ -16,17 +16,24 @@ const suite = createControlUiE2eSuite({
 const startedAt = Date.UTC(2026, 9, 22, 23, 41, 34);
 const failure =
   "No answer was returned. Some tool actions may already have completed; review before retrying.";
+const desktop = { width: 1280, height: 900 };
 
 suite.define(() => {
   it.each([
-    { name: "desktop", viewport: { width: 1280, height: 900 } },
-    { name: "phone", viewport: { width: 390, height: 844 } },
+    { name: "desktop", viewport: desktop, colorScheme: "light" as const, maxHeight: 96 },
+    { name: "dark", viewport: desktop, colorScheme: "dark" as const, maxHeight: 96 },
+    {
+      name: "phone",
+      viewport: { width: 390, height: 844 },
+      colorScheme: "light" as const,
+      maxHeight: 140,
+    },
   ])(
     "explains the failed run on arrival and while editing on $name",
-    async ({ name, viewport }) => {
+    async ({ name, viewport, colorScheme, maxHeight }) => {
       const artifactDir = createControlUiE2eArtifactDir("cron-attention-" + name);
       await suite.withPage(
-        { ...createControlUiE2eContextOptions(), viewport },
+        { ...createControlUiE2eContextOptions(), viewport, colorScheme },
         async ({ page }) => {
           const job = cronJob("attention-example", "Finish the release checklist", {
             enabled: false,
@@ -74,40 +81,29 @@ suite.define(() => {
           });
           // Same job-only deep link used by the session Details attention row.
           await page.goto(suite.server.baseUrl + "cron?job=" + job.id);
-          await page.locator(".cron-detail-header").waitFor();
-          await page.screenshot({ path: path.join(artifactDir, "arrival.png") });
           const history = page.locator("[data-test-id=cron-detail-tab-history]");
           await expect.poll(() => history.getAttribute("aria-selected")).toBe("true");
           const attention = page.locator(".cron-failure-details");
           await attention.waitFor();
-          expect(await attention.getAttribute("open")).toBeNull();
-          const collapsed = await attention.boundingBox();
-          expect(collapsed?.height).toBeLessThan(viewport.width < 640 ? 112 : 64);
-          const disclosure = attention.locator("summary");
-          await disclosure.focus();
-          await page.keyboard.press("Enter");
-          expect(await attention.locator(".cron-failure-details__body").isVisible()).toBe(true);
+          const review = attention.locator("[data-test-id=cron-review-failed-run]");
           expect(await attention.locator(".cron-failure-details__cause").textContent()).toBe(
             failure,
           );
-          await page.screenshot({ path: path.join(artifactDir, "expanded.png") });
-          await page.keyboard.press("Enter");
-          expect(await attention.getAttribute("open")).toBeNull();
-          expect(await attention.textContent()).toContain(failure);
-          expect(await page.locator(".cron-run-entry").textContent()).toContain(failure);
-          await page.locator("[data-test-id=cron-detail-tab-settings]").click();
-          expect(await attention.isVisible()).toBe(true);
-          expect(await attention.textContent()).toContain(failure);
+          // The selected history entry is already the review target.
+          expect(await review.count()).toBe(0);
+          expect((await attention.boundingBox())?.height).toBeLessThan(maxHeight);
           expect(await page.locator(".cron-detail-header").textContent()).not.toContain("Paused");
+          expect(await page.locator(".cron-run-entry").textContent()).toContain(failure);
+          await page.screenshot({ path: path.join(artifactDir, "arrival.png") });
+          await page.locator("[data-test-id=cron-detail-tab-settings]").click();
           const prompt = page.locator(".cron-tab-panel textarea").first();
           const draft = "Keep this unsaved release instruction while reviewing the failure.";
           await prompt.fill(draft);
-          await page.locator("[data-test-id=cron-review-failed-run]").click();
-          expect(await attention.getAttribute("open")).toBeNull();
+          await page.screenshot({ path: path.join(artifactDir, "settings.png") });
+          await review.click();
           await expect.poll(() => history.getAttribute("aria-selected")).toBe("true");
           await page.locator("[data-test-id=cron-detail-tab-settings]").click();
           expect(await prompt.inputValue()).toBe(draft);
-          await page.screenshot({ path: path.join(artifactDir, "settings.png") });
           expect(
             await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
           ).toBe(true);

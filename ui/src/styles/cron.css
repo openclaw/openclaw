@@ -189,10 +189,12 @@
   line-height: 1.45;
 }
 
-.cron-failure-details > summary .settings-row__desc {
+/* The selected run history entry carries the complete error. */
+.cron-failure-details__cause {
+  display: -webkit-box;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 /* ── Jobs table (escape hatch inside the tasks group) ── */

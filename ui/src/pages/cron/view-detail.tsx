@@ -62,7 +62,13 @@ export function DetailView(
         <div class="stack">
           <DetailHeader {...props} mode={props.mode} selectedJob={selectedJob()} />
           <Show when={failedJob()}>
-            {(job) => <FailureDetails job={job()} onSelectJob={props.onSelectJob} />}
+            {(job) => (
+              // History already presents the selected failed run.
+              <FailureDetails
+                job={job()}
+                onReviewRun={showHistory() ? undefined : () => props.onSelectJob(job())}
+              />
+            )}
           </Show>
         </div>
         <AdminRequired {...props} />

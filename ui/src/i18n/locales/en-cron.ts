@@ -104,8 +104,6 @@ const enCron = {
       autoDisabledTitle: "Automatically stopped",
       causeUnknown:
         "No failure details were recorded. Review the run history for available evidence.",
-      autoDisabledConsequence:
-        "Automatic runs are disabled. Review the run before resuming this automation.",
       nextRun: "Next run is scheduled for {time}.",
       noNextRun: "No further run is scheduled.",
       running: "A new run is in progress. Review its outcome before starting another run.",

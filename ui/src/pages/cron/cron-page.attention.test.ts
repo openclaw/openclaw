@@ -44,7 +44,7 @@ it("opens a job-only failure link on its recorded run without replaying it", asy
     expect(warning()?.textContent).toContain("No further run is scheduled");
     page.querySelector<HTMLButtonElement>('[data-test-id="cron-detail-tab-settings"]')?.click();
     await page.settle();
-    expect(warning()?.textContent).toContain("Check for completed actions before running again");
+    expect(warning()?.textContent).toContain("No further run is scheduled");
     page.querySelector<HTMLButtonElement>('[data-test-id="cron-review-failed-run"]')?.click();
     await page.settle();
     expect(page.querySelector(".cron-run-entry--highlighted")).not.toBeNull();
