@@ -100,7 +100,7 @@ function DreamingControls(props: DreamingProps) {
             <span class="dreams-controls__status">
               <DreamingRead on={props.selectedAgentId}>{description()}</DreamingRead>
             </span>
-            <Show when={props.header.ownerDreamsHint}>
+            <Show when={props.header.owner.hint}>
               {(hint) => <span class="dreams-controls__status">{hint()}</span>}
             </Show>
           </>
@@ -111,7 +111,7 @@ function DreamingControls(props: DreamingProps) {
         disabled={
           !props.header.canUpdateConfig ||
           props.header.configuredDreaming.engineOff ||
-          props.header.ownerLocksToggle
+          props.header.owner.locksToggle
         }
         saving={props.header.loading}
         // The owner asks for confirmation first; the switch moves once the write lands.
@@ -506,8 +506,8 @@ function DreamingReview(props: DreamingProps) {
     <SettingsSection
       title={t("dreaming.advanced.eyebrow")}
       description={
-        props.ownerPluginId
-          ? t("dreaming.advanced.descriptionOwner", { plugin: props.ownerPluginId })
+        props.header.owner.pluginId
+          ? t("dreaming.advanced.descriptionOwner", { plugin: props.header.owner.pluginId })
           : undefined
       }
       actions={

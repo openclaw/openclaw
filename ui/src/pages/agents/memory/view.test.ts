@@ -384,8 +384,7 @@ describe("dreaming view", () => {
           loading: false,
           canUpdateConfig: true,
           refreshLoading: false,
-          ownerLocksToggle: false,
-          ownerDreamsHint: undefined,
+          owner: { active: false, locksToggle: false },
         },
       }),
     );

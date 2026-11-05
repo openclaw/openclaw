@@ -906,7 +906,7 @@ describe("a memory slot owner that reports its own dreaming", () => {
     });
     page.context.setConfig(OWNER_CONFIG);
     const toggle = getByRole<HTMLInputElement>(page.container, "switch", { name: "Dreaming" });
-    await waitForSolid(() => expect(page.state.view().header.ownerLocksToggle).toBe(true));
+    await waitForSolid(() => expect(page.state.view().header.owner.locksToggle).toBe(true));
     expect(toggle.checked).toBe(false);
     expect(toggle.disabled).toBe(true);
     expect(page.dreaming.active).toBe(true);
@@ -951,7 +951,7 @@ describe("a memory slot owner that reports its own dreaming", () => {
     expect(page.toggle.open).toBe(true);
     reported = true;
     await page.state.loadResources();
-    await waitForSolid(() => expect(page.state.view().header.ownerLocksToggle).toBe(true));
+    await waitForSolid(() => expect(page.state.view().header.owner.locksToggle).toBe(true));
     expect(page.toggle.onConfirm()).toBeUndefined();
     flush();
     expect(page.toggle.open).toBe(false);
@@ -990,9 +990,7 @@ describe("a memory slot owner that reports its own dreaming", () => {
     async (_case, dreaming, active) => {
       const page = await createPage({ [STATUS]: ownerStatus(dreaming) });
       page.context.setConfig(OWNER_CONFIG);
-      await waitForSolid(() =>
-        expect(page.state.view().dreaming.ownerPluginId).toBe("acme-memory"),
-      );
+      await waitForSolid(() => expect(page.state.view().header.owner.pluginId).toBe("acme-memory"));
       expect(page.dreaming.active).toBe(active);
     },
   );
@@ -1024,8 +1022,8 @@ describe("a memory slot owner that reports its own dreaming", () => {
     page.context.setConfig(OWNER_CONFIG);
     const toggle = getByRole<HTMLInputElement>(page.container, "switch", { name: "Dreaming" });
     await waitForSolid(() => expect(toggle.disabled).toBe(false));
-    expect(page.state.view().header.ownerDreamsHint).toBeUndefined();
-    expect(page.dreaming.ownerPluginId).toBeUndefined();
+    expect(page.state.view().header.owner.hint).toBeUndefined();
+    expect(page.state.view().header.owner.pluginId).toBeUndefined();
     page.state.setEnabled(true);
     flush();
     expect(page.toggle).toMatchObject({ open: true, ownerPluginId: undefined });
