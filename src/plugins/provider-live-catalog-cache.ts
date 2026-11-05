@@ -9,7 +9,9 @@ import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
 import {
   consumeLiveCatalogRefresh,
   getProviderCatalogDiscoveryBudget,
+  recordProviderCatalogLoadOrigin,
   recordLiveCatalogExpiry,
+  sampleProviderCatalogBudgetClock,
 } from "./provider-catalog-expiry.js";
 
 type LiveCatalogCacheEntry<T> = {
@@ -107,10 +109,12 @@ export async function getCachedLiveCatalogValue<T>(params: {
   now?: () => number;
 }): Promise<T> {
   params.signal?.throwIfAborted();
+  const entryClock = sampleProviderCatalogBudgetClock();
   const rawNow = params.now?.() ?? Date.now();
   const ttlMs = params.ttlMs ?? 30_000;
   // Uncached callers must neither reuse nor disturb an existing entry.
   if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) {
+    recordProviderCatalogLoadOrigin(params.load, entryClock, rawNow, "uncached");
     return await params.load(params.signal);
   }
   const key = sha256Hex(JSON.stringify(params.keyParts));
@@ -133,6 +137,7 @@ export async function getCachedLiveCatalogValue<T>(params: {
   }
   liveCatalogCache.delete(key);
   // Read-only metadata may finish and warm the cache after every observer cancels.
+  recordProviderCatalogLoadOrigin(params.load, entryClock, rawNow, "new-load");
   const pending = { state: "pending" as const, value: params.load() };
   const entry: LiveCatalogCacheEntry<T> = {
     expiresAt: rawNow + ttlMs,
