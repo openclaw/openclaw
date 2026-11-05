@@ -25,21 +25,6 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(closeStateDatabaseForTest);
 afterEach(() => vi.restoreAllMocks());
 
-it("confirms live startup readiness without copying unrelated shared state", async () => {
-  const env = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("plugin-live-readiness-") };
-  writeConfigMachineState("fixture.unrelated", true, { env });
-  const backup = vi.spyOn(requireNodeSqlite(), "backup");
-  const warn = vi.fn();
-  await confirmPluginStateMigrationReadiness({
-    config: {},
-    env,
-    signal: new AbortController().signal,
-    warn,
-  });
-  expect(warn).not.toHaveBeenCalled();
-  expect(backup).not.toHaveBeenCalled();
-});
-
 it("retains settled readiness until a migration commits, independently of database and engine", async () => {
   const env = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("plugin-readiness-") };
   const other = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("plugin-readiness-other-") };
@@ -52,6 +37,14 @@ it("retains settled readiness until a migration commits, independently of databa
   writeConfigMachineState("fixture.unrelated", true, { env });
   writeConfigMachineState("fixture.unrelated", true, { env: other });
   const operations = vi.spyOn(reads, "executeExistingOpenClawStateRead");
+  const backup = vi.spyOn(requireNodeSqlite(), "backup");
+  const warn = vi.fn();
+  const signal = new AbortController().signal;
+  await confirmPluginStateMigrationReadiness({ config: {}, env, signal, warn });
+  expect(warn).not.toHaveBeenCalled();
+  expect(backup).not.toHaveBeenCalled();
+  expect(operations).toHaveBeenCalledOnce();
+  operations.mockClear();
   expect(await read({ env })).toEqual([]);
   expect(operations).toHaveBeenCalledOnce();
   operations.mockClear();

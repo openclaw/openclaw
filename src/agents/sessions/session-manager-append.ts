@@ -143,6 +143,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
           canonical,
           activeBranchAppend ? "active-branch" : undefined,
           admission,
+          "reload",
           message,
           options?.beforeFreshMessageCommit,
           undefined,

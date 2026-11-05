@@ -4,7 +4,7 @@ import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { NESTED_TOOL_ACTIVITY_CUSTOM_TYPE } from "../../sessions/nested-tool-activity.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
-import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
+import { readSessionEntryIdentity } from "./session-accessor.sqlite-entry-read.js";
 import { readTranscriptIdentityByEventId } from "./session-accessor.sqlite-read.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
@@ -127,8 +127,8 @@ export function readSessionTranscriptMaintenance(
           : {
               kind: "transcript-maintenance",
               version: readTranscriptContextVersionInTransaction(database, target.sessionId),
-              lifecycleRevision: readSessionEntryRow(database, target.sessionKey)?.entry
-                .lifecycleRevision,
+              lifecycleRevision: readSessionEntryIdentity(database, target.sessionKey)
+                ?.lifecycleRevision,
               appendParentId: resolveTranscriptMessageAppendParent(database, target.sessionId, {}),
             },
       { databaseLabel: database.path, operationLabel: "session transcript maintenance read" },

@@ -3,7 +3,10 @@ import path from "node:path";
 import { hasErrnoCode } from "../infra/errno.js";
 import { resolveHostExecMemoryLimit } from "./child-memory.js";
 import { resolveExecIoDevices } from "./linux-exec-cgroup-device.js";
-import { resolveGatewayServiceCgroupDirectory } from "./linux-exec-cgroup.js";
+import {
+  prepareAgentExecCgroupScope,
+  resolveGatewayServiceCgroupDirectory,
+} from "./linux-exec-cgroup.js";
 
 const cgroupMount = "/sys/fs/cgroup";
 const budgetKeys = ["rbps", "wbps", "riops", "wiops"] as const;
@@ -20,13 +23,7 @@ function readOptional(file: string): string {
   }
 }
 
-function ioBudget(root: string, device: string, bytesPerSecond: number): IoBudget {
-  const budget = {
-    rbps: bytesPerSecond,
-    wbps: bytesPerSecond,
-    riops: Math.max(1, Math.floor(bytesPerSecond / 4096)),
-    wiops: Math.max(1, Math.floor(bytesPerSecond / 4096)),
-  };
+function ioBudget(root: string, device: string, budget: IoBudget): IoBudget {
   for (let ancestor = root; ancestor !== cgroupMount; ancestor = path.dirname(ancestor)) {
     const line = readOptional(path.join(ancestor, "io.max"))
       .split("\n")
@@ -70,6 +67,9 @@ export async function initializeGatewayExecCgroup(stateDir: string): Promise<str
         throw error;
       }
     }
+    if (readOptional(path.join(leaf, "cgroup.procs"))) {
+      return "Per-session exec IO isolation deferred: existing commands retain their aggregate policy until their owner drains them. Restart the Gateway after command cleanup to enable session ceilings.";
+    }
     // An earlier successful startup must not remain discoverable after a failed refresh.
     if (readOptional(path.join(leaf, "memory.high"))) {
       fs.accessSync(path.join(leaf, "memory.high"), fs.constants.W_OK);
@@ -87,18 +87,32 @@ export async function initializeGatewayExecCgroup(stateDir: string): Promise<str
     // Keep the subtree undiscoverable until every controller policy succeeds.
     fs.writeFileSync(path.join(directory, "memory.high"), "max");
     fs.writeFileSync(path.join(directory, "cpu.weight"), "10");
-    // A shared memory-sized IO backlog per five minutes, divided between reads
-    // and writes and across backing devices. This is a pressure budget, not an
-    // estimate of disk speed. Tighter inherited ceilings retain half for peers.
-    const bytesPerSecond = Math.max(1, Math.floor(memoryHigh / 600 / devices.length));
     const limits = devices.map((device) => {
-      const budget = ioBudget(root, device, bytesPerSecond);
+      // Use the logical queue's media class, including md/dm, without double-charging slaves.
+      const nonRotational = readOptional(`/sys/dev/block/${device}/queue/rotational`) === "0";
+      // Btrfs measurements (2026-10-31): 250 MiB/s at 40,960 IOPS eased agent IO pressure
+      // without >=5s Gateway WAL commits; 400 MiB/s caused stalls. Tune this throughput/
+      // WAL-latency tradeoff, not device utilization; higher IOPS remain untested.
+      const bytesPerSecond = nonRotational
+        ? 250 * 1024 ** 2
+        : Math.max(1, Math.floor(memoryHigh / 600 / devices.length));
+      const iops = nonRotational ? 40_960 : Math.max(1, Math.floor(bytesPerSecond / 4096));
+      const budget = ioBudget(root, device, {
+        rbps: bytesPerSecond,
+        wbps: bytesPerSecond,
+        riops: iops,
+        wiops: iops,
+      });
       const line = `${device} ${budgetKeys.map((key) => `${key}=${budget[key]}`).join(" ")}`;
       fs.writeFileSync(path.join(directory!, "io.max"), line);
       return line;
     });
+    // Domain controllers require an empty parent. Existing processes retain their
+    // owner and budget; a failed refresh never migrates or kills them.
+    fs.writeFileSync(path.join(directory, "cgroup.subtree_control"), "+cpu +io +memory");
+    prepareAgentExecCgroupScope(directory);
     fs.writeFileSync(path.join(directory, "memory.high"), String(memoryHigh));
-    return `Agent exec isolation active: cpu.weight=10 memory.high=${memoryHigh}; io.max: ${limits.join("; ")}. Gateway IO is uncapped.`;
+    return `Agent exec isolation active: cpu.weight=10 memory.high=${memoryHigh}; io.max: ${limits.join("; ")}. Each session shares half the aggregate IO ceiling. Gateway IO is uncapped.`;
   } catch (error) {
     if (directory) {
       try {

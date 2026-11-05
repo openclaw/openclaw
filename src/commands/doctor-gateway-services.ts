@@ -17,6 +17,7 @@ import {
   type GatewayServiceInventory,
 } from "../daemon/inspect.js";
 import { execLaunchctl, isLaunchctlNotLoaded } from "../daemon/launchd-exec.js";
+import { removeBootedOutLaunchAgentPlist } from "../daemon/launchd-service-files.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
 import {
@@ -162,13 +163,6 @@ async function cleanupLegacyLaunchdService(params: {
     return { status: "failed", reason: "launchctl could not confirm unload" };
   }
 
-  const trashDir = path.join(os.homedir(), ".Trash");
-  try {
-    await fs.mkdir(trashDir, { recursive: true });
-  } catch {
-    // ignore
-  }
-
   try {
     await fs.access(params.plistPath);
   } catch (error) {
@@ -178,10 +172,10 @@ async function cleanupLegacyLaunchdService(params: {
     return { status: "failed", reason: "could not inspect plist" };
   }
 
-  const dest = path.join(trashDir, `${params.label}-${Date.now()}.plist`);
+  const dest = path.join(os.homedir(), ".Trash", `${params.label}-${Date.now()}.plist`);
   try {
-    await fs.rename(params.plistPath, dest);
-    return { status: "removed", destination: dest };
+    const { trashed } = await removeBootedOutLaunchAgentPlist(params.plistPath, dest);
+    return trashed ? { status: "removed", destination: dest } : { status: "removed" };
   } catch {
     return { status: "failed", reason: "could not move plist" };
   }
@@ -432,7 +426,11 @@ export async function maybeRepairGatewayServiceConfig(
 
   const serviceRewriteBlock = installationDrift
     ? undefined
-    : await resolveSystemdServiceRewriteBlock(command, audit.issues);
+    : await resolveSystemdServiceRewriteBlock(command, audit.issues, {
+        entrypointPath: runtimeLayout?.entrypointReal,
+        plannedNodePath: repairPlan.programArguments[0],
+        pinnedRuntimePath: pinSnapshot.pin?.path,
+      });
   if (serviceRewriteBlock) {
     note(serviceRewriteBlock, "Gateway service config");
   }
@@ -537,6 +535,7 @@ export async function maybeRepairGatewayServiceConfig(
       missingSystemNode: needsNodeRuntime && !systemNodePath && !runtimeRepair,
       runtimeIssues: audit.issues,
       definitionDrift: audit.definitionDrift,
+      pinnedRuntimePath: pinSnapshot.pin?.path,
     });
   note(preview, "Gateway service repair preview");
   const repair = await prompter.confirmRuntimeRepair({

@@ -7,6 +7,7 @@ import type {
   CronUpdateParams as CronUpdateParamsWire,
 } from "../../packages/gateway-protocol/src/schema/cron.types.js";
 import type { AgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.types.js";
+import type { AgentTerminalSnapshot } from "../agents/agent-terminal-snapshot.js";
 import type { EmbeddedAgentExecutionPhase } from "../agents/embedded-agent-runner/execution-phase.js";
 /** Cron scheduling, delivery, diagnostics, and store data contracts. */
 import type { FailoverReason } from "../agents/failover/signal.js";
@@ -87,6 +88,7 @@ type CronCompletionDestination = {
 type CronFailureDestination = {
   channel?: CronMessageChannel;
   to?: string;
+  threadId?: string | number;
   accountId?: string;
   mode?: "announce" | "webhook";
 };
@@ -150,6 +152,8 @@ export type CronRunTelemetry = Pick<CronRunLogWireEntry, "model" | "provider" | 
 
 /** Scheduler lifecycle event projected to Gateway clients and notification adapters. */
 export type CronEvent = {
+  /** Transient content-free facts from the selected failed agent attempt. */
+  agentTerminal?: AgentTerminalSnapshot;
   jobId: string;
   action: "added" | "updated" | "removed" | "started" | "finished" | "scheduled";
   /** Snapshot of the job at the time of the event. Present for all actions where the job is accessible. */
@@ -206,6 +210,8 @@ export type CronFailureNotificationDetail =
 
 /** Execution result used to author persisted state, run logs, and isolated turn results. */
 export type CronRunOutcome = {
+  /** Transient selected-attempt observations; omitted for other terminal owners. */
+  agentTerminal?: AgentTerminalSnapshot;
   status: CronRunStatus;
   error?: string;
   /** True once agent execution begins; retries after this point can replay side effects. */
@@ -412,6 +418,8 @@ export type CronJob = CronJobBase<
    * schedule keeps its reserved agentTurn sentinel in `payload` for existing readers.
    */
   payloadSource?: { kind: "pluginCommand"; pluginId: string; command: string };
+  /** Human allowed to manage this automation; separate from its execution envelope. */
+  ownerProfileId?: string;
   owner?: {
     agentId?: string;
     sessionKey?: string;
@@ -457,6 +465,8 @@ export type CronStoredJob = Omit<CronJob, "streamExecutionHost" | "payloadSource
     source: import("../gateway/operator-run-recovery-source.codec.js").RestartRecoveryOperatorSource;
     executionRevision: string;
   };
+  /** A human transfer retired inference authority; only fresh capture clears this marker. */
+  ownerTransferPending?: true;
   /** Captured inference owner; private and independent of scheduled tool authority. */
   inferenceBinding?: import("./inference-binding.js").CronInferenceBinding;
   /** Creation-bound destination for isolated results when no external route exists. */
@@ -492,6 +502,7 @@ type CronJobStateInput = Partial<
     CronJobState,
     | "lastMeaningfulResult"
     | "autoDisabled"
+    | "admissionDeferred"
     | "scheduleActivatedAtMs"
     | "streamSourceIdentity"
     | "sourceIdentity"
@@ -510,6 +521,7 @@ export type CronJobCreate = Omit<
   | "updatedAtMs"
   | "state"
   | "scheduledToolPolicy"
+  | "ownerProfileId"
   | "streamExecutionHost"
   | "payloadSource"
 > & {

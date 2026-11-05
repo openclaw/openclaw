@@ -31,7 +31,12 @@ export function buildUnresolvedBlockedPreludeSteps(
 ): LegacyStateMigrationStep[] {
   const ids = [
     ...(mode === "doctor"
-      ? ["session-entry-state-preparation", "media-persistence", "session-entry-state"]
+      ? [
+          "session-entry-state-preparation",
+          "media-persistence",
+          "session-entry-state",
+          "cold-navigation",
+        ]
       : []),
     ...(invocationPurpose === "doctor" ? ["transcript-directives"] : []),
     ...(mode === "doctor"
@@ -215,6 +220,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
   };
   let preparedRepairTargets: readonly AgentDatabaseMigrationTarget[] | undefined =
     params.mode === "doctor" ? [] : undefined;
+  let admittedNavigationTargets: readonly AgentDatabaseMigrationTarget[] = [];
   let inspectedEntryStatePaths = new Set<string>();
   let mediaEntryStatePreparationError: Error | undefined;
   const versionMigrationPaths = new Set(
@@ -294,6 +300,9 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
               return { completed: false, changes: [] };
             }
           },
+          onAdmittedTargets: (targets) => {
+            admittedNavigationTargets = targets;
+          },
           onPreparedRepairTargets: (targets) => {
             preparedRepairTargets = targets;
           },
@@ -332,6 +341,14 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
         undefined,
         "required",
       ),
+      sharedStep("cold-navigation", agentPersistence, agentPersistence, async () => {
+        const { migrateSessionColdNavigation } =
+          await import("./state-migrations.cold-navigation.js");
+        return await migrateSessionColdNavigation({
+          ...agentMigrationOptions,
+          preparedTargets: admittedNavigationTargets,
+        });
+      }),
     );
   }
   if (params.invocationPurpose === "doctor") {

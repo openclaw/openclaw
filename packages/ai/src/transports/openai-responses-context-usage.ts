@@ -1,6 +1,8 @@
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ResponseInput } from "openai/resources/responses/responses.js";
+import { preparedRequestSuffix } from "../provider-options.js";
 import {
   responsesContinuationPrefixFingerprint,
   type ResponsesContinuationRequest,
@@ -8,8 +10,10 @@ import {
 import { OPENAI_RESPONSES_TOOL_CALL_PROVIDERS } from "./openai-responses-contracts.js";
 import { readResponsesInputReplayState } from "./openai-responses-input-replay.js";
 import {
+  cloneResponsesInputForPayloadHook,
   convertProviderResponsesMessages,
   convertResponsesMessages,
+  type ConvertResponsesMessagesOptions,
 } from "./openai-responses-replay-messages-internal.js";
 import {
   buildProviderReplayContext,
@@ -18,6 +22,47 @@ import {
 } from "./provider-replay-context.js";
 
 type ReplayIdentity = NonNullable<Parameters<typeof buildProviderReplayContext>[1]>;
+
+const preparedInput = Symbol("responsesContextUsageInput");
+type PreparedContext = Context & {
+  [preparedInput]?: {
+    model: Model;
+    messages: Context["messages"];
+    systemPrompt: string | undefined;
+    identity: ReplayIdentity;
+    projection: "transport" | "provider";
+    includeSystemPrompt: boolean;
+    input: ResponseInput;
+  };
+};
+
+/** Consume admission's projection once; context-replacing transforms do not inherit it. */
+export function takeResponsesContextUsageInput(
+  model: Model,
+  context: PreparedContext,
+  options: ConvertResponsesMessagesOptions,
+): ResponseInput | undefined {
+  const prepared = context[preparedInput];
+  delete context[preparedInput];
+  if (
+    !prepared ||
+    prepared.model !== model ||
+    prepared.messages !== context.messages ||
+    prepared.systemPrompt !== context.systemPrompt ||
+    prepared.identity.sessionId !== options.sessionId ||
+    prepared.identity.authProfileId !== options.authProfileId ||
+    prepared.projection !== "transport" ||
+    prepared.includeSystemPrompt !== options.includeSystemPrompt ||
+    options.replayResponsesItemIds !== true ||
+    options.replayMode !== "checkpoint" ||
+    options.retainUserProvenance ||
+    preparedRequestSuffix.has(context) ||
+    (prepared.includeSystemPrompt && context.preparedSystemPrompt)
+  ) {
+    return undefined;
+  }
+  return options.mutableInput ? cloneResponsesInputForPayloadHook(prepared.input) : prepared.input;
+}
 
 function contextFingerprint(input: readonly unknown[], output: readonly unknown[] = []): string {
   // Continuation normalizes provider output into replayable input. Context accounting
@@ -99,6 +144,7 @@ export function resolveResponsesContextUsageBoundary(
   model: Model,
   identity: ReplayIdentity,
   systemPrompt?: string,
+  requestContext?: Context,
 ): { index: number; totalTokens: number; suffix: readonly unknown[] } | undefined {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
@@ -138,6 +184,22 @@ export function resolveResponsesContextUsageBoundary(
       OPENAI_RESPONSES_TOOL_CALL_PROVIDERS,
       { ...identity, includeSystemPrompt: includeSystemPrompt === true },
     );
+    if (requestContext) {
+      // Non-enumerable: text/media/history transforms replace context via spreads.
+      // Their different source contract must retain its own wire conversion.
+      Object.defineProperty(requestContext, preparedInput, {
+        configurable: true,
+        value: {
+          model,
+          messages: requestContext.messages,
+          systemPrompt,
+          identity,
+          projection,
+          includeSystemPrompt: includeSystemPrompt === true,
+          input,
+        } satisfies NonNullable<PreparedContext[typeof preparedInput]>,
+      });
+    }
     if (
       input.length < prefixLength ||
       contextFingerprint(input.slice(0, prefixLength)) !== prefixHash

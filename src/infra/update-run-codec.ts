@@ -33,6 +33,7 @@ const RETAINED_STEP_NAMES = [
   "candidate-gateway-startup",
   "candidate-state-cleanup",
   "post-stop-checks",
+  "warning:post-stop-checks",
   "git-checkout",
   "git-runtime-activation",
   "openclaw doctor",
@@ -43,9 +44,15 @@ const RETAINED_STEP_NAMES = [
   "diagnostic:openclaw doctor",
   "diagnostic:pre-plugin doctor",
   "diagnostic:post-plugin doctor",
+  // A later warning flood must not hide that post-update repair never ran.
+  "warning:post-plugin doctor",
   "managed-service-executor-check",
   "managed-service-install",
   "managed-service-restart",
+  "managed-service update handoff",
+  "service-stop",
+  "service-start",
+  "service-running",
   "update-driver-handoff",
   "diagnostic:update-driver-handoff",
   "notice:ack",
@@ -64,12 +71,15 @@ const RETAINED_STEP_NAMES = [
   "reconcile:superseded",
   "reconcile:acknowledged",
   "reconcile:settle",
+  "warning:reconcile:driver-lost-after-verification",
   "recovery-artifact-cleanup",
   "warning:recovery-artifact-cleanup",
   "diagnostic:recovery-artifact-cleanup",
 ];
 export type UpdateRunLedgerOptions = OpenClawStateDatabaseOptions & {
   busyTimeoutMs?: number;
+  /** One-shot bookkeeping under the candidate Doctor capture, before native migration. */
+  attributeUpdateWrite?: true;
   redactPaths?: readonly string[];
 };
 
@@ -164,6 +174,9 @@ function boundedJson(
           item.step !== "diagnostic:database snapshot" &&
           item.step !== "diagnostic:database migration writes" &&
           item.step !== "warning:database migration writes" &&
+          item.step !== "warning:post-plugin doctor" &&
+          item.step !== "warning:post-stop-checks" &&
+          item.step !== "warning:reconcile:driver-lost-after-verification" &&
           item.step !== "diagnostic:database rollback" &&
           item.step !== "finalize:data-at-risk" &&
           !(typeof item.step === "string" && item.step.startsWith("finalize:doctor-lint:"))

@@ -7,9 +7,9 @@ const enBoardDocument = {
     tabsLabel: "Dashboard tabs",
     moreTabs: "More dashboard tabs",
     gridLabel: "Dashboard widgets",
-    emptyTitle: "A clear board, ready for work",
-    emptyHint: "Your agent can pin widgets here — try asking for a status card.",
-    actionFailed: "The dashboard change could not be saved.",
+    emptyTitle: "No widgets yet.",
+    emptyHint: "Ask your agent to pin a status card here.",
+    actionFailed: "Couldn’t save the dashboard change. Try again.",
     actionInProgress: "Another dashboard change is still being saved.",
     announcement: {
       moved: "Moved {title}.",

@@ -11,6 +11,7 @@ import {
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import "./sidebar-attention.tsx";
 import "./tooltip.ts";
+import { SidebarOnlineHeader, SidebarPagesHeader } from "./app-sidebar-panel-headers.tsx";
 import { hidePersonalSidebarCatalog } from "./app-sidebar-personal-navigation.ts";
 import { renderSidebarRail } from "./app-sidebar-rail.tsx";
 import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
@@ -300,6 +301,24 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     super.connectedCallback();
   }
 
+  override updated() {
+    super.updated();
+    const sections = this.zonedVisibleSections(
+      this.selectedAgentSessionRows(this.getSessionNavigationState()),
+    ).sections;
+    const disclosure = this.sessionProjection.children;
+    const selected = sections.find((section) =>
+      section.rows.some((row) => row.key === disclosure.selectedRootKey && !row.visuallyActive),
+    );
+    if (
+      selected &&
+      disclosure.revealOnce("section:" + selected.id) &&
+      this.sessionOrganizer.collapsedSessionSections.has(selected.id)
+    ) {
+      this.sessionOrganizer.toggleSection(selected.id);
+    }
+  }
+
   toggleSessionPin(session: SidebarRecentSession): void {
     this.sessionOrganizer.setPersonalSessionPin(
       session.key,
@@ -542,6 +561,18 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
           {rail}
           <div class="sidebar-shell" onMouseDown={beginNativeWindowDragFromTopInset}>
             <div class="sidebar-shell__content">
+              {/* Every panel header sits above the scroller so it stays pinned, keeps
+                  one geometry across views, and the scroll fade starts below it. */}
+              <Show
+                when={this.navigationView === "pages"}
+                fallback={
+                  <Show when={this.navigationView === "online"} fallback={toolbar}>
+                    <SidebarOnlineHeader host={this} />
+                  </Show>
+                }
+              >
+                <SidebarPagesHeader host={this} />
+              </Show>
               <div
                 ref={scrollRef}
                 class={["sidebar-shell__body", `sidebar-shell__body--scroll-${scroll.state()}`]}
@@ -554,7 +585,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                       when={this.navigationView === "online"}
                       fallback={
                         <>
-                          {toolbar}
                           <div
                             ref={scroll.createContentRef()}
                             class="sidebar-session-content"

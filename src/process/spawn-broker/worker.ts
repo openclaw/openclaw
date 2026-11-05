@@ -18,6 +18,7 @@ import {
 } from "./cleanup.js";
 import { serializeExecaError } from "./execa-protocol.js";
 import { startBrokerExeca, type BrokerExecaProcess } from "./execa-worker.js";
+import { prepareProcessOutputFile } from "./file-output.js";
 import { createBrokerReceiver } from "./ipc.js";
 import { holdPipeForTransfer, takePipePrefix } from "./pipe.js";
 import {
@@ -38,6 +39,7 @@ type Owned = {
   child: ChildProcess;
   detached: boolean;
   execa?: BrokerExecaProcess;
+  output?: Promise<number>;
   announced: boolean;
   events: BrokerResponse[];
   exited: boolean;
@@ -49,7 +51,9 @@ type Owned = {
   groupGone?: boolean;
   openPipes: Set<number>;
 };
-type Admission = { type: "started"; entry: Owned } | { type: "failed"; execa: BrokerExecaProcess };
+type Admission =
+  | { type: "started"; entry: Owned; pid: number }
+  | { type: "failed"; execa: BrokerExecaProcess };
 const owned = new Map<number, Owned>();
 const receiver = createBrokerReceiver();
 let stopping = false;
@@ -135,7 +139,7 @@ function stopChild(entry: Owned): Promise<void> {
     for (const stream of execa?.stdio ?? child.stdio ?? []) {
       stream?.destroy();
     }
-    await Promise.allSettled([entry.closed, execa?.result]);
+    await Promise.allSettled([entry.closed, execa?.result, entry.output]);
     await termination?.settled;
     entry.groupGone = true;
   })());
@@ -284,6 +288,7 @@ async function launch(
   let spawnedChild: ChildProcess | undefined;
   let spawnedClose: Promise<void> | undefined;
   let spawnedGroupIdentity: BrokerChildGroupIdentity | undefined;
+  let destination: Awaited<ReturnType<typeof prepareProcessOutputFile>> | undefined;
   const detached =
     message.options.detached === true ||
     (message.type === "spawn-execa" && message.options.killDescendants === true);
@@ -298,6 +303,9 @@ async function launch(
     }
   };
   try {
+    if (message.type !== "spawn-execa" && message.outputFile) {
+      destination = await prepareProcessOutputFile(message.outputFile);
+    }
     // Reserve the outbound channel before forking: ownership cannot wait behind
     // another descriptor acknowledgement or a large buffered command result.
     const admission = await sender.reserve<Admission>(async (publish) => {
@@ -319,11 +327,23 @@ async function launch(
         message.type === "spawn-execa"
           ? await startBrokerExeca(message.argv, message.options, assertActive, message.execCgroup)
           : undefined;
+      const outputStdio = destination?.stdio;
       const child =
         execa?.child ??
         (message.type !== "spawn-execa"
           ? spawnInAgentExecCgroup(message.execCgroup, () =>
-              spawnWithInheritedOomScore(message.argv[0]!, message.argv.slice(1), message.options),
+              spawnWithInheritedOomScore(
+                message.argv[0]!,
+                message.argv.slice(1),
+                outputStdio !== undefined
+                  ? {
+                      ...message.options,
+                      stdio: message.options.stdio.map((entry, fd) =>
+                        fd === 1 ? outputStdio : entry,
+                      ),
+                    }
+                  : message.options,
+              ),
             )
           : undefined);
       spawnedChild = child;
@@ -331,6 +351,7 @@ async function launch(
         throw new Error("Spawn broker command did not start");
       }
       spawnedClose = waitForBrokerChildCompletion(child);
+      const output = destination?.start(child, detached, spawnedClose);
       if (detached && child.pid && process.platform !== "win32") {
         spawnedGroupIdentity = {
           pid: child.pid,
@@ -351,7 +372,7 @@ async function launch(
           throw error;
         }
         for (const [fd, stream] of child.stdio.entries()) {
-          if (fd > 0 && stream instanceof Socket) {
+          if (fd > 0 && !(destination && fd === 1) && stream instanceof Socket) {
             holdPipeForTransfer(stream);
           }
         }
@@ -368,14 +389,15 @@ async function launch(
         detached,
         ...(spawnedGroupIdentity ? { groupIdentity: spawnedGroupIdentity } : {}),
         execa,
+        output,
         announced: false,
         events: [],
         exited: false,
-        resultSettled: !execa,
+        resultSettled: !execa && !output,
         closed: spawnedClose,
         openPipes: new Set(
           (execa?.stdio ?? child.stdio).flatMap((stream, fd) =>
-            stream instanceof Socket ? [fd] : [],
+            stream instanceof Socket && !(destination && fd === 1) ? [fd] : [],
           ),
         ),
       };
@@ -405,10 +427,29 @@ async function launch(
       child.once("disconnect", () => event({ type: "disconnect", id: message.id }));
       child.once("exit", (code, signal) => event({ type: "exit", id: message.id, code, signal }));
       void spawnedClose.then(() => {
-        event({ type: "closed", id: message.id });
+        // File output already publishes a receipt after native completion and file close.
+        if (!output) {
+          event({ type: "closed", id: message.id });
+        }
         current.exited = true;
         forget(message.id, current);
       });
+      if (output) {
+        void (async () => {
+          try {
+            event({ type: "file-output", id: message.id, bytes: await output });
+          } catch (error) {
+            event({
+              type: "file-output",
+              id: message.id,
+              error: serializeBrokerError(toErrorObject(error, "Process output failed")),
+            });
+          } finally {
+            current.resultSettled = true;
+            forget(message.id, current);
+          }
+        })();
+      }
       if (execa) {
         void execa.result
           .then(async (result) => {
@@ -437,7 +478,7 @@ async function launch(
         throw new Error("Spawn broker command has no process identifier");
       }
       await publish({ type: "owned", id: message.id, pid: child.pid });
-      return { type: "started", entry: current };
+      return { type: "started", entry: current, pid: child.pid };
     });
     if (admission.type === "failed") {
       const result = await admission.execa.result;
@@ -460,25 +501,23 @@ async function launch(
     }
     const streams = execa?.stdio ?? child.stdio;
     for (const [fd, stream] of streams.entries()) {
-      if (!(stream instanceof Socket)) {
+      if (!(stream instanceof Socket) || (destination && fd === 1)) {
         continue;
       }
       stream.pause();
       await report({ type: "pipe", id: message.id, fd }, stream);
-      if (fd > 0) {
-        await report({ type: "pipe-prefix", id: message.id, fd, bytes: takePipePrefix(stream) });
+      const bytes = fd > 0 ? takePipePrefix(stream) : undefined;
+      if (bytes?.length) {
+        await report({ type: "pipe-prefix", id: message.id, fd, bytes });
       }
       if (!execa) {
         stream.destroy();
       }
     }
-    if (!child.pid) {
-      throw new Error("Spawn broker command has no process identifier");
-    }
     await report({
       type: "spawned",
       id: message.id,
-      pid: child.pid,
+      pid: admission.pid,
       spawnfile: child.spawnfile,
       spawnargs: child.spawnargs,
       connected: child.connected,
@@ -507,6 +546,7 @@ async function launch(
       await spawnedClose;
       await termination?.settled;
     }
+    await destination?.close();
     owned.delete(message.id);
     if (!stopping) {
       await report({

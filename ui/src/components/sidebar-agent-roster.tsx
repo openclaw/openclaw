@@ -161,12 +161,12 @@ export function SidebarAgentRoster(props: {
       return;
     }
     const confirmed = await showConfirmDialog({
-      message: t("agentsHome.deleteAgentConfirm", { agent: agent.name }),
-      details: t("agentsHome.deleteAgentDetails"),
+      title: t("agentsHome.deleteAgentConfirm", { agent: agent.name }),
+      message: t("agentsHome.deleteAgentDetails"),
       confirmLabel: t("common.delete"),
       danger: true,
     }).catch((error: unknown) => {
-      showToast({ message: formatUiError(error) });
+      showToast({ severity: "error", message: formatUiError(error) });
       return false;
     });
     if (
@@ -179,7 +179,7 @@ export function SidebarAgentRoster(props: {
     try {
       await client.request("agents.delete", { agentId: agent.id, deleteFiles: true });
     } catch (error) {
-      showToast({ message: formatUiError(error) });
+      showToast({ severity: "error", message: formatUiError(error) });
     } finally {
       await currentContext.agents.refreshList();
     }

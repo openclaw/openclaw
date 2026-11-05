@@ -66,7 +66,7 @@ async function reportDeferredLegacyState(ctx: DoctorHealthFlowContext): Promise<
     cfg: ctx.cfg,
     doctorOnlyStateMigrations: true,
     ...(ctx.env ? { env: ctx.env } : {}),
-    legacySessionSurfaces: prepareLegacySessionSurfaces({ config: ctx.cfg }),
+    legacySessionSurfaces: await prepareLegacySessionSurfaces({ config: ctx.cfg }),
   });
   const pendingDetails = [
     ...legacyState.warnings.map((warning) => (warning.startsWith("- ") ? warning : `- ${warning}`)),
@@ -229,7 +229,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
     const { detectLegacyStateMigrations, runLegacyStateMigrations } =
       await import("../infra/state-migrations.doctor.js");
     const { prepareLegacySessionSurfaces } = await import("../plugins/legacy-session-surfaces.js");
-    const legacySessionSurfaces = prepareLegacySessionSurfaces({ config: ctx.cfg });
+    const legacySessionSurfaces = await prepareLegacySessionSurfaces({ config: ctx.cfg });
     const legacyState = await detectLegacyStateMigrations({
       cfg: ctx.cfg,
       ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
@@ -629,6 +629,7 @@ async function runDoctorHealthContributionList(
           return;
         }
         if (retirementOnly && !ctx.retirementOnly) {
+          ctx.runtime.log(`Retirement-only Doctor widened: ${contribution.id}`);
           return;
         }
       } catch (error) {
@@ -655,6 +656,7 @@ async function runDoctorHealthContributionList(
         recordDoctorHealthWarnings(ctx, [], [message]);
         if (retirementOnly) {
           ctx.retirementOnly = false;
+          ctx.runtime.log(`Retirement-only Doctor widened: ${contribution.id}.failed`);
           return;
         }
       }
@@ -687,12 +689,18 @@ async function runDoctorHealthContributionList(
 
 export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext): Promise<void> {
   const contributions = resolveDoctorHealthContributions();
-  ctx.retirementOnly =
-    ctx.retirementOnly === true &&
-    ctx.configResult.retirementOnly === true &&
-    !ctx.agentDatabaseRefusals?.length &&
-    !ctx.healthFindings?.length &&
-    !ctx.updateWarnings?.length;
+  if (ctx.retirementOnly) {
+    const blocker =
+      (ctx.configResult.retirementOnly !== true &&
+        `config.${ctx.configResult.retirementOnlyBlocker ?? "preparation"}`) ||
+      (Boolean(ctx.agentDatabaseRefusals?.length) && "agent-admission") ||
+      (Boolean(ctx.healthFindings?.length) && "startup-findings") ||
+      (Boolean(ctx.updateWarnings?.length) && "startup-warnings");
+    if (blocker) {
+      ctx.retirementOnly = false;
+      ctx.runtime.log(`Retirement-only Doctor widened: ${blocker}`);
+    }
+  }
   if (ctx.retirementOnly) {
     const retained = new Set([
       "doctor:write-config-migrations",
