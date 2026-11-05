@@ -99,6 +99,7 @@ it(
           },
           mutateConfig: (config) => ({
             ...config,
+            meta: { ...config.meta, migrations: { skillWorkshopPlugin: true } },
             logging: { ...config.logging, level: "debug", consoleLevel: "debug" },
             plugins: {
               ...config.plugins,
