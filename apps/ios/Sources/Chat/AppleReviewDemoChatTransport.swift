@@ -1095,66 +1095,41 @@ private actor LocalFixtureChatStore {
             ]
         }
         if ProcessInfo.processInfo.arguments.contains("--openclaw-anthropic-work-chunks-fixture") {
-            // Synthetic Anthropic-style envelopes: narration and tool_use share each
-            // assistant message; tool results separate the two narration boundaries.
+            return self.anthropicWorkChunkMessages(now: now)
+        }
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-step-labels-fixture") {
+            return self.stepLabelMessages(now: now)
+        }
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-long-chat-fixture") {
             return [
                 self.message(
                     role: "user",
-                    text: "Check the sample project.",
+                    text: "Prepare a detailed project review.",
                     timestamp: now,
-                    transcriptMessageID: "work-chunks-user"),
+                    transcriptMessageID: "fixture-long-prompt"),
                 OpenClawChatMessage(
                     role: "assistant",
-                    content: [
-                        .init(type: "text", text: "I will read the sample file."),
-                        .init(
-                            type: "tool_use",
-                            id: "work-chunks-read",
-                            name: "read",
-                            arguments: AnyCodable(["path": "sample.txt"])),
-                    ],
+                    content: [.init(
+                        type: "toolCall",
+                        id: "fixture-long-review",
+                        name: "read",
+                        arguments: AnyCodable(["path": "project-review.txt"]))],
                     timestamp: now + 1,
-                    transcriptMessageID: "work-chunks-first",
-                    stopReason: "tool_use"),
+                    transcriptMessageID: "fixture-long-call",
+                    stopReason: "toolUse"),
                 OpenClawChatMessage(
                     role: "toolResult",
-                    content: [.init(type: "text", text: "Sample configuration is valid.")],
+                    content: [.init(type: "text", text: String(repeating: "Earlier response context. ", count: 120))],
                     timestamp: now + 2,
-                    transcriptMessageID: "work-chunks-read-result",
-                    toolCallId: "work-chunks-read",
+                    transcriptMessageID: "fixture-long-result",
+                    toolCallId: "fixture-long-review",
                     toolName: "read"),
-                OpenClawChatMessage(
-                    role: "assistant",
-                    content: [
-                        .init(type: "text", text: "The file looks good. I will run the check."),
-                        .init(
-                            type: "tool_use",
-                            id: "work-chunks-exec",
-                            name: "exec",
-                            arguments: AnyCodable(["command": "printf checked"])),
-                    ],
-                    timestamp: now + 3,
-                    transcriptMessageID: "work-chunks-second",
-                    stopReason: "tool_use"),
-                OpenClawChatMessage(
-                    role: "toolResult",
-                    content: [.init(type: "text", text: "checked")],
-                    timestamp: now + 4,
-                    transcriptMessageID: "work-chunks-exec-result",
-                    toolCallId: "work-chunks-exec",
-                    toolName: "exec"),
                 self.message(
                     role: "assistant",
-                    text: "All checks passed.",
-                    timestamp: now + 5,
-                    transcriptMessageID: "work-chunks-final"),
+                    text: "OPENCLAW_LONG_CHAT_LATEST",
+                    timestamp: now + 3,
+                    transcriptMessageID: "fixture-long-latest"),
             ]
-        }
-        if ProcessInfo.processInfo.arguments.contains("--openclaw-step-labels-fixture") {
-            return self.stepLabelSeedMessages(now: now)
-        }
-        if ProcessInfo.processInfo.arguments.contains("--openclaw-long-chat-fixture") {
-            return self.longChatSeedMessages(now: now)
         }
         return fixture.seedMessages.enumerated().map { index, text in
             self.message(
@@ -1165,39 +1140,64 @@ private actor LocalFixtureChatStore {
         }
     }
 
-    private static func longChatSeedMessages(now: Double) -> [OpenClawChatMessage] {
+    private static func anthropicWorkChunkMessages(now: Double) -> [OpenClawChatMessage] {
+        // Synthetic Anthropic-style envelopes: narration and tool_use share each
+        // assistant message; tool results separate the two narration boundaries.
         [
             self.message(
                 role: "user",
-                text: "Prepare a detailed project review.",
+                text: "Check the sample project.",
                 timestamp: now,
-                transcriptMessageID: "fixture-long-prompt"),
+                transcriptMessageID: "work-chunks-user"),
             OpenClawChatMessage(
                 role: "assistant",
-                content: [.init(
-                    type: "toolCall",
-                    id: "fixture-long-review",
-                    name: "read",
-                    arguments: AnyCodable(["path": "project-review.txt"]))],
+                content: [
+                    .init(type: "text", text: "I will read the sample file."),
+                    .init(
+                        type: "tool_use",
+                        id: "work-chunks-read",
+                        name: "read",
+                        arguments: AnyCodable(["path": "sample.txt"])),
+                ],
                 timestamp: now + 1,
-                transcriptMessageID: "fixture-long-call",
-                stopReason: "toolUse"),
+                transcriptMessageID: "work-chunks-first",
+                stopReason: "tool_use"),
             OpenClawChatMessage(
                 role: "toolResult",
-                content: [.init(type: "text", text: String(repeating: "Earlier response context. ", count: 120))],
+                content: [.init(type: "text", text: "Sample configuration is valid.")],
                 timestamp: now + 2,
-                transcriptMessageID: "fixture-long-result",
-                toolCallId: "fixture-long-review",
+                transcriptMessageID: "work-chunks-read-result",
+                toolCallId: "work-chunks-read",
                 toolName: "read"),
+            OpenClawChatMessage(
+                role: "assistant",
+                content: [
+                    .init(type: "text", text: "The file looks good. I will run the check."),
+                    .init(
+                        type: "tool_use",
+                        id: "work-chunks-exec",
+                        name: "exec",
+                        arguments: AnyCodable(["command": "printf checked"])),
+                ],
+                timestamp: now + 3,
+                transcriptMessageID: "work-chunks-second",
+                stopReason: "tool_use"),
+            OpenClawChatMessage(
+                role: "toolResult",
+                content: [.init(type: "text", text: "checked")],
+                timestamp: now + 4,
+                transcriptMessageID: "work-chunks-exec-result",
+                toolCallId: "work-chunks-exec",
+                toolName: "exec"),
             self.message(
                 role: "assistant",
-                text: "OPENCLAW_LONG_CHAT_LATEST",
-                timestamp: now + 3,
-                transcriptMessageID: "fixture-long-latest"),
+                text: "All checks passed.",
+                timestamp: now + 5,
+                transcriptMessageID: "work-chunks-final"),
         ]
     }
 
-    private static func stepLabelSeedMessages(now: Double) -> [OpenClawChatMessage] {
+    private static func stepLabelMessages(now: Double) -> [OpenClawChatMessage] {
         [
             self.message(
                 role: "user",

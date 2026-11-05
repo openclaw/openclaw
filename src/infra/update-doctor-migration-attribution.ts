@@ -161,6 +161,8 @@ export function hasUpdateDoctorMigrationCapture(): boolean {
 }
 
 type SqliteMigrationOptions = {
+  /** Close a one-shot native owner before publishing its final generation. */
+  close?: () => void;
   retainExclusive?: boolean;
   created?: boolean;
   /** Already-open companion custody stays held through this synchronous native phase. */
@@ -350,6 +352,7 @@ function* updateSqliteMigrationSteps<T>(
       }
       assertCurrent();
       truncateSqliteWal(db, pathname);
+      options?.close?.();
       let after: string | null | undefined;
       yield {
         read() {
@@ -402,6 +405,9 @@ function* updateSqliteMigrationSteps<T>(
       releaseError,
     );
   }
+  if (options?.close) {
+    capture.openedSqlitePaths?.delete(key);
+  }
   if ("error" in outcome) {
     throw outcome.error;
   }
@@ -429,6 +435,18 @@ export function beginUpdateSqliteCompanion(db: DatabaseSync, pathname: string, c
   const mode = db.prepare("PRAGMA locking_mode").get()?.locking_mode; // sqlite-allow-raw -- The caller retains native exclusion through publication.
   if (mode !== "exclusive") {
     throw new Error("Migration companion requires its exclusive native owner.");
+  }
+  const prepared = getUpdateDoctorMigrationSource(pathname);
+  if (prepared) {
+    prepared.assertCurrent();
+    return {
+      complete() {
+        prepared.assertCurrent();
+        if (!db.isOpen || db.isTransaction) {
+          throw new Error("Migration companion publication requires its committed native owner.");
+        }
+      },
+    };
   }
   const before = created && expected === null ? null : readSqliteGeneration(pathname);
   assertCurrent();
@@ -483,7 +501,16 @@ export function beginUpdatePostgresMigration(
   let publish: (() => void) | undefined;
   return {
     run<T>(operation: () => T): T {
-      return captures.run({ capture, source, assertMigrationCurrent: assertCurrent }, operation);
+      return captures.run(
+        {
+          ...context,
+          capture,
+          source,
+          assertMigrationCurrent: assertCurrent,
+          companions: [...(context.companions ?? []), ...(context.source ? [context.source] : [])],
+        },
+        operation,
+      );
     },
     beforeCommit() {
       assertCurrent();

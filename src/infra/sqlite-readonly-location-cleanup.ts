@@ -13,12 +13,16 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { hasErrnoCode } from "./errno.js";
 import { isPathInside } from "./path-guards.js";
+import { registerProcessExitCleanup } from "./process-exit-cleanup.js";
 import {
   captureSqliteDatabaseAdmissions,
   retireSqliteDatabaseAdmissionForPath,
 } from "./sqlite-database-admission.js";
 import { recordSqliteSnapshotFailure } from "./sqlite-error-diagnostics.js";
-import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
+import {
+  createSqliteLifecycleAggregateError,
+  SqliteSnapshotCleanupError,
+} from "./sqlite-lifecycle-errors.js";
 import type {
   PreparedSqliteReadOnlyLocation,
   RetainedPreparedSqliteReadOnlyLocation,
@@ -30,8 +34,6 @@ import {
 } from "./sqlite-snapshot-file.js";
 import { beginSqliteSnapshotRetirement } from "./sqlite-snapshot-retirement.js";
 import { SQLITE_STAGING_TOKEN_FILES, type SqliteStagingToken } from "./sqlite-staging-token.js";
-
-export class SqliteSnapshotCleanupError extends Error {}
 
 /**
  * Runtimes without qualified native close (stock Bun, every Windows Bun) can
@@ -210,7 +212,7 @@ export function registerSnapshotTempDirectory(
 function registerSnapshotCleanup(): void {
   if (!cleanupState.exitHandlerInstalled) {
     cleanupState.exitHandlerInstalled = true;
-    process.once("exit", () => {
+    registerProcessExitCleanup(() => {
       for (const stop of activeSnapshotWork.values()) {
         stop();
       }

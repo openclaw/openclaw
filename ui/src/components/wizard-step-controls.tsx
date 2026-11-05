@@ -1,14 +1,16 @@
 import { Dynamic, type JSX } from "@solidjs/web";
-import { createMemo, For, Match, Show, Switch } from "solid-js";
+import { createSignal, createMemo, For, Match, Show, Switch } from "solid-js";
 import type { WizardStep } from "../api/types.ts";
 import { registerModelSetupEnglish } from "../i18n/locales/en-model-setup.ts";
 import { formatUiExternalText } from "../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { liveValue } from "../lib/reactive/live-value.ts";
+import { createPendingFocus } from "../lib/reactive/pending-focus.ts";
 import { handleCopyButton } from "./copy-button-state.ts";
 import { Picker, type PickerParams } from "./select-picker.ts";
 import { SensitiveInput } from "./sensitive-input.tsx";
 import { ChannelPicker, type ChannelPickerOption } from "./solid/channel-picker.tsx";
+import { Icon } from "./solid/icon.tsx";
 import { ModelSetupSignIn } from "./wizard-sign-in.tsx";
 import "../styles/wizard-step-controls.css";
 
@@ -92,12 +94,14 @@ function OptionBody(props: { option: WizardStepOption; channels?: boolean; selec
         </span>
       }
     >
-      <span class="channels-wizard__option-label">
-        {props.selected === undefined ? "" : props.selected ? "☑ " : "☐ "}
-        {props.option.label}
-      </span>
+      <span class="channels-wizard__option-label">{props.option.label}</span>
       <Show when={props.option.hint}>
         <span class="channels-wizard__option-hint">{props.option.hint}</span>
+      </Show>
+      <Show when={props.selected}>
+        <span class="channels-wizard__option-check" aria-hidden="true">
+          <Icon name="check" />
+        </span>
       </Show>
     </Show>
   );
@@ -192,7 +196,9 @@ function ActionRow(props: {
   );
 }
 
-function Answer(props: WizardStepControlsProps & { label: string; onClick?: () => void }) {
+function Answer(
+  props: WizardStepControlsProps & { label: string; disabled?: boolean; onClick?: () => void },
+) {
   const label = () => props.answerLabel ?? props.label;
   const button = (
     <button
@@ -200,7 +206,7 @@ function Answer(props: WizardStepControlsProps & { label: string; onClick?: () =
       type={props.onClick ? "button" : "submit"}
       class="btn primary"
       autofocus={props.presentation === "model-setup"}
-      disabled={props.busy}
+      disabled={props.busy || props.disabled}
       onClick={() => props.onClick?.()}
     >
       {label()}
@@ -239,8 +245,24 @@ function Answer(props: WizardStepControlsProps & { label: string; onClick?: () =
 function TextForm(props: WizardStepControlsProps) {
   // Channel drafts stay in the input until submit; unrelated refreshes must not overwrite them.
   const value = createMemo(() => (typeof props.value === "string" ? props.value : ""));
+  const focusText = () => props.presentation === "model-setup";
+  let form: HTMLFormElement | undefined;
+  // Disabling the field while a reply is pending drops its focus to the page. When the reply
+  // settles on this step (e.g. a validation rejection), give it back unless focus moved elsewhere.
+  createPendingFocus(() => props.busy, {
+    requested: (busy, wasBusy) => !busy && wasBusy === true,
+    focus: () => {
+      const input = form?.elements.namedItem("wizard-text");
+      if (document.activeElement === document.body && input instanceof HTMLInputElement) {
+        input.focus({ preventScroll: true });
+      }
+    },
+  });
   return (
     <form
+      ref={(element) => {
+        form = element;
+      }}
       class="wizard-step__form"
       onSubmit={(event) => {
         event.preventDefault();
@@ -273,7 +295,15 @@ function TextForm(props: WizardStepControlsProps) {
             type={props.step.sensitive ? "password" : "text"}
             autocomplete={props.step.sensitive ? "off" : "on"}
             placeholder={props.step.placeholder ?? ""}
-            ref={liveValue(value)}
+            ref={[
+              liveValue(value),
+              (element) => {
+                if (focusText()) {
+                  props.onAutofocusRef?.(element);
+                }
+              },
+            ]}
+            autofocus={focusText()}
             disabled={props.busy}
             aria-invalid={props.validationErrorId ? "true" : undefined}
             aria-describedby={props.validationErrorId}
@@ -334,8 +364,19 @@ function SingleChoice(props: WizardStepControlsProps & { options: WizardStepOpti
       props.channelSelect &&
       props.options.every((option) => typeof option.value === "string"),
   );
+  // A picker's preselected choice needs a way forward, so these steps answer with Continue.
+  const confirms = () =>
+    props.presentation === "channels" ||
+    (props.presentation === "model-setup" && props.options.length > 2);
+  const [picked, setPicked] = createSignal<{ step: string; value: unknown }>();
+  const current = () => {
+    const choice = picked();
+    return choice?.step === props.step.id ? choice.value : props.value;
+  };
+  const selectedIndex = () =>
+    props.options.findIndex((option) => Object.is(option.value, current()));
   const params = createMemo<PickerParams<ChannelPickerOption>>(() => {
-    const selected = props.options.findIndex((option) => Object.is(option.value, props.value));
+    const selected = selectedIndex();
     return {
       label: label(),
       value:
@@ -353,16 +394,33 @@ function SingleChoice(props: WizardStepControlsProps & { options: WizardStepOpti
       disabled: props.busy,
       invalid: Boolean(props.validationErrorId),
       describedBy: props.validationErrorId,
-      onChange: (value) => props.onAnswer(channels() ? value : props.options[Number(value)]?.value),
+      onChange: (value) => {
+        const answer = channels() ? value : props.options[Number(value)]?.value;
+        if (confirms()) {
+          setPicked({ step: props.step.id, value: answer });
+        } else {
+          props.onAnswer(answer);
+        }
+      },
     };
   });
   return (
     <Show
       when={props.presentation !== "channels" && props.options.length <= 2}
       fallback={
-        <Show when={channels()} fallback={<Picker params={params()} />}>
-          <ChannelPicker {...params()} />
-        </Show>
+        <>
+          <Show when={channels()} fallback={<Picker params={params()} />}>
+            <ChannelPicker {...params()} />
+          </Show>
+          <Show when={confirms()}>
+            <Answer
+              {...props}
+              label={t("modelSetup.wizard.continue")}
+              disabled={selectedIndex() < 0}
+              onClick={() => props.onAnswer(current())}
+            />
+          </Show>
+        </>
       }
     >
       <div
@@ -473,16 +531,9 @@ function OptionsStep(props: WizardStepControlsProps) {
         fallback={
           <>
             <SingleChoice {...props} options={options()} />
-            {props.presentation === "channels"
-              ? props.busy && <Answer {...props} label={t("modelSetup.wizard.continue")} />
-              : props.presentation === "model-setup"
-                ? options().length > 2 &&
-                  props.leadingAction && (
-                    <openclaw-modal-actions class="wizard-step__actions wizard-step__actions--split">
-                      {props.leadingAction}
-                    </openclaw-modal-actions>
-                  )
-                : props.leadingAction}
+            {props.presentation === "channels" || props.presentation === "model-setup"
+              ? undefined
+              : props.leadingAction}
           </>
         }
       >

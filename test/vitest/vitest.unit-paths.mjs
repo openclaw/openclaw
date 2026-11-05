@@ -4,6 +4,7 @@ import { BUNDLED_PLUGIN_ROOT_DIR } from "../../scripts/lib/bundled-plugin-paths.
 import { cliProcessTestFiles } from "./vitest.cli-process-paths.mjs";
 import { databaseWorkerCoreTestFiles } from "./vitest.database-worker-core-paths.mjs";
 import { filterFilesByPatterns, isPlainRepoRelativePath } from "./vitest.include-patterns.ts";
+import { markdownTestFiles } from "./vitest.markdown-paths.mjs";
 import { isSharedVitestExcludedPath } from "./vitest.pattern-file.ts";
 
 export const unitTestIncludePatterns = [
@@ -32,6 +33,7 @@ export const bundledPluginDependentUnitTestFiles = [
 ];
 
 export const unitTestAdditionalExcludePatterns = [
+  ...markdownTestFiles,
   "src/gateway/**",
   "packages/gateway-client/**",
   "packages/gateway-protocol/**",

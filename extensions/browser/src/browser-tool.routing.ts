@@ -1,16 +1,20 @@
 import { hasGatewayToolRoutingContext, listNodes } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveBrowserNodeTarget } from "./browser-node-routing.js";
 import { resolveBrowserConfig } from "./browser/config.js";
 
-export async function resolveBrowserToolNodeTarget(params: {
-  requestedNode?: string;
-  profile?: string;
-  target?: "sandbox" | "host" | "node";
-  sandboxBridgeUrl?: string;
-  allowHostControl?: boolean;
-  signal?: AbortSignal;
-}) {
+export async function resolveBrowserToolNodeTarget(
+  params: {
+    requestedNode?: string;
+    profile?: string;
+    target?: "sandbox" | "host" | "node";
+    sandboxBridgeUrl?: string;
+    allowHostControl?: boolean;
+    signal?: AbortSignal;
+  },
+  getConfig: () => OpenClawConfig = getRuntimeConfig,
+) {
   if (params.allowHostControl === false) {
     if (params.target === "node" || params.requestedNode) {
       throw new Error("Node browser control is disabled by sandbox policy.");
@@ -18,7 +22,7 @@ export async function resolveBrowserToolNodeTarget(params: {
     return null;
   }
 
-  const cfg = getRuntimeConfig();
+  const cfg = getConfig();
   const policy = cfg.gateway?.nodes?.browser;
   const explicitTarget = params.target === "node";
   const requestedNode = params.requestedNode?.trim();
@@ -66,12 +70,15 @@ export async function resolveBrowserToolNodeTarget(params: {
     : null;
 }
 
-export function resolveBrowserBaseUrl(params: {
-  target?: "sandbox" | "host";
-  sandboxBridgeUrl?: string;
-  allowHostControl?: boolean;
-}): string | undefined {
-  const cfg = getRuntimeConfig();
+export function resolveBrowserBaseUrl(
+  params: {
+    target?: "sandbox" | "host";
+    sandboxBridgeUrl?: string;
+    allowHostControl?: boolean;
+  },
+  getConfig: () => OpenClawConfig = getRuntimeConfig,
+): string | undefined {
+  const cfg = getConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const normalizedSandbox = params.sandboxBridgeUrl?.trim() ?? "";
   const target = params.target ?? (normalizedSandbox ? "sandbox" : "host");

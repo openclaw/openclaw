@@ -127,12 +127,22 @@ suite.define(() => {
           });
           await page.goto(suite.server.baseUrl + "new");
           await waitForControlUiRoute(page, { routeId: "new-session" });
-          const outletOrigin = () =>
-            page.locator("openclaw-router-outlet").evaluate((element) => {
-              const { x, y } = element.getBoundingClientRect();
-              return { x, y };
+          const shifts = await page.evaluateHandle(() => {
+            let cls = 0;
+            const observer = new PerformanceObserver((list) => {
+              for (const entry of list.getEntries()) {
+                const shift = entry as PerformanceEntry & {
+                  hadRecentInput: boolean;
+                  value: number;
+                };
+                if (!shift.hadRecentInput) {
+                  cls += shift.value;
+                }
+              }
             });
-          const initialOrigin = await outletOrigin();
+            observer.observe({ type: "layout-shift", buffered: false });
+            return { read: () => cls, stop: () => observer.disconnect() };
+          });
           const inventoryReads = await gateway.deferNext("environments.list");
           const backupReads = await gateway.deferNext("backup.status");
           await page.evaluate(() => {
@@ -144,8 +154,6 @@ suite.define(() => {
             await page.getByRole("button", { name: "Show statistics" }).click();
           }
           await page.getByText("Loading backups…", { exact: true }).waitFor();
-          // A phone draft shares chat's canvas; other pages sit under the floating header.
-          expect(await outletOrigin()).toEqual(width === 400 ? { x: 4, y: 64 } : initialOrigin);
           const body = page.locator(".systems-body");
           expect(await body.locator(".systems-state").isVisible()).toBe(false);
           const position = () => body.evaluate((element) => element.getBoundingClientRect().y);
@@ -166,23 +174,6 @@ suite.define(() => {
               ),
             )
             .toBe(true);
-          const shifts = await page.evaluateHandle(() => {
-            let cls = 0;
-            const observer = new PerformanceObserver((list) => {
-              for (const entry of list.getEntries()) {
-                const shift = entry as PerformanceEntry & {
-                  hadRecentInput: boolean;
-                  value: number;
-                };
-                if (!shift.hadRecentInput) {
-                  cls += shift.value;
-                }
-              }
-            });
-            observer.observe({ type: "layout-shift", buffered: false });
-            return { read: () => cls, stop: () => observer.disconnect() };
-          });
-
           await gateway.resolveDeferred("environments.list");
           await page.locator(".systems-volume-summary").waitFor();
           await expect.poll(position).toBe(initialY);
@@ -192,7 +183,7 @@ suite.define(() => {
           );
           await gateway.resolveDeferred("backup.status");
           await page
-            .getByText(backups ? "Recorded: 1 · Failed: 1" : "No backups recorded —", {
+            .getByText(backups ? "Recorded: 1 · Failed: 1" : "No backups yet.", {
               exact: false,
             })
             .waitFor();
@@ -357,9 +348,9 @@ suite.define(() => {
         await gateway.waitForRequest("environments.list");
         await page.getByRole("button", { name: "Expand sidebar", exact: true }).tap();
         const inventory = page.locator(".systems-sidebar");
-        await inventory.getByRole("searchbox", { name: "Find a machine…" }).waitFor();
-        await inventory.getByRole("button", { name: "Filter & sort machines" }).waitFor();
-        const refresh = inventory.getByRole("button", { name: "Refresh machines" });
+        await inventory.getByRole("searchbox", { name: "Find a device…" }).waitFor();
+        await inventory.getByRole("button", { name: "Filter & sort devices" }).waitFor();
+        const refresh = inventory.getByRole("button", { name: "Refresh devices" });
         await expect.poll(() => refresh.isEnabled()).toBe(true);
         expect(await refresh.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
         const reads = (await gateway.getRequests("environments.list")).length;
@@ -430,18 +421,18 @@ suite.define(() => {
         });
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
-        await inventory.getByRole("searchbox", { name: "Find a machine…" }).fill("macOS");
+        await inventory.getByRole("searchbox", { name: "Find a device…" }).fill("macOS");
         await expect.poll(() => inventory.locator(".systems-machine").count()).toBe(2);
         await page
           .locator(".systems-toolbar")
-          .getByRole("button", { name: "Machine details" })
+          .getByRole("button", { name: "Device details" })
           .click();
         expect(await page.locator(".systems-details dd").allTextContents()).toContain(
           "macOS 27.0.0",
         );
         const systemReads = (await gateway.getRequests("system.info")).length;
         await gateway.deferNext("system.info");
-        await inventory.getByRole("button", { name: "Refresh machines" }).click();
+        await inventory.getByRole("button", { name: "Refresh devices" }).click();
         await gateway.waitForRequest("system.info", { after: systemReads });
         await gateway.rejectDeferred("system.info", {
           code: "UNAVAILABLE",
@@ -693,7 +684,7 @@ suite.define(() => {
         ],
       });
       await page.setViewportSize({ width: 1440, height: 900 });
-      await inventory.getByRole("button", { name: "Refresh machines" }).click();
+      await inventory.getByRole("button", { name: "Refresh devices" }).click();
       await expect.poll(() => inventory.locator(".systems-machine").count()).toBe(1);
       expect(await inventory.locator(".systems-group__count").allTextContents()).toEqual([]);
       await page.setViewportSize({ width: 640, height: 900 });
