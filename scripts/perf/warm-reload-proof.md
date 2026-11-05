@@ -429,3 +429,15 @@ original frame sequence before judging a subtle transition. The visible-change
 census is a reported animation-collapse heuristic; unmasked pixels and explicit
 animation provenance remain available as controls. An A/A run qualifies noisy
 metrics before using this report to reject a small change.
+
+## Appearance reconciliation experiment (L291)
+
+Warm appearance reconciliation must leave already-applied appearance untouched.
+The comparison uses a quiet AWS c7a.4xlarge, the signed-in Team-scale fixture,
+80 ms live-like latency, archived chat, active chat, and dashboard. Profiled
+attribution is separate from eleven interleaved unprofiled pairs and A/A controls.
+The primary is reconciliation-attributed blocking/forced layout and total LoAF
+blocking, improving in at least nine of eleven pairs on both chat variants.
+Report hello-handled, FCP, first painted and final DOM rows, CLS, every paired
+delta, and any intermediate appearance frames. Unchanged preferences must produce
+zero document-root appearance writes after hello; a genuine change applies once.
