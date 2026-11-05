@@ -130,18 +130,22 @@ describe("memory index", () => {
         code: "ERR_INVALID_STATE",
       }),
     });
-    using _sync = vi
+    const sync = vi
       .spyOn(manager as unknown as MaintenanceFields, "syncMemoryFiles")
       .mockRejectedValue(failure);
-    memoryWarnings.mockClear();
-    await expect(manager.search("zebra", { minScore: 0 })).resolves.toEqual([]);
-    const warning = memoryWarnings.mock.calls
-      .map((call) => String(call[0]))
-      .find((message) => message.startsWith("memory sync failed (search-bootstrap):"));
-    expect(warning).toContain("memory index maintenance failed");
-    expect(warning).toContain("database is not open");
-    expect(warning).toContain("ERR_INVALID_STATE");
-    expect(warning).not.toContain("memory-warning-secret");
+    try {
+      memoryWarnings.mockClear();
+      await expect(manager.search("zebra", { minScore: 0 })).resolves.toEqual([]);
+      const warning = memoryWarnings.mock.calls
+        .map((call) => String(call[0]))
+        .find((message) => message.startsWith("memory sync failed (search-bootstrap):"));
+      expect(warning).toContain("memory index maintenance failed");
+      expect(warning).toContain("database is not open");
+      expect(warning).toContain("ERR_INVALID_STATE");
+      expect(warning).not.toContain("memory-warning-secret");
+    } finally {
+      sync.mockRestore();
+    }
   });
 
   it("reuses published facts across searches and observes the next publication", async () => {
