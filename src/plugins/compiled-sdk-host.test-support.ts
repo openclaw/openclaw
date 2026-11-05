@@ -7,31 +7,18 @@ import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 
 type SdkEntrypoint = Parameters<typeof resolveRuntimeWorkerUrl>[0];
 
-/** Keep native SDK consumers on the invocation's verified, current-source graph. */
-export function createCompiledSdkHost(
-  entrypoints: readonly [SdkEntrypoint, ...SdkEntrypoint[]],
-  makeTempDir: (prefix: string) => string,
-  options: { mode?: "copy" | "link" } = {},
-): string | undefined {
-  return prepareCompiledSdkHost(entrypoints, options)(makeTempDir);
-}
-
 /** Discover once while keeping each consumer's writable host independent. */
 export function prepareCompiledSdkHost(
-  [entrypoint, ...additionalEntrypoints]: readonly [SdkEntrypoint, ...SdkEntrypoint[]],
+  entrypoints: readonly [SdkEntrypoint, ...SdkEntrypoint[]],
   options: { mode?: "copy" | "link" } = {},
 ) {
-  const artifact = fileURLToPath(resolveRuntimeWorkerUrl(entrypoint));
-  const artifacts = [
-    artifact,
-    ...additionalEntrypoints.map((entry) => fileURLToPath(resolveRuntimeWorkerUrl(entry))),
-  ];
+  const artifacts = entrypoints.map((entry) => fileURLToPath(resolveRuntimeWorkerUrl(entry)));
   // Standalone and watch-mode Vitest deliberately retain source declarations.
   if (artifacts.some((file) => path.extname(file) !== ".js")) {
     return () => undefined;
   }
-  const sourceDist = resolveRuntimeProcessDistRoot(artifact);
-  if (!sourceDist || artifacts.some((file) => resolveRuntimeProcessDistRoot(file) !== sourceDist)) {
+  const [sourceDist, ...otherDists] = artifacts.map(resolveRuntimeProcessDistRoot);
+  if (!sourceDist || otherDists.some((dist) => dist !== sourceDist)) {
     throw new Error("Compiled SDK entrypoints must share one invocation's dist directory");
   }
   const sourceRoot = path.dirname(sourceDist);
@@ -65,39 +52,30 @@ export function prepareCompiledSdkHost(
       }
     }
   }
+  const copiedFiles = [...files].filter((file) => !file.startsWith("dist/node_modules/"));
+  const directories = new Set(copiedFiles.map((file) => path.dirname(file)));
   return (makeTempDir: (prefix: string) => string) => {
     const hostRoot = makeTempDir("openclaw-sdk-host-");
     if (options.mode === "link") {
-      // The invocation retains this graph until its children join; native SDK and
-      // already-running compiled callers must keep the same physical modules.
+      // Linked consumers retain the invocation's physical modules until their children join.
       fs.symlinkSync(sourceDist, path.join(hostRoot, "dist"), "junction");
     }
-    const createdDirectories = new Set<string>();
-    let copiedEmbeddedDependencies = false;
-    for (const file of files) {
-      if (file.startsWith("dist/node_modules/")) {
-        if (!copiedEmbeddedDependencies) {
-          // Package internals can use bare imports, metadata, and native assets outside the scanner.
-          fs.cpSync(
-            path.join(sourceDist, "node_modules"),
-            path.join(hostRoot, "dist/node_modules"),
-            {
-              recursive: true,
-              mode: fs.constants.COPYFILE_FICLONE,
-            },
-          );
-          copiedEmbeddedDependencies = true;
-        }
-        continue;
-      }
-      const source = path.join(sourceRoot, file);
-      const target = path.join(hostRoot, file);
-      const directory = path.dirname(target);
-      if (!createdDirectories.has(directory)) {
-        fs.mkdirSync(directory, { recursive: true });
-        createdDirectories.add(directory);
-      }
-      fs.copyFileSync(source, target, fs.constants.COPYFILE_FICLONE);
+    for (const directory of directories) {
+      fs.mkdirSync(path.join(hostRoot, directory), { recursive: true });
+    }
+    if (copiedFiles.length !== files.size) {
+      // Bare imports can require package metadata and native assets outside the scanner.
+      fs.cpSync(path.join(sourceDist, "node_modules"), path.join(hostRoot, "dist/node_modules"), {
+        recursive: true,
+        mode: fs.constants.COPYFILE_FICLONE,
+      });
+    }
+    for (const file of copiedFiles) {
+      fs.copyFileSync(
+        path.join(sourceRoot, file),
+        path.join(hostRoot, file),
+        fs.constants.COPYFILE_FICLONE,
+      );
     }
     fs.copyFileSync(
       path.resolve(import.meta.dirname, "../../package.json"),

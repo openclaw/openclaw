@@ -1,20 +1,22 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, vi } from "vitest";
+import { vitestWorkerRuntimeAssets } from "../../../scripts/lib/package-root-modules.mts";
+import { resolveSqliteSchemaAssetInputs } from "../../../scripts/lib/sqlite-schema-assets.mts";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import { prepareCompiledSdkHost } from "../../plugins/compiled-sdk-host.test-support.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { VERSION } from "../../version.js";
-import { createUpdateCandidateRuntimeFixture } from "./update-candidate-runtime.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   entrypoint: vi.fn(),
@@ -168,14 +170,51 @@ export async function cleanupUpdateLeaseHarness(): Promise<void> {
   await state.cleanup();
 }
 
-const copyCandidateRuntime = createUpdateCandidateRuntimeFixture({ legacyFinalizer: true });
+let preparedHost: ReturnType<typeof prepareCompiledSdkHost> | undefined;
 
 async function prepareCandidateDoctorRuntime(): Promise<void> {
-  await copyCandidateRuntime(state.root);
+  preparedHost ??= prepareCompiledSdkHost([
+    runtimeProcessEntrypoints.updateMigratedFinalize,
+    runtimeProcessEntrypoints.workerNativeLifecycle,
+    runtimeProcessEntrypoints.spawnBroker,
+    runtimeProcessEntrypoints.sqliteWriterAdmission,
+    runtimeProcessEntrypoints.sqliteStore,
+    runtimeProcessEntrypoints.sqliteIntegrity,
+    runtimeProcessEntrypoints.sqliteReadOnly,
+    runtimeProcessEntrypoints.sqliteReadOnlyNativeResource,
+    runtimeProcessEntrypoints.sqliteSnapshotStaging,
+    runtimeProcessEntrypoints.sqliteSourceRevision,
+    runtimeProcessEntrypoints.sharedStateStore,
+    runtimeProcessEntrypoints.stateOwnership,
+    runtimeProcessEntrypoints.stateLeaseHeartbeat,
+    runtimeProcessEntrypoints.stateRead,
+  ]);
+  const installed = preparedHost(() => state.root);
+  if (!installed) {
+    throw new Error("The candidate lease fixture requires the prepared compiled worker graph.");
+  }
   const worker = state.path(
     "dist",
     runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
   );
+  const generation = path.resolve(
+    path.dirname(
+      fileURLToPath(resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateMigratedFinalize)),
+    ),
+    "../..",
+  );
+  for (const asset of vitestWorkerRuntimeAssets) {
+    await fs.copyFile(path.join(generation, asset), state.path(asset));
+  }
+  for (const asset of resolveSqliteSchemaAssetInputs()) {
+    const relative = path.join("dist/assets/sqlite-schema", path.basename(asset));
+    await fs.mkdir(path.dirname(state.path(relative)), { recursive: true });
+    await fs.copyFile(path.join(generation, relative), state.path(relative));
+  }
+  const preserved = path.join(generation, "dist/legacy-finalizer");
+  // The preserved graph can contain embedded dependencies; keep it beside the
+  // SDK host rather than copying over that host's node_modules junction.
+  await fs.cp(preserved, state.path("legacy-finalizer"), { recursive: true });
   // Consume the real delegated grant and retain its native owner. Only the Doctor
   // health body uses this fixture's existing lease probes and intentional failures.
   await fs.writeFile(
