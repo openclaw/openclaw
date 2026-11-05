@@ -118,7 +118,7 @@ export async function prepareSystemdGatewayActivation(params: {
         const targets = discovery?.discovery.schemaTargets ?? [];
         const { prepareDoctorDatabaseMigrations } =
           await import("../../commands/doctor-schema-migrations.js");
-        const report = (result: { changes: string[]; warnings: string[] }) => {
+        const report = (result: { changes: string[]; warnings: string[]; failure?: unknown }) => {
           for (const change of result.changes) {
             params.runtime.log(change);
           }
@@ -126,6 +126,10 @@ export async function prepareSystemdGatewayActivation(params: {
           // startup admission decides readiness after Doctor releases custody.
           for (const warning of result.warnings) {
             params.runtime.error(warning);
+          }
+          // A blocked repair changed nothing, and admission would park it as unrepaired.
+          if (isTransientStateContention(result.failure)) {
+            throw result.failure;
           }
         };
         const prepared = await prepareDoctorDatabaseMigrations({

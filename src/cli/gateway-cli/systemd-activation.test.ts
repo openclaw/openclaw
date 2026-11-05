@@ -9,6 +9,7 @@ const clock = vi.hoisted(() => ({ nowMs: 0 }));
 const mocks = vi.hoisted(() => ({
   begin: vi.fn(),
   preflight: vi.fn(),
+  fullRepair: vi.fn(),
 }));
 
 vi.mock("node:timers/promises", () => ({
@@ -21,6 +22,12 @@ vi.mock("../../commands/doctor-database-preflight.js", () => ({
 }));
 vi.mock("../../commands/doctor-maintenance.js", () => ({
   beginDoctorMaintenance: mocks.begin,
+}));
+vi.mock("../../commands/doctor-schema-migrations.js", () => ({
+  prepareDoctorDatabaseMigrations: async () => ({ changes: [], warnings: [] }),
+}));
+vi.mock("../../state/openclaw-state-db.js", () => ({
+  prepareOpenClawStateDatabaseSchema: mocks.fullRepair,
 }));
 vi.mock("../run-main-service-installation.js", () => ({
   readOwnGatewayServiceCommand: async () => ({ programArguments: ["openclaw"] }),
@@ -96,6 +103,25 @@ describe("prepareSystemdGatewayActivation", () => {
 
     expect(mocks.begin).toHaveBeenCalledOnce();
     expect(acquired.release).toHaveBeenCalledOnce();
+    expect(resolveGatewayStartupFailureExitCode(failure)).toBe(1);
+  });
+
+  it("treats a full repair blocked by a reader as retryable", async () => {
+    mocks.fullRepair.mockResolvedValue({
+      changes: [],
+      warnings: ["Failed migrating shared state database schema"],
+      failure: Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" }),
+    });
+    const release = vi.fn(async () => {});
+    mocks.begin.mockResolvedValue({
+      run: async (operation: () => Promise<void>) => await operation(),
+      release,
+    });
+
+    const failure = await activate().catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ code: "SQLITE_BUSY" });
+    expect(release).toHaveBeenCalledOnce();
     expect(resolveGatewayStartupFailureExitCode(failure)).toBe(1);
   });
 
