@@ -256,6 +256,16 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 
 .sidebar-recent-session .session-owner-stack::after {
   right: 0;
+  /* Keep the right-hand face opaque underneath its away opacity. */
+  z-index: 0;
+  background:
+    linear-gradient(var(--session-row-bg, transparent) 0 0) padding-box,
+    var(--sidebar-bg, var(--bg));
+  mask: none;
+}
+
+.sidebar-recent-session .session-owner-stack--overflow::after {
+  z-index: 1;
 }
 
 .session-owner-stack--overflow {

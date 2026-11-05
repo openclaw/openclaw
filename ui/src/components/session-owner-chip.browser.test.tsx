@@ -188,6 +188,41 @@ async function readyAvatars(chip: HTMLElement) {
 }
 
 describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
+  it.each(modes.flatMap((mode) => [1, 2].map((count) => ({ mode, count }))))(
+    "keeps an away overlap opaque in $mode with $count participants",
+    async ({ mode, count }) => {
+      await applyTheme("claw", mode);
+      const { sidebar, indicator } = sidebarFixture(false);
+      mountSolid(
+        () => (
+          <SessionOwnerChip
+            owner={{ ...ada, identity }}
+            viewingNow={false}
+            participants={participants}
+            participantCount={count}
+          />
+        ),
+        { container: indicator },
+      );
+      await readyAvatars(sidebar);
+      const primary = sidebar.querySelector<HTMLElement>(".session-owner-stack__front")!;
+      const peer = sidebar.querySelector<HTMLElement>(".session-owner-stack__back")!;
+      await expect.poll(() => appearance(primary).opacity).toBe("0.45");
+      const foreground =
+        count === 1
+          ? primary
+          : sidebar.querySelector<HTMLElement>(".session-owner-stack__overflow")!;
+      const overlapPixels = async () => {
+        const { context, image } = await captureFace(foreground);
+        const scale = image.width / foreground.getBoundingClientRect().width;
+        return [...context.getImageData(3 * scale, 8 * scale, 3 * scale, 3 * scale).data];
+      };
+      const visible = await overlapPixels();
+      (count === 1 ? peer : primary).style.visibility = "hidden";
+      expect(await overlapPixels()).toEqual(visible);
+    },
+  );
+
   it.each(
     BUILTIN_THEME_IDS.flatMap((theme) =>
       modes.flatMap((mode) =>

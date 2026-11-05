@@ -1,0 +1,2 @@
+# Pixel regression proves dimmed stacked avatars and overflow counters occlude the rear face.
+35
