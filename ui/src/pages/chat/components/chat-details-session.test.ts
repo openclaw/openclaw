@@ -91,7 +91,10 @@ it("hides only the authenticated viewer's complete self-only desktop People sect
     },
   });
   await waitForSolid(() => expect(section()).toBeNull());
+  // sessions.describe omits the owner from participants and omits empty metadata on the wire.
+  await select({ owner: { actor }, createdActor: actor }, false);
   await select({ owner: { actor }, participants: [], participantCount: 0 }, false);
+  await select({ ...onlySelf, participantCount: undefined }, false);
   await select({ ...onlySelf, participants: [self, { ...self, label: "Duplicate self" }] }, false);
   const other = { identity: { type: "profile", id: "other" }, label: "Alex" } as const;
   await select(
@@ -100,7 +103,6 @@ it("hides only the authenticated viewer's complete self-only desktop People sect
   );
   await select({ ...onlySelf, expandedParticipants: [self, other], participantCount: 2 }, true);
   for (const facts of [
-    { ...onlySelf, participantCount: undefined },
     { ...onlySelf, participantCount: 2 },
     { ...onlySelf, owner: { actor: { type: "human" as const, id: "alex", label: "Alex" } } },
     { ...onlySelf, createdActor: { type: "human" as const, id: "alex", label: "Alex" } },

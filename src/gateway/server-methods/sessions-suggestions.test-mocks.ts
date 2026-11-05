@@ -14,9 +14,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("./chat-send-handler.js", () => ({ handleChatSend: mocks.handleChatSend }));
-vi.mock("../../infra/system-presence.js", () => ({
-  listSystemPresence: () => mocks.presence,
-}));
 vi.mock("../../config/sessions/session-metadata-write.async.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../config/sessions/session-metadata-write.async.js")>();

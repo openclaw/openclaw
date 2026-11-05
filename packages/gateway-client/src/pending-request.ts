@@ -6,7 +6,7 @@ import {
   isGatewaySuspendUnavailableError,
 } from "@openclaw/gateway-protocol/restart-unavailable";
 import { isRetryableGatewayStartupUnavailableError } from "@openclaw/gateway-protocol/startup-unavailable";
-import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import { toStringifiedError } from "@openclaw/normalization-core/stringified-error";
 import {
   GatewayPayloadLimitError,
   GatewayProtocolRequestError,

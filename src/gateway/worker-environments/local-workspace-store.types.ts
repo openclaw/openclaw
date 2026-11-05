@@ -55,4 +55,11 @@ export type LocalWorkspaceManifestValue =
   | LocalWorkspaceManifestScan
   | { kind: "rescan" }
   | { kind: "materialize"; rawManifest: string; manifestRef: string }
+  | {
+      kind: "archive";
+      overlay?: {
+        base: { rawManifest: string; manifestRef: string };
+        accepted: { rawManifest: string; manifestRef: string };
+      };
+    }
   | { kind: "replace"; update: LocalWorkspacePreparedUpdate };

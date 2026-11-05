@@ -404,6 +404,8 @@ extension SettingsProTab {
                 self.handleScannedGatewayLink(link)
             case let .setupCode(code):
                 self.handleScannedSetupCode(code)
+            case .espDevice:
+                return
             }
         }
         if delivery == nil {
@@ -669,6 +671,7 @@ extension SettingsProTab {
         case .deviceSettings: String(localized: "Device Settings")
         case .gateway: String(localized: "Gateway")
         case .appleWatch: String(localized: "Apple Watch")
+        case .espSetup: String(localized: "ESP device setup")
         case .approvals: String(localized: "Approvals")
         case .diagnostics: String(localized: "Diagnostics")
         case .licenses: String(localized: "Licenses")

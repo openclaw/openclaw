@@ -3,6 +3,7 @@ import Vision
 import XCTest
 
 extension OpenClawSnapshotUITests {
+
     func testChatComposerAccessibilityControls() throws {
         self.launchApp(for: ScreenshotTarget(
             initialTab: "chat", initialDestination: "chat", name: "chat-accessibility-controls"))
@@ -67,6 +68,7 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "accessibility-model-and-send-controls")
     }
 
+
     func testChatComposerReturnInsertsNewlineWithoutSending() throws {
         self.launchApp(for: ScreenshotTarget(
             initialTab: "chat",
@@ -84,6 +86,7 @@ extension OpenClawSnapshotUITests {
         XCTAssertFalse(app.staticTexts["first line\nsecond line"].exists)
         self.attachScreenshot(named: "chat-composer-return")
     }
+
 
     func testChatComposerPastesClipboardImageAsAttachment() throws {
         self.launchApp(for: ScreenshotTarget(
@@ -112,6 +115,7 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(attachment.waitForExistence(timeout: 5), "PASTED_IMAGE_MISSING")
         self.attachScreenshot(named: "chat-composer-paste-image")
     }
+
 
     func testStopIgnoresTapsForAMomentAfterItReplacesSend() throws {
         self.launchApp(
@@ -150,6 +154,45 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(stop.waitForNonExistence(timeout: 8))
         self.attachScreenshot(named: "stop-guard-deliberate-stop-cancelled-response")
     }
+
+
+    func testTextDraftKeepsStopAvailableDuringActiveResponse() throws {
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "chat",
+                initialDestination: "chat",
+                name: "chat-text-draft-stop-active-response"),
+            additionalArguments: ["--openclaw-hold-initial-chat-run"])
+
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Keep this response running.")
+        let send = app.buttons["chat-send-message"]
+        self.waitForEnabled(send)
+        send.tap()
+
+        let stop = app.buttons["Stop response"]
+        XCTAssertTrue(stop.waitForExistence(timeout: 8))
+        self.waitForEnabled(stop)
+        input.tap()
+        input.typeText("Keep this follow-up draft")
+        self.attachScreenshot(named: "text-draft-during-active-response")
+        XCTAssertTrue(stop.exists, "Drafting must keep the current response stoppable")
+        XCTAssertTrue(stop.isHittable)
+        XCTAssertTrue(send.exists)
+        self.assertMinimumTouchTarget(stop)
+        self.assertNoHorizontalOverlap([stop, send])
+
+        stop.tap()
+        XCTAssertTrue(stop.waitForNonExistence(timeout: 8))
+        XCTAssertEqual(input.value as? String, "Keep this follow-up draft")
+        self.waitForEnabled(send)
+        send.tap()
+        XCTAssertTrue(app.staticTexts["Keep this follow-up draft"].waitForExistence(timeout: 8))
+    }
+
 
     func testVoiceNoteDraftKeepsStopAvailableDuringActiveResponse() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone voice-note composer proof only")
@@ -206,6 +249,7 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "voice-note-sent-after-stopping-response")
     }
 
+
     func testVoiceRenditionsStayVisibleBesideConsultAnswers() throws {
         self.launchApp(
             for: ScreenshotTarget(
@@ -228,6 +272,7 @@ extension OpenClawSnapshotUITests {
             .firstMatch
         XCTAssertTrue(spokenFirst.exists, "SPOKEN_ROW_FOLDED_INTO_WORK")
     }
+
 
     func testSystemNoticesExpandAndCollapseWithoutLosingTheirBody() throws {
         self.launchApp(
@@ -263,6 +308,7 @@ extension OpenClawSnapshotUITests {
         }
         self.attachScreenshot(named: "system-notices-recollapsed")
     }
+
 
     func testKeyboardOpenPreservesTranscriptAndFollowsLiveEdgeAfterSend() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone keyboard proof only")
@@ -402,6 +448,7 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(finalReply.exists)
     }
 
+
     func testAnthropicWorkChunksKeepNarrationVisibleInOrder() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,
@@ -444,6 +491,7 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "180490-after-collapsed")
     }
 
+
     func testUnknownOutcomeStepUsesLocalToolTitle() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,
@@ -483,6 +531,7 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.staticTexts["Local readiness checked."].exists)
     }
 
+
     func testCompletedWorkDisclosureKeepsFinalReplyVisible() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,
@@ -519,6 +568,7 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "completed-work-collapsed-again")
     }
 
+
     func testExistingSessionRestoresLatestOutput() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone reader positioning proof only")
         self.launchApp(
@@ -537,6 +587,7 @@ extension OpenClawSnapshotUITests {
         XCTAssertFalse(app.buttons["Jump to latest reply"].exists)
         self.attachScreenshot(named: "existing-session-latest-output")
     }
+
 
     func testTaskListLongPressOffersRefreshDismissAndClear() throws {
         self.launchApp(
@@ -567,6 +618,7 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "task-list-dismissed")
     }
 
+
     func testChatPresentationInLightAppearance() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone chat proof only")
         self.launchApp(
@@ -580,6 +632,7 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(self.app?.otherElements["chat-composer-surface"].exists == true)
         self.attachScreenshot(named: "chat-light")
     }
+
 
     func testChatKeepsLayeredCanvasInDarkAppearance() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone chat proof only")
@@ -595,6 +648,7 @@ extension OpenClawSnapshotUITests {
         self.sendFixtureChatMessage("Check the release status and prepare the next steps.")
         self.attachScreenshot(named: "chat-dark-soft-bottom-edge")
     }
+
 
     func testSavedPromptReactionsAndQuickPalette() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone message reaction proof only")
@@ -656,6 +710,7 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(addedReaction.isSelected)
     }
 
+
     func testAssistantLongPressKeepsTranscriptVisibleAndActionsReachable() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone message interaction proof only")
         self.launchApp(for: ScreenshotTarget(
@@ -684,6 +739,7 @@ extension OpenClawSnapshotUITests {
         app.buttons["Close"].tap()
         XCTAssertTrue(selectableText.waitForNonExistence(timeout: 3))
     }
+
 
     func testCodeBlockCopyButtonCopiesRawCode() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone code block copy proof only")
@@ -714,6 +770,7 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "code-block-copied")
     }
 
+
     func testEmptyChatStarterPromptSendsMessage() throws {
         self.launchApp(
             for: ScreenshotTarget(
@@ -737,6 +794,7 @@ extension OpenClawSnapshotUITests {
                 .firstMatch.waitForExistence(timeout: 5) == true)
         self.attachScreenshot(named: "chat-starter-response")
     }
+
 
     func testEmptyChatStarterPromptsLocalizeInGerman() throws {
         self.launchApp(
@@ -762,6 +820,7 @@ extension OpenClawSnapshotUITests {
             ].waitForExistence(timeout: 5) == true)
         self.attachScreenshot(named: "chat-empty-starters-german")
     }
+
 
     func testOnboardingPairCommandAndCompletionOpenChat() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone onboarding proof only")
@@ -805,6 +864,7 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.buttons["RootTabs.Sidebar.Show"].exists)
     }
 
+
     func testChatAndOverviewNavigateThroughSidebar() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar proof only")
         self.launchApp(for: ScreenshotTarget(
@@ -836,6 +896,7 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(self.app?.staticTexts["Agent session"].waitForExistence(timeout: 8) == true)
     }
 
+
     func testAgentUsesToolbarFilter() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone Agent proof only")
         self.launchApp(for: ScreenshotTarget(
@@ -862,6 +923,7 @@ extension OpenClawSnapshotUITests {
         all.tap()
         self.waitForValue("All", of: menu)
     }
+
 
     /// Real app onboarding, history decoder, artifact RPC, HTTP loader, and system share sheet.
     /// Only the loopback Gateway is synthetic; no production UI state is injected.
@@ -922,6 +984,7 @@ extension OpenClawSnapshotUITests {
         XCTAssertEqual(refreshedArtifacts.last?["sessionKey"] as? String, artifacts.first?["sessionKey"] as? String)
     }
 
+
     func testLiveGatewayPairChatAndRelaunch() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone lifecycle proof only")
         let app = try self.launchPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
@@ -953,6 +1016,7 @@ extension OpenClawSnapshotUITests {
         XCTAssertEqual(relaunchedApp.state, .runningForeground)
         print("IOS_RELEASE_CHECKPOINT overview")
     }
+
 
     func testManualAuthRetryUsesEditedToken() throws {
         try XCTSkipUnless(

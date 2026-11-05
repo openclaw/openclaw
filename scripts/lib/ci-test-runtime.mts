@@ -124,9 +124,13 @@ const bothHostFiles = new Set([
   "src/agents/code-mode.bridge.lifecycle.test.ts",
   "src/agents/code-mode-engine-parity.test.ts",
   "src/agents/code-mode.failure-phase.test.ts",
+  "src/cli/update-cli/update-command-admission-terminal.test.ts",
+  // Cold Decision preparation must retain the same owner on both host runtimes.
+  "src/decisions/clawrouter.integration.test.ts",
   "src/infra/sqlite-database-admission.worker.test.ts",
   "src/infra/sqlite-schema-facts.native.test.ts",
   "src/infra/sqlite-schema-facts.physical-cache.test.ts",
+  "src/infra/update-run-recovery-admission.test.ts",
   "src/state/openclaw-agent-db-schema-refresh.test.ts",
   "src/state/openclaw-agent-db.worker-admission.test.ts",
   "src/state/openclaw-agent-db-maintenance.schema-renewal.test.ts",

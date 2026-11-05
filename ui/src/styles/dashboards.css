@@ -258,7 +258,7 @@
   margin: 0;
   overflow: hidden;
   color: var(--text-strong);
-  font-size: var(--control-ui-text-base);
+  font-size: var(--control-ui-text-md);
   font-weight: 650;
   letter-spacing: -0.02em;
   line-height: 1.3;

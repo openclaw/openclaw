@@ -30,7 +30,6 @@
   align-items: center;
   gap: 4px;
   padding: 12px;
-  border-bottom: 1px solid var(--border);
 }
 
 .avatar-picker__tab {

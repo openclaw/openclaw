@@ -36,6 +36,7 @@ import {
   embedMemoryDocuments,
   embedMemoryQuery,
   formatMemoryEmbeddingChunks,
+  resolveMemoryIndexConcurrency,
   runMemoryEmbeddingBatchTimeoutRetry,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
@@ -62,7 +63,6 @@ import { resolveMemoryPathClassification } from "./memory-path-provenance.js";
 import { runEmbeddingOperationWithTimeout } from "./paused-deadline.js";
 
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
-const EMBEDDING_INDEX_CONCURRENCY = 4;
 const EMBEDDING_TIMEOUTS_MS = {
   query: { remote: 60_000, local: 5 * 60_000 },
   batch: { remote: 2 * 60_000, local: 10 * 60_000 },
@@ -435,13 +435,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
   }
 
   protected getIndexConcurrency(): number {
-    if (this.batch.enabled) {
-      return this.batch.concurrency;
-    }
-    const provider = this.syncProviderGeneration
-      ? this.syncProviderGeneration.provider
-      : this.provider;
-    return provider?.id === "local" || provider?.id === "ollama" ? 1 : EMBEDDING_INDEX_CONCURRENCY;
+    const runtime = this.syncProviderGeneration
+      ? this.syncProviderGeneration.kind === "semantic"
+        ? this.syncProviderGeneration.runtime
+        : undefined
+      : this.providerRuntime;
+    return resolveMemoryIndexConcurrency(this.batch, runtime);
   }
 
   private sourceReplacement(

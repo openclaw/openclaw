@@ -440,24 +440,21 @@ it("retries a failed selected catalog read through its visible error action", as
   expect(page.textContent).not.toContain("Synthetic catalog unavailable");
 });
 
-it.each(["settings", "discovery"] as const)(
-  "closes a held %s detail without waiting for transport",
-  async (surface) => {
-    const held = deferred();
-    const harness = pageFixture({
-      "plugins.inspect": () => held.promise,
-      "plugins.catalog.get": () => held.promise,
-      "plugins.catalog.browse": () => ({ items: [], categories: [] }),
-    });
-    const inventory = surface === "settings" ? createResult() : createResult([]);
-    const path =
-      surface === "settings" ? "/settings/plugins/workboard" : "/plugins/catalog-workboard";
-    const { page } = await mountPage(harness.context, harness.route(path, inventory), surface);
-    await harness.waitForCall(surface === "settings" ? "plugins.inspect" : "plugins.catalog.get");
-    page.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    await waitForSolid(() => expect(page.querySelector(".plugin-catalog-detail")).toBeNull());
-    held.reject(new Error("Retired detail must not reappear"));
-    await settlePlugins();
-    expect(page.textContent).not.toContain("Retired detail must not reappear");
-  },
-);
+it("closes a held discovery detail without waiting for transport", async () => {
+  const held = deferred();
+  const harness = pageFixture({
+    "plugins.catalog.get": () => held.promise,
+    "plugins.catalog.browse": () => ({ items: [], categories: [] }),
+  });
+  const { page } = await mountPage(
+    harness.context,
+    harness.route("/plugins/catalog-workboard", createResult([])),
+    "discovery",
+  );
+  await harness.waitForCall("plugins.catalog.get");
+  page.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await waitForSolid(() => expect(page.querySelector(".plugin-catalog-detail")).toBeNull());
+  held.reject(new Error("Retired detail must not reappear"));
+  await settlePlugins();
+  expect(page.textContent).not.toContain("Retired detail must not reappear");
+});

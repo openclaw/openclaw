@@ -25,6 +25,12 @@ extension SettingsProTab {
                 route: .deviceSettings)
                 .accessibilityIdentifier("settings-device-row")
             self.settingsListRow(
+                icon: "cpu",
+                iconColor: .orange,
+                title: "ESP device setup",
+                route: .espSetup)
+                .accessibilityIdentifier("settings-esp-setup-row")
+            self.settingsListRow(
                 icon: "applewatch",
                 iconColor: .green,
                 title: "Apple Watch",
@@ -73,6 +79,8 @@ extension SettingsProTab {
         Group {
             if route == .deviceSettings {
                 LocalDeviceSettingsScreen()
+            } else if route == .espSetup {
+                ESPDeviceSetupScreen()
             } else {
                 List {
                     switch route {
@@ -82,6 +90,8 @@ extension SettingsProTab {
                         self.gatewayDestination
                     case .appleWatch:
                         self.appleWatchDestination
+                    case .espSetup:
+                        EmptyView()
                     case .approvals:
                         self.approvalsDestination
                     case .diagnostics:
@@ -638,7 +648,7 @@ extension SettingsProTab {
                     title: "Discord",
                     icon: "bubble.left.and.bubble.right.fill",
                     color: .indigo,
-                    url: URL(string: "https://discord.gg/clawd")!)
+                    url: URL(string: "https://openclaw.ai/discord?from=openclaw-app-ios-settings")!)
             } footer: {
                 Text("© 2026 OpenClaw Foundation — MIT License.")
                     .font(OpenClawType.footnote)

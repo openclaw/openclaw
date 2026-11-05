@@ -118,7 +118,7 @@ describe("AppSidebar footer identity menu", () => {
     }
     expect(view.attr(".sidebar-identity-menu__avatar", "aria-hidden")).toBe("true");
     const shortcut = view.query('[data-value="command:settings"] .session-menu__shortcut');
-    expect(shortcut?.textContent?.replace(/\s+/gu, "").trim()).toMatch(/^(⌘⇧,|Ctrl\+Shift\+,)$/u);
+    expect(shortcut?.textContent?.replace(/\s+/gu, "").trim()).toMatch(/^(⌘⇧,|Ctrl⇧,)$/u);
     expect(view.query(".sidebar-pair-mobile")?.hasAttribute("disabled")).toBe(true);
 
     const helpRow = view.query<HTMLElement>(".sidebar-identity-menu__help");
