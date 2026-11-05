@@ -14,3 +14,7 @@ export const loadDiscordVoiceTestHarness = () =>
 // Gateway capture proof keeps routing/admission real; only transport edges are substituted.
 export const loadDiscordGatewayCaptureFixture = () =>
   import("./src/voice/voice-gateway-capture.test-support.js");
+
+// Host-owned joined lifecycle proof enters the shipped adapter through this plugin-owned seam.
+export const loadDiscordNativeAgentReply = () =>
+  import("./src/monitor/native-command-agent-reply.js");

@@ -50,13 +50,21 @@ For delivered and pending the real adapter calls deleteReply once and never
 followUp/editReply; the synthetic interaction settles to replied. These are
 adapter calls/state, not a Discord service or human observation.
 
+## Ownership boundary
+
+The host owns this joined core/lifecycle composition and its private core fixtures.
+It enters the shipped Discord adapter only through the plugin-owned lazy
+`loadDiscordNativeAgentReply` seam in `extensions/discord/test-api.ts`. The plugin
+retains its implementation; no private core helpers become Plugin SDK exports,
+and extension tests do not import core internals. Both ownership guards apply.
+
 ## Native reproduction
 
 ```sh
-pnpm test extensions/discord/discord-update-acknowledgement.integration.test.ts --maxWorkers=1
+pnpm test test/plugins/discord-update-acknowledgement.integration.test.ts --maxWorkers=1
 ```
 
-Post-relocation native run: **3/3 passed**, 56.515 s wall (including SQLite worker
+Original joined-fixture native run: **3/3 passed**, 56.515 s wall (including SQLite worker
 lifecycle/cleanup and compilation). The real joined custody-to-adapter contract
 requires this heavier integration; isolated helper fixtures cannot prove it.
 Owning root integration types and scoped type-aware lint pass; the staged native

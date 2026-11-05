@@ -27,11 +27,14 @@ vi.mock("../../src/gateway/server-plugin-in-process-dispatch.js", () => ({
   dispatchGatewayMethodInProcess: gateway.dispatch,
   getInProcessGatewayRequestContext: () => gateway.context,
 }));
-let adapter: typeof import("./src/monitor/native-command-agent-reply.js").dispatchDiscordNativeAgentReply;
+type DiscordNativeReplyModule = Awaited<
+  ReturnType<typeof import("../../extensions/discord/test-api.js").loadDiscordNativeAgentReply>
+>;
+let adapter: DiscordNativeReplyModule["dispatchDiscordNativeAgentReply"];
 beforeAll(async () => {
   await globalBeforeAll0();
-  adapter = (await import("./src/monitor/native-command-agent-reply.js"))
-    .dispatchDiscordNativeAgentReply;
+  const { loadDiscordNativeAgentReply } = await import("../../extensions/discord/test-api.js");
+  adapter = (await loadDiscordNativeAgentReply()).dispatchDiscordNativeAgentReply;
 });
 beforeEach(() => {
   describe0BeforeEach0();
