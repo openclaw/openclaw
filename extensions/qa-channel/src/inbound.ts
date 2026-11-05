@@ -475,6 +475,8 @@ export async function handleQaInbound(params: {
     replyOptions: {
       onFollowupQueueDisposition: (disposition) => {
         queueDisposition = disposition;
+        // A policy discard never executes, so no delivery scope will settle it.
+        queuedDelivery.resolve(false);
       },
       queuedDeliveryCorrelations: [
         {

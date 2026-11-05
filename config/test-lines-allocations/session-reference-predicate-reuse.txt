@@ -1,0 +1,2 @@
+# Prove reference reads reuse the writer predicate while optional references still validate.
+29
