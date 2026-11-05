@@ -494,7 +494,7 @@ it.each(
         await executeExistingOpenClawStateRead(
           { env },
           { type: "updateRuns.recoveryAdmission" },
-          { current: true, live: shape === "clean" },
+          shape === "clean" ? { current: true, live: true } : { current: true },
         );
         const result = await migrateLegacyExecApprovals({
           env,
