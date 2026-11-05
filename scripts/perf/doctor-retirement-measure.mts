@@ -402,6 +402,7 @@ try {
       JSON.stringify({
         id,
         channels: [id],
+        doctorContract: { stateMigrations: [] },
         channelConfigs: {
           [id]: {
             schema: {
@@ -431,6 +432,12 @@ export const plugin = {
     docsPath: "/synthetic", blurb: "Native update standing-advisory fixture" },
   capabilities: { chatTypes: ["direct"] },
   config: { listAccountIds: () => ["default"], resolveAccount: account, inspectAccount: account },
+  gateway: { async startAccount({ abortSignal, setStatus }) {
+    setStatus({ running: true, connected: true, lifecycle: "ready" });
+    if (!abortSignal.aborted) {
+      await new Promise(resolve => abortSignal.addEventListener("abort", resolve, { once: true }));
+    }
+  } },
   security: { resolveDmPolicy: ({ cfg }) => ({
     policy: "allowlist", allowFrom: resolvePluginConfigObject(cfg, id).peers,
     policyPath: "channels.postpass-advisory.dmPolicy",
@@ -446,6 +453,10 @@ export default { id: "postpass-advisory", register(api) { api.registerChannel({ 
 `,
     );
     fs.writeFileSync(path.join(pluginRoot, "setup.js"), 'export { plugin } from "./channel.js";\n');
+    fs.writeFileSync(
+      path.join(pluginRoot, "doctor-contract-api.js"),
+      "export const stateMigrations = [];\n",
+    );
     cfg.plugins.allow = [...(cfg.plugins.allow ?? []), id];
     cfg.plugins.load = { paths: [...(cfg.plugins.load?.paths ?? []), pluginRoot] };
     cfg.plugins.entries[id] = { enabled: true, config: { peers: ["synthetic-a", "synthetic-b"] } };
