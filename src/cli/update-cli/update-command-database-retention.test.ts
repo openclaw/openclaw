@@ -61,6 +61,38 @@ function captureExecution(
   };
 }
 
+async function captureEnvironment(stateDir: string) {
+  await fs.mkdir(stateDir);
+  const env = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+  };
+  await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
+  return env;
+}
+
+function mockSnapshot(source: string, restorable: boolean) {
+  let snapshotPath = "";
+  vi.spyOn(databaseBackup, "createUpdateDatabaseBackup").mockImplementation(async (input) => {
+    const directory = `${input.backupRoot}.databases`;
+    snapshotPath = path.join(directory, "snapshot.sqlite");
+    await fs.mkdir(directory);
+    await fs.writeFile(snapshotPath, "pre-migration bytes");
+    return {
+      directory,
+      databases: [
+        { path: source, snapshotPath, userVersion: 20, sha256: "0".repeat(64), sizeBytes: 19 },
+      ],
+      missingPaths: [],
+      sourcePaths: [source],
+      sourceGenerations: restorable ? { [source]: "captured-generation" } : {},
+      warnings: [],
+    };
+  });
+  return () => snapshotPath;
+}
+
 it.runIf(process.platform !== "win32").each([false, true])(
   "captures Git update databases in physical artifact storage (redirected: %s)",
   async (redirected) => {
@@ -125,30 +157,8 @@ it.each([
     const stateDir = path.join(base, "state");
     const source = path.join(stateDir, "state/openclaw.sqlite");
     await fs.mkdir(root);
-    await fs.mkdir(stateDir);
-    const env = {
-      ...process.env,
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-    };
-    await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
-    let snapshotPath = "";
-    vi.spyOn(databaseBackup, "createUpdateDatabaseBackup").mockImplementation(async (input) => {
-      const directory = `${input.backupRoot}.databases`;
-      snapshotPath = path.join(directory, "snapshot.sqlite");
-      await fs.mkdir(directory);
-      await fs.writeFile(snapshotPath, "pre-migration bytes");
-      return {
-        directory,
-        databases: [
-          { path: source, snapshotPath, userVersion: 20, sha256: "0".repeat(64), sizeBytes: 19 },
-        ],
-        missingPaths: [],
-        sourcePaths: [source],
-        sourceGenerations: restorable ? { [source]: "captured-generation" } : {},
-        warnings: [],
-      };
-    });
+    const env = await captureEnvironment(stateDir);
+    const snapshotPath = mockSnapshot(source, restorable);
     const transaction = createGitRuntimeTransaction({
       root,
       promotion: {
@@ -197,9 +207,9 @@ it.each([
       () => {},
     );
     if (removed) {
-      await expect(fs.stat(path.dirname(snapshotPath))).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(path.dirname(snapshotPath()))).rejects.toMatchObject({ code: "ENOENT" });
     } else {
-      expect(await fs.readFile(snapshotPath, "utf8")).toBe("pre-migration bytes");
+      expect(await fs.readFile(snapshotPath(), "utf8")).toBe("pre-migration bytes");
     }
   },
 );
@@ -217,32 +227,8 @@ it.each([
     const fixture = await createPackageSwapFixture(base);
     const stateDir = path.join(base, "state");
     const source = path.join(stateDir, "state/openclaw.sqlite");
-    await fs.mkdir(stateDir);
-    const env = {
-      ...process.env,
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-    };
-    await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
-    let snapshotPath = "";
-    // Snapshot generation is tested by update-database-backup; exercise its
-    // sealed/unsealed result through real capture admission and package retirement.
-    vi.spyOn(databaseBackup, "createUpdateDatabaseBackup").mockImplementation(async (input) => {
-      const directory = `${input.backupRoot}.databases`;
-      snapshotPath = path.join(directory, "snapshot.sqlite");
-      await fs.mkdir(directory);
-      await fs.writeFile(snapshotPath, "pre-migration bytes");
-      return {
-        directory,
-        databases: [
-          { path: source, snapshotPath, userVersion: 20, sha256: "0".repeat(64), sizeBytes: 19 },
-        ],
-        missingPaths: [],
-        sourcePaths: [source],
-        sourceGenerations: restorable ? { [source]: "captured-generation" } : {},
-        warnings: [],
-      };
-    });
+    const env = await captureEnvironment(stateDir);
+    const snapshotPath = mockSnapshot(source, restorable);
     const execution = captureExecution(fixture.packageRoot, env, "package");
     let transaction: PackageUpdateTransaction | undefined;
     let capture: Awaited<ReturnType<typeof captureUpdateDatabases>> | undefined;
@@ -304,9 +290,9 @@ it.each([
       () => {},
     );
     if (restorable && !lateRefusal && outcome === "success") {
-      await expect(fs.stat(snapshotPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(snapshotPath())).rejects.toMatchObject({ code: "ENOENT" });
     } else {
-      expect(await fs.readFile(snapshotPath, "utf8")).toBe("pre-migration bytes");
+      expect(await fs.readFile(snapshotPath(), "utf8")).toBe("pre-migration bytes");
     }
     if (!restorable) {
       expect(capture?.step.warnings).toEqual([

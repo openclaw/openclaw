@@ -912,6 +912,14 @@ It leaves unverified service definitions unchanged and skips their automatic
 restart. Restart the Gateway you launched manually after the update, or use its
 actual supervisor. Doctor still checks for active state writers before migrations.
 
+Git updates also check persisted Gateway ownership before replacing checkout or
+runtime files. A live or unverifiable owner must be stopped through its own
+supervisor or terminal first, even when native service discovery misses it.
+The previous runtime stays intact on this refusal. Database capture and rollback
+remain part of the existing update transaction. This check requires the installed
+updater to contain the fix; updating only the candidate cannot change an older
+driver's publication behavior.
+
 On Linux, unmask a managed systemd unit before updating. A masked unit
 (`masked` or `masked-runtime`), `RefuseManualStart=yes`, or a disabled and inactive
 unit with no start path causes preflight to refuse before replacing files or

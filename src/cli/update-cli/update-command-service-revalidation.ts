@@ -82,22 +82,31 @@ function matchesStoppedService(
 }
 
 /** Native inspection cannot authorize publication over a live or unverified state owner. */
-export async function assertUnavailableGatewayPackageConsumerStopped(params: {
+export async function assertGatewayArtifactConsumerStopped(params: {
   roots: readonly string[];
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
   assertCurrent: () => void;
-  verdict: Extract<ManagedGatewayUpdateVerdict, { kind: "unavailable" }>;
+  verdict?: Extract<ManagedGatewayUpdateVerdict, { kind: "unavailable" }>;
 }): Promise<void> {
   const refuse = (cause?: unknown): never => {
-    const failure = createUpdatePreflightFailure("gateway-stop-unverified", params.verdict.message);
-    throw new UpdatePreMutationError("gateway-stop-unverified", failure.message, {
-      failureFacts: [
-        ...failure.failureFacts,
-        ...(collectServiceInspectionFailureFacts(params.verdict) ?? []),
-      ],
-      cause,
-    });
+    const failure = params.verdict
+      ? createUpdatePreflightFailure("gateway-stop-unverified", params.verdict.message)
+      : {
+          message: `Cannot replace Git runtime artifacts before the Gateway is confirmed stopped. Stop it through its service manager or original terminal, then rerun \`${formatCliCommand("openclaw update", params.env)}\`. The serving runtime was left unchanged.`,
+          failureFacts: [],
+        };
+    throw new UpdatePreMutationError(
+      params.verdict ? "gateway-stop-unverified" : "runtime-artifact-publication",
+      failure.message,
+      {
+        failureFacts: [
+          ...failure.failureFacts,
+          ...(collectServiceInspectionFailureFacts(params.verdict) ?? []),
+        ],
+        cause,
+      },
+    );
   };
   try {
     const owner = await readActiveGatewayLockIdentity({
@@ -149,7 +158,7 @@ export async function assertManagedGatewayArtifactPublication(params: {
   const serving = params.selected;
   const servingVerdict = serving?.serviceUpdateVerdict;
   if (params.updateInstallKind === "package" && servingVerdict?.kind === "unavailable") {
-    await assertUnavailableGatewayPackageConsumerStopped({ ...params, verdict: servingVerdict });
+    await assertGatewayArtifactConsumerStopped({ ...params, verdict: servingVerdict });
   }
   if (
     (params.phase !== "before-stop" || !params.shouldRestart) &&
@@ -163,6 +172,12 @@ export async function assertManagedGatewayArtifactPublication(params: {
       "runtime-artifact-publication",
       `Cannot replace Git runtime artifacts in ${servingVerdict.root}: its Gateway${serving.servicePid === undefined ? "" : ` (PID ${serving.servicePid})`} is still running and this update did not stop it. Stop that Gateway through its service manager, then rerun \`${formatCliCommand("openclaw update", serving.serviceEnv)}\` without \`--no-restart\`. The serving runtime was left unchanged.`,
     );
+  }
+  if (
+    params.updateInstallKind === "git" &&
+    (params.phase !== "before-stop" || !params.shouldRestart || servingVerdict?.kind !== "owned")
+  ) {
+    await assertGatewayArtifactConsumerStopped(params);
   }
   const bindings = await discoverManagedGatewayBindings(params.env);
   params.assertCurrent();

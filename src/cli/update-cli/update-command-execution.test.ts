@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
+import * as gatewayLocks from "../../infra/gateway-lock.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
@@ -127,12 +128,14 @@ describe("mutable update execution", () => {
   registerExecutionTimeoutTests();
 
   registerNativeAdmissionTests();
-  it.each(["same", "alias", "disjoint"] as const)(
+  it.each(["same", "alias", "disjoint", "unmanaged"] as const)(
     "preserves a serving Git runtime when activation did not stop it: %s",
     async (destination) => {
       await withTestDir({ prefix: "git-live-runtime-custody-" }, async (dir) => {
         const servingRoot = path.join(dir, "serving");
-        const targetRoot = destination === "same" ? servingRoot : path.join(dir, "target");
+        const unmanaged = destination === "unmanaged";
+        const targetRoot =
+          destination === "same" || unmanaged ? servingRoot : path.join(dir, "target");
         await fs.mkdir(path.join(servingRoot, "dist"), { recursive: true });
         if (destination === "alias") {
           await fs.symlink(
@@ -149,7 +152,15 @@ describe("mutable update execution", () => {
         mocks.maybeStopService.mockImplementation(async () => ({
           ...serviceState(servingRoot, "inspect", "serving-generation"),
           servicePid: 23456,
+          ...(unmanaged ? { serviceUpdateVerdict: undefined } : {}),
         }));
+        if (unmanaged) {
+          vi.spyOn(gatewayLocks, "readActiveGatewayLockIdentity").mockResolvedValue({
+            pid: process.pid,
+            createdAt: "now",
+            port: 20445,
+          });
+        }
         vi.spyOn(readiness, "verifyPreviousGatewayForUpdate").mockResolvedValue(true);
         mocks.runGitUpdate.mockImplementation(
           async (options: Parameters<typeof updateGitInstall>[0]) => {
@@ -180,9 +191,11 @@ describe("mutable update execution", () => {
             mutationStarted: false,
             result: { status: "error", reason: "runtime-artifact-publication" },
           });
-          expect(execution?.result.steps).toContainEqual(
-            expect.objectContaining({ stderrTail: expect.stringContaining("23456") }),
-          );
+          if (!unmanaged) {
+            expect(execution?.result.steps).toContainEqual(
+              expect.objectContaining({ stderrTail: expect.stringContaining("23456") }),
+            );
+          }
         }
       });
     },
