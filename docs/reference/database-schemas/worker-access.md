@@ -119,8 +119,11 @@ Active accounting uses the independent history reader without reserving the
 agent database writer. Byte totals advance with actor appends and travel in its
 existing receipts, including when the full transcript is not resident. A reader
 borrows those totals only when the transcript version matches its native SQL
-snapshot; cold or changed snapshots retain their own accounting. Usage reads
-stay bounded and never expand to the complete active history.
+snapshot; cold or changed snapshots retain their own accounting. Actor readmission
+also reuses the admitted connection's exact-version totals when its prior resident
+state is absent. Metadata rewrites advance that version, and uncommitted writes
+still compute their own totals. Usage reads stay bounded and never expand to the
+complete active history.
 
 Entry reclamation derives each surviving row's transcript references once per
 synchronous deletion, even when several retained generations need a new owner.
