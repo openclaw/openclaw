@@ -252,7 +252,9 @@ async function installUnderPackageLock(
   const settle = async (decision: "restore" | "retain" | "retire") => {
     settled = true;
     try {
-      (await staged.settle(decision)).forEach(params.warn);
+      for (const warning of await staged.settle(decision)) {
+        params.warn(warning);
+      }
     } catch (error) {
       params.warn(`Durable OpenClaw copy cleanup failed: ${String(error)}`);
     }
@@ -288,7 +290,9 @@ async function installUnderPackageLock(
   } finally {
     if (!activation) {
       try {
-        (await staged.cancel()).forEach(params.warn);
+        for (const warning of await staged.cancel()) {
+          params.warn(warning);
+        }
       } catch (error) {
         params.warn(`Durable OpenClaw copy cleanup failed: ${String(error)}`);
       }
@@ -398,8 +402,16 @@ async function stageDurableCopy(env: NodeJS.ProcessEnv, replacement: DurableServ
   if (outcome) {
     throw failure(outcome.failedStep ?? { name: "the package update stopped before activation" });
   }
-  // Service install has no update-run fence; the service operation lock serializes it.
+  // Service installs have no update-run fence; the package lock orders them among themselves.
   const unfenced = () => undefined;
+  // `openclaw update` does not take the package lock and can publish its own copy meanwhile,
+  // so a restore first checks that the live copy is still the one this install published.
+  let published: { dev: bigint; ino: bigint } | undefined;
+  const liveIdentity = () =>
+    fs.lstat(replacement.packageRoot, { bigint: true }).then(
+      ({ dev, ino }) => ({ dev, ino }),
+      () => undefined,
+    );
   return {
     activate: async () => {
       gate.resolve(true);
@@ -407,6 +419,7 @@ async function stageDurableCopy(env: NodeJS.ProcessEnv, replacement: DurableServ
       if (result.failedStep) {
         throw failure(result.failedStep);
       }
+      published = await liveIdentity();
     },
     cancel: async (): Promise<string[]> => {
       gate.resolve(false);
@@ -428,6 +441,21 @@ async function stageDurableCopy(env: NodeJS.ProcessEnv, replacement: DurableServ
         return [];
       }
       const warnings: string[] = [];
+      if (decision === "restore" && published) {
+        const live = await liveIdentity();
+        if (live?.dev !== published.dev || live.ino !== published.ino) {
+          // Another owner replaced the copy after this install published it. Restoring would
+          // overwrite that copy, so keep it; the transaction then keeps this install's backup.
+          warnings.push(
+            `The durable OpenClaw copy at ${replacement.packageRoot} was replaced by another install before this failed install could restore it; keeping the current copy.`,
+          );
+          const retention = await transaction.complete({ activationVerified: false }, unfenced);
+          if (retention && retention.exitCode !== 0) {
+            warnings.push(retention.stderrTail ?? retention.name);
+          }
+          return warnings;
+        }
+      }
       if (decision === "restore") {
         const restored = await transaction.rollback(unfenced);
         if (restored.exitCode !== 0) {
