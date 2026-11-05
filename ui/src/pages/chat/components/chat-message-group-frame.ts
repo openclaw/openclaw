@@ -142,10 +142,15 @@ export function prepareMessageGroupFrame(
   const sourceSessionKey = group.senderSession?.sessionKey;
   const opts = resolveFileLinkOwnerOptions(group, options);
   const normalizedRole = normalizeRoleForGrouping(group.role);
+  // Supplied frame bodies replace per-message rows, including their mobile footers.
+  const showFooter = opts.frameFooter !== false || opts.frameContent === undefined;
   const sourceOnly = isSourceOnlyUserGroup(group);
   const showAvatar =
     normalizedRole !== "user" || Boolean(group.sender || group.senderLabel?.trim());
-  const assistantName = opts.assistantName ?? t("chat.messages.agentName");
+  const assistantName =
+    opts.frameHeader !== false || showFooter
+      ? (opts.assistantName ?? t("chat.messages.agentName"))
+      : "";
   const isOwnGroup = isOwnSenderGroup(group, opts.userId);
   const isPeerGroup =
     normalizedRole === "user" && Boolean(opts.userId && group.sender) && !isOwnGroup;
@@ -167,6 +172,7 @@ export function prepareMessageGroupFrame(
       : undefined);
   const replyIdentity = replyLine.sender?.identity;
   const showSenderName =
+    showFooter &&
     !(
       ownIdentity &&
       replyIdentity?.type === ownIdentity.type &&
@@ -175,10 +181,10 @@ export function prepareMessageGroupFrame(
     !isForwarded &&
     !sourceOnly &&
     (normalizedRole !== "user" || !isOwnGroup || opts.showOwnSenderName !== false);
-  const visibleSources = group.sourceClients?.filter(
-    (source) => gatewayClientKind(source) !== "web",
-  );
-  const who = resolveMessageGroupSenderLabel(group, opts);
+  const visibleSources = showFooter
+    ? group.sourceClients?.filter((source) => gatewayClientKind(source) !== "web")
+    : undefined;
+  const who = showFooter ? resolveMessageGroupSenderLabel(group, opts) : "";
   const roleClass =
     normalizedRole === "user" || normalizedRole === "assistant" || normalizedRole === "tool"
       ? normalizedRole
@@ -186,7 +192,7 @@ export function prepareMessageGroupFrame(
         ? "workspace-conflict"
         : "other";
   const avatarPlacement = opts.avatarPlacement ?? "gutter";
-  const meta = extractGroupMeta(group, opts.contextWindow ?? null);
+  const meta = showFooter ? extractGroupMeta(group, opts.contextWindow ?? null) : null;
 
   const ownsRunFrame = opts.frameContent !== undefined;
   // Tool activity and live narration are blocks of the turn whose answer follows:
@@ -221,7 +227,7 @@ export function prepareMessageGroupFrame(
       : normalizedRole === "user" && group.sender && !isOwnGroup
         ? resolveIdentityHue(group.sender)
         : null;
-  const pendingSend = readPendingSendStatus(group.messages.at(-1)?.message);
+  const pendingSend = showFooter ? readPendingSendStatus(group.messages.at(-1)?.message) : null;
   // Normal delivery uses the settled footer; only recovery needs an interruption.
   const sendStatus =
     pendingSend &&
