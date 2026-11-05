@@ -690,85 +690,154 @@ it.each([
   },
 );
 
-it("retains Doctor settlement warnings through the package activation result", async () => {
-  await withTestDir({ prefix: "update-package-doctor-settlement-" }, async (base) => {
-    const { params, root, expectOriginalInstallation } = await createPackageInstallFixture(
-      base,
-      "2.0.0",
-    );
-    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(base);
-    const env = {
-      OPENCLAW_STATE_DIR: path.join(base, "state"),
-      OPENCLAW_CONFIG_PATH: path.join(base, "openclaw.json"),
-    };
-    await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}\n");
-    const warning =
-      "Doctor timed out, but every tracked process group stopped. Run `openclaw update repair`.";
-    const settlement: UpdateStepResult = {
-      name: "doctor process settlement",
-      command: "settle doctor process groups",
-      cwd: root,
-      durationMs: 1,
-      exitCode: 0,
-      advisory: { kind: "recoverable-maintenance", message: warning },
-    };
-    // Native settlement has process-boundary coverage; this test owns the package
-    // verifier's auxiliary-step transport and its public warning consumer.
-    vi.spyOn(doctorChild, "withUpdateDoctorChild").mockImplementation(
-      async ({ context }, operation) => {
-        const value = await operation(async () => ({
-          stdout: "Doctor busy",
-          stderr: "",
-          code: null,
-          signal: "SIGKILL",
-          killed: true,
-          cleanup: "forced",
-          termination: "timeout",
-        }));
-        context.onProcessSettlement?.(settlement);
-        return value;
-      },
-    );
-    let transaction: PackageUpdateTransaction | undefined;
-    try {
-      const result = await runPackageInstallUpdate({
-        ...params,
-        installEnv: env,
-        managedServiceEnv: env,
-        validateCandidate: async () => [],
-        beforeActivate: async () => {},
-        getDoctorContext: () => ({
-          runId: "doctor-settlement-transport",
-          executorFence: { assertCurrent: () => {} },
-          inputHash: "fixture-input",
-          changes: [],
-          assertCurrent: () => {},
-          assertBoundChildCurrent: () => {},
-        }),
-        onTransaction: (retained) => {
-          transaction = retained;
-        },
-      });
-      expect(result).toMatchObject({
-        status: "error",
-        root,
-        failedStep: { termination: "timeout" },
-      });
-      expect(result.steps.filter((step) => step.name === "doctor process settlement")).toEqual([
-        settlement,
-      ]);
-      expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
-        warning,
+it.each(["settlement", "database writes", "reporting failure"] as const)(
+  "retains Doctor %s warnings through the package activation result",
+  async (receiptKind) => {
+    await withTestDir({ prefix: "update-package-doctor-receipts-" }, async (base) => {
+      const { params, root, expectOriginalInstallation } = await createPackageInstallFixture(
+        base,
+        "2.0.0",
       );
-    } finally {
-      if (transaction) {
-        expect((await transaction.rollback(() => {})).exitCode).toBe(0);
-        await transaction.complete({ activationVerified: false }, () => {});
+      vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(base);
+      const env = {
+        OPENCLAW_STATE_DIR: path.join(base, "state"),
+        OPENCLAW_CONFIG_PATH: path.join(base, "openclaw.json"),
+      };
+      await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}\n");
+      const migration = receiptKind !== "settlement";
+      const warning = migration
+        ? "Automatic database restoration unavailable: databases changed after snapshot capture; the writer is unknown."
+        : "Doctor timed out, but every tracked process group stopped. Run `openclaw update repair`.";
+      const settlement: UpdateStepResult = {
+        name: "doctor process settlement",
+        command: "settle doctor process groups",
+        cwd: root,
+        durationMs: 1,
+        exitCode: 0,
+        advisory: { kind: "recoverable-maintenance", message: warning },
+      };
+      // Native settlement has process-boundary coverage; this test owns the package
+      // verifier's auxiliary-step transport and its public warning consumer.
+      vi.spyOn(doctorChild, "withUpdateDoctorChild").mockImplementation(
+        async ({ context }, operation) => {
+          const value = await operation(async (_argv, options) => {
+            if (migration) {
+              assert(typeof options === "object");
+              const resultPath = options.env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
+              assert(resultPath);
+              await writeUpdatePostInstallDoctorResult({
+                resultPath,
+                result: {
+                  status: "ok",
+                  warnings: ["Unrelated Doctor warning"],
+                  databaseWrites: {
+                    unchanged: false,
+                    fromGenerations: { "database.sqlite": "foreign-write" },
+                    generations: { "database.sqlite": "after" },
+                  },
+                },
+              });
+              return { stdout: "", stderr: "", code: 0 };
+            }
+            return {
+              stdout: "Doctor busy",
+              stderr: "",
+              code: null,
+              signal: "SIGKILL",
+              killed: true,
+              cleanup: "forced",
+              termination: "timeout",
+            };
+          });
+          if (!migration) {
+            context.onProcessSettlement?.(settlement);
+          }
+          return value;
+        },
+      );
+      let transaction: PackageUpdateTransaction | undefined;
+      try {
+        const result = await runPackageInstallUpdate({
+          ...params,
+          installEnv: env,
+          managedServiceEnv: env,
+          validateCandidate: async () => [],
+          beforeActivate: async () => {},
+          onTransaction: (retained) => {
+            transaction = retained;
+          },
+          progress: {
+            onStepComplete: (step) => {
+              if (
+                receiptKind === "reporting failure" &&
+                step.name === "database migration writes"
+              ) {
+                throw new Error("Doctor progress could not be recorded.");
+              }
+            },
+          },
+          getDoctorContext: () => ({
+            runId: "doctor-settlement-transport",
+            executorFence: { assertCurrent: () => {} },
+            inputHash: "fixture-input",
+            changes: [],
+            ...(migration
+              ? {
+                  databaseBackup: {
+                    directory: path.join(base, "backup"),
+                    databases: [],
+                    missingPaths: [],
+                    sourcePaths: ["database.sqlite"],
+                    sourceGenerations: { "database.sqlite": "before" },
+                    warnings: [],
+                  },
+                }
+              : {}),
+            assertCurrent: () => {},
+            assertBoundChildCurrent: () => {},
+          }),
+        });
+        if (migration) {
+          expect(result.status).toBe(receiptKind === "reporting failure" ? "error" : "ok");
+          if (receiptKind === "reporting failure") {
+            expect(result.failedStep).toMatchObject({
+              name: "openclaw doctor",
+              failureFacts: expect.arrayContaining([
+                expect.objectContaining({
+                  check: "openclaw doctor",
+                  message: expect.stringContaining("Doctor progress could not be recorded."),
+                }),
+              ]),
+            });
+          }
+          expect(result.steps.filter((step) => step.name === "database migration writes")).toEqual([
+            expect.objectContaining({
+              warnings: expect.arrayContaining([expect.stringContaining(warning)]),
+            }),
+          ]);
+        } else {
+          expect(result).toMatchObject({
+            status: "error",
+            root,
+            failedStep: { termination: "timeout" },
+          });
+          expect(result.steps.filter((step) => step.name === "doctor process settlement")).toEqual([
+            settlement,
+          ]);
+        }
+        expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
+          warning,
+        );
+      } finally {
+        if (transaction) {
+          expect((await transaction.rollback(() => {})).exitCode).toBe(0);
+          await transaction.complete({ activationVerified: false }, () => {});
+        }
       }
-    }
-    await expectOriginalInstallation();
-  });
-});
+      await expectOriginalInstallation();
+    });
+  },
+);
 
 it.each([
   { method: "package", reason: "requester-revoked" },
