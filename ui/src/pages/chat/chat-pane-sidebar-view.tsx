@@ -218,29 +218,33 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
         // Portalled panels skip the physical host in Solid's delegated event path.
         // Stay after child handlers so their Escape handling takes precedence.
         if (
-          event.key === "Escape" &&
-          !event.isComposing &&
-          event.keyCode !== 229 &&
-          !event.defaultPrevented &&
-          props.mobileHost &&
-          event.composedPath().includes(shell)
+          event.key !== "Escape" ||
+          event.isComposing ||
+          event.keyCode === 229 ||
+          event.defaultPrevented
         ) {
+          return;
+        }
+        const host = props.mobileHost;
+        if (host && event.composedPath().includes(shell)) {
           event.preventDefault();
-          props.mobileHost.close();
+          host.close();
         }
       }}
       onFocusIn={(event) => {
+        const host = props.mobileHost;
+        if (host?.mode !== "dock" || !event.composedPath().includes(shell)) {
+          return;
+        }
         const target = event.target;
         if (
-          props.mobileHost?.mode === "dock" &&
-          event.composedPath().includes(shell) &&
           target instanceof HTMLElement &&
           (target.matches(
             "textarea:not([readonly]):not([disabled]), input:not([readonly]):not([disabled]):not([type=button]):not([type=submit]):not([type=reset]):not([type=color]):not([type=checkbox]):not([type=radio]):not([type=range]):not([type=file])",
           ) ||
             target.isContentEditable)
         ) {
-          props.mobileHost.toggleExpanded(shell.getBoundingClientRect().height);
+          host.toggleExpanded(shell.getBoundingClientRect().height);
         }
       }}
       data-mobile-open={props.mobileHost && mobileVisible() ? "" : undefined}
