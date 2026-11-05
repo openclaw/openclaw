@@ -60,10 +60,7 @@ describe("channel ingress drain", () => {
     await withTempState(async (stateDir) => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("evt-replay", { text: "recover" }, { laneKey: "lane-a" });
-      const originalClaim = await queue.claim("evt-replay", { ownerId: "worker" });
-      if (!originalClaim) {
-        throw new Error("Expected a claimed ingress event");
-      }
+      const originalClaim = expectDefined(await queue.claim("evt-replay", { ownerId: "worker" }));
       await queue.fail(originalClaim, { reason: "handler-error", failedAt: 20 });
       if (!queue.resubmit) {
         throw new Error("Expected queue.resubmit");
@@ -108,8 +105,10 @@ describe("channel ingress drain", () => {
         return await fail(...args);
       };
       const dispatched: string[] = [];
+      const onDeadLetter = vi.fn();
       const drain = createChannelIngressDrain<Payload>({
         queue,
+        onDeadLetter,
         retryPolicy: { maxAttempts: 1, deadLetterMinAgeMs: 0 },
         dispatchClaimedEvent: async (event, lifecycle) => {
           dispatched.push(event.id);
@@ -124,6 +123,7 @@ describe("channel ingress drain", () => {
       const idle = drain.waitForIdle();
       await vi.advanceTimersByTimeAsync(0);
       expect(failAttempts).toBe(1);
+      expect(onDeadLetter).not.toHaveBeenCalled();
       expect(drain.activeLaneKeys()).toEqual(new Set(["shared"]));
       expect(await drain.drainOnce()).toEqual({ started: 0 });
       expect(dispatched).toEqual(["poison"]);
@@ -131,6 +131,11 @@ describe("channel ingress drain", () => {
       await vi.advanceTimersByTimeAsync(5_000);
       await idle;
       expect(failAttempts).toBe(3);
+      expect(onDeadLetter).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ id: "poison" }),
+        expect.objectContaining({ reason: "retry-limit-exceeded", attempt: 1 }),
+        expect.any(AbortSignal),
+      );
       expect(await drain.drainOnce()).toEqual({ started: 1 });
       await drain.waitForIdle();
       expect(dispatched).toEqual(["poison", "follower"]);
@@ -892,10 +897,7 @@ describe("channel ingress drain ownership", () => {
       );
       try {
         await drain.drainOnce();
-        const [original] = await queue.listClaims();
-        if (!original) {
-          throw new Error("Expected the original ingress claim");
-        }
+        const original = expectDefined((await queue.listClaims())[0]);
         expect(await queue.release(original)).toBe(true);
         const successor = await queue.claim("evt-reclaim", { ownerId: "replacement" });
         expect(successor).not.toBeNull();
@@ -924,11 +926,9 @@ describe("channel ingress drain cancellation", () => {
       let clock = 100;
       const queue = createTestIngressQueue(stateDir, { now: () => clock });
       await queue.enqueue("evt-cancel", { text: "x" }, { laneKey: "l1", receivedAt: 1 });
-      const failedClaim = await queue.claim("evt-cancel", { ownerId: "failed-owner" });
-      expect(failedClaim).not.toBeNull();
-      if (!failedClaim) {
-        return;
-      }
+      const failedClaim = expectDefined(
+        await queue.claim("evt-cancel", { ownerId: "failed-owner" }),
+      );
       await queue.release(failedClaim, { lastError: "previous failure", releasedAt: clock });
       const before = (await queue.listPending())[0];
       for (let cycle = 0; cycle < 3; cycle += 1) {

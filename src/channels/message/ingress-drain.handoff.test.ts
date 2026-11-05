@@ -31,8 +31,12 @@ describe("durable ingress downstream handoff", () => {
           await lifecycle.onDropped?.(outcome);
           return { kind: "deferred" };
         });
+        const onDeadLetter = vi.fn();
+        const onLog = vi.fn();
         const drain = createChannelIngressDrain<Payload>({
           queue,
+          onDeadLetter,
+          onLog,
           dispatchClaimedEvent: dispatch,
           retryPolicy: { maxAttempts: 1, deadLetterMinAgeMs: 0 },
         });
@@ -42,24 +46,18 @@ describe("durable ingress downstream handoff", () => {
               started: outcome === "pending" || pass === 0 ? 1 : 0,
             });
             await drain.waitForIdle();
-            expect(await queue.listPending()).toEqual(
+            expect(await queue.listPending()).toMatchObject(
               outcome === "pending"
-                ? [
-                    expect.objectContaining({
-                      id: "capacity-pending",
-                      attempts: 0,
-                      payload: { text: "wait for capacity" },
-                    }),
-                  ]
+                ? [{ id: "capacity-pending", attempts: 0, payload: { text: "wait for capacity" } }]
                 : [],
             );
             expect(await queue.listClaims()).toEqual([]);
           }
           expect(dispatch).toHaveBeenCalledTimes(outcome === "pending" ? 3 : 1);
-          expect(await queue.listFailed?.()).toEqual(
-            outcome === "pending"
-              ? []
-              : [expect.objectContaining({ id: "capacity-pending", reason: outcome })],
+          expect(onDeadLetter).not.toHaveBeenCalled();
+          expect(onLog.mock.calls.flat().join(" ")).not.toMatch(/failed after|dead-lettered/);
+          expect(await queue.listFailed?.()).toMatchObject(
+            outcome === "pending" ? [] : [{ id: "capacity-pending", reason: outcome }],
           );
         } finally {
           drain.dispose();

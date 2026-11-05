@@ -286,6 +286,9 @@ describe("broadcast dispatch", () => {
     "settles independently deferred broadcast lanes after %s",
     async (outcome) => {
       const { broadcastClaim, susanClaim, mainClaim } = mockBroadcastClaims("deferred");
+      const chatHistories = new Map([
+        ["oc-broadcast-group", [{ sender: "peer", body: "earlier chat", timestamp: 1 }]],
+      ]);
       let deferredLifecycle: NonNullable<
         (typeof resolvedTurnCalls)[number]["replyOptions"]
       >["turnAdoptionLifecycle"];
@@ -306,7 +309,7 @@ describe("broadcast dispatch", () => {
         }),
       };
 
-      await dispatchBroadcast("deferred", { turnAdoptionLifecycle: transport });
+      await dispatchBroadcast("deferred", { turnAdoptionLifecycle: transport, chatHistories });
 
       expect(transport.onDeferred).toHaveBeenCalledTimes(1);
       expect(transport.onAdopted).not.toHaveBeenCalled();
@@ -335,6 +338,9 @@ describe("broadcast dispatch", () => {
       expect(transport.onAdopted).toHaveBeenCalledTimes(outcome === "adopted" ? 1 : 0);
       expectClaim(susanClaim, outcome !== "drop-failed");
       expectClaim(broadcastClaim, outcome !== "drop-failed");
+      if (outcome !== "drop-failed") {
+        expect(chatHistories.get("oc-broadcast-group")).toEqual([]);
+      }
     },
   );
 });

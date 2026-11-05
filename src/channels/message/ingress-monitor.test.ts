@@ -115,62 +115,43 @@ describe("channel ingress monitor", () => {
     });
   });
 
-  it("skips ignored events and prunes once before one admission enqueue", async () => {
-    await withQueue(async (queue) => {
-      const prune = vi.spyOn(queue, "prune");
-      const enqueue = vi.spyOn(queue, "enqueue");
-      const monitor = createMonitor(queue, vi.fn(), {
-        inspect: (raw) =>
-          raw.id === "ignored" ? null : { eventId: raw.id, laneKey: `lane:${raw.lane}` },
-        retention: { pruneIntervalMs: 0, completedMaxEntries: 10 },
+  it.each(["single", "batch"] as const)(
+    "prunes once before %s admission and skips ignored events",
+    async (mode) => {
+      await withQueue(async (queue) => {
+        const prune = vi.spyOn(queue, "prune");
+        const enqueue = vi.spyOn(queue, mode === "single" ? "enqueue" : "enqueueBatch");
+        const monitor = createMonitor(queue, vi.fn(), {
+          inspect: (raw) =>
+            raw.id === "ignored" ? null : { eventId: raw.id, laneKey: `lane:${raw.lane}` },
+          retention: { pruneIntervalMs: 0, completedMaxEntries: 10 },
+        });
+        const ignored = { id: "ignored", lane: "a", text: "receipt" };
+        await expect(monitor.admit(ignored)).resolves.toEqual({ kind: "ignored" });
+        expect(prune).not.toHaveBeenCalled();
+        expect(enqueue).not.toHaveBeenCalled();
+        if (mode === "single") {
+          await monitor.admit({ id: "event-one", lane: "a", text: "hello" });
+        } else {
+          await monitor.admitBatch([
+            ignored,
+            { id: "event-batch-1", lane: "a", text: "first" },
+            { id: "event-batch-2", lane: "b", text: "second" },
+            { id: "event-batch-3", lane: "c", text: "third" },
+          ]);
+        }
+        expect(prune).toHaveBeenCalledOnce();
+        expect(enqueue).toHaveBeenCalledOnce();
+        expect((await queue.listPending()).map((row) => row.id)).toEqual(
+          mode === "single" ? ["event-one"] : ["event-batch-1", "event-batch-2", "event-batch-3"],
+        );
+        expect(Math.max(...prune.mock.invocationCallOrder)).toBeLessThan(
+          Math.min(...enqueue.mock.invocationCallOrder),
+        );
+        await monitor.stop();
       });
-
-      await expect(monitor.admit({ id: "ignored", lane: "a", text: "receipt" })).resolves.toEqual({
-        kind: "ignored",
-      });
-      expect(prune).not.toHaveBeenCalled();
-      expect(enqueue).not.toHaveBeenCalled();
-
-      await monitor.admit({ id: "event-one", lane: "a", text: "hello" });
-      expect(prune).toHaveBeenCalledOnce();
-      expect(enqueue).toHaveBeenCalledOnce();
-      expect(Math.max(...prune.mock.invocationCallOrder)).toBeLessThan(
-        Math.min(...enqueue.mock.invocationCallOrder),
-      );
-      await monitor.stop();
-    });
-  });
-
-  it("prunes zero-interval retention once before a multi-event batch", async () => {
-    await withQueue(async (queue) => {
-      const prune = vi.spyOn(queue, "prune");
-      const enqueue = vi.spyOn(queue, "enqueueBatch");
-      const monitor = createMonitor(queue, vi.fn(), {
-        inspect: (raw) =>
-          raw.id === "ignored" ? null : { eventId: raw.id, laneKey: `lane:${raw.lane}` },
-        retention: { pruneIntervalMs: 0, completedMaxEntries: 10 },
-      });
-
-      await monitor.admitBatch([
-        { id: "ignored", lane: "a", text: "receipt" },
-        { id: "event-batch-1", lane: "a", text: "first" },
-        { id: "event-batch-2", lane: "b", text: "second" },
-        { id: "event-batch-3", lane: "c", text: "third" },
-      ]);
-
-      expect(prune).toHaveBeenCalledOnce();
-      expect(enqueue).toHaveBeenCalledOnce();
-      expect((await queue.listPending()).map((row) => row.id)).toEqual([
-        "event-batch-1",
-        "event-batch-2",
-        "event-batch-3",
-      ]);
-      expect(Math.max(...prune.mock.invocationCallOrder)).toBeLessThan(
-        Math.min(...enqueue.mock.invocationCallOrder),
-      );
-      await monitor.stop();
-    });
-  });
+    },
+  );
 
   it("recovers the entire committed batch after an acknowledgment fails", async () => {
     await withQueue(async (queue) => {
@@ -618,6 +599,63 @@ describe("channel ingress monitor", () => {
           scanGate.resolve();
           await monitor.stop();
           await Promise.all([creator.dispose(), foreign.dispose()]);
+        }
+      });
+    },
+  );
+
+  it.each(["admission", "settlement"] as const)(
+    "keeps work recoverable while its plugin is quiesced (%s wake)",
+    async (wake) => {
+      await withQueue(async (queue) => {
+        const owner = new PluginInstance("ingress-reload");
+        const service = owner.retainConsumer();
+        const successor = new PluginInstance("ingress-reload");
+        const entered = createDeferred();
+        const finish = createDeferred();
+        const adopted = createDeferred<unknown>();
+        const seen: string[] = [];
+        const deliver = async (raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
+          seen.push(raw.id);
+          entered.resolve();
+          await finish.promise;
+          await Promise.resolve()
+            .then(() => lifecycle.onAdopted())
+            .then(adopted.resolve, adopted.resolve);
+        };
+        const monitor = owner.run(() => createMonitor(queue, deliver));
+        const replacement = successor.run(() => createMonitor(queue, deliver));
+        const admitNext = () =>
+          service.run(() => monitor.admit({ id: "during-reload", lane: "a", text: "next" }));
+        try {
+          monitor.start();
+          await monitor.waitForIdle();
+          await monitor.admit({ id: "before-reload", lane: "a", text: "first" });
+          await entered.promise;
+          owner.quiesce();
+          if (wake === "admission") {
+            await expect(admitNext()).resolves.toMatchObject({ kind: "durable" });
+          }
+          finish.resolve();
+          expect(await adopted.promise).toBeUndefined();
+          await monitor.waitForIdle();
+          if (wake === "settlement") {
+            await expect(admitNext()).resolves.toMatchObject({ kind: "durable" });
+          }
+          expect(seen).toEqual(["before-reload"]);
+          expect((await queue.listPending()).map((row) => row.id)).toEqual(["during-reload"]);
+          await monitor.stop();
+          replacement.start();
+          await replacement.waitForIdle();
+          expect(seen).toEqual(["before-reload", "during-reload"]);
+          expect(await queue.listPending()).toEqual([]);
+          expect(await queue.listClaims()).toEqual([]);
+        } finally {
+          finish.resolve();
+          await monitor.stop();
+          await replacement.stop();
+          service.release();
+          await Promise.all([owner.dispose(), successor.dispose()]);
         }
       });
     },

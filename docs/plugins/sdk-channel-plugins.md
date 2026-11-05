@@ -498,6 +498,10 @@ when initialization must finish before the child runs.
       row's reason, without replay. Keep `onAbandoned` for retryable relinquishment;
       `queue-cap` when all entries are protected still uses that path. Wrappers
       must settle their handoff and source cleanup when either callback completes.
+      Spreading the lifecycle while overriding only `onAbandoned` does not intercept
+      drops: also wrap `onDropped`, or use the reply lifecycle's `onSettled` for
+      shared terminal cleanup. Omitting `onDropped` retains legacy abandonment and
+      replay. Policy drops do not send retry-failure notices.
 
       A `queuedDeliveryCorrelations` entry stays bound to its source through collect
       batching. Its optional `shouldSuppressReply(payload)` applies before an

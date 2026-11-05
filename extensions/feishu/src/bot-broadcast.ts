@@ -66,6 +66,13 @@ export function createFeishuBroadcastIngressSettlement(params: {
       // Reporting cannot undo an already adopted durable turn.
     }
   };
+  const notifyAdopted = () => {
+    try {
+      params.onAdopted?.();
+    } catch {
+      // Local cleanup cannot reopen an already adopted durable turn.
+    }
+  };
   const abandon = async (error: unknown) => {
     if (terminal) {
       return;
@@ -119,6 +126,9 @@ export function createFeishuBroadcastIngressSettlement(params: {
         }
         await params.lifecycle?.onAbandoned();
       }
+      if ([...lanes].some((lane) => lane.status === "completed")) {
+        notifyAdopted();
+      }
     } catch (error) {
       terminal = undefined;
       await abandon(error).catch(() => undefined);
@@ -139,11 +149,7 @@ export function createFeishuBroadcastIngressSettlement(params: {
     try {
       beginFinalizing();
       await params.lifecycle?.onAdopted();
-      try {
-        params.onAdopted?.();
-      } catch {
-        // Local cleanup cannot reopen an already adopted durable turn.
-      }
+      notifyAdopted();
       try {
         await params.replayClaim?.commit();
       } catch (error) {
@@ -248,13 +254,9 @@ export function createFeishuBroadcastIngressSettlement(params: {
             }
             lane.status = "dropped";
             dropReason ??= reason;
-            try {
-              await maybeSettle();
-            } finally {
-              // Initial fanout may still be dispatching another lane. Retain
-              // this source through the aggregate receipt and admitted work.
-              await settlement.promise;
-            }
+            // The tracked aggregate retains transport custody. Holding this
+            // session's dropped head until a peer adopts can deadlock fan-out.
+            await maybeSettle();
             if (terminal?.kind === "abandoned") {
               throw terminal.error;
             }

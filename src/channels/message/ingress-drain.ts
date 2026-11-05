@@ -21,10 +21,6 @@ import {
   registerLiveIngressDrainInstance,
 } from "./ingress-claim-owner.js";
 import { createIngressWriter } from "./ingress-claim-writes.js";
-import {
-  createIngressDeadLetterNotifier,
-  type IngressDeadLetterNotice,
-} from "./ingress-dead-letter-notice.js";
 import type { ChannelIngressDispatchLifecycle } from "./ingress-drain-lifecycle.js";
 import {
   activeClaimKey,
@@ -39,6 +35,10 @@ import {
   supersedeActiveStatesIfNeeded,
   type IngressSupersedeDecision,
 } from "./ingress-drain-supersede.js";
+import {
+  createIngressFailureReporter,
+  type IngressDeadLetterNotice,
+} from "./ingress-failure-report.js";
 import { IngressQueueCapDropError, resolveQueueCapDropFailure } from "./ingress-queue-cap-drop.js";
 import type {
   ChannelIngressQueue,
@@ -177,7 +177,7 @@ export function createChannelIngressDrainOwner<
   let disposed = false;
 
   const log = (message: string) => options.onLog?.(message);
-  const notifyDeadLetter = createIngressDeadLetterNotifier(options.onDeadLetter, log, formatError);
+  const reportFailure = createIngressFailureReporter(options.onDeadLetter, log, formatError);
 
   const clearStallTimer = (state: ActiveHandlerState<TPayload, TMetadata>) => {
     clearTimeout(state.stallTimer);
@@ -305,10 +305,7 @@ export function createChannelIngressDrainOwner<
       return;
     }
     if (disposition.kind === "fail") {
-      log(
-        `spooled update ${displayId} on lane ${claim.laneKey ?? displayId} failed after ${disposition.attempt} attempts (${disposition.reason}): ${disposition.message}; dead-lettered`,
-      );
-      await notifyDeadLetter(claim, disposition);
+      await reportFailure(claim, disposition);
       return;
     }
     log(`spooled update ${displayId} failed; keeping for retry: ${disposition.message}`);

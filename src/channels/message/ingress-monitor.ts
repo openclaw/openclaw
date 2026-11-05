@@ -1,7 +1,9 @@
 /** Shared durable channel-ingress admission, pump, retention, and shutdown lifecycle. */
 import { formatErrorMessage } from "../../infra/errors.js";
-import { pluginInstanceInvocation } from "../../plugins/plugin-instance-invocation.js";
-import { wrapCurrentPluginInstance } from "../../plugins/plugin-instance-scope.js";
+import {
+  getPluginValueInstance,
+  wrapCurrentPluginInstance,
+} from "../../plugins/plugin-instance-scope.js";
 import {
   getGatewayRestartDrainSignal,
   getGatewaySuspendAdmissionPhase,
@@ -61,8 +63,11 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
 ) {
   // Deferred pumps retain their plugin owner, not a completed caller's invocation.
   const options = wrapCurrentPluginInstance(params);
-  const runInBackgroundContext =
-    pluginInstanceInvocation.getStore()?.instance.lifecycle.runInBackgroundContext;
+  const pluginOwner = getPluginValueInstance(options);
+  const runInBackgroundContext = pluginOwner?.lifecycle.runInBackgroundContext;
+  // Reload closes ordinary admission before stopping channel monitors. Keep new
+  // work durable in that window; admitted deliveries still own their settlement.
+  const isPluginQuiesced = () => pluginOwner?.acceptingCalls === false;
   const now = options.now ?? Date.now;
   const waitForDeliveryIdleBeforeRepump = options.waitForDeliveryIdleBeforeRepump ?? false;
   const retention =
@@ -214,7 +219,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
                 claimedId: claim.id,
                 claimedLaneKey,
               });
-              if (!running || isAborted() || lifecycle.abortSignal.aborted) {
+              if (shouldStopDispatch() || lifecycle.abortSignal.aborted) {
                 await lifecycle.onCancelled?.();
                 return undefined;
               }
@@ -319,7 +324,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           // never drops channel work merely because the durable claim already settled.
           const delivery = Promise.resolve()
             .then(() => {
-              if (!running || isAborted() || lifecycle.abortSignal.aborted) {
+              if (shouldStopDispatch() || lifecycle.abortSignal.aborted) {
                 return wrappedLifecycle.onCancelled?.();
               }
               return options.deliver(raw, wrappedLifecycle, claim);
@@ -439,7 +444,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         requested = false;
         await pruneIfDue("pump");
         // Stop may win the async prune race; keep lazy drain creation behind this fence.
-        if (!running || isAborted()) {
+        if (!running || isAborted() || isPluginQuiesced()) {
           break;
         }
         const activeDrain = getDrain();
@@ -453,6 +458,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
             shouldStop: () =>
               !running ||
               isAborted() ||
+              isPluginQuiesced() ||
               getGatewaySuspendAdmissionPhase() !== "accepting" ||
               activeDeliveries.size + activeInspections.size - deferredStartCapacity >= startLimit,
           });
@@ -511,7 +517,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   );
 
   const requestDrain = (): void => {
-    if (!running || isAborted() || getGatewayRestartDrainSignal().aborted) {
+    if (!running || isAborted() || isPluginQuiesced() || getGatewayRestartDrainSignal().aborted) {
       // A stale request here makes waitForIdle busy-spin on resolved awaits.
       requested = false;
       releaseRestartFenceWake();
@@ -572,6 +578,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   const shouldStopDispatch = () =>
     !running ||
     isAborted() ||
+    isPluginQuiesced() ||
     isGatewayRestartDraining() ||
     getGatewayRestartDrainSignal().aborted ||
     getGatewaySuspendAdmissionPhase() !== "accepting";

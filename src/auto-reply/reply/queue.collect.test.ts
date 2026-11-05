@@ -217,24 +217,19 @@ describe("followup queue collect routing", () => {
   });
 
   it("carries queued local cron-authority unavailability through a collect batch", async () => {
-    const q = createQueueCase({}, 1);
-    const first = createRun({ prompt: "first queued turn" });
-    first.turnAdoptionLifecycle = {
-      admission: "cancel-only",
-      ownerKey: "gateway:local",
-      cronCreatorAuthorityUnavailable: "queued-local-operator",
-      onAdopted: async () => {},
-    };
-    const second = createRun({ prompt: "second queued turn" });
-    second.turnAdoptionLifecycle = {
-      admission: "cancel-only",
-      ownerKey: "gateway:local",
-      onAdopted: async () => {},
-    };
-    q.add(first);
-    q.add(second);
-    q.start();
-    await q.done.promise;
+    const q = createQueueCase();
+    for (const cronCreatorAuthorityUnavailable of ["queued-local-operator", undefined] as const) {
+      q.enqueue({
+        prompt: "queued turn",
+        turnAdoptionLifecycle: {
+          admission: "cancel-only",
+          ownerKey: "gateway:local",
+          cronCreatorAuthorityUnavailable,
+          onAdopted: async () => {},
+        },
+      });
+    }
+    await q.drain();
     expect(q.calls[0]?.turnAdoptionLifecycle?.cronCreatorAuthorityUnavailable).toBe(
       "queued-local-operator",
     );
@@ -1067,82 +1062,37 @@ describe("followup queue collect routing", () => {
     expect(calls[2]?.originatingChatType).toBe("channel");
   });
 
-  it("collects compatible items after one cross-channel drain", async () => {
+  it.each([
+    {
+      prompt: "different route",
+      originatingChannel: "slack",
+      originatingTo: "channel:A",
+      originatingChatType: "channel",
+    },
+    { prompt: "unresolved origin" },
+    { prompt: "route-less direct", originatingChatType: "direct" },
+  ] as const)("isolates $prompt before collecting routed peers", async (first) => {
     const q = createQueueCase({}, 2);
-    const { calls } = q;
-    q.enqueueMany(
-      {
-        prompt: "first route",
-        originatingChannel: "slack",
-        originatingTo: "channel:A",
-      },
-      {
-        prompt: "second route one",
-        originatingChannel: "slack",
-        originatingTo: "channel:B",
-      },
-      {
-        prompt: "second route two",
-        originatingChannel: "slack",
-        originatingTo: "channel:B",
-      },
-    );
-
-    await q.drain();
-
-    expect(calls).toHaveLength(2);
-    expect(calls[0]?.prompt).toBe("first route");
-    expect(calls[1]?.prompt).toContain("[Queued messages while agent was busy]");
-    expect(calls[1]?.prompt).toContain("Queued #1\nsecond route one");
-    expect(calls[1]?.prompt).toContain("Queued #2\nsecond route two");
-    expect(calls[1]?.originatingChannel).toBe("slack");
-    expect(calls[1]?.originatingTo).toBe("channel:B");
-  });
-
-  it("drains unresolved-origin items separately from a routed batch", async () => {
-    const q = createQueueCase({}, 2);
-    const { calls } = q;
-    q.enqueue({ prompt: "unresolved origin" });
-    for (const prompt of ["keyed one", "keyed two"]) {
+    q.enqueue(first);
+    for (const prompt of ["peer one", "peer two"]) {
       q.slack(prompt, {}, { originatingTo: "channel:B", originatingChatType: "channel" });
     }
     await q.drain();
 
-    expect(calls).toHaveLength(2);
-    expect(calls[0]?.prompt).toBe("unresolved origin");
-    expect(calls[0]?.prompt).not.toContain("keyed one");
-    expect(calls[0]?.originatingChannel).toBeUndefined();
-    expect(calls[1]?.prompt).toContain("Queued #1\nkeyed one");
-    expect(calls[1]?.prompt).toContain("Queued #2\nkeyed two");
-    expect(calls[1]?.originatingChannel).toBe("slack");
-    expect(calls[1]?.originatingTo).toBe("channel:B");
-    expect(calls[1]?.originatingChatType).toBe("channel");
-  });
-
-  it("does not collect known route-less chat types into another destination", async () => {
-    const q = createQueueCase({}, 2);
-    q.enqueueMany(
-      { prompt: "unresolved direct", originatingChatType: "direct" },
-      {
-        prompt: "channel one",
-        originatingChannel: "slack",
-        originatingTo: "channel:B",
-        originatingChatType: "channel",
-      },
-      {
-        prompt: "channel two",
-        originatingChannel: "slack",
-        originatingTo: "channel:B",
-        originatingChatType: "channel",
-      },
+    expect(q.calls).toHaveLength(2);
+    expect(q.calls[0]).toMatchObject(first);
+    expect(q.calls[0]?.originatingChannel).toBe(
+      "originatingChannel" in first ? first.originatingChannel : undefined,
     );
-    await q.drain();
-    expect(q.calls[0]?.prompt).toBe("unresolved direct");
-    expect(q.calls[0]?.originatingChatType).toBe("direct");
-    expect(q.calls[1]?.prompt).toContain("channel one");
-    expect(q.calls[1]?.prompt).toContain("channel two");
-    expect(q.calls[1]?.prompt).not.toContain("unresolved direct");
-    expect(q.calls[1]?.originatingChatType).toBe("channel");
+    expect(q.calls[1]?.prompt).toContain("[Queued messages while agent was busy]");
+    expect(q.calls[1]?.prompt).toContain("Queued #1\npeer one");
+    expect(q.calls[1]?.prompt).toContain("Queued #2\npeer two");
+    expect(q.calls[1]?.prompt).not.toContain(first.prompt);
+    expect(q.calls[1]).toMatchObject({
+      originatingChannel: "slack",
+      originatingTo: "channel:B",
+      originatingChatType: "channel",
+    });
   });
 
   it("drains a disableCollectBatching retry individually instead of collecting it", async () => {
@@ -1628,28 +1578,6 @@ describe("followup queue collect routing", () => {
     } finally {
       clearFollowupQueue(q.key);
     }
-  });
-
-  it("keeps overflow summaries when aborts remove only the live item", async () => {
-    const q = createQueueCase({ mode: "followup", cap: 1 });
-    const cleaned: FollowupRun[] = [];
-    const controller = new AbortController();
-    const onComplete = vi.fn();
-    q.enqueue({ prompt: "dropped" });
-    q.enqueue({
-      prompt: "aborted",
-      abortSignal: controller.signal,
-      turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: onComplete },
-    });
-    controller.abort();
-    await drainSettledQueue(q.key, async (run) => {
-      (run.abortSignal?.aborted ? cleaned : q.calls).push(run);
-    });
-    expect(q.calls).toHaveLength(1);
-    expect(q.calls[0]?.prompt).toContain("- dropped");
-    expect(cleaned).toEqual([]);
-    expect(onComplete).toHaveBeenCalledTimes(1);
-    expect(getExistingFollowupQueue(q.key)).toBeUndefined();
   });
 
   it("does not re-deliver overflow summary on partial auth group failure retry", async () => {
@@ -2493,33 +2421,39 @@ describe("followup queue collect routing", () => {
     },
   );
 
-  it("keeps summarized work when a different cancelable live item is aborted", async () => {
-    const q = createQueueCase({ mode: "followup", cap: 1 });
-    const summarizedComplete = vi.fn();
-    const abortedComplete = vi.fn();
-    const aborted = new AbortController();
-    for (const [prompt, abortSignal, onSettled] of [
-      ["owner A summary", new AbortController().signal, summarizedComplete],
-      ["owner B live", aborted.signal, abortedComplete],
-    ] as const) {
+  it.each([false, true])(
+    "retains overflow when only the live item is aborted (summary owns cancellation: %s)",
+    async (ownsCancellation) => {
+      const q = createQueueCase({ mode: "followup", cap: 1 });
+      const summarizedComplete = vi.fn();
+      const abortedComplete = vi.fn();
+      const aborted = new AbortController();
+      const cleaned: FollowupRun[] = [];
       q.enqueue({
-        prompt,
-        abortSignal,
-        turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled },
+        prompt: "retained summary",
+        abortSignal: ownsCancellation ? new AbortController().signal : undefined,
+        turnAdoptionLifecycle: ownsCancellation
+          ? { onAdopted: async () => {}, onSettled: summarizedComplete }
+          : undefined,
       });
-    }
-    aborted.abort();
-    await drainSettledQueue(q.key, async (run) => {
-      if (!run.abortSignal?.aborted) {
-        q.calls.push(run);
-      }
-    });
-    expect(q.calls).toHaveLength(1);
-    expect(q.calls[0]?.prompt).toContain("owner A summary");
-    expect(q.calls[0]?.prompt).not.toContain("owner B live");
-    await vi.waitFor(() => expect(summarizedComplete).toHaveBeenCalledTimes(1));
-    expect(abortedComplete).toHaveBeenCalledTimes(1);
-  });
+      q.enqueue({
+        prompt: "aborted live",
+        abortSignal: aborted.signal,
+        turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: abortedComplete },
+      });
+      aborted.abort();
+      await drainSettledQueue(q.key, async (run) => {
+        (run.abortSignal?.aborted ? cleaned : q.calls).push(run);
+      });
+      expect(q.calls).toHaveLength(1);
+      expect(q.calls[0]?.prompt).toContain("retained summary");
+      expect(q.calls[0]?.prompt).not.toContain("aborted live");
+      expect(cleaned).toEqual([]);
+      expect(summarizedComplete).toHaveBeenCalledTimes(Number(ownsCancellation));
+      expect(abortedComplete).toHaveBeenCalledOnce();
+      expect(getExistingFollowupQueue(q.key)).toBeUndefined();
+    },
+  );
 });
 describe("followup authorization delivery context", () => {
   it("changes when the approval reviewer device changes", () => {
