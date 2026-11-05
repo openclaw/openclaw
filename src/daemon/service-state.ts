@@ -176,12 +176,22 @@ export async function readGatewayServiceState(
           // Only affirmative facts allow the absent state: no runtime selector
           // and no installed unit definition in either scope. Anything
           // inconclusive keeps refusing.
-          const installedScope = await findInstalledSystemdGatewayScope(baseEnv).catch(
-            (fallbackError: unknown) => {
-              assertServiceInspectionFallbackAllowed(fallbackError);
-              return undefined;
-            },
-          );
+          // Absence proof: an incomplete load-path enumeration (e.g. a
+          // SYSTEMD_UNIT_PATH override) must stay unknown, not absent. The
+          // native read path does not need this - systemctl resolves its own
+          // load path - so the requirement is scoped to this fallback probe.
+          const installedScope = await findInstalledSystemdGatewayScope(baseEnv, {
+            requireCompleteLoadPaths: true,
+          }).catch((fallbackError: unknown) => {
+            assertServiceInspectionFallbackAllowed(fallbackError);
+            return undefined;
+          });
+          // The discovery await is not bounded by the native read's deadline:
+          // a slow filesystem probe near the end of the budget must not
+          // release the absent state. Expired budget keeps the refusal.
+          if (inspectionDeadline !== undefined && budget.now() >= inspectionDeadline) {
+            throw new ServiceInspectionDeadlineError("absence fallback discovery");
+          }
           if (isGatewayServiceEnv(baseEnv) || installedScope !== null) {
             throw error;
           }

@@ -346,6 +346,82 @@ it("keeps refusing a unit installed only in the runtime system load path", async
   ).rejects.toMatchObject({ reason: unavailable });
 });
 
+it("keeps refusing a unit installed only in the local system load path", async () => {
+  // /usr/local/lib/systemd/system is a supported system load path outside the
+  // small shared constant; a complete absence proof must probe it.
+  const unitPath = "/usr/local/lib/systemd/system/openclaw-gateway.service";
+  missingFiles(unitPath, unitPath);
+  const native = await execSpy();
+  native.mockImplementation(async () => ({
+    ...nativeResult(
+      "",
+      "System has not been booted with systemd as init system (PID 1). Can't operate.",
+    ),
+    termination: "exit",
+  }));
+  await expect(
+    readGatewayServiceState(resolveGatewayService(), {
+      env: { ...serviceEnv("local-system"), DBUS_SESSION_BUS_ADDRESS: undefined },
+      ...strictRead,
+    }),
+  ).rejects.toMatchObject({ reason: unavailable });
+});
+
+it("keeps the strict read unknown when SYSTEMD_UNIT_PATH overrides the load path", async () => {
+  mockProcessPlatform("linux");
+  vi.spyOn(fs, "readFile").mockRejectedValue(missing());
+  vi.spyOn(fs, "access").mockRejectedValue(missing());
+  vi.spyOn(fs, "readdir").mockResolvedValue([]);
+  const native = await execSpy();
+  native.mockImplementation(async () => ({
+    ...nativeResult(
+      "",
+      "System has not been booted with systemd as init system (PID 1). Can't operate.",
+    ),
+    termination: "exit",
+  }));
+  // An overridden load path means the enumeration cannot match what systemd
+  // would load, so absence is unprovable and the read stays inconclusive.
+  await expect(
+    readGatewayServiceState(resolveGatewayService(), {
+      env: {
+        ...serviceEnv("unit-path-override"),
+        SYSTEMD_UNIT_PATH: "/custom/units",
+        DBUS_SESSION_BUS_ADDRESS: undefined,
+      },
+      ...strictRead,
+    }),
+  ).rejects.toMatchObject({ reason: unavailable });
+});
+
+it("keeps the timeout refusal when slow discovery outlives the inspection budget", async () => {
+  mockProcessPlatform("linux");
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  // Every filesystem probe stalls; discovery returns null only after the
+  // inspection budget has already expired.
+  vi.spyOn(fs, "access").mockImplementation(async () => {
+    await sleep(80);
+    throw missing();
+  });
+  vi.spyOn(fs, "readFile").mockRejectedValue(missing());
+  vi.spyOn(fs, "readdir").mockResolvedValue([]);
+  const native = await execSpy();
+  native.mockImplementation(async () => ({
+    ...nativeResult(
+      "",
+      "System has not been booted with systemd as init system (PID 1). Can't operate.",
+    ),
+    termination: "exit",
+  }));
+  await expect(
+    readGatewayServiceState(resolveGatewayService(), {
+      env: { ...serviceEnv("slow-discovery"), DBUS_SESSION_BUS_ADDRESS: undefined },
+      timeoutMs: 200,
+      ...strictRead,
+    }),
+  ).rejects.toThrow(/Service inspection deadline expired/);
+});
+
 it("keeps the strict read inconclusive when an unrelated unit file is unreadable", async () => {
   mockProcessPlatform("linux");
   const denied = () => Object.assign(new Error("denied"), { code: "EACCES" });

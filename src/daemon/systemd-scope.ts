@@ -45,7 +45,6 @@ import {
 } from "./systemd-service-files.js";
 import { assertNoSystemSystemdOwnership, isSystemSystemdOwnershipError } from "./systemd-system.js";
 import {
-  DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS,
   resolveSystemdUnitLoadDirectories,
   resolveSystemdUnitLoadPaths,
 } from "./systemd-unit-load-paths.js";
@@ -54,7 +53,10 @@ import { parseSystemdInlineEnvironment } from "./systemd-unit.js";
 type SystemdDiscoveryOptions = Pick<
   GatewayServiceReadOptions,
   "requireLoaded" | "loadForInspection" | "timeoutMs"
->;
+> & {
+  /** Absence proof requires the resolver's full, unoverridden load-path set. */
+  requireCompleteLoadPaths?: boolean;
+};
 
 /** Proves service absence without interpreting failed manager commands as absence. */
 export async function isSystemdServiceAbsent(
@@ -513,15 +515,26 @@ async function findSystemdGatewayScope(
 ): Promise<SystemdServiceReadTarget | null> {
   const candidates = resolveInstalledSystemdServiceNameCandidates(env);
   const names = scope === "system" ? systemdInstalledNameProbes(candidates) : candidates;
-  // User units may live in any supported systemd load path (XDG config/data,
-  // /etc/systemd/user, runtime, ...); probing only the config home would let an
-  // installed-but-unprobed unit read as absent. Filesystem errors other than
-  // ENOENT propagate so the caller keeps the inconclusive (unknown) verdict.
-  const directories =
-    scope === "system"
-      ? DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS
-      : resolveSystemdUnitLoadDirectories(env, resolveDaemonHomeDir(env), process.geteuid?.())
-          .userDirs;
+  // Units may live in any supported systemd load path (XDG config/data,
+  // /usr/local/lib, runtime, transient/generator dirs, ...); probing only the
+  // config home would let an installed-but-unprobed unit read as absent.
+  // Filesystem errors other than ENOENT propagate so the caller keeps the
+  // inconclusive (unknown) verdict.
+  const resolved = resolveSystemdUnitLoadDirectories(
+    env,
+    resolveDaemonHomeDir(env),
+    process.geteuid?.(),
+  );
+  if (options?.requireCompleteLoadPaths && !resolved.complete) {
+    // A SYSTEMD_UNIT_PATH override (or unknown uid) means this enumeration does
+    // not match what systemd would actually load; treat as unknown, not absent.
+    throw new Error(
+      `Systemd unit load paths could not be fully resolved${
+        env.SYSTEMD_UNIT_PATH?.trim() ? " (SYSTEMD_UNIT_PATH override)" : ""
+      }; absence cannot be proven.`,
+    );
+  }
+  const directories = scope === "system" ? resolved.systemDirs : resolved.userDirs;
   for (const name of names) {
     const unitName = `${name}.service`;
     for (const dir of directories) {
@@ -594,7 +607,7 @@ export async function findInstalledSystemdGatewayScope(
   options?: SystemdDiscoveryOptions,
 ): Promise<SystemdServiceReadTarget | null> {
   return await withServiceInspectionBudget<Promise<SystemdServiceReadTarget | null>>(async () => {
-    const user = await findSystemdGatewayScope(env, "user");
+    const user = await findSystemdGatewayScope(env, "user", options);
     if (user) {
       return user;
     }
