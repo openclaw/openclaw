@@ -208,6 +208,26 @@ describe("dedicated worker websocket protocol", () => {
     },
   );
 
+  it.each([
+    { name: "admission", options: { admissionFailure: "environment-unavailable" as const } },
+    { name: "ownership", options: { validationFailure: "environment-unavailable" as const } },
+  ])(
+    "does not charge the admission budget for an unavailable environment ($name)",
+    async ({ options }) => {
+      const recordFailure = vi.fn();
+      const harness = attachHarness({
+        ...options,
+        rateLimiter: createRateLimiter({ recordFailure }),
+      });
+      harness.sendConnect();
+
+      await waitForWorkerProtocol(() => expect(harness.close).toHaveBeenCalled());
+      expect(harness.setCloseCause).toHaveBeenCalledWith("environment-unavailable");
+      expect(recordFailure).not.toHaveBeenCalled();
+      expect(harness.setClient).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects rate-limited public admission before credential verification", async () => {
     const rateLimiter = createRateLimiter({
       check: vi.fn(() => ({ allowed: false, remaining: 0, retryAfterMs: 12_000 })),
