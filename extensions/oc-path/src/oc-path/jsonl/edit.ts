@@ -7,6 +7,7 @@
 
 import { parseTree } from "jsonc-parser/lib/esm/main.js";
 import { OcPathEditError } from "../edit-error.js";
+import { emitJsoncObjectEntries } from "../emit.js";
 import type { JsoncValue } from "../jsonc/ast.js";
 import { findEffectiveJsoncNode } from "../jsonc/parse.js";
 import { resolveJsoncValueOcPath } from "../jsonc/resolve-value.js";
@@ -40,13 +41,12 @@ function renderJsoncValue(
     const parts = value.items.map((v, i) => renderJsoncValue(v, guardPath, [...walked, String(i)]));
     return `[${parts.join(",")}]`;
   }
-  const parts = value.entries.map((e) => {
-    // Keys carry data too; YAML already rejects a sentinel key at the same boundary.
-    if (e.key.includes(REDACTED_SENTINEL)) {
-      throw new OcEmitSentinelError(`${guardPath}/${[...walked, e.key].join("/")}`);
-    }
-    return `${JSON.stringify(e.key)}:${renderJsoncValue(e.value, guardPath, [...walked, e.key])}`;
-  });
+  const parentPath = walked.length ? `${guardPath}/${walked.join("/")}` : guardPath;
+  const parts = emitJsoncObjectEntries(
+    value.entries,
+    parentPath,
+    (e) => `${JSON.stringify(e.key)}:${renderJsoncValue(e.value, guardPath, [...walked, e.key])}`,
+  );
   return `{${parts.join(",")}}`;
 }
 

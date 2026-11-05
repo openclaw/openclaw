@@ -7,6 +7,7 @@ import {
   parseTree,
 } from "jsonc-parser/lib/esm/main.js";
 import { OcPathEditError } from "../edit-error.js";
+import { emitJsoncObjectEntries } from "../emit.js";
 import type { OcPath } from "../oc-path.js";
 import { splitOcPathSlots } from "../oc-path.js";
 import { guardSentinel } from "../sentinel.js";
@@ -133,10 +134,9 @@ function jsoncValueToJson(value: JsoncValue, guardPath: string): unknown {
     return value.items.map((item, index) => jsoncValueToJson(item, `${guardPath}/${index}`));
   }
   return Object.fromEntries(
-    value.entries.map((entry) => {
-      // Keys carry data too; YAML already rejects a sentinel key at the same boundary.
-      guardSentinel(entry.key, `${guardPath}/${entry.key}`);
-      return [entry.key, jsoncValueToJson(entry.value, `${guardPath}/${entry.key}`)];
-    }),
+    emitJsoncObjectEntries(value.entries, guardPath, (entry, path) => [
+      entry.key,
+      jsoncValueToJson(entry.value, path),
+    ]),
   );
 }
