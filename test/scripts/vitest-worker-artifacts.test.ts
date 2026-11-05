@@ -88,7 +88,9 @@ function heldWorkerBorrowingProbe(directory: string) {
 }
 
 describe.concurrent("fresh compiled subprocess invocation", () => {
-  it("keeps source-host SDK imports native in state and maintenance workers", ({ workerArtifacts }) =>
+  it("keeps source-host SDK imports native in state and maintenance workers", ({
+    workerArtifacts,
+  }) =>
     workerArtifacts.fixtureLifetime.run(async () => {
       const { node, prepareWorkers } = workerArtifacts.createFixtureCommands();
       const owner = workerArtifacts.createWorkerRun();
@@ -121,7 +123,7 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
             import assert from 'node:assert/strict';
             import path from 'node:path';
             import {pathToFileURL} from 'node:url';
-            import {Worker} from 'node:worker_threads';
+            import {MessagePort,Worker} from 'node:worker_threads';
             const [probe,directory,root]=process.argv.slice(1);
             for(const entry of [
               'infra/sqlite-store.worker.js',
@@ -142,7 +144,16 @@ describe.concurrent("fresh compiled subprocess invocation", () => {
               });
               try {
                 const ready=await new Promise((resolve,reject)=>{
-                  worker.once('message',resolve);
+                  worker.on('message',message=>{
+                    // The real SQLite worker publishes its diagnostic port before the SDK proof.
+                    if(message?.status==='memory') {
+                      assert(message.port instanceof MessagePort);
+                      assert(Array.isArray(message.postgresBridgeCounters));
+                      message.port.close();
+                      return;
+                    }
+                    resolve(message);
+                  });
                   worker.once('error',reject);
                   worker.once('exit',code=>reject(new Error('worker exited before SDK proof: '+code)));
                 });
