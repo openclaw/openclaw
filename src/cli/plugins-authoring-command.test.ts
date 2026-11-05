@@ -510,7 +510,7 @@ describe("plugin authoring commands", () => {
 
     await expect(
       loadToolPlugin({ rootDir: tmpDir, entryPath: path.join(tmpDir, "dist/index.js") }),
-    ).rejects.toThrow("plugin entry not found: ./dist/index.js");
+    ).rejects.toMatchObject({ humanOutput: "plugin entry not found: ./dist/index.js" });
   });
 
   it.each(["{invalid json", "{ // package.json must remain strict JSON\n}"])(

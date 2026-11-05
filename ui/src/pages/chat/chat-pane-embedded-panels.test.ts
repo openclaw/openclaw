@@ -733,7 +733,7 @@ it("shows why a file could not open instead of falling back to the session diff"
   const notice = query(".review-unavailable");
   expect(notice?.getAttribute("role")).toBe("alert");
   expect(notice?.classList.contains("danger")).toBe(true);
-  expect(notice?.querySelector("strong")?.textContent).toBe("Unable to open");
+  expect(notice?.querySelector("strong")?.textContent).toBe("Couldn’t open file");
   expect(notice?.querySelector("span")?.textContent).toBe(message);
   expect(notice?.querySelector("img")).toBeNull();
   expect(query("openclaw-session-diff")).toBeNull();

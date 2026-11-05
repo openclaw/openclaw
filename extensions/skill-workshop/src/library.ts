@@ -596,7 +596,7 @@ export async function publishSkillOverlay(
   });
 }
 
-export async function writeStagedFile(staging: string, filePath: string, content: string | Buffer) {
+async function writeStagedFile(staging: string, filePath: string, content: string | Buffer) {
   const destination = path.join(staging, ...filePath.split("/"));
   await fs.mkdir(path.dirname(destination), { recursive: true });
   await fs.writeFile(destination, content);
@@ -607,7 +607,7 @@ export async function writeStagedFile(staging: string, filePath: string, content
  * the live skill is snapshotted, and the copies swap by rename. A failed fill, refused authority,
  * or failed rename leaves the previous live skill in place. Returns the snapshot's version id.
  */
-export async function publishSkillBundle(
+async function publishSkillBundle(
   paths: MutationPaths,
   action: WorkshopChangeAction,
   fill: (staging: string) => Promise<void>,
