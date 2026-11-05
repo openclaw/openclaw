@@ -1,10 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   runWithSessionPendingInputWorkerCustody,
   type SessionPendingInputWorkerReceipt,
 } from "../../config/sessions/session-accessor.sqlite-pending-inputs.js";
 import type { SessionMetadataMessageControl } from "../../config/sessions/session-manager-write-contract.js";
 import { readSessionPendingInputAuthorityFacts } from "../../config/sessions/session-pending-input-authority.kernel.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { AgentDatabaseAdmissionRestriction } from "../../state/openclaw-agent-execution-domain.js";
 
 export type MetadataWorkerAdmission = (
@@ -15,7 +15,7 @@ export type MetadataWorkerAdmission = (
 export function runWithMetadataMessageAdmission<T>(
   context: {
     admit: MetadataWorkerAdmission;
-    database: DatabaseSync;
+    database: EngineConnection;
     databasePath: string;
     checkMessage: (facts: unknown) => void;
   },

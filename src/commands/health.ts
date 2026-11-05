@@ -26,7 +26,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { formatExactDuration } from "../infra/format-time/format-duration-exact.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
+import { buildChannelAccountBindings } from "../routing/bindings.js";
 import { ExitError, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { waitForGatewayDiagnostic } from "./gateway-diagnostic-readiness.js";
 import {
@@ -99,6 +99,19 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
   return true;
 }
 
+export function emitGatewayHealthErrorJson(error: unknown, runtime: RuntimeEnv): boolean {
+  const payload =
+    formatGatewayAuthErrorJson(error) ??
+    formatGatewayClientRequestErrorJson(error) ??
+    formatGatewayTransportErrorJson(error);
+  if (!payload) {
+    return false;
+  }
+  writeRuntimeJson(runtime, payload);
+  runtime.exit(1);
+  return true;
+}
+
 function formatEventLoopHealthLine(summary: HealthSummary): string | null {
   const eventLoop = summary.eventLoop;
   if (!eventLoop) {
@@ -168,16 +181,8 @@ export async function healthCommand(
     ) {
       return;
     }
-    if (opts.json) {
-      const payload =
-        formatGatewayAuthErrorJson(error) ??
-        formatGatewayClientRequestErrorJson(error) ??
-        formatGatewayTransportErrorJson(error);
-      if (payload) {
-        writeRuntimeJson(runtime, payload);
-        runtime.exit(1);
-        return;
-      }
+    if (opts.json && emitGatewayHealthErrorJson(error, runtime)) {
+      return;
     }
     throw error;
   }
@@ -203,12 +208,7 @@ export async function healthCommand(
     const localAgents = resolveHealthAgentOrder(cfg);
     const defaultAgentId = summary.defaultAgentId ?? localAgents.defaultAgentId;
     const agents = Array.isArray(summary.agents) ? summary.agents : [];
-    const resolvedAgents =
-      agents.length > 0 ? agents : await buildHealthAgentSummaries(cfg, localAgents);
-    const displayAgents =
-      opts.verbose || !defaultAgentId
-        ? resolvedAgents
-        : resolvedAgents.filter((agent) => agent.agentId === defaultAgentId);
+    const collectLocalAgents = agents.length === 0 && localAgents.ordered.length > 0;
     const channelBindings = buildChannelAccountBindings(cfg);
     const displayPlugins = listReadOnlyChannelPluginsForConfig(cfg, {
       includeSetupFallbackPlugins: false,
@@ -262,6 +262,55 @@ export async function healthCommand(
         runtime.log(`  ${channelId}: ${probes.join(", ") || "(none)"}`);
       }
     }
+    const selfIdAccounts = [];
+    for (const plugin of displayPlugins) {
+      const channelSummary = summary.channels?.[plugin.id];
+      if (channelSummary?.linked !== true || !plugin.status?.logSelfId) {
+        continue;
+      }
+      const boundAccounts = defaultAgentId
+        ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
+        : [];
+      const accountIds = plugin.config.listAccountIds(cfg);
+      const defaultAccountId = resolveChannelDefaultAccountId({
+        plugin,
+        cfg,
+        accountIds,
+      });
+      const accountId = boundAccounts[0] ?? defaultAccountId;
+      const accountContext = await resolveHealthAccountContext({
+        plugin,
+        cfg,
+        accountId,
+      });
+      if (
+        accountContext.probeAccount === undefined ||
+        !accountContext.enabled ||
+        accountContext.configured !== true ||
+        accountContext.diagnostics.length > 0
+      ) {
+        continue;
+      }
+      selfIdAccounts.push({
+        channelId: plugin.id,
+        accountId,
+        account: accountContext.probeAccount,
+        logSelfId: plugin.status.logSelfId.bind(plugin.status),
+      });
+    }
+    // Local session publication follows every asynchronous account inspection.
+    const resolvedAgents = collectLocalAgents
+      ? await buildHealthAgentSummaries(cfg, localAgents)
+      : agents;
+    const displayDefaultAgentId =
+      collectLocalAgents && defaultAgentId
+        ? (resolvedAgents.find((agent) => agent.agentId === defaultAgentId) ?? resolvedAgents[0])
+            ?.agentId
+        : defaultAgentId;
+    const displayAgents =
+      opts.verbose || !displayDefaultAgentId
+        ? resolvedAgents
+        : resolvedAgents.filter((agent) => agent.agentId === displayDefaultAgentId);
     const accountIdsByChannel = (() => {
       if (opts.verbose) {
         return undefined;
@@ -296,47 +345,17 @@ export async function healthCommand(
         runtime.log(styleHealthChannelLine(line, rich));
       }
     }
-    for (const plugin of displayPlugins) {
-      const channelSummary = summary.channels?.[plugin.id];
-      if (channelSummary?.linked !== true || !plugin.status?.logSelfId) {
-        continue;
-      }
-      const boundAccounts = defaultAgentId
-        ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
-        : [];
-      const accountIds = plugin.config.listAccountIds(cfg);
-      const defaultAccountId = resolveChannelDefaultAccountId({
-        plugin,
-        cfg,
-        accountIds,
-      });
-      const accountId = resolvePreferredAccountId({
-        defaultAccountId,
-        boundAccounts,
-      });
-      const accountContext = await resolveHealthAccountContext({
-        plugin,
-        cfg,
-        accountId,
-      });
-      if (
-        accountContext.probeAccount === undefined ||
-        !accountContext.enabled ||
-        accountContext.configured !== true ||
-        accountContext.diagnostics.length > 0
-      ) {
-        continue;
-      }
+    for (const { channelId, accountId, account, logSelfId } of selfIdAccounts) {
       try {
-        plugin.status.logSelfId({
-          account: accountContext.probeAccount,
+        logSelfId({
+          account,
           cfg,
           runtime,
           includeChannelPrefix: true,
         });
       } catch (error) {
         const details = {
-          channel: plugin.id,
+          channel: channelId,
           accountId,
           error: formatErrorMessage(error),
         };

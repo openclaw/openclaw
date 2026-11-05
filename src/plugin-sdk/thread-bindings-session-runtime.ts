@@ -1,6 +1,3 @@
-/**
- * Runtime SDK subpath for thread binding lifecycle and session binding adapters.
- */
 export { resolveThreadBindingFarewellText } from "../channels/thread-bindings-messages.js";
 export { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 export {
@@ -19,8 +16,8 @@ export {
   type SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
 export {
-  createAccountScopedBindingAdapter,
   createAccountScopedBindingAdapterV2,
   projectThreadBindingRecord,
 } from "../infra/outbound/session-binding-adapter.js";
 export type { AccountScopedConversationBindingRecord } from "../infra/outbound/account-scoped-conversation-bindings.js";
+export { resolveThreadBindingTargetKind } from "./thread-bindings/target-kind.js";

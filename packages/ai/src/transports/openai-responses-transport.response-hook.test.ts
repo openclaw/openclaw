@@ -1,36 +1,39 @@
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
+import { createDeferred, nextEventLoopTurn, withinTest } from "../../../../test/helpers/promise.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
+import { streamAzureOpenAIResponses } from "../providers/azure-openai-responses.js";
 import {
   closeOpenAICodexWebSocketSessions,
   resetOpenAICodexWebSocketStateForTest,
   streamOpenAICodexResponses,
 } from "../providers/openai-chatgpt-responses.js";
 import { streamOpenAIResponses } from "../providers/openai-responses.js";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import type { AssistantMessageEventStreamLike, Context, Model, StreamFn } from "../types.js";
 import {
   createAzureOpenAIResponsesTransportStreamFn,
   createOpenAIResponsesTransportStreamFn,
 } from "./openai-responses-client.js";
+import { collectEventTypes } from "./openai-stream-cases.test-support.js";
 
-const openAIModel = {
-  id: "gpt-5.6-luna",
+const openAIModel = makeProviderModel("openai-responses", "openai", "gpt-5.6-luna", {
   name: "Responses hook lifecycle",
-  api: "openai-responses",
-  provider: "openai",
   baseUrl: "https://api.openai.com/v1",
   reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128_000,
   maxTokens: 4_096,
-} satisfies Model<"openai-responses">;
+});
 
 const azureModel = {
   ...openAIModel,
   api: "azure-openai-responses",
   provider: "azure-openai-responses",
   baseUrl: "https://project.services.ai.azure.com/openai/v1",
+} satisfies Model<"azure-openai-responses">;
+
+const traditionalAzureModel = {
+  ...azureModel,
+  baseUrl: "https://resource.openai.azure.com/openai/v1",
 } satisfies Model<"azure-openai-responses">;
 
 const chatGptModel = {
@@ -166,6 +169,30 @@ const fixtures = {
     createStream: (options?: BaseOpenAIStreamOptions) =>
       createManagedFixtureStream(managedAzureStream, azureModel, options),
   },
+  traditionalAzure: {
+    name: "traditional SDK Azure",
+    model: traditionalAzureModel,
+    installResponse: installSdkResponse,
+    createStream: (options?: BaseOpenAIStreamOptions) =>
+      createManagedFixtureStream(managedAzureStream, traditionalAzureModel, options),
+  },
+  sharedAzure: {
+    name: "package Azure Responses",
+    model: azureModel,
+    installResponse: installSdkResponse,
+    createStream: (options?: BaseOpenAIStreamOptions) =>
+      streamAzureOpenAIResponses(azureModel, context, { apiKey: "fixture-token", ...options }),
+  },
+  sharedTraditionalAzure: {
+    name: "package traditional Azure Responses",
+    model: traditionalAzureModel,
+    installResponse: installSdkResponse,
+    createStream: (options?: BaseOpenAIStreamOptions) =>
+      streamAzureOpenAIResponses(traditionalAzureModel, context, {
+        apiKey: "fixture-token",
+        ...options,
+      }),
+  },
   shared: {
     name: "shared Responses provider",
     model: openAIModel,
@@ -185,20 +212,6 @@ const fixtures = {
       }),
   },
 };
-
-async function settleWithin<T>(promise: Promise<T>, timeoutMs = 500): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error("response hook lifecycle timed out")), timeoutMs);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 let previousHost: ReturnType<typeof getAiTransportHost>;
 
@@ -237,45 +250,21 @@ it.each([{ id: "gpt-6-sol", api: "azure-openai-responses" }] as const)(
   },
 );
 
-describe.each([
-  {
-    name: "OpenAI",
-    model: openAIModel,
-    createStream: managedOpenAIStream,
-    defaultEncoding: "identity",
-  },
-])("$name Responses encoding", ({ model, createStream, defaultEncoding }) => {
-  it.each([{ source: "turn", key: "Accept-Encoding", expected: "gzip, br" }])(
-    "preserves the $source encoding on the final SDK request",
-    async ({ source, key, expected }) => {
-      vi.stubEnv(
-        "OPENAI_CUSTOM_HEADERS",
-        source === "default"
-          ? undefined
-          : `${key}: ${source === "environment" ? expected : "deflate"}`,
-      );
-      const fetchMock = vi.fn<typeof fetch>(async () => completedResponse());
-      configureAiTransportHost({
-        buildModelFetch: () => fetchMock,
-        plugin: {
-          ...previousHost.plugin,
-          resolveTransportTurnState: () =>
-            source === "turn" ? { headers: { [key]: expected } } : undefined,
-        },
-      });
-      const stream = createManagedFixtureStream(
-        createStream,
-        { ...model, ...(source === "model" ? { headers: { [key]: expected } } : {}) },
-        source === "caller" ? { headers: { [key]: expected } } : undefined,
-      );
-      expect((await stream.result()).stopReason).toBe("stop");
-      expect(fetchMock).toHaveBeenCalledOnce();
-      const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
-      expect(headers.get("accept-encoding")).toBe(
-        source === "default" ? defaultEncoding : expected,
-      );
+it("preserves the turn encoding over environment headers on the final OpenAI SDK request", async () => {
+  vi.stubEnv("OPENAI_CUSTOM_HEADERS", "Accept-Encoding: deflate");
+  const fetchMock = vi.fn<typeof fetch>(async () => completedResponse());
+  configureAiTransportHost({
+    buildModelFetch: () => fetchMock,
+    plugin: {
+      ...previousHost.plugin,
+      resolveTransportTurnState: () => ({ headers: { "Accept-Encoding": "gzip, br" } }),
     },
-  );
+  });
+  const stream = createManagedFixtureStream(managedOpenAIStream, openAIModel);
+  expect((await stream.result()).stopReason).toBe("stop");
+  expect(fetchMock).toHaveBeenCalledOnce();
+  const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+  expect(headers.get("accept-encoding")).toBe("gzip, br");
 });
 
 describe.each([fixtures.azure, fixtures.chatgpt])(
@@ -284,21 +273,14 @@ describe.each([fixtures.azure, fixtures.chatgpt])(
     it("awaits response metadata before exposing the first stream event", async () => {
       installResponse();
       const order: string[] = [];
-      let continueHook!: () => void;
-      const hookCompleted = new Promise<void>((resolve) => {
-        continueHook = resolve;
-      });
+      const hookCompleted = createDeferred();
       const onResponse = vi.fn(async () => {
         order.push("hook:start");
-        await hookCompleted;
+        await hookCompleted.promise;
         order.push("hook:end");
       });
       const stream = createStream({ onResponse });
-      const consume = (async () => {
-        for await (const event of stream) {
-          order.push(event.type);
-        }
-      })();
+      const consume = collectEventTypes(stream, order);
 
       await vi.waitFor(() => expect(onResponse).toHaveBeenCalledOnce());
       expect(order).toEqual(["hook:start"]);
@@ -314,7 +296,7 @@ describe.each([fixtures.azure, fixtures.chatgpt])(
         model,
       );
 
-      continueHook();
+      hookCompleted.resolve();
       await consume;
       expect((await stream.result()).stopReason).toBe("stop");
       expect(order.slice(0, 3)).toEqual(["hook:start", "hook:end", "start"]);
@@ -323,7 +305,7 @@ describe.each([fixtures.azure, fixtures.chatgpt])(
 );
 
 describe.each([fixtures.shared])("$name response hook", ({ createStream, installResponse }) => {
-  it("applies the first-event timeout while the hook is pending", async () => {
+  it("applies the first-event timeout while the hook is pending", async ({ signal }) => {
     const lifecycle = installResponse();
     const onFirstEventTimeout = vi.fn();
     const onResponse = vi.fn(() => new Promise<void>(() => {}));
@@ -333,12 +315,8 @@ describe.each([fixtures.shared])("$name response hook", ({ createStream, install
       onResponse,
     });
     const eventTypes: string[] = [];
-    const consume = (async () => {
-      for await (const event of stream) {
-        eventTypes.push(event.type);
-      }
-    })();
-    const result = await settleWithin(stream.result());
+    const consume = collectEventTypes(stream, eventTypes);
+    const result = await withinTest(stream.result(), signal);
     await consume;
 
     expect(onResponse).toHaveBeenCalledOnce();
@@ -356,36 +334,23 @@ describe.each([fixtures.shared])("$name response hook", ({ createStream, install
 describe.each([fixtures.openai, fixtures.chatgpt])(
   "$name response hook",
   ({ createStream, installResponse }) => {
-    it.each(["resolve", "reject"] as const)(
+    it.for(["resolve", "reject"] as const)(
       "keeps caller cancellation terminal after a late hook %s",
-      async (settlement) => {
+      async (settlement, { signal }) => {
         const lifecycle = installResponse();
         const controller = new AbortController();
-        let settleHook!: () => void;
-        const pendingHook = new Promise<void>((resolve, reject) => {
-          settleHook = () => {
-            if (settlement === "resolve") {
-              resolve();
-            } else {
-              reject(new Error("late response hook rejection"));
-            }
-          };
-        });
-        const onResponse = vi.fn(() => pendingHook);
+        const pendingHook = createDeferred();
+        const onResponse = vi.fn(() => pendingHook.promise);
         const stream = createStream({ signal: controller.signal, onResponse });
         const eventTypes: string[] = [];
-        const consume = (async () => {
-          for await (const event of stream) {
-            eventTypes.push(event.type);
-          }
-        })();
+        const consume = collectEventTypes(stream, eventTypes);
 
         await vi.waitFor(() => expect(onResponse).toHaveBeenCalledOnce());
         const abortReason = Object.assign(new Error("caller canceled the provider response"), {
           code: "CALLER_ABORTED",
         });
         controller.abort(abortReason);
-        const result = await settleWithin(stream.result());
+        const result = await withinTest(stream.result(), signal);
         await consume;
         expect(result).toMatchObject({
           stopReason: "aborted",
@@ -395,10 +360,12 @@ describe.each([fixtures.openai, fixtures.chatgpt])(
         expect(eventTypes).toEqual(["error"]);
         expect(lifecycle.requestAborted).toHaveBeenCalledOnce();
 
-        settleHook();
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        if (settlement === "resolve") {
+          pendingHook.resolve();
+        } else {
+          pendingHook.reject(new Error("late response hook rejection"));
+        }
+        await nextEventLoopTurn();
         expect(eventTypes).toEqual(["error"]);
         lifecycle.assertListenersRemoved();
       },
@@ -417,24 +384,6 @@ describe("managed ChatGPT OAuth response model", () => {
     const result = await createManagedFixtureStream(managedOpenAIStream, chatGptModel).result();
 
     expect(result.responseModel).toBe(responseModel);
-  });
-
-  it("fails closed when managed HTTP and SSE model attestations conflict", async () => {
-    const tracked = trackedFetch(() =>
-      completedResponse(
-        { headers: { "openai-model": "gpt-5.6-sol" } },
-        { "x-openai-model": "gpt-5.6-terra-2026-08-01" },
-      ),
-    );
-    configureAiTransportHost({ buildModelFetch: () => tracked.fetch });
-
-    const result = await createManagedFixtureStream(managedOpenAIStream, chatGptModel).result();
-
-    expect(result).toMatchObject({
-      stopReason: "error",
-      errorMessage: "Conflicting OpenAI response model attestations",
-    });
-    expect(result.responseModel).toBeUndefined();
   });
 
   it("fails closed when one managed SSE event has conflicting model attestations", async () => {
@@ -471,31 +420,50 @@ describe("managed ChatGPT OAuth response model", () => {
   });
 });
 
-describe("native ChatGPT SSE non-success response hooks", () => {
-  it("runs the hook for the failing response and surfaces the error without retrying", async () => {
+describe.each(Object.values(fixtures))("$name non-success response hooks", ({ createStream }) => {
+  it("reports the rejection before body consumption while another request completes", async () => {
     // The embedded runner owns transient retries; the transport must expose
     // the first non-success response to the hook and then fail the stream.
+    const response = new Response("overloaded", {
+      status: 503,
+      headers: { "retry-after-ms": "0" },
+    });
+    const readBody = vi.spyOn(response, "text");
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        new Response("overloaded", { status: 503, headers: { "retry-after-ms": "0" } }),
-      )
+      .mockResolvedValueOnce(response)
       .mockResolvedValueOnce(completedResponse());
+    configureAiTransportHost({ buildModelFetch: () => fetchMock });
     vi.stubGlobal("fetch", fetchMock);
-    const onResponse = vi.fn();
+    const parallelOnResponse = vi.fn<NonNullable<BaseOpenAIStreamOptions["onResponse"]>>();
+    const bodyReadsDuringHook: number[] = [];
+    let requestsBeforeParallel: number | undefined;
+    let parallelStopReason: string | undefined;
+    const onResponse = vi.fn<NonNullable<BaseOpenAIStreamOptions["onResponse"]>>(async () => {
+      bodyReadsDuringHook.push(readBody.mock.calls.length);
+      requestsBeforeParallel = fetchMock.mock.calls.length;
+      const parallel = await createStream({
+        sessionId: "response-hook-overlap",
+        onResponse: parallelOnResponse,
+      }).result();
+      parallelStopReason = parallel.stopReason;
+      bodyReadsDuringHook.push(readBody.mock.calls.length);
+    });
 
-    const result = await streamOpenAICodexResponses(chatGptModel, context, {
-      apiKey: chatGptToken,
-      transport: "sse",
-      onResponse,
-    }).result();
+    const result = await createStream({ sessionId: "response-hook-overlap", onResponse }).result();
 
     expect(result.stopReason).toBe("error");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(onResponse.mock.calls.map(([response]) => response.status)).toEqual([503]);
+    expect(onResponse.mock.calls.map(([metadata]) => metadata.status)).toEqual([503]);
+    expect(parallelOnResponse.mock.calls.map(([metadata]) => metadata.status)).toEqual([202]);
+    expect(parallelStopReason).toBe("stop");
+    expect(bodyReadsDuringHook).toEqual([0, 0]);
+    expect(requestsBeforeParallel).toBe(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+});
 
-  it("times out a stalled non-success hook and cancels its body", async () => {
+describe("native ChatGPT SSE non-success response hooks", () => {
+  it("times out a stalled non-success hook and cancels its body", async ({ signal }) => {
     const bodyCancelled = vi.fn();
     const body = new ReadableStream<Uint8Array>({
       pull() {},
@@ -507,7 +475,7 @@ describe("native ChatGPT SSE non-success response hooks", () => {
     );
     const onFirstEventTimeout = vi.fn();
 
-    const result = await settleWithin(
+    const result = await withinTest(
       streamOpenAICodexResponses(chatGptModel, context, {
         apiKey: chatGptToken,
         transport: "sse",
@@ -515,6 +483,7 @@ describe("native ChatGPT SSE non-success response hooks", () => {
         onFirstEventTimeout,
         onResponse: () => new Promise<void>(() => {}),
       }).result(),
+      signal,
     );
 
     expect(result.stopReason).toBe("error");

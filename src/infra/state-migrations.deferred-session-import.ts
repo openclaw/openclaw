@@ -1,26 +1,15 @@
 import { isDeepStrictEqual } from "node:util";
-import { z } from "zod";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { sha256Hex } from "./crypto-digest.js";
-import { databaseIdentity } from "./deferred-plugin-session-verification.js";
+import { DeferredPluginSessionImportSchema } from "./deferred-plugin-session-import-schema.js";
+import { databaseIdentity } from "./deferred-plugin-session-source-read.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import { MigrationArtifactSchema } from "./session-sqlite-migration-artifact.js";
 import {
   readLegacyMigrationReceiptFromDatabase,
   recordLegacyMigrationRun,
   type LegacyMigrationReceipt,
 } from "./state-migrations.receipts.js";
-
-export const DeferredPluginSessionImportSchema = z.object({
-  databaseIdentity: z.string(),
-  superseded: z.literal("different-database").optional(),
-  pluginIds: z.array(z.string()),
-  sources: z.array(
-    z.object({ path: z.string(), identity: MigrationArtifactSchema.shape.identity }),
-  ),
-});
-export type DeferredPluginSessionImport = z.infer<typeof DeferredPluginSessionImportSchema>;
 
 export function parseSessionImportReceipt(
   params: { sqlitePath: string },

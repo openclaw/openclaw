@@ -1,14 +1,13 @@
-import {
-  loadSessionEntry,
-  replaceSessionEntrySync,
-} from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-admitted-read.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry-replace.js";
 import { loadTranscriptReadSnapshotSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { readTranscriptContextVersionInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
-import { appendTranscriptMessageSnapshotSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptMessageSnapshotSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.kernel.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readTranscriptMessageIdempotencyKey } from "../session-transcript-entry-message.js";
 import {
@@ -34,6 +33,7 @@ export function applyPreparedTranscriptCommit(
   plan: PreparedTranscriptCommit,
   freshMessages: readonly CommittedAgentMessage[],
   onProjectionReconcileNeeded: () => void,
+  onSessionEntryUpdated?: (entry: SessionEntry) => void,
 ): ApplyTranscriptCommitResult {
   if (!plan.result.ok) {
     return plan.result;
@@ -87,7 +87,6 @@ export function applyPreparedTranscriptCommit(
       },
       undefined,
       {
-        messageAlreadyRedacted: true,
         scheduleProjectionReconcile: false,
         onProjectionReconcileNeeded,
       },
@@ -115,9 +114,11 @@ export function applyPreparedTranscriptCommit(
   ) {
     throw new Error("Worker transcript session changed inside its transaction");
   }
-  replaceSessionEntrySync(input.scope, {
+  const updatedEntry = {
     ...entry,
     updatedAt: Math.max(entry.updatedAt ?? 0, Date.now()),
-  });
+  };
+  replaceSessionEntrySync(input.scope, updatedEntry);
+  onSessionEntryUpdated?.(updatedEntry);
   return { ...plan.result, messages };
 }

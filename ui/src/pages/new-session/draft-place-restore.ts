@@ -1,7 +1,7 @@
 import { parseProjectGitUrl } from "../../../../src/projects/project-git-url.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
-import type { DraftRepositoryController } from "./draft-repository-state.ts";
+import type { DraftRepositoryStateOwner } from "./draft-repository-state.ts";
 import type { NewSessionModelControl } from "./model-control.ts";
 import {
   resolveNewSessionWhere,
@@ -47,7 +47,7 @@ export function createDraftPlaceRestoreState(): DraftPlaceRestoreState {
 export function resolveDraftPlacePreferenceSelection(
   state: DraftPlaceRestoreState,
   browser: DraftPlaceBrowser,
-  repository: DraftRepositoryController,
+  repository: DraftRepositoryStateOwner,
   workspace: string,
   folder: string,
 ): NewSessionPreference {
@@ -70,7 +70,7 @@ export function resolveDraftPlacePreferenceSelection(
 
 export function canAdoptDraftPlaceDefaults(
   state: DraftPlaceRestoreState,
-  repository: DraftRepositoryController,
+  repository: DraftRepositoryStateOwner,
 ): boolean {
   return (
     !state.folderSelectedByUser &&
@@ -135,10 +135,10 @@ export function restoreDraftPlacePreferences(params: {
   gateway: DraftGatewayState;
   where: NewSessionWhere;
   modelControl: NewSessionModelControl;
-  repositoryState: DraftRepositoryController;
+  repositoryState: DraftRepositoryStateOwner;
   isAdmin: () => boolean;
   persistPreference: (patch: Parameters<DraftGatewayState["persistPreference"]>[2]) => void;
-  requestUpdate: () => void;
+  changed: () => void;
   requiredPlacement: boolean;
   loadConfiguredDefaults: (configuredDefaults: boolean) => void;
 }) {
@@ -150,7 +150,7 @@ export function restoreDraftPlacePreferences(params: {
     repositoryState,
     isAdmin,
     persistPreference,
-    requestUpdate,
+    changed: notify,
   } = params;
   if (state.requiredModelDefaults !== params.requiredPlacement) {
     state.requiredModelDefaults = params.requiredPlacement;
@@ -232,7 +232,7 @@ export function restoreDraftPlacePreferences(params: {
       state.preferredRemoteProjectRestore = null;
       changed = true;
     }
-    requestUpdate();
+    notify();
   }
 
   if (preferredRemoteProject) {
@@ -304,6 +304,6 @@ export function restoreDraftPlacePreferences(params: {
 
   if (changed) {
     repositoryState.synchronize();
-    requestUpdate();
+    notify();
   }
 }

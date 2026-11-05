@@ -1,8 +1,4 @@
-/**
- * Codex CLI and app-server bundle MCP projection helpers.
- */
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { normalizeConfiguredMcpServers } from "../../config/mcp-config-normalize.js";
 import type { SessionToolOverrides } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadMcpToolGrants } from "../../infra/exec-approvals-mcp.js";
@@ -18,11 +14,11 @@ import {
   buildCodexMcpServersConfig,
   normalizeCodexMcpServerConfig,
 } from "../codex-mcp-config.js";
-import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import { prepareConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { requiresMcpBearerProjection, resolveMcpBearerBundleConfig } from "../mcp-auth-profile.js";
 import { partitionMcpServersByConnectionScope } from "../mcp-connection-resolver.js";
 import { applyPreparedNativeMcpPolicy, prepareNativeMcpPolicy } from "../native-mcp-policy.js";
-import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
+import { resolveSandboxRuntimeStatusAsync } from "../sandbox/runtime-status.js";
 import { projectNativeMcpRunContext } from "./native-mcp-context.js";
 import { serializeTomlInlineValue } from "./toml-inline.js";
 
@@ -76,7 +72,7 @@ export function resolveCodexMcpToolOverridesForAgent(
   cfg: OpenClawConfig | undefined,
   options: Pick<CodexUserMcpServersProjectionOptions, "agentId" | "toolOverrides">,
 ): Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny"> | undefined {
-  const deniedServerNames = Object.entries(normalizeConfiguredMcpServers(cfg?.mcp?.servers))
+  const deniedServerNames = Object.entries(cfg?.mcp?.servers ?? {})
     .filter(([, server]) => !isCodexMcpServerAllowedForAgent(server, options))
     .map(([name]) => name);
   if (deniedServerNames.length === 0) {
@@ -101,7 +97,7 @@ function selectCodexProjectableMcpServers(
   cfg: OpenClawConfig | undefined,
   options: CodexUserMcpServersProjectionOptions | undefined,
 ): BundleMcpConfig["mcpServers"] {
-  const userServers = normalizeConfiguredMcpServers(cfg?.mcp?.servers);
+  const userServers = cfg?.mcp?.servers ?? {};
   // Fail-closed: requester-scoped servers never enter harness-native MCP config.
   const { staticServers } = partitionMcpServersByConnectionScope(userServers);
   return Object.fromEntries(
@@ -110,7 +106,7 @@ function selectCodexProjectableMcpServers(
       const allowed =
         serverOverride !== false &&
         (serverOverride === true || server.enabled !== false) &&
-        isCodexMcpServerAllowedForAgent(server as BundleMcpServerConfig, options);
+        isCodexMcpServerAllowedForAgent(server, options);
       if (!allowed) {
         return false;
       }
@@ -127,7 +123,7 @@ function selectCodexProjectableMcpServers(
       }
       return true;
     }),
-  ) as BundleMcpConfig["mcpServers"];
+  );
 }
 
 /** Returns Codex CLI args with TOML MCP server overrides injected. */
@@ -205,12 +201,12 @@ export async function buildCodexUserMcpServersThreadConfigPatchForRun(params: {
     agentId: run.sandboxAgentId,
     fallbackAgentId: agentId,
   });
-  const sandboxStatus = resolveSandboxRuntimeStatus({
+  const sandboxStatus = await resolveSandboxRuntimeStatusAsync({
     cfg: run.config,
     sessionKey: policySessionKey,
     agentId: policyAgentId,
   });
-  const capabilityProfile = resolveConversationCapabilityProfile({
+  const capabilityProfile = await prepareConversationCapabilityProfile({
     ...projectNativeMcpRunContext(run),
     config: run.config,
     sessionKey: policySessionKey,

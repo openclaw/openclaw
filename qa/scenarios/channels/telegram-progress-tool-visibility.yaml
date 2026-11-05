@@ -6,11 +6,11 @@ scenario:
   coverage:
     primary:
       - channels.streaming-final-reply
-  objective: Keep authored commentary visible while hiding ordinary tool rows by default and showing them when toolProgress is explicitly enabled.
+  objective: Keep authored commentary and bounded work status visible while hiding detailed tool rows by default and showing them when toolProgress is explicitly enabled.
   successCriteria:
     - The Telegram Test Server user observes authored commentary before a separate final reply in both cases.
     - Once the full commentary appears, every subsequent progress revision retains it.
-    - No observed message or edit in the default case contains an exec row or its command marker.
+    - Default progress permits only bounded Exec work status, never detailed tool rows or command markers.
     - The detailed case includes an exec row on the same progress message as commentary.
     - Each case crosses the mock provider boundary twice with one correlated exec result and delivers its final marker exactly once.
   docsRefs:
@@ -143,7 +143,8 @@ flow:
                   message: authored commentary must remain visible from its first complete preview through final delivery
               - set: toolEvents
                 value:
-                  expr: "turnEvents.filter((event) => /🛠️|\\b(?:Exec|Bash)\\b/u.test(event.message.text) || event.message.text.includes(toolMarker))"
+                  expr: |-
+                    turnEvents.filter((event) => event.message.text.split("\n").some((line) => !["Exec: running", "Last activity: Exec"].includes(line.trim()) && (/🛠️|\b(?:Exec|Bash)\b/u.test(line) || line.includes(toolMarker))))
               - if:
                   expr: fixture.toolProgress === true
                   then:

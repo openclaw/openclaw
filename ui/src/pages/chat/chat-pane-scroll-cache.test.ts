@@ -1,20 +1,20 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { nothing, render } from "lit";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { stubAnimationFrames } from "./chat-view.test-helpers.ts";
-import { renderChatThread } from "./components/chat-thread.ts";
+import { mountChatThread } from "./components/chat-thread.test-support.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 
+let flushFrames: ReturnType<typeof stubAnimationFrames>;
 beforeEach(() => {
   installTranscriptDomMocks();
-  stubAnimationFrames();
+  flushFrames = stubAnimationFrames();
 });
 afterEach(resetTranscriptTestDom);
 
@@ -30,23 +30,24 @@ async function mountSession(paneId: string, sessionKey: string) {
   }));
   pane.render();
   const props = expectDefined(pane.chatProps, "pane transcript props");
-  const container = document.body.appendChild(document.createElement("div"));
-  props.transcript.hostConnected();
-  render(renderChatThread(props, props.transcript), container);
+  props.transcript.start();
+  const view = mountChatThread(props, props.transcript);
+  const { container } = view;
   const thread = expectDefined(container.querySelector<HTMLDivElement>(".chat-thread"), "thread");
   Object.defineProperties(thread, {
     clientHeight: { configurable: true, value: 600 },
     scrollHeight: { configurable: true, value: 3_000 },
   });
-  props.transcript.hostUpdated();
+  props.transcript.update();
   await Promise.resolve();
+  flush();
+  flushFrames();
   flush();
   return {
     thread,
     dispose: () => {
-      props.transcript.hostDisconnected();
-      render(nothing, container);
-      container.remove();
+      props.transcript.dispose();
+      view.unmount();
     },
   };
 }

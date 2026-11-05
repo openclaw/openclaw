@@ -7,6 +7,7 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { readAutomationDisplayState } from "../infra/agent-run-registry.automation.js";
 import { consumeRootOptionToken } from "../infra/cli-root-options.js";
 import type {
   ExecApprovalPendingReplyParams,
@@ -142,10 +143,6 @@ export function loadHookRunnerGlobal(): Promise<HookRunnerGlobalModule> {
   return hookRunnerGlobalModuleLoader.load();
 }
 
-export function isCronAddAction(args: unknown): boolean {
-  return normalizeOptionalLowercaseString(asOptionalObjectRecord(args)?.action) === "add";
-}
-
 export function applyCurrentMessageProvider(
   toolName: string,
   args: Record<string, unknown>,
@@ -198,7 +195,7 @@ export function extractExecOutput(result: unknown): string | undefined {
 
 export function extractLiveExecOutput(result: unknown): string | undefined {
   const output = extractExecOutput(result);
-  return typeof output === "string" ? truncateLiveExecOutput(output) : undefined;
+  return output !== undefined ? truncateLiveExecOutput(output) : undefined;
 }
 
 function isOpenClawExecutable(token: string | undefined): boolean {
@@ -539,7 +536,10 @@ export async function emitToolResultOutput(params: {
     !isToolError &&
     hasStructuredMedia &&
     mediaUrls.length > 0;
-  const shouldEmitOutput = !suppressStructuredTtsOutput && ctx.shouldEmitToolOutput();
+  const shouldEmitOutput =
+    !suppressStructuredTtsOutput &&
+    (isToolError || readAutomationDisplayState(ctx.params.runId) === "ordinary") &&
+    ctx.shouldEmitToolOutput();
   if (shouldEmitOutput) {
     const outputText = extractToolResultText(sanitizedResult);
     if (outputText) {

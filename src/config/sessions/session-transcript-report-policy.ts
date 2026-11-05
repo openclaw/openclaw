@@ -51,6 +51,30 @@ export class TranscriptReportNavigation extends SessionEntryNavigation<ReportNav
   facts() {
     return { appendParentId: this.appendParentId, path: this.getBranch() };
   }
+
+  readCustomBranch(
+    leafEntryId: string | null,
+    customType: string,
+    readEvent: (seq: number) => Record<string, unknown> | undefined,
+  ): Record<string, unknown>[] | undefined {
+    if (leafEntryId === null) {
+      return [];
+    }
+    if (!this.byId.has(leafEntryId)) {
+      return undefined;
+    }
+    const events: Record<string, unknown>[] = [];
+    for (const entry of this.getBranch(leafEntryId)) {
+      if (entry.type !== "custom") {
+        continue;
+      }
+      const event = readEvent(entry.seq);
+      if (event?.customType === customType) {
+        events.push(event);
+      }
+    }
+    return events;
+  }
 }
 
 function latestCustomReport(
@@ -80,17 +104,8 @@ export function selectTranscriptReport(
   selection: TranscriptReportSelection,
 ): PreparedTranscriptReport {
   const suppressed =
-    selection.kind === "assistant"
-      ? branch.path.some((entry) => entry.assistantResponseId === selection.responseId)
-      : selection.suppressWhenAssistantRun !== undefined &&
-        branch.path.some((entry) => {
-          if (entry.assistantRunId !== selection.suppressWhenAssistantRun) {
-            return false;
-          }
-          // Progress and commentary cannot stand in for a durable failure outcome.
-          const message = readEvent(entry.seq)?.message;
-          return isRecord(message) && message.stopReason === "error";
-        });
+    selection.kind === "assistant" &&
+    branch.path.some((entry) => entry.assistantResponseId === selection.responseId);
   return {
     appendParentId: branch.appendParentId,
     suppressed,

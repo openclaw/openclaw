@@ -57,9 +57,27 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
         self.queue.sync { self.receivedRoles }
     }
 
+    var connectRoles: AsyncStream<String> {
+        self.connectRoleEvents.stream
+    }
+
+    /// Nil preserves the original node-only hello; set scopes to model an admitted operator session.
+    var acceptedOperatorScopes: [String]? {
+        get { self.queue.sync { self.operatorScopes } }
+        set { self.queue.sync { self.operatorScopes = newValue } }
+    }
+
+    private var operatorScopes: [String]?
+    var issuedDeviceTokensByRole: [String: String]? {
+        get { self.queue.sync { self.roleDeviceTokens } }
+        set { self.queue.sync { self.roleDeviceTokens = newValue } }
+    }
+
+    private var roleDeviceTokens: [String: String]?
     private var httpResponseHandler: HTTPResponseHandler?
     private var receivedRequests: [Request] = []
     private var receivedRoles: [String] = []
+    private let connectRoleEvents = AsyncStream<String>.makeStream()
     private var pendingHTTP: [Int: (Request, HTTPResponse)] = [:]
 
     private struct Client {
@@ -209,6 +227,7 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
         self.queue.sync {
             guard !self.stopped else { return }
             self.stopped = true
+            self.connectRoleEvents.continuation.finish()
             self.listener.cancel()
             for index in Array(self.clients.keys) {
                 self.close(index)
@@ -416,17 +435,19 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
 
         let params = request["params"] as? [String: Any]
         let auth = params?["auth"] as? [String: Any]
-        self.receivedRoles.append(params?["role"] as? String ?? "")
+        let role = params?["role"] as? String ?? ""
+        self.receivedRoles.append(role)
         self.connectAuth.append(ConnectAuth(
             token: auth?["token"] as? String,
             bootstrapToken: auth?["bootstrapToken"] as? String,
             deviceToken: auth?["deviceToken"] as? String))
         client.phase = .open
         self.clients[index] = client
+        self.connectRoleEvents.continuation.yield(role)
         if let failure = self.connectFailures[index] {
             self.sendConnectFailure(id: id, failure: failure, index: index)
         } else {
-            self.sendConnectOK(id: id, index: index)
+            self.sendConnectOK(id: id, role: role, index: index)
         }
     }
 
@@ -442,14 +463,21 @@ final class NativeGatewayWebSocketFixture: @unchecked Sendable {
         self.sendJSON(frame, index: index)
     }
 
-    private func sendConnectOK(id: String, index: Int) {
+    private func sendConnectOK(id: String, role: String, index: Int) {
         var auth: [String: Any] = [
             "role": "node",
             "scopes": [],
         ]
-        if self.issuedDeviceTokens.indices.contains(index),
-           let token = self.issuedDeviceTokens[index]
-        {
+        if role == "operator", let scopes = self.operatorScopes {
+            auth["role"] = "operator"
+            auth["scopes"] = scopes
+        }
+        let token: String? = if let roleDeviceTokens = self.roleDeviceTokens {
+            roleDeviceTokens[role]
+        } else {
+            self.issuedDeviceTokens.indices.contains(index) ? self.issuedDeviceTokens[index] : nil
+        }
+        if let token {
             auth["deviceToken"] = token
         }
         let frame: [String: Any] = [

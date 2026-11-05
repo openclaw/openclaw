@@ -1,17 +1,15 @@
 import type { JSX } from "@solidjs/web";
 
-export type PanelIconButtonProps = {
+export function PanelIconButton(props: {
   label: string;
   icon: JSX.Element;
   onClick: () => void;
-  class: string;
+  class: JSX.IntrinsicElements["button"]["class"];
   title?: string;
   disabled?: boolean;
   busy?: boolean;
   newTab?: boolean;
-};
-
-export function PanelIconButton(props: PanelIconButtonProps) {
+}) {
   return (
     <button
       class={props.class}

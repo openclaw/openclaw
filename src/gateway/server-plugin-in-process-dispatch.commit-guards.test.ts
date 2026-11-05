@@ -1,25 +1,44 @@
 import { expect, it } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { callAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { getOperatorApprovalDetailed, insertOperatorApproval } from "./operator-approval-store.js";
 import { createApprovalRequestAuthority } from "./server-methods/approval-request-authority.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 
+function dispatch(method: string, scope: string, params = {}, guard = () => {}) {
+  return dispatchGatewayMethodInProcess(method, params, {
+    forceSyntheticClient: true,
+    syntheticScopes: [scope],
+    sessionMutationCommitGuard: guard,
+  });
+}
+
+async function withoutHostMutation<T>(pattern: RegExp, run: () => Promise<T>): Promise<T> {
+  const sql = observeHostDataSql();
+  try {
+    return await run();
+  } finally {
+    sql.restore();
+    expect(sql.queries.filter((query) => pattern.test(query))).toEqual([]);
+  }
+}
+
 it.each(["runtime", "legacy"] as const)(
-  "routes %s approval expiry through its worker or released native guard contract",
-  async (entrypoint) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  "routes %s approval expiry through its worker with the request guard",
+  (entrypoint) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       await insertOperatorApproval({
         approval: {
-          id: "approval-expiry-routing",
+          id: "expiry",
           kind: "exec",
           runtimeEpoch: "fixture",
           createdAtMs: 1,
@@ -27,42 +46,18 @@ it.each(["runtime", "legacy"] as const)(
           presentation: {
             kind: "exec",
             commandText: "echo fixture",
-            commandPreview: "echo fixture",
-            warningText: null,
-            host: "gateway",
-            nodeId: null,
-            agentId: null,
             allowedDecisions: ["allow-once", "deny"],
           },
         },
       });
-      const context = createContext();
-      let nativeMutation = false;
-      context.getGatewayMethodRegistry = () =>
-        createGatewayMethodRegistry([
-          {
-            name: "approval.get",
-            scope: "operator.approvals",
-            owner: { kind: "core", area: "approvals" },
-            handler: async (options: GatewayRequestHandlerOptions) => {
-              using authority = createApprovalRequestAuthority(options);
-              const sql = observeHostDataSql();
-              try {
-                const result = await getOperatorApprovalDetailed({
-                  id: "approval-expiry-routing",
-                  nowMs: 3,
-                  guard: authority.guard,
-                });
-                nativeMutation = sql.queries.some((query) =>
-                  /^update "operator_approvals" set\b/i.test(query),
-                );
-                options.respond(true, result);
-              } finally {
-                sql.restore();
-              }
-            },
-          },
-        ]);
+      const handler = async (options: GatewayRequestHandlerOptions) => {
+        using authority = createApprovalRequestAuthority(options);
+        const result = await withoutHostMutation(/^update "operator_approvals" set\b/i, () =>
+          getOperatorApprovalDetailed({ id: "expiry", nowMs: 3, guard: authority.guard }),
+        );
+        options.respond(true, result);
+      };
+      const context = createContext([["approval.get", "operator.approvals", "approvals", handler]]);
       const result = await withPluginRuntimeGatewayRequestScope(
         {
           context,
@@ -77,70 +72,50 @@ it.each(["runtime", "legacy"] as const)(
                 {},
                 { scopes: ["operator.admin"] },
               )
-            : dispatchGatewayMethodInProcess(
-                "approval.get",
-                {},
-                {
-                  forceSyntheticClient: true,
-                  syntheticScopes: ["operator.admin"],
-                  sessionMutationCommitGuard: () => {},
-                },
-              ),
+            : dispatch("approval.get", "operator.admin"),
       );
       expect(result).toMatchObject({ outcome: "found", record: { status: "expired" } });
-      expect(nativeMutation).toBe(entrypoint === "legacy");
-    });
-  },
+    }),
 );
 
 it.each(["direct", "tool"] as const)(
-  "keeps opaque commit guards native without pinning prepared host guards on %s dispatch",
-  async (entrypoint) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  "keeps opaque and prepared commit guards authoritative with worker writes on %s dispatch",
+  (entrypoint) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const scope = { agentId: "main", sessionKey: "agent:main:commit-guard-routing" };
       await upsertSessionEntryCore(scope, { sessionId: "guard-routing-session", updatedAt: 1 });
-      const context = createContext();
       for (const kind of ["opaque", "prepared"] as const) {
-        const assertHostCurrent = () => {};
+        let current = true;
+        let revokeDuringUpdate = false;
+        const assertCurrent = () => {
+          if (!current) {
+            throw new Error("session commit authority revoked");
+          }
+        };
         const guard =
           kind === "prepared"
-            ? Object.assign(assertHostCurrent, {
-                prepareSessionSource: async () => ({
-                  assertCurrent: assertHostCurrent,
-                  checks: [],
-                }),
+            ? Object.assign(assertCurrent, {
+                prepareSessionSource: async () => ({ assertCurrent, checks: [] }),
               })
-            : assertHostCurrent;
-        let nativeMutation = false;
-        context.getGatewayMethodRegistry = () =>
-          createGatewayMethodRegistry([
-            {
-              name: "sessions.create",
-              scope: "operator.write",
-              owner: { kind: "core", area: "sessions" },
-              handler: async ({
-                respond,
-                sessionMutationCommitGuard,
-              }: GatewayRequestHandlerOptions) => {
-                const sql = observeHostDataSql();
-                try {
-                  const entry = await patchSessionEntryCore(scope, () => ({ label: kind }), {
-                    workerGuard: { source: sessionMutationCommitGuard },
-                  });
-                  // The canonical writer (#167932) upserts session rows natively.
-                  nativeMutation = sql.queries.some((query) =>
-                    /^(?:update "session_nodes" set\b|insert into "session_nodes"\s)/i.test(query),
-                  );
-                  respond(true, { label: entry?.label });
-                } finally {
-                  sql.restore();
-                }
-              },
-            },
-          ]);
-        const result = await withPluginRuntimeGatewayRequestScope(
-          { context, isWebchatConnect: () => false },
-          () =>
+            : assertCurrent;
+        const handler = async (options: GatewayRequestHandlerOptions) => {
+          const update = () => {
+            current = !revokeDuringUpdate;
+            return { label: revokeDuringUpdate ? "must not persist" : kind };
+          };
+          const entry = await withoutHostMutation(
+            /^(?:update "session_nodes" set\b|insert into "session_nodes"\s)/i,
+            () =>
+              patchSessionEntryCore(scope, update, {
+                workerGuard: { source: options.sessionMutationCommitGuard },
+              }),
+          );
+          options.respond(true, { label: entry?.label });
+        };
+        const context = createContext([["sessions.create", "operator.write", "sessions", handler]]);
+        const invoke = () =>
+          withPluginRuntimeGatewayRequestScope({ context, isWebchatConnect: () => false }, () =>
             entrypoint === "tool"
               ? callAgentToolGatewayRequest({
                   method: "sessions.create",
@@ -148,19 +123,12 @@ it.each(["direct", "tool"] as const)(
                   assertDispatchCurrent: () => {},
                   sessionMutationCommitGuard: guard,
                 })
-              : dispatchGatewayMethodInProcess(
-                  "sessions.create",
-                  { agentId: "main" },
-                  {
-                    forceSyntheticClient: true,
-                    syntheticScopes: ["operator.write"],
-                    sessionMutationCommitGuard: guard,
-                  },
-                ),
-        );
-        expect(result).toEqual({ label: kind });
-        expect(nativeMutation).toBe(kind === "opaque");
+              : dispatch("sessions.create", "operator.write", { agentId: "main" }, guard),
+          );
+        await expect(invoke()).resolves.toEqual({ label: kind });
+        revokeDuringUpdate = true;
+        await expect(invoke()).rejects.toThrow("session commit authority revoked");
+        expect(await readSessionEntryReadOnlyInWorker(scope)).toMatchObject({ label: kind });
       }
-    });
-  },
+    }),
 );

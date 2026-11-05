@@ -11,7 +11,7 @@ describe("media-generation catalog", () => {
         id: "example",
         label: "Example",
         defaultModel: " default-image ",
-        models: ["default-image", "alternate-image", "  ", "alternate-image"],
+        models: [" alternate-image ", "default-image", "alternate-image", "  "],
         capabilities,
       },
     });

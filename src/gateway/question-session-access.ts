@@ -13,7 +13,7 @@ import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import { readUserProfileAliases } from "../state/user-profile-list.js";
+import { readResidentUserProfileAliases } from "../state/user-profile-list.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import {
   authorizeCurrentOperatorRoleScopes,
@@ -74,7 +74,7 @@ function prepareQuestionSharing(
   return prepareSessionSharing(
     { cfg, client },
     {
-      aliases: identity ? readUserProfileAliases(identity.id) : new Set(),
+      aliases: identity ? readResidentUserProfileAliases(identity.id) : new Set(),
       sessionCap: operatorSessionCap(client, cfg),
       isMember,
     },
@@ -86,7 +86,7 @@ export async function withPreparedQuestionSessions<T>(
   options: GatewayRequestHandlerOptions,
   questions: readonly QuestionTarget[],
   consume: (prepared: readonly (PreparedQuestionSession | undefined)[]) => T,
-  operation: { assertCurrent: () => void; includeMembers?: boolean },
+  operation: { assertCurrent: () => void },
 ): Promise<T> {
   const signal = getAsyncWorkSignal();
   const callerRead = readGatewayRequestMutationAuthority(options).questionCallerRead;
@@ -101,7 +101,7 @@ export async function withPreparedQuestionSessions<T>(
         agentId: string;
         storePath: string;
         sessionKeys: string[];
-        includeMembers: boolean;
+        includeMembers: true;
         includeAuthorization: true;
         snapshotFields: readonly [];
       }
@@ -126,7 +126,8 @@ export async function withPreparedQuestionSessions<T>(
         agentId,
         storePath,
         sessionKeys: [],
-        includeMembers: operation.includeMembers ?? false,
+        // Reads and event recipients need the same membership facts as answers.
+        includeMembers: true as const,
         includeAuthorization: true as const,
         snapshotFields: [] as const,
       };
@@ -282,9 +283,7 @@ export async function withPreparedQuestionSessions<T>(
                       })
                     );
                   }
-                  return (
-                    sharingFor(client).entryFilter?.(target.canonicalKey, target.entry) ?? true
-                  );
+                  return sharingFor(client).canReadTarget(target);
                 } catch {
                   return false;
                 }
@@ -345,7 +344,7 @@ export async function withQuestionSessionAccess<T>(
     access: QuestionSessionAccess | undefined,
     prepared: PreparedQuestionSession | undefined,
   ) => T,
-  operation: { assertCurrent: () => void; includeMembers?: boolean },
+  operation: { assertCurrent: () => void },
 ): Promise<T> {
   operation.assertCurrent();
   const producer = resolveGatewayOperatorRoleActor(options.client);
@@ -465,7 +464,6 @@ export async function withQuestionSessionAccess<T>(
           operation.assertCurrent();
           source?.authority.assertCurrent();
         },
-        includeMembers: operation.includeMembers,
       },
     );
   } finally {
@@ -610,7 +608,7 @@ export async function prepareQuestionCommitAuthority(
     | ReturnType<
         NonNullable<
           ReturnType<typeof readGatewayRequestMutationAuthority>["questionCallerRead"]
-        >["retainNative"]
+        >["retainCurrent"]
       >
     | undefined;
   const assertCurrent = () => {
@@ -638,7 +636,7 @@ export async function prepareQuestionCommitAuthority(
         hasOperatorBoundary(options.client, currentCfg) &&
         observation.record.sessionKey &&
         (!current?.target ||
-          sharing.entryFilter?.(current.target.storeKey, current.target.entry) === false ||
+          !sharing.canReadTarget(current.target) ||
           sharing.authorizeTarget(current.target))) ||
       accessRevision !== readGatewayAccessRevision()
     ) {
@@ -649,7 +647,7 @@ export async function prepareQuestionCommitAuthority(
     }
   };
   try {
-    callerCommit = readGatewayRequestMutationAuthority(options).questionCallerRead?.retainNative();
+    callerCommit = readGatewayRequestMutationAuthority(options).questionCallerRead?.retainCurrent();
     assertCurrent();
     return {
       assertCurrent,

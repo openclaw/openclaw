@@ -1,3 +1,4 @@
+import type { AcquireConfiguredProviderLocalService } from "openclaw/plugin-sdk/embedding-providers";
 import {
   normalizeExtraMemoryPathEntries,
   type MemoryExtraPath,
@@ -6,8 +7,6 @@ import {
   defaultRuntime,
   formatCliJsonFailure,
   formatErrorMessage,
-  getMemoryEmbeddingCommandSecretTargetIds,
-  resolveCommandSecretRefsViaGateway,
   shortenHomePath,
   theme,
   withManager,
@@ -16,14 +15,17 @@ import {
 import {
   listAgentIds,
   resolveConfiguredAgentId,
-  getRuntimeConfig,
   resolveDefaultAgentId,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { formatMemoryCoreSidecarNotice, resolveForeignMemorySlotOwner } from "./cli-memory-slot.js";
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
+import { terminalText } from "openclaw/plugin-sdk/terminal-safe-text";
+import {
+  formatMemoryCoreSidecarNotice,
+  loadMemoryCommandConfig,
+  resolveForeignMemorySlotOwner,
+} from "./cli-memory-slot.js";
 import type { MemoryCommandOptions } from "./cli.types.js";
-import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
 import { getMemorySearchManager } from "./memory/index.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
 import type { ShortTermAuditSummary } from "./short-term-promotion.js";
@@ -67,19 +69,23 @@ export async function syncMemoryWithProgress(params: {
           force: Boolean(params.options.force),
           progress: (syncUpdate) => {
             if (syncUpdate.label) {
-              lastLabel = syncUpdate.label;
+              lastLabel = terminalText`${syncUpdate.label}`;
             }
             lastCompleted = syncUpdate.completed;
             lastTotal = syncUpdate.total;
             update({
               completed: syncUpdate.completed,
               total: syncUpdate.total,
-              label: params.elapsed ? buildLabel() : syncUpdate.label,
+              label: params.elapsed
+                ? buildLabel()
+                : syncUpdate.label === undefined
+                  ? undefined
+                  : terminalText`${syncUpdate.label}`,
             });
             if (params.elapsed) {
               progress.setLabel(buildLabel());
             } else if (syncUpdate.label) {
-              progress.setLabel(syncUpdate.label);
+              progress.setLabel(terminalText`${syncUpdate.label}`);
             }
           },
         });
@@ -98,71 +104,15 @@ export async function syncMemoryWithProgress(params: {
 }
 
 type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpose"];
-function isMemorySecretOwnerFailure(error: unknown, message: string): boolean {
-  const candidate = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
-  if (
-    candidate.ownerKind === "capability" &&
-    typeof candidate.ownerId === "string" &&
-    candidate.ownerId.startsWith("memory-provider:")
-  ) {
-    return true;
-  }
-  if (
-    Array.isArray(candidate.paths) &&
-    candidate.paths.some(
-      (entry) => typeof entry === "string" && entry.includes("memory.search.remote.apiKey"),
-    )
-  ) {
-    return true;
-  }
-  // Gateway RPC errors preserve the typed owner's redacted message even when
-  // structured owner fields are unavailable to the CLI process.
-  return message.includes("capability:memory-provider:");
-}
-async function loadMemoryCommandConfig(
-  commandName: string,
-  mode?: "enforce_resolved" | "read_only_status",
-) {
-  const config = getRuntimeConfig({ skipPluginValidation: true });
-  try {
-    const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
-      config,
-      commandName,
-      targetIds: getMemoryEmbeddingCommandSecretTargetIds(),
-      ...(mode ? { mode } : {}),
-    });
-    return { config: resolvedConfig, diagnostics };
-  } catch (error) {
-    const code =
-      error && typeof error === "object" && "code" in error
-        ? String((error as { code?: unknown }).code)
-        : "";
-    const message = formatErrorMessage(error);
-    if (
-      mode !== "read_only_status" ||
-      isMemorySecretOwnerFailure(error, message) ||
-      (code !== "SECRET_SURFACE_UNAVAILABLE" && !message.includes("SECRET_SURFACE_UNAVAILABLE"))
-    ) {
-      throw error;
-    }
-    return {
-      config,
-      diagnostics: [
-        `${commandName}: ${message}; continuing with degraded read-only config so healthy memory surfaces remain visible.`,
-      ],
-    };
-  }
-}
 function emitMemoryCommandWarning(message: string, toStderr: boolean): void {
-  defaultRuntime[toStderr ? "error" : "log"](warn(message));
+  defaultRuntime[toStderr ? "error" : "log"](warn(terminalText`${message}`));
 }
 /** Tells the operator that a Memory Core command acts on its sidecar index only. */
 export function emitMemoryCoreSidecarNotice(owner: string, params?: { json?: boolean }): void {
   emitMemoryCommandWarning(formatMemoryCoreSidecarNotice(owner), Boolean(params?.json));
 }
 export function resolveMemoryPluginConfig(cfg: OpenClawConfig): Record<string, unknown> {
-  const entry = asNullableRecord(cfg.plugins?.entries?.["memory-core"]);
-  return asNullableRecord(entry?.config) ?? {};
+  return resolvePluginConfigObject(cfg, "memory-core") ?? {};
 }
 export function formatAuditCounts(audit: ShortTermAuditSummary): string {
   const coverage = audit.conceptTagScripts;
@@ -194,7 +144,11 @@ export function resolveMemoryAgentIds(cfg: OpenClawConfig, agent?: string): stri
 export function formatExtraPaths(workspaceDir: string, extraPaths: MemoryExtraPath[]): string[] {
   return normalizeExtraMemoryPathEntries(workspaceDir, extraPaths).map((entry) => {
     const root = shortenHomePath(entry.path);
-    return entry.pattern ? `${root} (pattern: ${entry.pattern})` : root;
+    const details = [
+      ...(entry.pattern ? [`pattern: ${entry.pattern}`] : []),
+      ...(entry.evergreen ? ["evergreen"] : []),
+    ];
+    return details.length > 0 ? `${root} (${details.join(", ")})` : root;
   });
 }
 export async function withMemoryCommand(params: {
@@ -203,7 +157,7 @@ export async function withMemoryCommand(params: {
   allAgents?: boolean;
   purpose?: MemoryManagerPurpose;
   inspectSources?: boolean;
-  acquireLocalService?: MemoryCoreAcquireLocalService;
+  acquireLocalService?: AcquireConfiguredProviderLocalService;
   runInBackgroundContext?: MemoryCoreRuntimeHost["runInBackgroundContext"];
   /** Refuse instead of answering from the sidecar index when another plugin owns the slot. */
   requiresMemorySlot?: boolean;
@@ -222,7 +176,7 @@ export async function withMemoryCommand(params: {
   const slotOwner = resolveForeignMemorySlotOwner(cfg);
   if (slotOwner && params.requiresMemorySlot) {
     const message = `${params.commandName} reads only Memory Core's sidecar index, but plugins.slots.memory selects "${slotOwner}". Search the selected memory through the agent's memory tools or the ${slotOwner} plugin's own commands.`;
-    defaultRuntime.error(message);
+    defaultRuntime.error(terminalText`${message}`);
     process.exitCode = 1;
     onUnavailable?.({
       ...formatCliJsonFailure(message),
@@ -254,12 +208,12 @@ export async function withMemoryCommand(params: {
           return;
         }
         const message = `${params.commandName} failed (${agentId}): ${error}`;
-        defaultRuntime.error(message);
+        defaultRuntime.error(terminalText`${message}`);
         process.exitCode = 1;
         onUnavailable?.({ ...formatCliJsonFailure(message), agentId });
       },
       onCloseError: (err) =>
-        defaultRuntime.error(`Memory manager close failed: ${formatErrorMessage(err)}`),
+        defaultRuntime.error(terminalText`Memory manager close failed: ${formatErrorMessage(err)}`),
       close: async (manager) => {
         await manager.close?.();
       },

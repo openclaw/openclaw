@@ -191,10 +191,16 @@ extracts speech text defensively:
 
 - Ignores payloads marked as reasoning/error content.
 - Parses direct JSON, fenced JSON, or inline `"spoken"` keys.
+- Joins recoverable inline `"spoken"` fields in order. If any declared field cannot be recovered, the whole reply uses the plain-text fallback instead of silently dropping a segment.
 - Falls back to plain text and removes likely planning/meta lead-in paragraphs.
 
 This keeps spoken playback focused on caller-facing text and avoids leaking
 planning text into audio.
+
+If response generation fails or times out before delivering speech, Voice Call
+attempts a short spoken apology through the configured TTS path and keeps the
+call open for another question. Error details are never spoken. An explicit
+`{"spoken":""}` response remains silent.
 
 ### Conversation startup behavior
 

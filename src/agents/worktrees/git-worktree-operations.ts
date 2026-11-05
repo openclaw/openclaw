@@ -13,7 +13,11 @@ export type GitWorktreeOperations = {
       requiredPaths: readonly string[];
       records: Array<Pick<ManagedWorktreeRecord, "id" | "path" | "repoRoot">>;
     };
-    output: { worktreeIds: string[]; complete: boolean };
+    output: {
+      worktreeIds: string[];
+      ownedPaths: Array<{ id: string; path: string }>;
+      complete: boolean;
+    };
   };
   "worktree.eviction-repositories": {
     input: { repoRoots: string[] };
@@ -67,7 +71,7 @@ export type GitWorktreeOperations = {
     output: boolean;
   };
   "worktree.provisioning-inspection": {
-    input: { sourceRoot: string };
+    input: { sourceRoot: string; estimateBytes?: boolean };
     output: { paths: string[]; estimatedBytes: number };
   };
   "worktree.git-size": {
@@ -79,7 +83,7 @@ export type GitWorktreeOperations = {
     output: { targetBytes: number; changedBytes: number; requiresFullCheckout: boolean };
   };
   "worktree.directory-size": {
-    input: { root: string; excludeGit?: boolean };
+    input: { root: string };
     output: number;
   };
   "worktree.cleanup-inspection": {

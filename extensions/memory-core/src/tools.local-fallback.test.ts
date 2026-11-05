@@ -1,6 +1,8 @@
-import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { describe, expect, it } from "vitest";
-import { createManagerIndexFixture } from "./memory/manager-index.test-support.js";
+import {
+  createManagerIndexFixture,
+  memoryIndexFixtureWriter,
+} from "./memory/manager-index.test-support.js";
 import { testing } from "./tools.js";
 import { createMemorySearchToolOrThrow } from "./tools.test-helpers.js";
 
@@ -30,12 +32,6 @@ describe("memory_search local provider degradation", () => {
           provider: "local",
         });
         fixture.provider.beforeEmbedQuery = async () => {
-          if (mismatch) {
-            const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
-            db.prepare(
-              "UPDATE memory_index_meta SET value = json_set(value, '$.model', ?) WHERE key = 'memory_index_meta_v1'",
-            ).run("different-embedding-model");
-          }
           throw new Error("HTTP 400: synthetic embedding transport failure");
         };
 
@@ -48,8 +44,22 @@ describe("memory_search local provider degradation", () => {
           providerId: "local",
           reason: expect.stringContaining("synthetic embedding transport failure"),
         });
+        expect(failed.details).not.toHaveProperty("disabled");
+        expect(failed.details).toMatchObject({
+          results: [expect.objectContaining({ path: "memory/2026-01-12.md" })],
+        });
         if (mismatch) {
-          expect(failed.details).toMatchObject({
+          // Search retains its captured generation; seed offline corruption after its owner closes.
+          const db = memoryIndexFixtureWriter(manager);
+          await manager.close();
+          db.prepare(
+            "UPDATE memory_index_meta SET value = json_set(value, '$.model', ?) WHERE key = 'memory_index_meta_v1'",
+          ).run("different-embedding-model");
+          const mismatched = await tool.execute("persisted-identity-mismatch", {
+            query: "zebra",
+            corpus: "memory",
+          });
+          expect(mismatched.details).toMatchObject({
             results: [],
             disabled: true,
             unavailable: true,
@@ -57,10 +67,6 @@ describe("memory_search local provider degradation", () => {
           });
           return;
         }
-        expect(failed.details).not.toHaveProperty("disabled");
-        expect(failed.details).toMatchObject({
-          results: [expect.objectContaining({ path: "memory/2026-01-12.md" })],
-        });
         fixture.provider.beforeEmbedQuery = null;
         const repeated = await tool.execute("after-transport-restored", {
           query: "alpha zebra",

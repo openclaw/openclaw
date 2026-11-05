@@ -33,11 +33,10 @@ export function createSyntheticPluginRuntimeClient(
       | "operatorRunAuthority"
       | "operatorAccessAuthority"
       | "cronRunContinuation"
-      | "internalDeliveryMediaUrls"
       | "runtimeContextFragments"
-      | "internalDeliverySuppressText"
       | "internalDeliverySuppressErrors"
       | "pluginRuntimeOwnerId"
+      | "pluginApprovalRequestOwnerId"
       | "nodeInvokeApprovalSessionKey"
       | "pluginSubagentRequester"
       | "runtimePluginToolGrant"
@@ -80,17 +79,14 @@ export function createSyntheticPluginRuntimeClient(
       ...(params?.runtimeContextFragments
         ? { runtimeContextFragments: params.runtimeContextFragments }
         : {}),
-      ...(params?.internalDeliveryMediaUrls
-        ? { internalDeliveryMediaUrls: [...params.internalDeliveryMediaUrls] }
-        : {}),
-      ...(params?.internalDeliverySuppressText === true
-        ? { internalDeliverySuppressText: true }
-        : {}),
       ...(params?.internalDeliverySuppressErrors === true
         ? { internalDeliverySuppressErrors: true }
         : {}),
       ...(params?.scopes?.includes(APPROVALS_SCOPE) ? { approvalRuntime: true } : {}),
       ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
+      ...(params?.pluginApprovalRequestOwnerId
+        ? { pluginApprovalRequestOwnerId: params.pluginApprovalRequestOwnerId }
+        : {}),
       ...(params?.nodeInvokeApprovalSessionKey
         ? { nodeInvokeApprovalSessionKey: params.nodeInvokeApprovalSessionKey }
         : {}),
@@ -199,8 +195,15 @@ export function resolvePluginSubagentToolsAlsoAllow(params: {
     throw new Error("toolsAlsoAllow requires plugin identity for subagent runs.");
   }
   const registry = getActivePluginRegistry();
+  // A catalog id is the plugin's own when its manifest declares the tool (as `browser` and
+  // `skill_workshop` are); every other catalog id is a core tool a plugin may not hand a fork.
+  const declaredTools = new Set(
+    (registry?.plugins.find((plugin) => plugin.id === pluginId)?.contracts?.tools ?? []).map(
+      (name) => normalizeToolPolicyName(name),
+    ),
+  );
   for (const toolName of requested) {
-    if (isKnownCoreToolId(toolName)) {
+    if (isKnownCoreToolId(toolName) && !declaredTools.has(toolName)) {
       throw new Error(`plugin "${pluginId}" may not add core tool "${toolName}" to subagent runs.`);
     }
     const owners = uniqueStrings(

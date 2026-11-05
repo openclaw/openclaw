@@ -3,13 +3,84 @@ import type {
   ResolveStableChannelMessageIngressParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveXAccount } from "./accounts.js";
-import { normalizeXUserId, openXAllowlist } from "./allowlist.js";
+import { normalizeXUserId, openXAllowlist, XAllowlistChangedError } from "./allowlist.js";
 import type { XPost } from "./api.js";
 import { resolveXGuestSettings, resolveXSenderTier } from "./guest-policy.js";
 import { getXRuntime } from "./runtime.js";
 
 export const xMentionFacts = { canDetectMention: true, wasMentioned: true };
+
+/** Renew only the source permission, never the admitted run or its selected route. */
+export function createXPublicationPreparation(params: {
+  accountId: string;
+  post: XPost;
+  cfg: OpenClawConfig;
+  readConfig: () => OpenClawConfig;
+  route: { agentId: string; sessionKey: string };
+  assertActive: () => void;
+}): () => Promise<(() => void) | null> {
+  return async () => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        params.assertActive();
+      } catch {
+        return null;
+      }
+      const cfg = params.readConfig();
+      // Never apply a new routing configuration to a prompt prepared under the old one.
+      if (cfg !== params.cfg) {
+        return null;
+      }
+      const route = resolveAgentRoute({
+        cfg,
+        channel: "x",
+        accountId: params.accountId,
+        peer: { kind: "group", id: params.post.conversation_id },
+      });
+      // The pending prompt and tool policy were built for this exact configuration.
+      // A different route/tier requires a new turn, not transplanting this run's authority.
+      if (
+        route.agentId !== params.route.agentId ||
+        route.sessionKey !== params.route.sessionKey ||
+        resolveXAccount(cfg, params.accountId).config.autoPublishWorkSessions !== true
+      ) {
+        return null;
+      }
+      try {
+        const authorization = await resolveXIngress(params.accountId, params.post, cfg);
+        try {
+          params.assertActive();
+        } catch {
+          return null;
+        }
+        if (params.readConfig() !== cfg) {
+          return null;
+        }
+        const assertCurrent = () => {
+          params.assertActive();
+          authorization.assertCurrent();
+          if (params.readConfig() !== cfg) {
+            throw new Error("X work-session publication policy changed; send a new mention.");
+          }
+        };
+        assertCurrent();
+        if (!authorization.ingress.senderAccess.allowed || authorization.tier !== "maintainer") {
+          return null;
+        }
+        return assertCurrent;
+      } catch (error) {
+        if (!(error instanceof XAllowlistChangedError)) {
+          throw error;
+        }
+        if (attempt >= 2) {
+          return null;
+        }
+      }
+    }
+  };
+}
 
 export async function resolveXIngress(
   accountId: string,
@@ -35,6 +106,10 @@ export async function resolveXIngress(
     cfg,
     identity: {
       key: "x-user-id",
+      // Polling and Activity streams both obtain author_id from the authenticated X API.
+      authentication: "verified",
+      resolveParticipant: ({ stableId }) =>
+        typeof stableId === "string" ? { domain: "x", idKind: "user-id", id: stableId } : undefined,
       normalize: (value) => normalizeXUserId(value) ?? "",
       sensitivity: "pii",
       entryIdPrefix: "x-entry",

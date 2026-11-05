@@ -8,7 +8,9 @@ const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
 
 // The shared cache policy matrix lives in sqlite-worker-store.compile-cache.test.ts.
-it("inherits the owned compile cache through the real sync worker", async ({ signal }) => {
+it("inherits the owned compile cache and drains retained children before close", async ({
+  signal,
+}) => {
   const root = fixture.createTempDir("openclaw-sqlite-child-cache-");
   const env: NodeJS.ProcessEnv = {
     ...process.env,

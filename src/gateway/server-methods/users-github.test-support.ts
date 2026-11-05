@@ -1,4 +1,7 @@
 import { vi } from "vitest";
+import type { UserProfile } from "../../state/user-profiles.types.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
+import type { GatewayClient } from "./types.js";
 
 const network = vi.hoisted(() => ({
   assertCli: vi.fn(),
@@ -53,10 +56,8 @@ export function resetPersonalGitHubNetwork() {
   });
   network.verify.mockReset().mockImplementation(async (token) => {
     const native = token === "synthetic-native";
-    if (
-      !native &&
-      ![tokens.accessToken, "synthetic-rotated-access", "new-access"].includes(token)
-    ) {
+    const personalTokens = [tokens.accessToken, "synthetic-rotated-access", "new-access"];
+    if (!native && !personalTokens.includes(token)) {
       return { status: "unavailable" };
     }
     return {
@@ -83,4 +84,17 @@ export function resetPersonalGitHubNetwork() {
       stderr: Buffer.alloc(0),
     };
   });
+}
+
+export function createGitHubTestClient(
+  profile: UserProfile,
+  email: string,
+  scopes: string[],
+): GatewayClient {
+  return {
+    connId: `connection-${profile.id}`,
+    authenticatedUserId: email,
+    authenticatedUserProfile: gatewayProfile(profile.id, profile.displayName, profile.updatedAt),
+    connect: gatewayConnect(scopes, { id: "test", mode: "test", version: "1" }),
+  };
 }

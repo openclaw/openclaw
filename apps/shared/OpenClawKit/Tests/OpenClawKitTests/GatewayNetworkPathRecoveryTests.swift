@@ -4,16 +4,6 @@ import Testing
 @testable import OpenClawKit
 
 #if DEBUG
-extension GatewayChannelActor {
-    fileprivate func _test_setReconnectBackoffMs(_ milliseconds: Double) {
-        self.backoffMs = milliseconds
-    }
-
-    fileprivate func _test_reconnectBackoffMs() -> Double {
-        self.backoffMs
-    }
-}
-
 private final class PathRecoveryEvents<Value: Sendable>: Sendable {
     private struct State {
         var values: [Value] = []
@@ -136,10 +126,6 @@ extension GatewayChannelActor {
         self.testNetworkPathObserved = { observed.record($0) }
         self.testNetworkPathRecoveryFinished = { recovered.record(()) }
         self.testConnectRunFinishedHandler = { connectFinished.record(()) }
-    }
-
-    fileprivate func seedPathRecoveryReconnectBackoff(milliseconds: Double) {
-        self.backoffMs = milliseconds
     }
 
     fileprivate func seedPathRecoveryConnectBackoff(_ sleep: PathRecoverySleep?) {
@@ -289,7 +275,7 @@ struct GatewayNetworkPathRecoveryTests {
     }
 
     @Test
-    func `satisfied path wakes the pending reconnect and resets both backoffs`() async throws {
+    func `satisfied path wakes the shared reconnect cooldown and coalesced callers`() async throws {
         let reconnect = PathRecoverySleep()
         let upgrade = PathRecoverySleep()
         let upgradeCalls = PathRecoveryEvents<Void>()
@@ -303,52 +289,39 @@ struct GatewayNetworkPathRecoveryTests {
                 try await fixture.channel.connect()
                 await fixture.emit(PathRecoveryFixture.offline)
                 let oldSocket = try #require(fixture.session.latestTask())
-                await fixture.channel.seedPathRecoveryReconnectBackoff(milliseconds: 30000)
-                await fixture.channel.seedPathRecoveryConnectBackoff(nil)
+                await fixture.channel.seedPathRecoveryConnectBackoff(reconnect)
                 oldSocket.emitReceiveFailure()
                 await reconnect.started.wait(forCount: 1)
                 #expect(reconnect.started.values == [.seconds(30)])
+                let caller = Task { try await fixture.channel.connect() }
 
                 await fixture.settleNext(PathRecoveryFixture.wifi)
                 await upgrade.started.wait(forCount: 1)
                 #expect(reconnect.cancelled.values.count == 1)
-                #expect(await fixture.channel.backoffMs == 500)
                 #expect(await fixture.channel.hasPathRecoveryConnectBackoff() == false)
 
                 upgrade.release()
-                try await fixture.channel.connect()
+                try await caller.value
                 #expect(fixture.session.snapshotMakeCount() == 2)
                 #expect(upgradeCalls.values.count == 2)
             }
     }
 
-    @Test
-    func `satisfied path wakes a coalesced connect attempt inside its failure backoff`() async throws {
-        let backoff = PathRecoverySleep()
-        try await withPathRecoveryFixture { fixture in
-            try await fixture.channel.connect()
-            await fixture.emit(PathRecoveryFixture.offline)
-            let oldSocket = try #require(fixture.session.latestTask())
-            await fixture.channel.seedPathRecoveryConnectBackoff(backoff)
-            oldSocket.emitReceiveFailure()
-            await backoff.started.wait(forCount: 1)
-            let caller = Task { try await fixture.channel.connect() }
-
-            await fixture.settleNext(PathRecoveryFixture.wifi)
-            try await caller.value
-
-            #expect(backoff.cancelled.values.count == 1)
-            #expect(fixture.session.snapshotMakeCount() == 2)
-            #expect(await fixture.channel.hasPathRecoveryConnectBackoff() == false)
-        }
-    }
-
-    @Test
-    func `a satisfied path leaves authentication paused`() async throws {
+    @Test(arguments: [false, true])
+    func `a satisfied path leaves authentication paused`(legacyProtocolMismatch: Bool) async throws {
         let upgradeCalls = PathRecoveryEvents<Void>()
         try await withPathRecoveryFixture(extraHeadersProvider: {
             upgradeCalls.record(())
-            if upgradeCalls.values.count > 1 { throw GatewayExternalAuthorizationError() }
+            if upgradeCalls.values.count > 1 {
+                if legacyProtocolMismatch {
+                    throw GatewayConnectAuthError(
+                        message: "protocol mismatch",
+                        detailCode: "INVALID_REQUEST",
+                        canRetryWithDeviceToken: false,
+                        expectedProtocol: 1)
+                }
+                throw GatewayExternalAuthorizationError()
+            }
             return [:]
         }) { fixture in
             try await fixture.channel.connect()

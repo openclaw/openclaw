@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { ExpressionBuilder } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -24,8 +24,6 @@ import {
 import {
   deferTurnClaimRelease,
   deferWorkerTurnClaimClosed,
-  removeTurnClaimReleaseWaiter,
-  waitersFor,
 } from "./placement-turn-claim-events.js";
 import {
   assertSessionWorkspaceUnreserved,
@@ -42,9 +40,8 @@ import {
   parseWorkerWorkspaceReconciliationPlan,
   serializeWorkerWorkspaceReconciliationPlan,
 } from "./workspace-reconcile.js";
-export { registerWorkerTurnClaimClosedHandler } from "./placement-turn-claim-events.js";
 
-const workspaceJournalQuery = (db: DatabaseSync) =>
+const workspaceJournalQuery = (db: EngineConnection) =>
   getNodeSqliteKysely<Pick<StateDatabase, "worker_workspace_reconciliations">>(db);
 
 export class ActiveTurnClaimError extends Error {
@@ -54,7 +51,7 @@ export class ActiveTurnClaimError extends Error {
   }
 }
 
-function releaseTurnQuery(db: DatabaseSync, nowMs: number) {
+function releaseTurnQuery(db: EngineConnection, nowMs: number) {
   return query(db)
     .updateTable("worker_session_placements")
     .set({
@@ -64,7 +61,7 @@ function releaseTurnQuery(db: DatabaseSync, nowMs: number) {
 }
 
 export function clearLocalTurnClaimsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   path: string,
   nowMs: number,
 ): WorkerSessionPlacementRecord[] {
@@ -80,20 +77,20 @@ export function clearLocalTurnClaimsInDatabase(
 }
 
 export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
-  const { instanceId, path, now, read, write } = runtime;
+  const { instanceId, path, now, write } = runtime;
   function publishTurnRelease(
-    db: DatabaseSync,
+    db: EngineConnection,
     claim: WorkerSessionTurnClaim,
     statement: ReturnType<typeof releaseTurnQuery>,
     error: string,
   ): WorkerSessionPlacementRecord;
   function publishTurnRelease(
-    db: DatabaseSync,
+    db: EngineConnection,
     claim: WorkerSessionTurnClaim,
     statement: ReturnType<typeof releaseTurnQuery>,
   ): WorkerSessionPlacementRecord | undefined;
   function publishTurnRelease(
-    db: DatabaseSync,
+    db: EngineConnection,
     claim: WorkerSessionTurnClaim,
     statement: ReturnType<typeof releaseTurnQuery>,
     error?: string,
@@ -112,11 +109,15 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
     return updated;
   }
   const claimTurnInDatabase = (
-    db: DatabaseSync,
+    db: EngineConnection,
     input: WorkerTurnClaimInput,
     updatedAtMs: number,
     options: { allowDraining?: boolean } = {},
   ): { claim: WorkerSessionTurnClaim; placement: WorkerSessionPlacementRecord } => {
+    const environmentId = input.owner.environmentId;
+    if (environmentId === undefined) {
+      throw new Error("Plain-local turn claims belong to the placement owner");
+    }
     const identity = normalizeIdentity(input);
     const claimId = required(input.claimId, "turn claim id");
     const runId = required(input.runId, "turn claim run id");
@@ -124,19 +125,14 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       input.owner.kind === "local"
         ? {
             kind: "local",
-            ...(input.owner.environmentId === undefined
-              ? {}
-              : {
-                  environmentId: required(input.owner.environmentId, "turn owner environment id"),
-                  ownerEpoch: normalizeEpoch(input.owner.ownerEpoch ?? 0, "turn owner epoch"),
-                }),
+            environmentId: required(environmentId, "turn owner environment id"),
+            ownerEpoch: normalizeEpoch(input.owner.ownerEpoch ?? 0, "turn owner epoch"),
           }
         : {
             kind: "worker",
-            environmentId: required(input.owner.environmentId, "turn owner environment id"),
+            environmentId: required(environmentId, "turn owner environment id"),
             ownerEpoch: normalizeEpoch(input.owner.ownerEpoch, "turn owner epoch"),
           };
-    const local = owner.kind === "local" && owner.environmentId === undefined;
     const claimValues = {
       turn_claim_owner: owner.kind,
       turn_claim_id: claimId,
@@ -153,84 +149,46 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       >,
     ) =>
       eb.and([
-        eb("agent_id", "=", identity.agentId),
-        eb("session_key", "=", identity.sessionKey),
-        local
-          ? eb("state", "=", "local")
-          : eb.and([
-              owner.kind === "worker"
-                ? eb.or([
-                    eb("execution_mode", "=", "worker-turn"),
-                    eb("execution_mode", "is", null),
-                  ])
-                : eb("execution_mode", "=", "remote-exec"),
-              eb("state", "in", options.allowDraining ? ["active", "draining"] : ["active"]),
-              eb("environment_id", "=", owner.environmentId!),
-              eb("active_owner_epoch", "=", owner.ownerEpoch!),
-            ]),
+        eb("worker_session_placements.agent_id", "=", identity.agentId),
+        eb("worker_session_placements.session_key", "=", identity.sessionKey),
+        eb.and([
+          owner.kind === "worker"
+            ? eb.or([
+                eb("worker_session_placements.execution_mode", "=", "worker-turn"),
+                eb("worker_session_placements.execution_mode", "is", null),
+              ])
+            : eb("worker_session_placements.execution_mode", "=", "remote-exec"),
+          eb(
+            "worker_session_placements.state",
+            "in",
+            options.allowDraining ? ["active", "draining"] : ["active"],
+          ),
+          eb("worker_session_placements.environment_id", "=", owner.environmentId!),
+          eb("worker_session_placements.active_owner_epoch", "=", owner.ownerEpoch!),
+        ]),
         eb.or([
-          eb("turn_claim_owner", "is", null),
+          eb("worker_session_placements.turn_claim_owner", "is", null),
           eb.and([
-            eb("turn_claim_owner", "=", owner.kind),
-            eb("turn_claim_id", "=", claimId),
-            eb("turn_claim_run_id", "=", runId),
-            eb("turn_claim_generation", "=", eb.ref("transition_generation")),
+            eb("worker_session_placements.turn_claim_owner", "=", owner.kind),
+            eb("worker_session_placements.turn_claim_id", "=", claimId),
+            eb("worker_session_placements.turn_claim_run_id", "=", runId),
+            eb(
+              "worker_session_placements.turn_claim_generation",
+              "=",
+              eb.ref("worker_session_placements.transition_generation"),
+            ),
           ]),
         ]),
       ]);
-    const statement = local
-      ? placementQuery
-          .insertInto("worker_session_placements")
-          .columns([
-            "session_id",
-            "agent_id",
-            "session_key",
-            "state",
-            "turn_claim_owner",
-            "turn_claim_id",
-            "turn_claim_run_id",
-            "turn_claim_owner_epoch",
-            "updated_at_ms",
-            "turn_claim_generation",
-            "created_at_ms",
-            "state_changed_at_ms",
-          ])
-          .expression(
-            placementQuery
-              .selectNoFrom((eb) => [
-                eb.val(identity.sessionId).as("session_id"),
-                eb.val(identity.agentId).as("agent_id"),
-                eb.val(identity.sessionKey).as("session_key"),
-                eb.val("local").as("state"),
-                eb.val(claimValues.turn_claim_owner).as("turn_claim_owner"),
-                eb.val(claimValues.turn_claim_id).as("turn_claim_id"),
-                eb.val(claimValues.turn_claim_run_id).as("turn_claim_run_id"),
-                eb.val(claimValues.turn_claim_owner_epoch).as("turn_claim_owner_epoch"),
-                eb.val(updatedAtMs).as("updated_at_ms"),
-                eb.val(0).as("turn_claim_generation"),
-                eb.val(updatedAtMs).as("created_at_ms"),
-                eb.val(updatedAtMs).as("state_changed_at_ms"),
-              ])
-              .where((eb) => eb.not(eb.exists(reservation))),
-          )
-          .onConflict((conflict) =>
-            conflict
-              .column("session_id")
-              .doUpdateSet((eb) => ({
-                ...claimValues,
-                turn_claim_generation: eb.ref("transition_generation"),
-              }))
-              .where(admissible),
-          )
-      : placementQuery
-          .updateTable("worker_session_placements")
-          .set((eb) => ({
-            ...claimValues,
-            turn_claim_generation: eb.ref("transition_generation"),
-          }))
-          .where("session_id", "=", identity.sessionId)
-          .where(admissible)
-          .where((eb) => eb.not(eb.exists(reservation)));
+    const statement = placementQuery
+      .updateTable("worker_session_placements")
+      .set((eb) => ({
+        ...claimValues,
+        turn_claim_generation: eb.ref("worker_session_placements.transition_generation"),
+      }))
+      .where("session_id", "=", identity.sessionId)
+      .where(admissible)
+      .where((eb) => eb.not(eb.exists(reservation)));
     const row = executeSqliteQuerySync(db, statement.returningAll()).rows[0];
     if (!row) {
       // Failed admissions alone need a diagnostic read; the successful path is one write.
@@ -286,7 +244,10 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       return claim;
     });
 
-  const releaseTurnInDatabase = (db: DatabaseSync, claim: WorkerSessionTurnClaim) => {
+  const releaseTurnInDatabase = (db: EngineConnection, claim: WorkerSessionTurnClaim) => {
+    if (claim.owner.kind === "local" && claim.owner.environmentId === undefined) {
+      throw new Error("Plain-local turn claims belong to the placement owner");
+    }
     const sessionId = required(claim.sessionId, "session id");
     const claimId = required(claim.claimId, "turn claim id");
     const runId = required(claim.runId, "turn claim run id");
@@ -305,37 +266,21 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
               .where("session_id", "=", sessionId),
           ),
         ),
-      );
-    if (claim.owner.kind === "worker" || claim.owner.environmentId !== undefined) {
-      statement = statement
-        .where((eb) =>
-          claim.owner.kind === "worker"
-            ? eb.or([eb("execution_mode", "=", "worker-turn"), eb("execution_mode", "is", null)])
-            : eb("execution_mode", "=", "remote-exec"),
-        )
-        .where(
-          "state",
-          "in",
-          claim.owner.kind === "worker" ? ["active", "draining"] : ["active", "draining", "failed"],
-        )
-        .where("environment_id", "=", claim.owner.environmentId!)
-        .where("active_owner_epoch", "=", claim.owner.ownerEpoch!);
-      if (claim.owner.kind === "worker") {
-        statement = statement.where("turn_claim_owner_epoch", "=", claim.owner.ownerEpoch);
-      }
-    } else if (claim.owner.ownerEpoch !== undefined) {
-      return undefined;
-    } else {
-      statement = statement
-        .where("state", "in", ["local", "requested", "failed"])
-        .where((eb) =>
-          eb.or([
-            eb("execution_mode", "is", null),
-            eb("execution_mode", "!=", "remote-exec"),
-            eb("environment_id", "is", null),
-            eb("active_owner_epoch", "is", null),
-          ]),
-        );
+      )
+      .where((eb) =>
+        claim.owner.kind === "worker"
+          ? eb.or([eb("execution_mode", "=", "worker-turn"), eb("execution_mode", "is", null)])
+          : eb("execution_mode", "=", "remote-exec"),
+      )
+      .where(
+        "state",
+        "in",
+        claim.owner.kind === "worker" ? ["active", "draining"] : ["active", "draining", "failed"],
+      )
+      .where("environment_id", "=", claim.owner.environmentId!)
+      .where("active_owner_epoch", "=", claim.owner.ownerEpoch!);
+    if (claim.owner.kind === "worker") {
+      statement = statement.where("turn_claim_owner_epoch", "=", claim.owner.ownerEpoch);
     }
     const placement = publishTurnRelease(db, claim, statement);
     if (!placement) {
@@ -393,9 +338,6 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       const claimId = required(claim.claimId, "turn claim id");
       const runId = required(claim.runId, "turn claim run id");
       return write((db) => {
-        if (!hasWorkerWorkspacePendingResult(db, sessionId)) {
-          throw new Error(`Session ${sessionId} has no pending cloud workspace result`);
-        }
         if (!hasAcceptedWorkerWorkspacePendingResult(db, sessionId)) {
           throw new Error(`Session ${sessionId} cloud workspace result was not accepted`);
         }
@@ -487,75 +429,6 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       });
     },
 
-    clearLocalTurnClaimsAfterRestart(this: void): number {
-      return write((db) => clearLocalTurnClaimsInDatabase(db, path, now()).length);
-    },
-
-    async waitForTurnClaimRelease(
-      this: void,
-      sessionIdInput: string,
-      waitOptions: { timeoutMs?: number; signal?: AbortSignal },
-    ): Promise<void> {
-      const sessionId = required(sessionIdInput, "session id");
-      if (
-        waitOptions.timeoutMs !== undefined &&
-        (!Number.isSafeInteger(waitOptions.timeoutMs) || waitOptions.timeoutMs < 0)
-      ) {
-        throw new Error("Worker session turn claim wait timeout must be a non-negative integer");
-      }
-      if (!find(read(), sessionId)?.turnClaim) {
-        return;
-      }
-      if (waitOptions.signal?.aborted) {
-        throw new Error(`Turn claim wait aborted for session ${sessionId}`);
-      }
-      await new Promise<void>((resolve, reject) => {
-        let settled = false;
-        const waiters = waitersFor(path, sessionId);
-        const finish = (error?: Error) => {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          if (timer) {
-            clearTimeout(timer);
-          }
-          waitOptions.signal?.removeEventListener("abort", onAbort);
-          removeTurnClaimReleaseWaiter(path, sessionId, onRelease);
-          if (error) {
-            reject(error);
-          } else {
-            resolve();
-          }
-        };
-        const onRelease = (error?: Error) => finish(error);
-        const onAbort = () => finish(new Error(`Turn claim wait aborted for session ${sessionId}`));
-        const timer =
-          waitOptions.timeoutMs === undefined
-            ? undefined
-            : setTimeout(
-                () =>
-                  finish(
-                    new Error(`Timed out waiting for session ${sessionId} turn claim release`),
-                  ),
-                waitOptions.timeoutMs,
-              );
-        waiters.add(onRelease);
-        waitOptions.signal?.addEventListener("abort", onAbort, { once: true });
-        // Register first, then reread. This closes the release-between-check-and-wait race.
-        if (!find(read(), sessionId)?.turnClaim) {
-          finish();
-        } else if (waitOptions.signal?.aborted) {
-          onAbort();
-        }
-      });
-    },
-
-    validateTurnClaim(this: void, claim: WorkerSessionTurnClaim): boolean {
-      const current = find(read(), required(claim.sessionId, "session id"));
-      return current ? isCurrentPlacementTurnClaim(current, claim) : false;
-    },
-
     updateWorkspaceBaseManifest(input: {
       claim: WorkerSessionTurnClaim;
       manifestRef: string;
@@ -593,7 +466,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         ) {
           throw new Error(`Worker workspace journal owner is stale for session ${sessionId}`);
         }
-        const result = executeSqliteQuerySync(
+        const updatedRow = executeSqliteQuerySync(
           db,
           query(db)
             .updateTable("worker_session_placements")
@@ -614,9 +487,10 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
                   },
                 ),
               ),
-            ),
-        );
-        if (result.numAffectedRows !== 1n) {
+            )
+            .returningAll(),
+        ).rows[0];
+        if (!updatedRow) {
           throw new Error(`Worker session workspace ${sessionId} changed during reconciliation`);
         }
         if (reconciliation) {
@@ -638,7 +512,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
           }
           publishPlacementWorkspaceJournalState(db, sessionId, true);
         }
-        const updated = getRequired(db, sessionId);
+        const updated = fromRow(updatedRow);
         publishPlacementTurnClaimState(db, updated, current.state);
         sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
         return updated;

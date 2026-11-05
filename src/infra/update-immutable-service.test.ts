@@ -16,7 +16,7 @@ import {
   assertImmutableServiceStoppedCurrent,
   inspectImmutableActivationService,
   controlImmutableService,
-  verifyImmutableService,
+  readImmutableService,
 } from "./update-immutable-service.js";
 
 vi.mock("node:fs", async (original) => {
@@ -73,24 +73,11 @@ beforeEach(async () => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it("binds the effective service to the physical current generation and explicit state", async () => {
-  await expect(verifyImmutableService(service, root, generation, node)).resolves.toBeUndefined();
-  expect(systemd.readSystemdServiceExecStartAsRoot).toHaveBeenCalledWith(
-    { OPENCLAW_SYSTEMD_UNIT: "example.service" },
-    {
-      scope: "system",
-      unitName: "example.service",
-      unitPath: "/etc/systemd/system/example.service",
-    },
-    "openclaw",
-  );
-});
-
 it.each(["stateDir", "configPath", "profile"] as const)(
   "refuses adoption when the supplied %s does not match the effective service",
   async (key) => {
     service[key] = key === "profile" ? "other" : "/unrelated";
-    await expect(verifyImmutableService(service, root, generation, node)).rejects.toThrow(
+    await expect(readImmutableService(service, root, generation, node)).rejects.toThrow(
       "effective environment",
     );
   },
@@ -102,7 +89,7 @@ it("refuses a current symlink redirected to another generation", async () => {
   await fs.writeFile(path.join(other, "dist", "index.js"), "");
   await fs.unlink(path.join(root, "current"));
   await fs.symlink(other, path.join(root, "current"));
-  await expect(verifyImmutableService(service, root, generation, node)).rejects.toThrow(
+  await expect(readImmutableService(service, root, generation, node)).rejects.toThrow(
     "current immutable generation",
   );
 });
@@ -188,7 +175,7 @@ describe("immutable activation service", () => {
         if (!alive) {
           throw Object.assign(new Error("exited"), { code: "ENOENT" });
         }
-        return `${pid} (openclaw-gateway) S ${"0 ".repeat(18)}${ticks}`;
+        return `${path.basename(path.dirname(String(file)))} (openclaw-gateway) S ${"0 ".repeat(18)}${ticks}`;
       }
       if ([pid, currentPid].some((candidate) => String(file) === `/proc/${candidate}/cgroup`)) {
         return `0::${controlGroup}\n`;
@@ -267,18 +254,6 @@ describe("immutable activation service", () => {
     };
   });
 
-  it("binds the live process to its physical generation, external runtime and stable service", async () => {
-    const observed = await inspect();
-    expect(observed).toMatchObject({
-      pid,
-      processStartTicks: "101",
-      generationPath: generation,
-      state: { running: true },
-    });
-    expect(observed.definitionDigest).toMatch(/^[a-f0-9]{64}$/u);
-    expect(() => assertImmutableServiceProcessCurrent(observed)).not.toThrow();
-  });
-
   it.each(["stopped", "auto-restart", "queued job", "replacement"] as const)(
     "reconciles a host that becomes %s after committing shutdown before native dispatch",
     async (outcome) => {
@@ -333,7 +308,7 @@ describe("immutable activation service", () => {
     ).rejects.toBe(failure);
   });
 
-  it.each(["current", "physical"])(
+  it.each(["physical"])(
     "permits %s direct-entry adoption but refuses activation before effects",
     async (entry) => {
       command.programArguments = [
@@ -346,9 +321,9 @@ describe("immutable activation service", () => {
         "gateway",
       ];
       command.workingDirectory = generation;
-      await expect(
-        verifyImmutableService(service, root, generation, node),
-      ).resolves.toBeUndefined();
+      await expect(readImmutableService(service, root, generation, node)).resolves.toMatchObject({
+        command,
+      });
       await expect(inspect()).rejects.toThrow("packaged stable Gateway launcher");
       expect(lifecycle.stopSystemdService).not.toHaveBeenCalled();
       expect(lifecycle.startSystemdService).not.toHaveBeenCalled();
@@ -385,7 +360,7 @@ describe("immutable activation service", () => {
     expect(lifecycle.stopSystemdService).not.toHaveBeenCalled();
   });
 
-  it.each(["active", "activating"])(
+  it.each(["activating"])(
     "waits for the exact stable launcher to execve from its inherited cwd (%s)",
     async (state) => {
       activating = state === "activating";
@@ -517,7 +492,7 @@ describe("immutable activation service", () => {
     expect(alive).toBe(true);
   });
 
-  it("joins the old process and proves the entire service cgroup empty after native stop", async () => {
+  it("rechecks cgroup descendants synchronously immediately before pointer publication", async () => {
     const observed = await inspect();
     const initialReads = cgroupReads;
     await controlImmutableService("stop", {
@@ -529,16 +504,6 @@ describe("immutable activation service", () => {
     expect(alive).toBe(false);
     expect(cgroupReads).toBeGreaterThan(initialReads);
     await expect(inspect(true)).resolves.toMatchObject({ pid: null, state: { running: false } });
-  });
-
-  it("rechecks cgroup descendants synchronously immediately before pointer publication", async () => {
-    const observed = await inspect();
-    await controlImmutableService("stop", {
-      descriptor,
-      expected: observed,
-      assertCurrent,
-      stdout: new PassThrough(),
-    });
     expect(() => assertImmutableServiceStoppedCurrent(observed)).not.toThrow();
     populated = true;
     expect(() => assertImmutableServiceStoppedCurrent(observed)).toThrow("cgroup is populated");

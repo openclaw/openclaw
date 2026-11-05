@@ -1,4 +1,4 @@
-import type { AssistantMessage, Model } from "@openclaw/llm-core";
+import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveNewestAnthropicCompaction } from "./anthropic-compaction-replay.js";
 import { resolveAnthropicServerCompactionPlan } from "./anthropic-payload-policy.js";
@@ -16,6 +16,7 @@ import {
 export {
   isCompactionReplayCheckpoint,
   stripCompactionReplayCheckpoint,
+  stripCompactionReplayCheckpointInPlace,
 } from "./provider-compaction-checkpoint.js";
 
 export { CompactionReplayRefreshRequiredError } from "./openai-responses-compaction-replay.js";
@@ -193,6 +194,7 @@ export function resolveCompactionReplayPressure<T extends ReplayMessage>(
   identity: ReplayIdentity,
   estimate: ReplayPressureEstimator,
   systemPrompt?: string,
+  requestContext?: Context,
 ): { messages: T[]; prefixTokens: number; measuredTokens?: number } | undefined {
   const checkpoint = resolveCompactionSource(messages, model, identity);
   if (!checkpoint) {
@@ -214,7 +216,13 @@ export function resolveCompactionReplayPressure<T extends ReplayMessage>(
         : estimate.text(checkpoint.item.encrypted_content);
   const measuredBoundary =
     checkpoint.family === "responses"
-      ? resolveResponsesContextUsageBoundary(messages, model, identity, systemPrompt)
+      ? resolveResponsesContextUsageBoundary(
+          messages,
+          model,
+          identity,
+          systemPrompt,
+          requestContext,
+        )
       : undefined;
   if (measuredBoundary) {
     // Async tool results can be persisted before the final usage event. The wire
@@ -245,15 +253,6 @@ export function resolveCompactionReplayPressure<T extends ReplayMessage>(
     ],
     prefixTokens,
   };
-}
-
-/** Strip prefix-bound checkpoint state from an in-place message rewrite. */
-export function stripCompactionReplayCheckpointInPlace(message: {
-  providerReplay?: unknown;
-}): void {
-  if (isCompactionReplayCheckpoint(message.providerReplay)) {
-    delete message.providerReplay;
-  }
 }
 
 /** Preserve the covered prefix and reindex checkpoints after known content removals. */

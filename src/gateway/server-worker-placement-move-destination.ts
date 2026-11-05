@@ -31,12 +31,13 @@ export function createGatewayWorkerPlacementMoveDestinationResolver(params: {
       return undefined;
     }
     const sessionRuntime = await params.loadSessionRuntime();
-    const { config, target, entry, assertCurrent } = await resolveWorkerPlacementSessionTarget({
+    using resolved = await resolveWorkerPlacementSessionTarget({
       sessionRuntime,
       config: params.getConfig(),
       ...identity,
       errorMessage: `Session ${identity.sessionKey} changed before placement move recovery.`,
     });
+    const { config, target, entry, assertCurrent } = resolved;
     assertCurrent(params.getConfig());
     const destination = resolveWorkerPlacementDestination({
       cfg: config,

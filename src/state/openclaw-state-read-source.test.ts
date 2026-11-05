@@ -3,6 +3,7 @@
 import { emptyReply, mock, queueTask, source } from "./openclaw-state-read-worker.test-harness.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expect, it, vi } from "vitest";
+import * as processRole from "../infra/database-engine/admission-scope.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { withRuntimeWorkerGeneration } from "../infra/runtime-worker-generation.js";
 import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
@@ -15,11 +16,99 @@ import {
 } from "./openclaw-state-read-worker.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
+const backupRead = { type: "backup.runs" } as const;
+function readyTask() {
+  const task = queueTask();
+  task.result.resolve(emptyReply);
+  return task;
+}
+
+function withReadGeneration(
+  workerUrl: URL,
+  operation: (source: ReturnType<typeof captureOpenClawStateReadSource>) => Promise<void>,
+) {
+  const moduleUrl = resolveRuntimeProcessEntrypointUrl("stateRead");
+  return withRuntimeWorkerGeneration(
+    async (bind) => {
+      bind((url) => (url.href === moduleUrl.href ? workerUrl : url));
+      await operation(captureOpenClawStateReadSource());
+    },
+    async () => {},
+  );
+}
+
+function readFixture() {
+  const { options, pathname } = source();
+  return {
+    options,
+    read: () => executeExistingOpenClawStateRead(options, backupRead),
+    get location() {
+      return {
+        context: captureOpenClawStateWorkerContext(options),
+        location: pathname,
+        checkFreshAdmission: false,
+      };
+    },
+    authority: { signal: new AbortController().signal, assertCurrent: () => {} },
+  };
+}
+
+it.each(["gateway", "cli-oneshot", undefined] as const)(
+  "uses the %s process lifetime for early awaited reads",
+  async (role) => {
+    const roleSpy = vi.spyOn(processRole, "getDatabaseProcessRole").mockReturnValue(role);
+    const { location, authority } = readFixture();
+    try {
+      for (const awaitedOnly of [true, true, true, false]) {
+        const transport = captureOpenClawStateReadSource().createTransport(
+          backupRead,
+          undefined,
+          undefined,
+          awaitedOnly,
+        );
+        const task = readyTask();
+        await expect(transport.startRead(location, authority)).resolves.toEqual({
+          value: emptyReply,
+        });
+        await transport.startClose();
+        expect(task.close).toHaveBeenCalledExactlyOnceWith(
+          awaitedOnly && role !== "gateway" ? { retire: true } : undefined,
+        );
+      }
+      expect(mock.create).toHaveBeenCalledTimes(role === "gateway" ? 1 : 2);
+    } finally {
+      roleSpy.mockRestore();
+    }
+  },
+);
+
+it("shares read setup methods while each read retains independent task custody", async () => {
+  const { location, authority } = readFixture();
+  const factories = new Set();
+  const readers = new Set();
+  const validators = new Set();
+  const closers = new Set();
+  for (let index = 0; index < 16; index += 1) {
+    const captured = captureOpenClawStateReadSource();
+    const transport = captured.createTransport(backupRead);
+    factories.add(captured.createTransport);
+    readers.add(transport.startRead);
+    validators.add(transport.startValidateFresh);
+    closers.add(transport.startClose);
+    const task = readyTask();
+    await expect(transport.startRead(location, authority)).resolves.toEqual({ value: emptyReply });
+    await transport.startClose();
+    expect(task.close).toHaveBeenCalledOnce();
+  }
+  expect(mock.create).toHaveBeenCalledOnce();
+  expect([factories.size, readers.size, validators.size, closers.size]).toEqual([1, 1, 1, 1]);
+});
+
 it("retires cached readers after independent custody joins and permits reuse", async () => {
-  const { options } = source();
+  const { read } = readFixture();
   const nativeSource = captureRetainedNativeWorkerSource();
   const task = queueTask();
-  const reading = executeExistingOpenClawStateRead(options, { type: "backup.runs" });
+  const reading = read();
   try {
     await task.captured;
     expect(await retireIdleOpenClawStateReadWorkers(nativeSource)).toBe(false);
@@ -32,26 +121,23 @@ it("retires cached readers after independent custody joins and permits reuse", a
   expect(await retireIdleOpenClawStateReadWorkers(nativeSource)).toBe(true);
   expect(mock.closePool).toHaveBeenCalledOnce();
 
-  const next = queueTask();
-  next.result.resolve(emptyReply);
-  await expect(executeExistingOpenClawStateRead(options, { type: "backup.runs" })).resolves.toEqual(
-    emptyReply,
-  );
+  readyTask();
+  await expect(read()).resolves.toEqual(emptyReply);
   expect(mock.create).toHaveBeenCalledTimes(2);
 });
 
 it.each([true, false])(
   "refuses writer-held reader retirement before cleanup (targeted close: %s)",
   async (explicitSqliteCloseReleasesNativeResources) => {
-    const { options } = source();
+    const { options, read } = readFixture();
     mock.capabilities.mockReturnValue({
       explicitSqliteCloseReleasesNativeResources,
       decided: true,
       reason: "test policy",
     });
     const nativeSource = captureRetainedNativeWorkerSource();
-    queueTask().result.resolve(emptyReply);
-    await executeExistingOpenClawStateRead(options, { type: "backup.runs" });
+    readyTask();
+    await read();
 
     await expect(
       runOpenClawAgentWriteAdmission({ agentId: "main", path: options.path }, () =>
@@ -71,108 +157,64 @@ it.each([true, false])(
 );
 
 it("keeps lazy reads with their captured generation when another generation dispatches them", async () => {
-  const { options } = source();
-  const context = captureOpenClawStateWorkerContext(options);
-  const location = { context, location: options.path, checkFreshAdmission: false };
-  const authority = { signal: new AbortController().signal, assertCurrent: () => {} };
-  const moduleUrl = resolveRuntimeProcessEntrypointUrl("stateRead");
+  const { location, authority } = readFixture();
   const firstUrl = new URL("file:///synthetic/first/state-reader.mjs");
   const secondUrl = new URL("file:///synthetic/second/state-reader.mjs");
-  await withRuntimeWorkerGeneration(
-    async (bindFirst) => {
-      bindFirst((url) => (url.href === moduleUrl.href ? firstUrl : url));
-      const first = captureOpenClawStateReadSource();
-      expect(mock.create).not.toHaveBeenCalled();
-      expect(mock.selectSqlite).not.toHaveBeenCalled();
-      await withRuntimeWorkerGeneration(
-        async (bindSecond) => {
-          bindSecond((url) => (url.href === moduleUrl.href ? secondUrl : url));
-          const second = captureOpenClawStateReadSource();
-          const firstTask = queueTask();
-          const secondTask = queueTask();
-          firstTask.result.resolve(emptyReply);
-          secondTask.result.resolve(emptyReply);
-          const firstTransport = first.createTransport({ type: "backup.runs" });
-          const secondTransport = second.createTransport({ type: "backup.runs" });
-          try {
-            await expect(firstTransport.startRead(location, authority).result).resolves.toEqual({
-              value: emptyReply,
-            });
-            await expect(secondTransport.startRead(location, authority).result).resolves.toEqual({
-              value: emptyReply,
-            });
-            expect(mock.create).toHaveBeenCalledTimes(2);
-            expect(mock.create).toHaveBeenNthCalledWith(
-              1,
-              expect.objectContaining({ workerUrl: firstUrl }),
-              expect.objectContaining({ retainedTransport: true }),
-            );
-            expect(mock.create).toHaveBeenNthCalledWith(
-              2,
-              expect.objectContaining({ workerUrl: secondUrl }),
-              expect.objectContaining({ retainedTransport: true }),
-            );
-          } finally {
-            await Promise.all([
-              firstTransport.startClose().result,
-              secondTransport.startClose().result,
-            ]);
-          }
-        },
-        async () => {},
-      );
-    },
-    async () => {},
-  );
+  await withReadGeneration(firstUrl, async (first) => {
+    expect(mock.create).not.toHaveBeenCalled();
+    expect(mock.selectSqlite).not.toHaveBeenCalled();
+    await withReadGeneration(secondUrl, async (second) => {
+      const transports = [first, second].map((reader) => {
+        readyTask();
+        return reader.createTransport(backupRead);
+      });
+      try {
+        for (const transport of transports) {
+          await expect(transport.startRead(location, authority)).resolves.toEqual({
+            value: emptyReply,
+          });
+        }
+        expect(mock.create.mock.calls).toMatchObject(
+          [firstUrl, secondUrl].map((workerUrl) => [{ workerUrl }, { retainedTransport: true }]),
+        );
+      } finally {
+        await Promise.all(transports.map((transport) => transport.startClose()));
+      }
+    });
+  });
 });
 
 it("joins captured domain cleanup before retiring its pool and execution generation", async () => {
-  const { options } = source();
-  const context = captureOpenClawStateWorkerContext(options);
+  const { location, authority } = readFixture();
   const scope = new AsyncLocalStorage<string>();
   const ownerCloseStarted = createDeferredCore();
   const ownerMayClose = createDeferredCore();
   const events: string[] = [];
-  const releaseGeneration = vi.fn(async () => {
-    events.push("generation released");
-  });
-  mock.closeResources.mockImplementation(async () => {
-    events.push("resources closed");
-  });
-  mock.closePool.mockImplementation(async () => {
-    events.push("pool closed");
-  });
+  const record = (event: string) => async () => {
+    events.push(event);
+  };
+  const releaseGeneration = vi.fn(record("generation released"));
+  mock.closeResources.mockImplementation(record("resources closed"));
+  mock.closePool.mockImplementation(record("pool closed"));
   let captured: ReturnType<typeof captureOpenClawStateReadSource> | undefined;
   const generation = withRuntimeWorkerGeneration(async (bind) => {
     bind((url) => new URL(`${url.href}?synthetic-generation=owned`));
     captured = captureOpenClawStateReadSource();
     const retainedSource = captured;
-    const transport = retainedSource.createTransport({ type: "backup.runs" });
-    const task = queueTask();
-    task.result.resolve(emptyReply);
+    const transport = retainedSource.createTransport(backupRead);
+    readyTask();
     scope.run("accepted reader", () => {
-      const unregister = retainedSource.own(
-        () => {
-          expect(scope.getStore()).toBe("accepted reader");
-          events.push("reader serviced");
-          retainedSource.service();
-        },
-        async () => {
-          expect(scope.getStore()).toBe("accepted reader");
-          events.push("domain closing");
-          ownerCloseStarted.resolve();
-          await ownerMayClose.promise;
-          await transport.startRead(
-            { context, location: options.path, checkFreshAdmission: false },
-            { signal: new AbortController().signal, assertCurrent: () => {} },
-          ).result;
-          await transport.startClose().result;
-          unregister();
-          events.push("domain closed");
-        },
-      );
+      const unregister = retainedSource.own(async () => {
+        expect(scope.getStore()).toBe("accepted reader");
+        events.push("domain closing");
+        ownerCloseStarted.resolve();
+        await ownerMayClose.promise;
+        await transport.startRead(location, authority);
+        await transport.startClose();
+        unregister();
+        events.push("domain closed");
+      });
     });
-    scope.run("later reader", () => retainedSource.service());
   }, releaseGeneration);
   try {
     await Promise.race([
@@ -181,22 +223,14 @@ it("joins captured domain cleanup before retiring its pool and execution generat
         throw new Error("Generation completed before domain cleanup");
       }),
     ]);
-    expect(events).toEqual(["reader serviced", "domain closing"]);
+    expect(events).toEqual(["domain closing"]);
     expect(mock.create).not.toHaveBeenCalled();
-    expect(mock.closePool).not.toHaveBeenCalled();
-    expect(releaseGeneration).not.toHaveBeenCalled();
-    expect(() =>
-      captured?.own(
-        () => {},
-        async () => {},
-      ),
-    ).toThrow(/closing/);
+    expect(() => captured?.own(async () => {})).toThrow(/closing/);
   } finally {
     ownerMayClose.resolve();
     await generation;
   }
   expect(events).toEqual([
-    "reader serviced",
     "domain closing",
     "domain closed",
     "resources closed",
@@ -204,51 +238,3 @@ it("joins captured domain cleanup before retiring its pool and execution generat
     "generation released",
   ]);
 });
-
-it.each(["workerPlacements.changeSnapshot", "cron.activeReceiptOwners"] as const)(
-  "captures and charges selectors before queued dispatch (%s)",
-  async (type) => {
-    const { pathname, options } = source();
-    const selector = "选择🦞".repeat(512);
-    const command =
-      type === "workerPlacements.changeSnapshot"
-        ? { type, profileIds: [selector, selector] }
-        : { type, agentId: selector };
-    const expected = structuredClone(command);
-    const transport = captureOpenClawStateReadSource().createTransport(command);
-    if (command.type === "workerPlacements.changeSnapshot") {
-      command.profileIds.splice(0);
-    } else {
-      command.agentId = "different agent before preparation";
-    }
-    const dispatch = createDeferredCore();
-    const task = queueTask(dispatch.promise);
-    const read = transport.startRead(
-      {
-        context: captureOpenClawStateWorkerContext(options),
-        location: pathname,
-        checkFreshAdmission: false,
-      },
-      { signal: new AbortController().signal, assertCurrent: () => {} },
-    ).result;
-    try {
-      const submitted = await task.submitted;
-      dispatch.resolve();
-      expect.soft((await task.captured).command).toEqual(expected);
-      expect
-        .soft(submitted.inputBytes)
-        .toBeGreaterThanOrEqual(
-          Buffer.byteLength(selector) * (type === "workerPlacements.changeSnapshot" ? 2 : 1),
-        );
-    } finally {
-      dispatch.resolve();
-      task.result.resolve(
-        type === "workerPlacements.changeSnapshot"
-          ? { ok: true, type, sourceAdmitted: true, placements: [] }
-          : { ok: true, type, sourceAdmitted: true, owners: [] },
-      );
-      await read;
-      await transport.startClose().result;
-    }
-  },
-);

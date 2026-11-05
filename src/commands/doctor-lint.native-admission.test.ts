@@ -2,13 +2,12 @@ import fs from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import {
-  collectRuntimeToolSchemaFindingsWithRuntime,
-  createRuntimeToolSchemaCheck,
-} from "../flows/doctor-tool-schema-check.js";
+import { runtimeToolSchemaCheck } from "../flows/doctor-tool-schema-check.js";
 import { clearHealthChecksForTest } from "../flows/health-check-registry.js";
+import type { HealthCheckContext } from "../flows/health-checks.js";
 import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import { acquirePluginRegistryForInspection } from "../plugins/loader-runtime-load.js";
 import {
@@ -34,7 +33,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runDoctorLintCliInProcess } from "./doctor-lint-runner.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import { createDoctorPluginMetadataSnapshotScope } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
-import { createTestRuntime } from "./test-runtime-config-helpers.js";
+import { createTestModelDefinition, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const contributions = vi.hoisted(() => ({ resolve: vi.fn() }));
 vi.mock("../flows/doctor-health-contributions.js", () => ({
@@ -64,18 +63,15 @@ it("keeps private Doctor native admissions out of the caller and persisted index
         version: "1.0.0",
       });
       const packageJson = path.join(packageDir, "package.json");
-      fs.writeFileSync(
-        packageJson,
-        JSON.stringify({ ...JSON.parse(fs.readFileSync(packageJson, "utf8")), type: "module" }),
-      );
-      fs.writeFileSync(
-        path.join(packageDir, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: pluginId,
-          contracts: { tools: [toolName] },
-          configSchema: { type: "object", additionalProperties: false },
-        }),
-      );
+      writeFixtureJsonSync(packageJson, {
+        ...JSON.parse(fs.readFileSync(packageJson, "utf8")),
+        type: "module",
+      });
+      writeFixtureJsonSync(path.join(packageDir, "openclaw.plugin.json"), {
+        id: pluginId,
+        contracts: { tools: [toolName] },
+        configSchema: { type: "object", additionalProperties: false },
+      });
       fs.writeFileSync(path.join(packageDir, "README.md"), "Native companion fixture.\n");
       fs.writeFileSync(path.join(packageDir, "dist", "fixture.bin"), "native fixture bytes");
       fs.writeFileSync(
@@ -118,15 +114,11 @@ export default {
               api: "openai-completions",
               baseUrl: "http://127.0.0.1:1/v1",
               models: [
-                {
-                  id: "local",
+                createTestModelDefinition("local", {
                   name: "Local fixture",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   contextWindow: 128000,
                   maxTokens: 8192,
-                },
+                }),
               ],
             },
           },
@@ -157,13 +149,16 @@ export default {
         getBaseSnapshot: () => baseSnapshot,
         env: state.env,
       });
-      const check = createRuntimeToolSchemaCheck({
-        collectRuntimeToolSchemaFindings: (ctx) =>
-          collectRuntimeToolSchemaFindingsWithRuntime({
+      const check = {
+        ...runtimeToolSchemaCheck,
+        detect(ctx: HealthCheckContext) {
+          const preparedContext = {
             ...ctx,
             runWithPluginMetadataSnapshot: prepared.run,
-          }),
-      });
+          };
+          return runtimeToolSchemaCheck.detect(preparedContext);
+        },
+      };
       contributions.resolve.mockResolvedValue([check]);
       const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
       const inspect = async (cache: PluginCache) => {

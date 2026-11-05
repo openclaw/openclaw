@@ -12,10 +12,8 @@ import type { TelegramOutboundPromptContextMessage as TelegramMessageLike } from
 import type { TelegramRichMessageContextParams } from "./rich-message.js";
 import { isTelegramEmptyContentError } from "./rich-plain-fallback.js";
 import {
-  logTelegramOutboundSendOk,
   resolveAcceptedReplyToMessageId,
   sendLogger,
-  toAcceptedThreadScopedParams,
   type TelegramApi,
   type TelegramThreadScopedParams,
 } from "./send-context.js";
@@ -56,6 +54,7 @@ export function createTelegramTextSender(config: {
   ) => Promise<void>;
   singleUseReplyTo: boolean;
   buildThreadParams: (includeReplyTo: boolean) => Record<string, unknown>;
+  pendingMessageEffectParams: () => Record<string, unknown> | undefined;
   sender: TelegramPreparedSender;
   textMode: "markdown" | "html";
   tableMode: MarkdownTableMode;
@@ -73,14 +72,15 @@ export function createTelegramTextSender(config: {
     recordDeliveredPromptContext,
     singleUseReplyTo,
     buildThreadParams,
+    pendingMessageEffectParams,
     sender,
     textMode,
     tableMode,
     useRichMessages,
   } = config;
 
-  const linkPreviewOptions =
-    account.config.linkPreview === false ? { is_disabled: true } : undefined;
+  const linkPreview = opts.linkPreview ?? account.config.linkPreview;
+  const linkPreviewOptions = linkPreview === false ? { is_disabled: true } : undefined;
 
   return async (
     rawText: string,
@@ -110,7 +110,9 @@ export function createTelegramTextSender(config: {
           ? { replyToId: String(acceptedReplyToMessageId) }
           : {}),
       });
-      receipt.parts = receipt.parts.map((part, index) => ({ ...part, index }));
+      receipt.parts.forEach((part, index) => {
+        part.index = index;
+      });
       return receipt;
     };
     let pendingChunk: PendingChunk | undefined;
@@ -223,7 +225,7 @@ export function createTelegramTextSender(config: {
       tableMode,
       chunkMode: opts.chunkMode ?? resolveChunkMode(cfg, "telegram", account.accountId),
       richMessages: useRichMessages,
-      skipEntityDetection: account.config.linkPreview === false,
+      skipEntityDetection: linkPreview === false,
       ...(textMode === "html" ? { textMode: "html" as const } : {}),
       warn: (message) => sendLogger.warn(message),
     });
@@ -242,6 +244,7 @@ export function createTelegramTextSender(config: {
               index === pages.length - 1 && (!fallback || fallback.index === fallback.count - 1);
             return {
               ...buildThreadParams(includeReply),
+              ...pendingMessageEffectParams(),
               ...(finalPart && replyMarkup ? { reply_markup: replyMarkup } : {}),
               ...(linkPreviewOptions ? { link_preview_options: linkPreviewOptions } : {}),
               ...(opts.silent === true ? { disable_notification: true } : {}),
@@ -254,19 +257,6 @@ export function createTelegramTextSender(config: {
       const last = parts.at(-1);
       const lastMessageId = last ? String(last.messageId) : "";
       const lastChatId = String(last?.result.chat?.id ?? chatId);
-      if (lastMessageId) {
-        logTelegramOutboundSendOk({
-          accountId: account.accountId,
-          chatId: lastChatId,
-          messageId: lastMessageId,
-          operation: useRichMessages ? "sendRichMessage" : "sendMessage",
-          deliveryKind: "text",
-          messageThreadId: toAcceptedThreadScopedParams(last?.acceptedParams)?.message_thread_id,
-          replyToMessageId: opts.replyToMessageId,
-          silent: opts.silent,
-          chunkCount: parts.length,
-        });
-      }
       const receipt = buildReceipt();
       return {
         messageId: lastMessageId,

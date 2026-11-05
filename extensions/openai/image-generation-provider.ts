@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   ImageGenerationOutputFormat,
   ImageGenerationProvider,
-  ImageGenerationProviderConfiguredContext,
   ImageGenerationResult,
 } from "openclaw/plugin-sdk/image-generation";
 import type { resolveClosestSize } from "openclaw/plugin-sdk/media-generation-runtime";
@@ -19,7 +18,6 @@ import {
 } from "openclaw/plugin-sdk/provider-onboard";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-policy";
 import { filterStringRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   canonicalizeCodexResponsesBaseUrl,
   isOpenAICodexBaseUrl,
@@ -29,6 +27,10 @@ import {
   OPENAI_CODEX_DEFAULT_MODEL,
   OPENAI_DEFAULT_IMAGE_MODEL as DEFAULT_OPENAI_IMAGE_MODEL,
 } from "./default-models.js";
+import {
+  annotateDirectImageAuthFailure,
+  sanitizeLogValue,
+} from "./image-generation-diagnostics.js";
 import { resolveModelAuthPolicy } from "./provider-policy-api.js";
 import { resolveConfiguredOpenAIBaseUrl } from "./shared.js";
 
@@ -53,10 +55,16 @@ const OPENAI_SUPPORTED_SIZES = [
   "3840x2160",
   "2160x3840",
 ] as const;
-const OPENAI_LEGACY_IMAGE_SIZES = ["1024x1024", "1536x1024", "1024x1536"] as const;
+const OPENAI_LEGACY_IMAGE_SIZES = ["1024x1024", "1536x1024", "1024x1536"];
+const OPENAI_IMAGE_SIZES_BY_MODEL: Record<string, string[]> = {
+  "dall-e-2": ["256x256", "512x512", "1024x1024"],
+  "dall-e-3": ["1024x1024", "1792x1024", "1024x1792"],
+  [OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL]: OPENAI_LEGACY_IMAGE_SIZES,
+  "gpt-image-1": OPENAI_LEGACY_IMAGE_SIZES,
+  "gpt-image-1-mini": OPENAI_LEGACY_IMAGE_SIZES,
+};
 const OPENAI_MAX_INPUT_IMAGES = 5;
 const OPENAI_MAX_IMAGE_RESULTS = 4;
-const LOG_VALUE_MAX_CHARS = 256;
 const MOCK_OPENAI_PROVIDER_ID = "mock-openai";
 const OPENAI_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const OPENAI_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
@@ -83,27 +91,6 @@ const AZURE_HOSTNAME_SUFFIXES = [
 ] as const;
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview";
-
-function sanitizeLogValue(value: unknown): string {
-  const raw =
-    typeof value === "string"
-      ? value
-      : typeof value === "number" || typeof value === "boolean"
-        ? String(value)
-        : "";
-  const cleaned = raw
-    .replace(/[\r\n\u2028\u2029]+/g, " ")
-    .replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/gi, "")
-    .replace(/\p{Cc}+/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!cleaned) {
-    return "unknown";
-  }
-  return cleaned.length > LOG_VALUE_MAX_CHARS
-    ? `${truncateUtf16Safe(cleaned, LOG_VALUE_MAX_CHARS)}...`
-    : cleaned;
-}
 
 function resolveOpenAIImageTimeoutMs(
   timeoutMs: number | undefined,
@@ -203,16 +190,6 @@ function resolveOpenAIImageRequestModel(
   return model;
 }
 
-function resolveNativeOpenAIImageSizesForModel(model: string): readonly string[] {
-  switch (model) {
-    case "gpt-image-1":
-    case "gpt-image-1-mini":
-      return OPENAI_LEGACY_IMAGE_SIZES;
-    default:
-      return OPENAI_SUPPORTED_SIZES;
-  }
-}
-
 function isValidFlexibleOpenAIImageSize(model: string, size: string | undefined): size is string {
   if (!OPENAI_FLEXIBLE_IMAGE_MODELS.some((candidate) => candidate === model)) {
     return false;
@@ -263,7 +240,7 @@ function resolveOpenAIImageRequestSize(
   if (!params.applyNativeLimits) {
     return { size: requestedSize };
   }
-  const supportedSizes = resolveNativeOpenAIImageSizesForModel(params.model);
+  const supportedSizes = OPENAI_IMAGE_SIZES_BY_MODEL[params.model] ?? OPENAI_SUPPORTED_SIZES;
   const size =
     resolveSize({
       requestedSize,
@@ -281,11 +258,7 @@ function resolveOpenAIImageRequestSize(
   };
 }
 
-function shouldAllowPrivateImageEndpoint(req: {
-  provider: string;
-  model: string;
-  cfg: OpenClawConfig | undefined;
-}) {
+function shouldAllowPrivateImageEndpoint(req: OpenAIImageRequest) {
   if (req.provider === MOCK_OPENAI_PROVIDER_ID) {
     return true;
   }
@@ -301,11 +274,7 @@ function shouldAllowPrivateImageEndpoint(req: {
 
 type OpenAIImageModelAuth = Pick<
   OpenClawPluginApi["runtime"]["modelAuth"],
-  | "ensureAuthProfileStore"
-  | "ensureAuthProfileStoreAsync"
-  | "listProfilesForProvider"
-  | "isProviderApiKeyConfigured"
-  | "isProviderApiKeyConfiguredAsync"
+  "ensureAuthProfileStoreAsync" | "listProfilesForProvider" | "isProviderApiKeyConfiguredAsync"
 >;
 
 async function resolveRequestAuthStore(
@@ -652,11 +621,10 @@ async function generateOpenAICodexImage(params: {
     }
   }
   const images = results.flatMap((result) => result.images);
-  const output = resolveOutputMime(req.outputFormat);
   return {
     images: images.map((image, index) =>
       Object.assign({}, image, {
-        fileName: `image-${index + 1}.${output.extension}`,
+        fileName: `image-${index + 1}${extensionForMime(image.mimeType)}`,
       }),
     ),
     model,
@@ -693,7 +661,10 @@ export function buildOpenAIImageGenerationProvider(
       geometry: {
         sizes: [...OPENAI_SUPPORTED_SIZES],
         // Empty model-specific lists stop core from snapping valid flexible dimensions.
-        sizesByModel: Object.fromEntries(OPENAI_FLEXIBLE_IMAGE_MODELS.map((model) => [model, []])),
+        sizesByModel: {
+          ...OPENAI_IMAGE_SIZES_BY_MODEL,
+          ...Object.fromEntries(OPENAI_FLEXIBLE_IMAGE_MODELS.map((model) => [model, []])),
+        },
       },
       output: {
         formats: [...OPENAI_OUTPUT_FORMATS],
@@ -703,24 +674,6 @@ export function buildOpenAIImageGenerationProvider(
         ),
         backgrounds: [...OPENAI_BACKGROUNDS],
       },
-    },
-    // Released synchronous discovery must retain the image-specific auth policy.
-    isConfigured({ cfg, agentDir }: ImageGenerationProviderConfiguredContext) {
-      const directRoute = hasDirectOpenAIImageRoute(cfg);
-      const authStore =
-        directRoute || !agentDir?.trim()
-          ? undefined
-          : modelAuth.ensureAuthProfileStore(agentDir.trim(), { allowKeychainPrompt: false });
-      return (
-        modelAuth.isProviderApiKeyConfigured({
-          provider: "openai",
-          agentDir,
-          cfg,
-          store: authStore,
-          capability: "image-generation",
-        }) &&
-        (directRoute || hasOpenAIImageProfileRoute(cfg, authStore, modelAuth))
-      );
     },
     async isConfiguredAsync({ cfg, agentDir }) {
       const directRoute = hasDirectOpenAIImageRoute(cfg);
@@ -806,18 +759,17 @@ export function buildOpenAIImageGenerationProvider(
       }
       const [
         {
-          assertOkOrThrowHttpError,
+          createProviderOperationDeadline,
           postJsonRequest,
           postMultipartRequest,
-          readProviderJsonResponse,
           resolveProviderHttpRequestConfig,
           sanitizeConfiguredModelProviderRequest,
         },
-        { parseOpenAiCompatibleImageResponse, resolveInlineImageJsonResponseMaxBytes },
-        { resolveClosestSize, resolveGeneratedMediaMaxBytes },
+        { readOpenAIImageGenerationResponse },
+        { resolveClosestSize, resolveGeneratedImageDownloadMaxBytes },
       ] = await Promise.all([
         import("openclaw/plugin-sdk/provider-http"),
-        import("openclaw/plugin-sdk/image-generation"),
+        import("./image-generation-response.js"),
         import("openclaw/plugin-sdk/media-generation-runtime"),
       ]);
       const isAzure = isAzureOpenAIBaseUrl(rawBaseUrl);
@@ -844,6 +796,8 @@ export function buildOpenAIImageGenerationProvider(
       });
       const count = resolveIntegerOption(req.count, 1, { min: 1, max: OPENAI_MAX_IMAGE_RESULTS });
       const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs, { isAzure });
+      const operation = isEdit ? "OpenAI image edit" : "OpenAI image generation";
+      const deadline = createProviderOperationDeadline({ timeoutMs, label: operation });
       const sizeResolution = isValidFlexibleOpenAIImageSize(model, req.size)
         ? { size: req.size }
         : resolveOpenAIImageRequestSize(
@@ -854,7 +808,6 @@ export function buildOpenAIImageGenerationProvider(
             },
             resolveClosestSize,
           );
-      const size = sizeResolution.size;
       const url = isAzure
         ? buildAzureImageUrl(rawBaseUrl, model, isEdit ? "edits" : "generations")
         : `${baseUrl}/images/${isEdit ? "edits" : "generations"}`;
@@ -862,7 +815,7 @@ export function buildOpenAIImageGenerationProvider(
         ...(!isAzure ? { model } : {}),
         prompt: req.prompt,
         n: count,
-        size,
+        size: sizeResolution.size,
         ...resolveOpenAIImageOptions(req),
         ...(req.providerOptions?.openai?.user !== undefined
           ? { user: req.providerOptions.openai.user }
@@ -899,32 +852,42 @@ export function buildOpenAIImageGenerationProvider(
         : await postJsonRequest({ ...requestOptions, body });
       const { response, release } = requestResult;
       try {
-        const operation = isEdit ? "OpenAI image edit" : "OpenAI image generation";
-        await assertOkOrThrowHttpError(response, `${operation} failed`);
-
-        const data = await readProviderJsonResponse(response, "openai.image-generation", {
-          maxBytes: resolveInlineImageJsonResponseMaxBytes(
-            count,
-            resolveGeneratedMediaMaxBytes(req.cfg, "image"),
-          ),
+        const { images, usage } = await readOpenAIImageGenerationResponse(response, {
+          operation,
+          providerUrl: url,
+          deadline,
+          timeoutMs,
+          maxImages: count,
+          maxDownloads: OPENAI_MAX_IMAGE_RESULTS,
+          maxBytes: resolveGeneratedImageDownloadMaxBytes(req.cfg),
+          defaultMimeType: resolveOutputMime(req.outputFormat).mimeType,
+          allowPrivateNetwork:
+            isPrivateNetworkOptInEnabled(req.cfg?.browser?.ssrfPolicy) ||
+            openAIProviderConfig?.request?.allowPrivateNetwork === true,
+          ssrfPolicy: req.ssrfPolicy,
+          dispatcherPolicy,
+        }).catch((error: unknown) => {
+          // Only the Images API status gets route diagnostics, not later image URL downloads.
+          // Build them from facts resolved before the request; a failed request never reads auth.
+          if (!response.ok) {
+            annotateDirectImageAuthFailure(error, {
+              url,
+              authMode: imageAuth.mode,
+              authSource: imageAuth.source,
+              authOverridden: isAzure
+                ? requestOptions.headers.get("api-key") !== imageAuth.apiKey
+                : requestOptions.headers.get("authorization") !== `Bearer ${imageAuth.apiKey}`,
+              explicitDirectRoute: explicitDirectOpenAIConfig,
+            });
+          }
+          throw error;
         });
-        const output = resolveOutputMime(req.outputFormat);
-        const images = parseOpenAiCompatibleImageResponse(data, {
-          defaultMimeType: output.mimeType,
-          malformedResponseError: `${operation} response malformed`,
-        }).map((image, index) =>
-          Object.assign(image, {
-            fileName: `image-${index + 1}.${output.extension}`,
-          }),
-        );
-        if (images.length === 0) {
-          throw new Error(`${operation} response missing image data`);
-        }
 
+        const metadata = usage ? { ...sizeResolution.metadata, usage } : sizeResolution.metadata;
         return {
           images,
           model,
-          ...(sizeResolution.metadata ? { metadata: sizeResolution.metadata } : {}),
+          ...(metadata ? { metadata } : {}),
         };
       } finally {
         await release();

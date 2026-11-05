@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   onTrustedInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -6,7 +6,18 @@ import {
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
-import type { AssistantMessage, Model } from "../llm/types.js";
+import { activityByRunId } from "../logging/diagnostic-run-activity-state.js";
+import {
+  resetDiagnosticRunActivityForTest,
+  startDiagnosticRunActivityTracking,
+} from "../logging/diagnostic-run-activity.js";
+import {
+  startDiagnosticStabilityRecorder,
+  stopDiagnosticStabilityRecorder,
+} from "../logging/diagnostic-stability.js";
+import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
+import { createUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 const completeSimple = vi.hoisted(() => vi.fn());
 // mock-isolation: Supply deterministic provider outcomes without registering live transports.
@@ -15,101 +26,89 @@ vi.mock("../llm/stream.js", () => ({ completeSimple }));
 vi.mock("./ai-transport-runtime-host.js", () => ({}));
 import { completeWithPreparedSimpleCompletionModel } from "./simple-completion-execution.js";
 
-const model: Model<"openai-completions"> = {
+const model = makeProviderModelFixture({
   id: "test-model",
-  name: "Test",
   provider: "test",
   api: "openai-completions",
   baseUrl: "https://example.invalid/v1",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 4096,
-  maxTokens: 128,
-};
-const assistant: AssistantMessage = {
-  role: "assistant",
-  content: [{ type: "text", text: "title" }],
+});
+const assistant = makeAssistantMessageFixture({
   api: model.api,
   provider: model.provider,
-  model: model.id,
   stopReason: "stop",
-  timestamp: 1,
-  usage: {
-    input: 8,
-    output: 2,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 10,
-    cost: { input: 0.000008, output: 0.000002, cacheRead: 0, cacheWrite: 0, total: 0.00001 },
-  },
-};
-
+  errorMessage: undefined,
+  usage: createUsageFixture(8, 2, 10),
+});
+const messages = [{ role: "user" as const, content: "Generate a title", timestamp: 1 }];
+const complete = () =>
+  completeWithPreparedSimpleCompletionModel({
+    model,
+    auth: { apiKey: "synthetic", source: "test", mode: "api-key" },
+    context: { messages },
+  });
+let stop: (() => void) | undefined;
 beforeEach(() => {
   resetDiagnosticEventsForTest();
   setDiagnosticsEnabledForProcess(true);
+  resetDiagnosticRunActivityForTest();
+  startDiagnosticRunActivityTracking();
   completeSimple.mockReset();
 });
-afterEach(() => resetDiagnosticEventsForTest());
-
-describe("prepared background completion diagnostics", () => {
-  it.each(["success", "returned-error", "throw"] as const)(
-    "records exactly one request lifecycle for %s without recording usage twice",
-    async (outcome) => {
-      const events: DiagnosticEventPayload[] = [];
-      const stop = onTrustedInternalDiagnosticEvent((event) => {
-        events.push(event);
-      });
-      const error = new Error("provider unavailable");
-      if (outcome === "throw") {
-        completeSimple.mockRejectedValue(error);
-      } else {
-        completeSimple.mockResolvedValue(
-          outcome === "success"
-            ? assistant
-            : {
-                ...assistant,
-                stopReason: "error",
-                errorMessage: error.message,
-              },
-        );
-      }
-      try {
-        const pending = completeWithPreparedSimpleCompletionModel({
-          model,
-          auth: { apiKey: "synthetic", source: "test", mode: "api-key" },
-          context: { messages: [{ role: "user", content: "Generate a title", timestamp: 1 }] },
-        });
-        if (outcome === "throw") {
-          await expect(pending).rejects.toBe(error);
-        } else {
-          await expect(pending).resolves.toMatchObject({ role: "assistant" });
-        }
-        await waitForDiagnosticEventsDrained();
-        const calls = events.filter(
-          (event) =>
-            event.type === "model.call.started" ||
-            event.type === "model.call.completed" ||
-            event.type === "model.call.error",
-        );
-        expect(calls.map((event) => event.type)).toEqual([
-          "model.call.started",
-          outcome === "success" ? "model.call.completed" : "model.call.error",
-        ]);
-        expect(calls[0]).toMatchObject({
-          provider: "test",
-          model: "test-model",
-          observationUnit: "request",
-        });
-        expect(calls[1]).toMatchObject({
-          callId: calls[0]?.callId,
-          durationMs: expect.any(Number),
-        });
-        expect(events.filter((event) => event.type === "model.usage")).toEqual([]);
-        expect(completeSimple).toHaveBeenCalledOnce();
-      } finally {
-        stop();
-      }
-    },
-  );
+afterEach(() => {
+  stopDiagnosticStabilityRecorder();
+  stop?.();
+  stop = undefined;
+  resetDiagnosticRunActivityForTest();
+  resetDiagnosticEventsForTest();
 });
+
+it("does not serialize prompts for the default activity and stability listeners", async () => {
+  startDiagnosticStabilityRecorder();
+  completeSimple.mockResolvedValue(assistant);
+  using stringify = vi.spyOn(JSON, "stringify");
+
+  await complete();
+  await waitForDiagnosticEventsDrained();
+  expect(stringify.mock.calls.filter(([value]) => value === messages)).toHaveLength(0);
+});
+
+it.each(["success", "returned-error", "throw"] as const)(
+  "records one %s request lifecycle without duplicate usage",
+  async (outcome) => {
+    const events: DiagnosticEventPayload[] = [];
+    stop = onTrustedInternalDiagnosticEvent((event) => events.push(event));
+    const error = new Error("provider unavailable");
+    if (outcome === "throw") {
+      completeSimple.mockRejectedValue(error);
+    } else {
+      completeSimple.mockResolvedValue(
+        outcome === "success"
+          ? assistant
+          : { ...assistant, stopReason: "error", errorMessage: error.message },
+      );
+    }
+    const pending = complete();
+    if (outcome === "throw") {
+      await expect(pending).rejects.toBe(error);
+    } else {
+      await expect(pending).resolves.toMatchObject({ role: "assistant" });
+    }
+    await waitForDiagnosticEventsDrained();
+    const calls = events.filter(
+      (event) =>
+        event.type === "model.call.started" ||
+        event.type === "model.call.completed" ||
+        event.type === "model.call.error",
+    );
+    expect(calls.map((event) => event.type)).toEqual([
+      "model.call.started",
+      outcome === "success" ? "model.call.completed" : "model.call.error",
+    ]);
+    expect(calls).toMatchObject([
+      { provider: "test", model: "test-model", observationUnit: "request" },
+      { callId: calls[0]?.callId, durationMs: expect.any(Number) },
+    ]);
+    expect(events.filter((event) => event.type === "model.usage")).toEqual([]);
+    expect(activityByRunId.size).toBe(0);
+  },
+);

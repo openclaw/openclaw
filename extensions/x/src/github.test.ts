@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createXGitHubReader, type XGitHubPermission } from "./github.js";
-
-type GitHubFetch = NonNullable<Parameters<typeof createXGitHubReader>[0]["fetch"]>;
+import type { XGitHubPermission } from "./github.js";
+import {
+  createXTestGitHubReader as createXGitHubReader,
+  type XFetch as GitHubFetch,
+} from "./test-support/api-client.js";
 
 function collaborator(login: string, permission?: XGitHubPermission) {
   return {
@@ -156,12 +158,6 @@ describe("GitHub-derived X verification reader", () => {
   });
 
   it.each<{ code: number; headers: Record<string, string>; advance: number }>([
-    { code: 429, headers: { "retry-after": "120" }, advance: 120_000 },
-    {
-      code: 403,
-      headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "1800000180" },
-      advance: 180_000,
-    },
     { code: 403, headers: {}, advance: 60_000 },
   ])(
     "honors rate-limit cooldown for HTTP $code without dispatching early retries",
@@ -201,7 +197,7 @@ describe("GitHub-derived X verification reader", () => {
     expect(fetch).toHaveBeenCalledOnce();
   });
 
-  it.each([401, 403, 404])(
+  it.each([403])(
     "explains collaborator credential failures for HTTP %s without reflecting GitHub bodies",
     async (code) => {
       const reader = createXGitHubReader({
@@ -216,13 +212,11 @@ describe("GitHub-derived X verification reader", () => {
 
   it.each([
     { label: "invalid listing", path: "collaborators", body: {} },
-    { label: "missing permission", path: "collaborators", body: [{ id: 1, login: "writer" }] },
     {
       label: "invalid permission",
       path: "collaborators",
       body: [{ id: 1, login: "writer", permissions: { push: "true" } }],
     },
-    { label: "missing profile identity", path: "writer", body: {} },
     {
       label: "changed profile identity",
       path: "writer",

@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { shellEscape as shellQuote } from "openclaw/plugin-sdk/string-normalization-runtime";
 import type { ResolvedRaftAccount } from "./accounts.js";
 import { RAFT_CHANNEL_ID } from "./accounts.js";
 
@@ -12,10 +13,6 @@ type RaftChannelRuntime = Pick<
   PluginRuntime["channel"],
   "inbound" | "reply" | "routing" | "session"
 >;
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
-}
 
 export async function dispatchRaftWake(
   ctx: ChannelGatewayContext<ResolvedRaftAccount>,

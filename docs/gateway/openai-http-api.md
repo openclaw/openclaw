@@ -109,6 +109,11 @@ By default the endpoint is **stateless per request** (a new session key is gener
 
 If the request includes an OpenAI `user` string, the Gateway derives a stable session key from it so repeated calls can share an agent session. For custom apps, reuse the same `user` value per conversation thread; avoid account-level identifiers unless you want multiple conversations/devices to share one OpenClaw session. Use `x-openclaw-session-key` only when you need explicit routing control across multiple clients/threads, with application-owned keys that avoid the reserved namespaces above.
 
+If that session is archived, non-streaming requests return HTTP `409` with
+`invalid_request_error` and guidance to restore it in the Control UI. Streaming
+requests report the same error in the stream. Unarchive the session before
+retrying; the rejected request preserves its archived state and history.
+
 ### Explicit incognito session continuation
 
 Explicitly selecting or continuing an incognito conversation with `x-openclaw-session-key` (the `sessionKey` override) requires effective `operator.admin` authority. This rule follows authority, not ingress: it denies both trusted-proxy callers without owner/admin authority and private `gateway.auth.mode="none"` callers that explicitly narrow `x-openclaw-scopes` below admin (for example, to `operator.write`). Either receives HTTP `403` with a `forbidden` error. A profile-less private no-auth caller on this path gets `missing scope: operator.admin`; for a profile-backed caller, the response hides the private target with this error shape (where `<sessionKey>` is the requested override):
@@ -125,6 +130,9 @@ Explicitly selecting or continuing an incognito conversation with `x-openclaw-se
 Owner/admin callers keep explicit incognito session continuation. A private no-auth request without `x-openclaw-scopes` receives the default operator scopes, including `operator.admin`, and is therefore treated as owner/admin. Reserved internal namespace overrides (`subagent:`, `cron:`, `acp:`) remain a separate validation failure and still return HTTP `400` with `invalid_request_error`.
 
 ## Request limits
+
+`POST /v1/chat/completions`, `/v1/responses`, and `/v1/embeddings` have a
+60-second request-body read deadline. Uploads that exceed it return HTTP `408`.
 
 The endpoint uses built-in limits of 20 MB per request body, 8 `image_url`
 parts from the latest user message, and 20 MB of cumulative decoded image
@@ -224,7 +232,7 @@ When `stream: true`, tool calls arrive as incremental SSE chunks: an initial ass
 
 For required or function-pinned tool choices, prose is held until the matching call is confirmed. When the run returns finalized prose, the stream uses that text instead of provisional deltas.
 
-If `stream_options.include_usage=true`, a trailing usage chunk is emitted before `[DONE]`.
+If `stream_options.include_usage=true` and complete usage is available, a trailing usage chunk is emitted before `[DONE]`. Interrupted responses without final accounting omit that chunk; JSON responses omit `usage` too. Missing or provisional counts are not replaced with zeros.
 
 ### Tool follow-up loop
 
@@ -340,7 +348,9 @@ Responses include `usage.prompt_tokens` and `usage.total_tokens`. Native Ollama 
 
 Provider failures use the same error mapping as chat completions: missing provider credentials return `401 authentication_error` with setup guidance, unknown provider models return `404 invalid_request_error`, and provider overload returns `503 api_error`. Credential values are redacted. Unexpected failures return `500 api_error` with `internal error`.
 
-For models that support it, a positive integer `dimensions` requests the output vector size. It overrides the selected agent's active `memory.search.outputDimensionality` and also applies when memory search is disabled. Omitting it keeps the configured or provider default size.
+If provider cleanup fails, the Gateway logs restart guidance and blocks further embeddings requests for that agent/provider until restart. Other agent/provider scopes remain available.
+
+For models that support it, a positive integer `dimensions` requests the output vector size. It overrides the selected agent's active `memory.search.outputDimensionality` and also applies when memory search is disabled. Omitting it keeps the configured or provider default size. When the memory provider uses the OpenAI-compatible embeddings transport (such as `openai-compatible` or `omlx`), a backend that returns a different vector size fails the request with `400 invalid_request_error` and code `embedding_dimensions_mismatch` instead of returning vectors of the wrong size. The message states the requested and returned sizes; retrying cannot succeed until `dimensions` and `memory.search.outputDimensionality` are omitted or the backend honors them.
 
 ## Related
 

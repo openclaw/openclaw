@@ -1,3 +1,4 @@
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -11,7 +12,10 @@ import { assertRequiredWorkerSelection } from "../../config/required-worker-prof
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { acceptGatewayDeviceSourceAuthority } from "../device-revocation.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
+import { assertOperatorCloudProfileDispatchAllowed } from "../operator-role-policy.js";
+import { repositoryDispatchCredentialReader } from "../repository-dispatch.js";
 import {
   loadWorkerPlacementSessionRuntimeModule,
   resolveWorkerPlacementSessionTarget,
@@ -23,7 +27,7 @@ import { resolveDevicePlacementEligibility } from "../worker-environments/device
 import { selectDevicePlacementCandidates } from "../worker-environments/device-placement-selector.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "../worker-environments/device-provider-identity.js";
 import { deviceUnavailableText } from "../worker-environments/device-provider.js";
-import type { WorkerPlacementAuthorization } from "../worker-environments/placement-authorization.js";
+import { composePlacementAuthorization } from "../worker-environments/placement-authorization.js";
 import {
   resolveProjectProfileDestination,
   resolveWorkerPlacementDestination,
@@ -47,13 +51,9 @@ import { readSessionWorkerPlacementAsync } from "../worker-environments/session-
 import type { WorkerSessionWorkspace } from "../worker-environments/session-workspace.js";
 import { listGatewayEnvironments } from "./environments.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { withWorkerPlacementAuthorization } from "./session-placement-authorization.js";
 import { isWorkerDispatchInputError, requireSessionKey } from "./sessions-shared.js";
-import type {
-  GatewayRequestContext,
-  GatewayRequestHandlers,
-  RespondFn,
-  SessionMutationAuthorization,
-} from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 function respondInvalidWorkerSession(respond: RespondFn, message: string): void {
@@ -61,26 +61,6 @@ function respondInvalidWorkerSession(respond: RespondFn, message: string): void 
 }
 
 const MAX_AUTO_DEVICE_PLACEMENT_ATTEMPTS = 3;
-
-async function withWorkerPlacementAuthorization<T>(
-  authorization: SessionMutationAuthorization | undefined,
-  operation: (authorize: WorkerPlacementAuthorization | undefined) => Promise<T>,
-): Promise<T> {
-  const assertCurrent = authorization?.assertCurrent;
-  const prepared = await authorization?.prepareWorkerGrant?.();
-  try {
-    return await operation(
-      prepared
-        ? Object.assign(() => prepared.assertCurrent(), {
-            assertWorkerGrant: prepared.assertCurrent,
-            assertWorkerLifetime: prepared.assertLifetimeCurrent,
-          })
-        : assertCurrent,
-    );
-  } finally {
-    await prepared?.release();
-  }
-}
 
 async function withWorkerSessionTarget(
   method: "dispatch" | "move" | "reclaim",
@@ -165,14 +145,14 @@ async function resolveSessionWorkspace(params: {
 }): Promise<WorkerSessionWorkspace | undefined> {
   const article = params.method === "sessions.dispatch" ? "a" : "the";
   try {
-    const resolved = await resolveWorkerPlacementSessionTarget({
+    using resolved = await resolveWorkerPlacementSessionTarget({
       sessionRuntime: await loadWorkerPlacementSessionRuntimeModule(),
       config: params.config,
       sessionId: params.entry.sessionId,
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       expectedEntry: params.entry,
-      errorMessage: `${params.method} requires ${article} session-owned worktree or repository workspace`,
+      errorMessage: `${params.method} requires ${article} session-owned worktree, repository workspace, or device folder`,
     });
     params.assertCurrent?.();
     return resolved.workspace;
@@ -232,6 +212,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     context,
     client,
     signal,
+    hasCurrentClientAuthority,
     sessionMutationAuthorization,
   }) => {
     if (
@@ -256,7 +237,29 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     return withWorkerSessionTarget("dispatch", params, context, respond, async (resolved) => {
       const { cfg, entry, session, service: dispatchService } = resolved;
       const { sessionId, sessionKey, agentId } = session;
+      const runSetupScript = client?.connect?.scopes?.includes(ADMIN_SCOPE) === true;
+      const assertCloudProfileAllowed = () =>
+        assertOperatorCloudProfileDispatchAllowed({
+          config: context.getRuntimeConfig(),
+          client,
+          target: params,
+          createdActor: entry.createdActor,
+          runSetupScript,
+        });
+      assertCloudProfileAllowed();
       let { dispatchTarget } = resolved;
+      if (
+        entry.deviceFolder &&
+        (params.autoDevice === true ||
+          params.profileId !== undefined ||
+          params.deviceId !== entry.deviceFolder.deviceId)
+      ) {
+        respondInvalidWorkerSession(
+          respond,
+          `This session uses a folder on device ${entry.deviceFolder.deviceId}; dispatch explicitly to that device. Auto and cloud profiles are unavailable.`,
+        );
+        return;
+      }
       const autoDevice = params.autoDevice === true;
       const canUseProjectProfile =
         !autoDevice && params.profileId === undefined && params.deviceId === undefined;
@@ -276,6 +279,13 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
         assertCurrent: sessionMutationAuthorization?.assertCurrent,
       });
       const { executionMode, devicePlacement } = resolveWorkerPlacementCapabilities(sessionRuntime);
+      if (entry.deviceFolder && executionMode !== "worker-turn") {
+        respondInvalidWorkerSession(
+          respond,
+          "Existing device folders currently require the OpenClaw harness; choose an OpenClaw model instead of remote execution.",
+        );
+        return;
+      }
       if (!executionMode) {
         respondInvalidWorkerSession(
           respond,
@@ -420,6 +430,10 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
         const result = await withWorkerPlacementAuthorization<
           { placement: WorkerSessionPlacementRecord } | { invalid: string }
         >(sessionMutationAuthorization, async (authorize) => {
+          const authorizeDispatch = composePlacementAuthorization(
+            authorize,
+            assertCloudProfileAllowed,
+          );
           let candidateTarget = initialDispatchTarget;
           let lastEligibilityError: string | undefined;
           const candidates = autoDevice ? automaticDeviceIds : [candidateTarget.deviceId];
@@ -473,20 +487,33 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
               const request: WorkerPlacementDispatchRequest = {
                 ...session,
                 executionMode,
-                runSetupScript: client?.connect?.scopes?.includes(ADMIN_SCOPE) === true,
+                runSetupScript,
                 ...candidateTarget,
                 ...(devicePlacement ? { devicePlacement } : {}),
               };
+              if (workspace.kind === "repository") {
+                request.readNativeCredential = repositoryDispatchCredentialReader({
+                  ...session,
+                  client,
+                  hasCurrentClientAuthority,
+                  requestDigest: sha256Hex(JSON.stringify(request)),
+                  assertCurrent: authorizeDispatch,
+                });
+              }
               const placement = await dispatchService.dispatch(
                 request,
                 (observed) => {
+                  if (request.readNativeCredential && observed.state === "requested") {
+                    // The durable placement retains the original authenticated source.
+                    acceptGatewayDeviceSourceAuthority(hasCurrentClientAuthority);
+                  }
                   attemptedPlacement = { ...observed };
                   emitSessionsChanged(context, {
                     reason: "dispatch",
                     sessionKey,
                   });
                 },
-                authorize,
+                authorizeDispatch,
                 signal,
               );
               return { placement };
@@ -538,6 +565,13 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     return withWorkerSessionTarget("move", params, context, respond, async (resolved) => {
       const { entry, session, service: placementService } = resolved;
       const { sessionId, sessionKey } = session;
+      if (entry.deviceFolder) {
+        respondInvalidWorkerSession(
+          respond,
+          "This folder lives only on its paired device and cannot move or Continue on Gateway. Reconnect that device, or create a new session in another workspace.",
+        );
+        return;
+      }
       if (entry.archivedAt !== undefined) {
         respondInvalidWorkerSession(respond, "cannot move an archived session");
         return;
@@ -618,6 +652,13 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     return withWorkerSessionTarget("reclaim", params, context, respond, async (resolved) => {
       const { entry, session, service: placementService } = resolved;
       const { sessionId, sessionKey } = session;
+      if (entry.deviceFolder && params.recoverToGateway) {
+        respondInvalidWorkerSession(
+          respond,
+          "This folder lives only on its paired device. Reconnect it to continue; recovery to Gateway is unavailable.",
+        );
+        return;
+      }
       const existingPlacement = await readSessionWorkerPlacementAsync({ context, sessionId });
       sessionMutationAuthorization?.assertCurrent();
       const reportPlacementChange = (placement: WorkerSessionPlacementRecord | undefined): void => {

@@ -7,6 +7,8 @@ import {
   type GatewayStatusSample,
   type GatewayStatusSnapshot,
 } from "../gateway-vitals.ts";
+import "../tooltip.ts";
+import "../sparkline-tile.tsx";
 
 registerEnglishCatalog(registerDebugEnglish);
 
@@ -19,12 +21,17 @@ function formatPercent(value: number): string {
   return `${Math.round(value * 100)}%`;
 }
 
+function formatCpuCores(value: number): string {
+  return t("debug.overlay.cpuCores", { value: value.toFixed(2) });
+}
+
 function formatMemory(bytes: number): string {
   return t("debug.overlay.memoryMb", { value: String(Math.round(bytes / 1_048_576)) });
 }
 
 function formatDelay(value: number): string {
-  return formatDurationCompact(value) ?? t("common.na");
+  // A sub-millisecond reading is a real measurement, not a missing one.
+  return formatDurationCompact(value) ?? "0ms";
 }
 
 function formatCpuReading(value: number | undefined): string {
@@ -35,7 +42,7 @@ function CpuDetailRow(props: { label: string; value: number | undefined; kind: s
   return (
     <div class="gateway-cpu-detail__thread">
       <dt>
-        <span class={`gateway-cpu-key gateway-cpu-key--${props.kind}`} aria-hidden="true" />
+        <span class={["gateway-cpu-key", `gateway-cpu-key--${props.kind}`]} aria-hidden="true" />
         {props.label}
       </dt>
       <dd>
@@ -46,7 +53,7 @@ function CpuDetailRow(props: { label: string; value: number | undefined; kind: s
   );
 }
 
-function GatewayCpuVital(props: GatewayVitalsProps) {
+export function GatewayCpuVital(props: GatewayVitalsProps) {
   const eventLoop = () => props.status.eventLoop;
   const cpu = () => eventLoop()?.cpuBreakdown;
   const degraded = () =>
@@ -74,7 +81,13 @@ function GatewayCpuVital(props: GatewayVitalsProps) {
     }),
   );
   return (
-    <openclaw-tooltip class="gateway-cpu-tooltip" placement="top-start" open-on-click auto-size>
+    <openclaw-tooltip
+      class="gateway-cpu-tooltip"
+      placement="top-start"
+      open-on-click
+      auto-size
+      prop:pointerThrough={true}
+    >
       <button
         type="button"
         class="gateway-cpu-trigger"
@@ -83,16 +96,17 @@ function GatewayCpuVital(props: GatewayVitalsProps) {
         <openclaw-sparkline
           class="gateway-vital gateway-vital--cpu"
           data-degraded={degraded() ? "" : undefined}
-          prop:label={t("debug.overlay.cpu")}
+          prop:label={t("debug.overlay.gatewayCpu")}
           prop:sub={t("debug.overlay.gatewayCpuScope")}
           prop:samples={samples()}
-          prop:format={formatPercent}
+          prop:format={formatCpuCores}
           prop:floorMax={1}
           prop:stackColors={["var(--cpu-main)", "var(--cpu-workers)", "var(--cpu-other)"]}
         />
       </button>
       <div slot="content" class="gateway-cpu-detail">
         <strong>{t("debug.overlay.cpuBreakdownCurrent")}</strong>
+        <p>{t("debug.overlay.cpuScopeDescription")}</p>
         <dl>
           <div class="gateway-cpu-detail__total">
             <dt>{t("debug.overlay.gatewayCpuProcess")}</dt>
@@ -131,46 +145,55 @@ function GatewayCpuVital(props: GatewayVitalsProps) {
   );
 }
 
-/** Solid rendering companion while the other vitals consumers still render with Lit. */
-export function GatewayVitals(props: GatewayVitalsProps) {
-  const memorySamples = createMemo(() =>
+export function GatewayMemoryVital(props: GatewayVitalsProps) {
+  const samples = createMemo(() =>
     collectGatewayStatusSamples(props.history, (sample) => sample.processMemory?.rssBytes),
   );
-  const delaySamples = createMemo(() =>
+  return (
+    <openclaw-sparkline
+      class="gateway-vital gateway-vital--memory"
+      prop:label={t("debug.overlay.memory")}
+      prop:sub={
+        typeof props.status.processMemory?.heapUsedBytes === "number"
+          ? t("debug.overlay.heapShort", {
+              value: formatMemory(props.status.processMemory.heapUsedBytes),
+            })
+          : ""
+      }
+      prop:samples={samples()}
+      prop:format={formatMemory}
+      autorange
+    />
+  );
+}
+
+export function GatewayDelayVital(props: GatewayVitalsProps) {
+  const samples = createMemo(() =>
     collectGatewayStatusSamples(props.history, (sample) => sample.eventLoop?.delayP99Ms),
   );
   return (
+    <openclaw-sparkline
+      class="gateway-vital gateway-vital--delay"
+      data-degraded={props.status.eventLoop?.reasons?.includes("event_loop_delay") ? "" : undefined}
+      prop:label={t("debug.overlay.delayP99")}
+      prop:sub={
+        typeof props.status.eventLoop?.delayMaxMs === "number"
+          ? t("debug.overlay.maxShort", { value: formatDelay(props.status.eventLoop.delayMaxMs) })
+          : ""
+      }
+      prop:samples={samples()}
+      prop:format={formatDelay}
+      prop:floorMax={20}
+    />
+  );
+}
+
+export function GatewayVitals(props: GatewayVitalsProps) {
+  return (
     <div class="gateway-vitals">
       <GatewayCpuVital status={props.status} history={props.history} />
-      <openclaw-sparkline
-        class="gateway-vital gateway-vital--memory"
-        prop:label={t("debug.overlay.memory")}
-        prop:sub={
-          typeof props.status.processMemory?.heapUsedBytes === "number"
-            ? t("debug.overlay.heapShort", {
-                value: formatMemory(props.status.processMemory.heapUsedBytes),
-              })
-            : ""
-        }
-        prop:samples={memorySamples()}
-        prop:format={formatMemory}
-        autorange
-      />
-      <openclaw-sparkline
-        class="gateway-vital gateway-vital--delay"
-        data-degraded={
-          props.status.eventLoop?.reasons?.includes("event_loop_delay") ? "" : undefined
-        }
-        prop:label={t("debug.overlay.delayP99")}
-        prop:sub={
-          typeof props.status.eventLoop?.delayMaxMs === "number"
-            ? t("debug.overlay.maxShort", { value: formatDelay(props.status.eventLoop.delayMaxMs) })
-            : ""
-        }
-        prop:samples={delaySamples()}
-        prop:format={formatDelay}
-        prop:floorMax={20}
-      />
+      <GatewayMemoryVital status={props.status} history={props.history} />
+      <GatewayDelayVital status={props.status} history={props.history} />
     </div>
   );
 }

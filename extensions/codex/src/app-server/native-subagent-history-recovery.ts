@@ -4,6 +4,7 @@ import {
   readStringField as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  findCodexNativeSuccessorTurn,
   normalizeIdentifier,
   readThreadParentThreadId,
   readThreadSpawnSource,
@@ -43,6 +44,15 @@ export class CodexNativeSubagentHistoryRecovery {
     );
   }
 
+  async isNativeChildThread(threadId: string): Promise<boolean> {
+    if (this.knownChildren.has(threadId)) {
+      return true;
+    }
+    // A completed middle child may already be absent from the saved inventory.
+    const response = await this.requestThreadRead(threadId, false);
+    return response.thread.id === threadId && Boolean(readThreadParentThreadId(response.thread));
+  }
+
   async read(
     assignment: NativeSubagentAssignment,
     options: {
@@ -66,14 +76,12 @@ export class CodexNativeSubagentHistoryRecovery {
     const rawTurns = Array.isArray(thread.turns) ? thread.turns : [];
     if (options.predecessorNativeTurnId) {
       const turns = rawTurns.filter(isJsonObject);
-      const predecessor = turns.findIndex(
-        (turn) => readString(turn, "id") === options.predecessorNativeTurnId,
-      );
-      const target = turns.findIndex((turn) => readString(turn, "id") === assignment.nativeTurnId);
       if (
-        predecessor < 0 ||
-        target <= predecessor ||
-        !["completed", "failed"].includes(readString(turns[predecessor], "status") ?? "")
+        !findCodexNativeSuccessorTurn(
+          turns,
+          options.predecessorNativeTurnId,
+          assignment.nativeTurnId,
+        )
       ) {
         return { resumable: false, threadState: "unavailable", observedPendingTurns: [] };
       }

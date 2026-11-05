@@ -4,23 +4,25 @@ import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope
 import {
   type ExecPolicyOverrides,
   type ExecSessionDefaults,
-  resolveNodeExecEligibility,
+  resolveNodeExecEligibilityAsync,
 } from "../../agents/exec-defaults.js";
+import { resolveNodeExecEligibilityLegacy } from "../../agents/exec-defaults.legacy.js";
 import {
   getAgentWorkspaceAccess,
   isWorkspaceAccessUnavailableError,
 } from "../../agents/workspace-access.js";
+import { listReservedChatSlashCommandNames } from "../../auto-reply/commands-registry.data.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
+import { resolveSessionSkillExecutionWorkspace } from "../loading/workspace-skill-roots.js";
 import { prepareRemoteSkillConnections } from "../runtime/remote-skills.js";
 import { getRemoteSkillEligibility } from "../runtime/remote.js";
 import type { SkillCommandSpec } from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
-import { listReservedChatSlashCommandNames } from "./chat-command-invocation.js";
 import {
   buildWorkspaceSkillCommandSpecs,
   prepareWorkspaceSkillCommandSpecs,
@@ -37,19 +39,37 @@ type WorkspaceSkillCommandParams = {
   agentId?: string;
   skillFilter?: string[];
   sessionEntry?: ExecSessionDefaults &
-    Pick<SessionEntry, "skillLibrarySelections" | "skillsSnapshot">;
+    Pick<
+      SessionEntry,
+      "skillLibrarySelections" | "skillsSnapshot" | "spawnedCwd" | "worktree" | "projectId"
+    >;
   sessionKey?: string;
   execOverrides?: ExecPolicyOverrides;
   includeAllowlistHidden?: boolean;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  executionWorkspaceDir?: string;
+  executionWorkspaceFileHost?: "gateway";
 };
 
-function resolveWorkspaceSkillCommandOptions(params: WorkspaceSkillCommandParams) {
-  const nodeSkills = resolveNodeExecEligibility(params);
+function resolveWorkspaceSkillCommandOptions(
+  params: WorkspaceSkillCommandParams,
+  nodeSkills: ReturnType<typeof resolveNodeExecEligibilityLegacy>,
+) {
   const eligibility = {
     nodeSkills,
     remote: getRemoteSkillEligibility({ advertiseExecNode: nodeSkills.canExec }),
   };
+  // Invocation consumers receive only the session entry; resolve its execution skill
+  // root exactly as the runtime catalog does so listed commands are also invocable.
+  const execution =
+    params.executionWorkspaceDir !== undefined
+      ? {
+          executionWorkspaceDir: params.executionWorkspaceDir,
+          executionWorkspaceFileHost: params.executionWorkspaceFileHost,
+        }
+      : params.sessionEntry
+        ? resolveSessionSkillExecutionWorkspace(params.sessionEntry, params.sessionEntry.spawnedCwd)
+        : {};
   return {
     config: params.cfg,
     agentId: params.agentId,
@@ -58,6 +78,8 @@ function resolveWorkspaceSkillCommandOptions(params: WorkspaceSkillCommandParams
     eligibility,
     pluginMetadataSnapshot: params.pluginMetadataSnapshot,
     librarySelections: params.sessionEntry?.skillLibrarySelections,
+    executionWorkspaceDir: execution.executionWorkspaceDir,
+    executionWorkspaceFileHost: execution.executionWorkspaceFileHost,
   };
 }
 
@@ -74,7 +96,7 @@ function hasRemoteWorkspace(workspaceDir: string): boolean {
   }
 }
 
-/** @deprecated Await prepareSkillCommandsForWorkspace; removed at the next Plugin SDK major. */
+/** @deprecated Await prepareSkillCommandsForWorkspace; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function listSkillCommandsForWorkspace(
   params: WorkspaceSkillCommandParams,
 ): SkillCommandSpec[] {
@@ -84,7 +106,7 @@ export function listSkillCommandsForWorkspace(
     replacement: "prepareSkillCommandsForWorkspace",
   });
   return buildWorkspaceSkillCommandSpecs(params.workspaceDir, {
-    ...resolveWorkspaceSkillCommandOptions(params),
+    ...resolveWorkspaceSkillCommandOptions(params, resolveNodeExecEligibilityLegacy(params)),
     reservedNames: listReservedChatSlashCommandNames(),
     gatewayOnly: hasRemoteWorkspace(params.workspaceDir),
   });
@@ -97,10 +119,12 @@ export async function prepareSkillCommandsForWorkspace(
   assertCurrent?.();
   await prepareRemoteSkillConnections();
   assertCurrent?.();
+  const nodeSkills = await resolveNodeExecEligibilityAsync(params);
+  assertCurrent?.();
   const commands = await prepareWorkspaceSkillCommandSpecs(
     params.workspaceDir,
     {
-      ...resolveWorkspaceSkillCommandOptions(params),
+      ...resolveWorkspaceSkillCommandOptions(params, nodeSkills),
       reservedNames: listReservedChatSlashCommandNames(),
     },
     assertCurrent,
@@ -114,8 +138,9 @@ export async function prepareBundledSkillCommandForWorkspace(
   params: WorkspaceSkillCommandParams & { skillName: string },
 ): Promise<SkillCommandSpec | undefined> {
   await prepareRemoteSkillConnections();
+  const nodeSkills = await resolveNodeExecEligibilityAsync(params);
   const commands = await prepareWorkspaceSkillCommandSpecs(params.workspaceDir, {
-    ...resolveWorkspaceSkillCommandOptions(params),
+    ...resolveWorkspaceSkillCommandOptions(params, nodeSkills),
     reservedNames: listReservedChatSlashCommandNames(),
     bundledSkillName: params.skillName,
   });
@@ -146,9 +171,15 @@ type AgentSkillCommandParams = {
   cfg: OpenClawConfig;
   agentIds?: string[];
   sessionEntry?: ExecSessionDefaults &
-    Pick<SessionEntry, "skillLibrarySelections" | "skillsSnapshot">;
+    Pick<
+      SessionEntry,
+      "skillLibrarySelections" | "skillsSnapshot" | "spawnedCwd" | "worktree" | "projectId"
+    >;
   sessionKey?: string;
   execOverrides?: ExecPolicyOverrides;
+  /** Admitted project root for a single-agent catalog; callers own its authorization. */
+  executionWorkspaceDir?: string;
+  executionWorkspaceFileHost?: "gateway";
 };
 
 function* resolveAgentSkillCommandWorkspaces(params: AgentSkillCommandParams, allowRemote = false) {
@@ -188,22 +219,22 @@ function* resolveAgentSkillCommandWorkspaces(params: AgentSkillCommandParams, al
   for (const { agentId, workspaceDir, skillFilter, gatewayOnly } of workspaceAgents) {
     yield {
       workspaceDir,
-      options: {
-        ...resolveWorkspaceSkillCommandOptions({
-          cfg: params.cfg,
-          agentId,
-          workspaceDir,
-          skillFilter,
-          ...(hasSingleAgentContext
-            ? {
-                sessionEntry: params.sessionEntry,
-                sessionKey: params.sessionKey,
-                execOverrides: params.execOverrides,
-              }
-            : {}),
-        }),
-        gatewayOnly,
+      params: {
+        cfg: params.cfg,
+        agentId,
+        workspaceDir,
+        skillFilter,
+        ...(hasSingleAgentContext
+          ? {
+              sessionEntry: params.sessionEntry,
+              sessionKey: params.sessionKey,
+              execOverrides: params.execOverrides,
+              executionWorkspaceDir: params.executionWorkspaceDir,
+              executionWorkspaceFileHost: params.executionWorkspaceFileHost,
+            }
+          : {}),
       },
+      gatewayOnly,
     };
   }
 }
@@ -219,7 +250,7 @@ function appendSkillCommands(
   }
 }
 
-/** @deprecated Await prepareSkillCommandsForAgents; removed at the next Plugin SDK major. */
+/** @deprecated Await prepareSkillCommandsForAgents; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function listSkillCommandsForAgents(params: AgentSkillCommandParams): SkillCommandSpec[] {
   warnPluginSdkDeprecation({
     family: "skill-command-discovery",
@@ -228,12 +259,20 @@ export function listSkillCommandsForAgents(params: AgentSkillCommandParams): Ski
   });
   const used = listReservedChatSlashCommandNames();
   const entries: SkillCommandSpec[] = [];
-  for (const { workspaceDir, options } of resolveAgentSkillCommandWorkspaces(params)) {
+  for (const {
+    workspaceDir,
+    params: workspaceParams,
+    gatewayOnly,
+  } of resolveAgentSkillCommandWorkspaces(params)) {
     appendSkillCommands(
       entries,
       used,
       buildWorkspaceSkillCommandSpecs(workspaceDir, {
-        ...options,
+        ...resolveWorkspaceSkillCommandOptions(
+          workspaceParams,
+          resolveNodeExecEligibilityLegacy(workspaceParams),
+        ),
+        gatewayOnly,
         reservedNames: used,
       }),
     );
@@ -249,10 +288,17 @@ export async function prepareSkillCommandsForAgents(
   params.signal?.throwIfAborted();
   const used = listReservedChatSlashCommandNames();
   const entries: SkillCommandSpec[] = [];
-  for (const { workspaceDir, options } of resolveAgentSkillCommandWorkspaces(params, true)) {
+  for (const {
+    workspaceDir,
+    params: workspaceParams,
+    gatewayOnly,
+  } of resolveAgentSkillCommandWorkspaces(params, true)) {
+    const nodeSkills = await resolveNodeExecEligibilityAsync(workspaceParams);
+    params.signal?.throwIfAborted();
     const commands = await racePromiseWithAbortSignal(
       prepareWorkspaceSkillCommandSpecs(workspaceDir, {
-        ...options,
+        ...resolveWorkspaceSkillCommandOptions(workspaceParams, nodeSkills),
+        gatewayOnly,
         reservedNames: used,
       }),
       params.signal,

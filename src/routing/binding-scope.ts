@@ -1,29 +1,7 @@
-// Binding scope helpers normalize route binding scope values.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import type { AgentRouteBinding } from "../config/types.agents.js";
 import { normalizeAccountId, normalizeAgentId } from "./session-key.js";
-
-// Route binding scopes constrain a configured agent/account binding to a guild,
-// team, group space, and optionally channel/platform role ids.
-type RouteBindingScopeConstraint = {
-  guildId?: string | null;
-  teamId?: string | null;
-  roles?: string[] | null;
-};
-
-type RouteBindingScope = {
-  guildId?: string | null;
-  teamId?: string | null;
-  groupSpace?: string | null;
-  memberRoleIds?: Iterable<string> | null;
-};
-
-type NormalizedRouteBindingMatch = {
-  agentId: string;
-  accountId: string;
-  channelId: string;
-};
 
 export function normalizeRouteBindingId(value: unknown): string {
   if (typeof value === "string") {
@@ -48,7 +26,11 @@ export function normalizeRouteBindingChannelId(raw?: string | null): string | nu
 export function resolveNormalizedRouteBindingMatch(
   binding: AgentRouteBinding,
   options?: { includeImplicitDefaultAccount?: boolean },
-): NormalizedRouteBindingMatch | null {
+): {
+  agentId: string;
+  accountId: string;
+  channelId: string;
+} | null {
   if (!binding || typeof binding !== "object") {
     return null;
   }
@@ -96,9 +78,20 @@ function hasAnyRouteBindingRole(
   return roles.some((role) => memberRoleIdSet.has(role));
 }
 
+// Route binding scopes constrain a configured agent/account binding to a guild,
+// team, group space, and optionally channel/platform role ids.
 export function routeBindingScopeMatches(
-  constraint: RouteBindingScopeConstraint,
-  scope: RouteBindingScope,
+  constraint: {
+    guildId?: string | null;
+    teamId?: string | null;
+    roles?: string[] | null;
+  },
+  scope: {
+    guildId?: string | null;
+    teamId?: string | null;
+    groupSpace?: string | null;
+    memberRoleIds?: Iterable<string> | null;
+  },
 ): boolean {
   const guildId = normalizeRouteBindingId(scope.guildId);
   const teamId = normalizeRouteBindingId(scope.teamId);

@@ -12,10 +12,11 @@ import {
   projectChatDisplayMessagesWithState,
   type ChatDisplayProjectionOptions,
   createChatHistoryRecoveryProjection,
+  isChatHistoryRecoveryUserBoundary,
 } from "./chat-display-projection.core.js";
 import {
   dropPreSessionStartAnnouncePairs,
-  isHeartbeatHistoryTurnBoundaryMessage,
+  isProjectedHistoryTurnBoundaryMessage,
   createPreSessionStartAnnouncePairFilter,
 } from "./chat-display-projection.history.js";
 import type { CurrentUserProfileDisplayResolver } from "./current-user-profile-display.js";
@@ -55,6 +56,35 @@ export function buildPaginatedSessionHistory(params: {
   };
 }
 
+function resolveChatHistoryPageStart(
+  messages: unknown[],
+  limit: number,
+  endExclusive = messages.length,
+  sequence = readChatHistoryMessageSeq,
+): number {
+  let start = Math.max(0, endExclusive - limit);
+  // Projection can interleave several rows from the same transcript records.
+  // Close the page over their seq groups because the public cursor cannot split one.
+  if (start > 0) {
+    const pageSeqs = new Set<number>();
+    let indexedStart = endExclusive;
+    for (let index = start - 1; index >= 0; index--) {
+      // Index only admitted intervals; unrelated older gaps need no retained sequence set.
+      while (indexedStart > start) {
+        const pageSeq = sequence(messages[--indexedStart]);
+        if (pageSeq !== undefined) {
+          pageSeqs.add(pageSeq);
+        }
+      }
+      const seq = sequence(messages[index]);
+      if (seq !== undefined && pageSeqs.has(seq)) {
+        start = index;
+      }
+    }
+  }
+  return start;
+}
+
 export function paginateSessionMessages(
   messages: SessionHistoryMessage[],
   limit: number | undefined,
@@ -76,26 +106,10 @@ export function paginateSessionMessages(
       endExclusive = messages.length;
     }
   }
-  let start = typeof limit === "number" && limit > 0 ? Math.max(0, endExclusive - limit) : 0;
-  // Projection can interleave several rows from the same transcript records.
-  // Close the page over their seq groups because the public cursor cannot split one.
-  if (start > 0) {
-    const pageSeqs = new Set<number>();
-    let indexedStart = endExclusive;
-    for (let index = start - 1; index >= 0; index--) {
-      // Index only admitted intervals; unrelated older gaps need no retained sequence set.
-      while (indexedStart > start) {
-        const pageSeq = readChatHistoryMessageSeq(messages[--indexedStart]);
-        if (pageSeq !== undefined) {
-          pageSeqs.add(pageSeq);
-        }
-      }
-      const seq = readChatHistoryMessageSeq(messages[index]);
-      if (seq !== undefined && pageSeqs.has(seq)) {
-        start = index;
-      }
-    }
-  }
+  const start =
+    typeof limit === "number" && limit > 0
+      ? resolveChatHistoryPageStart(messages, limit, endExclusive)
+      : 0;
   const paginatedMessages = messages.slice(start, endExclusive);
   const firstSeq = readChatHistoryMessageSeq(paginatedMessages[0]);
   return buildPaginatedSessionHistory({
@@ -124,27 +138,6 @@ export function readChatHistoryPaginationKey(message: unknown): string | undefin
   return seq === undefined ? undefined : `seq:${seq}`;
 }
 
-function capOffsetChatHistoryProjectedMessages(
-  messages: unknown[],
-  max: number,
-  sequence = readChatHistoryMessageSeq,
-): unknown[] {
-  if (messages.length <= max) {
-    return messages;
-  }
-  const start = Math.max(0, messages.length - max);
-  const boundarySeq = sequence(messages[start]);
-  if (boundarySeq === undefined) {
-    return messages.slice(start);
-  }
-  // Numeric cursors resume at transcript records, so projected siblings stay together.
-  let safeStart = start;
-  while (safeStart > 0 && sequence(messages[safeStart - 1]) === boundarySeq) {
-    safeStart--;
-  }
-  return messages.slice(safeStart);
-}
-
 export function dropChatHistoryOverreadContextMessage(
   messages: unknown[],
   contextMessage: unknown,
@@ -164,7 +157,49 @@ export type IncrementalChatHistoryTail = {
   rawMessages: unknown[];
   rawPageMessages: number;
   readPage: ReadRecentSessionMessagesResult;
+  oldestMessageId?: string;
+  newestMessageId?: string;
+  hasOlder: boolean;
 };
+
+/** Keep each worker reply bounded even when the anchor and its neighbor cannot fit together. */
+export async function readChatHistoryAnchorPage(
+  readers: SessionTranscriptPageReader,
+  scope: SessionTranscriptReadScope,
+  options: Parameters<SessionTranscriptPageReader["readSessionMessagesAroundIdWithStatsAsync"]>[1],
+) {
+  const page = await readers.readSessionMessagesAroundIdWithStatsAsync(scope, {
+    ...options,
+    captureReadWindow: Boolean(options.direction),
+  });
+  if (
+    !options.direction ||
+    !page.found ||
+    page.windowReset ||
+    page.messages.length !== 1 ||
+    readChatHistoryMessageId(page.messages[0]) !== options.messageId ||
+    (options.direction === "older"
+      ? readChatHistoryMessageSeq(page.messages[0]) === 1
+      : page.offset === 0)
+  ) {
+    return page;
+  }
+  const next = await readers.readSessionMessagesAroundIdWithStatsAsync(scope, {
+    ...options,
+    excludeAnchor: true,
+    expectedReadWindow: page.readWindow,
+  });
+  if (!next.found || next.windowReset || next.displaySource !== page.displaySource) {
+    return { ...next, messages: [], windowReset: true };
+  }
+  return {
+    ...next,
+    messages:
+      options.direction === "older"
+        ? [...next.messages, ...page.messages]
+        : [...page.messages, ...next.messages],
+  };
+}
 
 async function readNewerChatHistoryMessages(params: {
   anchorId: string;
@@ -176,7 +211,7 @@ async function readNewerChatHistoryMessages(params: {
   readOnly?: boolean;
 }): Promise<unknown[]> {
   // Anchor lookup and positioning share one snapshot; numeric offsets drift on appends.
-  const page = await params.readers.readSessionMessagesAroundIdWithStatsAsync(params.readScope, {
+  const page = await readChatHistoryAnchorPage(params.readers, params.readScope, {
     messageId: params.anchorId,
     maxMessages: params.limit + 1,
     direction: "newer",
@@ -254,7 +289,7 @@ export async function readChatHistoryRecoveryContext(params: {
         continue;
       }
       context.push(message);
-      if (asOptionalRecord(message)?.role === "user") {
+      if (isChatHistoryRecoveryUserBoundary(message)) {
         boundaryReached = true;
         break;
       }
@@ -278,6 +313,7 @@ async function readIncrementalChatHistoryTailAttempt(params: {
   readers: SessionTranscriptPageReader;
   effectiveMaxChars: number;
   toolResultMaxChars?: number;
+  includePluginSteering?: boolean;
   max: number;
   maxBytes: number;
   offset?: number;
@@ -389,13 +425,14 @@ async function readIncrementalChatHistoryTailAttempt(params: {
       {
         subagentCoordination: params.readers.subagentCoordination,
         includeCommentaryFallbacks: true,
+        includePluginSteering: params.includePluginSteering,
         maxChars: params.effectiveMaxChars,
         toolResultMaxChars: params.toolResultMaxChars,
         resolveCronJobName: params.resolveCronJobName,
         ...(resolveProfileDisplay && !params.deferProfileDisplay
           ? { resolveCurrentUserProfileDisplay }
           : {}),
-        turnBoundaryPending: isHeartbeatHistoryTurnBoundaryMessage(contextMessage),
+        turnBoundaryPending: isProjectedHistoryTurnBoundaryMessage(contextMessage),
       },
     );
     if (newerContext.length > 0) {
@@ -403,12 +440,13 @@ async function readIncrementalChatHistoryTailAttempt(params: {
         (message) => (readSequence(message) ?? Infinity) <= (newestPageSeq ?? -1),
       );
     }
-    const projected =
-      offset === 0
-        ? projection.messages.length > params.max
-          ? projection.messages.slice(-params.max)
-          : projection.messages
-        : capOffsetChatHistoryProjectedMessages(projection.messages, params.max, readSequence);
+    const start = resolveChatHistoryPageStart(
+      projection.messages,
+      params.max,
+      undefined,
+      readSequence,
+    );
+    const projected = start > 0 ? projection.messages.slice(start) : projection.messages;
     return { filteredRawMessages, projected, projection };
   };
   const projectWindow = async () => {
@@ -535,6 +573,17 @@ async function readIncrementalChatHistoryTailAttempt(params: {
     rawMessages: result.filteredRawMessages,
     rawPageMessages,
     readPage,
+    // Capture consumed endpoints before display filters erase hidden rows. Cursors
+    // must still advance an empty page, without retaining another raw-message array.
+    oldestMessageId: readChatHistoryMessageId(
+      result.projected.length < result.projection.messages.length
+        ? result.projected[0]
+        : rawMessages[0],
+    ),
+    newestMessageId: readChatHistoryMessageId(rawMessages.at(-1)),
+    hasOlder:
+      rawPageMessages < availableMessages ||
+      result.projected.length < result.projection.messages.length,
   };
 }
 

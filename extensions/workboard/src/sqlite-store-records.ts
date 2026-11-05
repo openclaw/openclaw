@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import type {
   WorkboardAttachment,
   WorkboardCard,
@@ -18,6 +17,7 @@ import {
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { definedFields } from "../record-fields.js";
+import type { WorkboardSqlConnection } from "./sqlite-store-schema.js";
 export type Row = Record<string, unknown>;
 
 export function jsonValue(value: unknown): string | null {
@@ -127,7 +127,7 @@ function groupByCardId(rows: Iterable<Row>): Map<string, Row[]> {
   return grouped;
 }
 
-export function loadCardChildRows(db: DatabaseSync, cardIds?: string[]): CardChildRows {
+export function loadCardChildRows(db: WorkboardSqlConnection, cardIds?: string[]): CardChildRows {
   // Group raw rows only: every preload must finish before card decoding can fail.
   const query = getNodeSqliteKysely<WorkboardCardDatabase>(db);
   // Scope to captured IDs so a concurrent board move cannot discard a selected card's children.
@@ -160,7 +160,7 @@ export function loadCardChildRows(db: DatabaseSync, cardIds?: string[]): CardChi
 }
 
 function childRows(
-  db: DatabaseSync,
+  db: WorkboardSqlConnection,
   table: string,
   cardId: string,
   preloaded?: CardChildRows,
@@ -178,7 +178,7 @@ function childRows(
 }
 
 function workerProtocolRow(
-  db: DatabaseSync,
+  db: WorkboardSqlConnection,
   cardId: string,
   preloaded?: CardChildRows,
 ): Row | undefined {
@@ -190,7 +190,11 @@ function workerProtocolRow(
   return db.prepare("SELECT * FROM workboard_worker_protocol WHERE card_id = ?").get(cardId);
 }
 
-function readLabels(db: DatabaseSync, cardId: string, preloaded?: CardChildRows): string[] {
+function readLabels(
+  db: WorkboardSqlConnection,
+  cardId: string,
+  preloaded?: CardChildRows,
+): string[] {
   return childRows(db, "workboard_card_labels", cardId, preloaded).flatMap((row) => {
     const label = stringValue(row, "label");
     return label ? [label] : [];
@@ -198,7 +202,7 @@ function readLabels(db: DatabaseSync, cardId: string, preloaded?: CardChildRows)
 }
 
 function readEvents(
-  db: DatabaseSync,
+  db: WorkboardSqlConnection,
   cardId: string,
   preloaded?: CardChildRows,
 ): WorkboardEvent[] | undefined {
@@ -253,7 +257,7 @@ export function readAttachment(row: Row): WorkboardAttachment {
 }
 
 function readMetadata(
-  db: DatabaseSync,
+  db: WorkboardSqlConnection,
   row: Row,
   preloaded?: CardChildRows,
 ): WorkboardMetadata | undefined {
@@ -389,7 +393,11 @@ function readMetadata(
   );
 }
 
-export function readCard(db: DatabaseSync, row: Row, preloaded?: CardChildRows): WorkboardCard {
+export function readCard(
+  db: WorkboardSqlConnection,
+  row: Row,
+  preloaded?: CardChildRows,
+): WorkboardCard {
   const card: WorkboardCard = {
     id: requiredString(row, "id"),
     title: requiredString(row, "title"),

@@ -21,13 +21,12 @@ import type {
   getSessionBindingService,
   listSessionBindingsBySessionAsync,
 } from "../infra/outbound/session-binding-service.js";
-import { resolveAgentConfig } from "./agent-scope.js";
 import { resolveChildAdmission, type ChildAdmissionCap } from "./child-admission.js";
 import { resolveSenderRestrictedSpawnError } from "./spawn-requester-policy.js";
 import { countActiveRunsForSession } from "./subagents/registry/subagent-registry.js";
 import { resolveSubagentCapabilities } from "./subagents/spawn/subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagents/spawn/subagent-depth.js";
-import { resolveSubagentTargetPolicy } from "./subagents/spawn/subagent-target-policy.js";
+import { resolveRequesterSpawnTargetPolicy } from "./subagents/spawn/subagent-target-policy.js";
 
 type SpawnMode = "run" | "session";
 type SpawnBackendKind = "subagent" | "acp";
@@ -274,6 +273,7 @@ export function resolveSpawnAdmission(params: {
   requestedAgentId?: string;
   configuredAgentIds: string[];
   additionalActiveChildren?: number;
+  callerDepth?: number;
   countActiveRuns?: typeof countActiveRunsForSession;
 }):
   | {
@@ -293,10 +293,12 @@ export function resolveSpawnAdmission(params: {
   if (params.enabled === false) {
     return { ok: true };
   }
-  const callerDepth = getSubagentDepthFromSessionStore(params.requesterSessionKey, {
-    cfg: params.cfg,
-    agentId: params.requesterAgentId,
-  });
+  const callerDepth =
+    params.callerDepth ??
+    getSubagentDepthFromSessionStore(params.requesterSessionKey, {
+      cfg: params.cfg,
+      agentId: params.requesterAgentId,
+    });
   const maxSpawnDepth =
     params.cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   const collector = params.collector;
@@ -328,31 +330,9 @@ export function resolveSpawnAdmission(params: {
   if (!childAdmission.ok) {
     return childAdmission;
   }
-  const requesterSubagentConfig = resolveAgentConfig(
-    params.cfg,
-    params.requesterAgentId,
-  )?.subagents;
-  const requireAgentId =
-    requesterSubagentConfig?.requireAgentId ??
-    params.cfg.agents?.defaults?.subagents?.requireAgentId ??
-    false;
-  if (requireAgentId && !params.requestedAgentId?.trim()) {
-    return {
-      ok: false,
-      error:
-        "sessions_spawn requires explicit agentId when requireAgentId is configured. Provide an allowed configured agentId.",
-    };
-  }
-  const targetPolicy = resolveSubagentTargetPolicy({
-    requesterAgentId: params.requesterAgentId,
-    targetAgentId: params.targetAgentId,
-    requestedAgentId: params.requestedAgentId,
-    allowAgents:
-      requesterSubagentConfig?.allowAgents ?? params.cfg.agents?.defaults?.subagents?.allowAgents,
-    configuredAgentIds: params.configuredAgentIds,
-  });
+  const targetPolicy = resolveRequesterSpawnTargetPolicy(params);
   if (!targetPolicy.ok) {
-    return { ok: false, error: targetPolicy.error };
+    return targetPolicy;
   }
   const capabilities = resolveSubagentCapabilities({
     depth: callerDepth + 1,

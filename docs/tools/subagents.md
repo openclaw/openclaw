@@ -42,7 +42,8 @@ from the parent conversation to see child runs, including swarm workers, under *
 the parent. **Back to Subagents** returns to the list without replacing the
 parent conversation or its draft. The panel loads all child pages automatically;
 older running workers remain visible even when newer children have finished.
-The parallel-tasks view also shows aggregate swarm progress.
+Follow delegated work and inspect finished runs in the **Subagents** panel.
+The transcript does not add a separate inline task tracker.
 
 A directly opened subagent page keeps a compact notice naming its parent and an
 **Open parent session** button. The embedded panel omits that notice because the
@@ -51,6 +52,13 @@ an abortable run and your session access permits it. Persistent sessions created
 with `visible: true` are ordinary sessions in the session tree: they keep their
 parent for navigation and completion announcements, and you can always type in
 them and steer them like any other session.
+
+Visible spawned sessions are interactive, so they do not get the built-in
+sub-agent tool denies: they can use `message`, session and conversation tools,
+and receive background exec completion wakes like any other session. Hidden
+helpers still communicate through the announce chain. Configured
+`tools.subagents.tools`, inherited sender, sandbox, and channel restrictions
+continue to apply, and spawn depth and child limits still govern their own spawns.
 
 Use ordinary subagents for internal QA, research, coding, review, and test lanes,
 with results returning to the parent task. Create a persistent visible session

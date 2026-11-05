@@ -32,9 +32,9 @@ final class ScreenRecordService {
         screenIndex: Int?,
         durationMs: Int?,
         fps: Double?,
-        includeAudio: Bool?) async throws -> (path: String, hasAudio: Bool)
+        includeAudio: Bool?) async throws -> (path: String, durationMs: Int, fps: Double, hasAudio: Bool)
     {
-        try ScreenCaptureSupport.requirePermission(failure: ScreenRecordError.writeFailed)
+        try await ScreenCaptureSupport.requirePermission()
         let durationMs = CaptureRateLimits.clampDurationMs(durationMs)
         let fps = CaptureRateLimits.clampFps(fps, maxFps: 60)
         let includeAudio = includeAudio ?? false
@@ -73,9 +73,6 @@ final class ScreenRecordService {
             try stream.addStreamOutput(recorder, type: .audio, sampleHandlerQueue: recorder.queue)
         }
 
-        self.logger.info(
-            "screen record start idx=\(idx) durationMs=\(durationMs) fps=\(fps) out=\(outURL.path, privacy: .public)")
-
         var started = false
         do {
             try await stream.startCapture()
@@ -84,11 +81,11 @@ final class ScreenRecordService {
             try await stream.stopCapture()
         } catch {
             if started { try? await stream.stopCapture() }
-            throw error
+            throw PermissionManager.screenCaptureFailure(error)
         }
 
         try await recorder.finish()
-        return (path: outURL.path, hasAudio: recorder.hasAudio)
+        return (path: outURL.path, durationMs: durationMs, fps: fps, hasAudio: recorder.hasAudio)
     }
 }
 
@@ -173,10 +170,7 @@ private final class StreamRecorder: NSObject, SCStreamOutput, SCStreamDelegate, 
             return
         }
         _ = stream
-        if let msg = self.pendingErrorMessage {
-            let source = type == .audio ? "audio " : ""
-            self.logger
-                .error("screen record \(source, privacy: .public)aborting due to prior error: \(msg, privacy: .public)")
+        if self.pendingErrorMessage != nil {
             return
         }
         if self.didFinish { return }

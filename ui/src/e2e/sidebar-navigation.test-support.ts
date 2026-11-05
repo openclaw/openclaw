@@ -16,6 +16,11 @@ export async function openHomeFullPage(page: Page, agentId = "main"): Promise<vo
   await expect
     .poll(async () => new URL(page.url()).pathname === pathname || (await pageAction.isVisible()))
     .toBe(true);
+  // Chip navigation may reach Home before the dock receives its route properties.
+  if (new URL(page.url()).pathname === pathname) {
+    await waitForControlUiRoute(page, { pathname, routeId: "chat" });
+    return;
+  }
   if (await pageAction.isVisible()) {
     await pageAction.click();
   }

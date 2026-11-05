@@ -1,28 +1,36 @@
-import { formatErrorMessage } from "../../../infra/errors.js";
+import { resolveOpenAIResponsesServerCompactionPlan } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import {
   mergeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
   setAgentRunAttemptTerminalFailure,
   type AgentRunAttemptFailureSource,
 } from "../../agent-run-terminal-outcome.js";
-import { resolvePendingRuntimeContextReplay } from "../../internal-runtime-context.js";
+import { SAFETY_MARGIN } from "../../compaction-planning.js";
+import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
+import {
+  buildAgentRunBlockedUserMessage,
+  runBeforeAgentRunGate,
+} from "../../harness/before-agent-run.js";
+import {
+  isOpenClawSystemUpdateMessage,
+  resolvePendingRuntimeContextReplay,
+} from "../../internal-runtime-context.js";
 import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
 import {
   createCompactionRequestBudget,
   type CompactionRequestBudget,
 } from "../../sessions/compaction/request-budget.js";
+import { createFixedRequestTokenEstimator } from "../../sessions/context-token-pressure.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
-import { releasePendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
 import {
   persistToolResultProjections,
   persistSessionSystemPrompt,
+  persistSessionToolSurface,
 } from "../session-prompt-state.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { createAbortableError, isOpenClawAbortableWrapper } from "./abortable.js";
-import { runEmbeddedAttemptBeforeAgentRun } from "./attempt-before-agent-run.js";
-import { logDecisionToolRequest } from "./attempt-decision-diagnostics.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import {
   prepareEmbeddedAttemptPromptAssembly,
@@ -44,10 +52,9 @@ import {
   isChatGPTV2CompactionEligible,
 } from "./chatgpt-v2-compaction.js";
 import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
-import { estimateToolSchemaTokenPressure } from "./preemptive-compaction.js";
+import { sessionMessagesContainIdempotencyKey } from "./pre-persisted-user-turn.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
 
-type PromptAssemblyResult = Awaited<ReturnType<typeof prepareEmbeddedAttemptPromptAssembly>>;
 type PromptPreflightState = Parameters<typeof prepareEmbeddedAttemptPromptPreflight>[0]["state"];
 
 export type EmbeddedAttemptPromptState = Pick<
@@ -110,23 +117,12 @@ export async function runEmbeddedAttemptPromptPhase(
   const { withOwnedTranscriptWrite } = input.sessionLock;
   const withTranscriptWrite = <T>(write: () => Promise<T>) =>
     withOwnedTranscriptWrite(() => withSessionManagerAppend(sessionManager, write));
-  const observeForegroundRequests = (
-    onRequest: NonNullable<PreparedStreamRuntime["cache"]["onModelRequest"]>,
-  ) => {
-    const streamFn = activeSession.agent.streamFn;
-    activeSession.agent.streamFn = (model, context, options) => {
-      if (!activeSession.isCompacting) {
-        onRequest(model, context);
-      }
-      return streamFn(model, context, options);
-    };
-  };
+  const estimateFixedRequest = createFixedRequestTokenEstimator();
   const { diagnosticTrace, runTrace } = input.diagnostics;
   const { systemPromptReport, runtimeInfo } = prepared.systemPrompt;
   let systemPromptText = sessionRuntimeState.systemPromptText;
   const toolSearchCompacted = prepared.toolCatalog.toolSearch.compacted;
   let skipPromptSubmission = false;
-  let leasedSteering: PromptAssemblyResult["leasedSteering"];
   let providerBoundaryPrecheck: MidTurnPrecheckRequest | undefined;
   const providerCompactionAtRequestBoundary = isChatGPTV2CompactionEligible({
     config: attempt.config,
@@ -138,7 +134,13 @@ export async function runEmbeddedAttemptPromptPhase(
     operation: attempt.operation,
   });
   const previousThresholdDeferral = activeSession[agentSessionDeferThresholdCompaction];
-  if (providerCompactionAtRequestBoundary) {
+  // Provider-owned thresholds defer client maintenance, never the hard window guard.
+  if (
+    providerCompactionAtRequestBoundary ||
+    (compactionReplayEnabled &&
+      (attempt.model.api === "anthropic-messages" ||
+        resolveOpenAIResponsesServerCompactionPlan(attempt.model, effectiveExtraParams).enabled))
+  ) {
     activeSession[agentSessionDeferThresholdCompaction] = true;
   }
 
@@ -153,17 +155,6 @@ export async function runEmbeddedAttemptPromptPhase(
     promptState.contextBudgetStatus = state.contextBudgetStatus;
     promptState.preflightRecovery = state.preflightRecovery;
     setFailure(state.promptError, state.promptErrorSource);
-  };
-  const releaseLeasedSteering = async (error?: unknown) => {
-    if (!leasedSteering) {
-      return;
-    }
-    await releasePendingAgentSteeringItems({
-      runIds: leasedSteering.runIds,
-      leaseId: leasedSteering.leaseId,
-      error: error ? formatErrorMessage(error) : undefined,
-    });
-    leasedSteering = undefined;
   };
   const handleMidTurnPrecheckRequest = async (request: MidTurnPrecheckRequest) => {
     const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
@@ -187,6 +178,11 @@ export async function runEmbeddedAttemptPromptPhase(
 
   let transcriptLeafId: string | null = null;
   try {
+    if (attempt.inputAlreadyDelivered) {
+      runAbortController.signal.throwIfAborted();
+      input.sessionLock.ownedTranscriptWriteContext.assertCommitAllowed?.();
+      return { promptStartedAt, transcriptLeafId };
+    }
     const promptAssembly = await prepareEmbeddedAttemptPromptAssembly({
       attempt,
       activeSession,
@@ -197,13 +193,15 @@ export async function runEmbeddedAttemptPromptPhase(
       isRawModelRun,
       ...(orphanRepair ? { orphanRepair } : {}),
       sessionAgentId,
-      runtimeModel: runtimeInfo.model,
+      // A blind child's prompt never names its own model.
+      runtimeModel: attempt.blindPrompt ? undefined : runtimeInfo.model,
       systemPromptText,
       runAbortSignal: input.runAbortController.signal,
+      hasBaselineTools: promptToolPolicy.hasBaselineTools,
       setActiveSessionSystemPrompt,
-      applyPromptBuildToolsAllow: (toolsAllow, decisionIsCurrent) => {
+      applyPromptBuildToolsAllow: (toolsAllow, pruneForDecision) => {
         // Hook authority follows reachable capabilities, not just provider-visible controls.
-        return promptToolPolicy.apply(toolsAllow, decisionIsCurrent).callableToolNames;
+        return promptToolPolicy.apply(toolsAllow, pruneForDecision).callableToolNames;
       },
       prepareSystemPrompt: async (currentSystemPrompt) => {
         const refresh = await prepared.systemPrompt.prepareToolPrompt?.(
@@ -211,10 +209,8 @@ export async function runEmbeddedAttemptPromptPhase(
         );
         return refresh ? refresh(currentSystemPrompt) : currentSystemPrompt;
       },
-      setLeasedSteering: (lease) => {
-        leasedSteering = lease;
-      },
     });
+    input.setup.prepStages.mark("prompt-build");
     systemPromptText = sessionRuntimeState.systemPromptText;
     if (prepared.toolCatalog.emptyExplicitToolAllowlistError) {
       setFailure(prepared.toolCatalog.emptyExplicitToolAllowlistError, "precheck");
@@ -223,11 +219,11 @@ export async function runEmbeddedAttemptPromptPhase(
     }
     const { hookCtx, promptBuildPrependContext, promptBuildAppendContext } = promptAssembly;
     transcriptLeafId = promptAssembly.transcriptLeafId;
-    leasedSteering = promptAssembly.leasedSteering ?? leasedSteering;
 
     const promptContext = await prepareEmbeddedAttemptPromptContext({
       sessionVersion: sessionManager.getHeader()?.version,
       attempt,
+      systemPromptRuntimeContextFragments: prepared.systemPrompt.runtimeContextFragments,
       capabilityToolNames: prepared.toolCatalog.toolSearchRunPlan.capabilityToolNames,
       messages: activeSession.messages,
       prompt: promptAssembly,
@@ -245,6 +241,7 @@ export async function runEmbeddedAttemptPromptPhase(
       systemPromptText,
       toolResultPromptProjectionState,
     });
+    input.setup.prepStages.mark("prompt-context");
     if (runAbortController.signal.aborted) {
       throw createAbortableError(runAbortController.signal);
     }
@@ -252,24 +249,50 @@ export async function runEmbeddedAttemptPromptPhase(
     const { hookMessagesForCurrentPrompt, promptForModel, systemPromptForHook } = promptContext;
     sessionRuntimeState.prePromptMessageCount = promptContext.prePromptMessageCount;
     setCurrentUserTimestampOverride(promptContext.currentUserTimestampOverride);
-    const beforeAgentRunOutcome =
-      attempt.operation === "settled-tool-finalization"
-        ? undefined
-        : await runEmbeddedAttemptBeforeAgentRun({
-            attempt,
-            activeSession,
-            hookContext: hookCtx,
-            hookMessages: hookMessagesForCurrentPrompt,
-            hookRunner,
-            modelPrompt: promptForModel,
-            sessionManager,
-            systemPrompt: systemPromptForHook,
-            withOwnedTranscriptWrite,
-          });
-    if (beforeAgentRunOutcome) {
-      input.state.beforeAgentRunBlockedBy = beforeAgentRunOutcome.blockedBy;
-      setFailure(beforeAgentRunOutcome.promptError, "hook:before_agent_run");
-      skipPromptSubmission = true;
+    if (attempt.operation !== "settled-tool-finalization") {
+      const block = await runBeforeAgentRunGate(
+        hookRunner,
+        {
+          prompt: promptForModel,
+          systemPrompt: systemPromptForHook,
+          messages: hookMessagesForCurrentPrompt,
+          channelId: hookCtx.channelId,
+          accountId: attempt.agentAccountId,
+          senderId: attempt.senderId ?? undefined,
+          senderIsOwner: attempt.senderIsOwner,
+        },
+        hookCtx,
+      );
+      if (block) {
+        const redactedUserMessage = buildAgentRunBlockedUserMessage(attempt.runId, block);
+        if (
+          !sessionMessagesContainIdempotencyKey(
+            activeSession.messages,
+            redactedUserMessage.idempotencyKey,
+          )
+        ) {
+          try {
+            await withOwnedTranscriptWrite(() =>
+              withSessionManagerAppend(sessionManager, async () => {
+                await sessionManager.appendMessageAsync(redactedUserMessage);
+                sessionManager.flushPendingPersistence();
+              }),
+            );
+            activeSession.agent.state.messages = sanitizeCompactionReplayMessages(
+              sessionManager.buildSessionContext().messages,
+            );
+          } catch (err) {
+            log.warn(
+              `before_agent_run block: failed to persist redacted user message: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          }
+        }
+        input.state.beforeAgentRunBlockedBy = block.blockedBy;
+        setFailure(new Error(block.message), "hook:before_agent_run");
+        skipPromptSubmission = true;
+      }
     }
 
     if (!skipPromptSubmission) {
@@ -344,6 +367,12 @@ export async function runEmbeddedAttemptPromptPhase(
     // Publish each admission transition before the next fallible phase so outer cleanup sees it.
     publishDispatchState(state);
 
+    const fixedTokenPressure = state.skipPromptSubmission
+      ? undefined
+      : estimateFixedRequest({
+          systemPrompt: promptContext.systemPromptForHook,
+          tools: activeSession.agent.state.tools,
+        });
     let compactionRequestBudget: CompactionRequestBudget | undefined;
     if (!state.skipPromptSubmission) {
       const userTurnRecorder = attempt.userTurnTranscriptRecorder;
@@ -360,13 +389,16 @@ export async function runEmbeddedAttemptPromptPhase(
         : [];
       compactionRequestBudget = createCompactionRequestBudget({
         ...foregroundBudget,
+        fixedTokenPressure,
         systemPrompt: promptContext.systemPromptForHook,
         tools: activeSession.agent.state.tools,
         pendingPrompt: promptContext.llmBoundaryPromptForPrecheck,
         pendingImageCount: imageResult.images.length,
         // The SDK replaces the queued reservation at submission. Transient
         // installation remains separate because that carrier never enters its queue.
-        ...(appendOnlyRuntimeContext
+        ...(appendOnlyRuntimeContext ||
+        (promptContext.runtimeContextMessageForCurrentTurn &&
+          isOpenClawSystemUpdateMessage(promptContext.runtimeContextMessageForCurrentTurn))
           ? {
               pendingQueuedContextMessages: resolvePendingRuntimeContextReplay({
                 messages: activeSession.messages,
@@ -375,22 +407,12 @@ export async function runEmbeddedAttemptPromptPhase(
               }).pendingContextMessages,
             }
           : { pendingContextMessages }),
-        pendingAdditivePrompt: [promptBuildPrependContext, promptBuildAppendContext]
-          .filter(Boolean)
-          .join("\n\n"),
+        pendingAdditivePrompt: promptContext.isDispatchedCanonicalFallback
+          ? undefined
+          : [promptBuildPrependContext, promptBuildAppendContext].filter(Boolean).join("\n\n"),
         pendingUserIdempotencyKey,
       });
       attempt.onCompactionRequestBudget?.(compactionRequestBudget);
-      // Summarization has its own prompt/model; it cannot replace foreground accounting.
-      observeForegroundRequests((_model, context) => {
-        attempt.onCompactionRequestBudget?.(
-          createCompactionRequestBudget({
-            ...foregroundBudget,
-            systemPrompt: context.systemPrompt,
-            tools: context.tools,
-          }),
-        );
-      });
     }
 
     state = await prepareEmbeddedAttemptPromptPreflight({
@@ -408,6 +430,7 @@ export async function runEmbeddedAttemptPromptPhase(
       hookMessagesForCurrentPrompt: promptContext.hookMessagesForCurrentPrompt,
       promptForPrecheck: promptContext.llmBoundaryPromptForPrecheck,
       pendingInputTokens: compactionRequestBudget?.pendingTokens,
+      fixedTokenPressure,
       reserveTokens,
       sessionMessageCount: activeSession.messages.length,
       state,
@@ -415,14 +438,18 @@ export async function runEmbeddedAttemptPromptPhase(
       toolResultMaxChars: promptContext.promptToolResultMaxChars,
       // Use the installed model-facing tool surface (same source as the compaction
       // request budget) so client tools appended by attempt-client-tools are counted.
-      toolSchemaTokens: estimateToolSchemaTokenPressure(activeSession.agent.state.tools),
+      toolSchemaTokens: fixedTokenPressure
+        ? Math.ceil(fixedTokenPressure.toolTokens * SAFETY_MARGIN)
+        : undefined,
     });
+    input.setup.prepStages.mark("compaction-preflight");
     publishDispatchState(state);
 
     if (!state.skipPromptSubmission) {
       await submitEmbeddedAttemptPrompt({
         ...(promptBuildAppendContext ? { appendContext: promptBuildAppendContext } : {}),
         attempt,
+        registration: preparedStreamRuntime.stream.registration,
         activeSession,
         contextTokenBudget: promptContext.contextTokenBudget,
         compactionRequestBudget,
@@ -481,9 +508,22 @@ export async function runEmbeddedAttemptPromptPhase(
               }),
             }
           : {}),
+        prepareRequestTokenPressure: (context) => {
+          const pressure = estimateFixedRequest(context);
+          if (!activeSession.isCompacting) {
+            attempt.onCompactionRequestBudget?.(
+              createCompactionRequestBudget({
+                contextWindow: promptContext.contextTokenBudget,
+                reserveTokens,
+                fixedTokenPressure: pressure,
+              }),
+            );
+          }
+          return pressure;
+        },
         onModelRequest: preparedStreamRuntime.cache.onModelRequest,
+        normalizeToolCallIds: preparedStreamRuntime.normalizeToolCallIds,
         images: imageResult.images,
-        ...(leasedSteering ? { leasedSteering } : {}),
         modelPrompt: promptContext.promptForModel,
         onFinalPromptText: (prompt) => {
           promptState.finalPromptText = prompt;
@@ -491,59 +531,12 @@ export async function runEmbeddedAttemptPromptPhase(
         assertHostActive: promptAssembly.assertHostActive,
         withTranscriptWrite,
         getUserTranscriptContexts: sessionRuntime.boundary.getUserTranscriptContexts,
-        preparePrimaryModelRequest: () =>
-          promptToolPolicy.prepareForDispatch(async () => {
-            promptAssembly.decisionPrefilter.restrictionApplied = false;
-            promptAssembly.decisionPrefilter.status = "retained";
-            promptAssembly.decisionPrefilter.reason = "selection-changed";
-            const refresh = await prepared.systemPrompt.prepareToolPrompt?.(
-              promptToolPolicy.current.effectiveTools,
-            );
-            input.runAbortController.signal.throwIfAborted();
-            promptAssembly.assertHostActive?.();
-            const refreshedPrompt = refresh?.(activeSession.agent.state.systemPrompt);
-            const projection =
-              refreshedPrompt !== undefined && sessionRuntime.prepareSystemPromptUpdate
-                ? await sessionRuntime.prepareSystemPromptUpdate(
-                    refreshedPrompt,
-                    refresh?.freshlyRendered === true,
-                  )
-                : undefined;
-            if (refreshedPrompt !== undefined && !projection) {
-              setActiveSessionSystemPrompt(refreshedPrompt);
-            }
-            return () => ({
-              tools: activeSession.agent.state.tools.slice(),
-              systemPrompt: projection?.systemPrompt ?? activeSession.agent.state.systemPrompt,
-              ...(projection
-                ? {
-                    promptUpdate: {
-                      update: projection.update,
-                      commit: () => {
-                        projection.commit();
-                        setActiveSessionSystemPrompt(projection.systemPrompt);
-                      },
-                    },
-                  }
-                : {}),
-            });
-          }),
-        onPrimaryModelRequest: (tools) => {
-          logDecisionToolRequest({
-            decision: promptAssembly.decisionPrefilter,
-            baseline: promptToolPolicy.readDecisionBaseline(),
-            readFinal: () => tools,
-            requiredNames: promptToolPolicy.decisionRequiredNames,
-            trace: runTrace,
-          });
-        },
-        onSteeringAcknowledged: () => {
-          leasedSteering = undefined;
-        },
         persistToolResultProjections: async () => {
           if (
             !isRawModelRun &&
-            (inHistorySystemUpdates || toolResultPromptProjectionState.frozen.size > 0)
+            (inHistorySystemUpdates ||
+              sessionPromptState.pendingToolSurface ||
+              toolResultPromptProjectionState.frozen.size > 0)
           ) {
             await withTranscriptWrite(async () => {
               runAbortController.signal.throwIfAborted();
@@ -551,11 +544,11 @@ export async function runEmbeddedAttemptPromptPhase(
                 toolResultPromptProjectionState,
                 (customType, data) => sessionManager.appendCustomEntryAsync(customType, data),
               );
-              if (sessionRuntime.prepareSystemPromptUpdate) {
-                await persistSessionSystemPrompt(sessionPromptState, (customType, data) =>
-                  sessionManager.appendCustomEntryAsync(customType, data),
-                );
-              }
+              const appendEntry = (customType: string, data: unknown) =>
+                sessionManager.appendCustomEntryAsync(customType, data);
+              await (sessionRuntime.prepareSystemPromptUpdate
+                ? persistSessionSystemPrompt(sessionPromptState, appendEntry)
+                : persistSessionToolSurface(sessionPromptState, appendEntry));
             });
           }
         },
@@ -575,8 +568,6 @@ export async function runEmbeddedAttemptPromptPhase(
         toolResultPromptProjectionState,
         trajectoryRecorder,
       });
-    } else {
-      await releaseLeasedSteering(state.promptError ?? "prompt submission skipped");
     }
     publishDispatchState(state);
   } catch (error) {
@@ -592,7 +583,6 @@ export async function runEmbeddedAttemptPromptPhase(
           source: "yield_cleanup",
         });
       },
-      releaseLeasedSteering,
       withOwnedTranscriptWrite,
       ...input.lifecycle.readYieldState(),
     });
@@ -612,9 +602,6 @@ export async function runEmbeddedAttemptPromptPhase(
   } finally {
     activeSession[agentSessionDeferThresholdCompaction] = previousThresholdDeferral;
     stopAcceptingSteerMessages();
-    log.debug(
-      `embedded run prompt end: runId=${attempt.runId} sessionId=${attempt.sessionId} durationMs=${Date.now() - promptStartedAt}`,
-    );
   }
 
   const pendingMidTurnPrecheckRequest =

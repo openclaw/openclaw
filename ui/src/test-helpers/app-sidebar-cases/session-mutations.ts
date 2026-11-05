@@ -3,11 +3,14 @@ import type { ControlUiAction } from "../../../../src/plugin-sdk/control-ui.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { publishSidebarSessionList } from "../../components/session-data-controller-events.ts";
+import { publishSidebarSessionList } from "../../components/session-data-events.ts";
+import "../../lib/toast-host.tsx";
+import { i18n } from "../../i18n/lib/translate.ts";
 import {
   pauseSessionPlacementRecovery,
   readSessionPlacementRecovery,
 } from "../../lib/sessions/session-placement-recovery.ts";
+import { openRowSessionMenu as openSessionMenu } from "../app-sidebar-menu.ts";
 import {
   createGatewayHarness,
   createSessionState,
@@ -15,16 +18,16 @@ import {
   mountSidebar,
   type SidebarLifecycleState,
   successfulSessionPatch,
-  type TestSessionMenu,
 } from "../app-sidebar.ts";
 import { registerSessionPluginAction } from "../control-ui-plugin-action.ts";
 import { gatewayHelloForMethods } from "../gateway-methods.ts";
+import { settleLitElement } from "../lit-settle.ts";
 import {
   answerConfirmDialog,
   installDialogPolyfill,
   waitForConfirmDialogActions,
 } from "../modal-dialog.ts";
-import { menuItem, menuItemLabels } from "../session-menu.ts";
+import { menuItemLabels, openSubmenu, selectMenuValue } from "../session-menu.ts";
 import { sessionOwnerProfiles } from "../session-owner-menu.ts";
 import { waitForFast } from "../wait-for.ts";
 
@@ -82,21 +85,6 @@ describe("AppSidebar session mutation feedback", () => {
     return { gateway, harness, sidebar, context };
   }
 
-  async function openSessionMenu(sidebar: SidebarLifecycleState, key: string) {
-    const row = sidebar.querySelector<HTMLElement>(`[data-session-key="${key}"]`);
-    if (!row) {
-      throw new Error(`expected session row for ${key}`);
-    }
-    row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
-    await sidebar.updateComplete;
-    const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
-    if (!menu) {
-      throw new Error("expected session menu");
-    }
-    await menu.updateComplete;
-    return menu;
-  }
-
   function selectSession(sidebar: SidebarLifecycleState, key: string) {
     const link = sidebar.querySelector<HTMLAnchorElement>(
       `[data-session-key="${key}"] .sidebar-recent-session__link`,
@@ -133,7 +121,7 @@ describe("AppSidebar session mutation feedback", () => {
       }),
       run,
     });
-    sidebar.requestUpdate();
+    sidebar.invalidate();
     await sidebar.updateComplete;
     const publish = (rows: GatewaySessionRow[]) => {
       publishSidebarSessionList(sidebar.sessionData, {
@@ -163,7 +151,7 @@ describe("AppSidebar session mutation feedback", () => {
 
     // The filtered roster changes before rendering; the primary roster keeps its old row.
     publish([current]);
-    menu.querySelector<HTMLElement>(actionSelector)!.click();
+    await selectMenuValue(menu, menu.querySelector<HTMLButtonElement>(actionSelector)!.value);
     expect(run.mock.calls.length).toBe(1);
     expect(run.mock.calls[0]![0].sessionKey).toBe(row.key);
     expect(run.mock.calls[0]![0].session).toEqual(current);
@@ -171,9 +159,11 @@ describe("AppSidebar session mutation feedback", () => {
 
     menu = await openMenu();
     publish([{ ...current, hasActiveRun: true }]);
-    menu.querySelector<HTMLElement>(actionSelector)!.click();
+    await selectMenuValue(menu, menu.querySelector<HTMLButtonElement>(actionSelector)!.value);
     expect(run.mock.calls.length).toBe(1);
-    await waitForFast(() => expect(toast.textContent).toContain("Reopen the session menu."));
+    await waitForFast(() =>
+      expect(toast.textContent).toContain(i18n.t("pluginUi.actionUnavailableSession")),
+    );
   });
 
   it("does not invoke a plugin for a removed or replaced menu session", async () => {
@@ -186,9 +176,11 @@ describe("AppSidebar session mutation feedback", () => {
       const toast = await mountToastHost();
       const menu = await openMenu();
       publish(rows);
-      menu.querySelector<HTMLElement>(actionSelector)!.click();
+      await selectMenuValue(menu, menu.querySelector<HTMLButtonElement>(actionSelector)!.value);
       expect(run.mock.calls.length).toBe(0);
-      await waitForFast(() => expect(toast.textContent).toContain("Reopen the session menu."));
+      await waitForFast(() =>
+        expect(toast.textContent).toContain(i18n.t("pluginUi.actionSessionUnavailable")),
+      );
       toast.remove();
     }
 
@@ -196,7 +188,7 @@ describe("AppSidebar session mutation feedback", () => {
     await sidebar.updateComplete;
     const menu = await openMenu();
     publish([replacement]);
-    await sidebar.updateComplete;
+    await settleLitElement(sidebar);
     await menu.updateComplete;
     expect(menu.querySelector(actionSelector)).toBeNull();
   });
@@ -312,18 +304,15 @@ describe("AppSidebar session mutation feedback", () => {
     const menu = await openSessionMenu(sidebar, row.key);
     await waitForFast(() => expect(menu.textContent).toContain("Bob"));
     expect(menuItemLabels(menu)).toContain("Assign to…");
-    const assignmentMenu = menuItem(menu, "Assign to…");
-    expect(
-      Array.from(
-        assignmentMenu?.querySelectorAll<HTMLElement>('wa-dropdown-item[slot="submenu"]') ?? [],
-      ).map((item) => item.querySelector(".session-menu__text")?.textContent?.trim()),
-    ).toEqual(["Me", "Bob"]);
-    menu.querySelector("wa-dropdown")?.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        detail: { item: { value: "assign-owner:human:profile-bob" } },
-      }),
+    const assignmentMenu = await openSubmenu(menu, "Assign to…");
+    await waitForFast(() =>
+      expect(
+        Array.from(assignmentMenu.querySelectorAll<HTMLElement>('[role="menuitemradio"]')).map(
+          (item) => item.querySelector(".session-menu__text")?.textContent?.trim(),
+        ),
+      ).toEqual(["Me", "Bob"]),
     );
+    await selectMenuValue(menu, "assign-owner:human:profile-bob");
 
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     expect(request).toHaveBeenCalledWith("sessions.assignOwner", {
@@ -341,15 +330,8 @@ describe("AppSidebar session mutation feedback", () => {
 
     const selfMenu = await openSessionMenu(sidebar, row.key);
     await waitForFast(() => expect(menuItemLabels(selfMenu)).toContain("Assign to…"));
-    const selfItem = selfMenu.querySelector<HTMLElement>(
-      ':scope > wa-dropdown > wa-dropdown-item wa-dropdown-item[slot="submenu"][value="assign-owner:human:profile-ada"]',
-    );
-    selfMenu.querySelector("wa-dropdown")?.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        detail: { item: { value: selfItem?.getAttribute("value") } },
-      }),
-    );
+    await openSubmenu(selfMenu, "Assign to…");
+    await selectMenuValue(selfMenu, "assign-owner:human:profile-ada");
 
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
     expect(request).toHaveBeenNthCalledWith(2, "sessions.assignOwner", {
@@ -398,18 +380,19 @@ describe("AppSidebar session mutation feedback", () => {
     harness.publishList({ result: state.result, agentId: state.agentId });
     await sidebar.updateComplete;
 
+    const toast = await mountToastHost();
     const menu = await openSessionMenu(sidebar, row.key);
     menu.querySelector<HTMLElement>('[value="stop-cloud-worker"]')?.click();
     const actions = await waitForConfirmDialogActions();
     expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-      'Stop the cloud worker for "a"?',
+      "Stop this cloud device?",
     );
     answerConfirmDialog(actions, "confirm");
 
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     expect(context.placementStartup.pause).toHaveBeenCalledExactlyOnceWith(
       "agent:main:a",
-      "Worker stop requested. Review the initial message before retrying.",
+      "Device stop requested. Review the initial message before retrying.",
       { readSessionPlacementRecovery, pauseSessionPlacementRecovery },
     );
     expect(context.placementStartup.pause).toHaveBeenCalledBefore(request);
@@ -419,10 +402,10 @@ describe("AppSidebar session mutation feedback", () => {
       { timeoutMs: null },
     );
     await waitForFast(() => expect(harness.reconcileMutation).toHaveBeenCalledWith("main"));
-    await waitForFast(() => {
-      const error = sidebar.querySelector("[data-sidebar-session-error]")?.textContent ?? null;
-      expect(error).toContain("Stopped session refresh unavailable");
-    });
+    await waitForFast(() =>
+      expect(toast.textContent).toContain("Stopped session refresh unavailable"),
+    );
+    toast.remove();
   });
 
   it("reclaims a pending cloud worker through its session", async () => {
@@ -457,7 +440,7 @@ describe("AppSidebar session mutation feedback", () => {
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
     expect(context.placementStartup.pause).toHaveBeenCalledExactlyOnceWith(
       "agent:main:a",
-      "Worker stop requested. Review the initial message before retrying.",
+      "Device stop requested. Review the initial message before retrying.",
       { readSessionPlacementRecovery, pauseSessionPlacementRecovery },
     );
     expect(context.placementStartup.pause).toHaveBeenCalledBefore(request);
@@ -469,8 +452,9 @@ describe("AppSidebar session mutation feedback", () => {
     await waitForFast(() => expect(harness.reconcileMutation).toHaveBeenCalledWith("main"));
   });
 
-  it("shows and dismisses a fixed sidebar error when a session patch is rejected", async () => {
+  it("toasts a rejected session patch instead of pinning a sidebar error", async () => {
     const { harness, sidebar } = await mountMutationHarness();
+    const toast = await mountToastHost();
     harness.patch.mockRejectedValueOnce(new Error("rename rejected by Gateway"));
     const menu = await openSessionMenu(sidebar, "agent:main:a");
     menu.querySelector<HTMLButtonElement>('[data-shortcut="r"]')?.click();
@@ -480,84 +464,59 @@ describe("AppSidebar session mutation feedback", () => {
     document.body.querySelector<HTMLInputElement>('input[name="value"]')!.value = "Rejected rename";
     document.body.querySelector<HTMLButtonElement>('button[type="submit"]')?.click();
 
-    await waitForFast(() => {
-      expect(sidebar.querySelector("[data-sidebar-session-error]")?.textContent).toContain(
+    await waitForFast(() =>
+      expect(toast.querySelector(".app-toast-lane--top-right .app-toast")?.textContent).toContain(
         "rename rejected by Gateway",
-      );
-    });
-    const error = sidebar.querySelector("[data-sidebar-session-error]");
-    expect(error?.parentElement?.classList.contains("sidebar-sessions")).toBe(true);
-    expect(error?.closest(".sidebar-recent-sessions")).toBeNull();
-
-    error?.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')?.click();
-    await sidebar.updateComplete;
+      ),
+    );
     expect(sidebar.querySelector("[data-sidebar-session-error]")).toBeNull();
+    toast.remove();
   });
 
-  it("surfaces partial batch-delete errors", async () => {
+  it.each(["delete", "archive"] as const)("surfaces partial batch-%s errors", async (action) => {
     const { harness, sidebar } = await mountMutationHarness();
-    harness.deleteMany.mockResolvedValueOnce({
-      deleted: ["agent:main:a"],
-      errors: [
-        { target: { key: "agent:main:b" }, error: new Error("agent:main:b: permission denied") },
-      ],
-      preservedWorktrees: [],
-    });
-    selectSession(sidebar, "agent:main:a");
-    selectSession(sidebar, "agent:main:b");
-    await sidebar.updateComplete;
-    const row = sidebar.querySelector('[data-session-key="agent:main:b"]');
-    row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
-    await sidebar.updateComplete;
-    const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
-    await menu?.updateComplete;
-    menu?.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();
-    answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
-
-    await waitForFast(() => {
-      expect(sidebar.querySelector("[data-sidebar-session-error]")?.textContent).toContain(
-        "agent:main:b: permission denied",
-      );
-    });
-  });
-
-  it("surfaces ordered partial batch-archive errors", async () => {
-    const { harness, sidebar } = await mountMutationHarness();
-    harness.patchMany.mockImplementationOnce(async (targets) => {
-      return {
+    const toast = await mountToastHost();
+    if (action === "delete") {
+      harness.deleteMany.mockResolvedValueOnce({
+        deleted: ["agent:main:a"],
+        errors: [{ target: { key: "agent:main:b" }, error: new Error("agent:main:b: rejected") }],
+        preservedWorktrees: [],
+      });
+    } else {
+      harness.patchMany.mockImplementationOnce(async (targets) => ({
         outcomes: [
           { ok: true, key: targets[0]!.key, agentId: targets[0]!.agentId },
           {
             ok: false,
             key: targets[1]!.key,
             agentId: targets[1]!.agentId,
-            error: { code: "INVALID_REQUEST", message: "active run" },
+            error: { code: "INVALID_REQUEST", message: "rejected" },
           },
         ],
-      };
-    });
+      }));
+    }
     selectSession(sidebar, "agent:main:a");
     selectSession(sidebar, "agent:main:b");
     await sidebar.updateComplete;
-    const row = sidebar.querySelector('[data-session-key="agent:main:b"]');
-    row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
-    await sidebar.updateComplete;
-    const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
-    await menu?.updateComplete;
-    menu?.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
-
-    await waitForFast(() => {
-      expect(sidebar.querySelector("[data-sidebar-session-error]")?.textContent).toContain(
-        "agent:main:b: active run",
-      );
-    });
-    expect(harness.patchMany).toHaveBeenCalledOnce();
+    const menu = await openSessionMenu(sidebar, "agent:main:b");
+    menu
+      .querySelector<HTMLButtonElement>(
+        action === "delete" ? '[data-shortcut="d"]' : '[data-shortcut="a"]',
+      )
+      ?.click();
+    if (action === "delete") {
+      answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
+    }
+    await waitForFast(() => expect(toast.textContent).toContain("agent:main:b: rejected"));
+    expect(action === "delete" ? harness.deleteMany : harness.patchMany).toHaveBeenCalledOnce();
     expect(harness.patch).not.toHaveBeenCalled();
-    expect(harness.reconcileMutation).toHaveBeenCalledOnce();
+    expect(harness.reconcileMutation).toHaveBeenCalledTimes(action === "archive" ? 1 : 0);
+    toast.remove();
   });
 
   it("suppresses a late rejection after a same-client reconnect", async () => {
     const { gateway, harness, sidebar } = await mountMutationHarness();
+    const toast = await mountToastHost();
     const pending = deferred<ReturnType<typeof successfulSessionPatch>>();
     harness.patch.mockImplementationOnce(() => pending.promise);
     const menu = await openSessionMenu(sidebar, "agent:main:a");
@@ -571,7 +530,8 @@ describe("AppSidebar session mutation feedback", () => {
     await Promise.resolve();
     await sidebar.updateComplete;
 
-    expect(sidebar.querySelector("[data-sidebar-session-error]")).toBeNull();
+    expect(toast.textContent).not.toContain("late old-connection rejection");
+    toast.remove();
   });
 
   it("suppresses a late batch archive result after a reconnect", async () => {
@@ -581,11 +541,7 @@ describe("AppSidebar session mutation feedback", () => {
     selectSession(sidebar, "agent:main:a");
     selectSession(sidebar, "agent:main:b");
     await sidebar.updateComplete;
-    const row = sidebar.querySelector('[data-session-key="agent:main:b"]');
-    row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
-    await sidebar.updateComplete;
-    const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
-    await menu?.updateComplete;
+    const menu = await openSessionMenu(sidebar, "agent:main:b");
     menu?.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
     await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
 
@@ -626,12 +582,7 @@ describe("AppSidebar session mutation feedback", () => {
     selectSession(sidebar, "agent:main:a");
     selectSession(sidebar, "agent:main:b");
     await sidebar.updateComplete;
-    const row = sidebar.querySelector('[data-session-key="agent:main:b"]');
-
-    row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
-    await sidebar.updateComplete;
-    let menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
-    await menu?.updateComplete;
+    let menu = await openSessionMenu(sidebar, "agent:main:b");
     menu?.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
     await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
 
@@ -676,7 +627,8 @@ describe("AppSidebar session mutation feedback", () => {
       },
     });
     const menu = await openSessionMenu(sidebar, "agent:main:a");
-    menu.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();
+    await openSubmenu(menu, "Advanced");
+    await selectMenuValue(menu, "delete");
     answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
     await waitForFast(() => expect(harness.deleteSession).toHaveBeenCalledOnce());
 

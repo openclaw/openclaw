@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, expect, it, vi } from "vitest";
-import { zaloMessageActions } from "./actions.js";
 import { zaloPlugin } from "./channel.js";
 
 const { resolvePinnedHostnameWithPolicyMock } = vi.hoisted(() => ({
@@ -25,44 +24,12 @@ function requirePayloadSend() {
   return send;
 }
 
-function requireMessageActionSend() {
-  const send = zaloMessageActions.handleAction;
-  if (!send) {
-    throw new Error("Expected Zalo message action handler");
-  }
-  return send;
-}
-
 afterEach(() => {
   resolvePinnedHostnameWithPolicyMock.mockReset();
   vi.restoreAllMocks();
 });
 
-it.each([
-  {
-    route: "payload adapter",
-    send: (assertDirectAdapterHandoff: () => void) =>
-      requirePayloadSend()({
-        cfg,
-        to: target,
-        text: "",
-        payload: { mediaUrl },
-        assertDirectAdapterHandoff,
-      }),
-  },
-  {
-    route: "message action",
-    send: (assertDirectAdapterHandoff: () => void) =>
-      requireMessageActionSend()({
-        channel: "zalo",
-        action: "send",
-        params: { to: target, message: "caption", media: mediaUrl },
-        cfg,
-        accountId: "default",
-        assertDirectAdapterHandoff,
-      }),
-  },
-])("rejects revoked $route handoffs after photo preparation", async ({ send }) => {
+it("rejects revoked payload adapter handoffs after photo preparation", async () => {
   const lookupStarted = Promise.withResolvers<void>();
   const lookupFinished = Promise.withResolvers<void>();
   resolvePinnedHostnameWithPolicyMock.mockImplementationOnce(async () => {
@@ -85,7 +52,13 @@ it.each([
     }
   });
 
-  const result = send(assertDirectAdapterHandoff);
+  const result = requirePayloadSend()({
+    cfg,
+    to: target,
+    text: "",
+    payload: { mediaUrl },
+    assertDirectAdapterHandoff,
+  });
   await lookupStarted.promise;
   current = false;
   lookupFinished.resolve();

@@ -56,7 +56,7 @@ it.each(["success", "failure"] as const)(
       if (outcome === "failure") {
         start.reject(new Error("Synthetic startup failure"));
         await waitForSolid(() => {
-          expect(mounted.getByRole("alert").textContent).toContain("Synthetic startup failure");
+          expect(mounted.getByRole("status").textContent).toContain("Synthetic startup failure");
           expect(startButton().hasAttribute("disabled")).toBe(false);
           expect(mounted.queryByRole("status", { name: "Loading page…" })).toBeNull();
         });
@@ -69,6 +69,7 @@ it.each(["success", "failure"] as const)(
         expect(mounted.queryByRole("button", { name: "Start browser" })).toBeNull();
         expect(mounted.queryByRole("status", { name: "Loading page…" })).toBeNull();
         expect(mounted.queryByRole("alert")).toBeNull();
+        expect(panel.textContent).not.toContain("Synthetic startup failure");
       });
       expect(starts).toBe(outcome === "failure" ? 2 : 1);
     } finally {

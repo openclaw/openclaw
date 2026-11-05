@@ -1,4 +1,3 @@
-import { redactToolPayloadText } from "../logging/redact.js";
 import type { ItemProgressPayload } from "./progress-draft-events.js";
 import type { ChannelProgressDraftLine } from "./progress-draft-lines.js";
 import { buildChannelProgressDraftLine } from "./streaming.js";
@@ -49,7 +48,7 @@ export function projectChannelWorkStatus(
     id: item.itemId,
     kind: child ? "subagent-status" : "operation-status",
     label: "",
-    text: redactToolPayloadText(text),
+    text,
     // Bounded cards reserve lines for failures by status, ahead of plans and routine rows.
     ...(child ? { status: state } : {}),
     prefix: false,

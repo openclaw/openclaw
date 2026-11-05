@@ -16,6 +16,7 @@ import {
   assertAcpSessionMutationEntry,
   captureAcpSessionEntryBinding,
 } from "./session-meta-entry.kernel.js";
+import { acquireAcpMemorySession } from "./session-meta-memory.js";
 import { captureAcpSessionReadContext } from "./session-meta-read-context.js";
 import type { AcpSessionEntryReadInput, AcpSessionStoreEntry } from "./session-meta-read.types.js";
 import { readAcpSessionMetaForEntries } from "./session-meta-readonly.js";
@@ -24,7 +25,27 @@ import { resolveSessionStorePathForAcp } from "./session-meta-store.js";
 type AcpFact = Extract<SessionRowFacts, { kind: "acp" }>;
 
 /** Keep the shared owner's receipts only for this control operation, never in actor state. */
-export async function prepareMemoryAcpSessionControlRead(
+export async function prepareMemoryAcpSessionControlRead(params: AcpSessionEntryReadInput) {
+  const binding = await acquireAcpMemorySession(params);
+  if (!binding) {
+    throw new Error("ACP session is unavailable");
+  }
+  try {
+    const prepared = await prepareBoundMemoryAcpSessionControlRead(params, binding);
+    return {
+      ...prepared,
+      release() {
+        prepared.release();
+        void binding.actor.release();
+      },
+    };
+  } catch (error) {
+    await binding.actor.release();
+    throw error;
+  }
+}
+
+async function prepareBoundMemoryAcpSessionControlRead(
   params: AcpSessionEntryReadInput,
   binding: SessionActorStorageBinding,
 ) {
@@ -147,7 +168,7 @@ export async function prepareMemoryAcpSessionControlRead(
       readCurrent,
       assertCurrent,
       // Existing control callers use this hook immediately before their effect.
-      assertNativeAcpCurrent(cfg: OpenClawConfig, runtimeLocator?: AcpSessionRuntimeLocator) {
+      assertAcpCurrent(cfg: OpenClawConfig, runtimeLocator?: AcpSessionRuntimeLocator) {
         assertCurrent(cfg);
         if (
           !metadata?.acp ||

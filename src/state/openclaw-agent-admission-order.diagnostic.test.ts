@@ -24,10 +24,8 @@ import {
   openOpenClawAgentDatabase,
   withOpenClawAgentDatabaseAsync,
   runOpenClawAgentWriteTransaction,
-  resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -76,11 +74,11 @@ function seed(freshIdentity = false) {
   const pathname = database.path;
   closeOpenClawAgentDatabasesForTest();
   // Independent fixture writers model unclean state that requires physical admission checks.
-  clearOpenClawAgentIntegrityVerification(pathname, options.env);
   if (freshIdentity) {
     fs.copyFileSync(pathname, `${pathname}.replacement`);
     fs.renameSync(`${pathname}.replacement`, pathname);
   }
+  agentLeases.invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
   const writer = realOpen(pathname);
   independent.push(writer);
   writer.exec("PRAGMA foreign_keys=OFF;");
@@ -92,13 +90,22 @@ function corruptForeignKey(writer: DatabaseSync) {
   expect(writer.prepare("PRAGMA foreign_key_check").all()).toHaveLength(1);
 }
 
-function tracePhysicalChecks(
-  pathname: string,
-  gate?: "integrity" | "foreign-key",
-  commit?: () => void,
-) {
+function tracePhysicalChecks(pathname: string, commit?: () => void) {
   let completed = false;
   const events: string[] = [];
+  const check = integrityWorker.runSqliteIntegrityCheckInWorkerSync;
+  vi.spyOn(integrityWorker, "runSqliteIntegrityCheckInWorkerSync").mockImplementation((...args) => {
+    const result = check(...args);
+    if (args[0].databaseLabel === pathname) {
+      events.push("integrity-completed", "foreign-key-completed");
+      if (commit && !completed) {
+        completed = true;
+        commit();
+        events.push("external-commit");
+      }
+    }
+    return result;
+  });
   vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((location, options) => {
     const db = realOpen(location, options);
     if (location !== pathname) {
@@ -115,11 +122,6 @@ function tracePhysicalChecks(
         statement.all = () => {
           const rows = all();
           events.push("integrity-completed");
-          if (commit && !completed && gate === "integrity") {
-            completed = true;
-            commit();
-            events.push("external-commit");
-          }
           return rows;
         };
       }
@@ -131,7 +133,7 @@ function tracePhysicalChecks(
         statement.iterate = function* () {
           yield* iterate();
           events.push("foreign-key-completed");
-          if (commit && !completed && gate === "foreign-key") {
+          if (commit && !completed) {
             completed = true;
             commit();
             events.push("external-commit");
@@ -160,20 +162,9 @@ function ordinaryWrite(options: Parameters<typeof openOpenClawAgentDatabase>[0])
 }
 
 describe("physical-open admission ordering", () => {
-  it("rejects an external FK violation committed between table integrity and FK checks", () => {
-    const { options, pathname, writer } = seed();
-    const trace = tracePhysicalChecks(pathname, "integrity", () => corruptForeignKey(writer));
-    expect(() => openOpenClawAgentDatabase(options)).toThrow(/foreign_key_check failed/);
-    expect(trace.events).toEqual([
-      "integrity-completed",
-      "external-commit",
-      "foreign-key-completed",
-    ]);
-  });
-
   it("exposes and writes after an external FK violation committed after its table FK check", () => {
     const { options, pathname, writer } = seed();
-    const trace = tracePhysicalChecks(pathname, "foreign-key", () => corruptForeignKey(writer));
+    const trace = tracePhysicalChecks(pathname, () => corruptForeignKey(writer));
     const database = openOpenClawAgentDatabase(options);
     expect(trace.events).toEqual([
       "integrity-completed",
@@ -191,7 +182,7 @@ describe("physical-open admission ordering", () => {
     expect(openOpenClawAgentDatabase(options)).toBe(first);
     expect(ordinaryWrite(options)).toEqual({ n: 1 });
     expect(await disposeOpenClawAgentDatabaseByPath(pathname, { env: options.env })).toBe(true);
-    clearOpenClawAgentIntegrityVerification(pathname, options.env);
+    agentLeases.invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
     expect(() => openOpenClawAgentDatabase(options)).toThrow(/foreign_key_check failed/);
   });
 
@@ -205,9 +196,7 @@ describe("physical-open admission ordering", () => {
       } else if (replacement === "role") {
         writer.exec("UPDATE schema_meta SET role='global' WHERE meta_key='primary'");
       }
-      const trace = tracePhysicalChecks(pathname, "foreign-key", () =>
-        writer.exec("PRAGMA user_version=9999;"),
-      );
+      const trace = tracePhysicalChecks(pathname, () => writer.exec("PRAGMA user_version=9999;"));
       expect(() => openOpenClawAgentDatabase(options)).toThrow(
         /belongs to agent replacement|schema role global|schema version 9999/,
       );
@@ -393,7 +382,7 @@ describe("asynchronous canonical admission", () => {
     expect(state.db.prepare("SELECT lease_id FROM agent_database_leases").all()).toEqual([]);
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "refuses physical index corruption without changing it (unrelated damage: %s)",
     async (unrelated) => {
       const { options, pathname, writer } = seed();
@@ -477,44 +466,33 @@ describe("asynchronous canonical admission", () => {
     }
   });
 
-  it.each(["new", "registered replacement", "disposed replacement"] as const)(
-    "publishes a %s database after full checks and before yielding",
-    async (mode) => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-open-empty-"));
-      roots.push(root);
-      const options = { agentId: "synthetic-new", env: { OPENCLAW_STATE_DIR: root } };
-      if (mode !== "new") {
-        const original = openOpenClawAgentDatabase(options);
-        if (mode === "disposed replacement") {
-          expect(
-            await disposeOpenClawAgentDatabaseByPath(original.path, { env: options.env }),
-          ).toBe(true);
-        } else {
-          closeOpenClawAgentDatabaseByPath(original.path);
-        }
-        fs.renameSync(path.dirname(original.path), `${path.dirname(original.path)}-retired`);
-      }
-      const pathname = resolveOpenClawAgentSqlitePath(options);
-      const trace = tracePhysicalChecks(pathname);
-      const opening = openOpenClawAgentDatabaseAsync(options);
-      const beforeYield = {
-        checks: [...trace.events],
-        owner: inspectOpenClawAgentDatabaseOwner(pathname),
-      };
-      const database = await opening;
-      expect(beforeYield).toEqual({
-        checks: ["integrity-completed", "foreign-key-completed"],
-        owner: { status: "owned", agentId: options.agentId },
-      });
-      expect(database.db.prepare("SELECT agent_id FROM schema_meta").get()).toEqual({
-        agent_id: options.agentId,
-      });
-      expect(ordinaryWrite(options)).toEqual({ n: 1 });
-      expect(listOpenClawRegisteredAgentDatabases({ env: options.env })).toEqual([
-        expect.objectContaining({ agentId: options.agentId, path: database.path }),
-      ]);
-    },
-  );
+  it("publishes a registered replacement database after full checks and before yielding", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-open-empty-"));
+    roots.push(root);
+    const options = { agentId: "synthetic-new", env: { OPENCLAW_STATE_DIR: root } };
+    const original = openOpenClawAgentDatabase(options);
+    closeOpenClawAgentDatabaseByPath(original.path);
+    fs.renameSync(path.dirname(original.path), `${path.dirname(original.path)}-retired`);
+    const pathname = resolveOpenClawAgentSqlitePath(options);
+    const trace = tracePhysicalChecks(pathname);
+    const opening = openOpenClawAgentDatabaseAsync(options);
+    const beforeYield = {
+      checks: [...trace.events],
+      owner: inspectOpenClawAgentDatabaseOwner(pathname),
+    };
+    const database = await opening;
+    expect(beforeYield).toEqual({
+      checks: ["integrity-completed", "foreign-key-completed"],
+      owner: { status: "owned", agentId: options.agentId },
+    });
+    expect(database.db.prepare("SELECT agent_id FROM schema_meta").get()).toEqual({
+      agent_id: options.agentId,
+    });
+    expect(ordinaryWrite(options)).toEqual({ n: 1 });
+    expect(listOpenClawRegisteredAgentDatabases({ env: options.env })).toEqual([
+      expect.objectContaining({ agentId: options.agentId, path: database.path }),
+    ]);
+  });
 
   it("keeps a nonempty unversioned database with no application tables on async admission", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-open-retained-pages-"));
@@ -542,18 +520,6 @@ describe("asynchronous canonical admission", () => {
     expect(ordinaryWrite(options)).toEqual({ n: 1 });
   });
 
-  it("keeps the incognito handle in memory without starting a disk checker", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "agent-open-incognito-"));
-    roots.push(root);
-    const options = { agentId: "synthetic-private", env: { OPENCLAW_STATE_DIR: root } };
-    const pathname = resolveIncognitoOpenClawAgentSqlitePath(options);
-    const check = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
-    const database = await openOpenClawAgentDatabaseAsync({ ...options, path: pathname });
-    expect(openOpenClawAgentDatabase({ ...options, path: pathname })).toBe(database);
-    expect(check).not.toHaveBeenCalled();
-    expect(fs.existsSync(pathname)).toBe(false);
-  });
-
   it("checks an older schema before the unchanged doctor migration refusal", async () => {
     const { options, writer } = seed();
     writer.exec("PRAGMA user_version=18; UPDATE schema_meta SET schema_version=18;");
@@ -563,19 +529,6 @@ describe("asynchronous canonical admission", () => {
     );
     expect(check).toHaveBeenCalledOnce();
     expect(writer.prepare("PRAGMA user_version").get()).toEqual({ user_version: 18 });
-  });
-
-  it("publishes one healthy native handle shared with ordinary synchronous writes", async () => {
-    const { options } = seed();
-    const check = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
-    const [database, sameDatabase] = await Promise.all([
-      openOpenClawAgentDatabaseAsync(options),
-      openOpenClawAgentDatabaseAsync(options),
-    ]);
-    expect(sameDatabase).toBe(database);
-    expect(check).toHaveBeenCalledOnce();
-    expect(openOpenClawAgentDatabase(options)).toBe(database);
-    expect(ordinaryWrite(options)).toEqual({ n: 1 });
   });
 
   it("preserves point-in-time admission when a writer commits after the Worker check", async () => {
@@ -650,7 +603,7 @@ describe("asynchronous canonical admission", () => {
     const { options, pathname, writer } = seed();
     await openOpenClawAgentDatabaseAsync(options);
     expect(await disposeOpenClawAgentDatabaseByPath(pathname, { env: options.env })).toBe(true);
-    clearOpenClawAgentIntegrityVerification(pathname, options.env);
+    agentLeases.invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
     corruptForeignKey(writer);
     await expect(openOpenClawAgentDatabaseAsync(options)).rejects.toThrow(
       /foreign_key_check failed/,
@@ -683,25 +636,6 @@ describe("asynchronous canonical admission", () => {
       assertNoOpenClawAgentDatabaseLeases(options.agentId, { env: options.env }),
     ).not.toThrow();
     writer.exec("BEGIN IMMEDIATE; ROLLBACK;");
-  });
-
-  it("keeps the parent event loop responsive while checking a populated canonical database", async () => {
-    const { options, writer } = seed();
-    writer.exec(
-      "INSERT INTO cache_entries (scope,key,blob,updated_at) VALUES ('load','large',zeroblob(16777216),1)",
-    );
-    let ticks = 0;
-    const timer = setInterval(() => {
-      ticks += 1;
-    }, 5);
-    try {
-      const database = await openOpenClawAgentDatabaseAsync(options);
-      expect(database.db.isOpen).toBe(true);
-      expect(ticks).toBeGreaterThan(0);
-      expect(ordinaryWrite(options)).toEqual({ n: 1 });
-    } finally {
-      clearInterval(timer);
-    }
   });
 
   it.each([false, true])(

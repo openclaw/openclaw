@@ -27,7 +27,7 @@ export function commitSessionAgentPurge(
   input: SessionAgentPurgeCommit,
   context: AgentWorkerOperationContext,
 ) {
-  const mutate = <Receipt>(
+  const mutate = <Receipt extends object>(
     database: OpenClawAgentDatabase,
     wrapReceipt: (receipt: SessionEntryPatchReceipt) => Receipt,
   ): Receipt => {

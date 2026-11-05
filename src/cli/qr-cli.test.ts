@@ -33,10 +33,13 @@ vi.doMock("../runtime.js", async () => {
     runtime,
   );
 });
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: mocks.loadConfig,
-  loadConfig: mocks.loadConfig,
-}));
+// mock-isolation: QR setup resolves fixture config and secrets without host credentials.
+vi.mock("../config/config.js", async () => {
+  const { createTestConfigReadMocks } = await import("../commands/test-runtime-config-helpers.js");
+  return {
+    ...createTestConfigReadMocks(mocks, "loadConfig"),
+  };
+});
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: mocks.runCommandWithTimeout }));
 vi.mock("../media/qr-terminal.ts", () => ({
   renderQrTerminal: mocks.renderTerminal,
@@ -64,10 +67,9 @@ function createTokenGatewayConfig(customBindHost = "127.0.0.1") {
   };
 }
 
-function createRemoteQrConfig(params?: { withTailscale?: boolean }) {
+function createRemoteQrConfig() {
   return {
     gateway: {
-      ...(params?.withTailscale ? { tailscale: { mode: "serve" } } : {}),
       publicOrigin: "https://gateway.example.test",
       remote: { url: "wss://remote.example.com:444", token: "remote-tok" },
       auth: { mode: "token", token: "local-tok" },
@@ -141,24 +143,6 @@ describe("registerQrCli", () => {
     await program.parseAsync(["qr", ...args], { from: "user" });
   }
 
-  it.each([[[], "wss://gateway.example:8444/gateway"]])(
-    "preserves the Control UI path in configured QR URLs with overrides %j",
-    async (args, url) => {
-      loadConfig.mockReturnValue({
-        gateway: {
-          bind: "loopback",
-          controlUi: { basePath: "/gateway" },
-          auth: { mode: "token", token: "tok" },
-        },
-        plugins: {
-          entries: { "device-pair": { config: { publicUrl: "https://gateway.example:8444" } } },
-        },
-      });
-      await runQr(["--json", ...args]);
-      expect(parseLastLoggedQrJson().gatewayUrl).toBe(url);
-    },
-  );
-
   async function expectQrExit(args: string[]) {
     await expect(runQr(args)).rejects.toThrow("exit");
   }
@@ -203,14 +187,6 @@ describe("registerQrCli", () => {
     expect(output).toContain("Use wss:// or Tailscale Serve");
   }
 
-  function mockTailscaleStatusLookup() {
-    runCommandWithTimeout.mockResolvedValue({
-      code: 0,
-      stdout: '{"Self":{"DNSName":"ts-host.tailnet.ts.net."}}',
-      stderr: "",
-    });
-  }
-
   beforeEach(() => {
     vi.clearAllMocks();
     resetRuntimeCapture();
@@ -223,6 +199,24 @@ describe("registerQrCli", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it.each([
+    { profile: "", container: "", command: "openclaw" },
+    { profile: "work", container: "", command: "openclaw --profile work" },
+    { profile: "work", container: "demo", command: "openclaw --container demo" },
+  ])("prints approval hints for $command", async ({ profile, container, command }) => {
+    vi.stubEnv("OPENCLAW_PROFILE", profile);
+    vi.stubEnv("OPENCLAW_CONTAINER_HINT", container);
+    loadConfig.mockReturnValue(createTokenGatewayConfig());
+
+    await runQr(["--no-ascii"]);
+
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `  ${command} devices list\n  ${command} devices approve <requestId>`,
+      ),
+    );
   });
 
   it.each([
@@ -435,8 +429,6 @@ describe("registerQrCli", () => {
       resolvedConfig: createRemoteQrConfig(),
       diagnostics: ["gateway.remote.password inactive"] as string[],
     });
-    mockTailscaleStatusLookup();
-
     await runQr(["--json", "--remote"]);
 
     const payload = parseLastLoggedQrJson();

@@ -1,12 +1,11 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
-import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
@@ -14,7 +13,6 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import type { NodeWorkerSupervisorIdentity } from "../worker/node-supervisor-protocol.js";
 import type {
   NodeWorkerLaunchClaim,
@@ -25,6 +23,8 @@ import type {
 import {
   isNodeWorkerTerminalState,
   nodeWorkerLaunchReceiptFromRow,
+  rowMatchesImmutableIdentity,
+  validateIdentifier,
   validateNodeWorkerContainerIdentity,
   validateNodeWorkerPlanHash,
   validateNodeWorkerProcessIdentity,
@@ -35,6 +35,7 @@ import {
   type NodeWorkerLaunchRow,
   type NodeWorkerTerminalState,
 } from "./node-worker-launch-receipt.js";
+import { ensureNodeWorkerLaunchSchema } from "./node-worker-launch-schema.js";
 import type { NodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
 import { settleNodeWorkerActiveTurns } from "./node-worker-turn-settlement.worker.js";
 
@@ -52,32 +53,18 @@ type LaunchSchema = ReturnType<typeof getAdmittedSqliteSchemaFacts>;
 type LaunchTable = keyof NodeWorkerLaunchDatabase;
 type LaunchIdentity = Pick<NodeWorkerLaunchReceipt, "launchId" | "planHash">;
 
-const NODE_WORKER_LAUNCH_SCHEMA_END = "\n  WHERE completed_at_ms IS NOT NULL;";
-const initializedDatabases = new WeakSet<DatabaseSync>();
 const TERMINAL_RECEIPT_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const TERMINAL_PRUNE_BATCH_LIMIT = 256;
 
-function ensureNodeWorkerLaunchSchema(
-  database: DatabaseSync,
-  table: Exclude<keyof NodeWorkerLaunchDatabase, "node_worker_turns">,
-): void {
-  // sqlite-allow-raw -- Canonical feature-local additive DDL only.
-  database.exec(
-    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table, {
-      endMarker: table === "node_worker_launches" ? NODE_WORKER_LAUNCH_SCHEMA_END : undefined,
-    }),
-  );
-}
-
-function query(database: DatabaseSync) {
+function query(database: EngineConnection) {
   return getNodeSqliteKysely<NodeWorkerLaunchDatabase>(database);
 }
 
-function hasLaunchTable(database: DatabaseSync, schema: LaunchSchema, table: LaunchTable): boolean {
-  return schema ? schema.tables.has(table) : tableExists(database, table);
+function hasLaunchTable(db: EngineConnection, schema: LaunchSchema, table: LaunchTable): boolean {
+  return schema ? schema.tables.has(table) : tableExists(db, table);
 }
 
-function selectLaunchRows(database: DatabaseSync, schema: LaunchSchema) {
+function selectLaunchRows(database: EngineConnection, schema: LaunchSchema) {
   return query(database)
     .selectFrom("node_worker_launches")
     .selectAll("node_worker_launches")
@@ -125,14 +112,14 @@ function selectLaunchRows(database: DatabaseSync, schema: LaunchSchema) {
     );
 }
 
-function readRow(database: DatabaseSync, launchId: string, schema: LaunchSchema) {
+function readRow(database: EngineConnection, launchId: string, schema: LaunchSchema) {
   return executeSqliteQueryTakeFirstSync(
     database,
     selectLaunchRows(database, schema).where("node_worker_launches.launch_id", "=", launchId),
   );
 }
 
-function readNonterminalCount(database: DatabaseSync): number {
+function readNonterminalCount(database: EngineConnection): number {
   return (
     executeSqliteQueryTakeFirstSync(
       database,
@@ -144,7 +131,7 @@ function readNonterminalCount(database: DatabaseSync): number {
   );
 }
 
-function readNonterminalRows(database: DatabaseSync, schema: LaunchSchema) {
+function readNonterminalRows(database: EngineConnection, schema: LaunchSchema) {
   return executeSqliteQuerySync(
     database,
     selectLaunchRows(database, schema)
@@ -154,7 +141,7 @@ function readNonterminalRows(database: DatabaseSync, schema: LaunchSchema) {
 }
 
 function pruneTerminalRows(params: {
-  database: DatabaseSync;
+  database: EngineConnection;
   schema: LaunchSchema;
   cutoffMs: number;
   limit: number;
@@ -198,7 +185,7 @@ function pruneTerminalRows(params: {
 
 /** Read the authoritative physical owner within an already-open journal transaction. */
 export function readNodeWorkerLaunchReceipt(
-  database: DatabaseSync,
+  database: EngineConnection,
   launchId: string,
 ): NodeWorkerLaunchReceipt | undefined {
   const schema = getAdmittedSqliteSchemaFacts(database);
@@ -207,12 +194,6 @@ export function readNodeWorkerLaunchReceipt(
   }
   const row = readRow(database, launchId, schema);
   return row ? nodeWorkerLaunchReceiptFromRow(row) : undefined;
-}
-
-function validateIdentifier(value: string, label: string): void {
-  if (!value || value.trim() !== value || value.length > 256 || value.includes("\0")) {
-    throw new Error(`${label} must be a bounded non-empty identifier`);
-  }
 }
 
 function validateTimestamp(value: number): void {
@@ -228,7 +209,7 @@ function validatePruneLimit(limit: number): void {
 }
 
 function requireMatchingRow(
-  database: DatabaseSync,
+  database: EngineConnection,
   identity: LaunchIdentity,
   schema: LaunchSchema,
 ): NodeWorkerLaunchRow {
@@ -269,23 +250,8 @@ function sameObservedOwner(
   );
 }
 
-function rowMatchesImmutableIdentity(
-  row: NodeWorkerLaunchRow,
-  expected: NodeWorkerSupervisorIdentity,
-): boolean {
-  return (
-    row.launch_id === expected.launchId &&
-    row.plan_hash === expected.planHash &&
-    row.environment_id === expected.environmentId &&
-    row.session_id === expected.sessionId &&
-    row.owner_epoch === expected.ownerEpoch &&
-    row.placement_generation === expected.placementGeneration &&
-    row.run_id === expected.runId
-  );
-}
-
 function finishOwnedRow(
-  database: DatabaseSync,
+  database: EngineConnection,
   current: NodeWorkerLaunchRow,
   params: Omit<Parameters<NodeWorkerLaunchKernel["finish"]>[0], "launchId" | "planHash" | "nowMs">,
   nowMs: number,
@@ -345,28 +311,20 @@ export class NodeWorkerLaunchKernel {
 
   private write<T>(
     operationLabel: string,
-    operation: (database: DatabaseSync, schema: LaunchSchema, path: string) => T,
+    operation: (database: EngineConnection, schema: LaunchSchema, path: string) => T,
   ): T {
-    let initializedDatabase: DatabaseSync | undefined;
-    const result = runOpenClawStateWriteTransaction(
+    return runOpenClawStateWriteTransaction(
       ({ db, path }) => {
         requestSqliteWorkerOperationAdmission({
           stage: "transaction",
           facts: { kind: "node-worker-journal" },
         });
-        if (!initializedDatabases.has(db)) {
-          ensureNodeWorkerLaunchSchema(db, "node_worker_launches");
-          initializedDatabase = db;
-        }
+        ensureNodeWorkerLaunchSchema(db, "node_worker_launches");
         return operation(db, getAdmittedSqliteSchemaFacts(db), path);
       },
       this.databaseOptions,
       { operationLabel },
     );
-    if (initializedDatabase) {
-      initializedDatabases.add(initializedDatabase);
-    }
-    return result;
   }
 
   claimObservation(
@@ -426,29 +384,32 @@ export class NodeWorkerLaunchKernel {
         if (nonterminalCount >= capacity) {
           return finalize({ action: "at-capacity", nonterminalCount });
         }
-        executeSqliteQuerySync(
+        current = executeSqliteQueryTakeFirstSync(
           database,
-          query(database).insertInto("node_worker_launches").values({
-            launch_id: claim.launchId,
-            plan_hash: claim.planHash,
-            gateway_namespace: claim.gatewayNamespace,
-            environment_id: claim.environmentId,
-            session_id: claim.sessionId,
-            owner_epoch: claim.ownerEpoch,
-            placement_generation: claim.placementGeneration,
-            run_id: claim.runId,
-            state: "pending",
-            supervisor_pid: supervisor.pid,
-            supervisor_start_time: supervisor.startTime,
-            worker_pid: null,
-            worker_start_time: null,
-            result_json: null,
-            error_text: null,
-            completed_at_ms: null,
-            created_at_ms: nowMs,
-            updated_at_ms: nowMs,
-          }),
-        );
+          query(database)
+            .insertInto("node_worker_launches")
+            .values({
+              launch_id: claim.launchId,
+              plan_hash: claim.planHash,
+              gateway_namespace: claim.gatewayNamespace,
+              environment_id: claim.environmentId,
+              session_id: claim.sessionId,
+              owner_epoch: claim.ownerEpoch,
+              placement_generation: claim.placementGeneration,
+              run_id: claim.runId,
+              state: "pending",
+              supervisor_pid: supervisor.pid,
+              supervisor_start_time: supervisor.startTime,
+              worker_pid: null,
+              worker_start_time: null,
+              result_json: null,
+              error_text: null,
+              completed_at_ms: null,
+              created_at_ms: nowMs,
+              updated_at_ms: nowMs,
+            })
+            .returningAll(),
+        )!;
         if (bootId) {
           ensureNodeWorkerLaunchSchema(database, "node_worker_launch_boots");
           executeSqliteQuerySync(
@@ -457,8 +418,8 @@ export class NodeWorkerLaunchKernel {
               .insertInto("node_worker_launch_boots")
               .values({ launch_id: claim.launchId, boot_id: bootId }),
           );
+          current.boot_id = bootId;
         }
-        current = requireMatchingRow(database, claim, getAdmittedSqliteSchemaFacts(database));
         action = "start";
       } else if (current.plan_hash !== claim.planHash) {
         throw new Error(`node worker launch ${claim.launchId} was replayed with a different plan`);
@@ -469,7 +430,7 @@ export class NodeWorkerLaunchKernel {
       ) {
         if (current.state === "pending") {
           const updatedAtMs = Math.max(nowMs, current.created_at_ms, current.updated_at_ms);
-          executeSqliteQuerySync(
+          const updated = executeSqliteQueryTakeFirstSync(
             database,
             query(database)
               .updateTable("node_worker_launches")
@@ -484,8 +445,12 @@ export class NodeWorkerLaunchKernel {
               .where("supervisor_pid", "=", observed.supervisor_pid)
               .where("supervisor_start_time", "=", observed.supervisor_start_time)
               .where("worker_pid", "is", null)
-              .where("worker_start_time", "is", null),
+              .where("worker_start_time", "is", null)
+              .returning(["supervisor_pid", "supervisor_start_time", "updated_at_ms"]),
           );
+          if (updated) {
+            current = { ...current, ...updated };
+          }
           if (current.boot_id) {
             executeSqliteQuerySync(
               database,
@@ -494,8 +459,8 @@ export class NodeWorkerLaunchKernel {
                 .set({ boot_id: bootId ?? null })
                 .where("launch_id", "=", claim.launchId),
             );
+            current.boot_id = bootId ?? null;
           }
-          current = requireMatchingRow(database, claim, schema);
           action = rowHasSupervisor(current, supervisor) ? "start" : "replay";
         } else if (current.state === "running") {
           action = "recover";
@@ -662,7 +627,13 @@ export class NodeWorkerLaunchKernel {
             .values({
               launch_id: params.launchId,
               cleanup_mode:
-                params.cleanupMode === "linux-subreaper" ? "owned-anchor" : params.cleanupMode,
+                params.cleanupMode === "linux-subreaper"
+                  ? "owned-anchor"
+                  : params.cleanupMode === "windows-job"
+                    ? current.boot_id?.startsWith("win32:")
+                      ? "owned-anchor"
+                      : "process-group"
+                    : params.cleanupMode,
               lineage_settled: null,
             }),
         );

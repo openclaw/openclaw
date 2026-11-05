@@ -1,5 +1,3 @@
-// Retains cron policy eligibility through policy publication and native launch settlement.
-import type { DatabaseSync } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   registerOpenClawStateDatabaseAsyncResource,
@@ -13,6 +11,8 @@ import { assertNoPendingLegacyExecApprovals } from "./exec-approvals-migration-g
 import { maxAsk, minSecurity } from "./exec-approvals-policy.js";
 import { resolveExecApprovalsFromFileInternal } from "./exec-approvals-resolver.js";
 import { snapshotFromExecApprovalsRow } from "./exec-approvals-sqlite.js";
+// Retains cron policy eligibility through policy publication and native launch settlement.
+import type { EngineConnection } from "./sql-connection.js";
 import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
 
 type CronExecHostPolicyUse = {
@@ -184,7 +184,7 @@ export async function prepareCronExecHostPolicyUse(
 }
 
 export function stageCronExecHostPolicyPublication(
-  db: DatabaseSync,
+  db: EngineConnection,
   file: ExecApprovalsFile,
 ): void {
   if (cronPolicyUses.size === 0) {
