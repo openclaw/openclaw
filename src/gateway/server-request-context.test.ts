@@ -15,9 +15,9 @@ import {
   resetGatewayWorkAdmission,
   runWithGatewayShutdownCleanupAdmission,
 } from "../process/gateway-work-admission.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
-import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   assertAgentDatabaseAdmitted,
   recordAgentDatabaseAdmissions,
@@ -144,6 +144,7 @@ describe("createGatewayRequestContext", () => {
         vi.useRealTimers();
       }
     });
+  });
 
   it("tracks shutdown cleanup chain executions into the caller scope after connection work drains", async () => {
     // The close sequence drains received connection work before the gateway

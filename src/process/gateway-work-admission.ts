@@ -517,7 +517,7 @@ export function runWithGatewayShutdownCleanupAdmission<T>(
  * cleanup RPCs stay admissible after the close prelude fences ordinary entry.
  */
 export function isInsideGatewayShutdownCleanupChain(): boolean {
-  const current = GATEWAY_WORK_ADMISSION_STATE.currentRootWork.getStore();
+  const current = currentRootWork.getStore();
   return (
     current !== undefined && !current.released && current.origin === GATEWAY_SHUTDOWN_CLEANUP_ORIGIN
   );

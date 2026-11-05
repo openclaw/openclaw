@@ -355,8 +355,9 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
       methodRegistry,
     };
     // Real restart ordering: draining fences ordinary roots, then the close
-    // prelude aborts request entry before plugin-service cleanup begins.
-    await kernel.beginClosePrelude();
+    // prelude (inside prepareClose) aborts request entry before plugin-service
+    // cleanup begins.
+    await kernel.prepareClose();
     markGatewayRestartDraining();
     try {
       await expect(dispatchGatewayRequestInProcessRaw("test.cleanup", {}, options)).rejects.toThrow(

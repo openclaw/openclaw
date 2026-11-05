@@ -1,26 +1,24 @@
+import * as gatewayRuntime from "openclaw/plugin-sdk/gateway-runtime";
 // Google Meet tests cover the registered shutdown service drain behavior.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import { MEET_URL } from "./src/test-support/fixtures.test-helpers.js";
 import {
+  createGoogleMeetToolGatewayForTest,
   getMeetTool,
   invokeGoogleMeetGatewayMethodForTest,
   noopLogger,
   setupGoogleMeetPlugin,
 } from "./src/test-support/plugin-harness.js";
-import { testing as googleMeetPluginTesting } from "./test-api.js";
 
 const voiceCallMocks = vi.hoisted(() => ({
-  createVoiceCallGateway: vi.fn(
-    ({ runtime }: { runtime: { gateway: unknown } }) => runtime.gateway,
-  ),
   joinMeetViaVoiceCallGateway: vi.fn(async () => ({
     callId: "call-1",
     dtmfSent: true,
     introSent: true,
   })),
-  endMeetVoiceCallGatewayCall: vi.fn(async () => {}),
-  getMeetVoiceCallGatewayCall: vi.fn(
+  endMeetingVoiceCallGatewayCall: vi.fn(async () => {}),
+  getMeetingVoiceCallGatewayCall: vi.fn(
     async (): Promise<{
       found: boolean;
       call?: { callId: string; state?: string; endedAt?: number; endReason?: string };
@@ -29,8 +27,10 @@ const voiceCallMocks = vi.hoisted(() => ({
       call: { callId: "call-1" },
     }),
   ),
-  isVoiceCallMissingError: vi.fn((error: unknown) => String(error).includes("Call not found")),
-  speakMeetViaVoiceCallGateway: vi.fn(async () => {}),
+  isMeetingVoiceCallMissingError: vi.fn((error: unknown) =>
+    String(error).includes("Call not found"),
+  ),
+  speakMeetingViaVoiceCallGateway: vi.fn(async () => {}),
 }));
 
 const fetchGuardMocks = vi.hoisted(() => ({
@@ -56,28 +56,30 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("./src/voice-call-gateway.js", () => ({
-  createVoiceCallGateway: voiceCallMocks.createVoiceCallGateway,
+vi.mock("./src/voice-call-gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./src/voice-call-gateway.js")>()),
   joinMeetViaVoiceCallGateway: voiceCallMocks.joinMeetViaVoiceCallGateway,
-  endMeetVoiceCallGatewayCall: voiceCallMocks.endMeetVoiceCallGatewayCall,
-  getMeetVoiceCallGatewayCall: voiceCallMocks.getMeetVoiceCallGatewayCall,
-  isVoiceCallMissingError: voiceCallMocks.isVoiceCallMissingError,
-  speakMeetViaVoiceCallGateway: voiceCallMocks.speakMeetViaVoiceCallGateway,
 }));
+
+vi.mock("openclaw/plugin-sdk/meeting-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/meeting-runtime")>();
+  return {
+    ...actual,
+    endMeetingVoiceCallGatewayCall: voiceCallMocks.endMeetingVoiceCallGatewayCall,
+    getMeetingVoiceCallGatewayCall: voiceCallMocks.getMeetingVoiceCallGatewayCall,
+    isMeetingVoiceCallMissingError: voiceCallMocks.isMeetingVoiceCallMissingError,
+    speakMeetingViaVoiceCallGateway: voiceCallMocks.speakMeetingViaVoiceCallGateway,
+  };
+});
 
 function setup(
   config?: Parameters<typeof setupGoogleMeetPlugin>[1],
   options?: Parameters<typeof setupGoogleMeetPlugin>[2],
 ) {
   const harness = setupGoogleMeetPlugin(plugin, config, options);
-  googleMeetPluginTesting.setCallGatewayFromCliForTests(
-    async (method, _opts, params) =>
-      (await invokeGoogleMeetGatewayMethodForTest(harness.methods, method, params)) as Record<
-        string,
-        unknown
-      >,
+  vi.spyOn(gatewayRuntime, "callGatewayFromCli").mockImplementation(
+    createGoogleMeetToolGatewayForTest(harness.methods),
   );
-  googleMeetPluginTesting.setPlatformForTests(() => options?.registerPlatform ?? "darwin");
   return harness;
 }
 
@@ -89,23 +91,21 @@ describe("google-meet shutdown service", () => {
       dtmfSent: true,
       introSent: true,
     });
-    voiceCallMocks.endMeetVoiceCallGatewayCall.mockResolvedValue(undefined);
-    voiceCallMocks.getMeetVoiceCallGatewayCall.mockResolvedValue({
+    voiceCallMocks.endMeetingVoiceCallGatewayCall.mockResolvedValue(undefined);
+    voiceCallMocks.getMeetingVoiceCallGatewayCall.mockResolvedValue({
       found: true,
       call: { callId: "call-1" },
     });
-    voiceCallMocks.isVoiceCallMissingError.mockImplementation((error: unknown) =>
+    voiceCallMocks.isMeetingVoiceCallMissingError.mockImplementation((error: unknown) =>
       String(error).includes("Call not found"),
     );
-    voiceCallMocks.speakMeetViaVoiceCallGateway.mockResolvedValue(undefined);
+    voiceCallMocks.speakMeetingViaVoiceCallGateway.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
-    googleMeetPluginTesting.setCallGatewayFromCliForTests();
-    googleMeetPluginTesting.setPlatformForTests();
   });
 
   afterAll(() => {
@@ -126,11 +126,11 @@ describe("google-meet shutdown service", () => {
       pin: "123456",
     });
     const sessionId = joined.details.session.id;
-    expect(voiceCallMocks.endMeetVoiceCallGatewayCall).not.toHaveBeenCalled();
+    expect(voiceCallMocks.endMeetingVoiceCallGatewayCall).not.toHaveBeenCalled();
 
     await service?.stop?.({} as never);
 
-    expect(voiceCallMocks.endMeetVoiceCallGatewayCall).toHaveBeenCalledWith(
+    expect(voiceCallMocks.endMeetingVoiceCallGatewayCall).toHaveBeenCalledWith(
       expect.objectContaining({ callId: "call-1" }),
     );
     const status = (await invokeGoogleMeetGatewayMethodForTest(
@@ -158,13 +158,13 @@ describe("google-meet shutdown service", () => {
       dialInNumber: "+15551234567",
       pin: "654321",
     });
-    voiceCallMocks.endMeetVoiceCallGatewayCall
+    voiceCallMocks.endMeetingVoiceCallGatewayCall
       .mockRejectedValueOnce(new Error("voice gateway unavailable"))
       .mockResolvedValue(undefined);
 
     await service?.stop?.({} as never);
 
-    expect(voiceCallMocks.endMeetVoiceCallGatewayCall).toHaveBeenCalledTimes(2);
+    expect(voiceCallMocks.endMeetingVoiceCallGatewayCall).toHaveBeenCalledTimes(2);
     expect(noopLogger.warn).toHaveBeenCalledWith(
       expect.stringContaining("voice gateway unavailable"),
     );
@@ -177,6 +177,6 @@ describe("google-meet shutdown service", () => {
 
     await service?.stop?.({} as never);
 
-    expect(voiceCallMocks.endMeetVoiceCallGatewayCall).not.toHaveBeenCalled();
+    expect(voiceCallMocks.endMeetingVoiceCallGatewayCall).not.toHaveBeenCalled();
   });
 });

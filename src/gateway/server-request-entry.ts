@@ -44,8 +44,6 @@ export class GatewayRequestEntryLifetime {
     const assertOpen = () => {
       // Shutdown may still issue node cleanup commands. Only their exact pending
       // invoke can enter until transports close; pairing and settlement still revalidate.
-      // Shutdown may still issue node cleanup commands. Only their exact pending
-      // invoke can enter until transports close; pairing and settlement still revalidate.
       // The close sequence's own cleanup chains (plugin-service stops draining
       // transports) also stay admissible until entries seal; they arrive through
       // the shutdown-owned cleanup root, never from external callers.
@@ -65,7 +63,6 @@ export class GatewayRequestEntryLifetime {
           retryAfterMs: 1_000,
           details: { reason: GATEWAY_RESTART_UNAVAILABLE_REASON },
         });
-      }
       }
     };
     assertOpen();
