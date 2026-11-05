@@ -70,8 +70,9 @@ export function sidebarPresentationProbe() {
     }
   });
   const imageChanged = (event: Event) => {
-    if (event.target instanceof HTMLImageElement && event.target.closest("aside.sidebar"))
+    if (event.target instanceof HTMLImageElement && event.target.closest("aside.sidebar")) {
       dirty = true;
+    }
   };
   document.addEventListener("load", imageChanged, true);
   document.addEventListener("error", imageChanged, true);
@@ -107,7 +108,9 @@ export function sidebarPresentationProbe() {
           const node = [...(text?.childNodes ?? [])].find(
             (child) => child.nodeType === Node.TEXT_NODE && child.textContent?.trim(),
           );
-          if (!clip || !node) continue;
+          if (!clip || !node) {
+            continue;
+          }
           const range = document.createRange();
           range.selectNodeContents(node);
           const rect = range.getBoundingClientRect();
@@ -152,11 +155,12 @@ export function sidebarPresentationProbe() {
               element.getBoundingClientRect().width > 0 &&
               element.getBoundingClientRect().height > 0,
           )
-          .map((element, index) => ({
-            ...box(element),
-            name: `reconnect-${index}`,
-            reason: "Permitted reconnect indicator",
-          })),
+          .map((element, index) =>
+            Object.assign(box(element), {
+              name: `reconnect-${index}`,
+              reason: "Permitted reconnect indicator",
+            }),
+          ),
         chrome: [
           ["brand", ".sidebar-agent-card__avatar"],
           ["ownerPicker", ".sidebar-session-owner-filter .picker-select__trigger"],

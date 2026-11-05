@@ -132,16 +132,17 @@ suite.define(() => {
         });
         // Flush the peer's native pending publication before reloading another route.
         await peer.evaluate(() => window.dispatchEvent(new Event("pagehide")));
-        const saveScroll = (top: number) =>
-          page.evaluate(async (top) => {
+        const saveScroll = (offset: number) =>
+          page.evaluate(async (scrollTop) => {
             const scroller = document.querySelector<HTMLElement>(".sidebar-shell__body")!;
             const saved = new Promise<number>((resolve) => {
+              // oxlint-disable-next-line typescript/unbound-method -- call preserves each native store receiver.
               const put = IDBObjectStore.prototype.put;
               IDBObjectStore.prototype.put = function (value, key) {
                 const request = put.call(this, value, key);
                 if (
                   this.name === "sidebarSnapshots" &&
-                  value.model?.scrollTop === top &&
+                  value.model?.scrollTop === scrollTop &&
                   value.model.windowKeys.length > 0
                 ) {
                   IDBObjectStore.prototype.put = put;
@@ -156,14 +157,14 @@ suite.define(() => {
                 return request;
               };
             });
-            scroller.scrollTop = top;
+            scroller.scrollTop = scrollTop;
             scroller.dispatchEvent(new Event("scroll"));
             await new Promise<void>((resolve) => {
               requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
             });
             window.dispatchEvent(new Event("pagehide"));
             return saved;
-          }, top);
+          }, offset);
         for (const face of ["chat", "dashboard"] as const) {
           await page.goto(
             controlUiSessionUrl(suite.server.baseUrl, fixture.selectedSessionKey, face),

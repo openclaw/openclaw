@@ -118,7 +118,9 @@ export function createTeamScaleSidebarCategories(sessions: GatewaySessionRow[]) 
     { length: 97 },
     (_, index) => `Synthetic group ${String(index + 1).padStart(2, "0")}`,
   );
-  for (const [index, row] of sessions.entries()) row.category = groups[index % groups.length];
+  for (const [index, row] of sessions.entries()) {
+    row.category = groups[index % groups.length];
+  }
   return {
     groups,
     methodResponses: {
