@@ -108,6 +108,16 @@ initial cold capture remains separate from these independently reset visits.
 For separate attribution, add `--cpu-profile --reloads 1` to save a Chrome timeline
 and V8 CPU profile for each warm capture. Profiled timings are not comparison results.
 
+For Details render-cost investigations, capture archived and `--active-targets`
+chat separately, with Details open on warm reloads. Attribute module evaluation,
+rendering, and forced layout from the profiled captures before changing an owner.
+Compare unprofiled baseline/candidate builds in eleven interleaved pairs plus an
+A/A control on one quiet fixed-instance AWS lease. Details continuation cost and
+its first visible frame must improve in at least nine pairs on both chat routes;
+report transcript first/final rows, hello handled, FCP, LoAF blocking, and CLS on
+chat and dashboard as secondary metrics. A join or boot-order change is a separate
+experiment, not a render-cost reduction.
+
 The default `--admission signed-in` installs a random HttpOnly session cookie in
 Chromium for the owned loopback proxy. The proxy checks that cookie for HTTP and
 WebSocket requests, strips client-supplied identity/forwarding/scope headers, and
