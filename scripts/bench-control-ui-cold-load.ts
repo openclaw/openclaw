@@ -3246,7 +3246,7 @@ try {
         }
       : undefined;
     const warmReloadPerformance = values["warm-reload-perf-probe"]
-      ? await page.evaluate(() => {
+      ? await page.evaluate((route) => {
           const probe: NonNullable<ReturnType<typeof installWarmReloadBrowserProbe>> = Reflect.get(
             window,
             "__warmReloadProof",
@@ -3260,10 +3260,15 @@ try {
             fcpMs: probe.fcpMs,
             firstPaintedRowsMs: probe.firstPaintedRowsMs,
             finalRowsDomMs: probe.finalRowsDomMs,
+            rowMetricsApplicable: route === "chat",
+            firstDashboardContentDomMs: probe.firstDashboardContentDomMs,
+            allBoardWidgetsVisibleMs: probe.allBoardWidgetsVisibleMs,
+            cachedBoardLayoutMs: probe.cachedBoardLayoutMs,
+            boardWidgetSkeletonMs: probe.boardWidgetSkeletonMs,
             loafBlockingMs: probe.loafBlockingMs,
             cls: probe.cls,
           };
-        })
+        }, face)
       : undefined;
     const detailsGeometry =
       values["details-processes"] && paneChrome
