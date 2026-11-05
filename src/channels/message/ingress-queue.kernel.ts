@@ -8,6 +8,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
+import { readChannelIngressPrefixInDatabase } from "./ingress-queue.claim-prefix.kernel.js";
 import {
   baseRecord,
   CHANNEL_INGRESS_CORRUPT_REPAIR_LIMIT,
@@ -92,22 +93,74 @@ export function readChannelIngressClaimSnapshotInDatabase(
       ...claimed.flatMap((row) => (row.lane_key ? [row.lane_key] : [])),
     ]),
   ];
-  if (!input.deriveLaneKey && blocked.length) {
+  // Stored keys are authoritative unless a reconcile callback can remap them;
+  // reconcilable rows must stay visible to the JS-level pass. The blocked set is
+  // bound as one JSON table value so a retry-heavy account cannot exceed SQLite's
+  // per-query bind-variable budget; the JS pass still rechecks every row.
+  if (!input.reconcileStoredLaneKey && blocked.length) {
     pending = pending.where((eb) =>
-      eb.or([eb("lane_key", "is", null), eb("lane_key", "not in", blocked)]),
+      eb.or([eb("lane_key", "is", null), eb("lane_key", "not in", sqliteStringSet(blocked))]),
     );
   }
   const ordered =
     input.orderBy === "id"
       ? pending.orderBy("event_id", "asc")
       : pending.orderBy("received_at", "asc").orderBy("event_id", "asc");
+  let paged = ordered;
+  if (input.claimAfter) {
+    const cursor = input.claimAfter;
+    paged =
+      input.orderBy === "id"
+        ? paged.where("event_id", ">", cursor.eventId)
+        : paged.where((eb) =>
+            eb.or([
+              eb("received_at", ">", cursor.receivedAt),
+              eb.and([
+                eb("received_at", "=", cursor.receivedAt),
+                eb("event_id", ">", cursor.eventId),
+              ]),
+            ]),
+          );
+  }
   // Repair can expose up to 100 later rows without changing the caller's scan window.
+  let pendingBeforeCursor: number | undefined;
+  let pendingBeforeCursorFingerprint: string | undefined;
+  let cursorRowFingerprint: string | undefined;
+  let cursorRow: ChannelIngressRow | undefined;
+  let prefixRows: ChannelIngressRow[] | undefined;
+  if (input.expectedPendingBeforeCursor !== undefined && input.claimAfter) {
+    // A retained direct-scan cursor is only valid while the scan-visible pending
+    // rows before it are unchanged. Read their count and fingerprint in this same
+    // pinned read so a write from any handle that inserted, removed, or replaced
+    // a row before the cursor is observed atomically with the paged snapshot; the
+    // caller drops the resume otherwise. The cursor row itself is validated too,
+    // since the strict-before prefix cannot observe its equal-position replacement.
+    const prefix = readChannelIngressPrefixInDatabase(db, {
+      queueName: input.queueName,
+      candidateIds: input.candidateIds,
+      blockedLaneKeys: blocked,
+      reconcileStoredLaneKey: input.reconcileStoredLaneKey,
+      orderBy: input.orderBy,
+      claimAfter: input.claimAfter,
+      includeRows: input.includePrefixRows,
+    });
+    pendingBeforeCursor = prefix.count;
+    pendingBeforeCursorFingerprint = prefix.fingerprint;
+    cursorRowFingerprint = prefix.cursorRowFingerprint;
+    cursorRow = prefix.cursorRow;
+    prefixRows = prefix.rows;
+  }
   return {
     claimed,
     pending: executeSqliteQuerySync(
       db,
-      ordered.limit(normalizeLimit(input.scanLimit) + CHANNEL_INGRESS_CORRUPT_REPAIR_LIMIT),
+      paged.limit(normalizeLimit(input.scanLimit) + CHANNEL_INGRESS_CORRUPT_REPAIR_LIMIT),
     ).rows,
+    ...(pendingBeforeCursor === undefined ? {} : { pendingBeforeCursor }),
+    ...(pendingBeforeCursorFingerprint === undefined ? {} : { pendingBeforeCursorFingerprint }),
+    ...(cursorRowFingerprint === undefined ? {} : { cursorRowFingerprint }),
+    ...(cursorRow === undefined ? {} : { cursorRow }),
+    ...(prefixRows === undefined ? {} : { prefixRows }),
   };
 }
 

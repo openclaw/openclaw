@@ -9,14 +9,18 @@ import { resolveChannelIngressStateEnv } from "./ingress-queue-client.js";
 import { invalidateChannelIngressHealth } from "./ingress-queue-health-cache.js";
 import {
   baseRecord,
+  CHANNEL_INGRESS_CLAIM_SCAN_PAGE_BUDGET,
+  channelIngressPrefixRowFingerprint,
   claimedRecord,
   completedRecord,
   corruptClaimRecord,
   decodeClaimColumns,
   failedRecord,
   selectChannelIngressClaim,
+  xorChannelIngressPrefixFingerprints,
 } from "./ingress-queue.codec.js";
 import type {
+  ChannelIngressClaimCursor,
   ChannelIngressClaimRequest,
   ChannelIngressListInput,
   ChannelIngressQueue,
@@ -242,9 +246,65 @@ export function createChannelIngressQueue<
       assertQueueCurrent(context);
       if (await execute("channelIngress.recover", { row, cutoff, now: current }, context)) {
         recovered++;
+        invalidateResumeBefore(row.received_at, row.event_id);
       }
     }
     return recovered;
+  };
+
+  // Direct scans (no candidate window) remember where a bounded claim pass
+  // stopped so the next direct call resumes past a fully blocked prefix instead
+  // of re-scanning it from the front. Cleared whenever a claim succeeds or the
+  // scan reaches the end of the queue, so lanes that unblock are revisited. The
+  // lane-policy callbacks are retained by identity so a changed policy that makes
+  // an earlier row eligible invalidates the cursor instead of skipping it. The
+  // pendingBeforeCursor count is the authoritative queue state at retention; it is
+  // revalidated against the queue on resume so writes from other handles (which
+  // cannot run this closure's invalidation) still invalidate the cursor.
+  let directScanResume:
+    | {
+        cursor: ChannelIngressClaimCursor;
+        orderBy?: "received" | "id";
+        reconcileStoredLaneKey?: (
+          record: ChannelIngressQueueRecord<TPayload, TMetadata>,
+          storedLaneKey: string,
+          derivedLaneKey: string,
+        ) => boolean;
+        deriveLaneKey?: (
+          record: ChannelIngressQueueRecord<TPayload, TMetadata>,
+        ) => string | undefined;
+        blockedLaneKeys: string[];
+        pendingBeforeCursor: number;
+        /**
+         * Fingerprint of the scan-visible pending rows strictly before the cursor
+         * at retention. Revalidated against the queue on resume (with the count)
+         * so offsetting writes from other handles that preserve the count still
+         * invalidate the cursor.
+         */
+        prefixFingerprint: string;
+        /** Fingerprint of the cursor row, so a resumed walk can extend the prefix. */
+        cursorRowFingerprint: string;
+      }
+    | undefined;
+
+  // A retained direct-scan cursor is only valid while no pending row exists
+  // before it. Any write that adds a pending row sorting before the cursor
+  // (an explicit earlier receivedAt, a recovered/released claim, a resubmit)
+  // must invalidate the cursor so the next direct call rescans from the front
+  // instead of skipping that earlier row.
+  const invalidateResumeBefore = (receivedAt: number, eventId: string) => {
+    const resume = directScanResume;
+    if (!resume) {
+      return;
+    }
+    const before =
+      resume.orderBy === "id"
+        ? eventId < resume.cursor.eventId
+        : receivedAt < resume.cursor.receivedAt ||
+          (receivedAt === resume.cursor.receivedAt && eventId < resume.cursor.eventId);
+    if (before) {
+      directScanResume = undefined;
+    }
   };
 
   const claimNext: ChannelIngressQueue<
@@ -266,13 +326,13 @@ export function createChannelIngressQueue<
     if (candidateIds?.length === 0) {
       return null;
     }
-    const request: ChannelIngressClaimRequest = {
+    const requestBase: ChannelIngressClaimRequest = {
       queueName,
       candidateIds,
       blockedLaneKeys: [...(claimOptions?.blockedLaneKeys ?? [])]
         .map((key) => key.trim())
         .filter(Boolean),
-      deriveLaneKey: Boolean(deriveLaneKey),
+      reconcileStoredLaneKey: Boolean(reconcileStoredLaneKey),
       orderBy: claimOptions?.orderBy,
       scanLimit: claimOptions?.scanLimit,
     };
@@ -296,8 +356,132 @@ export function createChannelIngressQueue<
         ? derived
         : stored;
     };
+    // A fully blocked snapshot holds only the first scanLimit + repair rows; page
+    // forward with a keyset cursor so a free lane beyond a blocked prefix stays
+    // reachable, bounded by the claim scan budget for stop responsiveness. When
+    // the budget runs out, the cursor is retained so the next direct call resumes
+    // past the blocked prefix instead of restarting at the queue front.
+    const directScan = candidateIds === undefined;
+    let claimAfter: ChannelIngressClaimCursor | undefined;
+    let claimPages = 0;
+    // Scan-visible pending rows walked this call; the retained cursor records the
+    // count strictly before its position so a later resume can revalidate it.
+    let scannedPendingRows = 0;
+    // The authoritative count the queue must still show strictly before the page
+    // cursor; a mismatch means a write from any handle changed those rows, so the
+    // keyset is dropped and the scan restarts from the front.
+    let expectedPendingBeforeCursor: number | undefined;
+    // The authoritative fingerprint of the same prefix; a mismatch means a write
+    // replaced rows before the cursor while preserving the count, so the keyset
+    // is dropped too.
+    let expectedPendingBeforeCursorFingerprint: string | undefined;
+    // Fingerprint of the row that became claimAfter, needed to extend the prefix
+    // fingerprint across pages (the next prefix includes the cursor row).
+    let lastCursorRowFingerprint: string | undefined;
+    // Set on a resumed derived-lane scan: the first paged request returns the
+    // materialized prefix rows so their lanes can be re-evaluated under the
+    // current callback policy (identity alone cannot prove it unchanged).
+    let revalidatePrefixPolicy = false;
+    const blockedLaneKeySet = new Set(requestBase.blockedLaneKeys);
+    if (directScan && directScanResume) {
+      const resume = directScanResume;
+      const inputsMatch =
+        resume.orderBy === requestBase.orderBy &&
+        resume.reconcileStoredLaneKey === reconcileStoredLaneKey &&
+        resume.deriveLaneKey === deriveLaneKey &&
+        resume.blockedLaneKeys.length === requestBase.blockedLaneKeys.length &&
+        resume.blockedLaneKeys.every((key, index) => key === requestBase.blockedLaneKeys[index]);
+      if (inputsMatch) {
+        claimAfter = resume.cursor;
+        expectedPendingBeforeCursor = resume.pendingBeforeCursor;
+        expectedPendingBeforeCursorFingerprint = resume.prefixFingerprint;
+        lastCursorRowFingerprint = resume.cursorRowFingerprint;
+        revalidatePrefixPolicy = Boolean(deriveLaneKey);
+        // The resume page skips rows before the cursor; seed the walk with the
+        // count including the cursor row so a re-retained cursor still records the
+        // rows strictly before it (scannedPendingRows - 1) without double-subtracting.
+        scannedPendingRows = resume.pendingBeforeCursor + 1;
+      }
+      directScanResume = undefined;
+    }
     while (true) {
+      const request: ChannelIngressClaimRequest =
+        claimAfter && expectedPendingBeforeCursor !== undefined
+          ? {
+              ...requestBase,
+              claimAfter,
+              expectedPendingBeforeCursor,
+              ...(expectedPendingBeforeCursorFingerprint === undefined
+                ? {}
+                : { expectedPendingBeforeCursorFingerprint }),
+              ...(revalidatePrefixPolicy ? { includePrefixRows: true } : {}),
+            }
+          : claimAfter
+            ? { ...requestBase, claimAfter }
+            : requestBase;
       const snapshot = await execute("channelIngress.claimSnapshot", request, context);
+      if (expectedPendingBeforeCursor !== undefined) {
+        // Authoritative revalidation: the queue counts and fingerprints the
+        // scan-visible pending rows before the cursor in this same read. A
+        // mismatch means a write from any handle inserted, removed, or replaced a
+        // row before the cursor, so the retained or in-flight progress is stale
+        // and the keyset must be dropped to rescan from the front instead of
+        // skipping that earlier row. The cursor row itself is checked too: the
+        // strict-before prefix cannot observe an equal-position replacement of it.
+        const prefixStale =
+          snapshot.pendingBeforeCursor !== expectedPendingBeforeCursor ||
+          (expectedPendingBeforeCursorFingerprint !== undefined &&
+            snapshot.pendingBeforeCursorFingerprint !== expectedPendingBeforeCursorFingerprint) ||
+          snapshot.cursorRowFingerprint !== lastCursorRowFingerprint;
+        // Callback identity cannot prove an unchanged captured policy, so a
+        // resumed derived-lane scan re-evaluates every skipped row — the
+        // strict-before prefix rows and the cursor row itself — under the
+        // current callback. A row that now resolves outside the blocked set
+        // was made eligible by the policy change; the keyset must not skip it.
+        const policyShifted =
+          !prefixStale &&
+          revalidatePrefixPolicy &&
+          [
+            ...(snapshot.prefixRows ?? []),
+            ...(snapshot.cursorRow ? [snapshot.cursorRow] : []),
+          ].some((row) => {
+            if (!baseRecord(row)) {
+              return false;
+            }
+            const lane = resolveLane(row);
+            return lane === undefined || !blockedLaneKeySet.has(lane);
+          });
+        revalidatePrefixPolicy = false;
+        if (prefixStale || policyShifted) {
+          claimAfter = undefined;
+          expectedPendingBeforeCursor = undefined;
+          expectedPendingBeforeCursorFingerprint = undefined;
+          scannedPendingRows = 0;
+          continue;
+        }
+        expectedPendingBeforeCursor = undefined;
+        expectedPendingBeforeCursorFingerprint = undefined;
+      }
+      scannedPendingRows += snapshot.pending.length;
+      // Fingerprint of the scan-visible pending rows strictly before the page's
+      // last row: the validated current prefix, the previous cursor row, and this
+      // page's walked rows except the cursor row. XOR-composed so the next page or
+      // a retained resume can be revalidated against the authoritative queue state.
+      const prefixFingerprintAfterPage = (
+        page: ChannelIngressRow[],
+        previousCursorFingerprint: string | undefined,
+      ): string => {
+        const pageFingerprint = xorChannelIngressPrefixFingerprints(
+          ...page.slice(0, -1).map((row) => channelIngressPrefixRowFingerprint(row)),
+        );
+        return snapshot.pendingBeforeCursorFingerprint === undefined
+          ? pageFingerprint
+          : xorChannelIngressPrefixFingerprints(
+              snapshot.pendingBeforeCursorFingerprint,
+              previousCursorFingerprint ?? "",
+              pageFingerprint,
+            );
+      };
       // Native fingerprinting owns row freshness; retain only the lane observations to recheck.
       const preparedLanes: Array<{ row: ChannelIngressRow; laneKey: string | undefined }> = [];
       const selection = selectChannelIngressClaim(
@@ -328,15 +512,79 @@ export function createChannelIngressQueue<
             : undefined,
         );
         if (result.kind === "conflict") {
+          // The queue changed under the page; a write may sit behind the in-flight
+          // cursor, so rescan from the front instead of trusting the keyset.
+          if (directScan) {
+            claimAfter = undefined;
+            expectedPendingBeforeCursor = undefined;
+            expectedPendingBeforeCursorFingerprint = undefined;
+            scannedPendingRows = 0;
+          }
           continue;
         }
-        return result.row ? claimedRecord<TPayload, TMetadata>(result.row) : null;
+        if (result.row) {
+          directScanResume = undefined;
+          return claimedRecord<TPayload, TMetadata>(result.row);
+        }
+        if (selection.more && claimPages < CHANNEL_INGRESS_CLAIM_SCAN_PAGE_BUDGET) {
+          const last = snapshot.pending.at(-1);
+          if (!last) {
+            return null;
+          }
+          if (directScan) {
+            // The next page starts after last; it is only valid while the queue
+            // still holds exactly the walked rows (minus the cursor row) before it,
+            // with the same membership fingerprint.
+            expectedPendingBeforeCursor = scannedPendingRows - 1;
+            expectedPendingBeforeCursorFingerprint = prefixFingerprintAfterPage(
+              snapshot.pending,
+              lastCursorRowFingerprint,
+            );
+          }
+          claimAfter = { receivedAt: last.received_at, eventId: last.event_id };
+          lastCursorRowFingerprint = channelIngressPrefixRowFingerprint(last);
+          claimPages += 1;
+          continue;
+        }
+        if (directScan) {
+          const last = snapshot.pending.at(-1);
+          if (selection.more && last) {
+            // The blocked prefix continues beyond this bounded pass; preserve
+            // progress so the next direct call resumes past it. The scanned count
+            // minus the cursor row itself and the prefix fingerprint are the
+            // authoritative state the resume revalidates against the queue.
+            directScanResume = {
+              cursor: { receivedAt: last.received_at, eventId: last.event_id },
+              orderBy: requestBase.orderBy,
+              reconcileStoredLaneKey,
+              deriveLaneKey,
+              blockedLaneKeys: requestBase.blockedLaneKeys,
+              pendingBeforeCursor: scannedPendingRows - 1,
+              prefixFingerprint: prefixFingerprintAfterPage(
+                snapshot.pending,
+                lastCursorRowFingerprint,
+              ),
+              cursorRowFingerprint: channelIngressPrefixRowFingerprint(last),
+            };
+          } else {
+            // The scan reached the end of the queue; wrap so lanes that unblock
+            // or rows enqueued before the cursor are revisited on the next call.
+            directScanResume = undefined;
+          }
+        }
+        return null;
       } catch (error) {
         // Only our refused grant plus native rollback settlement permits another claim.
         if (
           error instanceof ChannelIngressClaimPolicyConflict &&
           (await error.settled).kind === "completed"
         ) {
+          if (directScan) {
+            claimAfter = undefined;
+            expectedPendingBeforeCursor = undefined;
+            expectedPendingBeforeCursorFingerprint = undefined;
+            scannedPendingRows = 0;
+          }
           continue;
         }
         throw error;
@@ -350,6 +598,9 @@ export function createChannelIngressQueue<
   ): Awaited<ReturnType<Queue["enqueue"]>> => {
     const row = result.row;
     if (result.accepted) {
+      // A new pending row before the retained cursor would be skipped by the
+      // keyset resume; drop the cursor so the earlier row stays reachable.
+      invalidateResumeBefore(receivedAt, eventId);
       return {
         kind: "accepted",
         duplicate: false,
@@ -510,12 +761,21 @@ export function createChannelIngressQueue<
         metadataJson:
           completeOptions?.metadata === undefined ? null : JSON.stringify(completeOptions.metadata),
       }),
-    release: async (value, releaseOptions) =>
-      await execute("channelIngress.release", {
+    release: async (value, releaseOptions) => {
+      const released = await execute("channelIngress.release", {
         ...mutation(value, releaseOptions?.releasedAt ?? now()),
         recordAttempt: releaseOptions?.recordAttempt,
         lastError: releaseOptions?.lastError,
-      }),
+      });
+      if (released && typeof value !== "string" && "receivedAt" in value) {
+        const releasedAt =
+          // SAFETY: the `in` guard proved the caller passed a full claim with receivedAt.
+          (value as ChannelIngressQueueClaim<TPayload, TMetadata> & { receivedAt: number })
+            .receivedAt;
+        invalidateResumeBefore(releasedAt, value.id);
+      }
+      return released;
+    },
     fail: async (value, failOptions) =>
       await execute("channelIngress.fail", {
         ...mutation(value, failOptions.failedAt ?? now()),
@@ -537,6 +797,7 @@ export function createChannelIngressQueue<
         case "unrecoverable":
           return { kind: result.kind, record: failedRecord<TPayload, TMetadata>(result.row) };
         case "resubmitted":
+          invalidateResumeBefore(result.row.received_at, result.row.event_id);
           return {
             kind: result.kind,
             record: requiredRecord<TPayload, TMetadata>(result.row),
