@@ -36,11 +36,10 @@ var translateRetryDelay = func(attempt int) time.Duration {
 }
 
 type CodexTranslator struct {
-	systemPrompt          string
-	exactGlossaryMappings map[string]string
-	model                 string
-	thinking              string
-	runPrompt             codexPromptRunner
+	systemPrompt string
+	model        string
+	thinking     string
+	runPrompt    codexPromptRunner
 }
 
 type docsTranslator interface {
@@ -48,7 +47,7 @@ type docsTranslator interface {
 	TranslateRaw(context.Context, string, string, string) (string, error)
 }
 
-type docsTranslatorFactory func(string, string, []GlossaryEntry, string) docsTranslator
+type docsTranslatorFactory func(string, string, string) docsTranslator
 
 type codexPromptRunner func(context.Context, codexPromptRequest) (string, error)
 
@@ -59,12 +58,11 @@ type codexPromptRequest struct {
 	Thinking     string
 }
 
-func NewCodexTranslator(srcLang, tgtLang string, glossary []GlossaryEntry, thinking string) *CodexTranslator {
+func NewCodexTranslator(srcLang, tgtLang, thinking string) *CodexTranslator {
 	return &CodexTranslator{
-		systemPrompt:          translationPrompt(srcLang, tgtLang, glossary),
-		exactGlossaryMappings: exactGlossaryMappings(glossary),
-		thinking:              normalizeThinking(thinking),
-		runPrompt:             runCodexExecPrompt,
+		systemPrompt: translationPrompt(srcLang, tgtLang),
+		thinking:     normalizeThinking(thinking),
+		runPrompt:    runCodexExecPrompt,
 	}
 }
 
@@ -80,9 +78,6 @@ func (t *CodexTranslator) translate(ctx context.Context, text string, run func(c
 	prefix, core, suffix := splitWhitespace(text)
 	if core == "" {
 		return text, nil
-	}
-	if translated, ok := t.exactGlossaryMappings[core]; ok {
-		return prefix + translated + suffix, nil
 	}
 	var lastErr error
 	for attempt := 0; attempt < translateMaxAttempts; attempt++ {
@@ -102,19 +97,6 @@ func (t *CodexTranslator) translate(ctx context.Context, text string, run func(c
 		}
 	}
 	return "", lastErr
-}
-
-func exactGlossaryMappings(glossary []GlossaryEntry) map[string]string {
-	mappings := map[string]string{}
-	for _, entry := range glossary {
-		source := strings.TrimSpace(entry.Source)
-		target := strings.TrimSpace(entry.Target)
-		if source == "" || target == "" {
-			continue
-		}
-		mappings[source] = target
-	}
-	return mappings
 }
 
 func (t *CodexTranslator) translateMasked(ctx context.Context, core string) (string, error) {

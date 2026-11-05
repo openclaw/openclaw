@@ -14,6 +14,7 @@ import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../src/agents/tools/gateway-caller-context.js";
+import { createAgentLifecycleTerminalBackstop } from "../../src/auto-reply/reply/agent-lifecycle-terminal.js";
 import { CronService } from "../../src/cron/service.js";
 import {
   createCronStoreHarness,
@@ -26,11 +27,13 @@ import { createGatewayMethodRegistry } from "../../src/gateway/methods/registry.
 import type { GatewayRequestHandler } from "../../src/gateway/server-methods/types.js";
 import { createContext } from "../../src/gateway/server-plugin-in-process-dispatch.test-support.js";
 import { dispatchTrustedPluginGatewayMethod } from "../../src/gateway/server-plugins.js";
+import { getAgentEventLifecycleGeneration, onAgentEvent } from "../../src/infra/agent-events.js";
 import {
   areDiagnosticsEnabledForProcess,
   setDiagnosticsEnabledForProcess,
 } from "../../src/infra/diagnostic-events.js";
 import type { PluginHookHandlerMap } from "../../src/plugins/hook-types.js";
+import { dispatchPluginAgentEventSubscriptions } from "../../src/plugins/host-hook-runtime.js";
 import { bindPluginRegistryRuntime } from "../../src/plugins/registry-runtime-binding.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry.js";
 import {
@@ -43,7 +46,7 @@ import { createTestGatewayScheduler } from "../../src/test-utils/gateway-schedul
 
 const { makeStorePath } = createCronStoreHarness({ prefix: "workboard-nudge-" });
 
-it.each(["agent_end", "subagent_ended"] as const)(
+it.each(["run_settled", "subagent_ended"] as const)(
   "Workboard terminal hook %s survives closure",
   async (hook) => {
     const sessionKey = "agent:main:subagent:workboard-d6-authority";
@@ -88,7 +91,6 @@ it.each(["agent_end", "subagent_ended"] as const)(
     });
     const settled = finished.waitForOk(job.id);
     const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
-    let agentEnd: PluginHookHandlerMap["agent_end"] | undefined;
     let subagentEnded: PluginHookHandlerMap["subagent_ended"] | undefined;
     const methods: GatewayMethodDescriptorInput[] = [];
     const captured = capturePluginRegistration({
@@ -104,9 +106,7 @@ it.each(["agent_end", "subagent_ended"] as const)(
           });
         };
         api.on = (name, handler) => {
-          if (name === "agent_end") {
-            agentEnd = handler as typeof agentEnd;
-          } else if (name === "subagent_ended") {
+          if (name === "subagent_ended") {
             subagentEnded = handler as typeof subagentEnded;
           }
         };
@@ -128,6 +128,44 @@ it.each(["agent_end", "subagent_ended"] as const)(
     });
     const warn = vi.fn();
     const registry = createEmptyPluginRegistry();
+    const pendingEvents: Promise<void>[] = [];
+    for (const subscription of captured.agentEventSubscriptions) {
+      registry.agentEventSubscriptions.push({
+        pluginId: "workboard",
+        source: "test",
+        subscription: {
+          ...subscription,
+          handle: (event, ctx) => {
+            const pending = Promise.resolve(subscription.handle(event, ctx));
+            pendingEvents.push(pending);
+            return pending;
+          },
+        },
+      });
+    }
+    const runSettled = async () => {
+      const unsubscribe = onAgentEvent((event) => {
+        if (event.runId === runId) {
+          dispatchPluginAgentEventSubscriptions({ registry, event, isLive: () => true });
+        }
+      });
+      try {
+        const terminal = createAgentLifecycleTerminalBackstop({
+          runId,
+          sessionKey,
+          getLifecycleGeneration: getAgentEventLifecycleGeneration,
+          resolveTerminationFields: () => ({}),
+        });
+        // A failed candidate can still be replaced before the owner publishes settlement.
+        terminal.capture("error", new Error("retryable candidate"));
+        terminal.replaceAttemptTerminal();
+        terminal.emit("end", { meta: {} });
+        expect(pendingEvents.length).toBeGreaterThan(0);
+        await Promise.all(pendingEvents.splice(0));
+      } finally {
+        unsubscribe();
+      }
+    };
     bindGatewayContextResolver(captured.api.runtime, () => gatewayContext);
     bindPluginRegistryRuntime(registry, captured.api.runtime);
     for (const service of services.filter((entry) =>
@@ -217,8 +255,8 @@ it.each(["agent_end", "subagent_ended"] as const)(
       await inGatewayScope(() =>
         withGatewayToolCallerIdentity(caller, async () => {
           const pending =
-            hook === "agent_end"
-              ? agentEnd!({ messages: [], success: true }, { agentId: "main", sessionKey, runId })
+            hook === "run_settled"
+              ? runSettled()
               : subagentEnded!(
                   {
                     targetSessionKey: sessionKey,
@@ -248,7 +286,7 @@ it.each(["agent_end", "subagent_ended"] as const)(
       await settled;
       expect(executeJob).toHaveBeenCalledOnce();
       // The sibling terminal event for the same card shares the service's debounce owner.
-      await agentEnd!({ messages: [], success: true }, { agentId: "main", sessionKey, runId });
+      await runSettled();
       expect(enqueue).toHaveBeenCalledOnce();
       expect(warn).not.toHaveBeenCalled();
     } finally {

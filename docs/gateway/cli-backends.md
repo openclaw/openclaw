@@ -106,6 +106,8 @@ To keep the API as the primary route and use Claude Code only when it fails, pin
 
 Configured fallbacks remain eligible when the primary model fails (auth, rate limits, timeouts), even when they are not in `agents.defaults.modelPolicy.allow`. Add the fallback model to that policy only when people should also be able to select it directly. Direct selection means `/model`, a session override, or `--model`. `agents.defaults.models` only owns per-model aliases, parameters, runtime, and metadata.
 
+The runtime pin applies to the model, not to one position in the list, so an `anthropic/*` primary and fallback cannot name the same model on two routes. Existing configs that use a `claude-cli/<model>` fallback for the API primary's own model keep that ref after an update; see [Claude CLI model routing](/gateway/doctor/config-migrations#claude-cli-model-routing).
+
 ## Configuration
 
 Users choose a registered backend through the model and runtime policy. Keep

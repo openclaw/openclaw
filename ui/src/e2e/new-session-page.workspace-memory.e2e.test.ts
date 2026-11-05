@@ -348,7 +348,7 @@ suite.define(() => {
     await expectLabel(projectTrigger, "packages");
     await pollLocatorText(
       page.locator("#new-session-where-trigger .new-session-page__trigger-label"),
-    ).toBe("Local");
+    ).toBe("This computer");
     await expectAttribute(placeTrigger, "data-worktree", "true");
     await placeTrigger.click();
     await expectValue(checkoutBaseRefInput(page), "release/next");

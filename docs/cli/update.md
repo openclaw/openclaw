@@ -726,6 +726,10 @@ the usual pre-mutation error and JSON output. History records the checks in a
 `candidate-admission` step. The installed updater continues to own the update
 after admission, including every mutation.
 
+Without `--timeout`, the candidate's allowance grows with the measured size of the
+SQLite state it inspects, capped by the update step deadline, so a large state
+database does not fall back merely because admission took longer than a small one.
+
 If the marker is absent or invalid, the updater uses its installed admission
 checks and records `update-admission-unsupported-target`. If the candidate times
 out, crashes, or returns no valid protocol-1 verdict, it records

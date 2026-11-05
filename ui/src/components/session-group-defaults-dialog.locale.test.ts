@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { expect, it, onTestFinished, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
+import { loadLazyLocaleTranslation } from "../i18n/lib/registry.ts";
 import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.ts";
 import {
   createModalDialogTestFixture,
@@ -12,6 +13,7 @@ import { showSessionGroupDefaultsDialog } from "./session-group-defaults-dialog.
 
 it("refreshes an open defaults dialog without replacing its focused folder control", async () => {
   const restoreI18n = captureI18nStateForTesting();
+  const german = await loadLazyLocaleTranslation("de");
   const restorePopover = installPopoverPolyfill();
   const fixture = createModalDialogTestFixture();
   onTestFinished(async () => {
@@ -19,10 +21,18 @@ it("refreshes an open defaults dialog without replacing its focused folder contr
       await fixture.cleanup();
     } finally {
       restorePopover();
+      i18n.registerTranslation("de", german ?? {});
       await restoreI18n();
     }
   });
   await i18n.setLocale("en");
+  i18n.registerTranslation("de", {
+    sessionsView: {
+      groupDefaultsTitle: "Testvorgaben für „{group}“",
+      groupDefaultsMode: "Umgebung",
+      groupDefaultsLocal: "Aktueller Checkout",
+    },
+  });
   const submit = vi.fn(async () => null);
   const completed = fixture.track(
     showSessionGroupDefaultsDialog({
@@ -36,15 +46,18 @@ it("refreshes an open defaults dialog without replacing its focused folder contr
   const { modal } = await getRenderedModalDialog(document.body);
   const folder = modal.querySelector<HTMLButtonElement>("#session-group-defaults-folder-trigger")!;
   const mode = () => modal.querySelector("#session-group-defaults-mode-trigger");
-  await waitForSolid(() =>
-    expect(mode()?.getAttribute("aria-label")).toBe("Environment: Current checkout"),
-  );
+  await waitForSolid(() => {
+    expect(modal.querySelector(".exec-approval-title")?.textContent).toBe(
+      "New session defaults for “Example”",
+    );
+    expect(mode()?.getAttribute("aria-label")).toBe("Environment: Current checkout");
+  });
   folder.focus();
 
   await i18n.setLocale("de");
   await waitForSolid(() => {
     expect(modal.querySelector(".exec-approval-title")?.textContent).toBe(
-      "New session defaults for “Example”",
+      "Testvorgaben für „Example“",
     );
     expect(mode()?.getAttribute("aria-label")).toBe("Umgebung: Aktueller Checkout");
     expect(document.body.querySelector("openclaw-modal-dialog")).toBe(modal);

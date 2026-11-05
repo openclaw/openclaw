@@ -242,7 +242,6 @@ src/commands/doctor-auth-flat-profiles.test.ts
 src/commands/doctor-auth-flat-profiles.ts
 src/commands/doctor-session-sqlite.ts
 src/commands/doctor-state-integrity.ts
-src/commands/doctor/shared/legacy-config-migrate.test.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
 src/commands/doctor/shared/missing-configured-plugin-install.test.ts
 src/commands/models/auth.ts

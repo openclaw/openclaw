@@ -425,6 +425,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/update-run-abandonment.test.ts",
   "src/infra/update-run-interruption.worker.test.ts",
   "src/channels/turn/durable-delivery.reload.test.ts",
+  "src/channels/turn/admitting-gateway-delivery.route-reply.test.ts",
+  "src/auto-reply/reply/route-reply.retired-turn-registry.test.ts",
   "test/e2e/qa-lab/runtime/gateway-loopback-lan-access.test.ts",
   "src/channels/message/durable-receive.test.ts",
   "src/channels/message/ingress-drain-lanes.test.ts",
@@ -1392,6 +1394,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/auth-profile-shared-usage.worker.test.ts",
   "src/agents/embedded-agent-runner/run/auth-controller.test.ts",
   "src/agents/embedded-agent-runner/run/auth-controller.request-auth.test.ts",
+  "src/agents/embedded-agent-runner/run/auth-controller.request-auth-peer-refresh.test.ts",
   "src/agents/auth-profiles.markauthprofilefailure.test.ts",
 
   "src/node-host/node-worker-launch-store.test.ts",
