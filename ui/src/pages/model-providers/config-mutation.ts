@@ -329,7 +329,7 @@ export async function runModelProviderApiKeyMutation(
     apiKey: string;
     success: string;
   },
-): Promise<{ ok: false } | { ok: true; warning: string | null; verified: boolean }> {
+): Promise<{ ok: false } | { ok: true; warning: string | null; rejected: boolean }> {
   const isCurrent = () => owner.isCurrentClient() && owner.isCurrentAgent();
   owner.setBusy(true);
   owner.setMessage(null);
@@ -367,7 +367,7 @@ export async function runModelProviderApiKeyMutation(
     const message = checked ?? { kind: "success" as const, text: params.success };
     const warnings = [message.warning, warning].filter(Boolean).join(" ");
     owner.setMessage({ ...message, ...(warnings ? { warning: warnings } : {}) });
-    return { ok: true, warning, verified: message.kind === "success" };
+    return { ok: true, warning, rejected: message.kind === "error" };
   } finally {
     if (isCurrent()) {
       owner.setBusy(false);
