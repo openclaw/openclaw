@@ -62,6 +62,33 @@ function createEvaluator(
 const INPUT = { jobId: "probe", script: "return result", state: null };
 const INTERNAL_ERROR = expect.objectContaining({ kind: "error", code: "internal_error" });
 
+it("snapshots a cron tool result without temporary object-value arrays", async () => {
+  const details = {
+    rows: Array.from({ length: 40 }, (_, snapshotRow) => ({ snapshotRow, state: "ready" })),
+  };
+  const probe = makeTool("snapshot_probe", async () => jsonResult(details));
+  const { evaluate } = createEvaluator(runCodeModeScriptHeadless, {
+    prepareRuntime: async ({ runtimeConfig }) => createPreparedRuntime(runtimeConfig, [probe]),
+  });
+  const objectValues = Object.values;
+  let snapshotArraySlots = 0;
+  const values = vi.spyOn(Object, "values").mockImplementation((object) => {
+    const members = objectValues(object);
+    if (Object.hasOwn(object, "snapshotRow")) {
+      snapshotArraySlots += members.length;
+    }
+    return members;
+  });
+  try {
+    await expect(
+      evaluate({ script: "return { fire: true, state: await snapshot_probe({}) };" }),
+    ).resolves.toMatchObject({ kind: "evaluated", fire: true, state: details });
+    expect(snapshotArraySlots).toBe(0);
+  } finally {
+    values.mockRestore();
+  }
+});
+
 function execEvaluator(host: "auto" | "node" | "gateway", node?: string) {
   return createCronScriptRuntime({
     config: {

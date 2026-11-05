@@ -713,6 +713,10 @@
       "types": "./dist/plugin-sdk/reply-payload.d.ts",
       "default": "./dist/plugin-sdk/reply-payload.js"
     },
+    "./plugin-sdk/agent-lifecycle": {
+      "types": "./dist/plugin-sdk/agent-lifecycle.d.ts",
+      "default": "./dist/plugin-sdk/agent-lifecycle.js"
+    },
     "./plugin-sdk/agent-media-payload": {
       "types": "./dist/plugin-sdk/agent-media-payload.d.ts",
       "default": "./dist/plugin-sdk/agent-media-payload.js"
