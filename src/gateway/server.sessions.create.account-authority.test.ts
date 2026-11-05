@@ -624,7 +624,8 @@ test.each(["human", "agent"] as const)(
 test.each([
   { configured: "workspace", explicit: undefined, origin: "human", expected: "workspace" },
   { configured: "full", explicit: "guarded", origin: "human", expected: "guarded" },
-  { configured: "full", explicit: undefined, origin: "human", expected: "forbidden" },
+  { configured: "full", explicit: undefined, origin: "human", expected: "workspace" },
+  { configured: "full", explicit: "full", origin: "human", expected: "forbidden" },
   { configured: "full", explicit: undefined, origin: "agent", expected: undefined },
 ] as const)("attended permission default $configured ($origin, explicit=$explicit)", (row) =>
   withFixture(["operator.write", false, row.origin], async (fixture) => {
