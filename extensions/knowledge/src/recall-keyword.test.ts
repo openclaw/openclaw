@@ -53,3 +53,11 @@ it("clips a long passage around the words that matched it", () => {
   expect(entry!.text).toHaveLength(1_000);
   expect(entry!.text).toContain("Router reset PIN: 4421.");
 });
+
+it("fits the match window to what is left of the page budget, separators included", () => {
+  const body = `${"General notes. ".repeat(80)}Router reset PIN: 4421.\n\n${"router ".repeat(30)}`;
+  const tight = { excerpts: 4, excerptChars: 1_000, pageChars: 200 };
+  const [entry] = keywordCandidates("router reset", [page("m", "Maintenance", body)], 10, tight);
+  expect(entry!.text).toContain("Router reset PIN: 4421.");
+  expect(entry!.text!.length).toBeLessThanOrEqual(200);
+});

@@ -376,14 +376,23 @@ export function renderInjection(
     parts.push(text);
     used += text.length + 1;
   };
+  const shown = new Set<GateEntry>();
   for (const { entry, tier, body } of items) {
     if (tier === "high" && body) {
-      const clipped = body.length > pageChars ? `${body.slice(0, pageChars - 1)}…` : body;
-      push(`### ${entry.label} (id ${entry.id})\n${clipped}`);
+      const heading = `### ${entry.label} (id ${entry.id})\n`;
+      // Clip to the page budget and to what the whole injection still has room for.
+      const room = Math.min(pageChars, GATE_INJECT_MAX - used - 1 - heading.length);
+      if (room < 2) {
+        continue;
+      }
+      const clipped = body.length > room ? `${body.slice(0, room - 1)}…` : body;
+      push(heading + clipped);
+      shown.add(entry);
     }
   }
-  for (const { entry, tier, body } of items) {
-    if (tier === "medium" || (tier === "high" && !body)) {
+  // Pointers for medium pages and for high pages whose text did not fit.
+  for (const { entry, tier } of items) {
+    if (tier === "medium" || (tier === "high" && !shown.has(entry))) {
       const lookup = entry.handle
         ? `knowledge_lookup "${entry.handle}"`
         : `knowledge_record id ${entry.id}`;

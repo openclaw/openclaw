@@ -1,5 +1,5 @@
 ---
-summary: "Use any /rerank endpoint (vLLM, TEI, Infinity, llama.cpp, Cohere, Jina, Voyage) as a Decision model"
+summary: "Use any /rerank endpoint (vLLM, TEI, Infinity, Cohere, Jina, Voyage) as a Decision model"
 read_when:
   - You already run a reranker and want to use it as a Decision model
   - You want a local, keyless Decision model for the Knowledge recall gate
@@ -22,15 +22,14 @@ it works as a Decision model with no extra plugin.
 
 Any server that speaks the common `/rerank` API:
 
-| Server                           | Base URL example              |
-| -------------------------------- | ----------------------------- |
-| vLLM (`--task score`)            | `http://127.0.0.1:8000/v1`    |
-| Hugging Face TEI                 | `http://127.0.0.1:8080`       |
-| Infinity                         | `http://127.0.0.1:7997`       |
-| llama.cpp server (`--reranking`) | `http://127.0.0.1:8080/v1`    |
-| Cohere                           | `https://api.cohere.com/v2`   |
-| Jina                             | `https://api.jina.ai/v1`      |
-| Voyage                           | `https://api.voyageai.com/v1` |
+| Server                | Base URL example              |
+| --------------------- | ----------------------------- |
+| vLLM (`--task score`) | `http://127.0.0.1:8000/v1`    |
+| Hugging Face TEI      | `http://127.0.0.1:8080`       |
+| Infinity              | `http://127.0.0.1:7997`       |
+| Cohere                | `https://api.cohere.com/v2`   |
+| Jina                  | `https://api.jina.ai/v1`      |
+| Voyage                | `https://api.voyageai.com/v1` |
 
 OpenClaw posts to `<baseUrl>/rerank` with `model`, `query`, and the documents.
 Most servers read the documents from `documents`; TEI reads `texts`. When an
@@ -38,8 +37,12 @@ endpoint rejects the first form, OpenClaw retries once with `texts` and
 remembers the working form for that endpoint.
 
 Responses may use the Cohere shape (`results[].relevance_score`), Voyage's
-`data[]`, or TEI's bare array of `{ index, score }`. Scores already in 0 to 1
-are used as they are; raw logits go through a sigmoid.
+`data[]`, or TEI's bare array of `{ index, score }`. Scores must be relevance
+probabilities from 0 to 1. Cohere, Jina and Voyage return them, as does TEI
+with `raw_scores` off; check the score setting of other servers. A response with any score outside that range is
+rejected as `invalid-response`: rescaling a batch from its own values would
+move one page's score with its neighbours, so serve raw-logit models (for
+example llama.cpp's `--reranking`) behind a sigmoid.
 
 ## Configure
 

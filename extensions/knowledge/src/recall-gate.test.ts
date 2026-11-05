@@ -341,6 +341,14 @@ it("counts the header inside the injection budget", () => {
   expect(text.length).toBeGreaterThan(5_800);
 });
 
+it("reserves the heading and header before clipping a full-budget page", () => {
+  const entry = { id: "r1", line: "", label: "Long page" };
+  const text = renderInjection([{ entry, tier: "high", body: "x".repeat(6_000) }], 6_000);
+  expect(text).toContain("### Long page (id r1)\nxxx");
+  expect(text.endsWith("…")).toBe(true);
+  expect(text.length).toBeLessThanOrEqual(6_000);
+});
+
 it("shadow mode logs the decisions and injects nothing", async () => {
   const { run, logged } = await setup(gate(), { relevant: { Nova: 0.95 } });
   expect(await run("Is Nova due for her shots?")).toBe(undefined);

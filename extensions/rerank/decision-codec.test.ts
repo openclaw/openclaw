@@ -95,18 +95,17 @@ describe("readRerankScores", () => {
     expect(readRerankScores(payload, 2)).toEqual([0.7, 0.2]);
   });
 
-  it("maps raw logits through a sigmoid", () => {
-    const scores = readRerankScores(
-      {
-        results: [
-          { index: 0, relevance_score: 0 },
-          { index: 1, relevance_score: 4 },
-        ],
-      },
-      2,
-    );
-    expect(scores?.[0]).toBe(0.5);
-    expect(scores?.[1]).toBeCloseTo(0.982, 3);
+  it("rejects scores outside [0, 1] instead of rescaling the batch", () => {
+    const alone = { results: [{ index: 0, relevance_score: 0.9 }] };
+    expect(readRerankScores(alone, 1)).toEqual([0.9]);
+    // A raw-logit neighbour must not move the first page's score; the response is invalid.
+    const mixed = {
+      results: [
+        { index: 0, relevance_score: 0.9 },
+        { index: 1, relevance_score: -1 },
+      ],
+    };
+    expect(readRerankScores(mixed, 2)).toBe(undefined);
   });
 
   it.each([

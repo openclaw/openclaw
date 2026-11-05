@@ -147,7 +147,7 @@ function field(value: unknown, key: string): unknown {
 /**
  * Read one `/rerank` response into scores aligned with the request's documents.
  * Accepts the Cohere-style `{ results: [{ index, relevance_score }] }` used by
- * Cohere, Jina, vLLM, Infinity and llama.cpp, Voyage's `{ data: [...] }`, and
+ * Cohere, Jina, vLLM and Infinity, Voyage's `{ data: [...] }`, and
  * TEI's bare `[{ index, score }]` array. Every document must be scored once.
  */
 export function readRerankScores(payload: unknown, count: number): number[] | undefined {
@@ -181,11 +181,9 @@ export function readRerankScores(payload: unknown, count: number): number[] | un
   }
   // count unique in-range indices over count rows fill every slot.
   const complete = scores.filter((score): score is number => score !== undefined);
-  // Most servers already return [0, 1] relevance. Raw logits (any value
-  // outside that range) go through the sigmoid every cross-encoder uses.
-  return complete.every((score) => score >= 0 && score <= 1)
-    ? complete
-    : complete.map((score) => 1 / (1 + Math.exp(-score)));
+  // One fixed convention: relevance probabilities in [0, 1]. Inferring a logit
+  // scale from the batch would move one page's score with its neighbours.
+  return complete.every((score) => score >= 0 && score <= 1) ? complete : undefined;
 }
 
 /** Assemble Decision answers from per-request scores. */

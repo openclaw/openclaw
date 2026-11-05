@@ -173,23 +173,27 @@ function excerpt(
   policy: KeywordExcerptPolicy,
 ): string {
   const wanted = new Set(query);
-  const ranked = parts
-    .map((text, index) => {
-      const tokens = new Set(keywordTokens(text));
-      const score = query.reduce((sum, token) => sum + (tokens.has(token) ? idf(token) : 0), 0);
-      return { text, index, score };
-    })
+  const scored = parts.map((text, index) => {
+    const tokens = new Set(keywordTokens(text));
+    const score = query.reduce((sum, token) => sum + (tokens.has(token) ? idf(token) : 0), 0);
+    return { text, index, score };
+  });
+  // Passages that share a query word, best first; a title-only match quotes the opening passage.
+  const matched = scored.filter(({ score }) => score > 0);
+  const ranked = (matched.length ? matched : scored.slice(0, 1))
     .toSorted((a, b) => b.score - a.score || a.index - b.index)
     .slice(0, policy.excerpts);
   const chosen: string[] = [];
   let used = 0;
   for (const { text } of ranked) {
-    const clipped = matchWindow(text, wanted, idf, policy.excerptChars);
-    if (used + clipped.length > policy.pageChars) {
-      continue;
+    // The page budget covers the joining newlines; each window fits what is left.
+    const room = Math.min(policy.excerptChars, policy.pageChars - used - (chosen.length ? 1 : 0));
+    if (room < 1) {
+      break;
     }
+    const clipped = matchWindow(text, wanted, idf, room);
+    used += clipped.length + (chosen.length ? 1 : 0);
     chosen.push(clipped);
-    used += clipped.length;
   }
   return chosen.join("\n");
 }
