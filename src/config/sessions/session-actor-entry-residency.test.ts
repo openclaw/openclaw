@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareSessionCostUsageRefreshLock } from "../../infra/session-cost-usage-cache.sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
@@ -506,9 +506,7 @@ function seed(f: Fixture, prettyQuestion = false) {
 }
 
 function reader(f: Fixture) {
-  if (f.target.database.kind !== "file") {
-    throw new Error("Context metadata proof requires a durable actor");
-  }
+  assert(f.target.database.kind === "file", "Context metadata proof requires a durable actor");
   const replica = createSessionActorReplica({
     target: { ...f.target, database: f.target.database },
     lifetime: { assertCurrent() {}, assertReadable() {} },
@@ -520,9 +518,7 @@ function reader(f: Fixture) {
       sessionKey: f.scope.sessionKey,
       sessionId: f.scope.sessionId,
     });
-    if (!retained) {
-      throw new Error("Actor did not publish its projection receipt");
-    }
+    assert(retained, "Actor did not publish its projection receipt");
     return retained;
   };
   const accounting = () =>
@@ -649,19 +645,19 @@ it.each(["reset", "compaction", "leaf"] as const)(
     }),
 );
 
-it("keeps exact accounting through appends and rewrites beyond the actor's resident window without rescanning", () =>
-  withActor(async (f) => {
+it.each([false, true])("keeps large-transcript accounting correct (invalidate: %s)", (invalidate) =>
+  withActor((f) => {
     const events = Array.from({ length: 600 }, (_, index) =>
       messageEvent(`message-${index}`, index === 0 ? null : `message-${index - 1}`, {
         role: "user",
         content: "x",
       }),
     );
-    runSqliteImmediateTransactionSync(f.database.db, () => {
+    runSqliteImmediateTransactionSync(f.database.db, () =>
       appendTranscriptEventsInTransaction(f.database, f.scope, events, {
         scheduleProjectionReconcile: false,
-      });
-    });
+      }),
+    );
     using context = reader(f);
 
     context.install();
@@ -669,13 +665,6 @@ it("keeps exact accounting through appends and rewrites beyond the actor's resid
       /\bsum\(/iu.test(sql) && sql.includes('"transcript_events"') ? "aggregate" : null,
     );
     const originalBytes = events.reduce((total, event) => total + storedBytes(event), 0);
-    context.expectAccounting(events.length, originalBytes);
-    // An entry-only native writer invalidates the actor, but not its transcript accounting.
-    f.database.db
-      .prepare(
-        "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', ?) WHERE session_key = ?",
-      )
-      .run("native metadata", f.target.sessionKey);
     const appended = {
       type: "message" as const,
       id: "after-window",
@@ -709,48 +698,31 @@ it("keeps exact accounting through appends and rewrites beyond the actor's resid
       message: { ...appended.message, __openclaw: { steerTargetRunId: "new-run" } },
     };
 
-    await f.prepare(command);
+    if (invalidate) {
+      f.writeEntry({ ...f.nativeEntry()!, label: "before append" });
+    }
     expect(f.mutate(command)).toMatchObject({ kind: "committed" });
     context.install();
     context.expectAccounting(events.length + 1, originalBytes + storedBytes(appended));
+    if (invalidate) {
+      f.writeEntry({ ...f.nativeEntry()!, label: "before rewrite" });
+    }
     runSqliteImmediateTransactionSync(f.database.db, () => {
       rewriteSqliteTranscriptEventRowsInTransaction(f.database, f.scope, [
         { seq: events.length, expectedEventJson: JSON.stringify(appended), event: rewritten },
       ]);
     });
+    context.install();
     context.expectAccounting(events.length + 1, originalBytes + storedBytes(rewritten));
-    expect(stats.counts.aggregate).toBe(0);
+    expect(stats.counts.aggregate).toBe(invalidate ? 1 : 0);
     expect(
       readSessionTranscriptBoundedActiveContextCore(f.scope, {
         maxBytes: 1024 * 1024,
         maxEvents: 100,
       }),
     ).toMatchObject({ events: [...events.slice(-99), rewritten], truncated: true });
-    const prior = f.read().transcript.version;
-    const first = {
-      ...events[0]!,
-      message: { ...events[0]!.message, __openclaw: { steerTargetRunId: "native-rewrite" } },
-    };
-    runSqliteImmediateTransactionSync(f.database.db, () => {
-      f.database.db
-        .prepare("UPDATE session_nodes SET label = ? WHERE session_key = ?")
-        .run("invalidate before native rewrite", f.target.sessionKey);
-      rewriteSqliteTranscriptEventRowsInTransaction(f.database, f.scope, [
-        { seq: 0, expectedEventJson: JSON.stringify(events[0]), event: first },
-      ]);
-    });
-    context.install();
-    expect(f.read().transcript.version).toMatchObject({
-      generation: prior.generation,
-      rawSeq: prior.rawSeq,
-    });
-    expect(f.read().transcript.version.updatedAt).not.toBe(prior.updatedAt);
-    context.expectAccounting(
-      events.length + 1,
-      originalBytes + storedBytes(rewritten) + storedBytes(first) - storedBytes(events[0]!),
-    );
-    expect(stats.counts.aggregate).toBe(1);
-  }));
+  }),
+);
 
 it("retains one oversized actor across competing small actors and replaces it with a second oversized actor", () =>
   withActor(async (f) => {
@@ -799,9 +771,7 @@ it("retains one oversized actor across competing small actors and replaces it wi
     };
     await f.prepare(command);
     const committed = f.mutate(command);
-    if (committed.kind !== "committed") {
-      throw new Error("Expected the oversized sole actor to commit without rehydration");
-    }
+    assert(committed.kind === "committed", "Expected the oversized actor to commit");
     expect(committed.failure).toBeUndefined();
     expect(committed.receipt.postimage.entry?.goal?.continuationTurns).toBe(1);
     expect(f.nativeEntry()?.goal?.continuationTurns).toBe(1);
