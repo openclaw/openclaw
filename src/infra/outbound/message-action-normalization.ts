@@ -24,6 +24,8 @@ import {
 } from "./message-action-spec.js";
 import { missingMessageActionTargetError } from "./target-errors.js";
 
+const THREAD_ID_PARAM_KEYS = ["threadId", "thread_id", "messageThreadId", "message_thread_id"];
+
 export function resolveImplicitMessageActionTarget(
   toolContext: ChannelThreadingToolContext | undefined,
   action?: ChannelMessageActionName,
@@ -58,17 +60,20 @@ export function normalizeMessageActionInput(params: {
 }): Record<string, unknown> {
   const normalizedArgs = { ...params.args };
   const { action, toolContext } = params;
-  // Provider handlers may read `messageThreadId` before `threadId` (Telegram does). Fold
-  // it so cross-context policy, core delivery and the provider all judge one thread.
-  const threadAlias = normalizeOptionalStringifiedId(normalizedArgs.messageThreadId);
-  if (threadAlias) {
-    const threadId = normalizeOptionalStringifiedId(normalizedArgs.threadId);
-    if (threadId && threadId !== threadAlias) {
-      throw new Error(`Action ${action} received conflicting threadId and messageThreadId values.`);
-    }
-    if (!threadId) {
-      normalizedArgs.threadId = threadAlias;
-    }
+  // Shared param readers also accept each key's snake_case form, and provider handlers may
+  // read `messageThreadId` before `threadId` (Telegram does). Fold every spelling so
+  // cross-context policy, core delivery and the provider all judge one thread.
+  const threadIds = new Set(
+    THREAD_ID_PARAM_KEYS.map((key) => normalizeOptionalStringifiedId(normalizedArgs[key])),
+  );
+  threadIds.delete(undefined);
+  // An explicit null threadId opts out of threading, so any other spelling contradicts it.
+  if (threadIds.size > 1 || (threadIds.size === 1 && normalizedArgs.threadId === null)) {
+    throw new Error(`Action ${action} received conflicting thread id values.`);
+  }
+  const [threadId] = threadIds;
+  if (threadId && normalizeOptionalStringifiedId(normalizedArgs.threadId) !== threadId) {
+    normalizedArgs.threadId = threadId;
   }
   const explicitChannel = normalizeOptionalString(normalizedArgs.channel) ?? "";
   const inferredChannel =

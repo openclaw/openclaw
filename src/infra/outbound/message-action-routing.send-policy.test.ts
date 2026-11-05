@@ -161,6 +161,11 @@ describe("runMessageAction core send routing", () => {
       params: { target: "-1001234567890:topic:42", messageThreadId: "99" },
       denied: true,
     },
+    {
+      name: "the current topic target with another message_thread_id",
+      params: { target: "-1001234567890:topic:42", message_thread_id: "99" },
+      denied: true,
+    },
   ])("judges a restricted Telegram topic turn sending to $name by its topic", async (scenario) => {
     const { telegramPlugin } = await loadBundledPluginFacade<{ telegramPlugin: ChannelPlugin }>({
       pluginId: "telegram",
