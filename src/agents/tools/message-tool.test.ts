@@ -1455,7 +1455,7 @@ describe("message tool explicit target guard", () => {
               message: "HEARTBEAT_OK",
             }),
           ),
-        ).rejects.toThrow(/Explicit message target required/i);
+        ).rejects.toThrow(/Explicit message target required.*"channel:<id>"/is);
       },
     );
     expect(consumePreExecutionBlockedToolCall(toolCallId)).toBe(true);
