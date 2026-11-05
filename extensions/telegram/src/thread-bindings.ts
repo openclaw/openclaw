@@ -14,6 +14,8 @@ import {
   registerSessionBindingAdapterV2,
   warnPluginSdkDeprecation,
 } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
+import { getTelegramRuntime } from "./runtime.js";
+import type { TelegramRuntime } from "./runtime.types.js";
 import { loadTelegramSendModule } from "./send-runtime.js";
 import {
   loadBindingsFromStore,
@@ -82,6 +84,9 @@ async function initializeThreadBindingManager(
     return existing;
   }
 
+  // Adapter calls can run in another plugin's instance (for example `/codex detach`),
+  // so persistence keeps the runtime of the Telegram instance that owns this manager.
+  const runtime = getTelegramRuntime();
   const persist = params.persist ?? true;
   const idleTimeoutMs = resolveNonNegativeIntegerOption(
     params.idleTimeoutMs,
@@ -92,7 +97,7 @@ async function initializeThreadBindingManager(
     DEFAULT_THREAD_BINDING_MAX_AGE_MS,
   );
 
-  for (const entry of await loadBindingsFromStore(accountId)) {
+  for (const entry of await loadBindingsFromStore(runtime, accountId)) {
     const key = resolveBindingKey(entry);
     getThreadBindingsState().bindingsByAccountConversation.set(key, {
       ...entry,
@@ -101,6 +106,7 @@ async function initializeThreadBindingManager(
   }
 
   await reconcileTelegramAcpBindingsOnStartup({
+    runtime,
     accountId,
     persist,
     prepareSession: params.prepareAcpSession,
@@ -129,7 +135,7 @@ async function initializeThreadBindingManager(
 
   const captureConversationMutation = (raw: string) => {
     const conversationId = normalizeOptionalString(raw);
-    return conversationId ? captureBindingMutation(manager, conversationId) : undefined;
+    return conversationId ? captureBindingMutation(manager, runtime, conversationId) : undefined;
   };
 
   const manager: TelegramThreadBindingManager = {
@@ -197,6 +203,7 @@ async function initializeThreadBindingManager(
       mutate(() =>
         updateTelegramBindingsBySessionKey({
           manager,
+          runtime,
           targetSessionKey: targetSessionKeyRaw,
           mutationOptions: {
             remove: true,
@@ -209,6 +216,7 @@ async function initializeThreadBindingManager(
       mutate(() =>
         updateTelegramBindingsBySessionKey({
           manager,
+          runtime,
           targetSessionKey,
           update,
           mutationOptions: { reason: "session-lifecycle-update" },
@@ -229,6 +237,7 @@ async function initializeThreadBindingManager(
         return null;
       }
       const next = updateStoredBindingSync({
+        runtime,
         binding,
         persist,
         update,
@@ -352,7 +361,7 @@ async function initializeThreadBindingManager(
         if (!conversationId) {
           return null;
         }
-        const mutation = captureBindingMutation(manager, conversationId);
+        const mutation = captureBindingMutation(manager, runtime, conversationId);
         const record = fromSessionBindingInput({
           accountId,
           existing: mutation.previous,
@@ -371,6 +380,7 @@ async function initializeThreadBindingManager(
         const committed =
           manager.shouldPersistMutations() &&
           (await persistBindingMutation({
+            runtime,
             accountId,
             persist: true,
             binding: record,
@@ -453,7 +463,7 @@ async function initializeThreadBindingManager(
       void mutate(async () => {
         const now = Date.now();
         for (const candidate of listBindingsForAccount(accountId)) {
-          const mutation = captureBindingMutation(manager, candidate.conversationId);
+          const mutation = captureBindingMutation(manager, runtime, candidate.conversationId);
           const record = mutation.previous;
           if (!record) {
             continue;
@@ -494,6 +504,7 @@ export function getTelegramThreadBindingManager(
 
 async function updateTelegramBindingsBySessionKey(params: {
   manager: TelegramThreadBindingManager;
+  runtime: TelegramRuntime;
   targetSessionKey: string;
   update?: (entry: TelegramThreadBindingRecord, now: number) => TelegramThreadBindingRecord;
   mutationOptions: { reason: string; remove?: boolean; throwOnError?: boolean };
@@ -511,7 +522,7 @@ async function updateTelegramBindingsBySessionKey(params: {
     if (!params.update && entry.targetSessionKey !== targetSessionKey) {
       continue;
     }
-    const mutation = captureBindingMutation(params.manager, entry.conversationId);
+    const mutation = captureBindingMutation(params.manager, params.runtime, entry.conversationId);
     const current = mutation.previous;
     if (!current || current.targetSessionKey !== targetSessionKey) {
       continue;
