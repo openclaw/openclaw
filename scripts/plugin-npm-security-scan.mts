@@ -249,6 +249,13 @@ function dependencyFindingPath(file: string): string | undefined {
   return index === -1 ? undefined : file.slice(index);
 }
 
+/** Packages whose own files carry reviewed critical findings. */
+export function reviewedCriticalFindingPackageNames(): Set<string> {
+  return new Set(
+    [...REVIEWED_CRITICAL_FINDING_LIMITS.keys()].flatMap((key) => key.split(":").slice(1, 2)),
+  );
+}
+
 export function scanPluginNpmArtifactSecurity(params: {
   packageName: string;
   packageVersion: string;
