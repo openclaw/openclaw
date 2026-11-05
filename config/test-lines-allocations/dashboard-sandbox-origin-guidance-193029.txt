@@ -1,0 +1,3 @@
+# Dashboard widget frames: sandboxOrigin guidance after the sandbox ready deadline,
+# with and without an authored sandboxOrigin.
+28

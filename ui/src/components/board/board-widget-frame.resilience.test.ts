@@ -48,6 +48,12 @@ function mountFrame(
   }
   return { root, frame, post, notify, fetchDocument, refresh };
 }
+const connectedContext = {
+  gateway: {
+    snapshot: { phase: "connected" },
+    connection: { gatewayUrl: "https://gateway.example" },
+  },
+} as ApplicationContext;
 afterEach(() => {
   lifecycle?.disconnect();
   lifecycle = undefined;
@@ -147,12 +153,6 @@ it("resumes its board bridge after suspension rolls back without reconnecting", 
 
 it("keeps a stalled inner document mounted, offers retry, and accepts only the current render", async () => {
   vi.useFakeTimers();
-  const context = {
-    gateway: {
-      snapshot: { phase: "connected" },
-      connection: { gatewayUrl: "https://gateway.example" },
-    },
-  } as ApplicationContext;
   const {
     root,
     frame,
@@ -160,7 +160,7 @@ it("keeps a stalled inner document mounted, offers retry, and accepts only the c
     notify: dispatch,
     fetchDocument,
     refresh,
-  } = mountFrame(grantedFrameWidgetFixture(), context, {}, true);
+  } = mountFrame(grantedFrameWidgetFixture(), connectedContext, {}, true);
   const notify = (method: string, params: object) => dispatch({ method, params });
   await vi.advanceTimersByTimeAsync(0);
   const renderId = () =>
@@ -198,15 +198,9 @@ it.each([
   "offers sandboxOrigin guidance behind More info after the ready deadline (sandboxOrigin=$sandboxOrigin)",
   async ({ sandboxOrigin, hint }) => {
     vi.useFakeTimers();
-    const context = {
-      gateway: {
-        snapshot: { phase: "connected" },
-        connection: { gatewayUrl: "https://gateway.example" },
-      },
-    } as ApplicationContext;
     // The outer sandbox frame never announces readiness.
     const widget = { ...grantedFrameWidgetFixture(), sandboxOrigin };
-    const { root } = mountFrame(widget, context, {}, true, false);
+    const { root } = mountFrame(widget, connectedContext, {}, true, false);
     await vi.advanceTimersByTimeAsync(30_000);
     flush();
     const notice = root.querySelector('[role="status"]');
