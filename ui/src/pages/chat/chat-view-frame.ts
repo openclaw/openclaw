@@ -18,6 +18,7 @@ import { isSessionRunVisuallyActive } from "../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
+import type { ChatDefaultModelRecovery } from "./chat-default-model-recovery.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import {
   buildPendingInputQueueItems,
@@ -126,6 +127,7 @@ export type ChatProps = Omit<
     onScrollToBottom?: (options?: { smooth?: boolean }) => void;
     onRefresh: () => void;
     onDismissError?: () => void;
+    defaultModelRecovery?: ChatDefaultModelRecovery;
     agentsList: {
       agents: Array<{
         id: string;

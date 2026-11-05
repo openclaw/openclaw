@@ -116,6 +116,23 @@ thinking parameter. Model/account restrictions and unrelated unsupported options
 keep their original failure classification and follow the configured fallback
 policy. OpenClaw does not retry them with thinking disabled.
 
+## Explicit switch after a failed chat
+
+When a failed chat has a different, available configured default on the same
+provider, Control UI offers **Switch to configured default**. This is an explicit
+model selection, not an extra fallback candidate. It preserves a pinned runtime
+and auth-profile suffix, respects model-selection locks and permissions, and
+rejects a stale action after the selection, session, failure, or connection changes.
+
+The action changes the model for your next message. It does not retry the failed
+message, resend the original prompt, or alter completed tool work. Review saved
+output before sending a continuation. Availability in the model catalog does not
+guarantee remaining quota.
+
+Configured fallback chains remain authoritative. OpenClaw does not append a
+provider-selected alternate to an existing or exhausted chain. A generic rate
+limit is not evidence of model-scoped daily quota exhaustion.
+
 ## Runtime flow
 
 <Steps>

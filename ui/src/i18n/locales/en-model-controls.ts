@@ -68,6 +68,8 @@ const enModelControls = {
       ultrafastUnavailable: "Ultrafast isn’t available for this model.",
       tierDowngrade: "Running at {served}. {requested} isn’t available right now.",
       tierRejected: "{requested} isn’t available right now.",
+      switchToDefault: "Switch to configured default ({model})",
+      switchOnlyHelp: "Changes the model for your next message. Does not retry the failed message.",
       switchTitle: "Switch to {new}?",
       switchWarning:
         "Switching re-sends the whole conversation to {new} with your next message, which uses more tokens. Long conversations may be summarized.",

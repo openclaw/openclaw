@@ -1,0 +1,2 @@
+# Branch regression proof: strict selection (56 lines) and explicit switch owner, pin preservation, stale intent and no replay (222 lines).
+278
