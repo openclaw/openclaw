@@ -486,7 +486,9 @@ async function scrollTranscript(
       let endpoint;
       if (options.endpointEntryId) {
         for (let frame = 0; frame < 2; frame++) {
-          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          });
         }
         const bounds = thread.getBoundingClientRect();
         endpoint = {
