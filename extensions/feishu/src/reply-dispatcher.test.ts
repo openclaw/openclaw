@@ -1084,6 +1084,12 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["two starts", ["X.", 3, 2, 2, "X. Y.", ["X.", 0], 3, "X. Y."], ["X.", "X. Y.X.", "X. Y."]],
     ["offset", [2, "B.", ["B.", 2], 2, "X. Y.", ["X.", 2], 3, "X. Y."], ["B.\n\nX. Y.X.", "X. Y."]],
     ["first block", [2, "X.", ["X.", 1]], ["X."]],
+    ["old shown", [2, "A. X.", ["A.", 1], null, 2, "X. Y.", ["X.", 1], null], ["A. X.", "X. Y."]],
+    ["old failed", [2, "A. X.", ["A.", 1], 3, 2, "X. Y.", ["X.", 1], null], ["A. X.", "X. Y.X."]],
+    ["partial old", [2, "A. X.", true, false, 2, "X. Y.", ["X.", 1], null], ["A. X.", "X. Y.X."]],
+    ["old unseen", [2, "A.", ["A.", 1], null, 2, "X. Y.", ["X.", 1], null], ["A.", "X. Y.X."]],
+    ["two old", [2, "A. X.", ["A.", 1], null, 2, 2, "X. Y.", ["X.", 1], null], ["A. X.", "X. Y."]],
+    ["old twin", [2, "X.", ["X.", 1], null, 2, "Y.", ["X.", 1], null], ["X.", "Y.X."]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
@@ -1665,7 +1671,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
-
   it.each([
     {
       name: "web_search",
@@ -1701,7 +1706,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expectClosed("final answer");
     },
   );
-
   it.each([
     { reason: "cancelled_by_reply_payload_sending_hook", recover: false },
     { reason: "channel_transform", recover: false },
@@ -1721,7 +1725,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await expect(result.ensureNoVisibleReplyFallback("dispatch-complete")).resolves.toBe(recover);
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(recover ? 1 : 0);
   });
-
   it.each([
     { failureKind: "final", recover: true },
     { failureKind: "block", recover: false },
@@ -1749,7 +1752,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       expect(sendMessageFeishuMock).toHaveBeenCalledTimes(recover ? 1 : 0);
     },
   );
-
   it.each([
     { name: "newer silence", skippedIndex: 2, deliveryIndex: 1, rewritten: false, recover: false },
     { name: "unindexed failure", rewritten: false, recover: true },
@@ -1788,7 +1790,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       }
     },
   );
-
   it("waits for pending streaming close before no-visible-reply fallback", async () => {
     const { result, options } = createDispatcherHarness();
     const text = "```md\nvisible answer\n```";
@@ -1816,7 +1817,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await expect(result.ensureNoVisibleReplyFallback("zero-final-count")).resolves.toBe(false);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
-
   it("cleans streaming state even when close throws", async () => {
     const { options } = createDispatcherHarness();
     const firstDelivery = await options.final({ text: "```md\nfirst\n```" });
