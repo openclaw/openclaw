@@ -79,6 +79,7 @@ export function resolveContextEngineCompletionRuntimeContext(
     },
     assembly ?? null,
   );
+  const promptCache = result.promptCache ? { promptCache: result.promptCache } : {};
   // A startup estimate may describe the thread's previous model.
   const reportedContextTokens =
     result.contextTokensSource === "runtime" || result.contextTokensSource === "runtime-configured"
@@ -98,6 +99,7 @@ export function resolveContextEngineCompletionRuntimeContext(
       ...(assemblyBudget === undefined && reportedContextTokens === undefined
         ? {}
         : { tokenBudget: assemblyBudget ?? reportedContextTokens }),
+      ...promptCache,
     };
   }
   return {
@@ -112,5 +114,6 @@ export function resolveContextEngineCompletionRuntimeContext(
       params.contextTokenBudget ??
       reportedContextTokens ??
       params.authoredContextTokenCap,
+    ...promptCache,
   };
 }
