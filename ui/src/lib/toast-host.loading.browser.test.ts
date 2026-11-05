@@ -17,12 +17,7 @@ it("keeps the offline failure message and recovery controls visible", async () =
   const host = document.createElement("openclaw-toast-host");
   document.body.append(host);
   const dismissed = vi.fn();
-  showToast({
-    severity: "info",
-    message: "Synthetic saved notice",
-    onDismiss: dismissed,
-    durationMs: 60_000,
-  });
+  showToast({ severity: "info", message: "Saved", onDismiss: dismissed, durationMs: 60_000 });
 
   await waitForSolid(() => expect(host.querySelector('[role="alert"]')).not.toBeNull());
   const card = host.querySelector<HTMLElement>('[role="alert"]')!;
