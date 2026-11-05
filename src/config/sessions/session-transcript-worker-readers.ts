@@ -450,6 +450,10 @@ const readers: Readers & ThisType<ReaderContext> = {
     (input) => ({ kind: "session-pending-input-source", ...input }),
     (value) => value.snapshot,
   ),
+  readQuestions: reader(
+    (input) => ({ kind: "session-question-read", ...input }),
+    (value) => value.result,
+  ),
   readConversationDelivery: reader(
     (input) => ({ kind: "conversation-delivery", ...input }),
     (value) => value.record,

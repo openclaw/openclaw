@@ -29,7 +29,10 @@ import {
 } from "./session-accessor.sqlite-entry-store.js";
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
-import { createFallbackSessionEntry } from "./session-accessor.sqlite-normalize.js";
+import {
+  createFallbackSessionEntry,
+  createInboundSessionFallback,
+} from "./session-accessor.sqlite-normalize.js";
 import {
   resolveSqliteScope,
   resolveSqliteTranscriptArchiveDirectory,
@@ -73,7 +76,6 @@ import {
 } from "./session-source-authority.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
-import { mergeSessionEntry } from "./types.js";
 
 export { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
 export { replaceSessionEntrySync } from "./session-accessor.sqlite-entry-replace.js";
@@ -644,7 +646,10 @@ export async function recordInboundSessionMeta(
               scope: "session-entry",
             })
         : undefined,
-      fallbackEntry: input.createIfMissing === false ? undefined : mergeSessionEntry(undefined, {}),
+      fallbackEntry:
+        input.createIfMissing === false
+          ? undefined
+          : createInboundSessionFallback(input.sessionKey),
     },
   );
 }
@@ -706,7 +711,7 @@ export async function updateSessionLastRouteInScope(
       preserveActivity: true,
       ...commitGuard,
       workerGuard: { ...routeGuard, ...commitGuard.workerGuard },
-      ...(createIfMissing ? { fallbackEntry: mergeSessionEntry(undefined, {}) } : {}),
+      ...(createIfMissing ? { fallbackEntry: createInboundSessionFallback(scope.sessionKey) } : {}),
     },
     scope.databaseAgentId,
   );

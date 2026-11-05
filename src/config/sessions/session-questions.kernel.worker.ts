@@ -15,9 +15,18 @@ import {
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
-import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
+import {
+  readSessionEntryRow,
+  readExactSessionEntryRow,
+} from "./session-accessor.sqlite-entry-read.js";
+import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { captureSessionEntryReadSource } from "./session-entry-read-source.js";
+import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
+import { hasQuestionOwnerNativeReference } from "./session-question-recovery-owner.js";
 import { SessionQuestionCustodyRetiredError } from "./session-questions-custody-error.js";
+import { matchesDurableQuestionDefinition } from "./session-questions-definition.js";
+import { retireSessionQuestionsInDatabase } from "./session-questions-retirement.worker.js";
 import type {
   DurableQuestion,
   SessionQuestionOperation,
@@ -95,7 +104,7 @@ function readQuestion(
     : undefined;
 }
 
-export function readSessionQuestions(
+function readSessionQuestions(
   database: OpenClawAgentReadOnlyDatabase,
   input: Extract<SessionQuestionOperation, { kind: "get" | "list" }>,
 ): SessionQuestionResult {
@@ -120,7 +129,7 @@ export function readSessionQuestions(
 }
 
 /** Read-only custody repair requires exact physical and session facts in one native snapshot. */
-export function readSessionQuestionCustodyInDatabase(
+function readSessionQuestionCustodyInDatabase(
   database: OpenClawAgentReadOnlyDatabase,
   binding: DurableQuestionSessionBinding,
   id: string,
@@ -185,6 +194,386 @@ function assertCapturedQuestionBinding(
       "Durable question custody session generation changed.",
     );
   }
+}
+
+function assertQuestionGeneration(database: OpenClawAgentDatabase, question: DurableQuestion) {
+  const fresh = readSessionEntryRow(database, question.sessionKey)?.entry;
+  if (
+    fresh?.sessionId !== question.sessionId ||
+    fresh.lifecycleRevision !== question.lifecycleRevision
+  ) {
+    throw new Error("Question session changed; start a new question in the current session.");
+  }
+}
+
+/** Called only inside the canonical worker's synchronous transaction and current host grant. */
+export function operateSessionQuestion(
+  database: OpenClawAgentDatabase,
+  input: SessionQuestionOperation,
+  postimages: SessionEntryWritePostimages,
+): SessionQuestionResult {
+  const query = questionKysely(database);
+  if (input.kind === "register") {
+    assertCapturedQuestionBinding(database, input.question.sessionBinding);
+  }
+  if (input.kind === "register" || input.kind === "interrupt") {
+    executeSqliteQuerySync(
+      database.db,
+      query
+        .deleteFrom("session_questions")
+        .where("continuation_state", "in", ["settled", "blocked", "interrupted"])
+        .where("terminal_at", "<=", Date.now() - TERMINAL_RECEIPT_RETENTION_MS),
+    );
+  }
+  if (input.kind === "retire") {
+    const fresh = readSessionEntryRow(database, input.sessionKey)?.entry;
+    if (
+      fresh?.sessionId === input.sessionId &&
+      fresh.lifecycleRevision === input.lifecycleRevision
+    ) {
+      throw new Error("Question generation is still active and cannot be retired.");
+    }
+    return retireSessionQuestionsInDatabase(database, input, input.resolutionId)
+      .map((id) => readQuestion(database, id))
+      .filter((question): question is DurableQuestion => question !== undefined);
+  }
+  if (input.kind === "list" || input.kind === "interrupt") {
+    if (input.kind === "interrupt") {
+      const pending = executeSqliteQuerySync(
+        database.db,
+        query
+          .selectFrom("session_questions")
+          .selectAll()
+          .where("continuation_state", "in", ["pending", "owed", "claimed"]),
+      ).rows;
+      for (const row of pending) {
+        const fresh = readSessionEntryRow(database, row.session_key)?.entry;
+        if (
+          fresh?.sessionId !== row.session_id ||
+          fresh.lifecycleRevision !== row.lifecycle_revision
+        ) {
+          retireSessionQuestionsInDatabase(
+            database,
+            {
+              sessionKey: row.session_key,
+              sessionId: row.session_id,
+              lifecycleRevision: row.lifecycle_revision,
+            },
+            `retired:${row.question_id}`,
+          );
+        }
+      }
+      executeSqliteQuerySync(
+        database.db,
+        query
+          .updateTable("session_questions")
+          .set({
+            continuation_state: "interrupted",
+            terminal_at: Date.now(),
+            continuation_reason:
+              "Gateway stopped after continuation admission; review the interrupted run before starting another.",
+          })
+          .where("continuation_state", "=", "claimed")
+          .where("gateway_epoch", "!=", input.gatewayEpoch),
+      );
+    }
+    return executeSqliteQuerySync(
+      database.db,
+      query.selectFrom("session_questions").selectAll(),
+    ).rows.map(decodeQuestion);
+  }
+  const id = input.kind === "register" ? input.question.record.id : input.id;
+  const current =
+    input.kind === "settle" ||
+    input.kind === "claim" ||
+    input.kind === "finish" ||
+    input.kind === "block"
+      ? readCapturedQuestionMutationCustody(database, id, input.expectedQuestion)
+      : readQuestion(database, id);
+  if (input.kind === "get") {
+    return current;
+  }
+  if (input.kind === "register") {
+    const question = input.question;
+    if (
+      question.record.status !== "pending" ||
+      question.continuation.status !== "pending" ||
+      !question.lifecycleRevision ||
+      question.record.agentId !== database.agentId ||
+      question.record.sessionKey !== question.sessionKey ||
+      question.record.answers ||
+      question.resolutionId
+    ) {
+      throw new Error(
+        "Durable question requires a pending definition and exact session ownership.",
+      );
+    }
+    const binding = question.sessionBinding;
+    if (
+      binding.agentId !== database.agentId ||
+      binding.sessionKey !== question.sessionKey ||
+      binding.sessionId !== question.sessionId ||
+      binding.lifecycleRevision !== question.lifecycleRevision ||
+      binding.databasePath !== database.path
+    ) {
+      throw new Error(
+        "Durable question binding does not own this database and session generation.",
+      );
+    }
+    assertQuestionGeneration(database, question);
+    if (current) {
+      if (!matchesDurableQuestionDefinition(current, question)) {
+        throw new Error("Question ID is already owned by another immutable definition.");
+      }
+      return current;
+    }
+    const fresh = readSessionEntryRow(database, question.sessionKey)?.entry;
+    if (
+      fresh?.durableQuestionOwners?.some(
+        (owner) => owner.questionId === id && hasQuestionOwnerNativeReference(fresh, owner),
+      )
+    ) {
+      throw new Error("Question ID is retained by native recovery; use a new question ID.");
+    }
+    const pending = executeSqliteQueryTakeFirstSync(
+      database.db,
+      query
+        .selectFrom("session_questions")
+        .select("question_id")
+        .where("session_key", "=", question.sessionKey)
+        .where("session_id", "=", question.sessionId)
+        .where("lifecycle_revision", "=", question.lifecycleRevision)
+        .where("continuation_state", "=", "pending"),
+    );
+    if (pending) {
+      throw new Error(
+        "This session already has a pending question; resolve it before asking another.",
+      );
+    }
+    const count =
+      executeSqliteQueryTakeFirstSync(
+        database.db,
+        query.selectFrom("session_questions").select(({ fn }) => fn.countAll<number>().as("count")),
+      )?.count ?? 0;
+    if (count >= 4096) {
+      throw new Error(
+        "Too many retained questions; resolve pending questions or wait for terminal receipts to expire before asking another.",
+      );
+    }
+    executeSqliteQuerySync(
+      database.db,
+      query.insertInto("session_questions").values({
+        question_id: id,
+        session_key: question.sessionKey,
+        session_id: question.sessionId,
+        lifecycle_revision: question.lifecycleRevision,
+        definition_json: JSON.stringify(question.record),
+        provenance_json: JSON.stringify(question.provenance),
+        session_binding_json: JSON.stringify(question.sessionBinding),
+        result_json: null,
+        resolution_id: null,
+        continuation_state: "pending",
+        continuation_run_id: null,
+        gateway_epoch: null,
+        terminal_at: null,
+        continuation_reason: null,
+      }),
+    );
+    recordQuestionOwner(database, question, postimages);
+    return question;
+  }
+  if (!current) {
+    throw new Error("Question not found; refresh the question list.");
+  }
+  if (input.kind !== "finish") {
+    assertQuestionGeneration(database, current);
+  }
+  if (input.kind === "settle") {
+    if (current.record.status !== "pending") {
+      return current;
+    }
+    if (input.outcome.id !== id || !input.resolutionId) {
+      throw new Error("Question resolution must name its original question and receipt.");
+    }
+    const expired = current.record.expiresAtMs <= Date.now();
+    if (input.outcome.status === "expired" && !expired) {
+      throw new Error("Question has not reached its absolute expiry.");
+    }
+    const outcome = expired
+      ? { id, status: "expired" as const }
+      : { ...input.outcome, ...(input.resolvedBy ? { resolvedBy: input.resolvedBy } : {}) };
+    executeSqliteQuerySync(
+      database.db,
+      query
+        .updateTable("session_questions")
+        .set({
+          result_json: JSON.stringify(outcome),
+          resolution_id: input.resolutionId,
+          continuation_state: "owed",
+        })
+        .where("question_id", "=", id)
+        .where("continuation_state", "=", "pending"),
+    );
+  } else if (input.kind === "block") {
+    if (current.continuation.status === "owed") {
+      executeSqliteQuerySync(
+        database.db,
+        query
+          .updateTable("session_questions")
+          .set({
+            continuation_state: "blocked",
+            continuation_reason: input.reason,
+            terminal_at: Date.now(),
+          })
+          .where("question_id", "=", id)
+          .where("continuation_state", "=", "owed"),
+      );
+    }
+  } else if (input.kind === "claim") {
+    if (
+      current.continuation.status === "claimed" &&
+      current.continuation.runId === input.runId &&
+      current.continuation.gatewayEpoch === input.gatewayEpoch
+    ) {
+      return current;
+    }
+    if (current.continuation.status !== "owed" || !input.runId || !input.gatewayEpoch) {
+      throw new Error(
+        "Question continuation is not available for admission; inspect its current outcome.",
+      );
+    }
+    executeSqliteQuerySync(
+      database.db,
+      query
+        .updateTable("session_questions")
+        .set({
+          continuation_state: "claimed",
+          continuation_run_id: input.runId,
+          gateway_epoch: input.gatewayEpoch,
+        })
+        .where("question_id", "=", id)
+        .where("continuation_state", "=", "owed"),
+    );
+  } else {
+    if (current.continuation.runId !== input.runId) {
+      throw new Error("Question continuation no longer owns this run.");
+    }
+    if (current.continuation.status === "claimed") {
+      executeSqliteQuerySync(
+        database.db,
+        query
+          .updateTable("session_questions")
+          .set({
+            continuation_state: input.interrupted ? "interrupted" : "settled",
+            terminal_at: Date.now(),
+            continuation_reason: input.reason ?? null,
+          })
+          .where("question_id", "=", id)
+          .where("continuation_state", "=", "claimed")
+          .where("continuation_run_id", "=", input.runId),
+      );
+    }
+  }
+  const result = readQuestion(database, id);
+  if (input.kind === "claim" && result) {
+    recordQuestionOwner(database, result, postimages);
+  }
+  return result;
+}
+
+/** This marker remains bounded when the separate terminal question receipt expires. */
+function recordQuestionOwner(
+  database: OpenClawAgentDatabase,
+  question: DurableQuestion,
+  postimages: SessionEntryWritePostimages,
+): void {
+  const selected = readExactSessionEntryRow(database, question.sessionKey, "full", undefined, true);
+  const fresh = selected?.entry;
+  assertQuestionGeneration(database, question);
+  if (!fresh || !selected) {
+    throw new Error("Question lost its current session before ownership publication.");
+  }
+  const facts = captureSessionEntrySnapshot(selected);
+  const owners = (fresh.durableQuestionOwners ?? []).filter((owner) => {
+    if (owner.questionId === question.record.id || hasQuestionOwnerNativeReference(fresh, owner)) {
+      return true;
+    }
+    const retained = readQuestion(database, owner.questionId);
+    return (
+      retained !== undefined &&
+      ["pending", "owed", "claimed"].includes(retained.continuation.status)
+    );
+  });
+  const existing = owners.find((owner) => owner.questionId === question.record.id);
+  if (!existing && owners.length >= 4096) {
+    throw new Error(
+      "Too many retained question recovery owners; finish recovery or start a new session before asking another.",
+    );
+  }
+  if (
+    existing &&
+    hasQuestionOwnerNativeReference(fresh, existing) &&
+    (existing.sourceRunId !== question.provenance.sourceRunId ||
+      (existing.continuationRunId !== undefined &&
+        question.continuation.runId !== undefined &&
+        existing.continuationRunId !== question.continuation.runId))
+  ) {
+    throw new Error("Question recovery ownership cannot replace a retained native run.");
+  }
+  const owner = {
+    questionId: question.record.id,
+    sourceRunId: question.provenance.sourceRunId,
+    ...(question.continuation.runId ? { continuationRunId: question.continuation.runId } : {}),
+    sessionId: question.sessionId,
+    lifecycleRevision: question.lifecycleRevision,
+  };
+  writeSessionEntry(
+    database,
+    question.sessionKey,
+    {
+      ...fresh,
+      durableQuestionOwners: [
+        ...owners.filter((prior) => prior.questionId !== owner.questionId),
+        owner,
+      ],
+    },
+    {
+      canonicalPreviousEntry: fresh,
+      canonicalPreviousRow: selected.row,
+      canonicalPreviousWindow: facts.window,
+      canonicalPreviousSideTables: facts.sideTables,
+      postimages,
+      questionOwnerMutation: true,
+    },
+  );
+}
+
+/** Native mutation admission binds the captured observation, never a same-ID successor. */
+function readCapturedQuestionMutationCustody(
+  database: OpenClawAgentDatabase,
+  id: string,
+  expected: DurableQuestion,
+): DurableQuestion {
+  if (!expected?.sessionBinding || !expected.record) {
+    throw new SessionQuestionCustodyRetiredError("Captured durable question custody is required.");
+  }
+  const current = readSessionQuestionCustodyInDatabase(database, expected.sessionBinding, id);
+  const pendingDefinition: DurableQuestion = {
+    ...expected,
+    record: { ...expected.record, status: "pending" },
+  };
+  if (
+    !current ||
+    expected.record.id !== id ||
+    !matchesDurableQuestionDefinition(current, pendingDefinition) ||
+    current.record.createdAtMs !== expected.record.createdAtMs ||
+    current.record.expiresAtMs !== expected.record.expiresAtMs
+  ) {
+    throw new SessionQuestionCustodyRetiredError(
+      "Captured durable question definition or owner was retired.",
+    );
+  }
+  return current;
 }
 
 /** The transcript worker delegates the complete synchronous, admitted question read. */
