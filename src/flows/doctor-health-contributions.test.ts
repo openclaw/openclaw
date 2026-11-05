@@ -812,6 +812,7 @@ describe("doctor health contributions", () => {
       }
       const ctx = createDoctorContext({
         cfg: { agents: { entries: { main: {} } } },
+        options: { nonInteractive: true },
         retirementOnly: true,
         shouldRepair: true,
         env: state.env,
@@ -823,15 +824,13 @@ describe("doctor health contributions", () => {
           openAICodexAuthProfileIdMap: new Map(),
         },
       });
-
       await runDoctorHealthContributions(ctx);
 
       expect(transcripts).toHaveBeenCalledOnce();
       if (credentialWork !== "none") {
         expect(ctx.retirementOnly).toBe(false);
-        expect(vi.mocked(ctx.runtime.error).mock.calls.flat()).toEqual(
-          blockers.map((reason) => `Retirement-only Doctor widened: ${reason}`),
-        );
+        const diagnostics = blockers.map((reason) => `Retirement-only Doctor widened: ${reason}`);
+        expect(vi.mocked(ctx.runtime.error).mock.calls.flat()).toEqual(diagnostics);
         expect(mocks.detectLegacyStateMigrations).toHaveBeenCalled();
         return;
       }
