@@ -37,7 +37,7 @@ type Props = {
 };
 
 function ProcessRow(props: {
-  row: SessionProcessSummary;
+  row: Pick<SessionProcessSummary, "processId" | "instanceId" | "name" | "canStop">;
   presentation: ReturnType<typeof createProcessesPresentation>;
   presented: boolean;
   onOpen: () => void;
@@ -46,11 +46,7 @@ function ProcessRow(props: {
   const stop = createMemo(() => props.presentation.createStop(() => props.row));
   const nameOverflow = useScrollState(true, false, { revision: () => props.row.name });
   const status = () =>
-    t(
-      stop().stopping()
-        ? "chat.processesPanel.stopping"
-        : `chat.processesPanel.status.${props.row.status}`,
-    );
+    t(stop().stopping() ? "chat.processesPanel.stopping" : "chat.processesPanel.status.running");
   const description = () => `${props.row.name}. ${status()}`;
   return (
     <div
@@ -58,7 +54,7 @@ function ProcessRow(props: {
       class="chat-details-processes__row"
       role="listitem"
       data-process-id={props.row.processId}
-      data-status={props.row.status}
+      data-status="running"
       data-stopping={stop().stopping() ? "" : undefined}
       data-actionable={props.row.canStop ? "" : undefined}
     >
@@ -71,7 +67,7 @@ function ProcessRow(props: {
       >
         <span class="chat-details-processes__icon" aria-hidden="true">
           <Icon name="squareTerminal" />
-          <span class="chat-details-processes__badge" data-status={props.row.status}>
+          <span class="chat-details-processes__badge" data-status="running">
             <span class="chat-details-processes__spinner" />
           </span>
         </span>
@@ -79,7 +75,7 @@ function ProcessRow(props: {
           {props.row.name}
         </span>
       </button>
-      <Show when={props.row.status === "running" && props.row.canStop}>
+      <Show when={props.row.canStop}>
         <button
           class="chat-details-processes__action chat-details-processes__stop"
           type="button"
@@ -112,14 +108,11 @@ export function ChatDetailsProcesses(props: Props) {
   const snapshot = () => props.processes()?.snapshot;
   const live = createDetailsProcessesPresentation(() => snapshot()?.rows ?? []);
   const cached = () => props.details.cachedDetails?.processes;
-  const visibleRows = createMemo<SessionProcessSummary[]>(() =>
+  const visibleRows = createMemo(() =>
     snapshot()?.hasResult || snapshot()?.errorKind === "access"
       ? live().slice(0, 3)
       : (cached()?.rows ?? []).map((row) => ({
           ...row,
-          status: "running",
-          tail: "",
-          truncated: false,
           canStop: false,
         })),
   );
@@ -131,11 +124,10 @@ export function ChatDetailsProcesses(props: Props) {
           write: props.details.onDetailsSnapshot,
           processes: {
             total: live().length,
-            rows: visibleRows().map(({ processId, instanceId, name, startedAt }) => ({
+            rows: visibleRows().map(({ processId, instanceId, name }) => ({
               processId,
               instanceId,
               name,
-              startedAt,
             })),
           },
         }

@@ -20,6 +20,7 @@ registerProcessesEnglish();
 
 const REFRESH_INTERVAL_MS = 60_000;
 type ProcessesPanelInput = { sessionKey: string; agentId: string; presented: boolean };
+export type ProcessIdentity = Pick<SessionProcessSummary, "processId" | "instanceId">;
 type ProcessSnapshot = Pick<
   ProcessObservation,
   "rows" | "loading" | "hasResult" | "truncated" | "error" | "readError" | "errorKind" | "stopping"
@@ -104,11 +105,11 @@ export class ProcessesPanelData {
     return this.entry?.data.refresh(true) ?? Promise.resolve();
   }
 
-  stop(row: SessionProcessSummary): Promise<void> {
+  stop(row: ProcessIdentity): Promise<void> {
     return this.entry?.data.stop(row) ?? Promise.resolve();
   }
 
-  reportStopError(row: SessionProcessSummary, error: unknown): void {
+  reportStopError(row: ProcessIdentity, error: unknown): void {
     this.entry?.data.reportStopError(row, error);
   }
 
@@ -338,13 +339,13 @@ class ProcessObservation {
     return pending;
   }
 
-  reportStopError(row: SessionProcessSummary, error: unknown): void {
+  reportStopError(row: ProcessIdentity, error: unknown): void {
     this.actionError = formatUiError(error);
     this.actionInstanceId = row.instanceId;
     this.changed();
   }
 
-  async stop(row: SessionProcessSummary): Promise<void> {
+  async stop(row: ProcessIdentity): Promise<void> {
     const scope = this.scope;
     const sessionId = this.sessionId;
     const generation = this.generation;

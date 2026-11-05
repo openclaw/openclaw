@@ -104,7 +104,6 @@ export const detailsSnapshotSchema = json.optional(
             processId: sessionKeySchema,
             instanceId: sessionKeySchema,
             name: json.text,
-            startedAt: json.number,
           }),
           3,
         ),
