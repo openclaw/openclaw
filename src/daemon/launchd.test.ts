@@ -48,6 +48,7 @@ import {
   stopLaunchAgent,
   uninstallLaunchAgent,
 } from "./launchd.js";
+import { withGatewayServiceUpdateAuthority } from "./service-update-authority.js";
 
 const ENV_FILE = "/Users/test/.openclaw/service-env/ai.openclaw.gateway.env";
 const WRAPPER = "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh";
@@ -225,6 +226,7 @@ describe("launchd uninstall", () => {
   it.each([
     { operation: "lstat", code: "EACCES" },
     { operation: "rename", code: "ENOENT" },
+    { operation: "rename", code: "ENOSPC" },
   ] as const)(
     "reports $operation $code without leaking the plist path",
     async ({ operation, code }) => {
@@ -242,6 +244,54 @@ describe("launchd uninstall", () => {
       }
     },
   );
+
+  it.each([
+    ["mkdir", "EPERM"],
+    ["rename", "EPERM"],
+    ["mkdir", "EACCES"],
+    ["rename", "EACCES"],
+  ] as const)(
+    "removes the booted-out plist when Trash %s is denied with %s",
+    async (operation, code) => {
+      state.files.set(PLIST, "RunAtLoad=true");
+      vi.mocked(fs[operation]).mockRejectedValueOnce(Object.assign(new Error(code), { code }));
+
+      await expect(uninstallLaunchAgent(control())).resolves.toBeUndefined();
+      expect(state.files.has(PLIST)).toBe(false);
+    },
+  );
+
+  it("preserves the plist when authority expires before the unlink fallback", async () => {
+    state.files.set(PLIST, "RunAtLoad=true");
+    let current = true;
+    vi.mocked(fs.rename).mockImplementationOnce(async () => {
+      current = false;
+      throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+    });
+    await expect(
+      withGatewayServiceUpdateAuthority(
+        () => {
+          if (!current) {
+            throw new Error("Maintenance custody released");
+          }
+        },
+        () => uninstallLaunchAgent(control()),
+      ),
+    ).rejects.toMatchObject({ code: "service-authority-revoked" });
+    expect(state.files.has(PLIST)).toBe(true);
+    expect(fs.unlink).not.toHaveBeenCalled();
+  });
+
+  it("moves the plist into the Trash without replacing an earlier same-name item", async () => {
+    const earlier = "/Users/test/.Trash/ai.openclaw.gateway.plist";
+    state.files.set(PLIST, "RunAtLoad=true");
+    state.files.set(earlier, "earlier");
+
+    await expect(uninstallLaunchAgent(control())).resolves.toBeUndefined();
+    expect(state.files.has(PLIST)).toBe(false);
+    expect(state.files.get(earlier)).toBe("earlier");
+    expect([...state.files.keys()].filter((file) => file.includes("/.Trash/"))).toHaveLength(2);
+  });
 
   it("preserves the plist when launchctl cannot boot out the service", async () => {
     state.files.set(PLIST, "RunAtLoad=true");

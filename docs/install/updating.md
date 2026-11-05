@@ -295,7 +295,11 @@ contain this fix; it does not change an older migration already running.
 On macOS, reinstall and uninstall reconcile the launchd registration by service
 label even if its plist was deleted. Reinstall warns when the previous definition
 is missing; an existing plist and its private environment files remain backed up
-for rollback if activation fails.
+for rollback if activation fails. After unloading a LaunchAgent, uninstall and
+Doctor legacy cleanup try a timestamped Trash destination to preserve earlier
+Trash items. If macOS denies Trash access with EPERM or EACCES, they remove the
+unloaded plist directly instead. Other removal failures still report an error.
+This fallback requires the candidate performing cleanup to contain the fix.
 
 Update-time service reconciliation also removes the historical macOS
 `NODE_EXTRA_CA_CERTS=/etc/ssl/cert.pem` setting when the candidate installer retires
