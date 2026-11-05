@@ -302,7 +302,6 @@ export function createSessionHistoryWorkerReaders(
       facts: value.facts,
     })),
     readEntryCurrent: reader("session-entry-current", (value) => value.entry),
-    readDiagnosticText: reader("session-diagnostic-text", (value) => value.text),
     // The native reader validates the selected file. Replacement after that read is best effort.
     readEntries: async (scope, continuation, expectedIdentity, ifRevision) => {
       const captured = expectedIdentity && { ...expectedIdentity };

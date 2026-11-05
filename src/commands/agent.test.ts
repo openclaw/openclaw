@@ -680,6 +680,44 @@ describe("agentCommand", () => {
     },
   );
 
+  it.each(["text", "nested", "json"])(
+    "returns ingress %s replies without writing them to Gateway logs",
+    async (mode) => {
+      await withTempHome(async (home) => {
+        mockConfig(home, path.join(home, "sessions.json"));
+        const text = "synthetic private ingress reply";
+        vi.mocked(runEmbeddedAgent).mockResolvedValueOnce({
+          ...createDefaultAgentResult(),
+          payloads: [{ text }],
+        });
+        const actualDelivery = await vi.importActual<
+          typeof import("../agents/command/delivery.js")
+        >("../agents/command/delivery.js");
+        vi.mocked(deliverAgentCommandResult).mockImplementationOnce(
+          actualDelivery.deliverAgentCommandResult,
+        );
+        const ingressRuntime = { ...runtime, writeStdout: vi.fn(), writeJson: vi.fn() };
+
+        const result = await agentCommandFromIngress(
+          {
+            message: "probe",
+            agentId: "main",
+            allowModelOverride: false,
+            ...(mode === "nested" ? { lane: "nested" } : {}),
+            ...(mode === "json" ? { json: true } : {}),
+          },
+          ingressRuntime,
+        );
+
+        expect(result?.payloads).toEqual([expect.objectContaining({ text })]);
+        expect(JSON.stringify(vi.mocked(runtime.log).mock.calls)).not.toContain(text);
+        expect(JSON.stringify(vi.mocked(runtime.error).mock.calls)).not.toContain(text);
+        expect(ingressRuntime.writeStdout).not.toHaveBeenCalled();
+        expect(ingressRuntime.writeJson).not.toHaveBeenCalled();
+      });
+    },
+  );
+
   it("owns skill watching for ingress runs with oneShotCliRun=true", async () => {
     await withTempHome(async (home) => {
       mockConfig(home, path.join(home, "sessions.json"));

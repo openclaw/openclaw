@@ -376,10 +376,6 @@ serveOwnedWorkerTasks(
             );
         return { kind: "session-identity-evidence" as const, evidence };
       }
-      if (request.kind === "session-diagnostic-text") {
-        const { readSessionDiagnosticText } = await import("./session-entry-read.worker.js");
-        return readSessionDiagnosticText(request);
-      }
       if (request.kind === "session-entry-read" || request.kind === "session-runtime-target") {
         const { readSessionEntryWorkerRequest } = await import("./session-entry-read.worker.js");
         return readSessionEntryWorkerRequest(request);

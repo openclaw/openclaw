@@ -235,7 +235,7 @@ describe("stuck session recovery", () => {
 
     expect(warnLogMessages()).toEqual([
       "stuck session recovery outcome: status=aborted action=abort_embedded_run sessionId=run-456 sessionKey=agent:clawblocker:cron:job-123:run:run-456 activeSessionId=run-456 activeWorkKind=embedded_run lane=session:agent:clawblocker:cron:job-123:run:run-456 aborted=true drained=true forceCleared=false released=0",
-      'stuck session recovery: sessionId=run-456 sessionKey=agent:clawblocker:cron:job-123:run:run-456 age=629s action=abort_embedded_run aborted=true drained=true released=0 cronJobId=job-123 cronRunId=run-456 stopped="Twitter Mention Moderation Agent" lastAssistant="There are 40 cached mentions."',
+      'stuck session recovery: sessionId=run-456 sessionKey=agent:clawblocker:cron:job-123:run:run-456 age=629s action=abort_embedded_run aborted=true drained=true released=0 cronJobId=job-123 cronRunId=run-456 stopped="Twitter Mention Moderation Agent"',
     ]);
   });
 
