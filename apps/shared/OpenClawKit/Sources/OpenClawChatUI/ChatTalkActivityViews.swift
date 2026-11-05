@@ -56,7 +56,8 @@ struct ChatTalkActivityStrip: View {
                         Button(action: toggleMicrophone) {
                             Image(systemName: "mic.slash")
                                 .font(.system(size: OpenClawChatTypography.scaled(17), weight: .medium))
-                                .foregroundStyle(self.control.isMicrophoneMuted ? Color.orange : Color.secondary)
+                                .foregroundStyle(self.control.isMicrophoneMuted
+                                    ? OpenClawChatTheme.warning : OpenClawChatTheme.muted)
                                 .frame(minWidth: 44, minHeight: 44)
                                 .contentShape(Rectangle())
                         }
@@ -126,7 +127,7 @@ struct ChatTalkActivityStrip: View {
                 if self.control.isMicrophoneMuted {
                     Text("Microphone muted")
                         .font(OpenClawChatTypography.captionSemiBold)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(OpenClawChatTheme.warning)
                 }
             }
             if let collapsedText = model.collapsedText, !self.isExpanded {
