@@ -1,2 +1,0 @@
-# Regression: filtered Knowledge search reuses the validated corpus without persistent FTS reads.
-42
