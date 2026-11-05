@@ -63,6 +63,15 @@ describe.skipIf(process.platform === "win32")("private creation adapter on the n
     expect(first).not.toBe(second);
     expect(path.dirname(first)).toBe(path.dirname(second));
     expect(resolvePrivateSqliteSnapshotStagingRoot(firstEnv)).toBe(first);
+    // Doctor's private state copy stays in its installation's swept namespace.
+    const copy = ["openclaw-sqlite-readonly-v2-aB3dE6", "openclaw-sqlite-readonly-v2-fG7hI9"];
+    const privateState = path.join(first, ...copy, "openclaw-state");
+    expect(
+      resolvePrivateSqliteSnapshotStagingRoot({ ...env, OPENCLAW_STATE_DIR: privateState }),
+    ).toBe(first);
+    expect(fs.readdirSync(path.dirname(first)).toSorted()).toEqual(
+      [first, second].map((directory) => path.basename(directory)).toSorted(),
+    );
     for (const directory of [first, second]) {
       expect(fs.statSync(directory).mode & 0o777).toBe(0o700);
     }
