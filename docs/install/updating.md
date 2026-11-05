@@ -53,6 +53,14 @@ backup.
 
 ## Update implementation contract
 
+Candidate Gateway rehearsal can prepare strictly valid config in its complete
+private update namespace even when a newer release wrote the config. It preserves
+the source writer stamp for installed-updater capture checks; the target's normal
+validated-downgrade writer records its version before live restart. Ordinary
+service startup, force/reset actions, invalid config, and paths outside that
+private namespace retain their future-config refusal. The candidate Gateway must
+contain this repair; the installed updater needs no change.
+
 Candidate state inventory includes normally discovered global plugins even when
 there is no install record or explicit load path. Their private copies retain
 `extensions/<name>` discovery, including linked plugin directories, so candidate
@@ -192,6 +200,11 @@ fact without exposing private paths. The candidate worker and installed updater
 must contain the diagnostic repair; an older updater cannot gain it from a newer
 candidate alone. If capture refuses before the package changes, final recovery
 restarts and verifies the previous owned Gateway unless recorded data is at risk.
+
+PostgreSQL update rollback uses a fresh prepared anchor on each attempt. After a
+prepublication refusal, correcting the reported obstruction allows the same native
+`update restore` request to retry without overwriting an earlier recovery preparation.
+The candidate restore implementation must contain this fix; the supervisor needs no change.
 
 When artifact-preserving SQLite inspection exhausts its stabilization attempts,
 update failures retain the final consistency reason code and attempt count in
@@ -1415,6 +1428,9 @@ ownership. It preserves later independent changes; conflicting records, settings
 or artifacts leave recovery unfinished instead of overwriting those changes or
 reporting the old Gateway ready. The updater performing the operation must contain
 this support; installing a newer candidate does not add it to an older parent.
+When recovery stays pending, the update prints the first failure below the
+unfinished-recovery refusal and names `openclaw update repair` when it can settle
+that plugin cohort.
 When a legacy Doctor fails or is interrupted, package rollback leaves compatible
 databases in place. Database restoration still requires the existing schema and
 write-generation checks; later independent changes prevent an unsafe restore.

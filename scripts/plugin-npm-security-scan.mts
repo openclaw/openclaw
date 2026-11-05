@@ -29,6 +29,7 @@ const REVIEWED_CRITICAL_FINDING_LIMITS = new Map<string, number>([
   ["dist:@openclaw/codex:dangerous-exec:dist/client-<hash>.js", 1],
   ["dist:@openclaw/codex:dangerous-exec:dist/dynamic-tools-<hash>.js", 2],
   ["dist:@openclaw/codex:dangerous-exec:dist/session-catalog-<hash>.js", 1],
+  ["dist:@openclaw/codex:dangerous-exec:dist/stdio.worker.js", 1],
   ["dist:@openclaw/codex:dangerous-exec:dist/transport-stdio-<hash>.js", 1],
   ["source:@openclaw/codex:dangerous-exec:src/app-server/managed-launcher-failure.ts", 1],
   ["source:@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/http.ts", 1],

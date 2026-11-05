@@ -304,12 +304,17 @@ export async function handleChatSendWithStorage(
           userTurnRecorder.getPendingInputMessage?.() &&
           !userTurnRecorder.isPendingInputConsumed?.();
         const disposition = "cancelled";
-        userTurnRecorder.finishPendingInput?.(disposition);
-        if (pending && activeRunAbort.controller.signal.aborted) {
-          const reason = resolveChatAbortDiagnosticReason(
-            activeRunAbort.controller.signal,
-            activeRunAbort.entry?.adapter,
-          );
+        const reason = activeRunAbort.controller.signal.aborted
+          ? resolveChatAbortDiagnosticReason(
+              activeRunAbort.controller.signal,
+              activeRunAbort.entry?.adapter,
+            )
+          : undefined;
+        userTurnRecorder.finishPendingInput?.(
+          disposition,
+          reason === "user-stop" ? true : undefined,
+        );
+        if (pending && reason) {
           context.logGateway.info(`chat pending input aborted: ${reason} (${disposition})`, {
             runId: clientRunId,
             sessionKey,
@@ -590,6 +595,7 @@ export async function handleChatSendWithStorage(
     }
     phase?.finish();
     diagnostics.acknowledge();
+    using dispatchHandoff = diagnostics.scope("detail.dispatch.accepted_handoff");
     context.recordClientActivity?.(client);
     const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
     // Dispatch owns execution from this point, including deferred and collected turns.
@@ -651,6 +657,7 @@ export async function handleChatSendWithStorage(
         runOutsideOperatorToolGatewayAuthority(() => startChatDispatch(dispatch)),
       ),
     );
+    dispatchHandoff?.finish();
     admittedCleanup.dispatched = true;
     if (codexGoalCommitted) {
       await acknowledgeCodexGoal({

@@ -1,7 +1,6 @@
 {
   "version": 2,
   "locale": "it",
-  "glossaryHash": "47cf80de6cebb6ba1ac7a0bfd60e96de12a8611785bae9ca4f82c14912db9bd1",
   "translations": {
     "native.android.000452ffd65ee11a": "1 strumento saltato",
     "native.android.004fd715ebe3d013": "Conversazioni recenti",
@@ -2301,6 +2300,7 @@
     "native.apple.1e95c351636ace48": "Ottieni le istruzioni di connessione. La presenza nell’elenco dei dispositivi nelle vicinanze non verifica l’identità del proprietario del Gateway.",
     "native.apple.1eb5cb3fa091bfaa": "In elaborazione",
     "native.apple.1eec0c3f30993373": "Si è verificato un errore della funzionalità vocale. Prova a parlare di nuovo.",
+    "native.apple.1eec26d04ba179e3": "Questa dashboard richiede un'interfaccia del Gateway che supporti l'accesso dall'app nativa. Se non riesce a connettersi, aggiorna il Gateway. La chat e le impostazioni native restano disponibili.",
     "native.apple.1ef295c1fbce7883": "In visualizzazione ora",
     "native.apple.1ef2c9a8cf3055e1": "Codice di configurazione applicato. Connessione in corso...",
     "native.apple.1f000764a8ae9309": "Copia ID",
@@ -2407,6 +2407,7 @@
     "native.apple.287d7ee22143fe4f": "Passa a un Gateway locale in questa app per Mac prima di importare i cookie del browser.",
     "native.apple.289e286c20ded5d7": "%lld altre approvazioni",
     "native.apple.28c62043b750117e": "OpenClaw in pausa",
+    "native.apple.28e1f7d66851c866": "La dashboard non è disponibile con questa sessione Cloudflare. La chat e le impostazioni native continuano a funzionare.",
     "native.apple.28f50747b4810aa3": "L'attivazione vocale resterà continuamente in ascolto delle frasi di attivazione tramite il microfono di questo dispositivo.",
     "native.apple.2963d57ca8f445cb": "Mostra tutti i proprietari",
     "native.apple.29779d9500ee1f36": "Consentire l'accesso alla posizione in qualsiasi momento?",
@@ -3856,7 +3857,6 @@
     "native.apple.b5b7102ed84a411c": "Nasconde l'etichetta di stato del Gateway",
     "native.apple.b5b843b6a0a96cc5": "Il microfono in tempo reale non è più disponibile: %@",
     "native.apple.b6047dc323d4d013": "Il servizio persistente del nodo Mac non è disponibile nel profilo dell'app; il nodo di runtime rimane disponibile.",
-    "native.apple.b63397a349b9705f": "Questa dashboard richiede una sessione del browser. La chat nativa e le impostazioni del Gateway restano disponibili.",
     "native.apple.b63d92eab5836702": "Log di rilevamento",
     "native.apple.b64b9c3d707d9f01": "Workshop Skill",
     "native.apple.b64d7a5636bb97ef": "Host HTTPS esatti, separati da virgole o spazi. Se il campo è vuoto, sono consentiti solo i SecretRef della configurazione.",

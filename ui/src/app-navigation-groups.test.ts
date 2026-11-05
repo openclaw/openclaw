@@ -8,11 +8,7 @@ import {
 } from "./app-navigation.ts";
 import type { NativeDeviceSettingsCapability as Device } from "./app/native-device-settings.ts";
 import { getStaticCommandPaletteCatalogItems } from "./components/command-palette-catalog-search.ts";
-import {
-  settingsBackTarget,
-  settingsNavigationOwnerRoute,
-  settingsParentRoute,
-} from "./lib/settings-navigation.ts";
+import { settingsParentTarget, settingsNavigationOwnerRoute } from "./lib/settings-navigation.ts";
 import { findSettingsSearchBlocks } from "./pages/config/settings-search.ts";
 import { createChromeExtensionSetupResult } from "./test-helpers/chrome-extension-setup.ts";
 import {
@@ -133,48 +129,24 @@ it("keeps model setup as a settings subpage without a sidebar entry", () => {
   expect(settingsNavigationOwnerRoute("model-setup")).toBe("model-providers");
 });
 
-it("sends the phone Back one level up from settings subpages", () => {
-  const at = (pathname: string, search = "") => ({ pathname, search });
-  const target = (routeId: string, pathname: string, search = "") => ({
-    routeId,
-    pathname,
-    search,
+const pluginPath = "/settings/plugins/fixture";
+const prefixed = `/ui${pluginPath}`;
+it.each([
+  ["appearance", "/settings/appearance", "", "", null, ""],
+  ["plugin-settings", "/settings/plugins", "", "", null, ""],
+  ["ai-agents", "/settings/ai-agents", "", "", "agents", "/settings/agents"],
+  ["lobsterdex", "/ui/settings/lobsterdex", "", "/ui", "appearance", "/ui/settings/appearance"],
+  ["plugin-settings", pluginPath, "", "", "plugin-settings", "/settings/plugins"],
+  ["plugin-settings", pluginPath, "?from=plugins", "", "plugins", "/plugins"],
+  ["plugin-settings", prefixed, "?view=settings&from=plugins", "/ui", "plugin-settings", prefixed],
+] as const)("resolves the parent of %s at %s%s", (route, pathname, search, base, parent, path) => {
+  const expected = parent && {
+    routeId: parent,
+    pathname: path,
+    search: search.includes("view=settings") ? "?from=plugins" : "",
     hash: "",
-  });
-  expect(settingsBackTarget("appearance", at("/settings/appearance"))).toBeNull();
-  expect(settingsBackTarget("plugin-settings", at("/settings/plugins"))).toBeNull();
-  expect(settingsBackTarget("ai-agents", at("/settings/ai-agents"))).toEqual(
-    target("agents", "/settings/agents"),
-  );
-  expect(settingsBackTarget("lobsterdex", at("/ui/settings/lobsterdex"), "/ui")).toEqual(
-    target("appearance", "/ui/settings/appearance"),
-  );
-  expect(settingsBackTarget("plugin-settings", at("/settings/plugins/fixture"))).toEqual(
-    target("plugin-settings", "/settings/plugins"),
-  );
-  expect(
-    settingsBackTarget(
-      "plugin-settings",
-      at("/settings/plugins/fixture", "?view=settings&from=plugins"),
-    ),
-  ).toEqual(target("plugin-settings", "/settings/plugins/fixture", "?from=plugins"));
-  expect(
-    settingsBackTarget("plugin-settings", at("/settings/plugins/fixture", "?from=plugins")),
-  ).toEqual(target("plugins", "/plugins"));
-});
-
-it("gives each settings subpage one level up and top-level sections none", () => {
-  expect(settingsNavigationOwnerRoute("lobsterdex")).toBe("appearance");
-  expect(settingsParentRoute("lobsterdex")).toBe("appearance");
-  expect(settingsParentRoute("ai-agents")).toBe("agents");
-  expect(settingsParentRoute("appearance")).toBeNull();
-  expect(settingsParentRoute("plugin-settings", "/settings/plugins")).toBeNull();
-  expect(settingsParentRoute("plugin-settings", "/settings/plugins/fixture")).toBe(
-    "plugin-settings",
-  );
-  expect(settingsParentRoute("plugin-settings", "/ui/settings/plugins/fixture", "/ui")).toBe(
-    "plugin-settings",
-  );
+  };
+  expect(settingsParentTarget(route, { pathname, search }, base)).toEqual(expected);
 });
 
 const opaqueIds = ["plugin:reports/daily/team:summary", "plugin:reports/日报 summary"];

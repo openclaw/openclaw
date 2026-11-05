@@ -49,9 +49,9 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // First-visit co-location improves Sessions/Cron by 7–8%, accepting 205 B in Chat.
-  // Measured 1,280,999 B plus the existing 64 B build-variance headroom.
-  chatBootJsGzipBytes: 1_281_063,
+  // Approved named Actions queries (#186057) add 354 B to Chat vs main 079d8d92.
+  // Measured 1,285,870 B plus the existing 192 B headroom; requests stay at 20.
+  chatBootJsGzipBytes: 1_286_062,
   newBootJsGzipBytes: 797_395,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.

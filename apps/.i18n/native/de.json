@@ -1,7 +1,6 @@
 {
   "version": 2,
   "locale": "de",
-  "glossaryHash": "47cf80de6cebb6ba1ac7a0bfd60e96de12a8611785bae9ca4f82c14912db9bd1",
   "translations": {
     "native.android.000452ffd65ee11a": "1 Werkzeug übersprungen",
     "native.android.004fd715ebe3d013": "Letzte Unterhaltungen",
@@ -2301,6 +2300,7 @@
     "native.apple.1e95c351636ace48": "Verbindungsanleitung anzeigen. Ein Eintrag unter „In der Nähe“ bestätigt nicht die Identität des Gateway-Eigentümers.",
     "native.apple.1eb5cb3fa091bfaa": "In Arbeit",
     "native.apple.1eec0c3f30993373": "Bei der Sprachfunktion ist ein Fehler aufgetreten. Versuchen Sie erneut zu sprechen.",
+    "native.apple.1eec26d04ba179e3": "Dieses Dashboard erfordert eine Gateway-Benutzeroberfläche, die die Anmeldung über die native App unterstützt. Falls keine Verbindung hergestellt werden kann, aktualisieren Sie das Gateway. Der native Chat und die Einstellungen bleiben verfügbar.",
     "native.apple.1ef295c1fbce7883": "Aktuell angesehen",
     "native.apple.1ef2c9a8cf3055e1": "Einrichtungscode übernommen. Verbindung wird hergestellt...",
     "native.apple.1f000764a8ae9309": "ID kopieren",
@@ -2407,6 +2407,7 @@
     "native.apple.287d7ee22143fe4f": "Stellen Sie diese Mac-App auf ein lokales Gateway um, bevor Sie Browser-Cookies importieren.",
     "native.apple.289e286c20ded5d7": "%lld weitere Genehmigungen",
     "native.apple.28c62043b750117e": "OpenClaw pausiert",
+    "native.apple.28e1f7d66851c866": "Das Dashboard ist mit dieser Cloudflare-Sitzung nicht verfügbar. Der native Chat und die Einstellungen funktionieren weiterhin.",
     "native.apple.28f50747b4810aa3": "Die Sprachaktivierung lauscht kontinuierlich über das Mikrofon dieses Geräts auf Aktivierungsphrasen.",
     "native.apple.2963d57ca8f445cb": "Alle Besitzer anzeigen",
     "native.apple.29779d9500ee1f36": "Standortzugriff jederzeit erlauben?",
@@ -3856,7 +3857,6 @@
     "native.apple.b5b7102ed84a411c": "Blendet die Gateway-Statusanzeige aus",
     "native.apple.b5b843b6a0a96cc5": "Mikrofon im Echtzeitmodus nicht mehr verfügbar: %@",
     "native.apple.b6047dc323d4d013": "Der dauerhafte Mac-Knotendienst ist im App-Profil nicht verfügbar; der Laufzeitknoten bleibt verfügbar.",
-    "native.apple.b63397a349b9705f": "Dieses Dashboard benötigt eine Browsersitzung. Der native Chat und die Gateway-Einstellungen bleiben verfügbar.",
     "native.apple.b63d92eab5836702": "Erkennungsprotokolle",
     "native.apple.b64b9c3d707d9f01": "Skill-Werkstatt",
     "native.apple.b64d7a5636bb97ef": "Exakte HTTPS-Hosts, durch Kommas oder Leerzeichen getrennt. Ein leeres Feld erlaubt nur SecretRefs aus der Konfiguration.",

@@ -38,6 +38,24 @@ backed by those local providers and repairs references to unavailable providers.
 This repair leaves `models.json` unchanged, preserving its comments. Unreadable
 or malformed catalogs still produce a warning and leave affected references intact.
 
+## Plugin prompt-modification permission
+
+The plugin hook policy key `plugins.entries.<id>.hooks.allowPromptInjection`
+was renamed to `plugins.entries.<id>.hooks.allowPromptModification`. Run
+`openclaw doctor --fix` after a direct package/source upgrade; normal updates
+run the same backed-up Doctor migration before admitting the candidate config.
+
+Doctor preserves explicit `true` and `false` values and leaves an unset grant
+unset. It removes the old key only after copying its value, or confirming both
+keys have the same boolean value. Conflicting or invalid values stop the repair
+before config publication; resolve the reported keys and run Doctor again.
+Ordinary reads reject the retired key instead of ignoring a denial. Doctor also
+keeps active legacy prompt policy ahead of last-known-good recovery, so an older
+backup cannot replace a newer grant or denial while an include needs repair. Existing
+include-write constraints still apply, and plugin-owned `config` fields are not
+renamed. No permission default or enforcement changes. Inspection responses keep
+the existing `grants.hooks.allowPromptInjection` field for API compatibility.
+
 ## Retired A2UI widgets
 
 A2UI widgets and the `registerBoardWidgetContentKind` Plugin SDK API have been
@@ -83,14 +101,16 @@ entry, including its old settings, and the `skill-workshop` id in `plugins.deny`
 Validation reports that Doctor will remove them.
 
 Doctor, which also runs during `openclaw update`, removes that older policy and records
-the marker. It does not change `plugins.allow` or `plugins.enabled`. An ordinary
+the marker. A non-empty `plugins.allow` from that era never governed Workshop, so Doctor
+adds `skill-workshop` to it and existing users keep Workshop. Doctor never changes
+`plugins.enabled`. An ordinary
 config write records the marker only when no older policy needs repair. While an older
 entry or deny id is ignored, config writes that change `plugins` are refused with the
 next step: run `openclaw doctor --fix`, then retry. After that, `skill-workshop` policy
 applies like any other plugin's.
 
-An exclusive `plugins.allow` without `skill-workshop`, or `plugins.enabled: false`, keeps
-the plugin off, so learned skills do not load. Doctor's Skill Workshop health check warns
+After the migration, an exclusive `plugins.allow` without `skill-workshop`, or
+`plugins.enabled: false`, keeps the plugin off, so learned skills do not load. Doctor's Skill Workshop health check warns
 about either switch while Workshop is on and names the fix.
 
 ## Group allowlist fallback
