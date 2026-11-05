@@ -226,6 +226,9 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       if (!traceContext?.spanId || runtime.activeTrustedSpans.has(traceContext.spanId)) {
         return;
       }
+      // Stamp identity at span start: a shutdown or reload before the terminal
+      // event would otherwise export this span outside the conversation grouping.
+      runtime.addRunAttrs(attrs, evt);
       runtime.trackInternalOrTrustedSpan(
         evt,
         metadata,

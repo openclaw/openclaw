@@ -2439,10 +2439,7 @@ describe("diagnostics-otel service", () => {
   });
 
   test("exports session identity on run-scoped spans only when content capture is on", async () => {
-    await startServiceFixture(["traces"], (ctx) => {
-      ctx.config.diagnostics!.otel!.serviceName = "qa-gateway";
-      ctx.config.diagnostics!.otel!.captureContent = true;
-    });
+    await startServiceFixture(["traces"], { captureContent: true });
 
     emitEvent("run.completed", {
       sessionKey: "agent:forge:main",
@@ -2452,25 +2449,31 @@ describe("diagnostics-otel service", () => {
     });
     emitEvent("model.call.completed", {
       sessionKey: "agent:forge:main",
+      sessionId: "session-1",
       trace: createTestTrace(MODEL_CALL_SPAN_ID, CHILD_SPAN_ID),
     });
     await emitEventAndFlush("tool.execution.completed", {
       sessionKey: "agent:forge:main",
+      sessionId: "session-1",
       toolCallId: "tool-1",
       trace: createTestTrace(TOOL_SPAN_ID, GRANDCHILD_SPAN_ID),
     });
 
     expect(startedSpanOptions("openclaw.run")?.attributes).toMatchObject({
-      "gen_ai.conversation.id": "qa-gateway:agent:forge:main",
-      "openclaw.session.id": "agent:forge:main",
+      "gen_ai.conversation.id": "session-1",
+      "openclaw.session.id": "session-1",
     });
     expect(startedSpanOptions("openclaw.model.call")?.attributes).toMatchObject({
-      "gen_ai.conversation.id": "qa-gateway:agent:forge:main",
-      "openclaw.session.id": "agent:forge:main",
+      "gen_ai.conversation.id": "session-1",
+      "openclaw.session.id": "session-1",
     });
     expect(startedSpanOptions("openclaw.tool.execution")?.attributes).toMatchObject({
-      "gen_ai.conversation.id": "qa-gateway:agent:forge:main",
-      "openclaw.session.id": "agent:forge:main",
+      "gen_ai.conversation.id": "session-1",
+      "openclaw.session.id": "session-1",
+    });
+    // The session key is never exported, even with content capture on.
+    expect(startedSpanOptions("openclaw.run")?.attributes).not.toMatchObject({
+      "gen_ai.conversation.id": "agent:forge:main",
     });
     expectAbsent(startedSpanOptions("openclaw.run")?.attributes, "openclaw.sessionKey");
   });

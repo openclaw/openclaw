@@ -69,18 +69,17 @@ harness, tool execution, and skill use) carry:
 
 - `gen_ai.conversation.id`: the GenAI semantic-conventions attribute that
   Langfuse, LangWatch, Phoenix, and other vendor-neutral backends read for
-  grouping, valued as the OTel service name joined with the session key
-  (`<service.name>:<session key>`, for example `openclaw:agent:main:main`) so
-  concurrent Gateways exporting to one backend keep separate conversations.
-  Set a distinct `diagnostics.otel.serviceName` per Gateway when they share a
-  collector.
-- `openclaw.session.id`: the raw session key (`agent:main:main`) for backend
-  joins back to the unnamespaced identity.
+  grouping, valued with the session id.
+- `openclaw.session.id`: the same session id under the OpenClaw-native key.
 
-Session keys are stable identifiers of a person or chat and can include channel
-peer ids; the shared `captureContent` gate exists so identity travels only to a
-collector already trusted with raw prompt and tool content. Metric attributes
-never carry session identifiers.
+The value is the session id — the per-incarnation identifier, not the session
+key — so a reset or recreate starts a new conversation in the backend, matching
+the LLM's own context boundary. The raw session key (which can embed channel
+peer ids and collides across Gateways that share a collector) is never
+exported. Session ids are still stable identifiers of a conversation; the
+shared `captureContent` gate exists so identity travels only to a collector
+already trusted with raw prompt and tool content. Metric attributes never
+carry session identifiers.
 
 Skill-use spans can include a SHA-256 fingerprint of the instructions actually
 delivered while tracing is active, even with content capture disabled. This

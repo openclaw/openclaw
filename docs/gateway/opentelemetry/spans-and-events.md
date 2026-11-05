@@ -82,14 +82,13 @@ Omitting the option preserves prompt statistics for interested subscribers.
 
 Run-scoped spans (run, message and prompt processing, model call, model usage,
 harness, tool execution, and skill use) additionally carry
-`gen_ai.conversation.id` and `openclaw.session.id` — so trace backends group
-turns into one conversation — but only while
-`diagnostics.otel.captureContent` is `true`; the attributes are absent by
-default and never label metrics. `gen_ai.conversation.id` joins the OTel
-service name with the session key (`<service.name>:<session key>`, for
-example `openclaw:agent:main:main`) so Gateways sharing one backend keep
-separate conversations — set a distinct `serviceName` per Gateway;
-`openclaw.session.id` carries the raw session key. See
+`gen_ai.conversation.id` and `openclaw.session.id` — the session id, so trace
+backends group turns into one conversation per session incarnation — but only
+while `diagnostics.otel.captureContent` is `true`; the attributes are absent
+by default and never label metrics. The value is the session id, not the
+session key: a reset or recreate starts a new conversation, matching the
+LLM's context boundary, and the raw key (which can embed channel peer ids) is
+never exported. See
 [privacy and trace context](/gateway/opentelemetry/privacy-and-trace-context#session-identity).
 
 When content capture is explicitly enabled, model and tool spans can also
@@ -125,9 +124,9 @@ payloads.
 **Upgrade note:** if you already run with `diagnostics.otel.captureContent:
 true`, these message and run span attributes are new — your existing setting
 now also exports this prompt and reply content with no further configuration
-change, and stamps `gen_ai.conversation.id` (service name + session key) and
-`openclaw.session.id` (the raw session key) on run-scoped spans. Nothing new is
-exported while `captureContent` is unset or `false`.
+change, and stamps `gen_ai.conversation.id` / `openclaw.session.id` (the session
+id) on run-scoped spans. Nothing new is exported while `captureContent` is
+unset or `false`.
 
 ## Diagnostic event catalog
 
