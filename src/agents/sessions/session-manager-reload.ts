@@ -7,6 +7,7 @@ import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/tran
 import { captureSessionManagerIncognitoBinding } from "./session-manager-incognito-scope.js";
 import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
 import { prepareSessionManagerMemoryRead } from "./session-manager-memory-read.js";
+import { recordSessionManagerBoundedSelection } from "./session-manager-bounded-selection.js";
 import type {
   PreparedSessionTranscriptReload,
   SessionManagerBoundedContextLimits,
