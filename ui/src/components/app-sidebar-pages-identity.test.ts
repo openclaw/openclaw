@@ -133,7 +133,7 @@ describe("Pages navigation identity", () => {
       expect(icon.classList.contains("icon--filled")).toBe(false);
       expect(icon.getAttribute("fill")).toBe("none");
       expect(icon.getAttribute("stroke")).toBe("currentColor");
-      expect(icon.getAttribute("stroke-width")).toBe("2");
+      expect(icon.querySelector("[stroke-width]")).toBeNull();
     }
     const navigate = vi.fn();
     sidebar.onNavigate = navigate;

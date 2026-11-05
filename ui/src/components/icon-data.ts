@@ -305,17 +305,10 @@ export const iconData = {
     ["path", { d: "M12 7v4" }],
     ["path", { d: "M16 7v9" }],
   ]),
-  // Blobster uses the same two-pixel outline as the other navigation icons.
-  blobster: strokeIconData([
-    [
-      "path",
-      {
-        d: "M46 14Q38 4 31 7M74 14Q82 4 89 7M20 42C5 37 0 47 5 57C10 67 20 62 25 52M100 42C115 37 120 47 115 57C110 67 100 62 95 52M60 8C32 8 16 32 16 52C16 72 30 90 44 95V104H54V96C58 97.5 62 97.5 66 96V104H76V95C90 90 104 72 104 52C104 32 88 8 60 8ZM45 30v4M75 30v4",
-        transform: "translate(2 3) scale(.166666667)",
-        "stroke-width": "12",
-      },
-    ],
-  ]),
+  // Native 24px coordinates let each navigation surface own its stroke weight.
+  blobster: strokePathData(
+    "M9.667 5.333Q8.333 3.667 7.167 4.167M14.333 5.333Q15.667 3.667 16.833 4.167M5.333 10C2.833 9.167 2 10.833 2.833 12.5S5.333 13.333 6.167 11.667M18.667 10c2.5-.833 3.333.833 2.5 2.5s-2.5.833-3.333-.833M12 4.333C7.333 4.333 4.667 8.333 4.667 11.667S7 18 9.333 18.833v1.5H11V19c.667.25 1.333.25 2 0v1.333h1.667v-1.5C17 18 19.333 15 19.333 11.667S16.667 4.333 12 4.333ZM9.5 8v.667M14.5 8v.667",
+  ),
   bot: strokeIconData([
     ["path", { d: "M12 8V4H8" }],
     ["rect", { width: "16", height: "12", x: "4", y: "8", rx: "2" }],
