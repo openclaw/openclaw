@@ -188,6 +188,25 @@ it.each([
     result: { row: undefined },
   },
   {
+    command: { type: "cron.store" },
+    tables: ["config_machine_state"],
+    result: { row: undefined },
+  },
+  {
+    command: { type: "hooks.internal.installs" },
+    tables: ["config_machine_state"],
+    result: { row: undefined },
+  },
+  {
+    command: { type: "devicePairing.list", nowMs: 1 },
+    tables: ["config_machine_state", "device_pairing_paired", "device_pairing_pending"],
+    result: {
+      revision: "0",
+      bindings: [],
+      list: { pending: [], paired: [] },
+    },
+  },
+  {
     command: { type: "workerEnvironments.snapshot", input: {} },
     tables: [
       "worker_environments",
@@ -572,4 +591,53 @@ describe.each([
     expect(exportTranscript).not.toHaveBeenCalled();
     expect(mock.open).not.toHaveBeenCalled();
   });
+});
+
+it("rechecks fresh admission after loading a deferred query owner", async () => {
+  vi.resetModules();
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const query = vi.fn(() => []);
+  // mock-isolation: Hold the actual dispatch owner's import across source revocation.
+  vi.doMock("./backup-run-records.kernel.js", async (importOriginal) => {
+    entered.resolve();
+    await release.promise;
+    return {
+      ...(await importOriginal<typeof import("./backup-run-records.kernel.js")>()),
+      readBackupRunsInDatabase: query,
+    };
+  });
+  const { openClawStateDatabaseCache } = await import("./openclaw-state-db-cache.js");
+  const admission = vi.spyOn(
+    openClawStateDatabaseCache,
+    "assertOpenClawStateDatabaseFreshOpenAllowedAtPath",
+  );
+  await import("./openclaw-state-read.worker.js");
+  const pending = mock.handler({ ...request, checkFreshAdmission: true });
+  try {
+    await Promise.race([
+      entered.promise,
+      pending.then(() => {
+        throw new Error("Read returned before loading its query owner");
+      }),
+    ]);
+    expect(admission).not.toHaveBeenCalled();
+    admission.mockImplementation(() => {
+      throw new Error("Fresh source admission refused");
+    });
+    release.resolve();
+    expect(await pending).toMatchObject({
+      ok: false,
+      message: "Fresh source admission refused",
+      sourceAdmitted: undefined,
+    });
+    expect(admission).toHaveBeenCalledOnce();
+    expect(query).not.toHaveBeenCalled();
+    expect(mock.admit).not.toHaveBeenCalled();
+  } finally {
+    release.resolve();
+    await pending;
+    admission.mockRestore();
+    vi.doUnmock("./backup-run-records.kernel.js");
+  }
 });
