@@ -23,6 +23,12 @@ import { WebSocketServer, WebSocket } from "ws";
 // and OPENCLAW_IOS_CONNECTION_STATE_FIXTURE_URL via TEST_RUNNER_ to
 // OpenClawUITests/GatewayConnectionStateUITests/testIndependentConnectionAndDismissal.
 const connectionStateMode = process.argv.includes("--connection-state");
+// For CommandSessionsMutationUITests use --session-mutations and forward
+// OPENCLAW_IOS_SESSION_MUTATION_FIXTURE_URL=http://127.0.0.1:<port> and
+// OPENCLAW_IOS_LIVE_SETUP_CODE via TEST_RUNNER_. Each run needs a fresh fixture.
+const sessionMutationMode = process.argv.includes("--session-mutations");
+let sessionListRejected = false;
+let pinRejected = true;
 const port = Number(process.argv.find((arg) => arg.startsWith("--port="))?.slice(7) ?? 19876);
 if (!Number.isInteger(port) || port < 1024 || port > 65535) {
   throw new Error("Fixture port must be an unprivileged TCP port");
@@ -147,16 +153,19 @@ const approval = {
     host: "gateway",
   },
 };
-const sessions = Array.from({ length: attachmentMode ? 1 : 205 }, (_, i) => ({
-  key: i === 0 ? "agent:main:main" : `agent:main:navigation-${i}`,
-  displayName: i === 0 ? "Navigation proof" : `Synthetic session ${i}`,
-  label: i === 0 ? "Navigation proof" : `Synthetic session ${i}`,
-  kind: "direct",
-  updatedAt: created - i * 1000,
-  totalTokens: 100 + i,
-  inputTokens: 80 + i,
-  outputTokens: 20,
-}));
+const sessions = Array.from(
+  { length: sessionMutationMode ? 3 : attachmentMode ? 1 : 205 },
+  (_, i) => ({
+    key: i === 0 ? "agent:main:main" : `agent:main:navigation-${i}`,
+    displayName: i === 0 ? "Navigation proof" : `Synthetic session ${i}`,
+    label: i === 0 ? "Navigation proof" : `Synthetic session ${i}`,
+    kind: "direct",
+    updatedAt: created - i * 1000,
+    totalTokens: 100 + i,
+    inputTokens: 80 + i,
+    outputTokens: 20,
+  }),
+);
 const methods = [
   "health",
   "config.get",
@@ -176,6 +185,7 @@ const methods = [
   "models.list",
   "sessions.preview",
   "chat.send",
+  ...(sessionMutationMode ? ["sessions.patch"] : []),
   ...(attachmentMode ? ["artifacts.download"] : []),
 ];
 
@@ -302,6 +312,13 @@ const server = createServer((req, res) => {
     return;
   }
   const url = new URL(req.url, "http://127.0.0.1");
+  if (sessionMutationMode && url.pathname === "/session-mutations") {
+    if (req.method === "POST") {
+      sessionListRejected = url.searchParams.get("rejectList") === "1";
+    }
+    res.end(JSON.stringify({ sessions, requests, sessionListRejected, pinRejected }));
+    return;
+  }
   if (attachmentMode && url.pathname === "/attachment-ready") {
     attachmentReadyWaiters.add(res);
     res.once("close", () => attachmentReadyWaiters.delete(res));
@@ -385,6 +402,7 @@ wss.on("connection", (ws) => {
       sessionKey: params.sessionKey,
       artifactId: params.artifactId,
       ...(guestModelPolicy ? { key: params.key } : {}),
+      ...(sessionMutationMode ? { key: params.key, pinned: params.pinned } : {}),
     });
     notifyAttachmentReadyWaiters();
     const reply = (payload) =>
@@ -519,6 +537,10 @@ wss.on("connection", (ws) => {
         });
         break;
       case "sessions.list": {
+        if (sessionMutationMode && sessionListRejected) {
+          fail("Synthetic session list refused");
+          break;
+        }
         if (guestModelPolicy) {
           reply({
             ts: Date.now(),
@@ -570,21 +592,29 @@ wss.on("connection", (ws) => {
         reply({
           sessionKey: params.sessionKey ?? "agent:main:main",
           sessionId: guestModelPolicy ? "synthetic-policy-session" : "synthetic-session",
-          messages: connectionStateMode
-            ? connectionMessages
-            : guestModelPolicy
-              ? [
-                  {
-                    role: "assistant",
-                    content: [{ type: "text", text: policyHistoryText }],
-                    timestamp: created,
-                    model: "excluded",
-                    provider: "fixture",
-                  },
-                ]
-              : attachmentMode
-                ? [attachmentMessage]
-                : [],
+          messages: sessionMutationMode
+            ? [
+                {
+                  role: "assistant",
+                  content: [{ type: "text", text: `Opened ${params.sessionKey}` }],
+                  timestamp: created,
+                },
+              ]
+            : connectionStateMode
+              ? connectionMessages
+              : guestModelPolicy
+                ? [
+                    {
+                      role: "assistant",
+                      content: [{ type: "text", text: policyHistoryText }],
+                      timestamp: created,
+                      model: "excluded",
+                      provider: "fixture",
+                    },
+                  ]
+                : attachmentMode
+                  ? [attachmentMessage]
+                  : [],
         });
         break;
       case "chat.send": {
@@ -698,6 +728,19 @@ wss.on("connection", (ws) => {
         break;
       }
       case "sessions.patch":
+        if (sessionMutationMode) {
+          const session = sessions.find((entry) => entry.key === params.key);
+          if (!session || typeof params.pinned !== "boolean") {
+            fail("Unexpected synthetic session patch");
+          } else if (pinRejected) {
+            pinRejected = false;
+            fail("Synthetic pin refused");
+          } else {
+            session.pinned = params.pinned;
+            reply({ ok: true });
+          }
+          break;
+        }
         if (!guestModelPolicy) {
           fail(`Unsupported synthetic method: ${req.method}`);
           break;

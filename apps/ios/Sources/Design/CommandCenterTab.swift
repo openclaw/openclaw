@@ -756,6 +756,7 @@ struct CommandSessionsScreen: View {
     @State private var sessions: [OpenClawChatSessionEntry] = []
     @State private var isLoading = false
     @State private var loadErrorText: String?
+    @State private var actionErrorText: String?
     @State private var statusScope: SessionStatusScope = .active
     @State private var now: Date = .now
     @State private var knownGroups = SessionGroupStore.load()
@@ -893,6 +894,15 @@ struct CommandSessionsScreen: View {
                     .accessibilityIdentifier("Sessions.StatusScope")
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
+                }
+
+                if let actionErrorText {
+                    Text(verbatim: actionErrorText)
+                        .font(OpenClawType.captionMedium)
+                        .foregroundStyle(OpenClawBrand.warn)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
                 }
 
                 if let loadErrorText {
@@ -1184,7 +1194,7 @@ struct CommandSessionsScreen: View {
                 await self.refreshSessions()
                 self.openSessionKey(key)
             } catch {
-                self.loadErrorText = error.localizedDescription
+                self.actionErrorText = error.localizedDescription
             }
         }
     }
@@ -1201,7 +1211,7 @@ struct CommandSessionsScreen: View {
                 }
                 await self.refreshSessions()
             } catch {
-                self.loadErrorText = error.localizedDescription
+                self.actionErrorText = error.localizedDescription
             }
         }
     }
@@ -1216,6 +1226,7 @@ struct CommandSessionsScreen: View {
         let sourceAgentID = self.appModel.chatDeliveryAgentId
         self.isLoading = true
         self.loadErrorText = nil
+        self.actionErrorText = nil
         defer {
             if requestedScope == self.statusScope { self.isLoading = false }
         }
