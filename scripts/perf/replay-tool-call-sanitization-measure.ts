@@ -17,7 +17,8 @@ import { resolve } from "node:path";
 import { PerformanceObserver } from "node:perf_hooks";
 import { setImmediate } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import type { AgentMessage, StreamFn } from "../../src/agents/runtime/index.js";
+import type { Context } from "../../packages/llm-core/src/types.js";
+import type { StreamFn } from "../../src/agents/runtime/index.js";
 import { makeAssistantMessageFixture } from "../../src/agents/test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "../../src/agents/test-helpers/provider-model-fixture.js";
 import { sumSampledHeapBytes } from "../lib/heap-sampling.js";
@@ -42,18 +43,19 @@ for (const signed of [false, true]) {
     baseUrl: "https://example.test",
     api: signed ? "anthropic-messages" : "openai-responses",
   });
-  let forwarded: AgentMessage[] | undefined;
+  let forwarded: Context["messages"] | undefined;
   const capture: StreamFn = (_model, context) => {
     forwarded = context.messages;
     return undefined as never;
   };
   const run = wrapStreamFnSanitizeMalformedToolCalls(capture, new Set(["read"]), {
+    validateGeminiTurns: false,
     validateAnthropicTurns: signed,
     preserveSignatures: signed,
     dropThinkingBlocks: false,
   });
   for (const count of [200, 1_000, 2_000]) {
-    const messages: AgentMessage[] = [];
+    const messages: Context["messages"] = [];
     for (let turn = 0; turn < count / 5; turn++) {
       const calls = Array.from({ length: 3 }, (_, index) => ({
         type: "toolCall" as const,
