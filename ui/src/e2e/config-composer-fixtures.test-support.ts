@@ -87,9 +87,8 @@ export function computedStyles(control: Locator, names: readonly string[]) {
   }, names);
 }
 
-// Closed sections render their fields on first open, so callers name the sections that
-// hold a nested control. Opening sections in document order until it appears re-renders
-// the form once per section; the complete Gateway schema made that walk outlast the test.
+// Callers name the closed sections holding a nested control: opening every section in
+// document order until it rendered made the complete-schema form outlast its test timeout.
 export async function revealControl(control: Locator, sections: readonly string[] = []) {
   const page = control.page();
   for (const title of sections) {

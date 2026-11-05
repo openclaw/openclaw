@@ -410,10 +410,8 @@ it("groups every direct subagent with counts, live activity first, and a bounded
       (segment) => segment.dataset.state,
     ),
   ).toEqual(["done", "failed", "stopped", "running", "queued"]);
-  // Live activity is a lazy boundary. Load it before asserting so a cold CI worker's
-  // module import cannot outlast a polling budget.
+  // Load the lazy live activity first: a cold CI import can outlast a polling budget.
   await vi.dynamicImportSettled();
-  flush();
   const live = lane.querySelector<ChatSubagentActivityLive>("openclaw-chat-subagent-activity")!;
   expect(live).not.toBeNull();
   await live.updateComplete;
