@@ -90,7 +90,10 @@ final class IOSSessionArtifactsModel {
             let access = try await self.acquire()
             let result = try await access.list()
             try Task.checkCancellation()
-            self.artifacts = result.artifacts.map { IOSSessionArtifact(summary: $0) }
+            // A managed file can recur in the transcript with the same download identity.
+            var seen = Set<String>()
+            self.artifacts = result.artifacts.filter { seen.insert($0.id).inserted }
+                .map { IOSSessionArtifact(summary: $0) }
             self.isPartial = result.omittedoversized == true || result.nextcursor != nil
             self.hasLoaded = true
         } catch is CancellationError {

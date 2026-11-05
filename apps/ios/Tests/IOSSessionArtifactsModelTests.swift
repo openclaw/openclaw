@@ -7,7 +7,7 @@ import Testing
 @Suite("Session artifacts")
 @MainActor
 struct IOSSessionArtifactsModelTests {
-    @Test func `catalog preserves homonyms and unsupported entries without downloading their bytes`() async {
+    @Test func `catalog deduplicates identities but preserves homonyms without downloading their bytes`() async {
         let gateway = ArtifactGatewayFixture()
         let model = IOSSessionArtifactsModel(acquire: { await gateway.access() })
         await model.refresh()
@@ -118,6 +118,13 @@ private actor ArtifactGatewayFixture {
                 title: "Diagram.png",
                 mimetype: "image/png",
                 download: ["mode": AnyCodable("url")]),
+            // The same managed artifact may appear in more than one transcript message.
+            ArtifactSummary(
+                id: "first",
+                type: "file",
+                title: "Report.pdf",
+                mimetype: "application/pdf",
+                download: ["mode": AnyCodable("bytes")]),
         ])
     }
 
