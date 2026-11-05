@@ -156,6 +156,15 @@ async function dispatchSyntheticCommand(
     chatType: params.chatType,
     log: params.runtime?.log ?? console.log,
   });
+  if (!resolvedChatType) {
+    await sendMessageFeishu({
+      cfg: params.cfg,
+      to: resolveCallbackTarget(params.event),
+      text: "Unable to verify this conversation's chat type. Please try again.",
+      accountId: params.account.accountId,
+    });
+    return;
+  }
   await handleFeishuMessage({
     trackTask: params.trackTask,
     cfg: params.cfg,
@@ -196,7 +205,7 @@ async function resolveCardActionChatType(params: {
   account: ReturnType<typeof resolveFeishuRuntimeAccount>;
   chatType?: "p2p" | "group";
   log: (message: string) => void;
-}): Promise<"p2p" | "group"> {
+}): Promise<"p2p" | "group" | undefined> {
   const explicitChatType = normalizeFeishuChatType(params.chatType);
   if (explicitChatType) {
     return explicitChatType;
@@ -227,21 +236,21 @@ async function resolveCardActionChatType(params: {
         return resolvedChatType;
       }
       params.log(
-        `feishu[${params.account.accountId}]: card action missing chat type for chat; defaulting to p2p`,
+        `feishu[${params.account.accountId}]: card action missing chat type for chat; refusing card action`,
       );
     } else {
       params.log(
-        `feishu[${params.account.accountId}]: failed to resolve chat type: ${sanitizeLogValue(response.msg ?? "unknown error")}; defaulting to p2p`,
+        `feishu[${params.account.accountId}]: failed to resolve chat type: ${sanitizeLogValue(response.msg ?? "unknown error")}; refusing card action`,
       );
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : "unknown";
     params.log(
-      `feishu[${params.account.accountId}]: failed to resolve chat type: ${sanitizeLogValue(message)}; defaulting to p2p`,
+      `feishu[${params.account.accountId}]: failed to resolve chat type: ${sanitizeLogValue(message)}; refusing card action`,
     );
   }
 
-  return "p2p";
+  return undefined;
 }
 
 export async function handleFeishuCardAction(params: {
@@ -321,6 +330,21 @@ export async function handleFeishuCardAction(params: {
           await sendInvalidInteractionNotice("malformed");
           return;
         }
+        const chatType = await resolveCardActionChatType({
+          event,
+          account,
+          chatType: envelope.c?.t,
+          log,
+        });
+        if (!chatType) {
+          await sendMessageFeishu({
+            cfg,
+            to: resolveCallbackTarget(event),
+            text: "Unable to verify this conversation's chat type. Please try again.",
+            accountId,
+          });
+          return;
+        }
         await sendCardFeishu({
           cfg,
           to: resolveCallbackTarget(event),
@@ -331,12 +355,7 @@ export async function handleFeishuCardAction(params: {
             prompt,
             sessionKey: envelope.c?.s,
             expiresAt,
-            chatType: await resolveCardActionChatType({
-              event,
-              account,
-              chatType: envelope.c?.t,
-              log,
-            }),
+            chatType,
             confirmLabel: command === "/reset" ? "Reset" : "Confirm",
           }),
           accountId,
