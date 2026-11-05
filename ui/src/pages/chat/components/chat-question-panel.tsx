@@ -179,24 +179,34 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps; host: ChatQues
     if (disabled() || event.isComposing || event.keyCode === 229) {
       return;
     }
-    if (event.target instanceof HTMLTextAreaElement) {
-      if (
-        event.key === "Enter" &&
-        (event.metaKey || event.ctrlKey) &&
-        !event.altKey &&
-        !event.shiftKey &&
-        (item.allowEmpty || answerValues(model(), item).length > 0)
-      ) {
-        event.preventDefault();
-        advanceOrSubmit(item);
-      }
+    // Links and file pickers retain native activation instead of submitting answers.
+    if (
+      event.target instanceof HTMLAnchorElement ||
+      (event.target instanceof HTMLInputElement && event.target.type === "file")
+    ) {
       return;
     }
     if (
+      event.key === "Enter" &&
+      (event.metaKey || event.ctrlKey) &&
+      !event.altKey &&
+      !event.shiftKey &&
+      (event.target === event.currentTarget ||
+        event.target instanceof HTMLInputElement ||
+        event.target instanceof HTMLTextAreaElement ||
+        (event.target instanceof HTMLButtonElement &&
+          ["radio", "checkbox"].includes(event.target.getAttribute("role") ?? ""))) &&
+      (item.allowEmpty || answerValues(model(), item).length > 0)
+    ) {
+      event.preventDefault();
+      advanceOrSubmit(item);
+      return;
+    }
+    if (
+      event.target instanceof HTMLTextAreaElement ||
       event.metaKey ||
       event.ctrlKey ||
-      event.altKey ||
-      event.target instanceof HTMLAnchorElement
+      event.altKey
     ) {
       return;
     }
