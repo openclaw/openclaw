@@ -36,6 +36,7 @@ export function bindSessionControllerSource(
   input.sourceAdapter?.signal?.throwIfAborted();
   input.source = source;
   source.controllerInput = input;
+  notifyGatewayWorkMetricsChanged();
 }
 
 export function isSessionControllerSourceQueued(input: SessionControllerInput): boolean {
