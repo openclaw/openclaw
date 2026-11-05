@@ -12,12 +12,13 @@ const credentialDirectories = new Set([".ssh", ".codex", ".gnupg", ".openclaw"])
 const git = (root, ...args) =>
   execFileSync(gitBin, ["-C", root, ...args], { encoding: "utf8", maxBuffer: Infinity });
 
-// Resolve ancestors after partial closeout, but never resolve a selected
-// symlink's leaf: unlinking it does not authorize deleting its target.
+// Native realpath normalizes case on macOS. Resolve missing ancestors after
+// partial closeout; selected artifacts pass only their parent so a symlink's
+// leaf remains an entry to unlink, never a target authorized for deletion.
 function physical(file) {
   const absolute = path.resolve(file);
   return stat(absolute)
-    ? fs.realpathSync(absolute)
+    ? fs.realpathSync.native(absolute)
     : path.join(physical(path.dirname(absolute)), path.basename(absolute));
 }
 
@@ -40,8 +41,10 @@ function selectedArtifact(root, worktree, requested) {
   const input = path.resolve(root, requested);
   const target = path.join(physical(path.dirname(input)), path.basename(input));
   const artifacts = path.join(root, ".artifacts");
+  const entry = stat(target);
   if (
     target !== input ||
+    (entry && !fs.readdirSync(path.dirname(target)).includes(path.basename(target))) ||
     !(
       (within(artifacts, target) && target !== artifacts) ||
       (worktree && within(worktree, target) && target !== worktree)
@@ -50,9 +53,8 @@ function selectedArtifact(root, worktree, requested) {
       .split(path.sep)
       .some((part) => part === ".git" || credentialDirectories.has(part.toLowerCase()))
   ) {
-    throw new Error(`Artifact outside task boundaries: ${requested}`);
+    throw new Error(`Artifact outside task boundaries or noncanonical path: ${requested}`);
   }
-  const entry = stat(target);
   if (entry && !entry.isDirectory() && !entry.isSymbolicLink()) {
     throw new Error(`Select artifact directories or symlinks, not files: ${target}`);
   }
@@ -133,7 +135,11 @@ function inventory(plan) {
   }
   if (worktree && stat(worktree)) {
     const entry = stat(worktree);
-    if (entry.isSymbolicLink() || `${entry.dev}:${entry.ino}` !== plan.worktreeIdentity) {
+    if (
+      entry.isSymbolicLink() ||
+      physical(worktree) !== worktree ||
+      `${entry.dev}:${entry.ino}` !== plan.worktreeIdentity
+    ) {
       throw new Error("Selected worktree identity changed");
     }
     if (git(worktree, "rev-parse", "HEAD").trim() !== plan.head) {
@@ -420,13 +426,14 @@ async function requireNoSessionReferences(plan) {
         if (!["worktree", "archived_worktree"].includes(attachment.attachmentType)) {
           continue;
         }
-        if (
-          typeof attachment.payload?.root !== "string" ||
-          typeof attachment.payload?.workspaceRoot !== "string"
-        ) {
+        const worktree =
+          attachment.attachmentType === "archived_worktree"
+            ? attachment.payload?.worktree
+            : attachment.payload;
+        if (typeof worktree?.root !== "string" || typeof worktree?.workspaceRoot !== "string") {
           throw new Error(`Incomplete worktree attachment: ${id}`);
         }
-        references.push(attachment.payload.root, attachment.payload.workspaceRoot);
+        references.push(worktree.root, worktree.workspaceRoot);
       }
       // Unloaded historical sessions are not live consumers. Their metadata
       // still must be available. A finalizing owner cannot remove its own cwd.

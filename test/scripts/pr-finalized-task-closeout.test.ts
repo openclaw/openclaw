@@ -116,12 +116,14 @@ async function fixture(command: CommandFixture) {
     [owner]: { id: owner, cwd: repo, status: { type: "active" }, turns: [], environments: [] },
     [peer]: { id: peer, cwd: unrelated, status: { type: "idle" }, turns: [], environments: [] },
   };
+  const attachments: Record<string, { attachmentType: string; payload: unknown }[]> = {};
   const state = {
     head,
     landed,
     prState: "MERGED",
     unavailable: false,
     threads,
+    attachments,
   };
   const save = () => writeFileSync(stateFile, JSON.stringify(state));
   save();
@@ -209,8 +211,10 @@ throw Error("Unexpected GitHub call: " + args.join(" "));
             break;
           }
           case "thread/attachmentOwner/list":
-          case "thread/attachment/list":
             result = { data: [], nextCursor: null };
+            break;
+          case "thread/attachment/list":
+            result = { data: state.attachments[request.params.threadId] ?? [], nextCursor: null };
             break;
           default:
             throw new Error("Unexpected Codex method: " + request.method);
@@ -370,6 +374,23 @@ describePosix("scripts/pr finalized-task closeout", () => {
     for (const artifact of f.artifacts) {
       expect(existsSync(join(artifact, "proof.txt"))).toBe(true);
     }
+    f.preserved();
+  });
+
+  it("preserves tracked root artifacts selected through a filesystem case alias", async ({ f }) => {
+    const original = f.artifacts[2]!;
+    const canonical = join(f.repo, ".artifacts", "Task-Proof");
+    renameSync(original, canonical);
+    f.git("add", "-f", canonical);
+    const aliasExists = existsSync(original);
+    const result = await f.runArtifacts([original]);
+    if (aliasExists) {
+      expect(result.status, result.output).not.toBe(0);
+      expect(result.output).toMatch(/canonical|tracked/iu);
+    } else {
+      expect(result.status, result.output).toBe(0);
+    }
+    expect(readFileSync(join(canonical, "proof.txt"), "utf8")).toBe("task-owned proof\n");
     f.preserved();
   });
 
@@ -539,6 +560,34 @@ describePosix("scripts/pr finalized-task closeout", () => {
     expect(result.status, result.output).not.toBe(0);
     expect(result.output).toContain(peer);
     expect(existsSync(f.worktree)).toBe(true);
+    f.preserved();
+  });
+
+  it("accepts unrelated native worktree attachments and preserves live references", async ({
+    f,
+  }) => {
+    for (const attachmentType of ["worktree", "archived_worktree"]) {
+      for (const reference of [f.template, f.worktree]) {
+        const worktree = { root: reference, workspaceRoot: reference };
+        f.state.attachments[peer] = [
+          {
+            attachmentType,
+            payload: attachmentType === "archived_worktree" ? { worktree } : worktree,
+          },
+        ];
+        f.save();
+        const result = await f.run(["--dry-run"]);
+        if (reference === f.template) {
+          expect(result.status, result.output).toBe(0);
+        } else {
+          expect(result.status, result.output).not.toBe(0);
+          expect(result.output).toContain(peer);
+        }
+        for (const artifact of f.artifacts) {
+          expect(existsSync(join(artifact, "proof.txt"))).toBe(true);
+        }
+      }
+    }
     f.preserved();
   });
 
