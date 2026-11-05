@@ -48,7 +48,7 @@ import {
   normalizeSingletonNodeTestJob,
   nodeTestConfigRequiresCanonicalMetadata,
   resolveCanonicalNodeTestConfig,
-  isCompleteCanonicalNodeTestTarget,
+  resolveCompleteCanonicalNodeTestConfig,
   isCanonicalNodeTestConfig,
   isRuntimeTestFileIncluded,
   SOURCE_CHANNEL_TEST_POLICY,
@@ -420,27 +420,9 @@ function isIndependentMarkdownCompanion(file: string, cwd: string): boolean {
   ) {
     return false;
   }
-  const plans = buildVitestRunPlans([file], cwd);
-  const plan = plans[0];
-  if (!plan || plans.length !== 1 || plan.watchMode) {
-    return false;
-  }
-  const targets = plan.includePatterns ?? plan.forwardedArgs;
-  if (
-    targets.length !== 1 ||
-    targets[0] !== file ||
-    (plan.forwardedArgs.length > 0 &&
-      (plan.forwardedArgs.length !== 1 || plan.forwardedArgs[0] !== file))
-  ) {
-    return false;
-  }
-  const config = resolveCanonicalNodeTestConfig(file, plan.config);
+  const config = resolveCompleteCanonicalNodeTestConfig(file, buildVitestRunPlans([file], cwd));
   // Each config runs in its own process; unit-fast shares the Markdown worker.
-  return Boolean(
-    config &&
-    config !== "test/vitest/vitest.unit-fast.config.ts" &&
-    isCompleteCanonicalNodeTestTarget(file, config),
-  );
+  return config !== undefined && config !== "test/vitest/vitest.unit-fast.config.ts";
 }
 
 /** Resolve owner areas and transitive consumers once, before projecting platform jobs. */
