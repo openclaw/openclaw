@@ -160,7 +160,9 @@ describe("config form renderer", () => {
           yields.push(resolve);
         }),
     });
-    onTestFinished(() => vi.unstubAllGlobals());
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
     const properties = Object.fromEntries(
       Array.from({ length: 8 }, (_, index) => [
         `part${index}`,
@@ -211,7 +213,9 @@ describe("config form renderer", () => {
           yields.push(resolve);
         }),
     });
-    onTestFinished(() => vi.unstubAllGlobals());
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
     const entries = Object.fromEntries(
       Array.from({ length: 12 }, (_, index) => [`entry${index}`, `Value ${index}`]),
     );

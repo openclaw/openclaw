@@ -270,12 +270,12 @@ function ConfigBody(props: {
       <Show when={!["updates", "memory", "talk", "mcp", "security"].includes(props.pageId)}>
         <Show
           when={
-            !props.routeData?.targetBlockId &&
-            (props.pageId === "advanced" || props.pageId === "ai-agents")
+            props.pageId === "advanced" ||
+            (props.pageId === "ai-agents" && props.config.activeSection === "agents")
           }
           fallback={<Config {...config()} />}
         >
-          <Config {...config()} progressive />
+          <Config {...config()} progressive={!props.routeData?.targetBlockId} />
         </Show>
       </Show>
     </>

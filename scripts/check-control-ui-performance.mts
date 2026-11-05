@@ -49,10 +49,10 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Profile's zero-CLS reservation changes only hashed import names in boot code.
-  // Measured Chat/New are 1,287,605/800,599 B; retain 192 B headroom.
-  chatBootJsGzipBytes: 1_287_797,
-  newBootJsGzipBytes: 800_791,
+  // Settings' lazy changes alter only hashed import names in otherwise identical boot code.
+  // Measured Chat/New are 1,288,055/800,965 B; retain 192 B headroom.
+  chatBootJsGzipBytes: 1_288_247,
+  newBootJsGzipBytes: 801_157,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).

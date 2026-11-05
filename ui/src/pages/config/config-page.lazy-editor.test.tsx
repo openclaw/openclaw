@@ -124,6 +124,16 @@ it("progressively opens Advanced after visiting Infrastructure", async () => {
     expect(view.page.querySelector('[aria-busy="true"]')).toBeNull();
   });
 
+  const retained = view.page.querySelector("#config-section-part7");
+  view.update({
+    routeData: configRouteData({
+      pathname: "/settings/advanced",
+      search: "",
+      hash: "#config-section-part7",
+    }),
+  });
+  await waitForSolid(() => expect(view.page.querySelector("#config-section-part7")).toBe(retained));
+
   view.update({ pageId: "infrastructure" });
   vi.stubGlobal("scheduler", { yield: () => new Promise<void>(() => {}) });
   view.update({
