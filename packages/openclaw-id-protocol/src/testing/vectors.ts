@@ -242,6 +242,8 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
   const revocation = await signStatement(
     "Revocation",
     {
+      claw_id: VECTOR_CLAW_ID,
+      seq: 2,
       target_fp: keys["device-3"]!.fp,
       target_kind: "owner_device",
       reason: "lost",

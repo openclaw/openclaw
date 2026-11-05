@@ -5,7 +5,7 @@ import type { createWorkboardLifecycleService } from "./lifecycle-sync.js";
 
 type Context = Parameters<OpenClawPluginService["start"]>[0];
 export type LifecycleSnapshot = Awaited<
-  ReturnType<ReturnType<typeof createWorkboardLifecycleService>["readSessions"]>
+  ReturnType<Parameters<typeof createWorkboardLifecycleService>[0]["readSessions"]>
 >;
 type Session = LifecycleSnapshot["sessions"][number];
 

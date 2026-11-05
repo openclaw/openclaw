@@ -1,4 +1,5 @@
-import { createMemo, createSignal, For, onSettled } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { ErrorDetails } from "../components/config-error.tsx";
 import { Icon, type IconName } from "../components/solid/icon.tsx";
 import { AgentIdentityAvatar } from "../components/solid/identity-avatar.tsx";
 import { formatUiExternalText } from "./format-error.ts";
@@ -14,6 +15,7 @@ import {
   type ToastPlacement,
   type ToastSeverity,
 } from "./toast.ts";
+import toastStyles from "../styles/toast.css?inline";
 
 type ToastController = ReturnType<typeof toastOwnerFor>;
 
@@ -33,6 +35,7 @@ export function ToastView(props: {
   const anchored = createMemo(() => props.toasts.filter((entry) => entry.lane === "anchored"));
   return (
     <>
+      <style>{toastStyles}</style>
       <div class="app-toast-lanes">
         <For each={TOAST_LANES}>
           {(lane) => (
@@ -162,7 +165,7 @@ function ToastCard(props: { entry: ToastEntry; open: boolean; owner: ToastContro
           "app-toast--progress": toast().severity === "progress",
           "app-toast--avatar": Boolean(toast().avatar),
           "app-toast--action": hasAction(),
-          "app-toast--single-row": !copy().description && singleRow(),
+          "app-toast--single-row": !copy().description && toast().detail == null && singleRow(),
         },
       ]}
       data-active={props.entry.active ? "true" : "false"}
@@ -239,6 +242,9 @@ function ToastCard(props: { entry: ToastEntry; open: boolean; owner: ToastContro
           {copy().description ? (
             <span class="app-toast__description">{formatUiExternalText(copy().description)}</span>
           ) : undefined}
+          <Show when={toast()} keyed>
+            {(options) => <ErrorDetails error={options.detail} />}
+          </Show>
         </div>
         {hasAction() ? (
           toast().actionHref ? (

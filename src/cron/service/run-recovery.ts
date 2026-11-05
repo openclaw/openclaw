@@ -15,6 +15,7 @@ export async function recoverCronRuns(state: CronServiceState): Promise<Set<stri
       storeKey,
       nowMs: state.deps.nowMs(),
       cronConfig: state.deps.cronConfig,
+      defaultAgentId: state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
       failureRepairTimeoutMs: state.deps.failureRepairTimeoutMs,
     },
   });

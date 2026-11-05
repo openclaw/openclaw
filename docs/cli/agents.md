@@ -42,7 +42,7 @@ For an explicit multi-agent roster, the default badge and JSON `isDefault` field
 use `agents.defaults.systemAgent.agentId`. Doctor preserves the migrated default
 there across restarts. Without a designation, every entry reports `isDefault: false`;
 set one with `openclaw config set agents.defaults.systemAgent.agentId <id>`.
-The Control UI's **Set Default** action writes the same designation.
+The Control UI's **Set default** action writes the same designation.
 
 Provider-status labels include optional account display names beside account IDs.
 Routing rules continue to identify accounts by channel and account ID.

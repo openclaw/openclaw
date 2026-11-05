@@ -26,20 +26,34 @@ function linkedMessage(label: string, before = "Connection lost. ".repeat(12)) {
   return { message, link };
 }
 const archived = {
+  severity: undefined,
   message: "Session archived",
   actionLabel: "Undo",
   onAction: () => undefined,
   durationMs: 60_000,
 } satisfies ToastOptions;
 async function settleAnimations(host: HTMLElement) {
-  await new Promise<void>((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-  });
-  await Promise.all(
-    [...host.querySelectorAll(".app-toast")].flatMap((toast) =>
-      toast.getAnimations({ subtree: true }).map((animation) => animation.finished),
-    ),
-  );
+  for (;;) {
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+    const animations = [...host.querySelectorAll(".app-toast")]
+      .flatMap((toast) => toast.getAnimations({ subtree: true }))
+      .filter((animation) => animation.playState !== "finished");
+    if (animations.length === 0) {
+      return;
+    }
+    await Promise.all(
+      animations.map((animation) =>
+        animation.finished.catch((error: unknown) => {
+          // Replaced transitions reject; their replacements still need to settle.
+          if (!(error instanceof DOMException && error.name === "AbortError")) {
+            throw error;
+          }
+        }),
+      ),
+    );
+  }
 }
 async function renderToast(
   options: Partial<ToastOptions> = {},
@@ -229,6 +243,41 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
     await waitForSolid(() => expect(lane.hasAttribute("data-open")).toBe(false));
   });
 
+  it("waits for replacement animations before checking toast layout", async () => {
+    await useViewport(390);
+    const { host, toast } = await renderToast();
+    const restingTop = rect(toast).top;
+    const frames = () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+    const enter = () => {
+      const animation = toast.animate([{ translate: "0 -14px" }, { translate: "0 0" }], {
+        duration: 200,
+        fill: "forwards",
+      });
+      animation.pause();
+      return animation;
+    };
+    const first = enter();
+    await first.ready;
+    let settled = false;
+    const settling = settleAnimations(host).then(() => {
+      settled = true;
+    });
+    void settling.catch(() => {});
+    await frames();
+    first.cancel();
+    const replacement = enter();
+    await replacement.ready;
+    await frames();
+    expect(settled).toBe(false);
+    expect(rect(toast).top).toBeCloseTo(restingTop - 14, 0);
+    replacement.finish();
+    await settling;
+    expect(rect(toast).top).toBeCloseTo(restingTop, 0);
+  });
+
   it("keeps a toast usable inside a native modal and returns it to the shell on dismissal", async () => {
     const shell = document.body.appendChild(document.createElement("div"));
     shell.className = "shell shell--chat shell--session";
@@ -237,7 +286,8 @@ describe.skipIf(navigator.userAgent.toLowerCase().includes("jsdom"))("toast brow
     const { toast: restingToast } = await renderToast({ message: "Saved" }, host);
     const restingBounds = rect(restingToast);
     const controller = new AbortController();
-    const confirmation = showConfirmDialog({ message: "Keep?", signal: controller.signal });
+    const prompt = { title: "Keep?", message: "", confirmLabel: "Keep" };
+    const confirmation = showConfirmDialog({ ...prompt, signal: controller.signal });
     try {
       const { modal, dialog } = await waitForRenderedModalDialog(document.body);
       const onAction = vi.fn();

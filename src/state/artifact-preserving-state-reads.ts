@@ -1,8 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
-import { SqliteSnapshotCleanupError } from "../infra/sqlite-readonly-location-cleanup.js";
+import {
+  throwSqliteLifecycleErrors,
+  SqliteSnapshotCleanupError,
+} from "../infra/sqlite-lifecycle-errors.js";
 import type { PreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 

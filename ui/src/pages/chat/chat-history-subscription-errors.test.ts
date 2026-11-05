@@ -72,14 +72,13 @@ function createSubscriptionState(options?: {
   const unsubscribeMessages =
     options?.unsubscribeMessages ?? vi.fn<Unsubscribe>(async () => undefined);
   const host = makeChatHost({ requestHandlers: {}, sessionKey: selected.key });
-  const state = {
-    ...host,
+  const state = Object.assign(host, {
     connectionEpoch: 1,
     chatError: null as string | null,
     chatSessionMessageSubscriptionRequestedKey: options?.previous?.key ?? null,
     chatSessionMessageSubscription: options?.previous ?? null,
     sessions: { ...host.sessions, subscribeMessages, unsubscribeMessages },
-  } satisfies Parameters<typeof syncSubscription>[0];
+  }) satisfies Parameters<typeof syncSubscription>[0];
   onTestFinished(
     createRoot((stop) => {
       projectChatFields(chatHistoryRequests(state), ["historyLoad", "acceptedHistory"]);
