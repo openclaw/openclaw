@@ -1,9 +1,11 @@
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
-import { describe, expect, it } from "vitest";
+import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
+import { describe, expect, it, vi } from "vitest";
 import {
   isDurablyRetryableInboundMediaError,
   isMediaSizeLimitError,
   isRecoverableMediaGroupError,
+  logInboundMediaFailure,
   TelegramBotApiFileTooLargeError,
 } from "./bot-handlers.media.js";
 
@@ -86,5 +88,74 @@ describe("isRecoverableMediaGroupError preserves album partial delivery (#55216)
     });
     expect(isDurablyRetryableInboundMediaError(networkError)).toBe(true);
     expect(isRecoverableMediaGroupError(networkError)).toBe(true);
+  });
+});
+
+describe("logInboundMediaFailure", () => {
+  function captureConsoleWarnings(run: () => void): Record<string, unknown>[] {
+    // Gateway deployments show only the console sink, so assert on it with the
+    // file sink silenced: this is the reporter's view of a failed media save.
+    setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "json" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      run();
+      return warn.mock.calls.flatMap(([line]) => {
+        try {
+          return [JSON.parse(String(line)) as Record<string, unknown>];
+        } catch {
+          return [];
+        }
+      });
+    } finally {
+      warn.mockRestore();
+      setLoggerOverride(null);
+      resetLogger();
+    }
+  }
+
+  it("writes a media save failure to the console with its errno (#193172)", () => {
+    const saveFailure = new MediaFetchError("fetch_failed", "media store publish failed", {
+      cause: Object.assign(new Error("EINVAL: invalid argument, rename '/state/media/tmp/a'"), {
+        code: "EINVAL",
+      }),
+    });
+
+    const records = captureConsoleWarnings(() =>
+      logInboundMediaFailure({
+        message: "media fetch failed",
+        accountId: "default",
+        chatId: 42,
+        error: saveFailure,
+      }),
+    );
+
+    const mediaFailure = records.filter((record) => record.subsystem === "telegram/media");
+    expect(mediaFailure).toHaveLength(1);
+    expect(mediaFailure[0]).toMatchObject({
+      level: "warn",
+      message: "media fetch failed",
+      accountId: "default",
+      chatId: 42,
+      code: "EINVAL",
+    });
+  });
+
+  it("keeps the collision errno so no-replace failures stay diagnosable", () => {
+    const collision = Object.assign(new Error("EEXIST: file already exists"), {
+      code: "EEXIST",
+    });
+
+    const records = captureConsoleWarnings(() =>
+      logInboundMediaFailure({
+        message: "media fetch failed",
+        accountId: "default",
+        chatId: 42,
+        error: collision,
+      }),
+    );
+
+    expect(records.filter((record) => record.subsystem === "telegram/media")[0]).toMatchObject({
+      code: "EEXIST",
+    });
   });
 });

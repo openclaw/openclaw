@@ -1,0 +1,2 @@
+# Console-visible Telegram inbound media failure warnings with the failing errno (#193172).
+71

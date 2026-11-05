@@ -21,6 +21,7 @@ import { createTelegramInboundMedia } from "./bot-handlers.inbound-media.js";
 import {
   isDurablyRetryableInboundMediaError,
   isMediaSizeLimitError,
+  logInboundMediaFailure,
   TelegramBotApiFileTooLargeError,
 } from "./bot-handlers.media.js";
 import {
@@ -64,7 +65,7 @@ export function createTelegramInboundPipeline({
   message: TelegramMessagePipeline;
   authorization: TelegramHandlerAuthorization;
 }): TelegramInboundPipeline {
-  const { accountId, bot, opts, runtime, shouldSkipUpdate, mediaMaxBytes, logger } = handlerParams;
+  const { accountId, bot, opts, runtime, shouldSkipUpdate, mediaMaxBytes } = handlerParams;
   const {
     resolveMediaRuntime,
     recordMessageResolvedMedia,
@@ -337,12 +338,21 @@ export function createTelegramInboundPipeline({
             if (!isChannelPost && mediaDisposition !== "silent-ingest") {
               await sendMediaWarning(mediaInput, `⚠️ File too large. Maximum size is ${limit}.`);
             }
-            logger.warn(
-              { chatId, error: String(mediaErr) },
-              isChannelPost ? "channel post media exceeds size limit" : "media exceeds size limit",
-            );
+            logInboundMediaFailure({
+              message: isChannelPost
+                ? "channel post media exceeds size limit"
+                : "media exceeds size limit",
+              accountId,
+              chatId,
+              error: mediaErr,
+            });
           } else {
-            logger.warn({ chatId, error: String(mediaErr) }, "media fetch failed");
+            logInboundMediaFailure({
+              message: "media fetch failed",
+              accountId,
+              chatId,
+              error: mediaErr,
+            });
             if (replayingSpooledUpdate && isDurablyRetryableInboundMediaError(mediaErr)) {
               return { kind: "retry", error: mediaErr };
             }

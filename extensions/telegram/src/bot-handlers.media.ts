@@ -1,5 +1,6 @@
 import type { Message } from "grammy/types";
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 
 const TELEGRAM_BOT_API_FILE_DOWNLOAD_LIMIT_MB = 20;
@@ -64,4 +65,43 @@ export function hasInboundMedia(msg: Message): boolean {
       msg.sticker,
     )
   );
+}
+
+// The Telegram handler logger is file-only in Gateway deployments, so a media
+// failure reported only through it never reached container stdout (#193172).
+// This subsystem logger writes to the file log and the console sink, and the
+// errno it carries tells an operator which step of the save failed.
+const mediaFailureLog = createSubsystemLogger("telegram/media");
+
+/** Follow the cause chain: media errors wrap the filesystem failure that names the errno. */
+export function resolveMediaFailureCode(err: unknown): string | undefined {
+  let current: unknown = err;
+  let deepest: string | undefined;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (!current || typeof current !== "object") {
+      return deepest;
+    }
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === "string" && code.length > 0) {
+      deepest = code;
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return deepest;
+}
+
+/** Record an inbound media failure where an operator can see it. */
+export function logInboundMediaFailure(params: {
+  message: string;
+  accountId: string;
+  chatId: number | string;
+  error: unknown;
+}): void {
+  const code = resolveMediaFailureCode(params.error);
+  mediaFailureLog.warn(params.message, {
+    accountId: params.accountId,
+    chatId: params.chatId,
+    error: String(params.error),
+    ...(code ? { code } : {}),
+  });
 }
