@@ -1,12 +1,16 @@
 // Covers core message-action send fallback, TTS application, and durable send
 // policy after plugin preparation is absent.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import type {
+  ChannelMessageActionName,
+  ChannelPlugin,
+} from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { mockFirstRecordArg } from "../../test-utils/mock-call-assertions.js";
+import { MessageActionDeniedError } from "./message-action-denial.js";
 import { runMessageAction } from "./message-action-runner.js";
 import { registerSlackTextPlugin } from "./message-action-runner.test-support.js";
 
@@ -139,7 +143,12 @@ describe("runMessageAction core send routing", () => {
     });
   });
 
-  it.each([
+  it.each<{
+    name: string;
+    action?: ChannelMessageActionName;
+    params: Record<string, unknown>;
+    denied?: boolean;
+  }>([
     { name: "the chat id with the current topic id", params: { threadId: "42" } },
     { name: "the chat id inheriting the current topic", params: {} },
     { name: "the current topic target", params: { target: "-1001234567890:topic:42" } },
@@ -171,7 +180,43 @@ describe("runMessageAction core send routing", () => {
       params: { target: "-1001234567890:topic:42", threadId: 99 },
       denied: true,
     },
-  ])("judges a restricted Telegram topic turn sending to $name by its topic", async (scenario) => {
+    // Sends and polls are delivered into the inherited topic. Telegram creates a topic in the
+    // base chat and edits the topic its thread id names.
+    {
+      name: "a poll to the chat id inheriting the current topic",
+      action: "poll",
+      params: { pollQuestion: "Lunch?", pollOption: ["yes", "no"] },
+    },
+    {
+      name: "a new topic in the chat id",
+      action: "topic-create",
+      params: { name: "New topic" },
+      denied: true,
+    },
+    {
+      name: "a new topic in the chat id with the current topic id",
+      action: "topic-create",
+      params: { name: "New topic", threadId: "42" },
+      denied: true,
+    },
+    {
+      name: "a rename of the current topic through the chat id",
+      action: "topic-edit",
+      params: { name: "Renamed", threadId: "42" },
+      denied: true,
+    },
+    {
+      name: "a rename of the current topic",
+      action: "topic-edit",
+      params: { target: "-1001234567890:topic:42", threadId: "42", name: "Renamed" },
+    },
+    {
+      name: "a rename of another topic through the current topic target",
+      action: "topic-edit",
+      params: { target: "-1001234567890:topic:42", threadId: "99", name: "Renamed" },
+      denied: true,
+    },
+  ])("judges a restricted Telegram topic turn's request for $name", async (scenario) => {
     const { telegramPlugin } = await loadBundledPluginFacade<{ telegramPlugin: ChannelPlugin }>({
       pluginId: "telegram",
       artifactBasename: "api.ts",
@@ -180,16 +225,17 @@ describe("runMessageAction core send routing", () => {
       createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
     );
     // Both the chat-type confinement and the existing same-provider switch share this check.
+    const outcomes: string[] = [];
     for (const crossContext of [
       { confineChatTypes: ["group" as const] },
       { allowWithinProvider: false },
     ]) {
-      const send = runMessageAction({
+      const run = runMessageAction({
         cfg: {
           channels: { telegram: { botToken: "123:test" } },
           tools: { message: { crossContext } },
         },
-        action: "send",
+        action: scenario.action ?? "send",
         params: {
           channel: "telegram",
           target: "-1001234567890",
@@ -204,10 +250,16 @@ describe("runMessageAction core send routing", () => {
         },
         dryRun: true,
       });
-      await (scenario.denied
-        ? expect(send).rejects.toMatchObject({ reasonCode: "message_cross_context_denied" })
-        : expect(send).resolves.toMatchObject({ kind: "send", dryRun: true }));
+      outcomes.push(
+        await run.then(
+          () => "allowed",
+          (error: unknown) =>
+            error instanceof MessageActionDeniedError ? error.reasonCode : String(error),
+        ),
+      );
     }
+    const expected = scenario.denied ? "message_cross_context_denied" : "allowed";
+    expect(outcomes).toEqual([expected, expected]);
   });
 
   it("accepts Telegram numeric forum topic targets through plugin-owned grammar", async () => {
