@@ -45,6 +45,7 @@ import {
   completeDoctorMigrationBackups,
   recordDoctorMigrationBackups,
 } from "./doctor-migration-backup-artifacts.js";
+import { retireRecovery } from "./doctor-session-sqlite.fixtures.test-support.js";
 import { useDoctorSessionSqliteTestFixture } from "./doctor-session-sqlite.test-support.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 import { cleanupCompletedUpdateRecovery } from "./update-automatic-cleanup.js";
@@ -769,3 +770,48 @@ it("keeps Gateway completion warnings visible when cleanup diagnostics cannot be
     await lock?.release();
   }
 });
+
+it.each(["intent", "unlink-pending", "retained"] as const)(
+  "records a pre-reboot original that is already gone under a %s receipt",
+  async (state) => {
+    const later = start(now + 60_000);
+    const { backup, source, manifestPath } = await migrationOriginal(true);
+    {
+      using database = new DatabaseSync(source);
+      database.exec("CREATE TABLE after_reboot(value TEXT); INSERT INTO after_reboot VALUES ('x')");
+    }
+    const manifest = readSessionSqliteMigrationManifest(manifestPath)!;
+    if (state !== "retained") {
+      // A consented retirement recorded its intent; the bytes were then lost outside cleanup.
+      const claimPath = path.join(stateDir, `.cleanup-${randomUUID()}`);
+      const target = manifest.targets[0]!;
+      for (const move of [...target.plannedMoves, ...target.completedMoves]) {
+        move.artifact!.disposal = {
+          state: "pending-disposal",
+          intendedAt: new Date(now).toISOString(),
+          phase: state,
+          claimPath,
+        };
+      }
+      writeSessionSqliteMigrationManifest({ manifestPath, manifest });
+    }
+    fs.unlinkSync(backup);
+    finishUpdateRun(later, { status: "succeeded" }, { env });
+    await closeOpenClawStateDatabaseAsync();
+    const report = await retireRecovery({ env });
+    const disposal =
+      readSessionSqliteMigrationManifest(manifestPath)!.targets[0]!.completedMoves[0]!.artifact!
+        .disposal;
+    if (state === "retained") {
+      // Without consent, a lost original stays reported as missing rather than disposed.
+      expect(report.missingOriginals).toBe(1);
+      expect(disposal.state).toBe("retained");
+    } else {
+      expect(report.artifacts.find((item) => item.path === backup)).toMatchObject({
+        outcome: "disposed",
+        reason: "completed-interrupted-disposal",
+      });
+      expect(disposal.state).toBe("disposed");
+    }
+  },
+);

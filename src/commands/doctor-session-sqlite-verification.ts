@@ -12,6 +12,7 @@ import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import {
   readMigrationArtifactIdentity,
+  statMigrationPath,
   type MigrationArtifact,
 } from "../infra/session-sqlite-migration-artifact.js";
 import {
@@ -54,6 +55,15 @@ export function createRecoveryDestinationVerifier(
   >();
   return (refs: Iterable<Pick<RecoveryArtifactReference, "target" | "run" | "move">>) => {
     for (const { target, run, move } of refs) {
+      const disposal = move.artifact?.disposal;
+      if (
+        disposal?.state === "pending-disposal" &&
+        !statMigrationPath(move.archivePath) &&
+        !statMigrationPath(disposal.claimPath)
+      ) {
+        // A consented disposal whose bytes are already gone protects nothing here.
+        continue;
+      }
       const paths = resolveSqliteDatabaseFilePaths(target.sqlitePath);
       assertDoctorSqliteMaintenancePathsNotAliased("update recovery cleanup", paths, [stateDir]);
       const expected = destinations.get(target.sqlitePath);
