@@ -20,7 +20,7 @@ import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
-import { PerformanceObserver, type NodeGCPerformanceEntry } from "node:perf_hooks";
+import { PerformanceObserver } from "node:perf_hooks";
 import { setImmediate } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
@@ -248,7 +248,9 @@ try {
         for (const entry of list.getEntries()) {
           gc.push(entry.duration);
           // This observer subscribes only to Node's GC performance entries.
-          const kind = String((entry as NodeGCPerformanceEntry).detail.kind);
+          const detail: unknown = Reflect.get(entry, "detail");
+          assert(isRecord(detail) && typeof detail.kind === "number");
+          const kind = String(detail.kind);
           const bucket = (gcByKind[kind] ??= { count: 0, totalMs: 0, maxMs: 0 });
           bucket.count++;
           bucket.totalMs += entry.duration;
