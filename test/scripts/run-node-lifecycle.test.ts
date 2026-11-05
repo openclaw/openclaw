@@ -21,7 +21,7 @@ import {
 } from "../../scripts/lib/local-build-metadata.mts";
 import { hasUnjoinedWork } from "../../scripts/lib/managed-child-process.mts";
 import { writeUpdateCompatibilityChunks } from "../../scripts/lib/update-compat-chunks.mts";
-import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
+import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-node-args.mts";
 import { listCoreRuntimePostBuildOutputs } from "../../scripts/runtime-postbuild.mts";
 import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mts";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
@@ -30,6 +30,7 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../helpers/fixture-receipts.js";
+import { launcherFixtureModules } from "../helpers/openclaw-launcher-fixture.js";
 import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
@@ -252,24 +253,7 @@ it.runIf(process.platform !== "win32")(
       const launcherPidPath = path.join(fixtureRoot, "launcher.pid");
       const invocationsPath = path.join(fixtureRoot, "invocations.jsonl");
       const releasePath = path.join(fixtureRoot, "release");
-      for (const filename of [
-        "openclaw.mjs",
-        "cli-invocation.mjs",
-        "node-host-launcher.mjs",
-        "node-compile-cache.mjs",
-        "node-version.mjs",
-        "node-runtime-update.mjs",
-        "node-runtime-recovery.mjs",
-        "cli-parent-lifetime.mjs",
-        "node-runtime-env.mjs",
-        "cli-root-options.mjs",
-        "gateway-run-argv.mjs",
-        "gateway-shutdown-budget.mjs",
-        "node-sqlite.mjs",
-        "node-sqlite-capabilities.mjs",
-        "runtime-process-bootstrap.generated.mjs",
-        "runtime-process-scripts.generated.mjs",
-      ]) {
+      for (const filename of launcherFixtureModules) {
         copyFileSync(filename, path.join(checkoutRoot, filename));
       }
       mkdirSync(path.join(checkoutRoot, "src"));

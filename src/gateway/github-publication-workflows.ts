@@ -5,6 +5,10 @@ import {
   GitHubPublicationKnownFailure,
   GitHubPublicationWorkflowChangesError,
 } from "./github-publication-failure.js";
+import {
+  TREE_LISTING_MAX_OUTPUT_BYTES,
+  type runPublicationCommand,
+} from "./github-publication-git-transport.js";
 import type { GitHubPublicationRequesterPolicy } from "./github-publication-requester.js";
 import type { GitHubRepositoryPublicationSnapshot } from "./github-repository-publication-snapshot.js";
 
@@ -25,7 +29,7 @@ export function assertGitHubPublicationWorkflowChangesAllowed(
   }
 }
 
-export function isGitHubPublicationWorkflowPath(file: string): boolean {
+function isGitHubPublicationWorkflowPath(file: string): boolean {
   return (
     file.startsWith(workflowDirectory) &&
     /^[^/]+\.ya?ml$/iu.test(file.slice(workflowDirectory.length))
@@ -51,10 +55,18 @@ export async function prepareGitHubPublicationWorkflowGuard(
 type WorkflowTree = ReadonlyMap<string, string>;
 
 /** Only an unchanged published definition or an unambiguous target-only update is exempt. */
-export async function hasUnapprovedGitHubPublicationWorkflowChanges(params: {
+async function hasUnapprovedGitHubPublicationWorkflowChanges(params: {
   before: WorkflowTree;
   accepted: WorkflowTree;
-  readUpstream: () => Promise<{ ancestor: WorkflowTree; target: WorkflowTree } | undefined>;
+  readUpstream: () => Promise<
+    | {
+        ancestor: WorkflowTree;
+        sourceAncestor: WorkflowTree;
+        source: WorkflowTree;
+        target: WorkflowTree;
+      }
+    | undefined
+  >;
 }): Promise<boolean> {
   const changed = [...new Set([...params.before.keys(), ...params.accepted.keys()])].filter(
     (file) => params.before.get(file) !== params.accepted.get(file),
@@ -66,10 +78,12 @@ export async function hasUnapprovedGitHubPublicationWorkflowChanges(params: {
   // Absence is a value too: additions, deletions, renames and mode changes all
   // follow the same rule. Never overwrite a branch-owned change just because
   // the accepted definition matches main (including a revert to the old base).
+  // The accepted source and the preceding publication are distinct baselines.
   return changed.some(
     (file) =>
       !upstream ||
       params.before.get(file) !== upstream.ancestor.get(file) ||
+      upstream.source.get(file) !== upstream.sourceAncestor.get(file) ||
       params.accepted.get(file) !== upstream.target.get(file),
   );
 }
@@ -91,7 +105,8 @@ export async function hasRepositoryGitHubPublicationWorkflowChanges(params: {
   comparisonRepository: string;
   comparisonTree: string;
   readUpstream: () => Promise<
-    { repository: string; ancestorTree: string; targetTree: string } | undefined
+    | { repository: string; ancestorTree: string; sourceAncestorTree: string; targetTree: string }
+    | undefined
   >;
   readTree: (repository: string, sha: string) => Promise<unknown>;
 }): Promise<boolean> {
@@ -151,10 +166,11 @@ export async function hasRepositoryGitHubPublicationWorkflowChanges(params: {
     );
   };
 
-  const [before, accepted] = await Promise.all([
+  const [before, source] = await Promise.all([
     workflows(params.comparisonRepository, params.comparisonTree),
     workflows(params.sourceRepository, params.snapshot.baseTree),
   ]);
+  const accepted = new Map(source);
   // A file, symlink or gitlink at either ancestor removes its executable descendants.
   // Clear first so the result does not depend on checkpoint entry ordering.
   if (
@@ -182,11 +198,87 @@ export async function hasRepositoryGitHubPublicationWorkflowChanges(params: {
       if (!upstream) {
         return undefined;
       }
-      const [ancestor, target] = await Promise.all([
+      const [ancestor, sourceAncestor, target] = await Promise.all([
         workflows(upstream.repository, upstream.ancestorTree),
+        workflows(upstream.repository, upstream.sourceAncestorTree),
         workflows(upstream.repository, upstream.targetTree),
       ]);
-      return { ancestor, target };
+      return { ancestor, sourceAncestor, source, target };
+    },
+  });
+}
+
+export async function hasGitHubPublicationWorkflowChanges(params: {
+  cwd: string;
+  comparisonCommit: string;
+  ancestryCommit: string;
+  targetCommit: string;
+  accepted: { sourceCommit: string; tree: string };
+  run: typeof runPublicationCommand;
+}): Promise<boolean> {
+  const trees = new Map<string, Promise<Map<string, string>>>();
+  const workflows = (tree: string) =>
+    getOrCreatePromise(trees, tree, async () => {
+      const listing = await params.run(
+        ["git", "ls-tree", "-r", "-z", "--full-tree", tree, "--", ".github/workflows"],
+        { cwd: params.cwd, maxOutputBytes: TREE_LISTING_MAX_OUTPUT_BYTES },
+      );
+      if (listing.code !== 0) {
+        throw new Error("GitHub publication workspace workflows could not be verified.");
+      }
+      const entries = new Map<string, string>();
+      for (const record of listing.stdout.toString("latin1").split("\0").filter(Boolean)) {
+        const tab = record.indexOf("\t");
+        const [mode, , sha] = record.slice(0, tab).split(" ");
+        if (tab < 0 || !mode || !sha) {
+          throw new Error("GitHub publication workspace workflows could not be verified.");
+        }
+        const file = record.slice(tab + 1);
+        if (isGitHubPublicationWorkflowPath(file)) {
+          entries.set(file, mode + ":" + sha);
+        }
+      }
+      return entries;
+    });
+  const [before, accepted] = await Promise.all([
+    workflows(params.comparisonCommit),
+    workflows(params.accepted.tree),
+  ]);
+  return await hasUnapprovedGitHubPublicationWorkflowChanges({
+    before,
+    accepted,
+    readUpstream: async () => {
+      const readAncestor = async (commit: string) => {
+        const result = await params.run(
+          ["git", "merge-base", "--all", commit, params.targetCommit],
+          { cwd: params.cwd },
+        );
+        if (result.code !== 0) {
+          throw new Error("GitHub publication workflow ancestry could not be verified.");
+        }
+        const bases = result.stdout.toString("utf8").trim().split(/\s+/u);
+        return bases.length === 1 && /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(bases[0]!)
+          ? bases[0]
+          : undefined;
+      };
+      const ancestorCommit = await readAncestor(params.ancestryCommit);
+      if (!ancestorCommit) {
+        return undefined;
+      }
+      const sourceAncestorCommit =
+        params.accepted.sourceCommit === params.ancestryCommit
+          ? ancestorCommit
+          : await readAncestor(params.accepted.sourceCommit);
+      if (!sourceAncestorCommit) {
+        return undefined;
+      }
+      const [ancestor, sourceAncestor, source, target] = await Promise.all([
+        workflows(ancestorCommit),
+        workflows(sourceAncestorCommit),
+        workflows(params.accepted.sourceCommit),
+        workflows(params.targetCommit),
+      ]);
+      return { ancestor, sourceAncestor, source, target };
     },
   });
 }

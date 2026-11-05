@@ -717,6 +717,13 @@ bundle comparison, so real server-cache lifecycle remains externally controlled.
 `--warm-reload` cannot be combined with `--first-load`; the existing persisted
 warm-snapshot comparison path remains separate.
 
+For a compact completed-and-active rich transcript, use
+`bench-control-ui-rich-boot.ts --bundle-dir <base> --compare-bundle-dir <head> --pairs 10`.
+Its default measures a cold document. Add `--warm-reload` to load the same document
+to composer and transcript readiness first, then measure its reload in the same
+browser context. Warm-up requests and CPU are excluded. This mode cannot be
+combined with `--service-worker`.
+
 For the 100 ms RTT / 10 Mbps profile, replace `--latency-ms 0` with
 `--latency-ms 100 --network-latency-ms 100 --download-kbps 10000` and add
 `--cold-http-cache`. HTTP/CDP throttling does not affect the synthetic WebSocket,
@@ -857,7 +864,7 @@ caller according to its contract.
 - `test-*.mts` / retained `test-*.mjs` / `test-*.sh` / `test-*.ts`: test planners, Docker lanes, live
   checks, and focused validation helpers.
 - `docs-*` and `check-docs-*`: docs listing, link auditing, MDX checks,
-  spellcheck, sync, and i18n glossary checks.
+  spellcheck, sync, and translation.
 - `release-*`, `openclaw-npm-*`, and `plugin-*-release-*`: release preparation,
   package verification, and publishing helpers.
 - `docker-*`, `test-docker-*`, and `test-live-*-docker.sh`: Docker E2E planning,

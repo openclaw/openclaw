@@ -380,10 +380,10 @@ async function consolidatePacks(
         },
       );
     }
-    // index-pack publishes the promisor marker and verified index before returning
-    // the hash. Plain --stdin-packs copies every object, including unreachable ones.
+    // Copy every object, including unreachable ones, and compress separately fetched revisions.
+    // index-pack publishes the promisor marker and verified index before returning the hash.
     const alias =
-      "!if command -v ionice >/dev/null 2>&1; then ionice -c 3 -p $$ >/dev/null 2>&1; fi; git pack-objects --stdin-packs --stdout --window=0 --threads=1 | git index-pack --stdin --threads=1" +
+      "!if command -v ionice >/dev/null 2>&1; then ionice -c 3 -p $$ >/dev/null 2>&1; fi; git pack-objects --stdin-packs --stdout --window=10 --window-memory=8m --threads=1 | git index-pack --stdin --threads=1" +
       (promisor ? " --promisor" : "");
     const result = await requireGit(
       repoRoot,

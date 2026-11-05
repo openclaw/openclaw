@@ -1,10 +1,12 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { readFile as readFileCallback } from "node:fs";
+import { readFile as readFileCallback, readFileSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import { promisify } from "node:util";
 import { hasErrnoCode } from "../infra/errno.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 const rssField = Buffer.from("\nVmRSS:");
 const swapField = Buffer.from("\nVmSwap:");
@@ -32,26 +34,124 @@ function readStatusNumber(buffer: Buffer, field: Buffer): number {
   }
 }
 
-/** Host exec budgets physical memory, not V8/Go's virtual address reservations. */
-export function resolveHostExecMemoryLimit(): number | undefined {
+export type HostExecMemoryBudget = { memoryBytes: number; swapBytes: number };
+export type HostExecMemoryUsage = HostExecMemoryBudget;
+
+function constrainToCgroupAncestors(capacity: HostExecMemoryBudget): void {
+  let relative: string | undefined;
+  try {
+    relative = /^0::(\/.*)$/mu.exec(readFileSync("/proc/self/cgroup", "utf8"))?.[1];
+  } catch {
+    return;
+  }
+  if (!relative) {
+    return;
+  }
+  const mount = "/sys/fs/cgroup";
+  let directory = path.resolve(mount, `.${relative}`);
+  if (directory !== mount && !directory.startsWith(`${mount}/`)) {
+    return;
+  }
+  // Node only reads the current cgroup. Delegated Gateway leaves can have no
+  // memory files even though a service or slice above them limits RAM and swap.
+  for (;;) {
+    for (const file of ["memory.max", "memory.high", "memory.swap.max"]) {
+      try {
+        const value = readFileSync(path.join(directory, file), "utf8").trim();
+        if (/^\d+$/u.test(value)) {
+          const dimension = file === "memory.swap.max" ? "swapBytes" : "memoryBytes";
+          capacity[dimension] = Math.min(capacity[dimension], Number(value));
+        }
+      } catch {
+        // Missing controllers and inaccessible ancestors retain known limits.
+      }
+    }
+    // A cgroup namespace can expose a constrained container at the mount root.
+    if (directory === mount) {
+      break;
+    }
+    directory = path.dirname(directory);
+  }
+}
+
+/** Reserve physical RAM for the host and Gateway; swap is a separate, finite allowance. */
+function resolveHostExecMemoryBudget(): HostExecMemoryBudget | undefined {
   if (process.platform !== "linux") {
     return undefined;
   }
   const constrained = process.constrainedMemory();
-  const total = constrained > 0 ? Math.min(os.totalmem(), constrained) : os.totalmem();
-  return Math.max(1, Math.floor(Math.min(total / 4, (total - process.memoryUsage.rss()) / 2)));
-}
-
-function formatChildMemoryLimit(limitBytes: number, observedBytes: number): string {
-  return `Command killed for exceeding its host memory bound (${Math.ceil(observedBytes / 1024 ** 2)} MiB observed; ${Math.ceil(limitBytes / 1024 ** 2)} MiB limit). Reduce command concurrency or input size, split the work, or use a separately resource-limited worker.`;
+  const capacity = {
+    memoryBytes: constrained > 0 ? Math.min(os.totalmem(), constrained) : os.totalmem(),
+    swapBytes: 0,
+  };
+  try {
+    capacity.swapBytes =
+      Number(/^SwapTotal:\s+(\d+)/mu.exec(readFileSync("/proc/meminfo", "utf8"))?.[1] ?? 0) * 1024;
+  } catch {
+    // Without swap facts, do not promise additional capacity.
+  }
+  constrainToCgroupAncestors(capacity);
+  const total = capacity.memoryBytes;
+  const gatewayRss = process.memoryUsage.rss();
+  const hostReserve = Math.max(256 * 1024 ** 2, total / 8);
+  const gatewayReserve = Math.max(total / 8, gatewayRss * 1.5);
+  // Extra growth reserves must not make a formerly fitting command unusable on
+  // a small host. This floor is shared by all commands, rather than multiplied.
+  const singleCommandAllowance = Math.min(total / 4, (total - gatewayRss) / 2);
+  const memoryBytes = Math.max(
+    1,
+    Math.floor(Math.max(total - hostReserve - gatewayReserve, singleCommandAllowance)),
+  );
+  return {
+    // Whole MiB survive cgroup page rounding, avoiding repeated memory.high
+    // writes (and writer-side reclaim on older kernels) for an unchanged budget.
+    memoryBytes:
+      memoryBytes < 1024 ** 2 ? memoryBytes : Math.floor(memoryBytes / 1024 ** 2) * 1024 ** 2,
+    swapBytes: Math.floor(Math.min(capacity.swapBytes, total / 4)),
+  };
 }
 
 type Census = {
-  memory: (pid: number) => Promise<number>;
+  memory: (pid: number) => Promise<HostExecMemoryUsage>;
   children: (pid: number) => Promise<number[]>;
 };
+type Snapshot = { pids: Map<number, HostExecMemoryUsage>; extra: HostExecMemoryUsage };
+type Watch = {
+  due: number;
+  snapshot: Snapshot;
+  cancelling: boolean;
+  sample: (census: Census) => Promise<void>;
+  limit: (observed: HostExecMemoryUsage, budget: HostExecMemoryBudget) => Promise<void>;
+};
+const owner = resolveGlobalSingleton(
+  Symbol.for("openclaw.hostExecMemory"),
+  (): {
+    budget?: HostExecMemoryBudget;
+    watches: Set<Watch>;
+    timer?: NodeJS.Timeout;
+    sampling: boolean;
+    assessmentPending: boolean;
+  } => ({
+    watches: new Set(),
+    sampling: false,
+    assessmentPending: false,
+  }),
+);
 
-/** Share parsed facts within one tick, without retaining procfs buffers or thread directories. */
+/** Keep one automatic budget for this Gateway owner. */
+export function getHostExecMemoryBudget(): HostExecMemoryBudget | undefined {
+  if (process.platform !== "linux") {
+    return undefined;
+  }
+  return (owner.budget ??= resolveHostExecMemoryBudget());
+}
+
+function formatLimit(observed: HostExecMemoryUsage, budget: HostExecMemoryBudget): string {
+  const mib = (bytes: number) => Math.ceil(bytes / 1024 ** 2);
+  return `Command killed because the shared host exec memory budget was exceeded (RAM ${mib(observed.memoryBytes)}/${mib(budget.memoryBytes)} MiB; swap ${mib(observed.swapBytes)}/${mib(budget.swapBytes)} MiB). Reduce concurrent work or input size. Check completed side effects before retrying; commands are never automatically replayed.`;
+}
+
+/** Share parsed facts within a tick, without retaining procfs buffers or thread directories. */
 function shareReads<T>(read: (pid: number) => Promise<T>): (pid: number) => Promise<T> {
   const reads = new Map<number, Promise<T>>();
   return (pid) => {
@@ -64,9 +164,31 @@ function shareReads<T>(read: (pid: number) => Promise<T>): (pid: number) => Prom
   };
 }
 
-async function readMemory(pid: number): Promise<number> {
+async function readMemory(pid: number): Promise<HostExecMemoryUsage> {
   const status = await readFile(`/proc/${pid}/status`);
-  return (readStatusNumber(status, rssField) + readStatusNumber(status, swapField)) * 1024;
+  return {
+    memoryBytes: readStatusNumber(status, rssField) * 1024,
+    swapBytes: readStatusNumber(status, swapField) * 1024,
+  };
+}
+
+/** Durable units retain descendants even after their MainPID exits. */
+export async function readCgroupMemoryUsage(directory: string): Promise<HostExecMemoryUsage> {
+  const [memory, swap] = await Promise.all([
+    readFile(`${directory}/memory.current`),
+    readFile(`${directory}/memory.swap.current`),
+  ]);
+  const memoryBytes = Number(memory.toString().trim());
+  const swapBytes = Number(swap.toString().trim());
+  if (
+    !Number.isFinite(memoryBytes) ||
+    memoryBytes < 0 ||
+    !Number.isFinite(swapBytes) ||
+    swapBytes < 0
+  ) {
+    throw new Error("Host exec cgroup memory usage is unavailable");
+  }
+  return { memoryBytes, swapBytes };
 }
 
 async function readChildren(pid: number): Promise<number[]> {
@@ -96,27 +218,22 @@ async function readChildren(pid: number): Promise<number[]> {
   return pids;
 }
 
-/** Follow every thread's children: native worker threads can spawn subprocesses too. */
+/** Follow every thread's children, including native-worker subprocesses. */
 async function readTreeMemory(
   rootPid: number,
-  limitBytes: number,
-  isStopped: () => boolean,
+  stopped: () => boolean,
   census: Census,
-): Promise<{ bytes: number; pids: Set<number> }> {
+): Promise<Snapshot> {
+  const pids = new Map<number, HostExecMemoryUsage>();
   const seen = new Set([rootPid]);
-  let bytes = 0;
   for (const pid of seen) {
-    if (isStopped()) {
-      return { bytes, pids: seen };
+    if (stopped()) {
+      break;
     }
     try {
-      // Include swapped private pages so swapping cannot hide a runaway allocation.
-      bytes += await census.memory(pid);
-      if (bytes > limitBytes) {
-        return { bytes, pids: seen };
-      }
-      if (isStopped()) {
-        return { bytes, pids: seen };
+      pids.set(pid, await census.memory(pid));
+      if (stopped()) {
+        break;
       }
       for (const child of await census.children(pid)) {
         seen.add(child);
@@ -127,100 +244,182 @@ async function readTreeMemory(
       }
     }
   }
-  return { bytes, pids: seen };
+  return { pids, extra: { memoryBytes: 0, swapBytes: 0 } };
 }
 
-type Watch = {
-  // Pending reads have no new deadline until that watch settles.
-  due: number;
-  sample: (census: Census) => Promise<void>;
-};
-const watches = new Set<Watch>();
-let timer: NodeJS.Timeout | undefined;
-let sampling = false;
+function totalUsage(): HostExecMemoryUsage {
+  const total = { memoryBytes: 0, swapBytes: 0 };
+  const pids = new Map<number, HostExecMemoryUsage>();
+  for (const { snapshot } of owner.watches) {
+    total.memoryBytes += snapshot.extra.memoryBytes;
+    total.swapBytes += snapshot.extra.swapBytes;
+    for (const [pid, usage] of snapshot.pids) {
+      const previous = pids.get(pid);
+      // Overlapping retained roots share a charge. Shared pages across distinct
+      // processes can still overcount; the sampled backend is conservative.
+      pids.set(pid, {
+        memoryBytes: Math.max(previous?.memoryBytes ?? 0, usage.memoryBytes),
+        swapBytes: Math.max(previous?.swapBytes ?? 0, usage.swapBytes),
+      });
+    }
+  }
+  for (const usage of pids.values()) {
+    total.memoryBytes += usage.memoryBytes;
+    total.swapBytes += usage.swapBytes;
+  }
+  return total;
+}
 
-function schedule() {
-  clearTimeout(timer);
-  if (sampling || !watches.size) {
+function nearBudget(usage: HostExecMemoryUsage, budget: HostExecMemoryBudget): boolean {
+  return (
+    usage.memoryBytes >= budget.memoryBytes / 2 ||
+    (usage.swapBytes > 0 && usage.swapBytes >= budget.swapBytes / 2)
+  );
+}
+
+function assess() {
+  if (owner.assessmentPending) {
     return;
   }
-  const due = Math.min(...Array.from(watches, (watch) => watch.due));
+  owner.assessmentPending = true;
+  queueMicrotask(() => {
+    owner.assessmentPending = false;
+    const budget = getHostExecMemoryBudget();
+    if (!budget) {
+      return;
+    }
+    const total = totalUsage();
+    if (nearBudget(total, budget)) {
+      for (const watch of owner.watches) {
+        if (Number.isFinite(watch.due)) {
+          watch.due = Math.min(watch.due, performance.now() + 1000);
+        }
+      }
+      schedule();
+    }
+    const dimension =
+      total.memoryBytes > budget.memoryBytes
+        ? "memoryBytes"
+        : total.swapBytes > budget.swapBytes
+          ? "swapBytes"
+          : undefined;
+    // Retain the victim's charge until its native cleanup owner unregisters it.
+    // One cancellation in flight avoids killing peers before that cleanup settles.
+    if (!dimension || Array.from(owner.watches).some((watch) => watch.cancelling)) {
+      return;
+    }
+    let victim: Watch | undefined;
+    let largest = 0;
+    for (const watch of owner.watches) {
+      let bytes = watch.snapshot.extra[dimension];
+      for (const usage of watch.snapshot.pids.values()) {
+        bytes += usage[dimension];
+      }
+      if (bytes > largest) {
+        largest = bytes;
+        victim = watch;
+      }
+    }
+    if (victim) {
+      const selected = victim;
+      selected.cancelling = true;
+      void selected.limit(total, budget).catch(() => {
+        // A failed manager request did not settle native cleanup. Retain the
+        // charge and retry on the next ordinary sample instead of blocking peers.
+        selected.cancelling = false;
+        process.emitWarning(
+          "Host exec memory cancellation failed; shared memory protection is degraded",
+        );
+      });
+    }
+  });
+}
+
+function schedule() {
+  clearTimeout(owner.timer);
+  if (owner.sampling || !owner.watches.size) {
+    return;
+  }
+  const due = Math.min(...Array.from(owner.watches, (watch) => watch.due));
   if (!Number.isFinite(due)) {
     return;
   }
-  timer = runInDetachedAsyncContext(() =>
-    setTimeout(() => void sample(), Math.max(0, Math.ceil(due - performance.now()))),
+  owner.timer = runInDetachedAsyncContext(() =>
+    setTimeout(() => sample(), Math.max(0, Math.ceil(due - performance.now()))),
   );
-  timer.unref();
+  owner.timer.unref();
 }
 
-async function sample() {
-  sampling = true;
-  // Align near-due watches early, never extend their one/five-second deadline.
-  const due = Array.from(watches).filter((watch) => watch.due <= performance.now() + 999);
-  try {
-    // Ancestry also covers children that move out of the exec cgroup.
-    const census = {
-      memory: shareReads(readMemory),
-      children: shareReads(readChildren),
-    };
-    for (const watch of due) {
-      watch.due = Infinity;
-      void watch.sample(census).catch(() => {});
-    }
-    // Pending trees settle independently; one stalled read cannot block peer limits.
-    await Promise.resolve();
-  } finally {
-    sampling = false;
-    schedule();
+function sample() {
+  owner.sampling = true;
+  const due = Array.from(owner.watches).filter((watch) => watch.due <= performance.now() + 999);
+  const census = { memory: shareReads(readMemory), children: shareReads(readChildren) };
+  for (const watch of due) {
+    watch.due = Infinity;
+    void watch.sample(census).catch(() => {});
   }
+  // Pending trees settle independently; one stalled read cannot block peers.
+  owner.sampling = false;
+  schedule();
 }
 
-/** Nonoverlapping samples: every second near the bound or after discovering descendants. */
-export function watchChildMemory(params: {
-  pid?: number;
-  limitBytes?: number;
-  onLimit: (observedBytes: number) => void;
-  onDiagnostic: (text: string) => void;
-}): () => void {
-  const { pid, limitBytes } = params;
-  if (process.platform !== "linux" || !pid || !limitBytes) {
+/** One installation owner accounts ordinary trees and disjoint durable cgroups. */
+export function watchHostExecMemory(
+  params: (
+    | { pid: number; readUsage?: never }
+    | {
+        pid?: never;
+        readUsage: () => Promise<HostExecMemoryUsage>;
+      }
+  ) & {
+    onLimit: () => void | Promise<void>;
+    onDiagnostic: (text: string) => void;
+  },
+): () => void {
+  if (!getHostExecMemoryBudget()) {
     return () => {};
   }
   let warned = false;
-  let previousPids = new Set([pid]);
+  const empty = { memoryBytes: 0, swapBytes: 0 };
   const watch: Watch = {
     due: performance.now() + 1000,
-    // The shared timer is detached; callbacks retain this command's own context.
-    sample: AsyncLocalStorage.bind(async (census: Census) => {
-      if (!watches.has(watch)) {
+    snapshot: { pids: new Map(), extra: empty },
+    cancelling: false,
+    limit: AsyncLocalStorage.bind(async (observed, budget) => {
+      try {
+        params.onDiagnostic(`\n${formatLimit(observed, budget)}\n`);
+      } finally {
+        await params.onLimit();
+      }
+    }),
+    sample: AsyncLocalStorage.bind(async (census) => {
+      if (!owner.watches.has(watch)) {
         return;
       }
       let intervalMs = 1000;
       try {
-        const { bytes, pids } = await readTreeMemory(
-          pid,
-          limitBytes,
-          () => !watches.has(watch),
-          census,
-        );
-        intervalMs = bytes < limitBytes / 2 ? 5000 : 1000;
-        for (const childPid of pids) {
-          if (!previousPids.has(childPid)) {
-            intervalMs = 1000;
-          }
+        const snapshot = params.readUsage
+          ? { pids: new Map<number, HostExecMemoryUsage>(), extra: await params.readUsage() }
+          : await readTreeMemory(params.pid, () => !owner.watches.has(watch), census);
+        if (!owner.watches.has(watch)) {
+          return;
         }
-        previousPids = pids;
-        if (watches.has(watch) && bytes > limitBytes) {
-          stop();
-          params.onLimit(bytes);
-          params.onDiagnostic(`\n${formatChildMemoryLimit(limitBytes, bytes)}\n`);
+        const previousPids = watch.snapshot.pids;
+        watch.snapshot = snapshot;
+        intervalMs = 5000;
+        if (
+          Array.from(snapshot.pids.keys()).some(
+            (pid) => !previousPids.has(pid) && pid !== params.pid,
+          )
+        ) {
+          intervalMs = 1000;
         }
+        assess();
       } catch {
-        if (watches.has(watch) && !warned) {
+        if (owner.watches.has(watch) && !warned) {
           warned = true;
           params.onDiagnostic(
-            "\nWarning: OpenClaw could not read child memory usage; memory protection is degraded. Check procfs permissions.\n",
+            "\nWarning: OpenClaw could not read workload memory usage; shared memory protection is degraded. Check procfs and cgroup permissions.\n",
           );
         }
       } finally {
@@ -229,11 +428,10 @@ export function watchChildMemory(params: {
       }
     }),
   };
-  const stop = () => {
-    watches.delete(watch);
+  owner.watches.add(watch);
+  schedule();
+  return () => {
+    owner.watches.delete(watch);
     schedule();
   };
-  watches.add(watch);
-  schedule();
-  return stop;
 }

@@ -7,16 +7,18 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/environments.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import type { ImageGenerationProvider } from "../image-generation/provider-types.js";
-import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
+import type { MediaUnderstandingProvider } from "../media-understanding/provider-types.js";
 import type { MusicGenerationProvider } from "../music-generation/provider-types.js";
 import type { SpawnResult } from "../process/exec.js";
 import type {
-  RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderConfiguredContext,
-  RealtimeTranscriptionProviderId,
   RealtimeTranscriptionProviderResolveConfigContext,
-  RealtimeTranscriptionSession,
   RealtimeTranscriptionSessionCreateRequest,
+} from "../realtime-transcription/provider-contexts.js";
+import type {
+  RealtimeTranscriptionProviderConfig,
+  RealtimeTranscriptionProviderId,
+  RealtimeTranscriptionSession,
 } from "../realtime-transcription/provider-types.js";
 import type {
   RealtimeVoiceBridge,

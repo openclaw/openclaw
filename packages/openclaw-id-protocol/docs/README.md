@@ -15,6 +15,7 @@ against it. It runs unchanged in Node (>= 24), browsers and Workers: WebCrypto o
 | [discovery.md](discovery.md)   | OCF-191 | Discovery API v1: descriptor, devices, claws, snapshot mirror, mailbox, relay admission, enrollment |
 | [enrollment.md](enrollment.md) | OCF-190 | Invites, SAS device approval, kit enrollment, reference membership authority rules                  |
 | [acceptance.md](acceptance.md) | OCF-274 | Spec section 11 acceptance tests: which run here, which need the full system                        |
+| [versioning.md](versioning.md) | -       | Version markers, unsupported versions, unknown fields, bootstrap, support window                    |
 
 Source material: the owner-key spec v0.2 ("OpenClaw ID remote access: owner key and device
 approval protocol", 2026-10-29) and the iroh spike (`tailcat-spike/docs/iroh/`). Spec
@@ -29,7 +30,8 @@ endpoint key held by the tunnel child, sidecar -> tunnel child process, DERP -> 
    pin (fp(R), claw_id, binding_seq).
 2. **Discovery cannot forge an accepted statement.** It holds no owner key, no Gateway key
    (K_gw) and no device key. It can withhold, delay, replay or reorder; it cannot add a member,
-   an owner device, an invite, an approval or a binding.
+   an owner device, an invite, an approval or a binding, and a replayed revocation cannot
+   remove a key that was approved again.
 3. **No credential before verification.** A client opens a tunnel only to the K_srv of a
    ServerBinding it has verified against its pin, and releases stored tokens only after that.
 4. **Approvals travel directly.** Membership changes and invite approvals reach the Gateway

@@ -575,6 +575,7 @@ const enPluginManagement = {
       "Plugin availability changed. Refresh the catalog to see its current state.",
     installDestinationChanged:
       "The connection or admin changed. Install the plugin again to request a new review.",
+    installPausedByUpdate: "Paused while OpenClaw updates",
     installBlockedByUpdate:
       "OpenClaw is updating. Try installing the plugin when the update finishes.",
   },

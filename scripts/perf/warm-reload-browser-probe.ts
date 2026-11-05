@@ -1,4 +1,5 @@
 import type { ApplicationContext } from "../../ui/src/app/context.ts";
+import type { installPaneChromeProbe } from "../lib/control-ui-pane-chrome-probe.ts";
 import type { ReloadAnimationSample } from "./warm-reload-frames.ts";
 
 export const proofRegions = {
@@ -9,6 +10,48 @@ export const proofRegions = {
   composer: ".agent-chat__input, .agent-chat__disabled-banner--replacement",
   dashboard: "openclaw-board-view",
 };
+
+/** Summarize the existing pane-chrome sampler after its first populated Details frame. */
+export function summarizeDetailsGeometry(
+  frames: ReturnType<ReturnType<typeof installPaneChromeProbe>["read"]>["detailsFrames"],
+) {
+  const firstIndex = frames.findIndex((frame) =>
+    frame.sections.some((row) => row.section === "session" && row.height > 0),
+  );
+  const populated = firstIndex < 0 ? [] : frames.slice(firstIndex);
+  let topMovementPx = 0;
+  let heightMovementPx = 0;
+  let sectionInsertions = 0;
+  let sectionRemovals = 0;
+  for (let index = 1; index < populated.length; index++) {
+    const before = new Map(populated[index - 1]!.sections.map((row) => [row.section, row]));
+    const after = new Map(populated[index]!.sections.map((row) => [row.section, row]));
+    for (const id of new Set([...before.keys(), ...after.keys()])) {
+      const from = before.get(id);
+      const to = after.get(id);
+      if (from && to) {
+        topMovementPx += Math.abs(to.top - from.top);
+      } else if (to) {
+        sectionInsertions++;
+      } else {
+        sectionRemovals++;
+      }
+      heightMovementPx += Math.abs((to?.height ?? 0) - (from?.height ?? 0));
+    }
+  }
+  const first = populated[0];
+  return {
+    firstPopulatedMs: first?.at ?? null,
+    firstHasAutomations: first?.sections.some((row) => row.section === "automations") ?? false,
+    firstProcessHeightPx: first?.sections.find((row) => row.section === "processes")?.height ?? 0,
+    topMovementPx,
+    heightMovementPx,
+    totalVerticalMovementPx: topMovementPx + heightMovementPx,
+    sectionInsertions,
+    sectionRemovals,
+    frames: populated,
+  };
+}
 
 /** Serialized into the top document before its application modules execute. */
 export function installWarmReloadBrowserProbe(

@@ -84,6 +84,7 @@ const catalog = {
         latestRunTokens: "Latest run tokens",
         estimatedCost: "Est. cost",
         planUsage: "Plan usage",
+        quotaAccountUnknown: "Quota account unknown",
         openUsage: "Open usage dashboard",
         resets: "Resets {time}",
         usageCredits: "Usage credits",

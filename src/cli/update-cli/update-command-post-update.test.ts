@@ -953,7 +953,9 @@ process.exitCode = 1;
       );
 
       expect(events).toEqual(["restart"]);
-      const steps = mocks.printResult.mock.lastCall?.[0].steps;
+      const steps = mocks.printResult.mock.lastCall?.[0].steps.filter(
+        (step: { name: string }) => !step.name.endsWith("-timing"),
+      );
       if (!runs) {
         await expect(fs.stat(lintLog)).rejects.toThrow();
         expect(steps).toEqual(initialSteps);

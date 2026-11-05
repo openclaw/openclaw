@@ -224,6 +224,7 @@ export function inspectOrStopService(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  successfulUpdate.steps = [];
   vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockResolvedValue([]);
   mocks.serviceStopped = false;
   mocks.validateCanary.mockResolvedValue(readyCanary([]));
