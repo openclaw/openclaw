@@ -20,15 +20,21 @@ const doneMessage = makeAssistantMessageFixture({
   timestamp: 2,
 });
 const orphanMarker =
-  "[Earlier unanswered user message. Address this request alongside the current input; follow the latest user instruction if they conflict.]";
+  "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]";
 const olderPrompt = "Unanswered user request";
 const latestPrompt = "Current user request";
 const repairedPrompt = `${orphanMarker}\n${olderPrompt}\n\n${latestPrompt}`;
+// Metadata replay and rewind apply to internal input; external input stays in history.
 const orphanLeaf = (text: string) => ({
   id: "orphan-leaf",
   parentId: "parent-leaf",
   type: "message",
-  message: { role: "user", content: text, timestamp: 1 },
+  message: {
+    role: "user",
+    content: text,
+    timestamp: 1,
+    provenance: { kind: "internal_system", sourceTool: "heartbeat" },
+  } satisfies PersistedUserTurnMessage,
 });
 function installOrphanMetadata(metadata: Record<string, unknown>[]) {
   const entries = metadata.map((entry, index) => ({
@@ -169,7 +175,8 @@ it.each([false, true])("repairs orphan metadata (dangling label: %s)", async (da
 });
 
 it("removes repaired orphan history when assembly appends the active prompt", async () => {
-  hoisted.sessionManager.getLeafEntry.mockReturnValueOnce(orphanLeaf(olderPrompt));
+  const orphan = orphanLeaf(olderPrompt);
+  hoisted.sessionManager.getLeafEntry.mockReturnValueOnce(orphan);
   const seen: { prompt?: string; messages: AgentMessage[] }[] = [];
 
   await runAttempt({
@@ -186,7 +193,7 @@ it("removes repaired orphan history when assembly appends the active prompt", as
         };
       },
     },
-    sessionMessages: [{ role: "user", content: olderPrompt, timestamp: 1 } as AgentMessage],
+    sessionMessages: [orphan.message],
     sessionMessagesAfterRepair: [],
     attemptOverrides: { prompt: latestPrompt },
     sessionPrompt: async (session, prompt) => {
