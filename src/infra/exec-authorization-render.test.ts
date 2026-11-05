@@ -64,6 +64,34 @@ describe("exec authorization renderer", () => {
     ).resolves.toEqual({ ok: false, reason: "shell expansion in safe-bin arguments" });
   });
 
+  it.each([
+    [String.raw`test $'\0\''?v benign`, ["safeBuiltins"]],
+    [String.raw`eval git status $$'a\'?v`, [null]],
+    [String.raw`eval git status $$$$'a\'?v`, [null]],
+  ] as const)("rejects expansion outside ANSI-C quoting: %s", async (command, satisfiedBy) => {
+    await expect(
+      render(command, {
+        mode: "enforced",
+        segmentSatisfiedBy: [...satisfiedBy],
+      }),
+    ).resolves.toEqual({ ok: false, reason: "shell expansion in enforced arguments" });
+  });
+
+  it.each([
+    [String.raw`git status $'a\'?v'`, ["allowlist"], /\/git status \$'a\\'\?v'$/],
+    [String.raw`eval git status $$$'a\'?v'`, [null], String.raw`eval git status $$$'a\'?v'`],
+  ] as const)("preserves static ANSI-C quoting: %s", async (command, satisfiedBy, expected) => {
+    await expect(
+      render(command, {
+        mode: "enforced",
+        segmentSatisfiedBy: [...satisfiedBy],
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      command: typeof expected === "string" ? expected : expect.stringMatching(expected),
+    });
+  });
+
   it("renders dispatch-wrapper safe-bin commands without quote-all argv rendering", async () => {
     const command = renderOk(
       await render(

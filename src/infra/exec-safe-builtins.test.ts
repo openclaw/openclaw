@@ -127,6 +127,13 @@ describe("isSafeBuiltinSegment", () => {
     ).toBe(false);
   });
 
+  it.each([
+    ["test", String.raw`$'\0\''?v`, "benign"],
+    ["[", "-e", "*.txt", "]"],
+  ])("rejects dynamic predicate source %j", (...argv) => {
+    expect(isSafeBuiltinSegment({ segment: builtinSegment(argv), platform: "linux" })).toBe(false);
+  });
+
   it("returns false on Windows hosts (PowerShell semantics differ)", () => {
     expect(
       isSafeBuiltinSegment({
@@ -206,6 +213,30 @@ describe.skipIf(process.platform === "win32")(
       });
       expect(result.analysisOk).toBe(true);
       expect(result.allowlistSatisfied).toBe(false);
+    });
+
+    it.each([String.raw`test $'\0\''?v benign`, "[ -e *.txt ]"])(
+      "does not auto-allow dynamic predicate source: %s",
+      async (command) => {
+        const result = await evaluateShellAllowlistWithAuthorization({
+          command,
+          allowlist: gitAllowlist,
+          safeBins: new Set(),
+          cwd: "/tmp",
+        });
+        expect(result.analysisOk).toBe(true);
+        expect(result.allowlistSatisfied).toBe(false);
+      },
+    );
+
+    it("allows a static quoted predicate operand", async () => {
+      const result = await evaluateShellAllowlistWithAuthorization({
+        command: "test -d '/tmp/space path' && git status",
+        allowlist: gitAllowlist,
+        safeBins: new Set(),
+        cwd: "/tmp",
+      });
+      expect(result.allowlistSatisfied).toBe(true);
     });
 
     it("environment-mutating builtins still gate", async () => {
