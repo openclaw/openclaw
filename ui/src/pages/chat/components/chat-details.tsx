@@ -149,7 +149,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
   const opened = () =>
     requested() &&
     (!desktop() ||
-      hasDetailsContent(props.chat, detailsAvailability.available()) ||
+      hasDetailsContent(props.chat, detailsAvailability.facts()) ||
       detailsAvailability.hasContent() === true);
   const outputsDemand = createMemo(() =>
     desktop() && requested() && props.chat?.outputs ? props.chat.retainOutputs : undefined,

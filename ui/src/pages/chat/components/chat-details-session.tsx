@@ -36,8 +36,9 @@ import type {
   ChatDetailsOutputs,
   ChatDetailsProps,
 } from "./chat-details-types.ts";
+import { readDetailsViewer } from "./chat-details-viewer.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
-import { getChatOutputsCount, hasChatDesktopOutputs } from "./chat-outputs-data.ts";
+import { readChatDesktopOutputs } from "./chat-outputs-data.ts";
 import { isProcessesPresentationReady } from "./chat-processes-presentation.ts";
 import { hasChatPublishedPullRequests } from "./chat-pull-requests.ts";
 import { ChatPullRequests, type ChatPullRequestsProps } from "./chat-pull-requests.tsx";
@@ -234,13 +235,11 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
           const count = () => peopleState().count;
           const partialPeople = () => peopleState().partial;
           const desktopPeople = () => peopleState().people;
-          const showPeople = () => {
-            const selfUser = gateway?.read().snapshot.selfUser;
-            return hasDetailsPeople(peopleState(), {
-              pending: Boolean(gateway && selfUser !== null && !selfUser?.identity),
-              identity: selfUser?.identity,
-            });
-          };
+          const showPeople = () =>
+            hasDetailsPeople(
+              peopleState(),
+              readDetailsViewer(gateway?.read().snapshot.selfUser, Boolean(gateway)),
+            );
           const outputs = createMemo<ChatDetailsOutputs | null>(() => {
             const snapshot = props.props?.outputs;
             if (!snapshot) {
@@ -330,11 +329,11 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
               compact: true,
             };
           });
-          const outputsCount = () => {
-            const data = outputs();
-            return data ? getChatOutputsCount(data) : null;
-          };
-          const displayedCount = () => outputsCount() ?? props.props?.cachedDetails?.outputs;
+          const outputsPresentation = createMemo(() =>
+            readChatDesktopOutputs(outputs(), props.props?.cachedDetails?.outputs),
+          );
+          const outputsCount = () => outputsPresentation().liveCount;
+          const displayedCount = () => outputsPresentation().count;
           const receipt = createMemo(() => {
             const selected = props.props?.sessionFactsReady ? session() : undefined;
             const facts = selected && {
@@ -558,7 +557,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                 </Show>
                 <Show when={desktopPresentation() && outputs()}>
                   {(data) => (
-                    <Show when={hasChatDesktopOutputs(data()) || (displayedCount() ?? 0) > 0}>
+                    <Show when={outputsPresentation().visible}>
                       <ChatDetailsDesktopSection
                         section="outputs"
                         title={desktopPresentation()!.outputsLabel}

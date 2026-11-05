@@ -7,8 +7,9 @@ import { readChatMachinePlacement } from "../chat-pane-placement.ts";
 import { hasLoadedDetailsSubagents } from "../chat-spawned-subagent.ts";
 import { listSubagents } from "../chat-subagent-wait.ts";
 import type { ChatDetailsEnvironmentDesktopProps, ChatDetailsProps } from "./chat-details-types.ts";
+import type { DetailsViewer } from "./chat-details-viewer.ts";
 import { hasEnvironmentTextChanges } from "./chat-environment-content.tsx";
-import { hasChatDesktopOutputs } from "./chat-outputs-data.ts";
+import { readChatDesktopOutputs } from "./chat-outputs-data.ts";
 import type { ChatPullRequestsProps } from "./chat-pull-request-shared.tsx";
 import {
   hasChatPublishedPullRequests,
@@ -17,7 +18,6 @@ import {
 } from "./chat-pull-requests.ts";
 
 type DetailsSession = ChatDetailsProps["selectedSession"];
-type DetailsViewer = { pending: boolean; identity?: SessionParticipant["identity"] };
 type DetailsWork = Pick<
   ChatPullRequestsProps,
   "branch" | "branchDismissed" | "publication" | "pullRequests"
@@ -155,11 +155,11 @@ export function admittedDetailsAutomationsCache(
 
 export function hasDetailsContent(
   details: ChatDetailsProps | undefined,
-  automationAvailability?: boolean,
+  facts: { automation?: boolean; viewer?: DetailsViewer } = {},
 ) {
   return Boolean(
     readDetailsSubagents(details).visible ||
-    (automationAvailability ??
+    (facts.automation ??
       (admittedDetailsAutomationsCache(
         details?.cachedDetails?.automations,
         details?.pullRequestsGateway?.snapshot,
@@ -170,8 +170,8 @@ export function hasDetailsContent(
     }) ||
     details?.progressCard ||
     details?.progressCardError === "access-denied" ||
-    (details?.outputs && hasChatDesktopOutputs(details.outputs)) ||
-    hasDetailsPeople(readDetailsPeople(detailsSessionFacts(details))) ||
+    readChatDesktopOutputs(details?.outputs, details?.cachedDetails?.outputs).visible ||
+    hasDetailsPeople(readDetailsPeople(detailsSessionFacts(details)), facts.viewer) ||
     readDetailsEnvironment(details, details?.environment, {
       branch: details?.pullRequestsBranch,
       branchDismissed: details?.pullRequestsBranchDismissed,

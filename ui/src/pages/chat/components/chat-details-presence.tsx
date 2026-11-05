@@ -1,6 +1,9 @@
 import type { JSX } from "@solidjs/web";
 import { createContext, createMemo, createSignal, onSettled, Show, useContext } from "solid-js";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
+import { projectGateway } from "../../../lib/reactive/application.ts";
+import { useOptionalApplication } from "../../../lib/reactive/context.ts";
+import { readDetailsViewer } from "./chat-details-viewer.ts";
 
 export type DetailsAutomationAvailability = { identity: unknown; available: boolean };
 /** Scope-owned view projection; the inventory remains the only availability decision owner. */
@@ -9,6 +12,8 @@ export function createDetailsAvailabilityProjection(
   readGateway: () => ApplicationGateway | undefined,
   readDesktop: () => boolean,
 ) {
+  const context = useOptionalApplication();
+  const viewerGateway = context ? projectGateway(context.gateway) : undefined;
   const identity = createMemo(
     () => {
       const gateway = readGateway();
@@ -39,9 +44,12 @@ export function createDetailsAvailabilityProjection(
     identity,
     hasContent,
     onContentChange,
-    available: () => {
+    facts: () => {
       const current = fact();
-      return current && current.identity === identity() ? current.available : undefined;
+      return {
+        automation: current && current.identity === identity() ? current.available : undefined,
+        viewer: readDetailsViewer(viewerGateway?.read().snapshot.selfUser, Boolean(viewerGateway)),
+      };
     },
     report: (next: DetailsAutomationAvailability) => {
       if (next.identity === identity()) {

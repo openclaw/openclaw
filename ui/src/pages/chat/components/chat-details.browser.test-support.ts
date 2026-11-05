@@ -17,6 +17,7 @@ export async function createDetailsBrowserFixture(
   fullscreen = false,
   nativePresentation?: ChatDetailsViewProps["nativePresentation"],
   contentPending?: boolean,
+  wrapper?: NonNullable<Parameters<typeof mountSolid>[1]>["wrapper"],
 ) {
   const styles = document.createElement("style");
   styles.textContent = [baseStyles, progressStyles, detailsStyles].join("\n");
@@ -63,7 +64,7 @@ export async function createDetailsBrowserFixture(
         ChatDetails,
         merge(() => current()),
       ),
-    { container: fullscreen ? header : frame },
+    { container: fullscreen ? header : frame, wrapper },
   );
   const element = view.container.querySelector("openclaw-chat-details")!;
   conversation.append(footer);
