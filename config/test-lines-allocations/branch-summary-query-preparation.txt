@@ -1,0 +1,2 @@
+# Work-count regression: reuse query plans across sessions with fresh rows and append bindings.
+26

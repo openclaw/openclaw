@@ -24,6 +24,7 @@ import {
   branchSummary as branch,
   expectBranchList,
 } from "./session-accessor.sqlite-branch-fixtures.test-support.js";
+import { readSessionBranchSummaries } from "./session-accessor.sqlite-branch-summaries.js";
 import {
   readSessionBranchSnapshot,
   readSessionBranchSummariesInWorker,
@@ -199,6 +200,31 @@ it.each(cases)("$name", async ({ events, branches }) => {
 
 const seedCanonicalBranchEvents = (events: Record<string, unknown>[]) =>
   seedStoredBranchEvents(events, true);
+
+it("reuses branch queries across sessions while reading fresh rows and append bindings", async () => {
+  const scope = await seedCanonicalBranchEvents([message("root", null, "first")]);
+  const other = { ...scope, sessionId: "other", sessionKey: "agent:main:other" };
+  await upsertSessionEntryCore(other, { sessionId: other.sessionId, updatedAt: 1 });
+  replaceTranscriptEventsSync(other, [
+    { type: "session", id: other.sessionId, version: 3 },
+    message("second", null, "second"),
+  ]);
+  const database = openOpenClawAgentDatabase(scope);
+  const read = (sessionId: string) => readSessionBranchSummaries(database, sessionId);
+  const previous = readSessionBranchSnapshot(database, scope);
+  assert(previous.status === "ok");
+  await append(other, "other-answer", "second", "other answer");
+  await append(scope, "answer", "root", "first answer");
+  const compile = vi.spyOn(getSessionKysely(database.db).getExecutor(), "compileQuery");
+  expect(read(other.sessionId).branches).toEqual([
+    branch("other-answer", "other answer", 2, true, "1970-01-01T00:00:01.000Z"),
+  ]);
+  expect(readSessionBranchSummaries(database, scope.sessionId, previous).branches).toEqual([
+    branch("answer", "first answer", 2, true, "1970-01-01T00:00:01.000Z"),
+  ]);
+  expect(read(other.sessionId).branches[0]?.headline).toBe("other answer");
+  expect(compile).not.toHaveBeenCalled();
+});
 
 it("reads branch summaries without loading participant display data", async () => {
   const scope = await seedCanonicalBranchEvents([

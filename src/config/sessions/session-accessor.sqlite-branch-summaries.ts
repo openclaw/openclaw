@@ -1,4 +1,9 @@
-import { iterateSqliteQuerySync, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
+import type { Expression } from "kysely";
+import {
+  createSqliteQueryCache,
+  prepareSqliteQueryIterator,
+  prepareSqliteQueryTakeFirstSync,
+} from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope-helpers.js";
 import type { SessionBranchSummary } from "./session-accessor.types.js";
@@ -20,34 +25,83 @@ type HeadlineCandidate = { seq: number; previous: HeadlineCandidate | undefined 
 type BranchPathSummary = { messageCount: number; candidate: HeadlineCandidate | undefined };
 type SessionBranchSummaries = { branches: SessionBranchSummary[]; appendSafe: boolean };
 
+type BranchQueryInput = { sessionId: string; seq: number };
+type NavigationRow = { seq: number; event_json: string };
+
+// Cache query plans, never rows; the snapshot owner supplies fresh session bindings.
+const branchQueries = createSqliteQueryCache((database) => {
+  const db = getSessionKysely(database);
+  const navigation = (sessionId: Expression<string>) =>
+    db
+      .selectFrom("transcript_events")
+      .select(["seq", transcriptEventNavigationSql(database).as("event_json")])
+      .where("session_id", "=", sessionId)
+      .orderBy("seq", "asc");
+  return {
+    headline: prepareSqliteQueryTakeFirstSync<BranchQueryInput, { event_json: string }>(
+      database,
+      (parameter) =>
+        db
+          .selectFrom("transcript_events")
+          .select(transcriptEventJsonSql(database).as("event_json"))
+          .where(
+            "session_id",
+            "=",
+            parameter((input) => input.sessionId),
+          )
+          .where(
+            "seq",
+            "=",
+            parameter((input) => input.seq),
+          )
+          .limit(1),
+    ),
+    tail: prepareSqliteQueryIterator<
+      BranchQueryInput,
+      NavigationRow & { identity_id: string | null }
+    >(database, (parameter) => {
+      const sessionId = parameter((input) => input.sessionId);
+      return navigation(sessionId)
+        .where(
+          "seq",
+          ">",
+          parameter((input) => input.seq),
+        )
+        .select((eb) =>
+          eb
+            .selectFrom("transcript_event_identities")
+            .select("event_id")
+            .where("session_id", "=", sessionId)
+            .whereRef("seq", "=", "transcript_events.seq")
+            .limit(1)
+            .as("identity_id"),
+        );
+    }),
+    all: prepareSqliteQueryIterator<string, NavigationRow & { identity_count: number }>(
+      database,
+      (parameter) => {
+        const sessionId = parameter((value) => value);
+        return navigation(sessionId).select((eb) =>
+          eb
+            .selectFrom("transcript_event_identities")
+            .select((identity) => identity.fn.countAll<number>().as("count"))
+            .where("session_id", "=", sessionId)
+            .as("identity_count"),
+        );
+      },
+    ),
+  };
+});
+
 /** Read navigation and selected headlines inside the branch snapshot owner's transaction. */
 export function readSessionBranchSummaries(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
   previous?: { branches: SessionBranchSummary[]; appendSafe?: boolean; maxSeq: number | null },
 ): SessionBranchSummaries {
-  const db = getSessionKysely(database.db);
-  const navigationQuery = db
-    .selectFrom("transcript_events")
-    .select(["seq", transcriptEventNavigationSql(database.db).as("event_json")])
-    .where("session_id", "=", sessionId)
-    .orderBy("seq", "asc");
-  const readCandidate = prepareSqliteQuerySync<number, { event_json: string }>(
-    database.db,
-    (parameter) =>
-      db
-        .selectFrom("transcript_events")
-        .select(transcriptEventJsonSql(database.db).as("event_json"))
-        .where("session_id", "=", sessionId)
-        .where(
-          "seq",
-          "=",
-          parameter((seq) => seq),
-        )
-        .limit(1),
-  );
+  const queries = branchQueries(database.db);
   const readHeadline = (seq: number) => {
-    const row = readCandidate(seq).rows[0];
+    const row = queries.headline({ sessionId, seq });
     if (!row) {
       throw new Error("Branch headline row is missing from the transcript snapshot");
     }
@@ -58,20 +112,7 @@ export function readSessionBranchSummaries(
     let tail = { ...active };
     let candidate: HeadlineCandidate | undefined;
     let appendSafe = true;
-    for (const row of iterateSqliteQuerySync(
-      database.db,
-      navigationQuery
-        .where("seq", ">", previous.maxSeq)
-        .select((eb) =>
-          eb
-            .selectFrom("transcript_event_identities")
-            .select("event_id")
-            .where("session_id", "=", sessionId)
-            .whereRef("seq", "=", "transcript_events.seq")
-            .limit(1)
-            .as("identity_id"),
-        ),
-    )) {
+    for (const row of queries.tail({ sessionId, seq: previous.maxSeq })) {
       const entry = projectSessionBranchEntry(JSON.parse(row.event_json), row.seq);
       // Identity ownership rules out duplicate IDs in the certified prefix or suffix.
       if (
@@ -108,14 +149,7 @@ export function readSessionBranchSummaries(
   let navigationCount = 0;
   let identityCount: number | null = 0;
   function* navigationEntries() {
-    const query = navigationQuery.select((eb) =>
-      eb
-        .selectFrom("transcript_event_identities")
-        .select((identity) => identity.fn.countAll<number>().as("count"))
-        .where("session_id", "=", sessionId)
-        .as("identity_count"),
-    );
-    for (const row of iterateSqliteQuerySync(database.db, query)) {
+    for (const row of queries.all(sessionId)) {
       navigationCount++;
       identityCount = row.identity_count;
       const entry = projectSessionBranchEntry(JSON.parse(row.event_json), row.seq);
