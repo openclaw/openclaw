@@ -389,6 +389,10 @@ workflow honors its `runner_group` input. Release Decision, Diagnostic Drain,
 and the nightly watcher keep their existing runner selection and 720-minute
 budgets; standard hosted runners cannot preserve that lifetime.
 
+Mantis Discord and web UI actor authorization, request resolution, and ref
+validation use `ubuntu-24.04`. Their live proof jobs retain separate runtime
+placement and deadlines.
+
 Mantis scenario dispatch and QA actor/ref validation also use `ubuntu-24.04`.
 The QA controls honor their `runner_group` input. QA profile planning, builds,
 shards, aggregation, and live transport workloads keep their existing runners.
