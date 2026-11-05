@@ -165,6 +165,18 @@ export type SnapshotOwnerDevice = { device_pub: Ed25519PublicKey; caps: OwnerCap
 export type SnapshotMember = { account_id: string; role: MemberRole; peer_keys: IrohEndpointKey[] };
 
 /**
+ * Protocol versions a Gateway accepts for new input, per versioned surface, ascending. Clients
+ * pick the highest version they share with it (`selectVersion`). The tunnel is not listed: its
+ * version is negotiated by QUIC ALPN inside the handshake K_srv authenticates.
+ */
+export type ProtocolVersions = {
+  /** Signed statement envelope versions. */
+  statement: number[];
+  /** ClawDescriptor versions. */
+  descriptor: number[];
+};
+
+/**
  * Gateway-signed (K_gw) mirror of the claw's current allowlist for Discovery listing and relay
  * admission. Not an authority, and it carries no history: a removed key is simply absent.
  */
@@ -180,6 +192,12 @@ export type MembershipSnapshotBody = {
   /** Owner device peer keys the relay should admit. */
   owner_peer_keys: IrohEndpointKey[];
   members: SnapshotMember[];
+  /**
+   * The versions this Gateway accepts. Signed by K_gw and only used from a snapshot that passed
+   * `assessFreshness`, so Discovery cannot edit it. It can still replay an older list a client
+   * has not seen; the Gateway refusing unlisted versions is what keeps that harmless.
+   */
+  protocols: ProtocolVersions;
   issued_at: UnixSeconds;
 };
 
