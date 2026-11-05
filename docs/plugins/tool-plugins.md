@@ -341,6 +341,11 @@ run/worker authority; a continuation also checks the original owner's live
 exact-parent binding. Standalone HTTP/RPC calls use their authenticated request
 lifetime, while MCP tools retain the existing authenticated grant or
 loopback-runtime lifetime.
+The guard identifies the invoking call from its async context. Awaited work keeps
+that context, but callbacks from an event source shared across calls, such as a
+cached connection's event listeners, can run in another call's context, such as
+the call that created the source. Capture `AsyncLocalStorage.snapshot()` when the call starts and run
+the guard through it in those callbacks.
 Metadata-only catalog construction does not grant invocation authority. A retained
 versioned tool without an admitted invocation fails when its guard is called.
 
