@@ -101,6 +101,17 @@ it("collects distinct names from the whole selected snapshot without crossing fi
   );
 });
 
+it("counts authored inputs instead of their declared compiled script copies", () => {
+  const { collect, git } = createRepo({
+    "src/infra/daemon-runtime-probe.generated.mjs": "OPENCLAW_COPIED_ROOT_HANDOFF",
+    "src/custom.generated.mjs": "OPENCLAW_AUTHORED",
+    "src/runtime.ts": "OPENCLAW_RUNTIME",
+  });
+  git(["add", "."]);
+  expect(collect()).toEqual(["OPENCLAW_AUTHORED", "OPENCLAW_RUNTIME"]);
+  expect(collect(true)).toEqual(["OPENCLAW_AUTHORED", "OPENCLAW_RUNTIME"]);
+});
+
 it("uses a constant number of Git processes as the staged source set grows", () => {
   const counts = [8, 16].map((fileCount) => {
     const names = Array.from({ length: fileCount }, (_, index) => `OPENCLAW_N${index}`);

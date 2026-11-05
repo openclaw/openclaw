@@ -35,13 +35,6 @@ const TWILIO_MMS_MAX_OUTBOUND_MEDIA_COUNT = 10;
 export const TWILIO_MMS_MAX_BYTES = 5 * 1024 * 1024;
 const SMS_MAX_INBOUND_MEDIA_DOWNLOADS = 10;
 
-type TwilioMessagePayload = {
-  sid?: string;
-  to?: string;
-  from?: string;
-  status?: string;
-};
-
 const TWILIO_CHANNEL_ADDRESS_RE = /^([a-z][a-z0-9-]*):(.*)$/i;
 
 export type TwilioIncomingPhoneNumber = ReturnType<typeof parseTwilioIncomingPhoneNumber>;
@@ -67,7 +60,7 @@ function firstStringish(value: unknown): string {
   return typeof first === "number" ? String(first) : "";
 }
 
-function parseTwilioSuccessPayload(text: string): TwilioMessagePayload {
+function parseTwilioSuccessPayload(text: string) {
   if (!text.trim()) {
     return {};
   }

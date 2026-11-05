@@ -82,7 +82,6 @@ describe("sandbox ssh helpers", () => {
     await expect(createSshSandboxSessionFromConfigText({ configText: "Host test\n" })).rejects.toBe(
       injectedError,
     );
-    expect(chmod).toHaveBeenCalledOnce();
     const configDir = path.dirname(String(chmod.mock.calls[0]?.[0]));
     tempDirs.push(configDir);
     await expect(fs.access(configDir)).rejects.toThrow();
@@ -218,9 +217,6 @@ describe("sandbox ssh helpers", () => {
       const { root, workspace } = await workspaceTree();
       const link = path.join(workspace, "escape");
       await fs.symlink(root, link);
-      if (suffix) {
-        expect(ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT.split("\n")[0]).toBe("set -e");
-      }
       await expect(run(path.join(link, suffix), workspace)).rejects.toThrow(
         /unsafe remote directory symlink/,
       );

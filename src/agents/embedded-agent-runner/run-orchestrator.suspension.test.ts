@@ -339,10 +339,20 @@ describe("embedded run detached session metadata", () => {
     },
   );
 
-  it.each(["success", "assistant", "aborted"] as const)(
-    "keeps a detached %s out of an absent final agent root, including key backfill",
-    async (outcome) => {
-      const { params, run, expectNoAgent } = await createRun("detached");
+  it.each([
+    { outcome: "success", existing: false },
+    { outcome: "assistant", existing: false },
+    { outcome: "aborted", existing: false },
+    { outcome: "success", existing: true },
+    { outcome: "assistant", existing: true },
+  ] as const)(
+    "keeps detached $outcome metadata unchanged (existing row: $existing)",
+    async ({ outcome, existing }) => {
+      const { params, scope, seed, run, expectNoAgent } = await createRun("detached");
+      if (existing) {
+        await seed(pendingSwitch());
+      }
+      const before = loadSessionEntry(scope);
       if (outcome === "assistant") {
         failAttempt(outcome, params.sessionId);
       } else {
@@ -352,36 +362,23 @@ describe("embedded run detached session metadata", () => {
             outcome === "aborted" ? { kind: "aborted", source: "external" } : { kind: "ok" },
         });
       }
-      const pending = run({ sessionKey: undefined });
+      const pending = run(existing ? {} : { sessionKey: undefined });
       if (outcome === "assistant") {
         await expect(pending).rejects.toMatchObject(billingFailure);
       } else {
         const result = await pending;
         expect(result.meta.agentMeta?.sessionId).toBe(params.sessionId);
+        if (existing) {
+          expect(result).toMatchObject(verified);
+        }
       }
       await joinSuspensionWrites();
       expect(runAttempt).toHaveBeenCalledOnce();
-      // Global operational state may exist; no durable session owner may be created.
-      await expectNoAgent();
-    },
-  );
-
-  it.each(["success", "assistant"] as const)(
-    "does not spend a durable pending switch during detached %s",
-    async (outcome) => {
-      const { params, scope, seed, run } = await createRun("detached");
-      await seed(pendingSwitch());
-      const before = loadSessionEntry(scope);
-      if (outcome === "success") {
-        runAttempt.mockResolvedValue(successfulAttempt(params.sessionId));
-        await expect(run()).resolves.toMatchObject(verified);
+      if (existing) {
+        expect(loadSessionEntry(scope)).toEqual(before);
       } else {
-        failAttempt(outcome, params.sessionId);
-        await expect(run()).rejects.toMatchObject(billingFailure);
+        await expectNoAgent();
       }
-      await joinSuspensionWrites();
-      expect(runAttempt).toHaveBeenCalledOnce();
-      expect(loadSessionEntry(scope)).toEqual(before);
     },
   );
 
@@ -539,33 +536,20 @@ describe("embedded run detached session metadata", () => {
     },
   );
 
-  it("retains one detached transcript manager through a real attempt retry", async () => {
+  it("retries unsupported thinking without creating durable session state", async () => {
     const { params, run, expectNoAgent } = await createRun("detached");
-    let firstManager: EmbeddedRunAttemptParams["sessionManager"];
     runAttempt
-      .mockImplementationOnce(async (attempt) => {
-        firstManager = attempt.sessionManager;
-        expect(firstManager).toBeDefined();
-        firstManager!.appendMessage(makeUserMessage("retained history", 1));
-        return makeEmbeddedRunnerAttempt({
+      .mockResolvedValueOnce(
+        makeEmbeddedRunnerAttempt({
           sessionIdUsed: params.sessionId,
           terminal: {
             kind: "failed",
             source: "prompt",
             error: new Error("thinking level not supported; supported values: minimal"),
           },
-        });
-      })
-      .mockImplementationOnce(async (attempt) => {
-        expect(attempt.sessionManager).toBe(firstManager);
-        expect(attempt.sessionManager?.getEntries()).toContainEqual(
-          expect.objectContaining({
-            type: "message",
-            message: expect.objectContaining({ content: "retained history" }),
-          }),
-        );
-        return successfulAttempt(params.sessionId);
-      });
+        }),
+      )
+      .mockResolvedValueOnce(successfulAttempt(params.sessionId));
     await expect(run({ sessionManager: undefined })).resolves.toMatchObject(verified);
     expect(runAttempt).toHaveBeenCalledTimes(2);
     await expectNoAgent();
@@ -577,21 +561,11 @@ describe("embedded run detached session metadata", () => {
     ["codex", true],
     ["codex", false],
   ] as const)(
-    "does not persist detached %s trajectory metadata (caller manager: %s)",
+    "forwards detached lifetime to the %s attempt (caller manager: %s)",
     async (harness, suppliedManager) => {
       const { params, run, expectNoAgent } = await createRun("detached");
-      const { prepareEmbeddedAttemptTrajectory } = await import("./run/attempt-trajectory.js");
       runAttempt.mockImplementationOnce(async (attempt) => {
-        const recorder = await prepareEmbeddedAttemptTrajectory({
-          activeSession: { sessionId: attempt.sessionId },
-          attempt,
-          clientToolCount: 0,
-          effectiveToolCount: 0,
-          effectiveWorkspace: params.workspaceDir,
-          localModelLeanEnabled: false,
-          sessionAgentId: "research",
-        });
-        await recorder?.flush();
+        expect(attempt.sessionPersistence).toBe("detached");
         return successfulAttempt(params.sessionId);
       });
       await expect(

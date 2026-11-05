@@ -83,11 +83,9 @@ export function ChatSendStatus(props: { status: SendStatus; actions: ChatSendSta
               {t(
                 reconnecting()
                   ? "chat.queue.states.waitingForReconnect"
-                  : pending()
-                    ? "common.queued"
-                    : status().state === "held"
-                      ? "chat.queue.states.needsReview"
-                      : "chat.queue.notSent",
+                  : status().state === "held"
+                    ? "chat.queue.states.needsReview"
+                    : "chat.queue.notSent",
               )}
             </span>
           </span>

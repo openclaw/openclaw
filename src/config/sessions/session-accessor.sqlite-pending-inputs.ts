@@ -26,6 +26,12 @@ import {
 } from "./session-actor-transaction.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
+import {
+  collectForeignLiveSessionPendingInputEntries,
+  copySessionPendingInputWorkerFacts,
+  publishConsumedSessionPendingInputSources,
+  publishSessionPendingInputWorkerReceipt,
+} from "./session-pending-input-live-owner.js";
 import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
 import {
   isFinalInputCompletion,
@@ -61,36 +67,14 @@ export function captureSessionPendingInputWorkerCustody() {
   if (!owner) {
     return undefined;
   }
-  const copy = (current: SessionPendingInputOwner): SessionPendingInputWorkerFacts => ({
-    agentId: current.agentId,
-    databaseAgentId: current.databaseAgentId,
-    inputId: current.inputId,
-    transcriptInputId: current.transcriptInputId,
-    sessionId: current.sessionId,
-    sessionKey: current.sessionKey,
-    databasePath: current.workerDatabasePath,
-    idempotencyKey: current.idempotencyKey,
-    lifecycleGeneration: current.lifecycleGeneration,
-    messageJson: current.messageJson,
-    preparedAuthority:
-      current.authority || current.sources?.some((source) => source.authority) ? true : undefined,
-    ...(current.sources ? { sources: current.sources.map(copy) } : {}),
-  });
   const relocation = owners.relocation.getStore();
   return {
-    facts: copy(owner),
+    facts: copySessionPendingInputWorkerFacts(owner),
     ...(relocation?.owner === owner ? { relocation: relocation.sourceInputId } : {}),
     assertCurrent: (facts?: SessionPendingInputAuthorityFacts, assertSourceCurrent?: () => void) =>
       assertPendingInputOwnerCurrent(owner, facts, assertSourceCurrent),
-    publish(receipt: SessionPendingInputWorkerReceipt) {
-      owner.transcriptInputId = receipt.transcriptInputId;
-      const consumed = new Set(receipt.consumedInputIds);
-      for (const source of owner.sources ?? [owner]) {
-        if (consumed.has(source.inputId)) {
-          source.consumed = true;
-        }
-      }
-    },
+    publish: (receipt: SessionPendingInputWorkerReceipt) =>
+      publishSessionPendingInputWorkerReceipt(owner, receipt),
   };
 }
 
@@ -157,22 +141,17 @@ const owners = resolveGlobalSingleton(Symbol.for("openclaw.sessionPendingInputOw
   transactionRelocations: new WeakMap<EngineConnection, Map<SessionPendingInputOwner, string>>(),
 }));
 
-const recoveredDedupeOwners = resolveGlobalSingleton(
-  Symbol.for("openclaw.sessionPendingInputDedupeRecoveries"),
-  () => new WeakSet<SessionPendingInputOwner>(),
-);
-
 registerAgentEventLifecycleRotationHandler("session-pending-inputs", () => {
   const failures: unknown[] = [];
   for (const owner of owners.live.values()) {
     try {
-      owner.finish("interrupted");
+      owner.finish("cancelled");
     } catch (error) {
       failures.push(error);
     }
   }
   if (failures.length) {
-    throw new AggregateError(failures, "Failed to record interrupted pending inputs");
+    throw new AggregateError(failures, "Failed to settle pending inputs");
   }
 });
 
@@ -192,6 +171,7 @@ export function releaseSessionPendingInputOwner(owner: SessionPendingInputOwner)
   owner.assertCurrent = assertPendingInputOwnerActive.bind(undefined, owner);
   owner.finish = () => {};
   owner.authority = undefined;
+  owner.promotedOwner = undefined;
 }
 
 export function assertRegisteredSessionPendingInputOwner(owner: SessionPendingInputOwner): void {
@@ -250,6 +230,18 @@ export function assertSessionPendingInputLifetimeCurrent(owner: SessionPendingIn
   (owner.authority?.assertLifetimeCurrent ?? owner.assertCurrent)();
 }
 
+/** Capture the calling owner before physical database discovery yields. */
+export function captureForeignLiveSessionPendingInputReader() {
+  const currentOwner = owners.current.getStore();
+  return (scope: { databasePath: string; sessionId: string; sessionKey: string }) =>
+    collectForeignLiveSessionPendingInputEntries({
+      scope,
+      liveOwners: owners.live.values(),
+      currentOwner,
+      assertLifetimeCurrent: assertSessionPendingInputLifetimeCurrent,
+    });
+}
+
 export function runWithSessionPendingInput<T>(owner: SessionPendingInputOwner, run: () => T): T {
   const enter = () => {
     assertPendingInputOwnerCurrent(owner);
@@ -303,6 +295,35 @@ export function hasRegisteredSessionPendingInputOwner(
       owner.lifecycleGeneration === row.lifecycle_generation) &&
     (owner.settling || isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration))
   );
+}
+
+/** Durable queued text is visible only while its ordinary input owner is live. */
+export function listLiveSessionPendingInputIds(
+  databasePath: string,
+  sessionKey: string,
+  sessionId: string,
+  queuedOnly = false,
+): string[] {
+  return [...owners.live.values()]
+    .filter(
+      (owner) =>
+        owner.workerDatabasePath === databasePath &&
+        owner.sessionKey === sessionKey &&
+        owner.sessionId === sessionId &&
+        (!queuedOnly || (!owner.consumed && !owner.settling)) &&
+        (owner.settling || isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration)),
+    )
+    .map((owner) => owner.inputId);
+}
+
+/** Called after the exact IDs commit in the session marker, before shutdown cancellation. */
+export function preserveSessionQueuedInputOwnersForRestart(inputIds: readonly string[]): void {
+  for (const inputId of inputIds) {
+    const owner = owners.live.get(inputId);
+    if (owner && !owner.consumed && !owner.settling) {
+      owner.preserveQueuedForRestart = true;
+    }
+  }
 }
 
 type SessionInputCompletionScope = Pick<ResolvedTranscriptScope, "sessionId" | "sessionKey"> & {
@@ -428,7 +449,7 @@ export function writeSessionInputCompletion(
   return outcome;
 }
 
-/** Capture the exact host owner before reading; claim it once in the consuming frame. */
+/** Only the freshly staged owner may spend one inbound dedupe retry. */
 export function prepareCurrentSessionPendingInputDedupeRecovery(
   scope: Pick<ResolvedTranscriptScope, "sessionId" | "sessionKey">,
   runId: string,
@@ -437,8 +458,7 @@ export function prepareCurrentSessionPendingInputDedupeRecovery(
   if (
     !owner ||
     owner.sources ||
-    owner.restartRecovered !== true ||
-    recoveredDedupeOwners.has(owner) ||
+    owner.dedupeRetryAvailable !== true ||
     owner.sessionId !== scope.sessionId ||
     owner.sessionKey !== scope.sessionKey ||
     owner.idempotencyKey !== `${runId}:user`
@@ -447,32 +467,16 @@ export function prepareCurrentSessionPendingInputDedupeRecovery(
   }
   // Preparation does not spend replay custody; the claim rechecks current authority.
   assertSessionPendingInputLifetimeCurrent(owner);
-  return (
-    path: string,
-    snapshot: { current: boolean; pending?: SessionPendingInputRow },
-  ): boolean => {
+  return (): boolean => {
     assertPendingInputOwnerCurrent(owner);
-    const row = snapshot.pending;
     if (
       owners.current.getStore() !== owner ||
-      recoveredDedupeOwners.has(owner) ||
-      owner.consumed ||
-      owner.workerDatabasePath !== path ||
-      !snapshot.current ||
-      !row ||
-      row.input_id !== owner.inputId ||
-      row.run_id !== runId ||
-      row.session_key !== owner.sessionKey ||
-      row.session_id !== owner.sessionId ||
-      row.lifecycle_generation !== owner.lifecycleGeneration ||
-      row.message_json !== owner.messageJson ||
-      row.state !== "queued" ||
-      row.consumed_event_id != null ||
-      !hasRegisteredSessionPendingInputOwner(path, row)
+      owner.dedupeRetryAvailable !== true ||
+      owner.consumed
     ) {
       return false;
     }
-    recoveredDedupeOwners.add(owner);
+    owner.dedupeRetryAvailable = undefined;
     return true;
   };
 }
@@ -724,11 +728,7 @@ export function consumeSessionPendingInput(
         worker?.consumed.delete(consumedOwner.inputId);
       }
     },
-    commit: () => {
-      for (const consumedOwner of consumedOwners) {
-        consumedOwner.consumed = true;
-      }
-    },
+    commit: () => publishConsumedSessionPendingInputSources(owner, consumedOwners),
   });
 }
 

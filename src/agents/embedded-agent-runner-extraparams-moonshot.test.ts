@@ -6,6 +6,15 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runExtraParamsPayloadCase } from "./embedded-agent-runner-extraparams.test-support.js";
 import { testing as extraParamsTesting } from "./embedded-agent-runner/extra-params.test-support.js";
 
+function createReadToolCallHistory() {
+  return [
+    {
+      role: "assistant",
+      tool_calls: [{ id: "call_1", type: "function", function: { name: "read", arguments: "{}" } }],
+    },
+  ];
+}
+
 function moonshotConfig(modelId: string, params: Record<string, unknown>) {
   return { agents: { defaults: { models: { [`moonshot/${modelId}`]: { params } } } } };
 }
@@ -121,14 +130,7 @@ describe("applyExtraParamsToAgent Moonshot", () => {
         thinkingLevel: "off",
         payload: {
           model: modelId,
-          messages: [
-            {
-              role: "assistant",
-              tool_calls: [
-                { id: "call_1", type: "function", function: { name: "read", arguments: "{}" } },
-              ],
-            },
-          ],
+          messages: createReadToolCallHistory(),
         },
         cfg: moonshotConfig(modelId, {
           thinking: { type: "disabled", keep: "all" },
@@ -166,14 +168,7 @@ describe("applyExtraParamsToAgent Moonshot", () => {
       thinkingLevel: "off",
       payload: {
         model: "kimi-k3",
-        messages: [
-          {
-            role: "assistant",
-            tool_calls: [
-              { id: "call_1", type: "function", function: { name: "read", arguments: "{}" } },
-            ],
-          },
-        ],
+        messages: createReadToolCallHistory(),
       },
       cfg: moonshotConfig("kimi-k3", {
         thinking: { type: "disabled", keep: "all" },
@@ -247,14 +242,7 @@ describe("applyExtraParamsToAgent Moonshot", () => {
       modelId: "kimi-k2.5",
       thinkingLevel: "off",
       payload: {
-        messages: [
-          {
-            role: "assistant",
-            tool_calls: [
-              { id: "call_1", type: "function", function: { name: "read", arguments: "{}" } },
-            ],
-          },
-        ],
+        messages: createReadToolCallHistory(),
       },
     });
 

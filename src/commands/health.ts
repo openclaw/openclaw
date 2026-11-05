@@ -26,7 +26,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { formatExactDuration } from "../infra/format-time/format-duration-exact.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
+import { buildChannelAccountBindings } from "../routing/bindings.js";
 import { ExitError, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { waitForGatewayDiagnostic } from "./gateway-diagnostic-readiness.js";
 import {
@@ -277,10 +277,7 @@ export async function healthCommand(
         cfg,
         accountIds,
       });
-      const accountId = resolvePreferredAccountId({
-        defaultAccountId,
-        boundAccounts,
-      });
+      const accountId = boundAccounts[0] ?? defaultAccountId;
       const accountContext = await resolveHealthAccountContext({
         plugin,
         cfg,

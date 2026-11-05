@@ -15,6 +15,7 @@ import {
   projectAgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
 import { sanitizeAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
+import { withAgentTerminalPayloadSnapshot } from "../../agent-terminal-snapshot.js";
 import type { AuthProfileFailureReason, AuthProfileStore } from "../../auth-profiles.js";
 import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import { renderStorageFailureSummary } from "../../failover/assistant-request-failure-copy.js";
@@ -83,23 +84,6 @@ const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
 const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
   "Before accepting the previous final answer, apply this revision request and produce the revised final answer. Do not repeat completed work or rerun tools unless the request explicitly requires it.";
-
-export function createTerminalToolPresentationTracker() {
-  let latestOrdinal = -1;
-  let nextOrdinal = 0;
-  let value: string | undefined;
-  return {
-    allocateOrdinal: () => nextOrdinal++,
-    observe: (observation: { terminalPresentation?: string; toolCallOrdinal?: number }): void => {
-      const ordinal = observation.toolCallOrdinal ?? latestOrdinal + 1;
-      if (ordinal >= latestOrdinal) {
-        latestOrdinal = ordinal;
-        value = observation.terminalPresentation;
-      }
-    },
-    read: () => value,
-  };
-}
 
 type TerminalResolution =
   | { action: "retry" }
@@ -321,7 +305,7 @@ export async function resolveEmbeddedRunTerminal(input: {
         externalAbort: externalAbort || signalOwnedInterruption,
         hadPotentialSideEffects: input.replayState.hadPotentialSideEffects,
         hasIntentionalTerminalCompletion: intentionalTerminalCompletion,
-        terminalAuthFailure: input,
+        terminalFailure: input,
       }) ??
       ((authoredSilenceRequiresResult || settledTurnFinalizationAttempted) &&
       terminalFacts.payloadCount === 0 &&
@@ -586,13 +570,26 @@ async function completeEmbeddedRun(
     input.terminalToolPresentation && input.incompleteTurnText !== undefined
       ? input.terminalToolPresentation.concat("\n\n", input.incompleteTurnText)
       : (input.incompleteTurnText ?? (error ? storageFailureText : undefined));
+  const agentTerminal =
+    error &&
+    !terminalAborted &&
+    !terminalTimedOut &&
+    !input.terminalToolPresentation &&
+    !input.prepared.terminalToolFailure &&
+    !input.prepared.failureSignal &&
+    input.settledTurnFinalizationOutcome === "not-attempted"
+      ? input.attempt.agentTerminal
+      : undefined;
   const terminalPayloads = suppressMissingReplyNotice
     ? retainSilentFinalPayloads(input.payloadsForTerminalPath ?? [])
     : incompleteText !== undefined
       ? [
-          isMissingReplyNotice
-            ? createMissingReplyNotice(incompleteText)
-            : { text: incompleteText, isError: true },
+          withAgentTerminalPayloadSnapshot(
+            isMissingReplyNotice
+              ? createMissingReplyNotice(incompleteText)
+              : { text: incompleteText, isError: true },
+            agentTerminal,
+          ),
         ]
       : error
         ? input.payloadsForTerminalPath
@@ -632,6 +629,7 @@ async function completeEmbeddedRun(
         ? { diagnosticTrace: freezeDiagnosticTraceContext(input.attempt.diagnosticTrace) }
         : {}),
       meta: {
+        agentTerminal,
         durationMs: Date.now() - input.startedAtMs,
         agentMeta: input.prepared.agentMeta,
         aborted: terminalAborted,
@@ -639,9 +637,7 @@ async function completeEmbeddedRun(
         finalPromptText: input.attempt.finalPromptText,
         finalAssistantVisibleText:
           sourceFinal?.text ??
-          (isMissingReplyNotice
-            ? undefined
-            : (incompleteText ?? input.prepared.finalAssistantVisibleText)),
+          (isMissingReplyNotice ? undefined : input.prepared.finalAssistantVisibleText),
         finalAssistantRawText: isMissingReplyNotice
           ? undefined
           : input.prepared.finalAssistantRawText,

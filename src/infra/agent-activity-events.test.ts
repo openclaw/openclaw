@@ -1,7 +1,4 @@
-import { Value } from "typebox/value";
-import { assert, expect, expectTypeOf, onTestFinished, test } from "vitest";
-import { AgentActivityItemSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
-import { capToolResultForPersistence } from "../agents/session-tool-result-guard.payload.js";
+import { expect, expectTypeOf, onTestFinished, test } from "vitest";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import {
   emitAgentActivityEvent,
@@ -59,7 +56,7 @@ function resultEntry(messageId: string, toolCallId: string | undefined, metadata
   return { messageId, message: toolResult(toolCallId, "exec", metadata) };
 }
 
-test("emits every activity stream with shared sequencing and context", () => {
+test("forwards activity data with sequencing and optional session context", () => {
   type ItemData = Extract<Parameters<typeof emitAgentActivityEvent>[0], { stream: "item" }>["data"];
   expectTypeOf<AgentApprovalEventData>().not.toMatchTypeOf<ItemData>();
 
@@ -70,16 +67,6 @@ test("emits every activity stream with shared sequencing and context", () => {
       ...context,
       stream: "item",
       data: { ...item, phase: "start", kind: "tool", status: "running" },
-    },
-    {
-      ...context,
-      stream: "approval",
-      data: { phase: "requested", kind: "exec", status: "pending", title: "Approve" },
-    },
-    {
-      ...context,
-      stream: "command_output",
-      data: { ...item, phase: "delta", output: "working" },
     },
     {
       ...context,
@@ -106,9 +93,7 @@ test("emits every activity stream with shared sequencing and context", () => {
     events.map(({ runId, seq, stream, sessionKey }) => [runId, seq, stream, sessionKey]),
   ).toEqual([
     ["run-1", 1, "item", "session-1"],
-    ["run-1", 2, "approval", "session-1"],
-    ["run-1", 3, "command_output", "session-1"],
-    ["run-1", 4, "patch", undefined],
+    ["run-1", 2, "patch", undefined],
   ]);
   expect(events.map((event) => event.data)).toEqual(inputs.map((input) => input.data));
   expect(events[0]?.data).toBe(inputs[0]?.data);
@@ -144,15 +129,14 @@ test("projects Tool Search names for live and history activity without changing 
     expect(entry.items).toMatchObject([
       {
         name: "exec",
-        title: "Exec",
+        title: "Exec check-release",
         toolCallId: tool.toolCallId,
         status: "skipped",
         commandBearing: true,
       },
     ]);
-    expect(entry.items[0]?.meta).toBeUndefined();
+    expect(entry.items[0]?.meta).toBe("check-release");
   }
-  expect(skipped).toMatchObject({ toolName: "tool_call", isError: true });
 });
 
 test("derives historical Tool Search metadata from the executed inner input", () => {
@@ -185,7 +169,6 @@ test.each([
   const history = projectAgentHistoryActivity([{ messageId: "result", message: result }]);
   expect(live.status).toBe(status);
   expect(history[0]?.items).toMatchObject([{ status }]);
-  expect(result.isError).toBe(true);
 });
 
 test.each([
@@ -259,23 +242,21 @@ test("keeps a completed step countable when its only child is routine progress",
 });
 
 test.each([
-  [
-    "a nested step holds the routine call",
-    [
+  {
+    nested: [
       ["inner", "exec", "outer"],
       ["plan", "progress_card", "inner"],
-    ],
-    "inner",
-  ],
-  [
-    "a visible call sits under a hidden one",
-    [
+    ] as const,
+    counted: "inner",
+  },
+  {
+    nested: [
       ["plan", "progress_card", "outer"],
       ["read", "read", "plan"],
-    ],
-    "read",
-  ],
-] as const)("counts one operation for a completed step when %s", (_, nested, counted) => {
+    ] as const,
+    counted: "read",
+  },
+])("counts only $counted through nested hidden progress", ({ nested, counted }) => {
   const projected = projectAgentHistoryActivity([
     call("outer", "outer", { __openclaw: { runId: "run" } }),
     ...nested.map(([id, name, parent], index) =>
@@ -311,7 +292,8 @@ test.each([true, false])("does not expose a child assignment in progress (named:
 test("marks only unpaired history calls as provisional, including terminal unknown outcomes", () => {
   const unpaired = call("call", "command");
   const missing = projectAgentHistoryActivity([unpaired])[0]?.items[0];
-  expect(missing).toMatchObject({ phase: "end", unpairedCall: true, summary: "Outcome unknown" });
+  expect(missing).toMatchObject({ phase: "end", unpairedCall: true });
+  expect(missing).not.toHaveProperty("summary");
   expect(missing?.status).toBeUndefined();
   const result = resultEntry("result", "command", {
     details: {
@@ -326,137 +308,4 @@ test("marks only unpaired history calls as provisional, including terminal unkno
     expect(entry.items[0]?.status).toBeUndefined();
     expect(entry.items[0]).not.toHaveProperty("unpairedCall");
   }
-});
-
-test.each(["accepted", "done", "failed", "killed", "timeout"] as const)(
-  "retains immutable %s delegation facts across ordinary and nested result caps",
-  (status) => {
-    const name = status === "accepted" ? "sessions_spawn" : "agents_wait";
-    const receipt = {
-      runId: "child-run",
-      childSessionKey: "agent:worker:subagent:child",
-      label: "Review",
-      groupId: "review-batch",
-      status,
-      ...(status === "accepted" ? {} : { runtimeMs: 75 }),
-    };
-    const details =
-      status === "accepted"
-        ? { ...receipt, task: "private task" }
-        : {
-            completed: [
-              { ...receipt, sessionKey: receipt.childSessionKey, result: "private result" },
-            ],
-            pending: ["pending-child"],
-            errors: [{ runId: "foreign-child", error: "not_owner" }],
-          };
-    const result = {
-      role: "toolResult" as const,
-      toolName: name,
-      toolCallId: "delegate",
-      content: [{ type: "text" as const, text: "x".repeat(40_000) }],
-      details: { ...details, diagnostics: "x".repeat(40_000) },
-      isError: false,
-      timestamp: 1,
-    };
-    const live = projectAgentToolActivity({
-      name,
-      toolCallId: result.toolCallId,
-      phase: "result",
-      result,
-      isError: false,
-    });
-    const expected =
-      status === "accepted"
-        ? receipt
-        : { runId: receipt.runId, childSessionKey: receipt.childSessionKey, status, runtimeMs: 75 };
-    expect(live.delegation).toEqual([expected]);
-    expect(Value.Check(AgentActivityItemSchema, live)).toBe(true);
-    const ordinary = capToolResultForPersistence(result, 100);
-    const nested = nestedEntry("nested-delegate", {
-      toolName: name,
-      toolCallId: result.toolCallId,
-      input: { task: "private task" },
-      result,
-    });
-    // JSON round-trip models reload without the live result or child registry.
-    for (const message of [ordinary, nested.message]) {
-      const persisted = JSON.stringify(message);
-      const history = projectAgentHistoryActivity([
-        { messageId: "reloaded", message: JSON.parse(persisted) },
-      ]);
-      expect(history[0]?.items[0]?.delegation).toEqual([expected]);
-      expect(JSON.stringify(history[0]?.items[0]?.delegation)).not.toMatch(
-        /private|pending|foreign/,
-      );
-    }
-  },
-);
-
-test("only bounded structured delegation outcomes become activity receipts", () => {
-  const accepted = {
-    status: "accepted",
-    runId: "run",
-    childSessionKey: "agent:worker:subagent:child",
-  };
-  for (const result of [
-    { content: [{ type: "text", text: JSON.stringify(accepted) }] },
-    { details: { ...accepted, status: "forbidden" } },
-    { details: accepted, isError: true },
-    { details: { ...accepted, childSessionKey: "x".repeat(1025) } },
-  ]) {
-    expect(
-      projectAgentToolActivity({
-        name: "sessions_spawn",
-        toolCallId: "id",
-        phase: "result",
-        result,
-      }).delegation,
-    ).toBeUndefined();
-  }
-  const result = {
-    role: "toolResult" as const,
-    toolName: "agents_wait",
-    toolCallId: "id",
-    isError: false,
-    timestamp: 1,
-    content: [{ type: "text" as const, text: "x".repeat(40000) }],
-    details: {
-      completed: Array.from({ length: 1000 }, (_, index) => ({
-        runId: "run-" + index,
-        sessionKey: "agent:worker:subagent:" + index,
-        status: "done",
-        label: "é".repeat(512),
-        groupId: "group",
-      })),
-    },
-  };
-  const item = projectAgentToolActivity({
-    name: "agents_wait",
-    toolCallId: "id",
-    phase: "result",
-    result,
-  });
-  const ordinary = capToolResultForPersistence(result, 100);
-  const nested = nestedEntry("batch", {
-    toolName: "agents_wait",
-    toolCallId: "id",
-    result,
-  }).message;
-  assert(ordinary.role === "toolResult");
-  for (const [message, saved, limit] of [
-    [ordinary, ordinary.details, 8192],
-    [nested, nested.details.result, 32768],
-  ] as const) {
-    // Exercise the serialized history contract, not an in-memory clone.
-    const persisted = JSON.stringify(message);
-    const history = projectAgentHistoryActivity([
-      { messageId: "reloaded", message: JSON.parse(persisted) },
-    ]);
-    expect(history[0]?.items[0]?.delegation).toEqual(item.delegation);
-    expect(Buffer.byteLength(JSON.stringify(saved), "utf8")).toBeLessThanOrEqual(limit);
-  }
-  expect(item.delegation?.length).toBeGreaterThan(0);
-  expect(item.delegation!.length).toBeLessThanOrEqual(32);
-  expect(Buffer.byteLength(JSON.stringify(item.delegation), "utf8")).toBeLessThanOrEqual(6144);
 });

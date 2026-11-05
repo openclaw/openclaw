@@ -26,6 +26,12 @@ import {
 let container: HTMLDivElement;
 const query = (selector: string) => container.querySelector(selector);
 const publish = () => container.querySelector<HTMLButtonElement>(".chat-pr__create");
+const waitForPublication = () =>
+  waitForSolid(() => {
+    const button = publish();
+    expect(button).not.toBeNull();
+    return button!;
+  });
 let environmentView:
   | {
       update: (work: ChatPullRequestsProps) => void;
@@ -109,7 +115,7 @@ afterEach(() => {
 });
 
 const unknownAvailability =
-  "GitHub publication account verification is unavailable. Reload and retry, or check gh auth status on the Gateway runtime host. Settings connections are optional; My GitHub is separate.";
+  "Couldn’t verify the publishing account. Reload and try again, or check gh auth status on the computer running OpenClaw. Accounts in Settings are optional; My GitHub is separate.";
 function availability(
   reason: GitHubPublicationOptions["sharedUnavailableReason"],
   message: string | undefined,
@@ -121,19 +127,19 @@ function availability(
 it.each([
   availability(
     "unavailable",
-    "No usable GitHub credential is available in the Gateway environment. Sign in with gh auth login on the Gateway runtime host, or optionally add a connection in Settings → Profile → GitHub connections. My GitHub is separate and optional.",
+    "No GitHub account is available on the computer running OpenClaw. Sign in with gh auth login on the computer running OpenClaw, or add an account in Settings → Profile → GitHub accounts. My GitHub is separate and optional.",
   ),
   availability(
     "rate_limited",
-    "GitHub rate-limited account verification. Wait and retry publication; reconnecting is not needed.",
+    "Couldn’t verify the GitHub account because of a rate limit. Wait and try publishing again; you don’t need to reconnect.",
   ),
   availability(
     "unverified",
-    "GitHub account verification is unavailable. Retry publication or check gh auth status on the Gateway runtime host.",
+    "Couldn’t verify the GitHub account. Try publishing again or check gh auth status on the computer running OpenClaw.",
   ),
   availability(
     "unsupported_workspace",
-    "Publish PR needs a session-owned worktree or repository workspace. Normal agent gh commands still work; reconnecting GitHub will not help.",
+    "Publishing a PR needs a repository workspace owned by this session. Agent gh commands still work; reconnecting GitHub won’t help.",
   ),
   availability(undefined, unknownAvailability),
   availability(undefined, unknownAvailability, {
@@ -171,8 +177,8 @@ it.each([
     branch: sessionBranch(),
     publication: await settled(controller),
   });
+  const action = await waitForPublication();
   const row = container.querySelector<HTMLElement>(".chat-environment__branch")!;
-  const action = row.querySelector<HTMLButtonElement>(".chat-pr__create")!;
   expect(action.textContent).toBe("Create PR");
   expect(action.disabled).toBe(!scenario.native);
   row.querySelector<HTMLButtonElement>(".chat-pr__actions-trigger")!.click();
@@ -289,21 +295,23 @@ it("warns about the workspace only for a selected or sole personal account", () 
     paint({ options, onSelect, personalReady: false, ...overrides });
   paintPublication({});
   expect(publish()?.disabled).toBe(false);
-  expect(container.textContent).not.toContain("reclaim the workspace");
+  expect(container.textContent).not.toContain("bring it back to the computer running OpenClaw");
   paintPublication({
     selection: { source: "personal", generation: personal.generation, account: personal.account },
   });
   expect(publish()?.disabled).toBe(true);
-  expect(container.textContent).toContain("reclaim the workspace");
-  expect(query('[role="menu"]')?.textContent).not.toContain("reclaim the workspace");
+  expect(container.textContent).toContain("bring it back to the computer running OpenClaw");
+  expect(query('[role="menu"]')?.textContent).not.toContain(
+    "bring it back to the computer running OpenClaw",
+  );
   expect(query(".chat-pr__publication-outcome")?.textContent?.replace(/\s+/g, " ").trim()).toBe(
-    "Wait for work to finish and reclaim the workspace to publish with My GitHub.",
+    "Wait for work to finish and bring it back to the computer running OpenClaw to publish with My GitHub.",
   );
   paintPublication({ options: { ...options, shared: null }, selection: null });
   expect(publish()?.disabled).toBe(true);
   expect(publish()?.textContent?.trim()).toBe("Publish as @alice-tools");
   expect(query('[aria-label="Publication account"]')).toBeNull();
-  expect(container.textContent).toContain("reclaim the workspace");
+  expect(container.textContent).toContain("bring it back to the computer running OpenClaw");
   expect(onSelect).not.toHaveBeenCalled();
 });
 
@@ -325,9 +333,7 @@ it("selects an eligible profile directly from Details and publishes its exact id
     });
   changed.mockImplementation(draw);
   draw();
-  const create = container.querySelector<HTMLButtonElement>(
-    ".chat-environment__branch button.chat-pr__create",
-  );
+  const create = await waitForPublication();
   expect(create?.textContent).toBe("Create PR");
   expect(
     request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
@@ -388,9 +394,7 @@ it.each(["personal", "confirmation"] as const)(
         onConfirm: nativeAction,
       }),
     });
-    const entry = container.querySelector<HTMLButtonElement>(
-      ".chat-environment__branch button.chat-pr__create",
-    )!;
+    const entry = await waitForPublication();
     expect(entry.textContent).toBe(state === "personal" ? "Create PR" : "Review");
     entry.click();
     await waitForSolid(() =>
@@ -408,7 +412,7 @@ it.each(["personal", "confirmation"] as const)(
   },
 );
 
-it.each([false, true])("labels publication reads as Loading (recovery=%s)", (recovery) => {
+it.each([false, true])("labels publication reads as Loading (recovery=%s)", async (recovery) => {
   const onPublish = vi.fn();
   const draw = (activity: GitHubPublicationView["activity"]) =>
     paintEnvironment({
@@ -419,6 +423,7 @@ it.each([false, true])("labels publication reads as Loading (recovery=%s)", (rec
       publication: publication({ activity, locked: recovery, onPublish }),
     });
   draw("read");
+  await waitForPublication();
   expect(publish()?.textContent?.trim()).toBe("Loading…");
   draw("publish");
   expect(publish()?.textContent?.trim()).toBe("Creating…");
@@ -433,7 +438,7 @@ it.each(["pull-requests", "environment"] as const)(
     const readiness = { read: null, retired: retired.promise };
     const onPublish = vi.fn(() => completion.promise);
     paint({ readiness, onPublish }, surface);
-    const button = publish()!;
+    const button = await waitForPublication();
     button.click();
     await waitForSolid(() => expect(button.disabled).toBe(true));
     expect(onPublish).toHaveBeenCalledOnce();
@@ -469,7 +474,7 @@ it.each(["pull-requests", "environment"] as const)(
   async (surface) => {
     const completion = Promise.withResolvers<void>();
     paint({ onPublish: () => completion.promise }, surface);
-    publish()!.click();
+    (await waitForPublication()).click();
     completion.reject(new Error("Publication action unavailable"));
     await waitForSolid(() =>
       expect(container.textContent).toContain("Publication action unavailable"),
@@ -488,7 +493,7 @@ it.each(["pull-requests", "environment"] as const)(
   async (surface) => {
     const completion = Promise.withResolvers<void>();
     paint({ onPublish: () => completion.promise }, surface);
-    publish()!.click();
+    (await waitForPublication()).click();
     await waitForSolid(() => expect(publish()?.disabled).toBe(true));
     if (surface === "environment") {
       environmentView?.unmount();
@@ -514,7 +519,7 @@ it.each(["pull-requests", "environment"] as const)(
       },
       surface,
     );
-    publish()!.click();
+    (await waitForPublication()).click();
     await waitForSolid(() =>
       expect(container.querySelector('button[aria-label="Refresh publication"]')).not.toBeNull(),
     );
@@ -533,7 +538,7 @@ it.each([
   ["publishing", "Could not read publication status.", "Retry", true],
 ] as const)(
   "distinguishes %s with status error %s in Environment",
-  (status, error, label, warning) => {
+  async (status, error, label, warning) => {
     const result =
       status === "failed"
         ? {
@@ -547,6 +552,7 @@ it.each([
           ? { status, requestId: "request-one", message: "Publication status." }
           : null;
     paint({ locked: status !== "failed", result, error }, "environment");
+    await waitForPublication();
     expect(publish()?.textContent).toContain(label);
     expect(publish()?.querySelector(".chat-pr__publication-warning") !== null).toBe(warning);
   },

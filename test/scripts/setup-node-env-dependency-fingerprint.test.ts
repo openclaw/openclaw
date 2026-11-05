@@ -71,10 +71,20 @@ it("fingerprints dependency install inputs without ordinary script churn", () =>
   expect(hookFingerprint).not.toBe(baseline);
   expectOtherInvalidation(hookFingerprint);
   remove(".pnpmfile.cjs");
-  const installScript = ".github/actions/setup-node-env/install-dependencies.sh";
-  write(installScript, "fixture\n");
-  expect(fingerprint()).not.toBe(baseline);
-  remove(installScript);
+  for (const installInput of [
+    ".github/actions/setup-node-env/install-dependencies.sh",
+    "runtime-process-bootstrap.generated.mjs",
+    "runtime-process-scripts.generated.mjs",
+    "scripts/lib/fs-safe-npm-cli-preload.generated.mjs",
+    "scripts/lib/fs-safe-npm-cli-protocol.mjs",
+  ]) {
+    write(installInput, "first fixture\n");
+    const first = fingerprint();
+    expect(first, installInput).not.toBe(baseline);
+    write(installInput, "changed fixture\n");
+    expect(fingerprint(), installInput).not.toBe(first);
+    remove(installInput);
+  }
   writeManifest({
     ...Object.fromEntries(Object.entries(manifest).toReversed()),
     scripts: {

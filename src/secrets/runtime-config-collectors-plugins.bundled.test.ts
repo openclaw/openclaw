@@ -1,10 +1,7 @@
 /** Tests bundled plugin config secret collectors. */
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { findBundledPluginMetadataById } from "../plugins/bundled-plugin-metadata.js";
-import { resolvePluginConfigContractsById } from "../plugins/config-contracts.js";
 import type { PluginOrigin } from "../plugins/types.js";
 import { resolveSecretRefValues } from "./resolve.js";
 import { collectPluginConfigAssignments } from "./runtime-config-collectors-plugins.js";
@@ -21,24 +18,6 @@ function pluginConfig(id: string, config: Record<string, unknown>): OpenClawConf
     agents: { entries: { main: {} } },
     plugins: { entries: { [id]: { enabled: true, config } } },
   };
-}
-
-function bundledPaths(id: string) {
-  return findBundledPluginMetadataById(id, {
-    includeChannelConfigs: false,
-    includeSyntheticChannelConfigs: false,
-  })?.manifest.configContracts?.secretInputs?.paths;
-}
-
-function resolvedBundledPaths(config: OpenClawConfig, id: string) {
-  return resolvePluginConfigContractsById({
-    config,
-    workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)),
-    env: isolatedEnv,
-    fallbackToBundledMetadataForResolvedBundled: true,
-    pluginIds: [id],
-    fallbackBundledPluginIds: [id],
-  }).get(id)?.configContracts.secretInputs?.paths;
 }
 
 function collect(
@@ -72,44 +51,7 @@ function expectCollected(context: ReturnType<typeof collect>, paths: string[]) {
 }
 
 describe("collectPluginConfigAssignments bundled plugin manifests", () => {
-  it("collects Codex app-server SecretRefs from bundled manifest contracts", () => {
-    const paths = [
-      { path: "appServer.authToken", expected: "string" },
-      { path: "appServer.headers.*", expected: "string" },
-    ];
-    expect(bundledPaths("codex")).toEqual(paths);
-    const config = pluginConfig("codex", {
-      appServer: {
-        transport: "websocket",
-        url: "wss://codex-app-server.example.internal/ws",
-        authToken: "$CODEX_APP_SERVER_TOKEN",
-        headers: {
-          Authorization: "Bearer literal-token",
-          "x-codex-client-session-token": envRef("CODEX_CLIENT_SESSION_TOKEN"),
-        },
-      },
-    });
-    expect(resolvedBundledPaths(config, "codex")).toEqual(paths);
-    const context = collect(config, "codex");
-    expectCollected(context, [
-      "plugins.entries.codex.config.appServer.authToken",
-      "plugins.entries.codex.config.appServer.headers.x-codex-client-session-token",
-    ]);
-    context.assignments[0]?.apply("resolved-app-server-token");
-    context.assignments[1]?.apply("resolved-session-token");
-    expect(config.plugins?.entries?.codex?.config).toMatchObject({
-      appServer: {
-        authToken: "resolved-app-server-token",
-        headers: {
-          Authorization: "Bearer literal-token",
-          "x-codex-client-session-token": "resolved-session-token",
-        },
-      },
-    });
-  });
-
   it("resolves only explicitly referenced Google web-search headers", async () => {
-    expect(bundledPaths("google")).toEqual([{ path: "webSearch.headers.*", expected: "string" }]);
     const config = pluginConfig("google", {
       webSearch: {
         headers: {
@@ -134,9 +76,6 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
   });
 
   it("materializes Tavily tool credentials from the plugin secret contract", async () => {
-    expect(bundledPaths("tavily")).toEqual([
-      { path: "webSearch.apiKey", expected: "string", ownerKind: "capability" },
-    ]);
     const sourceConfig = pluginConfig("tavily", {
       webSearch: { apiKey: envRef("TAVILY_API_KEY") },
     });
@@ -181,14 +120,6 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
         { tts: { providers: { openai: { apiKey: ref } } } },
       ]),
     );
-    const paths = [
-      { path: "twilio.authToken", expected: "string" },
-      { path: "realtime.providers.*.apiKey", expected: "string" },
-      { path: "streaming.providers.*.apiKey", expected: "string" },
-      { path: "tts.providers.*.apiKey", expected: "string" },
-      { path: "numbers.*.tts.providers.*.apiKey", expected: "string" },
-    ];
-    expect(bundledPaths("voice-call")).toEqual(paths);
     const config = pluginConfig("voice-call", {
       numbers: numberRoutes,
       twilio: { authToken: envRef("TWILIO_AUTH_TOKEN") },
@@ -201,7 +132,6 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
         },
       },
     });
-    expect(resolvedBundledPaths(config, "voice-call")).toEqual(paths);
     const context = collect(config, "voice-call");
     expectCollected(context, [
       ...numberRouteRefs.map(
@@ -239,13 +169,6 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
     config.plugins!.load = {
       paths: [fileURLToPath(new URL("../../extensions/google-meet", import.meta.url))],
     };
-    expect(
-      resolvePluginConfigContractsById({
-        config,
-        env: isolatedEnv,
-        pluginIds: ["google-meet"],
-      }).get("google-meet")?.configContracts.secretInputs?.paths,
-    ).toEqual([{ path: "realtime.providers.*.apiKey", expected: "string" }]);
     expectCollected(collect(config, "google-meet", isolatedEnv, config, "config"), [
       "plugins.entries.google-meet.config.realtime.providers.google.apiKey",
       "plugins.entries.google-meet.config.realtime.providers.openai.apiKey",

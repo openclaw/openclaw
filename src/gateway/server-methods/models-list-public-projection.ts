@@ -125,7 +125,7 @@ export function buildPublicModelProjection(
     ...(family ? { family } : {}),
     ...(contextWindow ? { contextWindow } : {}),
     ...(contextTokens ? { contextTokens } : {}),
-    ...(options.includeDetails && entry.baseUrl ? { local: isLocalBaseUrl(entry.baseUrl) } : {}),
+    ...(entry.baseUrl ? { local: isLocalBaseUrl(entry.baseUrl) } : {}),
     ...(options.includeDetails && entry.input?.length ? { input: entry.input } : {}),
     ...(entry.contextWindows ? { contextWindows: entry.contextWindows } : {}),
     ...(entry.contextWindowDefault ? { contextWindowDefault: entry.contextWindowDefault } : {}),

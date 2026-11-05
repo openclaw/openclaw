@@ -19,15 +19,6 @@ import type { ChatAbortOrigin } from "./chat-aborted-partial.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
 
-/** Metadata persisted on gateway-injected assistant messages that mark a stopped run. */
-type GatewayInjectedAbortMeta = {
-  aborted: true;
-  origin: ChatAbortOrigin;
-  runId: string;
-  /** The registered native producer has finished its canonical transcript writes. */
-  producerSettled?: true;
-};
-
 export type GatewayInjectedTranscriptAppendResult = {
   ok: boolean;
   messageId?: string;
@@ -79,7 +70,14 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   content?: Array<Record<string, unknown>>;
   idempotencyKey?: string;
   stopReason?: "stop" | "aborted";
-  abortMeta?: GatewayInjectedAbortMeta;
+  /** Metadata persisted on gateway-injected assistant messages that mark a stopped run. */
+  abortMeta?: {
+    aborted: true;
+    origin: ChatAbortOrigin;
+    runId: string;
+    /** The registered native producer has finished its canonical transcript writes. */
+    producerSettled?: true;
+  };
   ttsSupplement?: GatewayInjectedTtsSupplementMarker;
   contextFreeCommand?: true;
   /** Trusted Gateway selections bound to UTF-16 offsets in `message`; never client input. */

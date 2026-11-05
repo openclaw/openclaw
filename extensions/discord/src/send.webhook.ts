@@ -21,11 +21,6 @@ import {
 } from "./internal/rest-errors.js";
 import { DISCORD_REST_TIMEOUT_MS } from "./internal/rest.js";
 import { prepareDiscordOutboundText } from "./outbound-text.js";
-import {
-  createReusableDiscordReplyReference,
-  resolveDiscordReplyMessageId,
-  type DiscordReplyReference,
-} from "./reply-reference.js";
 import { createDiscordRetryRunner, recordDiscordMessageCreateAmbiguity } from "./retry.js";
 import {
   resolveDiscordMessageFlags,
@@ -43,11 +38,11 @@ type DiscordWebhookSendOpts = {
   webhookToken: string;
   accountId?: string;
   threadId?: string | number;
-  replyTo?: string | DiscordReplyReference;
   username?: string;
   avatarUrl?: string;
   tableMode?: MarkdownTableMode;
   wait?: boolean;
+  signal?: AbortSignal;
   /** Opt into configured line limits; omission preserves character-only chunking. */
   chunking?: { maxChars?: number; maxLines?: number };
   onPlatformSendDispatch?: () => Promise<void>;
@@ -99,10 +94,6 @@ export async function sendWebhookMessageDiscord(
     throw new Error("Discord webhook id/token are required");
   }
 
-  const reply =
-    typeof opts.replyTo === "string"
-      ? createReusableDiscordReplyReference(normalizeOptionalString(opts.replyTo))
-      : opts.replyTo;
   const { account, proxyFetch } = resolveDiscordClientAccountContext({
     cfg: opts.cfg,
     accountId: opts.accountId,
@@ -139,6 +130,7 @@ export async function sendWebhookMessageDiscord(
   }
   const deadline = buildTimeoutAbortSignal({
     timeoutMs: DISCORD_WEBHOOK_TIMEOUT_MS,
+    signal: opts.signal,
     operation: "discord.webhook.send",
   });
   const request = createDiscordRetryRunner({ signal: deadline.signal });
@@ -153,10 +145,6 @@ export async function sendWebhookMessageDiscord(
   const results: DiscordSendResult[] = [];
   try {
     for (const content of chunks.length ? chunks : [""]) {
-      const replyTo = resolveDiscordReplyMessageId(reply, results.length === 0);
-      const messageReference = replyTo
-        ? { message_id: replyTo, fail_if_not_exists: false }
-        : undefined;
       const response = await request(
         async () => {
           await opts.onPlatformSendDispatch?.();
@@ -171,7 +159,6 @@ export async function sendWebhookMessageDiscord(
               username: normalizeOptionalString(opts.username),
               avatar_url: normalizeOptionalString(opts.avatarUrl),
               ...(flags ? { flags } : {}),
-              ...(messageReference ? { message_reference: messageReference } : {}),
             }),
             signal: deadline.signal,
           });
@@ -213,7 +200,6 @@ export async function sendWebhookMessageDiscord(
         fallbackChannelId: opts.threadId ? String(opts.threadId) : "",
         kind: "text",
         ...(opts.threadId != null ? { threadId: opts.threadId } : {}),
-        reply: createReusableDiscordReplyReference(replyTo),
       });
       const resultConversationId = result.channelId.trim();
       if (result.messageId && resultConversationId) {

@@ -5,13 +5,13 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../config/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withPluginCommandExecution } from "./command-execution-lock.js";
 import { createPluginHostRegistryRetirement } from "./host-hook-cleanup.js";
 import { createPluginCache, retirePluginCache } from "./plugin-cache.js";
 import { PluginInstance } from "./plugin-instance.js";
+import { createOwnedInstance, throwing, trackCompletion } from "./plugin-instance.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
 import {
@@ -20,8 +20,9 @@ import {
   setActivePluginRegistry,
 } from "./runtime.js";
 import { setPluginRuntimeLoadContext } from "./runtime/load-context.js";
-import { createPluginRecord } from "./status.test-helpers.js";
 import { createToolLoadContext } from "./tools.test-support.js";
+
+const extensions = (value: string) => ({ fixture: { value }, other: { value: "preserve" } });
 
 describe("plugin retirement session-store ownership", () => {
   it("retires in-memory resources without preparing persistent config", () =>
@@ -49,10 +50,7 @@ describe("plugin retirement session-store ownership", () => {
       withOpenClawTestState({ label: "plugin-retirement-config" }, async (state) => {
         const oldPath = state.path("old-custom", "sessions.json");
         const newPath = state.path("new-custom", "sessions.json");
-        const cfg: OpenClawConfig = {
-          agents: { entries: { main: {} } },
-          session: { store: oldPath },
-        };
+        const cfg = { agents: { entries: { main: {} } }, session: { store: oldPath } };
         setRuntimeConfigSnapshot(cfg, cfg);
         const scope = (storePath: string) => ({
           agentId: "main",
@@ -66,12 +64,10 @@ describe("plugin retirement session-store ownership", () => {
           await replaceSessionEntry(scope(storePath), {
             sessionId: "config-retirement",
             updatedAt: 1,
-            pluginExtensions: { fixture: { value }, other: { value: "preserve" } },
+            pluginExtensions: extensions(value),
           });
         }
-        const registry = createEmptyPluginRegistry();
-        const record = createPluginRecord({ id: "fixture" });
-        registry.plugins.push(record);
+        const { registry, instance } = createOwnedInstance("fixture");
         if (mode === "registry-context") {
           setPluginRuntimeLoadContext(
             registry,
@@ -79,7 +75,6 @@ describe("plugin retirement session-store ownership", () => {
           );
           clearRuntimeConfigSnapshot();
         }
-        const instance = new PluginInstance(record.id, { record, registry });
         setActivePluginRegistry(registry);
         const release = createDeferredCore();
         const call =
@@ -102,24 +97,21 @@ describe("plugin retirement session-store ownership", () => {
               cleanupPersistentState: true,
             });
           }
-          let finished = false;
-          retirement = retirement.then(() => {
-            finished = true;
-          });
+          const completion = trackCompletion(retirement);
+          retirement = completion.promise;
           await Promise.resolve();
-          expect(finished).toBe(false);
+          expect(completion.done).toBe(false);
           const next = { ...cfg, session: { store: newPath } };
           setRuntimeConfigSnapshot(next, next);
           release.resolve();
-          await Promise.all([call, retirement]);
+          await Promise.all([call, completion.promise]);
           expect(loadSessionEntry(scope(oldPath))?.pluginExtensions).toEqual({
             ...(mode === "clear-command" ? { fixture: { value: "old" } } : {}),
             other: { value: "preserve" },
           });
-          expect(loadSessionEntry(scope(newPath))?.pluginExtensions).toEqual({
-            fixture: { value: "successor" },
-            other: { value: "preserve" },
-          });
+          expect(loadSessionEntry(scope(newPath))?.pluginExtensions).toEqual(
+            extensions("successor"),
+          );
         } finally {
           release.resolve();
           await Promise.allSettled([call, retirement]);
@@ -133,18 +125,11 @@ it.each(["registry", "cache"] as const)(
   "returns best-effort cleanup rows from the %s owner without reviving callbacks",
   (kind) =>
     withOpenClawTestState({ label: "plugin-cleanup-outcome" }, async () => {
-      const registry = createEmptyPluginRegistry();
-      const record = createPluginRecord({ id: "cleanup-outcome" });
-      registry.plugins.push(record);
-      const instance = new PluginInstance(record.id, { record, registry });
+      const { registry, record, instance } = createOwnedInstance("cleanup-outcome");
       const hostFailure = new Error("synthetic cleanup failure");
       const disposeFailure = new Error("synthetic cleanup failure");
-      const hostCleanup = vi.fn(() => {
-        throw hostFailure;
-      });
-      const instanceCleanup = vi.fn(() => {
-        throw disposeFailure;
-      });
+      const hostCleanup = vi.fn(throwing(hostFailure));
+      const instanceCleanup = vi.fn(throwing(disposeFailure));
       const callback = instance.wrap(() => "live");
       instance.lifecycle.onDispose(instanceCleanup);
       for (const id of ["fixture", "sibling"]) {

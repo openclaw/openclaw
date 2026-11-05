@@ -101,14 +101,12 @@ const spawnSyncDefaults = {
 export type SpawnSyncResult = typeof spawnSyncDefaults;
 
 export function isProcessSnapshotQuery(args: readonly string[] | undefined): boolean {
-  return (
-    args?.some(
-      (arg) =>
-        arg.includes("Get-CimInstance Win32_Process") &&
-        arg.includes("Select-Object ProcessId,CommandLine") &&
-        arg.includes("ConvertTo-Json"),
-    ) ?? false
-  );
+  const markers = [
+    "Get-CimInstance Win32_Process",
+    "Select-Object ProcessId,CommandLine",
+    "ConvertTo-Json",
+  ];
+  return args?.some((arg) => markers.every((marker) => arg.includes(marker))) ?? false;
 }
 
 export function makeSpawnSyncResult(overrides: Partial<SpawnSyncResult> = {}): SpawnSyncResult {
@@ -140,6 +138,7 @@ export function runningTaskSnapshot(): TaskSnapshot {
 
 /** Native registration/process facts remain stable across repeated inspection reads. */
 export function createSchtasksNativeFixture(getEnv: () => Record<string, string>) {
+  const launcherPath = "C:\\fixture\\gateway.cmd";
   const queuedProbes: string[] = [];
   let currentProbe = JSON.stringify(notYetRunTaskSnapshot());
   const advance = () => {
@@ -173,17 +172,14 @@ export function createSchtasksNativeFixture(getEnv: () => Record<string, string>
           ...JSON.parse(currentProbe),
           enabled: !schtasksRegistration.response.stdout.includes("<Enabled>false</Enabled>"),
           taskPath: getEnv().OPENCLAW_WINDOWS_TASK_NAME ?? "OpenClaw Gateway",
-          actions: [
-            { type: 0, path: "C:\\fixture\\gateway.cmd", arguments: "", workingDirectory: "" },
-          ],
+          actions: [{ type: 0, path: launcherPath, arguments: "", workingDirectory: "" }],
         }),
       };
     },
     reset: () => {
       schtasksRegistration.response = {
         code: 0,
-        stdout:
-          "<Task><Settings><Enabled>true</Enabled></Settings><Actions><Exec><Command>C:\\fixture\\gateway.cmd</Command></Exec></Actions></Task>",
+        stdout: `<Task><Settings><Enabled>true</Enabled></Settings><Actions><Exec><Command>${launcherPath}</Command></Exec></Actions></Task>`,
         stderr: "",
       };
       currentProbe = JSON.stringify(notYetRunTaskSnapshot());
@@ -198,11 +194,9 @@ export function createSchtasksNativeFixture(getEnv: () => Record<string, string>
       };
       // Keep native absolute-path admission while storing launcher bytes in the host temp directory.
       const readFile = fs.readFile.bind(fs);
-      vi.spyOn(fs, "readFile").mockImplementation((pathname, options) => {
-        const realPath =
-          pathname === "C:\\fixture\\gateway.cmd" ? resolveTaskScriptPath(getEnv()) : pathname;
-        return readFile(realPath, options);
-      });
+      vi.spyOn(fs, "readFile").mockImplementation((pathname, options) =>
+        readFile(pathname === launcherPath ? resolveTaskScriptPath(getEnv()) : pathname, options),
+      );
     },
   };
 }

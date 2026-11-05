@@ -522,6 +522,37 @@ describe("resolveBuildAllSteps", () => {
       expect(logger.warn).toHaveBeenCalledTimes(warns ? 1 : 0);
     },
   );
+  it("checks package declaration programs in ciArtifacts despite an ambient skip", async () => {
+    const env = { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" };
+    const compilerConfig = (invocation: ReturnType<typeof resolveBuildAllStep>) =>
+      invocation.args.includes("scripts/tsdown-build.mts")
+        ? invocation.args.includes("--config")
+          ? invocation.args[invocation.args.indexOf("--config") + 1]
+          : "runtime"
+        : undefined;
+    const passing = buildRunner();
+    expect((await passing.run("ciArtifacts", { cacheEnabled: false, env })).exitCode).toBe(0);
+    const compilers = passing.calls().filter((invocation) => compilerConfig(invocation));
+    expect(
+      compilers.map((invocation) => [
+        compilerConfig(invocation),
+        invocation.options.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD,
+      ]),
+    ).toEqual([
+      ["tsdown.ai.config.ts", "0"],
+      ["tsdown.config.ts", "0"],
+      ["runtime", "1"],
+    ]);
+
+    const failing = buildRunner();
+    failing.runStep.mockImplementation((invocation) => ({
+      status: compilerConfig(invocation) === "tsdown.ai.config.ts" ? 2 : 0,
+    }));
+    const result = await failing.run("ciArtifacts", { cacheEnabled: false, env });
+    expect(result.exitCode).toBe(2);
+    expect(result.timings.at(-1)).toMatchObject({ label: "tsdown-ai", status: "failed" });
+    expect(failing.calls().filter((invocation) => compilerConfig(invocation))).toHaveLength(1);
+  });
   it("does not validate after declaration publication fails", async () => {
     const result = await runBuildAllSteps("strictSmoke", {
       ...buildRunner(),
@@ -669,6 +700,21 @@ describe("resolveBuildAllSteps", () => {
           fs.existsSync(path.join(cwd, ".artifacts", file)),
         ),
       ).toEqual([false, false]);
+    },
+  );
+  it.each(["full", "runtime", "qaRuntime"])(
+    "stops %s before compilation when generated runtime scripts are stale",
+    async (profile) => {
+      const runner = buildRunner();
+      runner.runStep.mockImplementation((invocation) => ({
+        status: invocation.args.includes("scripts/generate-runtime-script-assets.mjs") ? 9 : 0,
+      }));
+      expect((await runner.run(profile)).exitCode).toBe(9);
+      const calls = runner.calls();
+      expect(
+        calls.some((call) => call.args.includes("scripts/generate-runtime-script-assets.mjs")),
+      ).toBe(true);
+      expect(calls.some((call) => call.args.includes("scripts/tsdown-build.mts"))).toBe(false);
     },
   );
   it.each([

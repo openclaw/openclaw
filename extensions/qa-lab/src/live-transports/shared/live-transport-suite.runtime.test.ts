@@ -24,7 +24,6 @@ vi.mock("./scenario-selection.js", async (importOriginal) => ({
 import type { QaSeedScenarioWithSource } from "../../scenario-catalog.js";
 import { runQaSuite } from "../../suite-launch.runtime.js";
 import { selectQaFlowSuiteScenarios } from "../../suite-planning.js";
-import { recordQaSuiteTestResults } from "../../suite-test-helpers.js";
 import type { QaSuiteRunParams } from "../../suite.js";
 import { discordQaCliRegistration } from "../discord/cli.js";
 import { matrixQaCliRegistration } from "../matrix/cli.js";
@@ -64,6 +63,7 @@ const runDiscord = (options: CommandOptions) =>
   runStandardLiveTransportQaSuiteCommand({ channelId: "discord", options });
 const parseDiscord = (...args: string[]) => parseQa("discord", ...args);
 const doctorStep = { name: "native readiness", actions: [{ call: "channelE2e.doctor" }] };
+const recipeConfig = { agentE2e: true, marker: "external-recipe" };
 
 async function writeAgentE2eRecipe(
   directory: string,
@@ -85,7 +85,7 @@ async function writeAgentE2eRecipe(
           kind: "flow",
           channel: "discord",
           timeoutMs: 23456,
-          config: { agentE2e: true, marker: "external-recipe" },
+          config: recipeConfig,
           ...execution,
         },
       },
@@ -128,29 +128,21 @@ describe("live transport suite runtime", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([undefined, 2])(
-    "forwards the dedicated Matrix concurrency %s through parsing and the live suite host",
-    async (concurrency) => {
-      await parseQa(
-        "matrix",
-        "--provider-mode",
-        "mock-openai",
-        "--scenario",
-        "matrix-allowlist-hot-reload",
-        ...(concurrency === undefined ? [] : ["--concurrency", String(concurrency)]),
-      );
+  it.each([undefined, 2])("parses Matrix concurrency %s", async (concurrency) => {
+    await parseQa(
+      "matrix",
+      "--provider-mode",
+      "mock-openai",
+      "--scenario",
+      "matrix-allowlist-hot-reload",
+      ...(concurrency === undefined ? [] : ["--concurrency", String(concurrency)]),
+    );
 
-      expectDispatch({
-        channelDriver: "live",
-        channel: "matrix",
-        scenarioIds: ["matrix-allowlist-hot-reload"],
-        ...(concurrency === undefined ? {} : { concurrency }),
-      });
-      if (concurrency === undefined) {
-        expect(runQaSuiteCommand.mock.calls[0]?.[0]).not.toHaveProperty("concurrency");
-      }
-    },
-  );
+    expectDispatch({ channel: "matrix", ...(concurrency === undefined ? {} : { concurrency }) });
+    if (concurrency === undefined) {
+      expect(runQaSuiteCommand.mock.calls[0]?.[0]).not.toHaveProperty("concurrency");
+    }
+  });
 
   it.each([
     ["dedicated", "ready"],
@@ -160,9 +152,9 @@ describe("live transport suite runtime", () => {
   ] as const)("prepares %s Matrix flows before workers start (%s)", async (caller, outcome) => {
     const outputDir = tempDirs.make("matrix-suite-preparation-");
     const initialization = createDeferred<void>();
-    const initializationStarted = createDeferred<void>();
-    const workersStarted = createDeferred<void>();
+    const entered = createDeferred<"initialization" | "workers">();
     const failure = new Error("crypto initialization failed");
+    const workerBoundary = new Error("reached prepared workers");
     const priorArtifacts = ["qa-suite-summary.json", "qa-evidence.json", "qa-suite-report.md"];
     if (outcome === "failed") {
       await fs.mkdir(path.join(outputDir, "proof"));
@@ -173,31 +165,16 @@ describe("live transport suite runtime", () => {
       );
     }
     loadMatrixQaE2eeRuntime.mockImplementation(() => {
-      initializationStarted.resolve();
+      entered.resolve("initialization");
       return initialization.promise;
     });
-    runFlowWorkers.mockImplementation(async (params, context) => {
-      workersStarted.resolve();
-      const scenarioIds = context.selectedScenarios.map((scenario) => scenario.id);
-      return {
-        ...recordQaSuiteTestResults(
-          params,
-          context.selectedScenarios,
-          scenarioIds.map((name) => ({ name, status: "pass", steps: [] })),
-        ),
-        outputDir: context.outputDir,
-        evidencePath: path.join(context.outputDir, "qa-evidence.json"),
-        reportPath: path.join(context.outputDir, "qa-suite-report.md"),
-        summaryPath: path.join(context.outputDir, "qa-suite-summary.json"),
-        report: "# QA Suite Report\n",
-        startedScenarioIds: scenarioIds,
-        watchUrl: "http://127.0.0.1:43124",
-      };
+    runFlowWorkers.mockImplementation(async () => {
+      entered.resolve("workers");
+      throw workerBoundary;
     });
     const scenarioIds = [
       "matrix-allowbots-default-block",
       "matrix-e2ee-cli-account-add-enable-e2ee",
-      "matrix-approval-channel-target-both",
     ];
     const params: QaSuiteRunParams = {
       repoRoot: outputDir,
@@ -214,11 +191,9 @@ describe("live transport suite runtime", () => {
             ? ["matrix-allowbots-default-block"]
             : scenarioIds,
     };
-    let suite: ReturnType<typeof runQaSuite> | undefined;
-    runQaSuiteCommand.mockImplementation((options) => {
-      suite = runQaSuite({ ...params, scenarioIds: options.scenarioIds });
-      return suite;
-    });
+    runQaSuiteCommand.mockImplementation((options) =>
+      runQaSuite({ ...params, scenarioIds: options.scenarioIds }),
+    );
     const exit = vi.spyOn(process, "exit").mockImplementation(() => {
       throw new Error("Matrix CLI must not force process exit");
     });
@@ -236,44 +211,31 @@ describe("live transport suite runtime", () => {
       (error: unknown) => error,
     );
     try {
-      const first = await Promise.race([
-        initializationStarted.promise.then(() => "initialization"),
-        workersStarted.promise.then(() => "workers"),
-        settled.then((error) => {
-          if (error instanceof Error) {
-            throw error;
-          }
-          expect(error).toBeUndefined();
-          return "settled";
-        }),
-      ]);
+      const first = await Promise.race([entered.promise, settled.then(() => "settled")]);
+      expect(first).toBe(caller === "plain selection" ? "workers" : "initialization");
       if (caller === "plain selection") {
-        expect(first).toBe("workers");
-        expect(await settled).toBeUndefined();
         expect(loadMatrixQaE2eeRuntime).not.toHaveBeenCalled();
       } else {
-        expect(first).toBe("initialization");
         expect(runFlowWorkers).not.toHaveBeenCalled();
         if (outcome === "failed") {
           initialization.reject(failure);
-          expect(suite).toBeDefined();
-          await expect(suite).rejects.toBe(failure);
-          expect(await settled).toBeUndefined();
-          expect(stderrWrite).toHaveBeenCalledExactlyOnceWith(`${failure.message}\n`);
-          expect(process.exitCode).toBe(1);
-          expect(exit).not.toHaveBeenCalled();
-          expect(runFlowWorkers).not.toHaveBeenCalled();
-          for (const name of priorArtifacts) {
-            await expect(fs.stat(path.join(outputDir, "proof", name))).rejects.toMatchObject({
-              code: "ENOENT",
-            });
-          }
         } else {
           initialization.resolve();
-          expect(await settled).toBeUndefined();
-          expect(runFlowWorkers).toHaveBeenCalled();
-          expect(loadMatrixQaE2eeRuntime).toHaveBeenCalledOnce();
         }
+      }
+      expect(await settled).toBe(caller === "dedicated" ? undefined : workerBoundary);
+      if (outcome === "failed") {
+        expect(stderrWrite).toHaveBeenCalledExactlyOnceWith(`${failure.message}\n`);
+        expect(process.exitCode).toBe(1);
+        expect(exit).not.toHaveBeenCalled();
+        expect(runFlowWorkers).not.toHaveBeenCalled();
+        for (const name of priorArtifacts) {
+          await expect(fs.stat(path.join(outputDir, "proof", name))).rejects.toMatchObject({
+            code: "ENOENT",
+          });
+        }
+      } else {
+        expect(runFlowWorkers).toHaveBeenCalled();
       }
     } finally {
       initialization.resolve();
@@ -288,36 +250,12 @@ describe("live transport suite runtime", () => {
     expect(runQaSuiteCommand).not.toHaveBeenCalled();
   });
 
-  it("normalizes one live command into the shared suite host", async () => {
-    const options = {
-      repoRoot: "/repo",
-      outputDir: ".artifacts/slack",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5-alt",
-      fastMode: true,
-      allowFailures: true,
-      failFast: true,
-      credentialFile: "/secure/slack-qa.json",
-      credentialSource: " convex ",
-      credentialRole: " ci ",
-      sutAccountId: "slack-sut",
-    };
-    await runLiveCommand(options, {
-      channelId: "slack",
-      selectScenarioIds: ({ primaryModel, providerMode, scenarioIds }) => {
-        expect(primaryModel).toBe("openai/gpt-5.5");
-        expect(providerMode).toBe("live-frontier");
-        expect(scenarioIds).toBeUndefined();
-        return ["slack-canary"];
-      },
-    });
-
-    expect(runQaSuiteCommand).toHaveBeenCalledWith({
-      ...options,
+  it("normalizes credentials and selects the default live lane", async () => {
+    await runLiveCommand({ credentialSource: " convex ", credentialRole: " ci " });
+    expectDispatch({
       providerMode: "live-frontier",
       channelDriver: "live",
-      channel: "slack",
-      scenarioIds: ["slack-canary"],
+      scenarioIds: ["discord-canary"],
       credentialSource: "convex",
       credentialRole: "ci",
       explicitScenarioSelection: false,
@@ -325,30 +263,11 @@ describe("live transport suite runtime", () => {
   });
 
   it("propagates selection context through the standard suite owner", async () => {
-    const channelId = "discord";
-    const scenarioId = "discord-canary";
-    resolveLiveTransportQaScenarioIds.mockReturnValueOnce([scenarioId]);
-
-    await runDiscord({
-      primaryModel: "openai/custom-selection-model",
-      profile: "all",
-      providerMode: "mock-openai",
-      scenarioIds: [scenarioId, scenarioId],
-    });
-
-    expect(resolveLiveTransportQaScenarioIds).toHaveBeenLastCalledWith({
-      channelId,
-      primaryModel: "openai/custom-selection-model",
-      profile: "all",
-      providerMode: "mock-openai",
-      scenarioIds: [scenarioId, scenarioId],
-      supportsModuleFlows: true,
-    });
+    resolveLiveTransportQaScenarioIds.mockReturnValueOnce(["discord-canary"]);
+    await runDiscord({ scenarioIds: ["discord-canary"] });
     expectDispatch({
-      channel: channelId,
-      primaryModel: "openai/custom-selection-model",
-      providerMode: "mock-openai",
-      scenarioIds: [scenarioId],
+      channel: "discord",
+      scenarioIds: ["discord-canary"],
       explicitScenarioSelection: true,
     });
   });
@@ -391,16 +310,8 @@ describe("live transport suite runtime", () => {
   it("normalizes the shared credential source environment override", async () => {
     vi.stubEnv("OPENCLAW_QA_CREDENTIAL_SOURCE", " convex ");
 
-    await runLiveTransportQaSuiteCommand({
-      channelId: "buzz",
-      defaultProviderMode: "mock-openai",
-      options: {},
-      selectScenarioIds: () => ["channel-canary"],
-    });
-
-    expect(runQaSuiteCommand).toHaveBeenCalledWith(
-      expect.objectContaining({ credentialSource: "convex" }),
-    );
+    await runLiveCommand({});
+    expectDispatch({ credentialSource: "convex" });
   });
 
   it("rejects shared credentials for disposable transports", async () => {
@@ -427,34 +338,36 @@ describe("live transport suite runtime", () => {
     expect(runQaSuiteCommand).not.toHaveBeenCalled();
   });
 
-  it("selects only the Discord doctor and respects explicit lane overrides", async () => {
-    await parseDiscord("--doctor");
-    expectDispatch({
-      providerMode: "mock-openai",
-      credentialSource: "convex",
-      credentialRole: "ci",
-      explicitScenarioSelection: true,
-      scenarioIds: ["discord-e2e-doctor"],
-      scenarioDefinitions: [expect.objectContaining({ id: "discord-e2e-doctor" })],
-    });
-
-    await parseDiscord(
-      "--doctor",
-      "--provider-mode",
+  it.each([
+    [[], "mock-openai", "convex", "ci"],
+    [
+      [
+        "--provider-mode",
+        "live-frontier",
+        "--credential-source",
+        "env",
+        "--credential-role",
+        "maintainer",
+      ],
       "live-frontier",
-      "--credential-source",
       "env",
-      "--credential-role",
       "maintainer",
-    );
-    expectDispatch({
-      providerMode: "live-frontier",
-      credentialSource: "env",
-      credentialRole: "maintainer",
-      scenarioIds: ["discord-e2e-doctor"],
-    });
-    expect(resolveLiveTransportQaScenarioIds).not.toHaveBeenCalled();
-  });
+    ],
+  ] as const)(
+    "selects only the doctor with overrides %j",
+    async (args, providerMode, credentialSource, credentialRole) => {
+      await parseDiscord("--doctor", ...args);
+      expectDispatch({
+        providerMode,
+        credentialSource,
+        credentialRole,
+        explicitScenarioSelection: true,
+        scenarioIds: ["discord-e2e-doctor"],
+        scenarioDefinitions: [expect.objectContaining({ id: "discord-e2e-doctor" })],
+      });
+      expect(resolveLiveTransportQaScenarioIds).not.toHaveBeenCalled();
+    },
+  );
 
   it("lists only the repeated file selections without dispatching or injecting the curated suite", async () => {
     const directory = tempDirs.make("agent-e2e-selection-");
@@ -493,14 +406,12 @@ describe("live transport suite runtime", () => {
     await expectQaFailure(["--scenario-file", file], boundary.message);
     expect(selected).toMatchObject([
       {
-        id: "discord-e2e-doctor",
-        title: "External discord-e2e-doctor",
         sourcePath: file,
         execution: {
           timeoutMs: 23456,
           retryCount: 0,
-          config: { agentE2e: true, marker: "external-recipe" },
-          flow: { steps: [{ name: "native readiness", actions: [{ call: "channelE2e.doctor" }] }] },
+          config: recipeConfig,
+          flow: { steps: [doctorStep] },
         },
       },
     ]);

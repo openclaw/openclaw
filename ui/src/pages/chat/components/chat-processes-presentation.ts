@@ -1,6 +1,25 @@
 import { action, affects, createMemo, createOptimistic, refresh } from "solid-js";
-import type { SessionProcessSummary } from "../../../../../packages/gateway-protocol/src/schema/session-processes.js";
-import type { ProcessesPanelData } from "../processes-panel-data.ts";
+import type { ApplicationGatewaySnapshot } from "../../../app/gateway.ts";
+import { canPresentGatewayMethod } from "../../../lib/gateway-methods.ts";
+import type { ProcessIdentity, ProcessesPanelData } from "../processes-panel-data.ts";
+
+/** Unknown acquisition is pending; a known unavailable capability is a settled outcome. */
+export function isProcessesPresentationReady(
+  owner: ProcessesPanelData | undefined,
+  gateway: ApplicationGatewaySnapshot | undefined,
+): boolean {
+  if (owner?.pendingRead) {
+    return false;
+  }
+  if (
+    gateway?.hello &&
+    !canPresentGatewayMethod(gateway, "sessions.processes.list", "operator.read")
+  ) {
+    return true;
+  }
+  const snapshot = owner?.snapshot;
+  return Boolean(snapshot?.hasResult || snapshot?.errorKind);
+}
 
 /** Presents shared, already-admitted process work without starting another read. */
 export function createProcessesPresentation(
@@ -49,7 +68,7 @@ export function createProcessesPresentation(
   });
 
   // Each row/control gets its own flag so simultaneous Stops remain independent.
-  function createStop(row: () => SessionProcessSummary) {
+  function createStop(row: () => ProcessIdentity) {
     const presentation = createMemo(() => {
       const view = scope();
       if (!view?.connectionRetired) {

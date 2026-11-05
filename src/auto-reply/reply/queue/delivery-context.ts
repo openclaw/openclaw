@@ -1,5 +1,6 @@
 import { expectDefined, stableStringify } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { RuntimeContextFragment } from "../../../agents/internal-runtime-context.js";
 import { resolveRequesterPrincipalKey } from "../../../agents/requester-origin.js";
 import { withSandboxRuntimeStatusesInWorker } from "../../../agents/sandbox/runtime-status.js";
 import { withPreparedSessionCapabilityRead } from "../../../agents/subagents/spawn/subagent-session-store.js";
@@ -35,14 +36,6 @@ const queuedAdmissionOwnerState = resolveGlobalSingleton(
   }),
 );
 
-function hasExclusiveTurnAdmission(
-  lifecycle: FollowupRun["turnAdoptionLifecycle"],
-): lifecycle is NonNullable<FollowupRun["turnAdoptionLifecycle"]> & {
-  admission: "exclusive";
-} {
-  return lifecycle?.admission === "exclusive";
-}
-
 function resolveTurnAdoptionLifecycleDeliveryKey(
   lifecycle: FollowupRun["turnAdoptionLifecycle"],
 ): string {
@@ -52,7 +45,7 @@ function resolveTurnAdoptionLifecycleDeliveryKey(
   const explicitOwnerKey = lifecycle.ownerKey ?? "";
   // Closed admission marker — never infer exclusive from onAbandoned presence.
   // Cancel-only owners share collect identity via ownerKey alone.
-  if (!hasExclusiveTurnAdmission(lifecycle)) {
+  if (lifecycle.admission !== "exclusive") {
     return explicitOwnerKey;
   }
   let admissionOwnerKey = queuedAdmissionOwnerState.keys.get(lifecycle);
@@ -96,10 +89,7 @@ export function resolveFollowupAuthorizationKey(run: FollowupRun): string {
   ]);
 }
 
-/** Storage grouping is policy-independent; drain prepares current screen/theme authority. */
-export function resolveFollowupDeliveryStorageKey(run: FollowupRun): string {
-  const execution = run.run;
-  const provenance = execution.inputProvenance;
+export function resolveFollowupReplyDeliveryKey(run: FollowupRun): string {
   return JSON.stringify([
     channelRouteDedupeKey({
       channel: run.originatingChannel,
@@ -107,13 +97,22 @@ export function resolveFollowupDeliveryStorageKey(run: FollowupRun): string {
       accountId: run.originatingAccountId,
       threadId: run.originatingThreadId,
     }),
+    resolveFollowupReplyAnchor(run) ?? "",
+    run.originatingReplyToMode ?? "",
+    normalizeChatType(run.originatingChatType) ?? "",
+  ]);
+}
+
+/** Storage grouping is policy-independent; drain prepares current screen/theme authority. */
+export function resolveFollowupDeliveryStorageKey(run: FollowupRun): string {
+  const execution = run.run;
+  const provenance = execution.inputProvenance;
+  return JSON.stringify([
+    resolveFollowupReplyDeliveryKey(run),
     hasPreparedCurrentTurnImages(run),
     // Approved sources skip the write hook; never carry unstaged input past it.
     Boolean(run.userTurnTranscriptRecorder?.getPendingInputMessage?.()),
     run.originatingChatId ?? "",
-    resolveFollowupReplyAnchor(run) ?? "",
-    run.originatingReplyToMode ?? "",
-    normalizeChatType(run.originatingChatType) ?? "",
     resolveFollowupAuthorizationKey(run),
     run.turnAdoptionLifecycle?.ownerKey ?? "",
     normalizeOptionalString(execution.runtimePolicySessionKey ?? execution.sessionKey) ?? "",
@@ -155,8 +154,6 @@ export function resolveFollowupDeliveryStorageKey(run: FollowupRun): string {
       run.toolsAllow ? (readToolAllowlistIntersection(run.toolsAllow) ?? null) : null,
     ),
     run.disableTools === true,
-    run.forceRestartSafeTools === true,
-    run.forceCodeModeTools === true,
     execution.extraSystemPrompt ?? "",
     execution.extraSystemPromptStatic ?? "",
     execution.sourceReplyDeliveryMode ?? "",
@@ -234,7 +231,7 @@ export async function prepareNextDeliveryGroup(
   });
 }
 
-export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined {
+function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined {
   if (run.originatingReplyToMode === "off") {
     return undefined;
   }
@@ -253,37 +250,13 @@ export function resolveFollowupReplyAnchor(run: FollowupRun): string | undefined
   return hasRoutedThread ? undefined : normalizeOptionalString(run.messageId);
 }
 
-type FollowupRuntimeMetadata = Pick<
-  FollowupRun,
-  | "sourceTurnId"
-  | "createChannelCronAuthority"
-  | "readAdmissionConfig"
-  | "operatorAuthority"
-  | "personalBootstrapEligible"
-  | "currentInboundEventKind"
-  | "currentInboundAudio"
-  | "currentInboundContext"
-  | "explicitSkillSelections"
-  | "channelAdmissionEvidence"
-  | "gatewayLocalUserIngress"
-  | "toolsAllow"
-  | "disableTools"
-  | "forceRestartSafeTools"
-  | "forceCodeModeTools"
-  | "abortSignal"
-  | "queueAbortSignal"
-  | "deliveryCorrelations"
-  | "turnAdoptionLifecycle"
-  | "replyOperationRunStates"
-  | "queuedFollowupReplyDisposition"
-  | "runObservers"
->;
-
-function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["currentInboundContext"] {
+export function collectCurrentInboundContext(
+  items: FollowupRun[],
+): FollowupRun["currentInboundContext"] {
   const contexts = items.flatMap((item, index) =>
     item.currentInboundContext ? [{ context: item.currentInboundContext, index }] : [],
   );
-  if (contexts.length <= 1) {
+  if (items.length <= 1) {
     return contexts[0]?.context;
   }
   const renderField = (field: "text" | "resumableText") => {
@@ -304,10 +277,14 @@ function collectCurrentInboundContext(items: FollowupRun[]): FollowupRun["curren
   return {
     text,
     ...(resumableText ? { resumableText } : {}),
-    fragments: contexts.flatMap(
-      ({ context }) =>
-        context.fragments ?? [{ kind: "conversation-data" as const, text: context.text }],
-    ),
+    fragments: contexts.flatMap(({ context, index }) => {
+      const fragments: RuntimeContextFragment[] = [
+        { kind: "runtime-instruction", text: `Queued #${index + 1} context:` },
+      ];
+      return fragments.concat(
+        context.fragments ?? [{ kind: "conversation-data", text: context.text }],
+      );
+    }),
     promptJoiner: "\n\n",
     ...(injectedGoalContexts.length > 0 ? { injectedGoalContexts } : {}),
   };
@@ -351,10 +328,7 @@ function collectReplyDisposition(
   };
 }
 
-export function collectRuntimeMetadata(
-  items: FollowupRun[],
-  abortSignal?: AbortSignal,
-): FollowupRuntimeMetadata {
+export function collectRuntimeMetadata(items: FollowupRun[], abortSignal?: AbortSignal) {
   const currentTurnSource = items.find(
     (item) =>
       item.currentInboundEventKind === "room_event" ||
@@ -399,8 +373,6 @@ export function collectRuntimeMetadata(
     ),
     toolsAllow: authoritySource?.toolsAllow,
     disableTools: authoritySource?.disableTools,
-    forceRestartSafeTools: authoritySource?.forceRestartSafeTools,
-    forceCodeModeTools: authoritySource?.forceCodeModeTools,
     abortSignal,
     queueAbortSignal: items.find((item) => item.queueAbortSignal)?.queueAbortSignal,
     deliveryCorrelations: deliveryCorrelations.length > 0 ? deliveryCorrelations : undefined,
@@ -412,7 +384,9 @@ export function collectRuntimeMetadata(
         ? authoritySource?.runObservers
         : {
             ...authoritySource?.runObservers,
-            onAgentRunTerminalOutcome: (outcome) => {
+            onAgentRunTerminalOutcome: (
+              outcome: Parameters<(typeof terminalObservers)[number]>[0],
+            ) => {
               const failures: unknown[] = [];
               for (const observer of terminalObservers) {
                 try {
@@ -445,6 +419,7 @@ export function getFollowupOriginRouting(source: FollowupRun) {
 export function createOverflowSummaryRetrySource(source: InternalFollowupRun): InternalFollowupRun {
   return {
     controllerInput: source.controllerInput,
+    ambientOverflowContext: source.ambientOverflowContext,
     prompt: source.prompt,
     sourceTurnId: source.sourceTurnId,
     createChannelCronAuthority: source.createChannelCronAuthority,
@@ -458,8 +433,6 @@ export function createOverflowSummaryRetrySource(source: InternalFollowupRun): I
     explicitSkillSelections: source.explicitSkillSelections,
     toolsAllow: source.toolsAllow,
     disableTools: source.disableTools,
-    forceRestartSafeTools: source.forceRestartSafeTools,
-    forceCodeModeTools: source.forceCodeModeTools,
     currentTurnImagesPrepared: source.currentTurnImagesPrepared,
     images: source.images,
     imageOrder: source.imageOrder,
@@ -481,6 +454,7 @@ export function createOverflowSummaryRetrySource(source: InternalFollowupRun): I
     ...(source.currentInboundEventKind === "room_event"
       ? { currentInboundEventKind: "room_event" }
       : {}),
+    currentInboundContext: source.currentInboundContext,
     run: source.run,
   };
 }

@@ -3,7 +3,10 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  createControlUiE2eContextOptions,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Updates settings mocked Gateway E2E",
@@ -12,12 +15,7 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`.`,
 });
 
-const pageOptions = {
-  colorScheme: "dark",
-  locale: "en-US",
-  serviceWorkers: "block",
-  viewport: { height: 900, width: 1280 },
-} as const;
+const pageOptions = { colorScheme: "dark", ...createControlUiE2eContextOptions() } as const;
 const configResponse = (config: object, hash: string) => ({
   config,
   hash,
@@ -210,9 +208,7 @@ suite.define(() => {
       expect(response?.status()).toBe(200);
       await gateway.waitForRequest("config.get");
       await page.getByRole("note").waitFor();
-      expect(await page.getByRole("note").textContent()).toContain(
-        "Administrator access is required",
-      );
+      expect(await page.getByRole("note").textContent()).toContain("You need admin access");
       await expectRadiosDisabled(page);
       expect(await page.getByRole("switch", { name: "Automatic updates" }).isDisabled()).toBe(true);
       expect(await page.getByRole("switch", { name: "Check for updates" }).isDisabled()).toBe(true);
@@ -275,7 +271,7 @@ suite.define(() => {
           message:
             "Review and submit the prefilled issue using your own GitHub account in your browser. No issue has been submitted by the Gateway.",
         });
-        await dialog.getByRole("button", { name: "Continue", exact: true }).click();
+        await dialog.getByRole("button", { name: "Report failure", exact: true }).click();
         const link = page.locator(`a[href="${fallbackUrl}"]`);
         await link.waitFor();
         expect(await link.getAttribute("target")).toBe("_blank");

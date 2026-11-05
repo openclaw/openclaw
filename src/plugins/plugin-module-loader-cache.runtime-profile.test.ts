@@ -5,15 +5,15 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { getCachedPluginModuleLoader, preparePluginModule } from "./plugin-module-loader-cache.js";
 
-vi.mock("../../cli-invocation.mjs", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../cli-invocation.mjs")>()),
-  getStandaloneRuntimeBuild: () => ({ mode: "aot" }),
+vi.mock("../../standalone-runtime-profile.mjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../standalone-runtime-profile.mjs")>()),
+  getRuntimeExecutionProfile: () => "embedded-aot",
 }));
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 
 describe("plugin loading in the embedded AOT profile", () => {
-  it.each(["cjs", "ts"])("rejects fetched %s code before evaluation", (extension) => {
+  it.each(["cjs", "ts"])("loads fetched %s code through the normal loader", (extension) => {
     const root = temp.make("plugin-runtime-profile-");
     const entry = path.join(root, `index.${extension}`);
     const marker = path.join(root, "executed");
@@ -28,8 +28,9 @@ describe("plugin loading in the embedded AOT profile", () => {
         aliasMap: {},
         tryNative: true,
       });
-      expect(() => load(entry)).toThrow(/not embedded.*dynamic-execution/);
-      expect(fs.existsSync(marker)).toBe(false);
+      expect(load(entry)).toEqual({ value: 42 });
+      expect(load(entry)).toEqual({ value: 42 });
+      expect(fs.readFileSync(marker, "utf8")).toBe("executed");
       expect(() =>
         preparePluginModule({
           modulePath: entry,
@@ -38,7 +39,7 @@ describe("plugin loading in the embedded AOT profile", () => {
           rejectHardlinks: true,
           surfaceLabel: "plugin public surface",
         }),
-      ).toThrow(/Rebuild the complete standalone artifact with this plugin/);
+      ).not.toThrow();
     });
   });
 });

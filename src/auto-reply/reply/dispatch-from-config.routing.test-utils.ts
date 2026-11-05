@@ -28,6 +28,7 @@ import {
   describe0BeforeEach0,
 } from "./dispatch-from-config.test-support.js";
 import { createDispatchVerboseSession } from "./dispatch-from-config.verbose-session.test-support.js";
+import { withVerboseDefault } from "./get-reply-config.test-support.js";
 import { isReplyDispatchDeliveryError } from "./reply-dispatch-outcome.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
@@ -311,10 +312,7 @@ describe("dispatchReplyFromConfig", () => {
   it("provides onToolResult in DM sessions", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
-    const cfg = {
-      ...emptyConfig,
-      agents: { defaults: { verboseDefault: "on" } },
-    } satisfies OpenClawConfig;
+    const cfg = withVerboseDefault(emptyConfig);
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "telegram",
@@ -601,14 +599,7 @@ describe("dispatchReplyFromConfig", () => {
 
   it("allows group tool summaries when the agent verbose default is enabled", async () => {
     setNoAbort();
-    const cfg = {
-      ...automaticGroupReplyConfig,
-      agents: {
-        defaults: {
-          verboseDefault: "on",
-        },
-      },
-    } as const satisfies OpenClawConfig;
+    const cfg = withVerboseDefault(automaticGroupReplyConfig);
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "matrix",
@@ -633,14 +624,7 @@ describe("dispatchReplyFromConfig", () => {
   it("keeps group tool summaries suppressed when session verbose is disabled", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = { verboseLevel: "off" };
-    const cfg = {
-      ...automaticGroupReplyConfig,
-      agents: {
-        defaults: {
-          verboseDefault: "on",
-        },
-      },
-    } as const satisfies OpenClawConfig;
+    const cfg = withVerboseDefault(automaticGroupReplyConfig);
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       ChatType: "group",

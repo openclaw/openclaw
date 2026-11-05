@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
+import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureComposerProof,
@@ -55,6 +56,25 @@ function installTalkGateway(
     ...options,
     methodResponses: { "talk.client.create": clientSession, ...options.methodResponses },
   });
+}
+async function completeGoogleSetup(
+  page: Page,
+  gateway: Awaited<ReturnType<typeof installTalkGateway>>,
+) {
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (window as MockGatewayWindow).openclawControlUiE2eGateway
+          ?.socketStates()
+          .some(
+            (socket) =>
+              socket.url.startsWith("wss://generativelanguage.googleapis.com/") &&
+              socket.readyState === WebSocket.OPEN,
+          ),
+      ),
+    )
+    .toBe(true);
+  await gateway.deliverLatest({ setupComplete: {} });
 }
 type TalkWindow = Window & {
   openclawTalkE2eState?: {
@@ -120,8 +140,20 @@ async function openTalk(page: Page, width = 1366, height = 900) {
 suite.define(() => {
   it("keeps reduced-motion voice activity readable in a narrow viewport", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
-      const gateway = await installTalkGateway(page, googleSession("voice-browser-talk-e2e"));
+      const gateway = await installTalkGateway(page, googleSession("voice-browser-talk-e2e"), {
+        deferredMethods: ["talk.client.create"],
+        webSocketPassthroughPrefixes: ["wss://generativelanguage.googleapis.com/"],
+      });
       await installTalkBrowserFixtures(page);
+      const providerSetup = Promise.withResolvers<() => void>();
+      await page.routeWebSocket("wss://generativelanguage.googleapis.com/**", (socket) => {
+        socket.onMessage((message) => {
+          const frame = JSON.parse(message.toString()) as { setup?: unknown };
+          if (frame.setup) {
+            providerSetup.resolve(() => socket.send(JSON.stringify({ setupComplete: {} })));
+          }
+        });
+      });
 
       await page.emulateMedia({ reducedMotion: "reduce" });
       const tapToTalk = page.getByRole("button", { name: "Tap to talk" });
@@ -147,7 +179,10 @@ suite.define(() => {
         .toBe("none");
       const connectingReducedMotionTransform = await barTransform();
 
-      await gateway.deliverLatest({ setupComplete: {} });
+      await gateway.waitForRequest("talk.client.create");
+      await gateway.resolveDeferred("talk.client.create");
+      const completeProviderSetup = await providerSetup.promise;
+      completeProviderSetup();
       await expect
         .poll(() => page.locator('.agent-chat__voice-activity[data-status="listening"]').count())
         .toBe(1);
@@ -177,7 +212,7 @@ suite.define(() => {
       await openTalk(page);
       await page.getByRole("button", { name: "Start voice input" }).click();
       await gateway.waitForRequest("talk.client.create");
-      await gateway.deliverLatest({ setupComplete: {} });
+      await completeGoogleSetup(page, gateway);
       const stopVoice = page.getByRole("button", { name: "Stop voice input" });
       await expect.poll(() => stopVoice.isVisible()).toBe(true);
       await page.mouse.move(0, 0);
@@ -194,7 +229,7 @@ suite.define(() => {
       expect(voiceAppearance.width).toBeGreaterThanOrEqual(64);
       expect(voiceAppearance.background).toBe("rgba(0, 0, 0, 0)");
       expect(voiceAppearance.meterContained).toBe(true);
-      const stopRun = page.getByRole("button", { name: "Stop generating" });
+      const stopRun = page.getByRole("button", { name: "Stop", exact: true });
       await expect.poll(() => stopRun.isVisible()).toBe(true);
       await expect.poll(() => stopVoice.isVisible()).toBe(true);
 
@@ -370,7 +405,7 @@ suite.define(() => {
     });
   });
 
-  it("renders streamed relay assistant transcript deltas as readable text", async () => {
+  it.each(["Istanbul", "İstanbul"])("renders relay transcripts with %s overlap", async (place) => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const relaySessionId = "relay-e2e-transcript";
       const gateway = await installTalkGateway(page, relaySession(relaySessionId), {
@@ -391,18 +426,28 @@ suite.define(() => {
       await expect
         .poll(() => page.locator('.agent-chat__voice-activity[data-status="listening"]').count())
         .toBe(1);
-      await gateway.emitGatewayEvent("talk.event", {
-        relaySessionId,
-        type: "transcript",
-        role: "user",
-        text: "Hey, what model are you using?",
-        final: true,
-      });
+      const userText = `Meet in ${place} tomorrow`;
+      for (const text of [`Meet in ${place}`, `${place} tomorrow`]) {
+        await gateway.emitGatewayEvent("talk.event", {
+          relaySessionId,
+          type: "transcript",
+          role: "user",
+          text,
+          final: false,
+        });
+      }
       await expect
         .poll(() =>
           page.locator(".agent-chat__voice-turn--user .agent-chat__voice-turn-text").textContent(),
         )
-        .toBe("Hey, what model are you using?");
+        .toBe(userText);
+      await gateway.emitGatewayEvent("talk.event", {
+        relaySessionId,
+        type: "transcript",
+        role: "user",
+        text: userText,
+        final: true,
+      });
       // Assistant audio transcripts stream as verbatim fragments that can split
       // words ("I","'m"," Chat","G","PT"); regression coverage for #102556 where
       // the merge injected spaces mid-word and the turn collapsed while streaming.

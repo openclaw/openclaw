@@ -90,7 +90,7 @@ export function IdentityCrumbs(props: ChatPaneHeaderProps) {
   );
 }
 
-// Roster mode keeps the session crumbs off the agent pill: it is one settings target.
+// Roster mode keeps the avatar and name together as one settings target.
 export function AgentCrumb(
   props: ChatPaneHeaderProps & { agent: NonNullable<ChatPaneHeaderProps["agent"]> },
 ) {
@@ -105,9 +105,6 @@ export function AgentCrumb(
         <AgentIdentityAvatar agent={props.agent} />
       </span>
       <span class="chat-pane__agent-name">{props.agent.name}</span>
-      <span class="chat-pane__agent-settings" aria-hidden="true">
-        <Icon name="settings" />
-      </span>
     </button>
   );
 }
@@ -115,7 +112,9 @@ export function AgentCrumb(
 function SessionTitle(props: ChatPaneHeaderProps) {
   return (
     <>
-      <SessionColorDot value={props.catalog ? props.catalogColor : props.session?.color} />
+      <SessionColorDot
+        value={props.catalog ? props.catalogColor : (props.sessionColor ?? props.session?.color)}
+      />
       <span class="chat-pane__session-title-text">
         <Show
           when={
@@ -201,7 +200,7 @@ function SessionRenameInput(props: ChatPaneHeaderProps) {
 
 let nextWorkspaceMenuId = 0;
 
-function ProjectCrumb(props: ChatPaneHeaderProps) {
+export function ProjectCrumb(props: ChatPaneHeaderProps) {
   const overflow = useScrollState(true, false);
   const id = `chat-workspace-${++nextWorkspaceMenuId}`;
   const copied = () => props.copiedAction === "copy-path" || props.copiedAction === "copy-branch";

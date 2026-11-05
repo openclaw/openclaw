@@ -9,10 +9,9 @@ import type {
   ChatHistoryMessageParams,
 } from "../../config/sessions/session-history-types.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
-import {
-  prepareForwardedMessageCronJobNameResolver,
-  projectForwardedMessages,
-} from "../chat-display-projection.history.js";
+import { prepareForwardedMessageCronJobNameResolver } from "../chat-display-projection.cron.js";
+import { projectForwardedMessages } from "../chat-display-projection.history.js";
+import { sanitizeChatHistoryMessages } from "../chat-display-projection.sanitize.js";
 import { readChatHistoryPageKernel } from "../chat-history-page-kernel.js";
 import { projectChatHistoryWithReplies } from "../chat-history-reply-messages.js";
 import { encodeChatHistoryResponsePage } from "../chat-history-response-page.js";
@@ -78,7 +77,7 @@ export async function readChatHistoryMessageById(input: ChatHistoryMessageParams
   });
 }
 
-export async function readChatHistoryPage(
+async function readChatHistoryPageUnprojected(
   input: ChatHistoryPageParams,
   signal?: AbortSignal,
 ): Promise<ChatHistoryPage> {
@@ -146,4 +145,30 @@ async function refreshForwardedLabels(messages: unknown[]): Promise<unknown[]> {
         await prepareForwardedMessageCronJobNameResolver(displayMessages),
       ),
   );
+}
+
+export type ChatHistoryMessageProjector = {
+  project: (messages: unknown[]) => Promise<unknown[]>;
+};
+
+/** Enrich only the admitted display copy, then budget the bytes actually sent. */
+export async function readChatHistoryPage(
+  input: ChatHistoryPageParams,
+  signal?: AbortSignal,
+  displayProjector?: ChatHistoryMessageProjector,
+) {
+  const page = await readChatHistoryPageUnprojected(
+    displayProjector ? { ...input, deferChannelUserDisplay: true } : input,
+    signal,
+  );
+  if (!displayProjector || page.encodedResponse) {
+    return page;
+  }
+  const messages = sanitizeChatHistoryMessages(
+    await displayProjector.project(page.messages),
+    input.effectiveMaxChars,
+    { toolResultMaxChars: input.toolResultMaxChars },
+  );
+  signal?.throwIfAborted();
+  return encodeChatHistoryResponsePage({ ...page, messages }, prepareChatHistoryParams(input));
 }

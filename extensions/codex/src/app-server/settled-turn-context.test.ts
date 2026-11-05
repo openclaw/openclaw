@@ -89,6 +89,19 @@ const settledItems = () => [
   { type: "function_call_output", call_id: "call-2", output: "sent" },
 ];
 
+it("captures a continuation against its persisted prompt from an earlier native turn", async () => {
+  const persistedPrompt = user("Send it.", "turn-1:prompt");
+  const settledMessages = [persistedPrompt, ...settledTurn().slice(1)];
+  const history = [user("Older context.", "older:prompt"), ...settledMessages];
+  const context = await captureContext(settledMessages, history, {
+    promptIdentity: "turn-1:prompt",
+  });
+  expect(context?.data).toEqual([userItem("Older context."), ...settledItems()]);
+  await expect(
+    captureContext(settledMessages, history.slice(2), { promptIdentity: "turn-1:prompt" }),
+  ).resolves.toBeUndefined();
+});
+
 beforeEach(() => {
   mocks.readHistory.mockReset();
 });

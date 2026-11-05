@@ -1,6 +1,6 @@
 import type { SessionAdmissionTransition } from "../../../config/sessions/session-admission-transition.types.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context-store.js";
 import {
-  runWithoutOwnedSessionTranscriptWrites,
   withOwnedSessionTranscriptWrites,
   type SessionTranscriptWriterFence,
 } from "../../../config/sessions/transcript-write-context.js";
@@ -8,7 +8,6 @@ import type { ContextEngineSessionTarget } from "../../../context-engine/types.j
 import { registerAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { adoptExecRequestSession } from "../../../infra/exec-request-context.js";
-import { getUserTurnTranscriptAdmissionOwner } from "../../../sessions/user-turn-transcript-admission.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { CustomMessage } from "../../sessions/messages.js";
 import { appendSessionTranscriptNote } from "../../sessions/session-manager-write-admission.js";
@@ -23,7 +22,7 @@ import {
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const CONTINUATION_PROMPT =
-  "Continue the current task from the existing transcript, preserving completed work. If an action was interrupted, inspect its state before deciding whether to retry it. Do not restart the task or repeat completed actions.";
+  "Continue the current task from the existing transcript, preserving completed work and the user's constraints. Use recorded tool results to determine what completed. Before retrying an action with an unknown outcome, inspect its state. If the recorded results already satisfy the remaining request, report them without additional tool calls. Do not restart the task or repeat completed actions.";
 
 type ActivePrompt = {
   override?: string;
@@ -136,14 +135,7 @@ export async function createEmbeddedRunSessionPromptState(input: {
     Object.assign(activePrompt, { persisted: true, internal: true });
     suppressNextUserMessagePersistence = true;
   };
-  // An outer model fallback starts a fresh invocation, but its retry instructions
-  // cannot recapture the original user projection after that turn has dispatched.
-  const dispatchedFallback =
-    params.modelRoutingProvenance?.stage === "fallback" &&
-    params.userTurnTranscriptRecorder !== undefined &&
-    getUserTurnTranscriptAdmissionOwner(params.userTurnTranscriptRecorder)?.sentToProvider() ===
-      true;
-  if (params.pluginRuntimeRefreshContinuation || dispatchedFallback) {
+  if (params.pluginRuntimeRefreshContinuation) {
     activateInternalPrompt(params.prompt);
   }
   const activateCompactionContinuation = (instruction: string) => {
@@ -188,6 +180,17 @@ export async function createEmbeddedRunSessionPromptState(input: {
         );
       });
     recorder.markRuntimePersistencePending(observedPersistence);
+  };
+  // Only a persisted operator turn with an idempotency key is replayed in place;
+  // anything else would append a second copy of the original request.
+  const canReplayCurrentUserTurn = () => {
+    const recorder = params.userTurnTranscriptRecorder;
+    return (
+      !activePrompt.internal &&
+      activePrompt.persisted &&
+      recorder?.hasPersisted() === true &&
+      Boolean((recorder.getPersistedMessage?.() ?? recorder.message)?.idempotencyKey)
+    );
   };
   const waitForCurrentUserMessagePersistence = async () => {
     if (params.userTurnTranscriptRecorder?.hasRuntimePersistencePending() === true) {
@@ -255,9 +258,9 @@ export async function createEmbeddedRunSessionPromptState(input: {
         customType: "incomplete-tool-call",
         content:
           (toolCallId
-            ? `Runtime notice: The tool call ${JSON.stringify(toolCallId.slice(0, 200))} was cut off at the provider's output limit (max_output_tokens) and was not executed. Split the remaining work into smaller tool calls with shorter arguments. `
-            : "Runtime notice: The model response reached the provider's output limit (max_output_tokens) before producing an answer. Continue with a shorter response and smaller tool calls. ") +
-          "Earlier actions may have completed; verify their results before continuing and do not repeat completed actions.",
+            ? `Runtime notice: The tool call ${JSON.stringify(toolCallId.slice(0, 200))} was cut off at the provider's output limit (max_output_tokens) and was not executed. Split the remaining work into smaller tool calls with shorter arguments only if the original request allows continuing that work. `
+            : "Runtime notice: The model response reached the provider's output limit (max_output_tokens) before producing an answer. Continue with a shorter response and smaller tool calls only if the original request allows continuing that work. ") +
+          "Use recorded tool results to determine what completed, and do not repeat completed actions. Inspect state only for actions whose outcomes are unknown.",
         display: false,
         details: { reason: "max_output_tokens", ...(toolCallId ? { toolCallId } : {}) },
         timestamp: Date.now(),
@@ -322,6 +325,7 @@ export async function createEmbeddedRunSessionPromptState(input: {
     continueFromCurrentTranscript: (options?: {
       includeToolFailureInstruction?: boolean;
       messages?: NonNullable<EmbeddedRunAttemptParams["continuation"]>["messages"];
+      replayCurrentUserTurn?: boolean;
     }) => {
       // Raw model runs load no transcript history; the original prompt is their only task context.
       if (params.modelRun === true || params.promptMode === "none") {
@@ -334,6 +338,12 @@ export async function createEmbeddedRunSessionPromptState(input: {
           prompt: params.prompt,
           messages,
         };
+      }
+      // A request rejected before any output left the transcript unchanged. Replaying
+      // the persisted keyed user turn resends that exact request; a hidden prompt
+      // would add a user turn and shift the prompt prefix on every retry.
+      if (options?.replayCurrentUserTurn && canReplayCurrentUserTurn()) {
+        return;
       }
       const prompt = options?.includeToolFailureInstruction
         ? `${CONTINUATION_PROMPT} ${TOOL_FAILURE_INSTRUCTION}`

@@ -5,10 +5,10 @@ import {
   type ControlUiSessionPullRequest,
   type ControlUiSessionPullRequestCheck,
   type ControlUiSessionPullRequestCheckDetails,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
 } from "../../../src/gateway/control-ui-contract.js";
 import type { CronJob } from "../api/types.ts";
 import { ciAutomationJobSpec, type CiAutomationOption } from "../lib/session-pr-automation-spec.ts";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import {
@@ -367,6 +367,7 @@ suite.define(() => {
     });
     await publish({ ...pullRequest, checks: undefined });
     await openDesktopPullRequestPage(page.locator(".chat-pr").first(), "monitoring");
+    await page.getByText("You need admin access to change automations.", { exact: true }).waitFor();
     const autoMerge = page.getByRole("switch", { name: "Auto-merge when ready" });
     await expect.poll(() => autoMerge.isChecked()).toBe(true);
     expect(await autoMerge.isDisabled()).toBe(true);

@@ -6,7 +6,6 @@ import { observeRuntimeProfileCapability } from "../infra/runtime-capabilities.j
 import {
   captureDiagnosticProfile,
   createInspectorProfileCapture,
-  type DiagnosticProfileOutcome,
   ProfileFailure,
 } from "./diagnostic-profile.js";
 import { createSubsystemLogger } from "./subsystem.js";
@@ -16,20 +15,12 @@ const COOLDOWN_MS = 60_000;
 const log = createSubsystemLogger("gateway").child("diagnostics/heap-snapshot");
 let nextCaptureAt = 0;
 
-type HeapSnapshotResult = {
-  path: string;
-  sizeBytes: number;
-  heapUsedBefore: number;
-  heapUsedAfter: number;
-  elapsedMs: number;
-};
-
 /** Owns opt-in main-isolate snapshots; native capture cannot be interrupted. */
 export async function captureDiagnosticHeapSnapshot(options: {
   reason?: string;
   signal: AbortSignal;
   hasAuthority: () => boolean;
-}): Promise<DiagnosticProfileOutcome<HeapSnapshotResult>> {
+}) {
   let ownedPath: string | undefined;
   let elapsedMs = 0;
   let heapUsedAfter = 0;

@@ -253,7 +253,6 @@ function createFeishuHttpInstance(
     }
     if (authority?.beforeDispatch) {
       await authority.beforeDispatch();
-      authority.assertCurrent();
     }
     if (authority) {
       const defaults = Lark.defaultHttpInstance.defaults;
@@ -341,7 +340,6 @@ function createFeishuHttpInstance(
               : {}),
           }
         : undefined;
-    authority?.assertCurrent();
     try {
       return await request(authority);
     } catch (error) {

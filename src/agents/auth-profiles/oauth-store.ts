@@ -205,6 +205,7 @@ export async function persistOAuthRefreshClaim(params: {
   profileId: string;
   expected: OAuthCredential;
   fence: OAuthCredential;
+  assertAdmission?: () => void;
   assertCurrent: () => void;
 }): Promise<boolean> {
   let claimed = false;
@@ -214,6 +215,9 @@ export async function persistOAuthRefreshClaim(params: {
     profileId: params.profileId,
     assertCurrent: params.assertCurrent,
     updater: (store) => {
+      // Admit before this claim publishes its own pending-credential denial.
+      // Accepted claim persistence and refresh settlement retain their native owner.
+      params.assertAdmission?.();
       if (!isExactOAuthCredential(store.profiles[params.profileId], params.expected)) {
         return false;
       }

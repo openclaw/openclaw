@@ -22,6 +22,7 @@ const generatedRoot = mkdtempSync(path.join(localRoot, "responses-continuation-m
 process.once("exit", () => rmSync(generatedRoot, { recursive: true, force: true }));
 const sourcePaths = [
   "src/agents/embedded-agent-runner/session-fork.ts",
+  "src/shared/immutable-data.ts",
   "packages/ai/src/transports/model-request-body.ts",
   "packages/ai/src/transports/openai-responses-continuation.ts",
   "packages/ai/src/transports/openai-responses-reasoning-update.ts",
@@ -200,7 +201,7 @@ async function capture(owner, label) {
   };
   let options;
   let replayed;
-  const parent = owner.wrapStreamFnWithSessionFork(async (_model, current, requestOptions) => {
+  const transport = async (_model, current, requestOptions) => {
     if (current === context) {
       options = requestOptions;
       owner.prepareModelRequestBody(options);
@@ -208,17 +209,24 @@ async function capture(owner, label) {
       replayed = await requestOptions.onPayload({ input: [] }, model);
     }
     return done;
-  }, identity);
+  };
+  // Historical roots include capture; current ordinary turns use the transport directly.
+  const parent = owner.wrapStreamFnWithSessionFork
+    ? owner.wrapStreamFnWithSessionFork(transport, identity)
+    : transport;
   await parent(model, context, {});
   const encode = owner.prepareModelRequestBody(options);
   return {
     async run(value) {
-      await options.onPayload(value.full, model);
+      await options.onPayload?.(value.full, model);
       const resolved = owner.resolveResponsesContinuationRequest(value.state, value.full);
       assert.equal(resolved.continuationStatus, "continued");
       return (await encode(resolved.request)).body;
     },
     async snapshot() {
+      if (!owner.wrapStreamFnWithSessionFork) {
+        return undefined;
+      }
       await owner.runEmbeddedSessionFork({
         ...identity,
         model,
@@ -230,7 +238,7 @@ async function capture(owner, label) {
       return json;
     },
     clear() {
-      owner.clearEmbeddedSessionForkSnapshot(identity.sessionId);
+      owner.clearEmbeddedSessionForkSnapshot?.(identity.sessionId);
     },
   };
 }
@@ -283,12 +291,14 @@ async function retained(owner, size, side) {
     `${side}: retained prepared payload`,
   );
   const snapshot = await session.snapshot();
-  assert.equal(JSON.parse(snapshot).input.length, size + 2);
+  if (snapshot !== undefined) {
+    assert.equal(JSON.parse(snapshot).input.length, size + 2);
+  }
   session.clear();
   return {
     weakReferences: references.length,
     collected: references.length,
-    snapshotBytes: Buffer.byteLength(snapshot),
+    snapshotBytes: snapshot === undefined ? 0 : Buffer.byteLength(snapshot),
   };
 }
 const inspector = new Session();
@@ -298,10 +308,10 @@ let checksum = 0;
 try {
   console.log(
     JSON.stringify({
-      protocol: "responses-continuation-owner-v1",
+      protocol: "responses-continuation-owner-v2",
       runtime: process.version,
       scope:
-        "Validation + wire encoding + fork capture; explicit external adapters; excludes provider/Gateway and response-commit accounting",
+        "Validation + wire encoding + historical fork capture when present; explicit external adapters; excludes provider/Gateway, fork reconstruction and response-commit accounting",
       samplesPerSide: samples,
       cpuCallsPerSample: cpuCalls,
       allocationCallsPerSample: allocationCalls,
@@ -327,8 +337,11 @@ try {
       Object.values(sessions).map((session) => session.snapshot()),
     );
     assert.equal(wire[0], wire[1], "wire byte parity");
-    assert.equal(snapshots[0], expected, "baseline capture byte parity");
-    assert.equal(snapshots[1], expected, "candidate capture byte parity");
+    for (const snapshot of snapshots) {
+      if (snapshot !== undefined) {
+        assert.equal(snapshot, expected, "historical capture byte parity");
+      }
+    }
     console.log(
       JSON.stringify({
         size,
@@ -336,8 +349,10 @@ try {
           baseline: before,
           candidate: after,
           wireBytes: Buffer.byteLength(wire[0]),
-          snapshotBytes: Buffer.byteLength(expected),
-          byteParity: true,
+          snapshotBytes: snapshots.map((snapshot) =>
+            snapshot === undefined ? 0 : Buffer.byteLength(snapshot),
+          ),
+          wireByteParity: true,
         },
       }),
     );
@@ -445,7 +460,7 @@ try {
 } finally {
   inspector.disconnect();
   for (const owner of Object.values(owners)) {
-    owner.clearEmbeddedSessionForkSnapshot();
+    owner.clearEmbeddedSessionForkSnapshot?.();
   }
   hooks.deregister();
 }

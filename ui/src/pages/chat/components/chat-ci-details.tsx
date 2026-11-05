@@ -26,6 +26,7 @@ import { resolveSafeExternalUrl } from "../../../lib/open-external-url.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { createCiDisclosure, type ChatCiDisclosureProps } from "./chat-ci-disclosure.ts";
+import { subscribeCiGatewayUpdates } from "./chat-ci-gateway-updates.ts";
 
 registerEnglishCatalog(registerChatCiEnglish);
 registerEnglishCatalog(registerGitHubEnglish);
@@ -100,7 +101,21 @@ type DetailsState = {
 };
 const inputHandlers = new WeakMap<HTMLElement, (key: keyof ChatCiDetailsProps) => void>();
 
-function createCiDetails(host: ChatCiDetailsElement) {
+type ChatCiDetailsProps = ChatCiDisclosureProps & {
+  /** Opt summaries into the containing Menu's native control navigation. */
+  menuControls?: boolean;
+  controls?: MenuControls;
+};
+
+export type ChatCiDetailsElement = SolidBridgeElement<ChatCiDetailsProps>;
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-chat-ci-details": ChatCiDetailsElement;
+  }
+}
+
+function ChatCiDetailsContent(props: ChatCiDetailsProps, host: ChatCiDetailsElement) {
   const [state, setState] = createStore<DetailsState>({
     retryAt: 0,
     expandedJobs: {},
@@ -137,12 +152,14 @@ function createCiDetails(host: ChatCiDetailsElement) {
     connection.transition(gateway?.snapshot ?? { client: null, phase: "stopped" });
     reset();
     // Revoke in-flight request scopes on every connection edge, before later acknowledgments.
-    stopGateway = gateway?.subscribe((snapshot) => {
-      if (connection.transition(snapshot)) {
-        reset();
-        queueMicrotask(load);
-      }
-    });
+    stopGateway = gateway
+      ? subscribeCiGatewayUpdates(gateway, "details", (snapshot) => {
+          if (connection.transition(snapshot)) {
+            reset();
+            queueMicrotask(load);
+          }
+        })
+      : undefined;
     queueMicrotask(load);
   }
 
@@ -307,34 +324,9 @@ function createCiDetails(host: ChatCiDetailsElement) {
       Math.min(2_147_483_647, Math.max(0, retryAt - Date.now())),
     );
   }
-  return {
-    state,
-    read,
-    scope: scopeRevision,
-    load,
-    setExpanded: (id: number, open: boolean) => {
-      setState((draft) => {
-        draft.expandedJobs[id] = open;
-      });
-    },
-  };
-}
-
-type ChatCiDetailsProps = ChatCiDisclosureProps & {
-  /** Opt summaries into the containing Menu's native control navigation. */
-  menuControls?: boolean;
-  controls?: MenuControls;
-};
-
-export type ChatCiDetailsElement = SolidBridgeElement<ChatCiDetailsProps>;
-function ChatCiDetailsContent(props: ChatCiDetailsProps, host: ChatCiDetailsElement) {
-  const retryRef = props.controls?.ref();
-  const skippedRef = props.controls?.ref();
-  const model = createCiDetails(host);
-  const state = model.state;
   const retryWait = () => Math.max(0, state.retryAt - Date.now());
-  const result = createMemo(() => latest(model.read));
-  const loading = createMemo(() => isPending(model.read));
+  const result = createMemo(() => latest(read));
+  const loading = createMemo(() => isPending(read));
   const checks = () => result()?.checks ?? [];
   const jobs = () =>
     checks()
@@ -347,8 +339,6 @@ function ChatCiDetailsContent(props: ChatCiDetailsProps, host: ChatCiDetailsElem
     result()?.status === "unavailable" ||
     result()?.error;
   const job = (check: () => ControlUiSessionPullRequestCheck) => {
-    const summaryRef = props.controls?.ref();
-    const linkRef = props.controls?.ref();
     const jobState = (): CheckState =>
       check().state === "running" && check().status !== "in_progress" ? "queued" : check().state;
     const url = () =>
@@ -365,21 +355,29 @@ function ChatCiDetailsContent(props: ChatCiDetailsProps, host: ChatCiDetailsElem
           if (event.target !== event.currentTarget) {
             return;
           }
-          model.setExpanded(check().id, event.currentTarget.open);
+          const id = check().id;
+          const open = event.currentTarget.open;
+          setState((draft) => {
+            draft.expandedJobs[id] = open;
+          });
         }}
       >
-        <summary
-          ref={(element) => summaryRef?.(element)}
-          class="chat-ci__job-summary"
-          data-form-control={props.menuControls ? "" : undefined}
-        >
-          <CheckStatus state={jobState()} />
-          <span class="chat-ci__name">{check().name}</span>
-          <span class="chat-ci__duration">{duration(check(), jobState() === "running")}</span>
-          <span class="chat-ci__chevron" aria-hidden="true">
-            <Icon name="chevronDown" />
-          </span>
-        </summary>
+        <Show when={{ ref: props.controls?.ref() }} keyed>
+          {(binding) => (
+            <summary
+              ref={binding.ref}
+              class="chat-ci__job-summary"
+              data-form-control={props.menuControls ? "" : undefined}
+            >
+              <CheckStatus state={jobState()} />
+              <span class="chat-ci__name">{check().name}</span>
+              <span class="chat-ci__duration">{duration(check(), jobState() === "running")}</span>
+              <span class="chat-ci__chevron" aria-hidden="true">
+                <Icon name="chevronDown" />
+              </span>
+            </summary>
+          )}
+        </Show>
         <div class="chat-ci__job-detail">
           <Show
             when={check().steps?.length}
@@ -412,20 +410,24 @@ function ChatCiDetailsContent(props: ChatCiDetailsProps, host: ChatCiDetailsElem
           </Show>
           <Show when={url()}>
             {(href) => (
-              <a
-                ref={(element) => linkRef?.(element)}
-                class="chat-ci__job-link"
-                href={href()}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                {t(
-                  check().source === "actions"
-                    ? "chat.pullRequests.openJob"
-                    : "chat.pullRequests.openCheck",
+              <Show when={{ ref: props.controls?.ref() }} keyed>
+                {(binding) => (
+                  <a
+                    ref={binding.ref}
+                    class="chat-ci__job-link"
+                    href={href()}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {t(
+                      check().source === "actions"
+                        ? "chat.pullRequests.openJob"
+                        : "chat.pullRequests.openCheck",
+                    )}
+                    <Icon name="externalLink" />
+                  </a>
                 )}
-                <Icon name="externalLink" />
-              </a>
+              </Show>
             )}
           </Show>
         </div>
@@ -453,15 +455,19 @@ function ChatCiDetailsContent(props: ChatCiDetailsProps, host: ChatCiDetailsElem
             })
           : undefined}
       </span>
-      <button
-        ref={(element) => retryRef?.(element)}
-        class="chat-ci__retry"
-        type="button"
-        disabled={loading() || retryWait() > 0}
-        onClick={() => retry()}
-      >
-        {t("common.retry")}
-      </button>
+      <Show when={{ ref: props.controls?.ref() }} keyed>
+        {(binding) => (
+          <button
+            ref={binding.ref}
+            class="chat-ci__retry"
+            type="button"
+            disabled={loading() || retryWait() > 0}
+            onClick={() => retry()}
+          >
+            {t("common.retry")}
+          </button>
+        )}
+      </Show>
     </div>
   );
   const loadingNotice = () => (
@@ -471,13 +477,13 @@ function ChatCiDetailsContent(props: ChatCiDetailsProps, host: ChatCiDetailsElem
   );
   return (
     <Errored
-      fallback={(error, reset) => (
+      fallback={(error, resetError) => (
         <>
           {notice(
             () => formatUiError(error()),
             () => {
-              model.load();
-              reset();
+              load();
+              resetError();
             },
           )}
           <div class="chat-ci__jobs" aria-busy="false" />
@@ -485,7 +491,7 @@ function ChatCiDetailsContent(props: ChatCiDetailsProps, host: ChatCiDetailsElem
       )}
     >
       <Loading
-        on={model.scope()}
+        on={scopeRevision()}
         fallback={
           <>
             {loadingNotice()}
@@ -495,7 +501,7 @@ function ChatCiDetailsContent(props: ChatCiDetailsProps, host: ChatCiDetailsElem
       >
         <Show
           when={loading() && !result()}
-          fallback={<Show when={showNotice()}>{notice(() => undefined, model.load)}</Show>}
+          fallback={<Show when={showNotice()}>{notice(() => undefined, load)}</Show>}
         >
           {loadingNotice()}
         </Show>
@@ -505,18 +511,24 @@ function ChatCiDetailsContent(props: ChatCiDetailsProps, host: ChatCiDetailsElem
           </For>
           <Show when={skipped().length}>
             <details class="chat-ci__skipped">
-              <summary
-                ref={(element) => skippedRef?.(element)}
-                data-form-control={props.menuControls ? "" : undefined}
-              >
-                <CheckStatus state="skipped" />
-                <span>
-                  {t("chat.pullRequests.checksSkippedCount", { count: String(skipped().length) })}
-                </span>
-                <span class="chat-ci__chevron" aria-hidden="true">
-                  <Icon name="chevronDown" />
-                </span>
-              </summary>
+              <Show when={{ ref: props.controls?.ref() }} keyed>
+                {(binding) => (
+                  <summary
+                    ref={binding.ref}
+                    data-form-control={props.menuControls ? "" : undefined}
+                  >
+                    <CheckStatus state="skipped" />
+                    <span>
+                      {t("chat.pullRequests.checksSkippedCount", {
+                        count: String(skipped().length),
+                      })}
+                    </span>
+                    <span class="chat-ci__chevron" aria-hidden="true">
+                      <Icon name="chevronDown" />
+                    </span>
+                  </summary>
+                )}
+              </Show>
               <For each={skipped()} keyed={(check) => check.id}>
                 {job}
               </For>
@@ -538,15 +550,19 @@ function ChatCiDetailsContent(props: ChatCiDetailsProps, host: ChatCiDetailsElem
   );
 }
 
-defineSolidBridge<ChatCiDetailsProps>("openclaw-chat-ci-details", ChatCiDetailsContent, {
-  propertyChanged: (host, key) => inputHandlers.get(host)?.(key),
-  properties: {
-    gateway: { default: undefined, attribute: false },
-    pullRequest: { default: undefined, attribute: false },
-    sessionKey: { default: "", attribute: false },
-    presented: { default: true, type: Boolean },
-    inline: { default: false, attribute: false },
-    menuControls: { default: false, attribute: false },
-    controls: { default: undefined, attribute: false },
+export const ChatCiDetails = defineSolidBridge<ChatCiDetailsProps>(
+  "openclaw-chat-ci-details",
+  ChatCiDetailsContent,
+  {
+    propertyChanged: (host, key) => inputHandlers.get(host)?.(key),
+    properties: {
+      gateway: { default: undefined, attribute: false },
+      pullRequest: { default: undefined, attribute: false },
+      sessionKey: { default: "", attribute: false },
+      presented: { default: true, type: Boolean },
+      inline: { default: false, attribute: false },
+      menuControls: { default: false, attribute: false },
+      controls: { default: undefined, attribute: false },
+    },
   },
-});
+);

@@ -1,69 +1,85 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
-import { expect, it, vi } from "vitest";
+import { assert, expect, it, onTestFinished, vi } from "vitest";
 import type { OpenClawPluginApi } from "./api.js";
 import plugin from "./index.js";
 import { registerWorkboardGatewayMethods } from "./runtime-api.js";
 import { WorkboardStore } from "./src/store.js";
+import { createGatewayMethodCapture } from "./src/test/gateway-method-capture.js";
+import {
+  WORKBOARD_CARD_TOOL_NAMES,
+  WORKBOARD_SESSIONS_BOARD_TOOL_NAMES,
+} from "./src/workspace-access.js";
 
 const workerModuleUrl = new URL("./src/sqlite-store.worker.ts", import.meta.url);
 const runtimeSource = fileURLToPath(new URL("./index.ts", import.meta.url));
 const closedStore = "workboard store is closed.";
+
+it("discovers tool schemas without creating storage and persists executed tools", () =>
+  withStateDirEnv("workboard-discovery-", async ({ stateDir }) => {
+    {
+      await using discovery = registerGeneration(plugin.register, "tool-discovery");
+      const tools = discovery.tools();
+      expect(tools.map((tool) => tool.name).toSorted()).toEqual(
+        [...WORKBOARD_CARD_TOOL_NAMES, ...WORKBOARD_SESSIONS_BOARD_TOOL_NAMES].toSorted(),
+      );
+      const create = tools.find((tool) => tool.name === "workboard_create")!;
+      expect(existsSync(path.join(stateDir, "plugins/workboard/workboard.sqlite"))).toBe(false);
+      await create.execute("create", { title: "Retained discovery card" });
+    }
+    await using reopened = openStore();
+    expect(await reopened.list()).toMatchObject([{ title: "Retained discovery card" }]);
+  }));
 
 function openStore() {
   const store = WorkboardStore.openSqlite(workerModuleUrl);
   return Object.assign(store, { [Symbol.asyncDispose]: () => store.close() });
 }
 
-function registerGeneration(register: (api: OpenClawPluginApi) => void = plugin.register) {
-  const captured = createCapturedPluginRegistration(plugin);
+function registerGeneration(
+  register: (api: OpenClawPluginApi) => void = plugin.register,
+  registrationMode: OpenClawPluginApi["registrationMode"] = "full",
+) {
+  const captured = createCapturedPluginRegistration({ ...plugin, registrationMode });
   const registerService = vi.fn<OpenClawPluginApi["registerService"]>();
-  const registerGatewayMethod = vi.fn<OpenClawPluginApi["registerGatewayMethod"]>();
+  const registerTool = vi.fn<OpenClawPluginApi["registerTool"]>();
+  const { registerGatewayMethod, invoke: rpc } = createGatewayMethodCapture();
   let gatewayStart: Parameters<typeof captured.api.on<"gateway_start">>[1] = () => {};
+  let agentEnd: Parameters<typeof captured.api.on<"agent_end">>[1] = () => {};
   let gatewayStop: Parameters<typeof captured.api.on<"gateway_stop">>[1] = () => {};
   register({
     ...captured.api,
     runtimeSource,
     registerService,
+    registerTool,
     registerGatewayMethod,
     on: (name, handler) => {
       if (name === "gateway_start") {
         gatewayStart = handler as typeof gatewayStart;
+      } else if (name === "agent_end") {
+        agentEnd = handler as typeof agentEnd;
       } else if (name === "gateway_stop") {
         gatewayStop = handler as typeof gatewayStop;
       }
     },
   });
-  const warn = vi.fn();
-  const emit = vi.fn();
-  const scheduler = createTestPluginServiceScheduler();
+  const mocks = { warn: vi.fn(), emit: vi.fn() };
   const serviceContext = {
-    scheduler,
     config: {},
     stateDir: process.env.OPENCLAW_STATE_DIR!,
-    logger: { ...captured.api.logger, warn },
-    gatewayEvents: { emit, onSessionsChanged: () => () => {} },
+    logger: { ...captured.api.logger, warn: mocks.warn },
+    gatewayEvents: { emit: mocks.emit, onSessionsChanged: () => () => {} },
   };
   const start = async () => {
     for (const [service] of registerService.mock.calls) {
+      assert(service.apiVersion !== 2, "Workboard uses v1 services without a host scheduler");
       await service.start(serviceContext);
     }
     void gatewayStart({ port: 0 }, {});
     await vi.advanceTimersByTimeAsync(0);
-  };
-  const close = async () => {
-    scheduler.beginClose();
-    try {
-      void gatewayStop({}, {});
-      for (const [service] of registerService.mock.calls) {
-        await service.stop?.(serviceContext);
-      }
-    } finally {
-      await scheduler.stop();
-      await retire({ reason: "disable" });
-    }
   };
   const retire = async (
     context?: Parameters<NonNullable<(typeof captured.runtimeLifecycles)[number]["cleanup"]>>[0],
@@ -77,15 +93,7 @@ function registerGeneration(register: (api: OpenClawPluginApi) => void = plugin.
     expected: { ok?: boolean; payload?: object; error?: object; params?: object } = {},
   ) => {
     const { params = {}, ...response } = expected;
-    const handler = registerGatewayMethod.mock.calls.find(
-      ([name]) => name === `workboard.${method}`,
-    )?.[1];
-    if (!handler) {
-      throw new Error(`Missing Gateway method: ${method}`);
-    }
-    const respond = vi.fn<Parameters<typeof handler>[0]["respond"]>();
-    await handler({ params, respond } as unknown as Parameters<typeof handler>[0]);
-    const [ok, payload, error] = respond.mock.calls[0] ?? [];
+    const [ok, payload, error] = (await rpc(`workboard.${method}`, { ...params })).mock.calls[0]!;
     expect({ ok, payload, error }).toMatchObject({ ok: true, ...response });
   };
   const expectCards = (titles: string[], allowOthers = false) => {
@@ -95,8 +103,30 @@ function registerGeneration(register: (api: OpenClawPluginApi) => void = plugin.
     });
   };
   return Object.assign(
-    { cleanup: retire, start, warn, emit, expectCall, expectCards },
-    { [Symbol.asyncDispose]: close },
+    {
+      cleanup: retire,
+      start,
+      ...mocks,
+      expectCall,
+      expectCards,
+      agentEnd,
+      subscriptions: captured.agentEventSubscriptions,
+    },
+    {
+      tools: () =>
+        registerTool.mock.calls.flatMap(
+          ([factory]) =>
+            (typeof factory === "function"
+              ? factory({})
+              : "create" in factory
+                ? factory.create({ assertInvocationCurrent: () => {} })
+                : factory) ?? [],
+        ),
+      async [Symbol.asyncDispose]() {
+        void gatewayStop({}, {});
+        await retire();
+      },
+    },
   );
 }
 
@@ -115,7 +145,6 @@ it("registers store disposal before a later runtime dependency throws", () =>
       },
     });
     expect(() => plugin.register({ ...captured.api, runtime, runtimeSource })).toThrow(failure);
-    expect(captured.runtimeLifecycles).toHaveLength(1);
     await captured.runtimeLifecycles[0]!.dispose?.();
     await expect(store.list()).rejects.toThrow(closedStore);
   }));
@@ -149,8 +178,7 @@ it.each(["disable", "restart", "dispose"] as const)(
       expect(first.warn).not.toHaveBeenCalled();
       expect(vi.getTimerCount()).toBe(0);
       await second.start();
-      const fresh = { title: "Fresh card" };
-      await second.expectCall("cards.create", { params: fresh, payload: { card: fresh } });
+      await second.expectCall("cards.create", { params: { title: "Fresh card" } });
       await second.expectCards(["Retained card", "Fresh card"], true);
       await retire();
       second.emit.mockClear();
@@ -167,7 +195,6 @@ it.each(["internal", "injected"] as const)(
       await using generation = registerGeneration((api) =>
         registerWorkboardGatewayMethods({ api, store }),
       );
-      await generation.expectCards([]);
       const board = { id: "retained", name: "Retained board" };
       await generation.expectCall("boards.upsert", { params: board });
       await generation.cleanup({ reason: "disable", sessionKey: "agent:other:session" });
@@ -175,8 +202,62 @@ it.each(["internal", "injected"] as const)(
       await generation.cleanup({ reason: "disable" });
       await generation.expectCall("cards.list", { ok: ownership === "injected" });
       await using reopened = openStore();
-      expect(await reopened.listBoards()).toMatchObject({
-        boards: expect.arrayContaining([expect.objectContaining(board)]),
+      expect((await reopened.listBoards()).boards).toContainEqual(expect.objectContaining(board));
+    }),
+);
+
+it.each([
+  { phase: "end", extra: {}, expected: "review" },
+  { phase: "error", extra: {}, expected: "blocked" },
+  {
+    phase: "end",
+    extra: { aborted: true, yielded: true, livenessState: "paused", stopReason: "end_turn" },
+    expected: "blocked",
+  },
+  { phase: "end", extra: { timeoutPhase: "provider" }, expected: "blocked" },
+])(
+  "settles the linked card from the owner's $phase outcome ($expected)",
+  ({ phase, extra, expected }) =>
+    withStateDirEnv("workboard-settled-run-", async () => {
+      vi.useFakeTimers();
+      onTestFinished(() => void vi.useRealTimers());
+      await using store = openStore();
+      const sessionKey = "agent:worker:subagent:workboard-settled";
+      const card = await store.create({
+        title: "Worker",
+        status: "running",
+        sessionKey,
+        runId: "current",
       });
+      await using generation = registerGeneration();
+      await generation.start();
+      const emit = async (data: Record<string, unknown>, runId = "current") => {
+        for (const subscription of generation.subscriptions) {
+          await subscription.handle(
+            { stream: "lifecycle", runId, sessionKey, seq: 1, ts: card.updatedAt + 1, data },
+            {
+              getRunContext: () => undefined,
+              setRunContext: () => {},
+              clearRunContext: () => {},
+            },
+          );
+        }
+      };
+      // Attempt hooks and retryable failures cannot settle the logical run.
+      await generation.agentEnd({ messages: [], success: false }, { sessionKey, runId: "current" });
+      await emit({ phase: "error" });
+      await emit({
+        phase: "end",
+        executionSettled: true,
+        yielded: true,
+        livenessState: "paused",
+        stopReason: "end_turn",
+      });
+      await emit({ phase: "end", executionSettled: true }, "old");
+      expect((await store.get(card.id))?.status).toBe("running");
+      // No session read or elapsed-time window: the owner publishes the final fact.
+      await emit({ phase, executionSettled: true, ...extra });
+      expect((await store.get(card.id))?.status).toBe(expected);
+      expect(generation.warn).not.toHaveBeenCalled();
     }),
 );

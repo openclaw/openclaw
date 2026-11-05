@@ -1,9 +1,31 @@
-import { describe, expect, it } from "vitest";
-import { anonymize, anonymizeParentRow } from "../../scripts/dev/cron-context-replay.mts";
+import { describe, expect, it, vi } from "vitest";
+import {
+  anonymize,
+  anonymizeParentRow,
+  replayInferenceRuntimes,
+} from "../../scripts/dev/cron-context-replay.mts";
+import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { replayScheduledContextFixture } from "../../src/cron/execution-context.fixtures.test-support.js";
 import { resolveScheduledRequester } from "../../src/cron/execution-context.js";
 import { resolveCronRunToolsAllow } from "../../src/cron/tools-allow.js";
 import type { CronStoredJob } from "../../src/cron/types.js";
+
+vi.mock("../../src/cron/isolated-agent/model-selection.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../src/cron/isolated-agent/model-selection.js")>();
+  // The published catalog owner needs a running Gateway; selection itself stays real.
+  return {
+    ...actual,
+    resolveCronModelSelectionOwner: async (params: { cfg: OpenClawConfig; agentId: string }) => ({
+      agentId: params.agentId,
+      agentDir: "/work/agent",
+      workspaceDir: "/work/workspace",
+      config: params.cfg,
+      metadataSnapshot: undefined,
+      modelCatalog: { entries: [] },
+    }),
+  };
+});
 
 const parentKey = "agent:ops:dashboard:private-parent";
 
@@ -173,5 +195,88 @@ describe("cron context replay fixtures", () => {
       worktree: { path: "/work/parent/worktree", exists: false },
     });
     expect(replayScheduledContextFixture(fixture).status).toBe("pause");
+  });
+});
+
+describe("replayInferenceRuntimes", () => {
+  it("selects the scheduled model the run selects, not the global primary", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "anthropic/claude-haiku-4-5",
+          subagents: { model: "anthropic/claude-sonnet-4-5" },
+          models: { "anthropic/claude-sonnet-4-5": { agentRuntime: { id: "claude-cli" } } },
+        },
+      },
+    };
+    const job = storedJob({
+      agentId: "main",
+      inferenceBinding: {
+        provider: "anthropic",
+        profileId: "anthropic:profile",
+        authorizationId: "authorization",
+        runtime: "claude-cli",
+      },
+    } as Partial<CronStoredJob>);
+    await expect(replayInferenceRuntimes(job, "main", cfg, () => undefined)).resolves.toEqual({
+      runtimes: { legacy: "claude-cli" },
+    });
+  });
+
+  it.each([
+    { provider: "anthropic", model: "claude-sonnet-4-5", legacy: "anthropic/claude-sonnet-4-5" },
+    {
+      provider: "openai",
+      model: "gpt-5",
+      legacy: "openai/gpt-5 (refused: not the bound provider)",
+    },
+  ])(
+    "compares a current job's scheduled model with its conversation's $provider model",
+    async ({ provider, model, legacy }) => {
+      const cfg: OpenClawConfig = { agents: { defaults: { model: "anthropic/claude-haiku-4-5" } } };
+      const job = storedJob({
+        agentId: "main",
+        sessionTarget: "current",
+        sessionKey: parentKey,
+        inferenceBinding: {
+          provider: "anthropic",
+          profileId: "anthropic:profile",
+          authorizationId: "authorization",
+          runtime: "openclaw",
+        },
+      } as Partial<CronStoredJob>);
+      const parent = {
+        sessionId: "parent",
+        updatedAt: 1,
+        modelOverride: model,
+        providerOverride: provider,
+        modelOverrideSource: "user" as const,
+      };
+      await expect(
+        replayInferenceRuntimes(job, "main", cfg, (key) =>
+          key === parentKey ? parent : undefined,
+        ),
+      ).resolves.toEqual({
+        runtimes: {
+          legacy: "openclaw",
+          models: { legacy, context: "anthropic/claude-haiku-4-5" },
+        },
+      });
+    },
+  );
+
+  it("reports an unresolved comparison when selection leaves the bound provider", async () => {
+    const cfg: OpenClawConfig = { agents: { defaults: { model: "openai/gpt-5" } } };
+    const job = storedJob({
+      agentId: "main",
+      inferenceBinding: {
+        provider: "anthropic",
+        profileId: "anthropic:profile",
+        authorizationId: "authorization",
+      },
+    } as Partial<CronStoredJob>);
+    await expect(replayInferenceRuntimes(job, "main", cfg, () => undefined)).resolves.toEqual({
+      unresolved: "selected provider openai is not bound provider anthropic",
+    });
   });
 });

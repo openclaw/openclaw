@@ -511,7 +511,7 @@ export function createOpenAIResponsesWebSocketStream(params: {
           onActiveResponse: params.onActiveResponse,
           toInput: params.steeringInput,
           send: (event) => lease.socket.sendRaw(JSON.stringify(event)),
-          needsContinuation: () => deferredInput,
+          needsContinuation: deferredInput,
           assertActive: () => {
             if (released || terminalReceived || params.signal?.aborted) {
               throw new Error("Responses steering is no longer active");

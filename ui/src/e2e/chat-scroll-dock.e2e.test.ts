@@ -1,7 +1,9 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import {
+  CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+} from "../../../src/gateway/control-ui-contract.js";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
 import {
   closeChatDetails,
@@ -32,10 +34,11 @@ type DockGeometry = Awaited<ReturnType<typeof dockGeometry>>;
 async function dockGeometry(page: Page) {
   return page.locator(".chat-pane-cache__pane--active").evaluate((pane) => {
     const thread = pane.querySelector<HTMLElement>(".chat-thread");
+    const inner = pane.querySelector<HTMLElement>(".chat-thread-inner");
     const rows = pane.querySelectorAll<HTMLElement>(".chat-virtual-row");
     const row = rows.item(rows.length - 1);
     const dock = pane.querySelector<HTMLElement>(".chat-footer");
-    if (!thread || !row || !dock) {
+    if (!thread || !inner || !row || !dock) {
       throw new Error("Expected a transcript row and composer dock");
     }
     return {
@@ -43,7 +46,7 @@ async function dockGeometry(page: Page) {
       overhang: Math.round(row.getBoundingClientRect().bottom - dock.getBoundingClientRect().top),
       rowKey: row.getAttribute("data-virtual-row-key"),
       rowHeight: row.offsetHeight,
-      scrollHeight: thread.scrollHeight,
+      tailGap: inner.getBoundingClientRect().bottom - row.getBoundingClientRect().bottom,
       latestVisible:
         pane.querySelector(".chat-scroll-to-bottom")?.getAttribute("data-visible") ?? null,
     };
@@ -304,7 +307,18 @@ suite.define(() => {
     });
     const report: Record<string, DockGeometry> = {};
     await page.goto(`${suite.server.baseUrl}chat`);
+    const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+    await thread.locator(".chat-virtual-row").last().waitFor();
+    // Bring preceding history into the viewport beside the long run.
+    const tailHeight = await thread
+      .locator(".chat-virtual-row:not([data-prepared-row])")
+      .last()
+      .evaluate((element) => element.getBoundingClientRect().height);
+    await thread.hover();
+    await page.mouse.wheel(0, -tailHeight);
     await page.getByText("Stream history 29").waitFor({ timeout: 10_000 });
+    await page.getByRole("button", { name: "Scroll to latest", exact: true }).click();
+    await waitForChatScrollIdle(page);
     const watchedKey = await waitForWatchedSessionKey(gateway);
     await publishPr(gateway, watchedKey);
     await openDetailsPullRequests(page);
@@ -322,7 +336,8 @@ suite.define(() => {
       const after = (report[stage] = await dockGeometry(page));
       expect(after.rowKey).toBe(rowKey);
       expect(after.rowHeight).toBeGreaterThan(before.rowHeight);
-      expect(after.scrollHeight - before.scrollHeight).toBe(after.rowHeight - before.rowHeight);
+      // Preparing earlier rows can refine estimates; compare the committed tail itself.
+      expect(Math.abs(after.tailGap)).toBeLessThanOrEqual(1);
       return after;
     };
     let sequence = 0;

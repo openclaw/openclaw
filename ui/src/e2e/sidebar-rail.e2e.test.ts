@@ -1,4 +1,8 @@
+import { withTimeout } from "@openclaw/fs-safe/advanced";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import {
   installMockGateway,
   defaultControlUiFeatureMethods,
@@ -13,8 +17,19 @@ import {
 
 const suite = createControlUiE2eSuite({ name: "Personal rail pins" });
 const unloaded = [
-  { key: "agent:research:plan", kind: "direct" as const, label: "Research plan", icon: "🔬" },
-  { key: "agent:main:notes", kind: "direct" as const, label: "Release notes" },
+  {
+    key: "agent:research:plan",
+    sessionId: "session:agent:research:plan",
+    kind: "direct" as const,
+    label: "Research plan",
+    icon: "🔬",
+  },
+  {
+    key: "agent:main:notes",
+    sessionId: "session:agent:main:notes",
+    kind: "direct" as const,
+    label: "Release notes",
+  },
 ];
 const entries = [
   "session-rail:agent:main:current",
@@ -118,7 +133,11 @@ suite.define(() => {
           },
           "users.prefs.get": {
             status: "ok",
-            entries: { "ui.railShortcuts": entries, "ui.themeMode": "dark" },
+            entries: {
+              "ui.railShortcuts": entries,
+              "ui.themeMode": "dark",
+              "new-session.migration.v1": true,
+            },
           },
           "users.prefs.set": { status: "ok" },
           "sessions.describe": {
@@ -150,12 +169,44 @@ suite.define(() => {
         // Post-commit profile reads must retain the accepted pin order.
         await gateway.setMethodResponse("users.prefs.get", {
           status: "ok",
-          entries: { "ui.railShortcuts": nextEntries, "ui.themeMode": "dark" },
+          entries: {
+            "ui.railShortcuts": nextEntries,
+            "ui.themeMode": "dark",
+            "new-session.migration.v1": true,
+          },
         });
         await gateway.resolveDeferred("users.prefs.set");
         committedEntries = nextEntries;
       };
-      await expect.poll(pinOrder).toEqual(entries);
+      try {
+        await expect.poll(pinOrder).toEqual(entries);
+      } catch (error) {
+        await withTimeout(
+          Promise.all([
+            evaluateControlUiContext(page, (context) => ({
+              pinBootstrapForegroundReady: context.connectionBootstrap.foregroundReady,
+            })),
+            Promise.all(
+              unloaded.map(
+                async (row) =>
+                  (await gateway.getRequests("sessions.describe", { key: row.key })).length,
+              ),
+            ),
+            pins.count(),
+          ]),
+          1_000,
+        )
+          .then(([facts, descriptorRequests, renderedPins]) =>
+            recordControlUiE2eFailureFacts(page, {
+              ...facts,
+              pinDescriptorRequests: descriptorRequests,
+              pinRenderedCount: renderedPins,
+              pinDiagnosticRead: true,
+            }),
+          )
+          .catch(() => recordControlUiE2eFailureFacts(page, { pinDiagnosticRead: false }));
+        throw error;
+      }
       for (const row of unloaded) {
         const link = rail.getByRole("link", { name: row.label, exact: true });
         await link.waitFor();
@@ -241,12 +292,20 @@ suite.define(() => {
           presenceUsers: [{ id: "alex", name: "Alex", self: true }],
           featureMethods: [...defaultControlUiFeatureMethods, "users.prefs.get", "users.prefs.set"],
         });
+        // Chat may migrate its own preferences while the empty rail is loading.
+        const railWrites = async () =>
+          (await gateway.getRequests("users.prefs.set")).filter(({ params }) => {
+            const preferenceEntries = asNullableRecord(asNullableRecord(params)?.entries);
+            return (
+              preferenceEntries !== null && Object.hasOwn(preferenceEntries, "ui.railShortcuts")
+            );
+          });
         await page.goto(suite.server.baseUrl + "chat");
         await gateway.waitForRequest("connect");
         const installProfilePreferences = () =>
           installPreferenceServer(
             page,
-            { "ui.themeMode": "dark" },
+            { "ui.themeMode": "dark", "new-session.migration.v1": true },
             "openclaw-test:clean-rail:profile-prefs",
           );
         await installProfilePreferences();
@@ -258,7 +317,7 @@ suite.define(() => {
         expect(await rail.locator(".sidebar-rail__pin").count()).toBe(0);
         expect(await rail.getAttribute("class")).not.toContain("--drag-active");
         expect(await gateway.getRequests("sessions.list", { pinned: true })).toEqual([]);
-        expect(await gateway.getRequests("users.prefs.set")).toEqual([]);
+        expect(await railWrites()).toEqual([]);
         const sourceBox = await source.boundingBox();
         const railBox = await rail.boundingBox();
         if (!sourceBox || !railBox) {
@@ -294,11 +353,9 @@ suite.define(() => {
               .evaluateAll((pins) => pins.map((pin) => pin.getAttribute("data-sidebar-entry"))),
           )
           .toEqual(rows.map((row) => `session-rail:${row.key}`));
+        await expect.poll(async () => (await railWrites()).length).toBeGreaterThan(0);
         await expect
-          .poll(async () => (await gateway.getRequests("users.prefs.set")).length)
-          .toBeGreaterThan(0);
-        await expect
-          .poll(async () => (await gateway.getRequests("users.prefs.set")).at(-1)?.params)
+          .poll(async () => (await railWrites()).at(-1)?.params)
           .toMatchObject({
             entries: { "ui.railShortcuts": rows.map((row) => `session-rail:${row.key}`) },
           });

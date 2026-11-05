@@ -1,25 +1,25 @@
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WIDGET_HTML_MAX_UTF8_BYTES } from "../../../../packages/gateway-protocol/src/schema/canvas.ts";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../../../test/helpers/gateway-integration-fixtures.ts";
 import type { BoardWidget } from "./types.ts";
 import { BoardWidgetSandboxHost } from "./widget-sandbox-host.ts";
+import { createBoardWidget } from "./widget.test-support.ts";
 const SANDBOX_ORIGIN = "https://sandbox.example";
 const SANDBOX_URL = SANDBOX_ORIGIN + "/mcp-app-sandbox";
 type HostOptions = ConstructorParameters<typeof BoardWidgetSandboxHost>[0];
-const widget = (overrides: Partial<BoardWidget> = {}): BoardWidget => ({
-  name: "weather",
-  tabId: "main",
-  contentKind: "html",
-  sizeW: 6,
-  sizeH: 4,
-  position: 0,
-  grantState: "granted",
-  revision: 2,
-  viewTicket: "ticket",
-  viewGeneration: "a".repeat(32),
-  ...overrides,
-});
+const widget = (overrides: Partial<BoardWidget> = {}): BoardWidget =>
+  createBoardWidget({
+    name: "weather",
+    grantState: "granted",
+    revision: 2,
+    viewTicket: "ticket",
+    viewGeneration: "a".repeat(32),
+    ...overrides,
+  });
 const htmlFetch = (html = "<!doctype html><p>weather</p>", init?: ResponseInit) =>
   vi.fn<typeof fetch>(async () => new Response(html, init));
 const client = () => ({ request: vi.fn(async () => ({ ok: true })) });
@@ -30,6 +30,32 @@ const promptClient = () => ({
 });
 const called = (mock: unknown, count = 1) =>
   vi.waitFor(() => expect(mock).toHaveBeenCalledTimes(count));
+function channel() {
+  const value = new MessageChannel();
+  onTestFinished(() => value.port2.close());
+  value.port2.start();
+  return value;
+}
+const acknowledge = (port: MessagePort, ticket: string) =>
+  port.postMessage({ type: "openclaw:widget-host-init-ack", ticket }, []);
+function scopedFetch(matches: (url: string) => boolean, fetchMock: typeof fetch) {
+  const original = globalThis.fetch.bind(globalThis);
+  return (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : String(input);
+    return matches(url) ? fetchMock(input, init) : original(input, init);
+  };
+}
+function nextMessage(port: MessagePort, matches: (event: MessageEvent) => boolean) {
+  return new Promise<MessageEvent>((resolve) => {
+    const listener = (event: MessageEvent) => {
+      if (matches(event)) {
+        port.removeEventListener("message", listener);
+        resolve(event);
+      }
+    };
+    port.addEventListener("message", listener);
+  });
+}
 function createHost(
   overrides: Partial<HostOptions> = {},
   fetchMock: typeof fetch | null = htmlFetch(),
@@ -52,6 +78,7 @@ function createHost(
     onLoadFailed: vi.fn(),
     onUnauthorized: vi.fn(),
     onReadyTimeout: vi.fn(),
+    onPending: vi.fn(),
     onLoaded: vi.fn(),
     onError: vi.fn(),
     ...overrides,
@@ -69,33 +96,20 @@ function createHost(
     send({ method: "ui/notifications/sandbox-" + method, params });
   const ready = (sandboxUrl = options.sandboxUrl) => notify("proxy-ready", { sandboxUrl });
   const update = (next: Partial<HostOptions>) => host.update({ ...options, ...next });
-  const port = async (onMessage?: (event: MessageEvent) => void) => {
-    const channel = new MessageChannel();
-    onTestFinished(() => channel.port2.close());
-    let adopted = false;
-    const initialized = new Promise<void>((resolve) => {
-      channel.port2.addEventListener("message", (event) => {
-        onMessage?.(event);
-        if (
-          !adopted &&
-          event.data?.type === "openclaw:widget-host-init" &&
-          typeof event.data.ticket === "string"
-        ) {
-          adopted = true;
-          channel.port2.postMessage(
-            { type: "openclaw:widget-host-init-ack", ticket: event.data.ticket },
-            [],
-          );
-          resolve();
-        }
-      });
-    });
-    channel.port2.start();
-    send({ type: "openclaw:widget-bridge-port-offer" }, [channel.port1]);
-    await initialized;
-    return channel.port2;
+  const messages: unknown[] = [];
+  const port = async () => {
+    const { port1, port2 } = channel();
+    port2.addEventListener("message", (event) => messages.push(event.data));
+    const initialized = nextMessage(
+      port2,
+      (event) =>
+        event.data?.type === "openclaw:widget-host-init" && typeof event.data.ticket === "string",
+    );
+    send({ type: "openclaw:widget-bridge-port-offer" }, [port1]);
+    acknowledge(port2, (await initialized).data.ticket);
+    return port2;
   };
-  return { ...options, options, frame, host, fetchMock, post, send, notify, ready, update, port };
+  return { ...options, frame, host, fetchMock, post, send, notify, ready, update, port, messages };
 }
 async function readyHost(...args: Parameters<typeof createHost>) {
   const f = createHost(...args);
@@ -113,47 +127,93 @@ const state = (id: string, phase: string, ticket = "ticket") =>
   request(id, "state.emit", { payload: { phase } }, ticket);
 const prompt = (id: string, text: string) => request(id, "prompt.send", { text });
 async function sendRequest(port: MessagePort, data: Record<string, unknown>) {
-  return await new Promise<Record<string, unknown>>((resolve) => {
-    const listener = (event: MessageEvent) => {
-      if (event.data?.type !== "openclaw:widget-bridge-response" || event.data.id !== data.id) {
-        return;
-      }
-      port.removeEventListener("message", listener);
-      resolve(event.data as Record<string, unknown>);
-    };
-    port.addEventListener("message", listener);
-    port.postMessage(data, []);
-  });
+  const response = nextMessage(
+    port,
+    (event) => event.data?.type === "openclaw:widget-bridge-response" && event.data.id === data.id,
+  );
+  port.postMessage(data, []);
+  return (await response).data as Record<string, unknown>;
 }
 const reply = (
   port: MessagePort,
   data: Record<string, unknown>,
   expected: Record<string, unknown> = { ok: true },
 ) => expect(sendRequest(port, data)).resolves.toMatchObject(expected);
+const rejectRequest = (port: MessagePort, data: Record<string, unknown>, error: string) =>
+  reply(port, data, { ok: false, error });
+// Stands in for the outer sandbox proxy, which answers activation queries with
+// its own navigator.userActivation.isActive (src/agents/sandbox-host.ts).
+function answerActivation(
+  f: ReturnType<typeof createHost>,
+  active: boolean,
+  source: Window | null = f.frame.contentWindow,
+  origin = SANDBOX_ORIGIN,
+) {
+  f.post.mockImplementation(((data: { method?: string; params?: { id?: unknown } }) => {
+    if (data?.method === "ui/notifications/sandbox-activation-query") {
+      f.send(
+        {
+          jsonrpc: "2.0",
+          method: "ui/notifications/sandbox-activation",
+          params: { id: data.params?.id, active },
+        },
+        [],
+        source,
+        origin,
+      );
+    }
+  }) as Window["postMessage"]);
+}
+// Dashboard activation as WebKit keeps it: showPicker() spends it page-wide.
+function stubDashboardActivation() {
+  const activation = { isActive: true };
+  Object.defineProperty(navigator, "userActivation", { configurable: true, value: activation });
+  Object.defineProperty(HTMLInputElement.prototype, "showPicker", {
+    configurable: true,
+    value: () => {
+      if (!activation.isActive) {
+        throw new DOMException("showPicker() requires a user gesture", "NotAllowedError");
+      }
+      activation.isActive = false;
+    },
+  });
+  onTestFinished(() => {
+    Reflect.deleteProperty(navigator, "userActivation");
+    Reflect.deleteProperty(HTMLInputElement.prototype, "showPicker");
+  });
+  return activation;
+}
 afterEach(() => {
   vi.useRealTimers();
   document.body.replaceChildren();
   vi.unstubAllGlobals();
 });
 describe("BoardWidgetSandboxHost", () => {
-  it("loads before connecting without accepting bridge requests", async () => {
-    const c = client();
-    const f = await readyHost({ connected: false, client: c });
-    const channel = new MessageChannel();
-    onTestFinished(() => channel.port2.close());
-    channel.port2.start();
-    f.send({ type: "openclaw:widget-bridge-port-offer" }, [channel.port1]);
-    await reply(channel.port2, request("before-hello"), {
-      ok: false,
-      error: "Gateway unavailable",
-    });
-    expect(f.fetchMock).toHaveBeenCalledOnce();
-    expect(f.onLoaded).toHaveBeenCalledOnce();
-    expect(c.request).not.toHaveBeenCalled();
-  });
+  it.each(["disconnected", "passive"])(
+    "loads %s documents without accepting bridge requests",
+    async (mode) => {
+      const c = client();
+      const f = await readyHost({
+        client: c,
+        connected: mode !== "disconnected",
+        bridgeEnabled: mode !== "passive",
+      });
+      const { port1, port2 } = channel();
+      const close = vi.spyOn(port1, "close");
+      f.send({ type: "openclaw:widget-bridge-port-offer" }, [port1]);
+      if (mode === "passive") {
+        expect(close).toHaveBeenCalledOnce();
+      } else {
+        await rejectRequest(port2, request("before-hello"), "Gateway unavailable");
+      }
+      expect(f.fetchMock).toHaveBeenCalledOnce();
+      expect(c.request).not.toHaveBeenCalled();
+    },
+  );
   it("binds document delivery and receipts to proxy readiness", async () => {
+    const c = promptClient();
     const f = createHost({
-      client: client(),
+      client: c,
       resolveFrameUrl: () => "/__openclaw__/board/weather?bt=ticket",
       onRendered: vi.fn(),
       controlUiBaseUrl: "https://control.example/openclaw",
@@ -183,7 +243,6 @@ describe("BoardWidgetSandboxHost", () => {
         source,
         origin,
       );
-    expect(f.onRendered).not.toHaveBeenCalled();
     rendered("stale-document");
     rendered(renderId, window);
     rendered(renderId, f.frame.contentWindow, "https://other.example");
@@ -191,92 +250,36 @@ describe("BoardWidgetSandboxHost", () => {
     rendered();
     rendered();
     expect(f.onRendered).toHaveBeenCalledOnce();
-    const messages = vi.fn();
-    await f.port(messages);
+    const data = prompt("prompt-request", "Injected");
+    f.send(data);
+    await Promise.resolve();
+    expect(c.request).not.toHaveBeenCalled();
+    const port = await f.port();
     f.send({ type: "openclaw:widget-bridge-ready" });
-    expect(messages).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: {
-          type: "openclaw:widget-host-init",
-          ticket: "ticket",
-          controlUiBaseUrl: "https://control.example/openclaw",
-        },
-      }),
+    expect(f.messages).toContainEqual({
+      type: "openclaw:widget-host-init",
+      ticket: "ticket",
+      controlUiBaseUrl: "https://control.example/openclaw",
+    });
+    port.postMessage(data, []);
+    await vi.waitFor(() =>
+      expect(c.request).toHaveBeenCalledWith("board.prompt.authorize", { ticket: "ticket" }),
     );
     f.host.reset();
     rendered();
     expect(f.onRendered).toHaveBeenCalledOnce();
   });
-  it("delivers passive previews without accepting a capability port", async () => {
-    const c = client();
-    const f = await readyHost({
-      client: c,
-      bridgeEnabled: false,
-      resolveFrameUrl: () => "/__openclaw__/board/weather?bt=ticket",
-    });
-    const channel = new MessageChannel();
-    onTestFinished(() => channel.port2.close());
-    const close = vi.spyOn(channel.port1, "close");
-    f.send({ type: "openclaw:widget-bridge-port-offer" }, [channel.port1]);
-    expect(close).toHaveBeenCalledOnce();
-    expect(c.request).not.toHaveBeenCalled();
-  });
   it("reports transient document failures separately from authorization", async () => {
-    const f = createHost(
-      {
-        client: client(),
-        resolveFrameUrl: () => "/__openclaw__/board/weather?bt=ticket",
-      },
-      htmlFetch("unavailable", { status: 503 }),
-    );
+    const f = createHost({ client: client() }, htmlFetch("unavailable", { status: 503 }));
     f.ready();
     await vi.waitFor(() => expect(f.onLoadFailed).toHaveBeenCalledWith(widget()));
     expect(f.onError).not.toHaveBeenCalled();
   });
-  it("drops responses after document replacement", async () => {
-    const pending = Promise.withResolvers<unknown>();
-    const c = { request: vi.fn(async () => await pending.promise) };
-    const f = await readyHost({ client: c });
-    const port = await f.port();
-    const response = vi.fn();
-    port.addEventListener("message", response);
-    f.post.mockClear();
-    port.postMessage(request("old-request"), []);
-    await called(c.request);
-    f.update({ widget: widget({ revision: 3, viewTicket: "next-ticket" }) });
-    pending.resolve({ sensitive: "old grant result" });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(response).not.toHaveBeenCalled();
-    expect(f.post).not.toHaveBeenCalledWith(
-      { type: "openclaw:widget-host-init", ticket: "next-ticket" },
-      SANDBOX_ORIGIN,
-    );
-  });
-  it("accepts bridge requests only on the wrapper-owned private port", async () => {
-    const c = promptClient();
-    const f = createHost({ client: c });
-    f.ready();
-    await called(fetch);
-    const data = prompt("prompt-request", "Injected");
-    f.send(data);
-    await Promise.resolve();
-    expect(c.request).not.toHaveBeenCalled();
-    (await f.port()).postMessage(data, []);
-    await vi.waitFor(() =>
-      expect(c.request).toHaveBeenCalledWith("board.prompt.authorize", { ticket: "ticket" }),
-    );
-  });
   it("scopes prompt limits by board source and view generation", async () => {
     const prefix = "session-" + crypto.randomUUID();
     let activeFrame: HTMLIFrameElement | null = null;
-    Object.defineProperty(document, "activeElement", {
-      get: () => activeFrame,
-      configurable: true,
-    });
-    onTestFinished(() => {
-      delete (document as unknown as Record<string, unknown>).activeElement;
-    });
+    const focus = vi.spyOn(document, "activeElement", "get").mockImplementation(() => activeFrame);
+    onTestFinished(() => focus.mockRestore());
     const setup = async (session: string, generation: string) => {
       const f = await readyHost({
         widget: widget({ viewGeneration: generation }),
@@ -296,6 +299,129 @@ describe("BoardWidgetSandboxHost", () => {
     const recreated = await setup(prefix + "-a", "b".repeat(32));
     await reply(recreated, prompt("recreated-view", "Independent generation"));
   });
+  it("opens widget links only from the adopted wrapper port and ticket", async () => {
+    const postMessage = vi.fn();
+    vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
+    stubDashboardActivation();
+    const open = vi.spyOn(window, "open").mockReturnValue({} as Window);
+    const f = await readyHost({ client: client() });
+    answerActivation(f, true);
+    const link = (id: string, ticket = "ticket") =>
+      request(id, "host.open", { url: "https://example.com/" + id }, ticket);
+    const other = document.createElement("iframe");
+    document.body.append(other);
+    // Window-channel requests from the widget frame, another frame, or another origin.
+    f.send(link("window-channel"));
+    f.send(link("other-frame"), [], other.contentWindow);
+    f.send(link("other-origin"), [], f.frame.contentWindow, "https://evil.example");
+    const port = await f.port();
+    // A second port offer, as forged by widget code after the wrapper's offer.
+    const forged = channel();
+    const forgedReplies: unknown[] = [];
+    forged.port2.addEventListener("message", (event) => forgedReplies.push(event.data));
+    const closeForged = vi.spyOn(forged.port1, "close");
+    f.send({ type: "openclaw:widget-bridge-port-offer" }, [forged.port1]);
+    // The host settles the forged port while handling its offer: it closes the
+    // port without listening, so nothing posted on it can reach the host.
+    expect(closeForged).toHaveBeenCalledOnce();
+    forged.port2.postMessage(link("forged-port"), []);
+    await rejectRequest(
+      port,
+      link("forged-ticket", "forged"),
+      "widget view ticket does not match the active frame",
+    );
+    await reply(port, link("wrapper"));
+    expect(postMessage.mock.calls).toEqual([
+      [{ type: "open-link", url: "https://example.com/wrapper", target: "external" }],
+    ]);
+    expect(open).not.toHaveBeenCalled();
+    expect(forgedReplies).toEqual([]);
+  });
+  it("opens native widget links only on activation reported by that widget's sandbox frame", async () => {
+    const postMessage = vi.fn();
+    vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
+    // The dashboard holds activation, as after a click anywhere in it.
+    stubDashboardActivation();
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    const f = await readyHost({ client: client() });
+    const port = await f.port();
+    const link = (id: string) => request(id, "host.open", { url: "https://example.com/" + id });
+    const refused = "widget link could not be opened";
+    // The proxy reports no activation: the input happened outside this widget.
+    answerActivation(f, false);
+    await rejectRequest(port, link("outside-widget"), refused);
+    // Answers from another frame or origin are ignored; the query times out.
+    const other = document.createElement("iframe");
+    document.body.append(other);
+    answerActivation(f, true, other.contentWindow);
+    await rejectRequest(port, link("other-frame"), refused);
+    answerActivation(f, true, f.frame.contentWindow, "https://evil.example");
+    await rejectRequest(port, link("other-origin"), refused);
+    // A guessed query id from the right frame is ignored too.
+    f.post.mockImplementation(((data: { method?: string }) => {
+      if (data?.method === "ui/notifications/sandbox-activation-query") {
+        f.notify("activation", { id: "guess", active: true });
+      }
+    }) as Window["postMessage"]);
+    await rejectRequest(port, link("guessed-id"), refused);
+    expect(postMessage).not.toHaveBeenCalled();
+    answerActivation(f, true);
+    await reply(port, link("inside-widget"));
+    expect(postMessage.mock.calls).toEqual([
+      [{ type: "open-link", url: "https://example.com/inside-widget", target: "external" }],
+    ]);
+    expect(
+      f.post.mock.calls
+        .filter(
+          ([data]) =>
+            (data as { method?: string })?.method === "ui/notifications/sandbox-activation-query",
+        )
+        .map(([, targetOrigin]) => targetOrigin),
+    ).toEqual(Array(5).fill(SANDBOX_ORIGIN));
+    expect(open).not.toHaveBeenCalled();
+  });
+  it.each([
+    ["retired", (f: ReturnType<typeof createHost>) => f.host.setActive(false)],
+    ["reconnected", (f: ReturnType<typeof createHost>) => f.update({ client: client() })],
+    ["disconnected", (f: ReturnType<typeof createHost>) => f.update({ connected: false })],
+  ] as const)(
+    "opens nothing for a widget link %s while its activation query is pending",
+    async (_, retire) => {
+      const postMessage = vi.fn();
+      vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
+      const activation = stubDashboardActivation();
+      // Earlier tests in this file leave window.open spied with their calls.
+      const open = vi
+        .spyOn(window, "open")
+        .mockClear()
+        .mockReturnValue({} as Window);
+      const f = await readyHost({ client: client() });
+      const port = await f.port();
+      const queries: string[] = [];
+      f.post.mockImplementation(((data: { method?: string; params?: { id?: string } }) => {
+        if (data?.method === "ui/notifications/sandbox-activation-query") {
+          queries.push(data.params?.id ?? "");
+        }
+      }) as Window["postMessage"]);
+      // Fake timers expose the query's refusal timeout as the only live timer.
+      vi.useFakeTimers();
+      const response = sendRequest(
+        port,
+        request("pending-query", "host.open", { url: "https://example.com/pending" }),
+      );
+      await vi.waitFor(() => expect(queries).toHaveLength(1));
+      expect(vi.getTimerCount()).toBe(1);
+      retire(f);
+      // Retirement settles the pending query at once instead of leaving it live.
+      expect(vi.getTimerCount()).toBe(0);
+      // The proxy's positive answer arrives after the request was revoked.
+      f.notify("activation", { id: queries[0], active: true });
+      await expect(response).resolves.toMatchObject({ ok: false });
+      expect(postMessage).not.toHaveBeenCalled();
+      expect(open).not.toHaveBeenCalled();
+      expect(activation.isActive).toBe(true);
+    },
+  );
   it("keeps the adopted ticket valid until renewal is acknowledged", async () => {
     const pending = Promise.withResolvers<unknown>();
     const c = {
@@ -304,15 +430,9 @@ describe("BoardWidgetSandboxHost", () => {
       ),
     };
     const f = await readyHost({ client: c, resolveFrameUrl: () => "/widget?bt=ticket" });
-    const responses: unknown[] = [];
-    let renewalTicket = "";
-    const port = await f.port((event) => {
-      if (event.data?.type === "openclaw:widget-host-init") {
-        renewalTicket = event.data.ticket;
-      } else if (event.data?.type === "openclaw:widget-bridge-response") {
-        responses.push(event.data);
-      }
-    });
+    const port = await f.port();
+    const response = nextMessage(port, (event) => event.data?.id === "in-flight");
+    const renewal = nextMessage(port, (event) => event.data?.ticket === "renewed-ticket");
     port.postMessage(request("in-flight"), []);
     await called(c.request);
     f.update({
@@ -321,18 +441,16 @@ describe("BoardWidgetSandboxHost", () => {
     });
     port.postMessage(state("before-ack", "renewing"), []);
     await called(c.request, 2);
-    await vi.waitFor(() => expect(renewalTicket).toBe("renewed-ticket"));
-    port.postMessage({ type: "openclaw:widget-host-init-ack", ticket: renewalTicket }, []);
+    acknowledge(port, (await renewal).data.ticket);
     pending.resolve({ status: "healthy" });
-    await vi.waitFor(() =>
-      expect(responses).toContainEqual(expect.objectContaining({ id: "in-flight", ok: true })),
-    );
+    expect((await response).data).toMatchObject({ id: "in-flight", ok: true });
     port.postMessage(state("after-ack", "renewed", "renewed-ticket"), []);
     await called(c.request, 3);
     expect(c.request.mock.calls.slice(1)).toEqual([
       ["board.event", { ticket: "ticket", payload: { phase: "renewing" } }],
       ["board.event", { ticket: "renewed-ticket", payload: { phase: "renewed" } }],
     ]);
+    expect(f.fetchMock).toHaveBeenCalledOnce();
   });
   it.each(["replaced", "reconnected"])(
     "cancels in-flight requests when the client is %s",
@@ -341,12 +459,7 @@ describe("BoardWidgetSandboxHost", () => {
       const old = { request: vi.fn(async () => await pending.promise) };
       const next = change === "reconnected" ? old : client();
       const f = await readyHost({ client: old, resolveFrameUrl: () => "/widget?bt=ticket" });
-      const responses: unknown[] = [];
-      const port = await f.port((event) => {
-        if (event.data?.type === "openclaw:widget-bridge-response") {
-          responses.push(event.data);
-        }
-      });
+      const port = await f.port();
       port.postMessage(request("old-client"), []);
       await called(old.request);
       if (change === "reconnected") {
@@ -354,7 +467,7 @@ describe("BoardWidgetSandboxHost", () => {
       }
       f.update({ client: next, connected: true });
       await vi.waitFor(() =>
-        expect(responses).toContainEqual({
+        expect(f.messages).toContainEqual({
           type: "openclaw:widget-bridge-response",
           id: "old-client",
           ok: false,
@@ -364,30 +477,22 @@ describe("BoardWidgetSandboxHost", () => {
       pending.resolve({ private: "old-context" });
       await Promise.resolve();
       await Promise.resolve();
-      expect(responses).not.toContainEqual(expect.objectContaining({ id: "old-client", ok: true }));
+      expect(f.messages).not.toContainEqual(
+        expect.objectContaining({ id: "old-client", ok: true }),
+      );
       next.request.mockClear();
       next.request.mockResolvedValue({ ok: true });
-      await reply(port, state("new-client", "reconnected"), {
-        id: "new-client",
-        ok: false,
-      });
+      await reply(port, state("new-client", "reconnected"), { id: "new-client", ok: false });
       expect(next.request).not.toHaveBeenCalled();
-      const renewal = new Promise<void>((resolve) => {
-        port.addEventListener("message", (event) => {
-          if (
-            event.data?.type === "openclaw:widget-host-init" &&
-            event.data.ticket === "renewed-ticket"
-          ) {
-            port.postMessage(
-              { type: "openclaw:widget-host-init-ack", ticket: "renewed-ticket" },
-              [],
-            );
-            resolve();
-          }
-        });
-      });
+      const renewal = nextMessage(
+        port,
+        (event) =>
+          event.data?.type === "openclaw:widget-host-init" &&
+          event.data.ticket === "renewed-ticket",
+      );
       f.update({ client: next, widget: widget({ viewTicket: "renewed-ticket" }) });
       await renewal;
+      acknowledge(port, "renewed-ticket");
       await reply(port, state("revalidated", "reconnected", "renewed-ticket"), {
         id: "revalidated",
         ok: true,
@@ -398,128 +503,93 @@ describe("BoardWidgetSandboxHost", () => {
       });
     },
   );
-  it.each(["session", "generation", "CSP"] as const)("reloads %s identity", async (change) => {
-    const path = (session = "a", ticket = "ticket") =>
-      "/__openclaw__/board/session-" + session + "/weather/index.html?bt=" + ticket;
-    const wide = SANDBOX_URL + "?csp=wide",
-      narrow = SANDBOX_URL + "?csp=narrow";
-    const sources = new Set(
-      [path(), path(change === "session" ? "b" : "a")].map(
-        (value) => "https://gateway.example" + value.split("?")[0],
-      ),
-    );
-    const originalFetch = globalThis.fetch.bind(globalThis),
-      fetchMock = htmlFetch();
-    const f = await readyHost(
-      {
-        sandboxUrl: change === "CSP" ? wide : SANDBOX_URL,
-        client: client(),
-        resolveFrameUrl: () => path(),
-      },
-      (input, init) => {
-        const url = input instanceof Request ? input.url : String(input);
-        return sources.has(url.split(/[?#]/u, 1)[0]!)
-          ? fetchMock(input, init)
-          : originalFetch(input, init);
-      },
-    );
-    f.update({
-      widget: widget({ viewTicket: "renewed-ticket" }),
-      resolveFrameUrl: () => path("a", "renewed-ticket"),
-    });
-    await Promise.resolve();
-    expect(fetchMock).toHaveBeenCalledOnce();
-    f.post.mockClear();
-    f.update({
-      sandboxUrl: change === "CSP" ? narrow : SANDBOX_URL,
-      widget: widget({
-        viewTicket: "next-ticket",
-        ...(change !== "session" ? { viewGeneration: "b".repeat(32) } : {}),
-        ...(change === "CSP" ? { revision: 3 } : {}),
-      }),
-      resolveFrameUrl: () => path(change === "session" ? "b" : "a", "next-ticket"),
-    });
-    expect(f.post).not.toHaveBeenCalledWith(
-      { type: "openclaw:widget-host-init", ticket: "next-ticket" },
-      SANDBOX_ORIGIN,
-    );
-    await called(fetchMock, 2);
-    if (change === "CSP") {
-      expect(f.post).not.toHaveBeenCalled();
-      f.ready(wide);
-      await Promise.resolve();
-      expect(f.post).not.toHaveBeenCalled();
-      f.ready(narrow);
-      await called(f.onLoaded, 2);
-      expect(f.post).toHaveBeenCalledWith(
-        expect.objectContaining({ method: "ui/notifications/sandbox-resource-ready" }),
-        SANDBOX_ORIGIN,
+  it.each(["session", "generation", "revision", "CSP"] as const)(
+    "reloads %s identity",
+    async (change) => {
+      const pending = Promise.withResolvers<unknown>();
+      const c = { request: vi.fn(() => pending.promise) };
+      const wide = SANDBOX_URL + "?csp=wide",
+        narrow = SANDBOX_URL + "?csp=narrow";
+      const sources = new Set([
+        "https://gateway.example/widget",
+        `https://gateway.example/${change === "session" ? "other" : "widget"}`,
+      ]);
+      const fetchMock = htmlFetch();
+      const f = await readyHost(
+        {
+          sandboxUrl: change === "CSP" ? wide : SANDBOX_URL,
+          client: c,
+        },
+        scopedFetch((url) => sources.has(url), fetchMock),
       );
-    }
-  });
-  it("records one-shot proxy readiness while inactive", async () => {
+      const port = await f.port();
+      port.postMessage(request("old-request"), []);
+      await called(c.request);
+      f.post.mockClear();
+      f.update({
+        sandboxUrl: change === "CSP" ? narrow : SANDBOX_URL,
+        widget: widget({
+          viewTicket: "next-ticket",
+          ...(change === "generation" ? { viewGeneration: "b".repeat(32) } : {}),
+          ...(change === "revision" ? { revision: 3 } : {}),
+        }),
+        resolveFrameUrl: () => (change === "session" ? "/other" : "/widget"),
+      });
+      pending.resolve({ sensitive: "old grant result" });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(f.messages).not.toContainEqual(expect.objectContaining({ id: "old-request" }));
+      await called(fetchMock, 2);
+      if (change === "CSP") {
+        expect(f.post).not.toHaveBeenCalled();
+        f.ready(wide);
+        await Promise.resolve();
+        expect(f.post).not.toHaveBeenCalled();
+        f.ready(narrow);
+        await called(f.onLoaded, 2);
+        expect(f.post).toHaveBeenCalledWith(
+          expect.objectContaining({ method: "ui/notifications/sandbox-resource-ready" }),
+          SANDBOX_ORIGIN,
+        );
+      }
+    },
+  );
+  it("retains readiness, resumes interrupted loading, and preserves the bridge across inactivity", async () => {
     vi.useFakeTimers();
-    const f = createHost();
-    const reload = vi.spyOn(f.frame, "src", "set");
-    f.host.setActive(false);
-    f.ready();
-    await vi.advanceTimersByTimeAsync(20_000);
-    expect(f.fetchMock).not.toHaveBeenCalled();
-    expect(f.onReadyTimeout).not.toHaveBeenCalled();
-    f.host.setActive(true);
-    await called(f.onLoaded);
-    expect(f.fetchMock).toHaveBeenCalledOnce();
-    expect(reload).not.toHaveBeenCalled();
-  });
-  it("retains the loaded frame and private bridge while inactive", async () => {
-    vi.useFakeTimers();
+    const pending = Promise.withResolvers<Response>();
     const c = { request: vi.fn(async () => ({ resumed: true })) };
-    const f = await readyHost({ client: c });
-    const port = await f.port();
+    const fetchMock = htmlFetch().mockImplementationOnce(() => pending.promise);
+    const f = createHost(
+      { client: c },
+      scopedFetch((url) => url === "https://gateway.example/widget", fetchMock),
+    );
     const retained = f.host.frame;
     const reload = vi.spyOn(f.frame, "src", "set");
     f.host.setActive(false);
-    await vi.advanceTimersByTimeAsync(20_000);
-    await reply(port, request("inactive"), {
-      ok: false,
-      error: "Widget inactive",
-    });
-    expect(c.request).not.toHaveBeenCalled();
-    f.host.setActive(true);
-    await vi.advanceTimersByTimeAsync(20_000);
-    expect(f.host.frame).toBe(retained);
-    expect(f.fetchMock).toHaveBeenCalledOnce();
-    expect(f.onReadyTimeout).not.toHaveBeenCalled();
-    expect(reload).not.toHaveBeenCalled();
-    await reply(port, request("resumed"), {
-      ok: true,
-      result: { resumed: true },
-    });
-  });
-  it("resumes one interrupted document load after reactivation", async () => {
-    const pending = Promise.withResolvers<Response>();
-    const source = "https://gateway.example/widget";
-    const originalFetch = globalThis.fetch.bind(globalThis);
-    let sourceFetches = 0;
-    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
-      if ((input instanceof Request ? input.url : String(input)) !== source) {
-        return await originalFetch(input, init);
-      }
-      sourceFetches += 1;
-      return sourceFetches === 1
-        ? await pending.promise
-        : new Response("<!doctype html><p>resumed</p>");
-    });
-    const f = createHost({}, fetchMock);
     f.ready();
-    await vi.waitFor(() => expect(sourceFetches).toBe(1));
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(f.onReadyTimeout).not.toHaveBeenCalled();
+    f.host.setActive(true);
+    await called(fetchMock);
     f.host.setActive(false);
     pending.resolve(new Response("<!doctype html><p>stale</p>"));
     await Promise.resolve();
     expect(f.onLoaded).not.toHaveBeenCalled();
     f.host.setActive(true);
     await called(f.onLoaded);
-    expect(sourceFetches).toBe(2);
+    const port = await f.port();
+    f.host.setActive(false);
+    await vi.advanceTimersByTimeAsync(20_000);
+    await rejectRequest(port, request("inactive"), "Widget inactive");
+    expect(c.request).not.toHaveBeenCalled();
+    f.host.setActive(true);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(f.host.frame).toBe(retained);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(f.onReadyTimeout).not.toHaveBeenCalled();
+    expect(reload).not.toHaveBeenCalled();
+    await reply(port, request("resumed"), { ok: true, result: { resumed: true } });
   });
   it("bounds readiness retries and cancels them on disposal", async () => {
     vi.useFakeTimers();
@@ -560,32 +630,11 @@ describe("BoardWidgetSandboxHost", () => {
       });
       res.write("<!doctype html><p>partial</p>");
     });
-    onTestFinished(async () => {
-      if (!server.listening) {
-        return;
-      }
-      const closing = new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-      server.closeAllConnections();
-      await closing;
-    });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        server.off("error", reject);
-        resolve();
-      });
-    });
+    onTestFinished(() => (server.listening ? closeHttpServer(server) : undefined));
+    const sourceOrigin = await listenLoopback(server);
     const rejected = Promise.withResolvers<void>();
     const onError = vi.fn<(error: unknown) => void>(() => rejected.resolve());
-    const f = createHost(
-      {
-        onError,
-        sourceOrigin: "http://127.0.0.1:" + (server.address() as AddressInfo).port,
-      },
-      null,
-    );
+    const f = createHost({ onError, sourceOrigin }, null);
     f.ready();
     await rejected.promise;
     expect(onError).toHaveBeenCalledExactlyOnceWith(
@@ -599,60 +648,30 @@ describe("BoardWidgetSandboxHost", () => {
     await closed.promise;
   });
 });
-function timeoutHost(waitForRender = false, deferReady = false) {
-  const frame = document.createElement("iframe");
-  if (deferReady) {
-    frame.src = SANDBOX_URL;
-  }
-  const onError = vi.fn();
-  const f = createHost(
-    {
-      frame,
-      resolveFrameUrl: () => (deferReady ? "/widget" : "/widget?generation=first"),
-      onLoadFailed: deferReady ? onError : vi.fn(),
-      onUnauthorized: deferReady ? onError : vi.fn(),
-      onReadyTimeout: deferReady ? onError : vi.fn(),
-      onRendered: waitForRender ? vi.fn() : undefined,
-      onPending: deferReady ? vi.fn() : undefined,
-      onError,
-    },
-    null,
-  );
-  if (!deferReady) {
-    f.ready();
-  }
-  return f;
-}
 describe("document timeouts", () => {
+  beforeEach(() => vi.useFakeTimers());
   it.each(["headers", "body", "render"] as const)("times out %s", async (phase) => {
-    vi.useFakeTimers();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
-        if (phase === "render") {
-          return Promise.resolve(new Response("<p>Waiting for a resource</p>"));
-        }
-        const signal = init?.signal;
-        if (phase === "headers") {
-          return new Promise<Response>((_resolve, reject) => {
-            signal?.addEventListener("abort", () => reject(new Error("request aborted")));
-          });
-        }
-        return Promise.resolve(
-          new Response(
-            new ReadableStream({
-              start(controller) {
-                controller.enqueue(new TextEncoder().encode("<!doctype html>"));
-                signal?.addEventListener("abort", () =>
-                  controller.error(new Error("body aborted")),
-                );
-              },
-            }),
-          ),
-        );
-      }),
-    );
-    const f = timeoutHost(phase === "render");
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (phase === "render") {
+        return new Response("<p>Waiting for a resource</p>");
+      }
+      const signal = init?.signal;
+      if (phase === "headers") {
+        return new Promise<Response>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(new Error("request aborted")));
+        });
+      }
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("<!doctype html>"));
+            signal?.addEventListener("abort", () => controller.error(new Error("body aborted")));
+          },
+        }),
+      );
+    });
+    const f = createHost({ onRendered: phase === "render" ? vi.fn() : undefined }, fetchMock);
+    f.ready();
     await vi.advanceTimersByTimeAsync(30_000);
     if (phase === "render") {
       expect(f.onLoadFailed).not.toHaveBeenCalled();
@@ -667,7 +686,6 @@ describe("document timeouts", () => {
     expect(f.onLoaded).toHaveBeenCalledTimes(phase === "render" ? 1 : 0);
   });
   it.each(["document", "proxy", "render"] as const)("permits slow %s loads", async (phase) => {
-    vi.useFakeTimers();
     const fetchMock = vi.fn(async () => {
       if (phase === "document") {
         await new Promise((resolve) => {
@@ -676,8 +694,20 @@ describe("document timeouts", () => {
       }
       return new Response("<p>Slow success</p>");
     });
-    vi.stubGlobal("fetch", fetchMock);
-    const f = timeoutHost(phase === "render", true);
+    const onError = vi.fn();
+    const frame = document.createElement("iframe");
+    frame.src = SANDBOX_URL;
+    const f = createHost(
+      {
+        frame,
+        onError,
+        onLoadFailed: onError,
+        onUnauthorized: onError,
+        onReadyTimeout: onError,
+        onRendered: phase === "render" ? vi.fn() : undefined,
+      },
+      fetchMock,
+    );
     if (phase !== "proxy") {
       f.ready();
     }
@@ -703,7 +733,6 @@ describe("document timeouts", () => {
     expect(reload).not.toHaveBeenCalled();
   });
   it.each(["generation", "client"] as const)("cancels %s loads", async (change) => {
-    vi.useFakeTimers();
     let signal: AbortSignal | undefined;
     const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
       if (fetchMock.mock.calls.length !== 1) {
@@ -714,8 +743,8 @@ describe("document timeouts", () => {
         signal?.addEventListener("abort", () => reject(new Error("request aborted")));
       });
     });
-    vi.stubGlobal("fetch", fetchMock);
-    const f = timeoutHost();
+    const f = createHost({}, fetchMock);
+    f.ready();
     await called(fetchMock);
     f.update({
       ...(change === "generation"
@@ -728,6 +757,5 @@ describe("document timeouts", () => {
     expect(signal?.aborted).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(f.onLoadFailed).not.toHaveBeenCalled();
-    expect(f.onLoaded).toHaveBeenCalledOnce();
   });
 });

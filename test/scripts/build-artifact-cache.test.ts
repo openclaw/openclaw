@@ -205,6 +205,7 @@ describe("native owner content records", () => {
     const readdir = fs.readdirSync;
     const reordered = vi
       .spyOn(fs, "readdirSync")
+      // oxlint-disable-next-line openclaw-boundaries/no-recursive-readdir -- Transparent ordering spy over nonrecursive artifact-owner calls.
       .mockImplementation((target, options) => readdir(target, options).toReversed());
     try {
       expect(f.matches(record, relocated, Object.keys(record.outputs), "dist")).toBe(true);

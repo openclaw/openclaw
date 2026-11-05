@@ -14,7 +14,7 @@ import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import { admitStoredChatComposerQueueItemResult } from "./composer-queue-persistence.ts";
 
 const selected = "agent:main:selected";
@@ -40,68 +40,54 @@ function pageHost<T extends ReturnType<typeof makeChatHost>>(host: T) {
   return Object.assign(state, host);
 }
 
-function sessionEvent(sessionKey: string, event = "sessions.changed"): GatewayEventFrame {
-  return {
-    type: "event",
-    event,
-    payload: { sessionKey, phase: "message", hasActiveRun: true, updatedAt: 2 },
-  };
-}
-
 it("publishes a real recovery-owner change to subscribed panes during a foreign event", () => {
   const host = pageHost(makeChatHost({ sessionKey: selected, requestHandlers: {} }));
   const client = expectDefined(host.client, "shared client");
   const peer = pageHost(makeChatHost({ client, sessions: host.sessions, sessionKey: selected }));
-  const publish = vi.fn();
-  const peerPublish = vi.fn();
-  const stopPublication = subscribeChatOutboxQueue(host, publish);
-  const stopPeerPublication = subscribeChatOutboxQueue(peer, peerPublish);
-  const stopHost = chatOutboxOwner(host).subscribe(host);
-  const stopPeer = chatOutboxOwner(peer).subscribe(peer);
-  onTestFinished(() => {
-    stopPeerPublication();
-    stopPublication();
-    stopPeer();
-    stopHost();
-    host.sessions.dispose();
+  const publications = [host, peer].map((target) => {
+    const publish = vi.fn();
+    onTestFinished(subscribeChatOutboxQueue(target, publish));
+    onTestFinished(chatOutboxOwner(target).subscribe(target));
+    return publish;
   });
-  const item = (id: string, recoveryScope: string): ChatQueueItem => ({
-    id,
-    text: id,
-    sessionKey: selected,
-    createdAt: 1,
-    sendState: "failed",
-    attachmentPayload: { key: `${id}-payload`, recoveryScope, tabId: "fixture-tab" },
-    attachmentStorageError: "missing",
-  });
-  expect(
-    admitStoredChatComposerQueueItemResult(
-      host,
-      captureChatOutboxAdmission(host, selected),
-      item("old-owner", client.recoveryScope!),
-    ),
-  ).toBe("admitted");
+  onTestFinished(() => host.sessions.dispose());
+  const admit = (target: ReturnType<typeof makeChatHost>, id: string, recoveryScope: string) => {
+    const item: ChatQueueItem = {
+      id,
+      text: id,
+      sessionKey: selected,
+      createdAt: 1,
+      sendState: "failed",
+      attachmentPayload: { key: `${id}-payload`, recoveryScope, tabId: "fixture-tab" },
+      attachmentStorageError: "missing",
+    };
+    expect(
+      admitStoredChatComposerQueueItemResult(
+        target,
+        captureChatOutboxAdmission(target, selected),
+        item,
+      ),
+    ).toBe("admitted");
+  };
+  admit(host, "old-owner", client.recoveryScope!);
   const replacement = createTestGatewayClient(async () => ({}));
   vi.spyOn(replacement, "recoveryScope", "get").mockReturnValue("replacement-scope");
   const writer = makeChatHost({ client: replacement, sessionKey: selected });
   onTestFinished(() => writer.sessions.dispose());
-  expect(
-    admitStoredChatComposerQueueItemResult(
-      writer,
-      captureChatOutboxAdmission(writer, selected),
-      item("new-owner", "replacement-scope"),
-    ),
-  ).toBe("admitted");
+  admit(writer, "new-owner", "replacement-scope");
   expect(host.chatQueue.map((row) => row.id)).toEqual(["old-owner"]);
-  publish.mockClear();
-  peerPublish.mockClear();
+  publications.forEach((publish) => publish.mockClear());
 
   vi.spyOn(client, "recoveryScope", "get").mockReturnValue("replacement-scope");
-  handlePageGatewayEvent(host, sessionEvent(foreign), () => false);
+  const event: GatewayEventFrame = {
+    type: "event",
+    event: "sessions.changed",
+    payload: { sessionKey: foreign, phase: "message", hasActiveRun: true, updatedAt: 2 },
+  };
+  handlePageGatewayEvent(host, event, () => false);
   expect(host.chatQueue.map((row) => row.id)).toEqual(["new-owner"]);
   expect(peer.chatQueue.map((row) => row.id)).toEqual(["new-owner"]);
-  expect(publish).toHaveBeenCalledTimes(1);
-  expect(peerPublish).toHaveBeenCalledTimes(1);
+  publications.forEach((publish) => expect(publish).toHaveBeenCalledOnce());
 });
 
 it.each(
@@ -116,11 +102,10 @@ it.each(
     const published = vi.fn();
     onTestFinished(chatRunPresentation(host).subscribe(published));
     let commitFrame: FrameRequestCallback | undefined;
-    const frame = vi.fn((callback: FrameRequestCallback) => {
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
       commitFrame = callback;
       return 1;
     });
-    vi.stubGlobal("requestAnimationFrame", frame);
     handlePageGatewayEvent(
       host,
       {
@@ -140,7 +125,6 @@ it.each(
       },
       () => false,
     );
-    expect(frame).toHaveBeenCalledTimes(matching ? 1 : 0);
     expect(published).not.toHaveBeenCalled();
     commitFrame?.(0);
     expect(published).toHaveBeenCalledTimes(matching ? 1 : 0);

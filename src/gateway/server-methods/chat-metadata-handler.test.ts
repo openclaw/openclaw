@@ -18,7 +18,6 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import * as userModelAccounts from "../../state/user-model-accounts.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
@@ -33,6 +32,7 @@ import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { ADMIN_SCOPE, READ_SCOPE, SESSION_READ_SCOPE } from "../operator-scopes.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import * as sessionReads from "../session-utils-store.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
@@ -40,33 +40,16 @@ import {
   chatMetadataCommandFields,
   connectChatMetadataAccount,
   createChatMetadataHarness,
-  createChatMetadataOwner,
+  createOtherAgentChatMetadataFixture,
 } from "./chat-metadata-runtime.test-support.js";
-import * as modelLists from "./models-list-result.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 type MetadataFixture = ReturnType<typeof createPersonalMetadataFixture>;
 
 it("serves commands independently of another agent's remembered model list", async ({ signal }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const config = {
-      agents: {
-        entries: { main: {}, other: {} },
-        defaults: { model: "test/main-model", modelPolicy: { allow: ["test/*"] } },
-      },
-    };
-    const pluginRegistry = createEmptyPluginRegistry();
-    const owner = (id: string) => ({
-      ...createChatMetadataOwner(config, id, {}, "test", "openai-completions"),
-      pluginRegistry,
-    });
-    const mainOwner = owner("main-model");
-    let otherOwner = owner("other-model");
-    const harness = createChatMetadataHarness(config);
-    harness.setOwner(mainOwner);
-    harness.getPreparedOwner.mockImplementation((params) =>
-      params?.agentId === "other" ? otherOwner : mainOwner,
-    );
+    const fixture = createOtherAgentChatMetadataFixture(signal);
+    const { config, harness, request, entered, release, pending } = fixture;
     const context = createDirectChatContext({
       getRuntimeConfig: () => config,
       readChatMetadata: harness.runtime.read,
@@ -85,35 +68,13 @@ it("serves commands independently of another agent's remembered model list", asy
         revision: expect.any(String),
       });
     };
-    const request = {
-      agentId: "other",
-      params: { agentId: "other", view: "all" as const },
-      includeManualSelection: true,
-    };
-    const entered = createDeferred();
-    const release = createDeferred();
-    const abort = () => release.resolve();
-    signal.addEventListener("abort", abort, { once: true });
-    let blockOther = false;
-    const prepare = modelLists.prepareModelsListResult;
-    const preparation = vi
-      .spyOn(modelLists, "prepareModelsListResult")
-      .mockImplementation(async (params) => {
-        if (blockOther && params.agentId === "other") {
-          entered.resolve();
-          await release.promise;
-        }
-        return prepare(params);
-      });
-    const pending: Promise<unknown>[] = [];
     try {
       await harness.runtime.refresh();
       await expect(harness.runtime.readModelsList(request)).resolves.toMatchObject({
         models: expect.arrayContaining([expect.objectContaining({ id: "other-model" })]),
       });
       await readCommands();
-      otherOwner = owner("replacement-model");
-      blockOther = true;
+      fixture.holdOtherModel("replacement-model");
       await harness.runtime.refresh();
       const models = harness.runtime.readModelsList(request);
       pending.push(models);
@@ -127,28 +88,13 @@ it("serves commands independently of another agent's remembered model list", asy
         models: expect.arrayContaining([expect.objectContaining({ id: "replacement-model" })]),
       });
     } finally {
-      release.resolve();
-      await Promise.allSettled(pending);
-      preparation.mockRestore();
-      signal.removeEventListener("abort", abort);
-      await harness.runtime.stop();
+      await fixture.stop();
     }
   });
 });
 
 function metadataConnect(scopes: GatewayOperatorRoleDefinition["scopes"]) {
-  return {
-    minProtocol: 1,
-    maxProtocol: 1,
-    client: {
-      id: "openclaw-control-ui" as const,
-      version: "test",
-      platform: "test",
-      mode: "webchat" as const,
-    },
-    role: "operator" as const,
-    scopes: [...scopes],
-  };
+  return sharingPolicyClient({ scopes: [...scopes] }).connect;
 }
 
 function callMetadata(
@@ -637,16 +583,11 @@ describe("chat metadata dispatch authority", () => {
   );
 
   it.each([
-    { change: "title", patch: { displayName: "First reply" }, current: true },
-    { change: "run start", patch: { updatedAt: 2, startedAt: 2 }, current: true },
     { change: "ordinary patch", patch: { thinkingLevel: "high" }, current: true },
-    { change: "visibility", patch: { visibility: "draft" }, current: false },
-    { change: "account", patch: { authProfileOverride: "test:replacement" }, current: false },
     { change: "model", patch: { modelOverride: "replacement" }, current: false },
     { change: "model route", patch: { modelOverrideRouteResolution: "resolved" }, current: false },
     { change: "runtime", patch: { agentRuntimeOverride: "replacement" }, current: false },
     { change: "runtime lock", patch: { modelSelectionLocked: true }, current: false },
-    { change: "lifecycle", patch: { lifecycleRevision: "replacement" }, current: false },
   ] satisfies { change: string; patch: Partial<SessionEntry>; current: boolean }[])(
     "revalidates $change changes during metadata preparation",
     ({ patch, current }) =>

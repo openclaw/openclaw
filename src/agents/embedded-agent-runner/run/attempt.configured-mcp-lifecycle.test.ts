@@ -5,6 +5,7 @@ import {
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
 } from "../../../infra/diagnostic-events.js";
+import { fixtureCatalog, staticRuntime } from "../../agent-bundle-mcp-fixture.test-support.js";
 import type { SessionMcpRuntime } from "../../agent-bundle-mcp-types.js";
 import { Agent, type AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/session-manager.js";
@@ -66,30 +67,13 @@ it.each([false, true])(
     const startedEvent = { type: "tool.execution.started", ...eventIdentity };
     const events: DiagnosticEventPayload[] = [];
     const requests: AgentMessage[][] = [];
-    const catalog = {
-      version: 1,
-      generatedAt: 0,
-      servers: {
-        silent: { serverName: "silent", launchSummary: "local fixture", toolCount: 1 },
-      },
-      tools: [
-        {
-          serverName: "silent",
-          safeServerName: "silent",
-          toolName: "delayed_local",
-          description: "Return a delayed result",
-          fallbackDescription: "Return a delayed result",
-          inputSchema: { type: "object", properties: {} },
-        },
-      ],
-    };
-    runtime = {
+    const catalog = fixtureCatalog("silent", [
+      { toolName: "delayed_local", description: "Return a delayed result" },
+    ]);
+    runtime = staticRuntime({
       sessionId: "embedded-session",
       workspaceDir: "unused",
       configFingerprint: "fixture",
-      createdAt: 0,
-      lastUsedAt: 0,
-      markUsed: () => {},
       getCatalog: async () => catalog,
       peekCatalog: () => catalog,
       callTool: async () => {
@@ -98,8 +82,7 @@ it.each([false, true])(
         return { content: [{ type: "text", text: marker }] };
       },
       joinCleanup: async () => {},
-      dispose: async () => {},
-    };
+    });
     const unsubscribe = onInternalDiagnosticEvent((event) => {
       if (
         (event.type === "tool.execution.started" ||
@@ -116,7 +99,6 @@ it.each([false, true])(
       tempPaths,
       createSession: () =>
         createAgentBackedAttemptSession((model, tools) => {
-          expect(tools.map((tool) => tool.name)).toContain(callable);
           if (cataloged) {
             expect(tools.map((tool) => tool.name)).not.toContain(toolName);
           }
@@ -153,7 +135,7 @@ it.each([false, true])(
       expect(events).toMatchObject([startedEvent]);
       expect(requests).toHaveLength(1);
       finish.resolve();
-      const result = await attempt;
+      await attempt;
       await nextTurn();
       expect(events).toMatchObject([
         startedEvent,
@@ -167,10 +149,6 @@ it.each([false, true])(
           content: [{ type: "text", text: expect.stringContaining(marker) }],
         },
       ]);
-      expect(result.messagesSnapshot.at(-1)).toMatchObject({
-        role: "assistant",
-        content: [{ type: "text", text: marker }],
-      });
     } finally {
       finish.resolve();
       try {

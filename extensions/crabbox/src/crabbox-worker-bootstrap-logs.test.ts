@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { commandResult } from "../../test-support/command-result.test-support.js";
 import { parseCrabboxProfile } from "./crabbox-worker-profile.js";
 import { runProvisionSetup } from "./crabbox-worker-provision-commands.js";
 
@@ -10,15 +11,12 @@ vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => ({
 }));
 // mock-isolation: the remote process supplies fixed stdout/stderr; setup consumes it normally.
 vi.mock("./crabbox-process.js", () => ({
-  runCrabboxProcess: async () => ({
-    stdout: "unrelated output must not be logged",
-    stderr:
-      "CRABBOX_TIMING:openclaw-bootstrap-download-body:125\r\nCRABBOX_TIMING:openclaw-bootstrap-installation:900\nCRABBOX_WARNING:openclaw-bootstrap-unlocked-install:lock unavailable from Gateway\nCRABBOX_TIMING:invalid-secret:123\n",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-  }),
+  runCrabboxProcess: async () =>
+    commandResult({
+      stdout: "unrelated output must not be logged",
+      stderr:
+        "CRABBOX_TIMING:openclaw-bootstrap-download-body:125\r\nCRABBOX_TIMING:openclaw-bootstrap-installation:900\nCRABBOX_WARNING:openclaw-bootstrap-unlocked-install:lock unavailable from Gateway\nCRABBOX_TIMING:invalid-secret:123\n",
+    }),
 }));
 
 it("logs successful bootstrap durations and fallback warnings without forwarding process output", async () => {

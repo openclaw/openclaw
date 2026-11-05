@@ -8,6 +8,7 @@ import {
   isSessionEntryDataSql,
   observeHostDataSql,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import * as repositoryPaths from "../../agents/worktrees/repository-paths.js";
 import { ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import { initializeManagedWorktreeTestRepository } from "../../agents/worktrees/service.test-support.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
@@ -110,16 +111,13 @@ it.each(["lifecycle", "intent"] as const)(
     assert(pendingWorktree);
     const entered = createDeferred();
     const resume = createDeferred();
-    // oxlint-disable-next-line typescript/unbound-method -- The real method is called with its original receiver below.
-    const resolveRepository = ManagedWorktreeService.prototype.resolveRepositoryPaths;
-    vi.spyOn(ManagedWorktreeService.prototype, "resolveRepositoryPaths").mockImplementationOnce(
-      async function (this: ManagedWorktreeService, ...args) {
-        const resolved = await resolveRepository.apply(this, args);
-        entered.resolve();
-        await resume.promise;
-        return resolved;
-      },
-    );
+    const resolveRepository = repositoryPaths.resolveRepository;
+    vi.spyOn(repositoryPaths, "resolveRepository").mockImplementationOnce(async (...args) => {
+      const resolved = await resolveRepository(...args);
+      entered.resolve();
+      await resume.promise;
+      return resolved;
+    });
     const pending = session.prepare();
     const settled = pending.catch((error: unknown) => error);
     try {

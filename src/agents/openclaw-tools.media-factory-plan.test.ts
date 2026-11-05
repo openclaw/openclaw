@@ -10,6 +10,7 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { configFor } from "./model-auth.fixtures.test-support.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import {
   resolveImageToolFactoryAvailable,
@@ -235,40 +236,36 @@ describe("optional media tool factory planning", () => {
       expires: Date.now() + 60_000,
     };
 
-    expect(
+    const available = (authStore: AuthProfileStore, prepared: unknown = preparedModelRuntime) =>
       resolveImageToolFactoryAvailable({
         config,
         agentDir: "/agent",
-        authStore: createAuthStore(["custom"]),
-        preparedModelRuntime,
-      }),
-    ).toBe(true);
-    expect(
-      resolveImageToolFactoryAvailable({
-        config,
-        agentDir: "/agent",
-        authStore: oauthStore,
-        preparedModelRuntime,
-      }),
-    ).toBe(false);
+        authStore,
+        preparedModelRuntime: prepared as never,
+      });
+
+    expect(available(createAuthStore(["custom"]))).toBe(true);
+    expect(available(oauthStore)).toBe(false);
     for (const [capabilities, expected] of [
       [["audio"], false],
       [["image"], true],
     ] as const) {
+      const mediaUnderstandingProviders = [{ id: "codex", capabilities }];
       expect(
-        resolveImageToolFactoryAvailable({
-          config,
-          agentDir: "/agent",
-          authStore: oauthStore,
-          preparedModelRuntime: {
-            metadataSnapshot: snapshot,
-            mediaCapabilityProviders: {
-              mediaUnderstandingProviders: [{ id: "codex", capabilities }],
-            },
-          } as never,
+        available(oauthStore, {
+          metadataSnapshot: snapshot,
+          mediaCapabilityProviders: { mediaUnderstandingProviders },
         }),
       ).toBe(expected);
     }
+    // A key on the provider entry is usable auth; a marker counts only on a local route.
+    const custom = config.models?.providers?.custom ?? {};
+    Object.assign(custom, { apiKey: "ollama-local" });
+    expect(available(createAuthStore())).toBe(false);
+    Object.assign(custom, { api: "ollama", baseUrl: "http://localhost:11434" });
+    expect(available(createAuthStore())).toBe(true);
+    Object.assign(custom, { api: undefined, baseUrl: "https://vision.example/v1", apiKey: "k" });
+    expect(available(createAuthStore())).toBe(true);
   });
 
   it("does not plan media factories from workspace-scoped metadata without workspace context", () => {
@@ -429,16 +426,7 @@ describe("optional media tool factory planning", () => {
   });
 
   it("honors manifest-declared image provider auth alias base-url guards", () => {
-    const config: OpenClawConfig = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "http://localhost:11434/v1",
-            models: [],
-          },
-        },
-      },
-    };
+    const config: OpenClawConfig = configFor("openai", "http://localhost:11434/v1");
     installSnapshot(config, [
       createPlugin({
         id: "openai",

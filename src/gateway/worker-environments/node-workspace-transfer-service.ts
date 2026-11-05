@@ -151,9 +151,7 @@ export function createNodeWorkspaceTransferService(options: {
   };
 
   const closeContext = async (context: TransferContext) => {
-    if (!context.signal.aborted) {
-      context.abortController.abort(new Error("Node workspace transfer context closed"));
-    }
+    context.abortController.abort(new Error("Node workspace transfer context closed"));
     // Readers and pack processes must release scratch before its parent is removed.
     const settled = await Promise.allSettled([
       context.pack?.catch(() => undefined),
@@ -657,7 +655,7 @@ export function createNodeWorkspaceTransferService(options: {
       const context = contexts.get(environmentId);
       // Abort synchronously so every in-flight response and capability for this owner is
       // fenced at once; cleanup (scratch removal, map entry) settles behind the queue.
-      if (context && !context.signal.aborted) {
+      if (context) {
         context.abortController.abort(reason ?? new Error("Worker environment credential revoked"));
       }
       void closeEnvironment(environmentId).catch(() => undefined);

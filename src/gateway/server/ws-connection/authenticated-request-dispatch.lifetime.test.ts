@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../../../config/paths.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import type { GatewayRequestOptions } from "../../server-methods/types.js";
+import { dispatchProfile } from "../client-fixtures.test-support.js";
 import { createRequestGate } from "./authenticated-request-dispatch.fixtures.test-support.js";
 
 beforeEach(() => vi.resetModules());
@@ -161,7 +162,7 @@ describe("authenticated request completion", { concurrent: false }, () => {
           isSyntheticGatewayCaller: () => false,
         }));
       }
-      const { createDispatchTestHarness, createOperatorWsClient, dispatchProfile, requestFrame } =
+      const { createDispatchTestHarness, createOperatorWsClient, requestFrame } =
         await import("./authenticated-request-dispatch.test-support.js");
       const harness = createDispatchTestHarness({
         extraHandlers: { "test.lifetime": handleGatewayRequest },
