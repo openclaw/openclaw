@@ -413,6 +413,7 @@ src/infra/database-engine/adapters.ts
 src/infra/database-engine/admission-scope.ts
 src/infra/database-engine/capability-unavailable.ts
 src/infra/database-engine/context.ts
+src/infra/database-engine/database-store-live-read.worker.ts
 src/infra/database-engine/index-hint.ts
 src/infra/database-engine/json-values.ts
 src/infra/database-engine/observation.ts
@@ -437,6 +438,7 @@ src/infra/database-engine/sqlite-full-text.ts
 src/infra/database-engine/sqlite-memory-search-fragments.ts
 src/infra/database-engine/sqlite-memory-vector-schema.ts
 src/infra/database-engine/sqlite-search-schema.ts
+src/infra/database-engine/sqlite-store-inspection.ts
 src/infra/database-engine/sqlite-vector-subprocess.ts
 src/infra/database-engine/sqlite-vector-types.ts
 src/infra/database-engine/sqlite-vector.ts
