@@ -133,7 +133,7 @@ it.each([false, true])(
         expect(response).toMatchObject({
           url: `${baseUrl}/final`,
           redirected: redirect,
-          type: "basic",
+          type: original.type,
           status: 200,
         });
         expect(response.headers.get("x-response")).toBe("original");
