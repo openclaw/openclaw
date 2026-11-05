@@ -130,22 +130,25 @@ it("routes portalled mobile events and releases refs when the region or view unm
       narrow
       mobileHost={mobileHost}
       layout={pending() ? { columns: [] } : openSlot({ columns: [] }, "workspace")}
-      panelDefinitions={sidebarPanelDefinitions().map((definition) => ({
-        ...definition,
-        content: (
-          <>
-            <input
-              aria-label="Panel search"
-              onKeyDown={(event) => {
-                if (event.key === "Escape" && event.currentTarget.value === "nested") {
-                  event.preventDefault();
-                }
-              }}
-            />
-            <input aria-label="Read-only preview" readonly />
-          </>
-        ),
-      }))}
+      panelDefinitions={sidebarPanelDefinitions().map((definition) =>
+        definition.slot === "workspace"
+          ? Object.assign(definition, {
+              content: (
+                <>
+                  <input
+                    aria-label="Panel search"
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape" && event.currentTarget.value === "nested") {
+                        event.preventDefault();
+                      }
+                    }}
+                  />
+                  <input aria-label="Read-only preview" readonly />
+                </>
+              ),
+            })
+          : definition,
+      )}
       callbacks={createNoopSidebarRegionCallbacks()}
       primary={primary}
       onRegionElementRef={capture("region")}
