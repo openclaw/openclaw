@@ -415,8 +415,28 @@ the original payload is never sent. A scanner that wants outage passthrough
 must catch its own failures and return nothing. If the turn is aborted while a
 handler runs, the request is not sent.
 
-The hook needs conversation access and prompt modification, like
-`before_prompt_build`. It still runs for incognito sessions, as other policy
+The hook is off by default. Enable it per plugin with
+`plugins.entries.<id>.hooks.allowModelRequest: true`; bundled plugins need the
+same opt-in. Without it the registration is ignored and `openclaw doctor` and
+`openclaw plugins inspect <id>` show a warning naming the key:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "my-scanner": {
+        hooks: {
+          allowModelRequest: true,
+          allowConversationAccess: true,
+        },
+      },
+    },
+  },
+}
+```
+
+The opt-in does not replace the other gates: the hook still needs conversation
+access and prompt modification, like `before_prompt_build`. It still runs for incognito sessions, as other policy
 hooks do; `llm_input` and `llm_output` observations stay suppressed there. With
 no handler registered, messages are not copied and nothing is awaited.
 

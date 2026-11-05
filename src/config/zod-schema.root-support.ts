@@ -147,6 +147,11 @@ export const PluginEntrySchema = z.strictObject({
        * Non-bundled plugins must opt in explicitly; bundled plugins stay allowed unless disabled.
        */
       allowConversationAccess: z.boolean().optional(),
+      /**
+       * Allows this plugin's before_model_request hook to rewrite or withhold the final
+       * provider request. Off unless explicitly true, for bundled plugins too.
+       */
+      allowModelRequest: z.boolean().optional(),
       /** Default timeout in milliseconds for this plugin's typed hooks. */
       timeoutMs: z.number().int().positive().max(600_000).optional(),
       /** Per typed-hook timeout overrides in milliseconds. */
