@@ -1511,11 +1511,12 @@ If activation fails, rollback restores that cohort before restarting the previou
 Gateway. Backups precede plugin maintenance. After an interrupted update,
 `openclaw update repair` resumes the recorded plugin settlement under current
 ownership. It preserves later independent changes. When a plugin's install
-record or data/settings upgrade obligation changed after the update wrote it,
-rollback keeps that later change, restores everything that still matches, and
-completes. It records the kept items in an update warning that repair prints and
-`openclaw doctor` shows. Conflicting settings or plugin artifacts still leave
-recovery unfinished instead of overwriting those changes. The updater performing the operation must contain
+record, data/settings upgrade obligation, package files, source snapshot, or a
+config file the update wrote changed after the update, rollback keeps that later
+change, restores everything that still matches, and completes. It records the
+kept items in an update warning that repair prints and `openclaw doctor` shows.
+Recovery still stops for a config file whose path was replaced, for config that
+fails validation or secret resolution, and for a corrupt recovery journal. The updater performing the operation must contain
 this support; installing a newer candidate does not add it to an older parent.
 When recovery stays pending, the update prints the first failure below the
 unfinished-recovery refusal and names `openclaw update repair` when it can settle

@@ -143,7 +143,7 @@ export const dataLogScenarios: readonly InteractionScenario[] = [
     expected: "Filtering a full retained log buffer finds the 20 matching messages.",
     prepare: bufferReady,
     run: async (page) => {
-      await page.getByRole("textbox", { name: "Filter", exact: true }).fill("needle");
+      await page.getByRole("searchbox", { name: "Search logs", exact: true }).fill("needle");
       await retainedLines(page, 20);
       await waitForLine(page, 1900);
       return { retainedLines: bufferLimit, matchingLines: 20 };
@@ -156,7 +156,9 @@ export const dataLogScenarios: readonly InteractionScenario[] = [
     expected: "Disabling info leaves 800 warning and error rows from the full buffer.",
     prepare: bufferReady,
     run: async (page) => {
-      await page.getByRole("checkbox", { name: "info", exact: true }).uncheck();
+      await page.locator(".logs-toolbar__levels").click();
+      await page.getByRole("menuitemcheckbox", { name: "info", exact: true }).click();
+      await page.keyboard.press("Escape");
       const mountedLines = await retainedLines(page, 800);
       return { retainedLines: bufferLimit, matchingLines: 800, mountedLines };
     },
@@ -232,10 +234,15 @@ export const dataLogScenarios: readonly InteractionScenario[] = [
     run: async (page, gateway) => {
       await gateway.setMethodResponse("logs.tail", createDataLogTail(10_000));
       const after = (await gateway.getRequests("logs.tail")).length;
-      await page
+      const refresh = page
         .locator("openclaw-logs-page")
-        .getByRole("button", { name: "Refresh", exact: true })
-        .click();
+        .getByRole("button", { name: "Refresh", exact: true });
+      if (await refresh.isVisible()) {
+        await refresh.click();
+      } else {
+        await page.getByRole("button", { name: "More actions", exact: true }).click();
+        await page.getByRole("menuitem", { name: "Refresh", exact: true }).click();
+      }
       await gateway.waitForRequest("logs.tail", { after });
       await waitForLine(page, 10_499);
       const mountedLines = await retainedLines(page, tailSize);
@@ -347,9 +354,9 @@ export const dataLogScenarios: readonly InteractionScenario[] = [
     expected: "Empty and one-row filtered results remain visible in the measured log stream.",
     prepare: bufferReady,
     run: async (page) => {
-      const filter = page.getByRole("textbox", { name: "Filter", exact: true });
+      const filter = page.getByRole("searchbox", { name: "Search logs", exact: true });
       await filter.fill("no-synthetic-log-matches");
-      await page.getByText("No log entries.", { exact: true }).waitFor({ state: "visible" });
+      await page.getByText("No log entries yet.", { exact: true }).waitFor({ state: "visible" });
       if ((await page.locator(".log-row").count()) !== 0) {
         throw new Error("The empty log filter retained a rendered row");
       }
