@@ -141,18 +141,30 @@ export async function recoverDurableQuestions(
   scopes: readonly SessionAccessScope[],
   onContinuationOwed: (question: DurableQuestion) => void,
   assertCurrent: () => void,
+  gatewayEpoch: string,
   publication?: (
     question: DurableQuestion,
   ) => Pick<Parameters<QuestionManager["request"]>[0], "onResolved">,
 ): Promise<void> {
   for (const scope of scopes) {
-    const result = await executeSessionQuestionOperation(
+    let result = await executeSessionQuestionOperation(
       { ...scope, assertCurrent },
       { kind: "list" },
     );
     assertCurrent();
     if (!Array.isArray(result)) {
       throw new Error("Durable question recovery returned an invalid collection");
+    }
+    // Empty stores have no custody to reconcile and must not acquire a native writer.
+    if (result.length > 0) {
+      result = await executeSessionQuestionOperation(
+        { ...scope, assertCurrent },
+        { kind: "interrupt", gatewayEpoch },
+      );
+      assertCurrent();
+      if (!Array.isArray(result)) {
+        throw new Error("Durable question recovery returned an invalid collection");
+      }
     }
     for (const question of result) {
       installDurableQuestion(manager, question, onContinuationOwed, publication?.(question));

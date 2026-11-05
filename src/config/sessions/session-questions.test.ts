@@ -1,7 +1,10 @@
 import { copyFileSync, renameSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { installDurableQuestion } from "../../gateway/durable-question-runtime.js";
+import {
+  installDurableQuestion,
+  recoverDurableQuestions,
+} from "../../gateway/durable-question-runtime.js";
 import { QuestionManager } from "../../gateway/question-manager.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
@@ -794,9 +797,29 @@ describe("durable question custody", () => {
         sourceRunId: "asking-run",
       },
     ]);
-    expect(await operate({ kind: "interrupt", gatewayEpoch: "new-gateway" })).toMatchObject([
-      { continuation: { status: "interrupted", runId: "continuation-run" } },
-    ]);
+    const scheduler = createTestGatewayScheduler();
+    const manager = new QuestionManager(scheduler);
+    try {
+      await recoverDurableQuestions(
+        manager,
+        [scope()],
+        () => {
+          throw new Error("Claimed work must not be offered again after restart");
+        },
+        () => {},
+        "new-gateway",
+      );
+      expect(manager.observe(question.record.id)?.durableDefinition).toMatchObject({
+        continuation: { status: "interrupted", runId: "continuation-run" },
+      });
+    } finally {
+      manager.close();
+      await manager.drain();
+      await scheduler.stop();
+    }
+    expect(await operate({ kind: "get", id: question.record.id })).toMatchObject({
+      continuation: { status: "interrupted", runId: "continuation-run" },
+    });
     await expect(
       operate({
         kind: "claim",

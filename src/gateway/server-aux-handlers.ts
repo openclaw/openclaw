@@ -301,24 +301,15 @@ export function createGatewayAuxHandlers(
       if (!context) {
         throw new Error("Durable question recovery context is unavailable.");
       }
-      const [
-        { executeSessionQuestionOperation },
-        { recoverDurableQuestions },
-        { getAgentEventLifecycleGeneration },
-      ] = await Promise.all([
-        import("../config/sessions/session-questions.js"),
-        import("./durable-question-runtime.js"),
-        import("../infra/agent-events.js"),
-      ]);
-      await executeSessionQuestionOperation(
-        { ...scope, assertCurrent: assertQuestionOwnerCurrent },
-        { kind: "interrupt", gatewayEpoch: getAgentEventLifecycleGeneration() },
+      const [{ recoverDurableQuestions }, { getAgentEventLifecycleGeneration }] = await Promise.all(
+        [import("./durable-question-runtime.js"), import("../infra/agent-events.js")],
       );
       await recoverDurableQuestions(
         questionManager,
         [scope],
         onContinuationOwed,
         assertQuestionOwnerCurrent,
+        getAgentEventLifecycleGeneration(),
         () => ({
           onResolved: async (event, observation) => {
             assertQuestionOwnerCurrent();
