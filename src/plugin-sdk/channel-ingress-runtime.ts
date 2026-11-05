@@ -245,7 +245,13 @@ export function fanInChannelIngressLifecycles(
     invoke: (lifecycle: ChannelIngressLifecycle) => void | Promise<void>,
     targets: readonly ChannelIngressLifecycle[] = lifecycles,
   ) => {
-    await Promise.all(targets.map(async (lifecycle) => await invoke(lifecycle)));
+    const outcomes = await Promise.allSettled(
+      targets.map(async (lifecycle) => await invoke(lifecycle)),
+    );
+    const failure = outcomes.find((outcome) => outcome.status === "rejected");
+    if (failure?.status === "rejected") {
+      throw failure.reason;
+    }
   };
   const abandonAll = () => settleOnce(() => fanOut((lifecycle) => lifecycle.onAbandoned()));
   const dropAll = (reason: Parameters<NonNullable<ChannelIngressLifecycle["onDropped"]>>[0]) =>

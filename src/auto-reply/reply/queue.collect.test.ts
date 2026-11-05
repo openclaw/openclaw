@@ -474,20 +474,15 @@ describe("followup queue collect routing", () => {
   });
 
   it("does not enqueue when the external lifecycle rejects the run identity", () => {
-    const key = `test-rejected-lifecycle-${Date.now()}`;
+    const q = createQueueCase({ mode: "followup", debounceMs: 10_000, cap: 50 });
     const onEnqueued = vi.fn(() => false);
     const run = createRun({ prompt: "duplicate owner" });
     run.turnAdoptionLifecycle = { onAdopted: async () => {}, onDeferred: onEnqueued };
-    const enqueued = enqueueFollowupRun(key, run, {
-      mode: "followup",
-      debounceMs: 10_000,
-      cap: 50,
-      dropPolicy: "summarize",
-    });
+    const enqueued = q.add(run);
     expect(enqueued).toBe(false);
     expect(onEnqueued).toHaveBeenCalledTimes(1);
-    expect(getExistingFollowupQueue(key)?.items ?? []).toEqual([]);
-    clearFollowupQueue(key);
+    expect(getExistingFollowupQueue(q.key)?.items ?? []).toEqual([]);
+    clearFollowupQueue(q.key);
   });
 
   it("retires only the failed reservation when enqueue validation throws", async ({ signal }) => {

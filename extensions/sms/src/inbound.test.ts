@@ -160,7 +160,7 @@ function expectCleanedMedia() {
 
 describe("dispatchSmsInboundEvent", () => {
   beforeEach(() => {
-    unlinkIfExistsMock.mockClear();
+    unlinkIfExistsMock.mockReset().mockResolvedValue(undefined);
   });
 
   it("creates and sends a pairing challenge for first-time SMS senders", async () => {

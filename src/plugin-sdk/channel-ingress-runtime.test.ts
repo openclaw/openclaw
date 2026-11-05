@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createInboundDebouncer } from "../auto-reply/inbound-debounce.js";
 import {
@@ -95,13 +96,17 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
     expect(fanInChannelIngressLifecycles([]).lifecycle).toBeUndefined();
   });
 
-  it("preserves a queue-cap drop through channel fan-in and inbound debounce", async () => {
-    const first = { ...createLifecycle(), onDropped: vi.fn(async () => {}) };
-    const second = { ...createLifecycle(), onDropped: vi.fn(async () => {}) };
+  it("joins failed queue drops through fan-in and debounce", async () => {
+    const gate = Promise.withResolvers<void>();
+    const error = new Error("drop failed");
+    const onError = vi.fn();
+    const first = { ...createLifecycle(), onDropped: vi.fn().mockRejectedValue(error) };
+    const second = { ...createLifecycle(), onDropped: vi.fn(() => gate.promise) };
     const combined = fanInChannelIngressLifecycles([first, second]);
     const debouncer = createInboundDebouncer({
       debounceMs: 0,
       buildKey: () => "room",
+      onError,
       onFlush: (_items, createFlush) =>
         createFlush({
           lifecycle: combined.lifecycle,
@@ -111,8 +116,14 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
         }),
     });
 
-    await debouncer.enqueue({ id: "message" });
+    const dropping = debouncer.enqueue({ id: "message" });
+    await nextTurn();
+    const failuresBeforeSettlement = onError.mock.calls.length;
+    gate.resolve();
+    await dropping;
     await debouncer.drain();
+    expect(failuresBeforeSettlement).toBe(0);
+    expect(onError.mock.calls).toEqual([[error, [{ id: "message" }]]]);
     await combined.abandon();
 
     for (const source of [first, second]) {

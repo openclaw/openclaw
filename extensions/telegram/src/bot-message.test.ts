@@ -670,6 +670,7 @@ describe("telegram bot message processor", () => {
     let participantSettles = 0;
     let settledAfterFirstAdmission = false;
     const admissionErrors: unknown[] = [];
+    const admissionsDone = createDeferred<void>();
     dispatchTelegramMessage.mockImplementationOnce(async ({ turnAdoptionLifecycle }) => {
       turnAdoptionLifecycle?.onDeferred?.();
       for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -682,6 +683,7 @@ describe("telegram bot message processor", () => {
           settledAfterFirstAdmission = participantSettles > 0;
         }
       }
+      admissionsDone.resolve();
       return { kind: "completed" };
     });
     const processMessage = createTelegramMessageProcessor(baseDeps);
@@ -706,6 +708,7 @@ describe("telegram bot message processor", () => {
       );
     });
 
+    await admissionsDone.promise;
     expect(admissionErrors).toEqual([finalizerError, undefined, undefined]);
     expect(settledAfterFirstAdmission).toBe(false);
     expect(finalizeSpooledReplayResult).toHaveBeenCalledTimes(2);
