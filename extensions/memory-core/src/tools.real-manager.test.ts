@@ -287,10 +287,10 @@ describe("memory_search real manager", () => {
     }).execute("routine-refresh", zebraQuery);
     expect(result.details).toMatchObject({
       results: [expect.objectContaining({ snippet: expect.stringContaining("Zebra") })],
+      stale: true,
+      warning: expect.stringContaining("pending updates"),
+      action: expect.stringContaining("--agent main"),
     });
-    for (const field of ["stale", "warning", "action"]) {
-      expect(result.details).not.toHaveProperty(field);
-    }
     expect(getSpy.mock.calls.some(([params]) => params.purpose === "maintenance")).toBe(false);
     expect(Reflect.get(manager, "sessionsDirty")).toBe(true);
   });

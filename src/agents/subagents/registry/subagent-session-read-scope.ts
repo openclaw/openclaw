@@ -222,8 +222,11 @@ export class SubagentSessionReadLookup {
     return { sessionKeys: selected, cacheKeys: this.#select(buckets.byChild, selected) };
   }
 
-  selectChildren(childKeys: ReadonlySet<string>): string[] {
-    return this.#select(this.#sessionBuckets().byChild, childKeys);
+  selectChildren(
+    childKeys: ReadonlySet<string>,
+    additionalCacheKeys: readonly string[] = [],
+  ): string[] {
+    return this.#select(this.#sessionBuckets().byChild, childKeys, additionalCacheKeys);
   }
 
   selectControllers(controllerKeys: ReadonlySet<string>): string[] {

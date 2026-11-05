@@ -365,7 +365,11 @@ type CronServiceDepsInternal = Omit<CronServiceDeps, "env" | "nowMs"> & {
 
 /** Dependencies consumed by job policy before its mutation is committed. */
 export type CronJobPolicyContext = {
-  deps: Pick<CronServiceDepsInternal, "cronConfig" | "nowMs" | "log" | "failureRepairTimeoutMs">;
+  deps: Pick<
+    CronServiceDepsInternal,
+    "cronConfig" | "nowMs" | "log" | "failureRepairTimeoutMs" | "defaultAgentId"
+  > &
+    Partial<Pick<CronServiceDepsInternal, "resolveDefaultAgentId">>;
   /** Resolved by the host for this exact job while its recovery transaction holds the row. */
   preparedFailureAlert?: { jobId: string; value: ResolvedFailureAlert | null };
 };

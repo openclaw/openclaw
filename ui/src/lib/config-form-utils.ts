@@ -82,7 +82,10 @@ export function pathKey(path: Array<string | number>): string {
   return path.filter((segment) => typeof segment === "string").join(".");
 }
 
-const wildcardHintCache = new WeakMap<ConfigUiHints, Array<[string[], ConfigUiHint]>>();
+const wildcardHintCache = new WeakMap<
+  ConfigUiHints,
+  Map<number, Array<[string[], ConfigUiHint]>>
+>();
 
 type ResolvedConfigUiHint = {
   hint: ConfigUiHint;
@@ -101,16 +104,20 @@ function resolveHintForPath(
   const segments = path.map(String);
   let wildcardHints = wildcardHintCache.get(hints);
   if (!wildcardHints) {
-    wildcardHints = Object.entries(hints).flatMap(([hintKey, hint]) =>
-      hintKey.includes("*") ? [[hintKey.split("."), hint]] : [],
-    );
+    wildcardHints = new Map();
+    for (const [hintKey, hint] of Object.entries(hints)) {
+      if (!hintKey.includes("*")) {
+        continue;
+      }
+      const parts = hintKey.split(".");
+      const bucket = wildcardHints.get(parts.length) ?? [];
+      bucket.push([parts, hint]);
+      wildcardHints.set(parts.length, bucket);
+    }
     wildcardHintCache.set(hints, wildcardHints);
   }
-  for (const [hintSegments, hint] of wildcardHints) {
-    if (
-      hintSegments.length === segments.length &&
-      hintSegments.every((segment, index) => segment === "*" || segment === segments[index])
-    ) {
+  for (const [hintSegments, hint] of wildcardHints.get(segments.length) ?? []) {
+    if (hintSegments.every((segment, index) => segment === "*" || segment === segments[index])) {
       return { hint, hintPath: hintSegments.join(".") };
     }
   }
