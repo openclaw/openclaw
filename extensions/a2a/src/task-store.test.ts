@@ -29,8 +29,8 @@ describe("A2A task store", () => {
     expect(store.complete(aliceFirst.id, "first")?.id).toBe(aliceFirst.id);
     expect(store.complete(bobOnly.id, "bob")?.id).toBe(bobOnly.id);
     expect(store.complete(aliceSecond.id, "second")?.id).toBe(aliceSecond.id);
-    expect(aliceFirst.artifacts[0]?.parts).toEqual([{ text: "first" }]);
-    expect(aliceSecond.artifacts[0]?.parts).toEqual([{ text: "second" }]);
+    expect(aliceFirst.artifacts?.[0]?.parts).toEqual([{ text: "first" }]);
+    expect(aliceSecond.artifacts?.[0]?.parts).toEqual([{ text: "second" }]);
   });
 
   it("completes empty replies without inventing an artifact", () => {
@@ -108,7 +108,7 @@ describe("A2A task store", () => {
       store.complete(task.id, "final reply");
       await expect(second).resolves.toBe(task);
       expect(timedOut?.status.state).toBe("TASK_STATE_COMPLETED");
-      expect(task.artifacts[0]?.parts).toEqual([{ text: "final reply" }]);
+      expect(task.artifacts?.[0]?.parts).toEqual([{ text: "final reply" }]);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
@@ -177,21 +177,30 @@ describe("A2A task store", () => {
     const store = createTaskStore();
     const task = store.create("ctx-replay", "alice");
     store.start(task.id);
-    store.complete(task.id, "done");
+    const iterator = store.stream(task.id, "alice");
 
-    const states: string[] = [];
-    for await (const frame of store.stream(task.id, "alice")) {
-      if ("statusUpdate" in frame && frame.statusUpdate) {
-        states.push(frame.statusUpdate.status.state);
-      }
-    }
-    // The snapshot carries the final state; the replay buffer must still
-    // deliver the transitions the task already went through.
-    expect(states).toContain("TASK_STATE_WORKING");
-    expect(states).toContain("TASK_STATE_COMPLETED");
+    // The first frame is the live Task snapshot...
+    await expect(iterator.next()).resolves.toMatchObject({
+      value: { task: { status: { state: "TASK_STATE_WORKING" } } },
+    });
+    // ...followed by the transitions already buffered before subscribing.
+    await expect(iterator.next()).resolves.toMatchObject({
+      value: { statusUpdate: { status: { state: "TASK_STATE_WORKING" } } },
+    });
+
+    store.complete(task.id, "done");
+    // `complete` records the final artifact before the terminal status, in
+    // generation order; the stream must preserve that order.
+    await expect(iterator.next()).resolves.toMatchObject({
+      value: { artifactUpdate: { lastChunk: true } },
+    });
+    await expect(iterator.next()).resolves.toMatchObject({
+      value: { statusUpdate: { status: { state: "TASK_STATE_COMPLETED" } } },
+    });
+    await iterator.return?.(undefined);
   });
 
-  it("does not regress the state sequence when a reused messageId lands on a completed task", async () => {
+  it("opens a stream with the Task snapshot and drops stale transitions on a completed task", async () => {
     const store = createTaskStore();
     const first = store.create("ctx-dup", "alice", "reused-message");
     store.start(first.id);
@@ -205,17 +214,21 @@ describe("A2A task store", () => {
     for await (const frame of store.stream(second.id, "alice")) {
       frames.push(frame);
     }
+
+    // A stream must open with the Task (spec §3.5.2), so the completed
+    // snapshot leads; replaying the older `working` transition after it
+    // would regress the state sequence, so it is dropped instead
+    // (STREAM-ORDER-001).
+    expect(frames[0]).toMatchObject({
+      task: { id: first.id, status: { state: "TASK_STATE_COMPLETED" } },
+    });
     const states = frames
       .filter(
         (frame): frame is { task: never; statusUpdate: { status: { state: string } } } =>
           "statusUpdate" in frame,
       )
       .map((frame) => frame.statusUpdate.status.state);
-
-    // A completed-task snapshot yielded before the replayed events would put
-    // COMPLETED before WORKING; the replay sequence must stand alone and stay
-    // in generation order (STREAM-ORDER-001).
-    expect(states).toEqual(["TASK_STATE_WORKING", "TASK_STATE_COMPLETED"]);
+    expect(states).toEqual([]);
   });
 
   it("resolves a blocking wait when the task pauses for input", async () => {
@@ -233,7 +246,7 @@ describe("A2A task store", () => {
     });
   });
 
-  it("filters listed tasks by statusTimestampAfter", () => {
+  it("filters listed tasks by statusTimestampAfter on the inclusive boundary, newest first", () => {
     const store = createTaskStore();
     // Status timestamps come from `new Date()`, so the clock itself must move
     // between the two tasks for the comparison to be strict.
@@ -245,12 +258,14 @@ describe("A2A task store", () => {
     const later = store.create("ctx-later", "alice", "m-later");
     store.complete(later.id, "done");
 
+    // The cutoff equals the earlier task's timestamp: greater-than-or-equal
+    // keeps it, and the page is ordered most-recent-status-first.
     const listed = store.listTasks({
       ownerPeer: "alice",
       statusTimestampAfter: earlier.status.timestamp,
     });
 
-    expect(listed.tasks.map((entry) => entry.id)).toEqual([later.id]);
+    expect(listed.tasks.map((entry) => entry.id)).toEqual([later.id, earlier.id]);
     // Restore only after the assertions: with the clock back at the real date,
     // the 2026-01-01 completion times look older than the 24h retention and
     // the next prune would evict both fixtures.

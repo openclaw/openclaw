@@ -423,7 +423,13 @@ export function createA2aHttpHandler(deps: A2aHttpRoutesDeps) {
       try {
         assertSupportedVersion(request);
         const methodContext = createMethodContext({ request, peerName });
-        const card = await executeA2aMethod(methodContext, { method: "GetExtendedAgentCard" }, {});
+        // The capability travels with the method so the disabled setting is
+        // enforced on this route exactly as it is on the JSON-RPC path.
+        const card = await executeA2aMethod(
+          methodContext,
+          { method: "GetExtendedAgentCard", capability: "extendedAgentCard" },
+          {},
+        );
         writeCardResponse(request, response, card, "private");
       } catch (error) {
         writeJsonResponse(response, 200, {

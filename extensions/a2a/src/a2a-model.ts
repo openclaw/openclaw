@@ -101,7 +101,12 @@ export type A2aTask = {
   id: string;
   contextId: string;
   status: A2aTaskStatus;
-  artifacts: A2aArtifact[];
+  /**
+   * Present when the task has (or is requested with) artifacts. Projections
+   * that exclude artifacts MUST omit the field entirely — the wire contract
+   * forbids an empty array or null in its place.
+   */
+  artifacts?: A2aArtifact[];
   history: A2aMessage[];
   metadata?: A2aMetadata;
 };

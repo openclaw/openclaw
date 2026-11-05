@@ -69,6 +69,12 @@ function cloneTask(task: A2aTask): A2aTask {
   return structuredClone(task);
 }
 
+/** Parse an RFC 3339 instant to epoch milliseconds; 0 when unparseable. */
+function instantMs(timestamp: string | undefined): number {
+  const parsed = timestamp === undefined ? Number.NaN : Date.parse(timestamp);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function createStatusMessage(contextId: string, text: string): A2aMessage {
   return {
     messageId: randomUUID(),
@@ -255,13 +261,13 @@ export class A2aTaskStore {
   /**
    * Stream task updates (spec §3.1.2 / §3.1.6).
    *
-   * The first frame is the current Task snapshot while the task is live —
-   * that is what prevents a peer from missing an update between `GetTask`
-   * and subscribing. A terminal task with buffered history replays those
-   * events instead: a completed-task snapshot (e.g. a `messageId` reuse
-   * landing on an existing task) yielded before them would regress the
-   * state sequence (spec §3.5.2, events in generation order). The stream
-   * ends once the task reaches a terminal state.
+   * The first frame is always the current Task snapshot — that is what
+   * prevents a peer from missing an update between `GetTask` and
+   * subscribing. For a live task the replayed transitions follow it in
+   * generation order (spec §3.5.2). A terminal task (e.g. a `messageId`
+   * reuse landing on a completed task) drops the replayed transitions
+   * instead: yielding them after the newer snapshot would regress the state
+   * sequence. The stream ends once the task reaches a terminal state.
    */
   async *stream(
     taskId: string,
@@ -272,7 +278,7 @@ export class A2aTaskStore {
     if (!task) {
       throw taskNotFound("Task not found", taskId);
     }
-    // Subscribe before the first yield: an event published while the first
+    // Subscribe before the first yield: an event published while the snapshot
     // frame is in flight must land in this queue, not be missed. The queue is
     // seeded with the replay buffer so a late subscriber still observes every
     // transition since `submitted`.
@@ -283,14 +289,19 @@ export class A2aTaskStore {
       closed: false,
     };
     this.#subscribeQueue(taskId, queue);
+    // Captured before the first yield: the state as of the snapshot, not
+    // whatever the task has reached by the time the consumer resumes. A
+    // task that completes while the snapshot frame is in flight is live to
+    // this stream — its transitions still follow the snapshot in order.
+    const snapshotWasTerminal = isTerminalTaskState(task.status.state);
     try {
-      // A terminal-task snapshot yielded ahead of the replayed events would
-      // regress the state sequence (STREAM-ORDER-001): the buffer still
-      // holds the earlier `working` transitions. A live task's snapshot
-      // cannot regress — `submitted` is never published, and the interrupted
-      // states share the working order — so it stays the first frame.
-      if (replay.length === 0 || !isTerminalTaskState(task.status.state)) {
-        yield { task: cloneTask(task) };
+      yield { task: cloneTask(task) };
+      // A terminal snapshot is newer than every buffered transition, so
+      // replaying them after it would regress the state sequence
+      // (STREAM-ORDER-001); a live snapshot cannot regress — `submitted` is
+      // never published, and the interrupted states share the working order.
+      if (snapshotWasTerminal) {
+        queue.events.length = 0;
       }
       // A task that never settles must not pin an HTTP response open forever. The
       // deadline bounds one stream; the peer can reconnect with SubscribeToTask.
@@ -366,16 +377,20 @@ export class A2aTaskStore {
       if (params.status !== undefined && task.status.state !== params.status) {
         continue;
       }
-      // RFC 3339 timestamps compare correctly as strings when both sides use
-      // the same `toISOString()` rendering.
+      // Compare instants, not strings: lexical ordering breaks on
+      // fractional seconds ('.' sorts before 'Z'), and the schema's contract
+      // is greater-than-or-equal, so the boundary itself is included.
       if (
         params.statusTimestampAfter !== undefined &&
-        (task.status.timestamp ?? "") <= params.statusTimestampAfter
+        instantMs(task.status.timestamp) < instantMs(params.statusTimestampAfter)
       ) {
         continue;
       }
       matches.push(task);
     }
+    // Most-recent-status-first: the caller's first page is the freshest tasks,
+    // and the pagination cursor resolves against this same order.
+    matches.sort((a, b) => instantMs(b.status.timestamp) - instantMs(a.status.timestamp));
 
     const requestedSize = params.pageSize ?? A2A_DEFAULT_PAGE_SIZE;
     const pageSize = Math.min(
@@ -498,8 +513,10 @@ export class A2aTaskStore {
   }
 
   #addArtifact(task: A2aTask, artifact: A2aArtifact, lastChunk: boolean): void {
+    // `artifacts` is optional only on the wire projection; a stored task that
+    // gains an artifact always carries the full field.
     task.artifacts = [
-      ...task.artifacts.filter((entry) => entry.artifactId !== artifact.artifactId),
+      ...(task.artifacts ?? []).filter((entry) => entry.artifactId !== artifact.artifactId),
       artifact,
     ];
     const event: A2aTaskArtifactUpdateEvent = {
@@ -629,7 +646,9 @@ export function projectTask(
 ): A2aTask {
   const projected = cloneTask(task);
   if (!includeArtifacts) {
-    projected.artifacts = [];
+    // The wire contract forbids `artifacts: []` when the projection excludes
+    // them — the field must be absent entirely, not empty or null.
+    delete projected.artifacts;
   }
   if (historyLength !== undefined) {
     if (historyLength === 0) {

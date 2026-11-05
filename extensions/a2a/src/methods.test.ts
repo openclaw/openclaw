@@ -169,11 +169,12 @@ describe("A2A ListTasks", () => {
       result: { tasks: [{ id: running.id }], totalSize: 1 },
     });
 
-    // Artifacts are opt-in on ListTasks (spec §3.1.4).
+    // Artifacts are opt-in on ListTasks (spec §3.1.4): omitted entirely —
+    // not an empty array — unless requested.
     const withoutArtifacts = (await (await post(rpc("ListTasks", {}))).json()) as {
-      result: { tasks: Array<{ artifacts: unknown[] }> };
+      result: { tasks: Array<Record<string, unknown>> };
     };
-    expect(withoutArtifacts.result.tasks.every((task) => task.artifacts.length === 0)).toBe(true);
+    expect(withoutArtifacts.result.tasks.every((task) => !("artifacts" in task))).toBe(true);
     const withArtifacts = (await (
       await post(rpc("ListTasks", { includeArtifacts: true }))
     ).json()) as { result: { tasks: Array<{ artifacts: unknown[] }> } };

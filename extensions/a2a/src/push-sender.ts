@@ -77,9 +77,9 @@ export class A2aPushSender {
   notify(params: {
     task: A2aTask;
     /**
-     * Resolved at the delivery boundary, not when the event fires: a
-     * registration deleted while this notification sat queued behind a slow
-     * receiver must not receive (or be charged for) the update.
+     * Resolved at every delivery boundary, not when the event fires: a
+     * registration deleted or replaced while this notification sat queued
+     * behind a slow receiver must not receive (or be charged for) the update.
      */
     resolveConfigs: () => A2aPushNotificationConfig[];
     event: A2aStreamResponse;
@@ -94,8 +94,10 @@ export class A2aPushSender {
         if (this.#closed) {
           return;
         }
-        for (const config of params.resolveConfigs()) {
-          await this.#deliver(config, params.event);
+        // Re-resolve per config id: each delivery re-checks registration
+        // authority before every network attempt, not just at queue time.
+        for (const initial of params.resolveConfigs()) {
+          await this.#deliver(initial.id, params.event, params.resolveConfigs);
         }
       })
       .catch((error: unknown) => {
@@ -109,13 +111,24 @@ export class A2aPushSender {
     this.#chains.set(params.task.id, chained);
   }
 
-  async #deliver(config: A2aPushNotificationConfig, event: A2aStreamResponse): Promise<void> {
+  async #deliver(
+    configId: string,
+    event: A2aStreamResponse,
+    resolveConfigs: () => A2aPushNotificationConfig[],
+  ): Promise<void> {
     const body = JSON.stringify(event);
-    const headers = buildPushHeaders(config);
     for (let attempt = 1; attempt <= A2A_PUSH_MAX_ATTEMPTS; attempt += 1) {
       if (this.#closed) {
         return;
       }
+      // Registration authority is re-resolved before each attempt: a config
+      // deleted (or replaced) during backoff or a prior slow delivery loses
+      // its right to receive further events, including retries.
+      const config = resolveConfigs().find((entry) => entry.id === configId);
+      if (!config) {
+        return;
+      }
+      const headers = buildPushHeaders(config);
       try {
         const { response, release } = await fetchWithSsrFGuard({
           url: config.url,
@@ -156,7 +169,9 @@ export class A2aPushSender {
         });
       }
     }
-    this.#log(`a2a push notification to ${config.url} exhausted ${A2A_PUSH_MAX_ATTEMPTS} attempts`);
+    this.#log(
+      `a2a push notification for config ${configId} exhausted ${A2A_PUSH_MAX_ATTEMPTS} attempts`,
+    );
   }
 
   /** Stop the sender: queued deliveries abort before their next network attempt. */

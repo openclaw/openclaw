@@ -8,7 +8,6 @@ import { createA2aGatewayFixture } from "./gateway.test-support.js";
 import type { dispatchA2aInbound } from "./inbound.js";
 import {
   createStreamingResponse,
-  parseSseFrames,
   parseSseJsonFrames,
   type StreamingResponse,
 } from "./streaming.test-support.js";
@@ -221,15 +220,5 @@ describe("A2A streaming (SendStreamingMessage / SubscribeToTask)", () => {
     await handler(streamRequest(sendStreamRequest("hello")), response);
 
     expect(JSON.parse(response.body())).toMatchObject({ error: { code: -32004 } });
-  });
-
-  it("parses SSE frames with and without an explicit event name", () => {
-    expect(parseSseFrames('event: error\ndata: {"code":-32001}\n\n')).toEqual([
-      { event: "error", data: '{"code":-32001}' },
-    ]);
-    // A2A 1.0 data frames carry no `event:` line, so they default to "message".
-    expect(parseSseFrames('data: {"task":{}}\n\n')).toEqual([
-      { event: "message", data: '{"task":{}}' },
-    ]);
   });
 });

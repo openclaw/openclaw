@@ -138,7 +138,13 @@ export const A2aListTasksParamsSchema = z.object({
   pageSize: z.number().int().min(1).max(100).optional(),
   pageToken: z.string().optional(),
   historyLength: z.number().int().nonnegative().optional(),
-  statusTimestampAfter: z.string().optional(),
+  // The filter is compared as an instant, so it must parse as RFC 3339.
+  statusTimestampAfter: z
+    .string()
+    .refine((value) => Number.isFinite(Date.parse(value)), {
+      message: "statusTimestampAfter must be an RFC 3339 timestamp",
+    })
+    .optional(),
   includeArtifacts: z.boolean().optional(),
 });
 

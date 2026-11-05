@@ -161,8 +161,8 @@ describe("A2A channel inbound dispatch", () => {
     const turns = fixture.dispatch.mock.calls.map(([turn]) => turn);
     await turns[1]!.delivery.deliver({ text: "second reply" }, { kind: "final" });
     await turns[0]!.delivery.deliver({ text: "first reply" }, { kind: "final" });
-    expect(fixture.task.artifacts[0]?.parts).toEqual([{ text: "first reply" }]);
-    expect(second.artifacts[0]?.parts).toEqual([{ text: "second reply" }]);
+    expect(fixture.task.artifacts?.[0]?.parts).toEqual([{ text: "first reply" }]);
+    expect(second.artifacts?.[0]?.parts).toEqual([{ text: "second reply" }]);
   });
 
   it("propagates dispatch failures to the HTTP task owner", async () => {
@@ -191,8 +191,8 @@ describe("A2A channel inbound dispatch", () => {
 
     const dispatches = fixture.dispatch.mock.calls;
     expect(dispatches[0]?.[0].route.sessionKey).not.toBe(dispatches[1]?.[0].route.sessionKey);
-    expect(fixture.task.artifacts[0]?.parts[0]).toEqual({ text: "a2a:hermes" });
-    expect(fixture.store.get(crewTask.id, "crew")?.artifacts[0]?.parts[0]).toEqual({
+    expect(fixture.task.artifacts?.[0]?.parts[0]).toEqual({ text: "a2a:hermes" });
+    expect(fixture.store.get(crewTask.id, "crew")?.artifacts?.[0]?.parts[0]).toEqual({
       text: "a2a:crew",
     });
   });

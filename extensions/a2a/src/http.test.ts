@@ -764,7 +764,7 @@ describe("A2A SendMessage task references", () => {
         artifacts: [{ parts: [{ text: "echo: follow up" }] }],
       }),
     );
-    expect(harness.taskStore.get(original.id, "alpha")?.artifacts[0]?.parts).toEqual([
+    expect(harness.taskStore.get(original.id, "alpha")?.artifacts?.[0]?.parts).toEqual([
       { text: "original reply" },
     ]);
   });
