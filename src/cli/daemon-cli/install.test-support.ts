@@ -129,7 +129,7 @@ vi.mock("./response.js", () => ({
   buildDaemonServiceSnapshot: vi.fn(),
   installDaemonServiceAndEmit: installDaemonServiceAndEmitMock,
 }));
-const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const { defaultRuntime, resetRuntimeCapture, runtimeLogs } = createCliRuntimeCapture();
 vi.mock("../../runtime.js", () => ({
   defaultRuntime,
 }));
@@ -193,6 +193,7 @@ export function setupInstallTests() {
   });
 }
 export {
+  runtimeLogs,
   actionState,
   buildGatewayInstallPlanMock,
   ensureConfigReadyMock,

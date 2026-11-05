@@ -1,4 +1,5 @@
 import { raceWithTimeout } from "@openclaw/retry";
+import { INGRESS_QUEUE_CAP_DROP_REASONS } from "./ingress-queue-cap-drop.js";
 import type { ChannelIngressQueueClaim } from "./ingress-queue.types.js";
 import type { IngressNonRetryableFailure } from "./ingress-retry-policy.js";
 
@@ -8,16 +9,26 @@ export type IngressDeadLetterNotice<TPayload, TMetadata> = (
   signal: AbortSignal,
 ) => void | Promise<void>;
 
-/** Bound transport delivery after a committed dead letter; never retry the inbound event. */
-export function createIngressDeadLetterNotifier<TPayload, TMetadata>(
+/** Report committed failure outcomes; only delivery failures can notify the transport. */
+export function createIngressFailureReporter<TPayload, TMetadata>(
   onDeadLetter: IngressDeadLetterNotice<TPayload, TMetadata> | undefined,
   log: (message: string) => void,
   formatError: (error: unknown) => string,
 ) {
   return async (
     claim: ChannelIngressQueueClaim<TPayload, TMetadata>,
-    failure: IngressNonRetryableFailure,
+    failure: IngressNonRetryableFailure & { attempt: number },
   ) => {
+    const displayId = claim.id.replace(/^0+(?=\d)/, "") || claim.id;
+    if (INGRESS_QUEUE_CAP_DROP_REASONS.some((reason) => reason === failure.reason)) {
+      log(
+        `spooled update ${displayId} on lane ${claim.laneKey ?? displayId} dropped by queue policy (${failure.reason})`,
+      );
+      return;
+    }
+    log(
+      `spooled update ${displayId} on lane ${claim.laneKey ?? displayId} failed after ${failure.attempt} attempts (${failure.reason}): ${failure.message}; dead-lettered`,
+    );
     if (!onDeadLetter) {
       return;
     }
@@ -34,7 +45,6 @@ export function createIngressDeadLetterNotifier<TPayload, TMetadata>(
         { ref: false },
       );
     } catch (error) {
-      const displayId = claim.id.replace(/^0+(?=\d)/, "") || claim.id;
       log(`spooled update ${displayId} dead-letter notice failed: ${formatError(error)}`);
     }
   };
