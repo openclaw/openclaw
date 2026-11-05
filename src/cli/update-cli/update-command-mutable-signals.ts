@@ -54,6 +54,11 @@ export async function withMutableUpdateTerminalSettlement<T>(
   }
 }
 
+/** Recovery owns the run after an activation-stage signal, so its receipts still belong in history. */
+export function isMutableUpdateRecovering(run: Run | undefined): boolean {
+  return (run && admissions.get(run)?.recovering) === true;
+}
+
 export function recordMutableUpdateSignalPhase(
   run: Run | undefined,
   phase: UpdateRunRecord["phase"],

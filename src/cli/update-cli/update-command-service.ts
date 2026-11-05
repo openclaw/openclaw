@@ -515,7 +515,7 @@ export async function maybeRestartService(
           }
         }
         const warning =
-          `Failed to reconcile gateway service with ${activation.result.root ?? "the updated install"}: ${String(err)}. ` +
+          `Failed to reconcile gateway service with ${activation.result.root ?? "the updated install"}: ${run?.interrupted ? "the update was interrupted before the service restart finished" : String(err)}. ` +
           `Run \`${formatCliCommand("openclaw gateway install --force", activation.serviceEnv)}\`, then \`${formatCliCommand("openclaw gateway restart", activation.serviceEnv)}\`.`;
         recordServiceReconciliationWarning(activation.result, activation.serviceEnv, warning);
         if (activation.serviceRuntimeRefreshRequired) {
