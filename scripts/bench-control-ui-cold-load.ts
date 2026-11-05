@@ -2878,6 +2878,37 @@ try {
         : undefined;
     if (transcriptWitness) {
       const observed = warmReload?.transcriptWitnesses;
+      const finalWitness =
+        values["active-transcript"] && !values["active-transcript-reader"]
+          ? await page.evaluate(({ rowKey, text }) => {
+              const thread = document.querySelector<HTMLElement>(
+                ".chat-pane-cache__pane--active .chat-thread",
+              );
+              const row = [
+                ...(thread?.querySelectorAll<HTMLElement>(".chat-virtual-row") ?? []),
+              ].find((element) => element.dataset.virtualRowKey === rowKey);
+              const body = row?.querySelector<HTMLElement>(".chat-text");
+              const rect = body?.getBoundingClientRect();
+              const rowRect = row?.getBoundingClientRect();
+              const viewport = thread?.getBoundingClientRect();
+              return {
+                attached: Boolean(body?.textContent?.includes(text)),
+                visible: Boolean(
+                  body?.textContent?.includes(text) &&
+                  body.checkVisibility({ checkOpacity: true, visibilityProperty: true }) &&
+                  rect &&
+                  rowRect &&
+                  viewport &&
+                  Math.min(rect.bottom, rowRect.bottom, viewport.bottom, innerHeight) >
+                    Math.max(rect.top, rowRect.top, viewport.top, 0) &&
+                  Math.min(rect.right, rowRect.right, viewport.right, innerWidth) >
+                    Math.max(rect.left, rowRect.left, viewport.left, 0),
+                ),
+                top: rect && viewport ? rect.top - viewport.top : null,
+                bottom: rect && viewport ? rect.bottom - viewport.top : null,
+              };
+            }, transcriptWitness.witnesses.live)
+          : null;
       const cache =
         observed?.history.filter((entry: { source: string }) => entry.source === "snapshot-read") ??
         [];
@@ -2902,7 +2933,12 @@ try {
         (values["active-transcript-reader"] || observed.attached.live) &&
         (!values["active-transcript"] || Boolean(warmReload?.transcriptStability?.anchor)) &&
         (values["active-transcript"] || !observed.attached.saved) &&
-        (values["active-transcript-reader"] || observed.live.paintMs !== null) &&
+        // Chrome's one-shot text timing entry can precede the tail's scroll into view.
+        (values["active-transcript-reader"] ||
+          (values["active-transcript"]
+            ? finalWitness?.visible &&
+              warmReload?.transcriptStability?.frames.at(-1)?.distanceFromEnd <= 1
+            : observed.live.paintMs !== null)) &&
         (!values["active-transcript-two-round"] ||
           (warmReload?.transcriptRounds?.some(
             (entry: { phase: string }) => entry.phase === "completed-history-response",
@@ -2920,6 +2956,7 @@ try {
             observed,
             phases: warmReload?.transcriptRounds,
             stability: warmReload?.transcriptStability,
+            finalWitness,
             valid: Boolean(valid),
             savedPaintObserved:
               observed?.saved.paintMs !== null && observed?.saved.paintMs !== undefined,
@@ -2929,6 +2966,9 @@ try {
         ),
       );
       if (!valid) {
+        await page.screenshot({
+          path: path.join(artifactDir, `run-${run + 1}.witness-failure.png`),
+        });
         throw new Error(
           "Saved/live witness provenance or final live presentation was not established; see transcript-witness artifact",
         );
