@@ -185,9 +185,8 @@ Choose whether to share your existing Codex state:
 
 When automatic setup selects an existing Codex ChatGPT or API-key login, it
 uses **Reuse**. Without an existing login,
-the offered ChatGPT sign-in uses a separate home. To switch, choose **Use a
-separate login** on the setup card, or sign in with ChatGPT or an OpenAI API key
-in **Model Setup**. Completing that sign-in selects the isolated home.
+the offered ChatGPT sign-in uses a separate home. To switch, choose **Sign in separately** on the setup card, or sign in with ChatGPT or an OpenAI API key
+in **Models**. Completing that sign-in selects the isolated home.
 
 Choosing a Claude or Codex model does not automatically show native
 conversations in the sidebar. Enable conversation discovery separately if you want to browse them.
@@ -227,7 +226,7 @@ integrity (when available), then confirm installation or activation. This also
 applies to verified first-party packages in manual setup.
 
 Declining stops the attempt without choosing another route. If confirmation
-fails, retry the saved sign-in in **Model Setup**; your credential and any
+fails, retry the saved sign-in in **Models**; your credential and any
 plugins installed for that attempt are kept.
 
 A replacement sign-in becomes active only after verification and your acceptance

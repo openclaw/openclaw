@@ -1,5 +1,6 @@
 import ConcurrencyExtras
 import Foundation
+import Network
 import OpenClawDiscovery
 import OpenClawKit
 import OSLog
@@ -42,6 +43,14 @@ actor GatewayEndpointStore {
     enum Credential: String {
         case token
         case password
+    }
+
+    struct LocalPortConflict: LocalizedError {
+        let message: String
+
+        var errorDescription: String? {
+            self.message
+        }
     }
 
     private static let envOverrideWarnings = LockIsolated<Set<Credential>>([])
@@ -150,6 +159,11 @@ actor GatewayEndpointStore {
                 self.resolveLocalConfigAuthString($0, env: env, serviceEnv: launchdSnapshot?.environment ?? [:])
             }
         }
+        // Local clients must match Gateway startup's config-first credential precedence.
+        // An inherited app environment must not replace the configured local secret.
+        if !isRemote, let configured {
+            return configured
+        }
         if let override {
             // Password overrides always warn; token overrides warn only when different.
             if let configured, kind == .password || configured != override {
@@ -235,13 +249,6 @@ actor GatewayEndpointStore {
 
         let port = deps.localPort()
         self.localUnavailableReason = deps.localUnavailableReason()
-        let root = OpenClawConfigFile.loadDict()
-        let localConfig = Self.localConfig(
-            root: root,
-            env: ProcessInfo.processInfo.environment,
-            launchdSnapshot: nil,
-            tailscaleIP: nil,
-            port: port)
         let token = deps.token()
         let password = deps.password()
         let deviceAuthGatewayID = GatewayDiscoveryPreferences.deviceAuthGatewayID(
@@ -255,17 +262,29 @@ actor GatewayEndpointStore {
                 self.state = .unavailable(mode: .local, reason: reason, routeRevision: self.endpointRevision.value)
                 return
             }
-            let url = localConfig.url
-            self.state = .ready(
-                mode: .local,
-                url: url,
-                token: token,
-                password: password,
-                routeRevision: self.endpointRevision.value)
-            self.resolvedEndpoint = Self.localEndpoint(
-                config: (url, token, password),
-                deviceAuthGatewayID: deviceAuthGatewayID,
-                revision: self.endpointRevision.value)
+            do {
+                let url = try Self.localConfig(
+                    root: OpenClawConfigFile.loadDict(),
+                    env: ProcessInfo.processInfo.environment,
+                    launchdSnapshot: nil,
+                    tailscaleIP: nil,
+                    port: port).url
+                self.state = .ready(
+                    mode: .local,
+                    url: url,
+                    token: token,
+                    password: password,
+                    routeRevision: self.endpointRevision.value)
+                self.resolvedEndpoint = Self.localEndpoint(
+                    config: (url, token, password),
+                    deviceAuthGatewayID: deviceAuthGatewayID,
+                    revision: self.endpointRevision.value)
+            } catch {
+                self.state = .unavailable(
+                    mode: .local,
+                    reason: error.localizedDescription,
+                    routeRevision: self.endpointRevision.value)
+            }
         case .remote:
             self.state = .connecting(
                 mode: .remote, detail: Self.remoteConnectingDetail, routeRevision: self.endpointRevision.value)
@@ -357,8 +376,13 @@ actor GatewayEndpointStore {
                 self.setState(.unavailable(mode: .local, reason: reason))
                 return
             }
-            let url = URL(string: "\(source.scheme)://\(source.localHost):\(source.localPort)")!
-            self.publishReadyEndpoint(source: source, url: url)
+            do {
+                let url = try Self.localGatewayURL(
+                    scheme: source.scheme, host: source.localHost, port: source.localPort, bindMode: source.bindMode)
+                self.publishReadyEndpoint(source: source, url: url)
+            } catch {
+                self.setState(.unavailable(mode: .local, reason: error.localizedDescription))
+            }
         case .remote:
             if source.remoteTransport == .direct {
                 guard let url = source.directRemoteURL else {
@@ -702,9 +726,8 @@ extension GatewayEndpointStore {
               expectedEndpoint.config.url == currentURL
         else { return nil }
         let currentHost = currentURL.host?.lowercased() ?? ""
-        guard currentHost == "127.0.0.1" || currentHost == "localhost" else { return nil }
-
-        guard let source = try? await self.currentSourceSnapshot() else { return nil }
+        guard currentHost == "127.0.0.1" || currentHost == "localhost",
+              let source = try? await self.currentSourceSnapshot() else { return nil }
         let fallbackHost = source.localHost.lowercased()
         guard !Task.isCancelled,
               source.mode == .local,
@@ -716,9 +739,11 @@ extension GatewayEndpointStore {
         else { return nil }
         // Validate the captured endpoint before adopting its intentional replacement.
         let generation = self.adoptSource(source)
-        let url = URL(string: "\(source.scheme)://\(source.localHost):\(source.localPort)")!
-
-        guard await self.sourceIsCurrent(source, generation: generation) else { return nil }
+        guard let url = try? Self.localGatewayURL(
+            scheme: source.scheme, host: source.localHost, port: source.localPort, bindMode: source.bindMode),
+            await self.sourceIsCurrent(
+                source,
+                generation: generation) else { return nil }
         self.logger.info("auto bind fallback to tailnet host=\(source.localHost, privacy: .public)")
         return self.publishReadyEndpoint(source: source, url: url)
     }
@@ -792,12 +817,6 @@ extension GatewayEndpointStore {
             ? app.tailscaleIP ?? TailscaleNetwork.detectTailnetIPv4()
             : nil
         let localPort = self.resolveGatewayPort(root: root, env: env, profile: profile)
-        let localConfig = mode == .local ? self.localConfig(
-            root: root,
-            env: env,
-            launchdSnapshot: launchdSnapshot,
-            tailscaleIP: tailscaleIP,
-            port: localPort) : nil
         let remoteResolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
         let sshRouteIdentity: SSHRouteIdentity?
         if mode == .remote, remoteResolution.transport == .ssh {
@@ -813,9 +832,6 @@ extension GatewayEndpointStore {
         }
         let deviceAuthGatewayID = GatewayDiscoveryPreferences.deviceAuthGatewayID(root: root, connectionMode: mode)
         func credential(_ kind: Credential) -> String? {
-            if mode == .local {
-                return kind == .token ? localConfig?.token : localConfig?.password
-            }
             guard mode != .unconfigured else { return nil }
             return self.resolveGatewayCredential(
                 kind,
@@ -832,11 +848,11 @@ extension GatewayEndpointStore {
             password: credential(.password),
             deviceAuthGatewayID: deviceAuthGatewayID,
             localPort: localPort,
-            localHost: localConfig?.url.host ?? self.resolveLocalGatewayHost(
+            localHost: self.resolveLocalGatewayHost(
                 bindMode: bindMode,
                 customBindHost: customBindHost,
                 tailscaleIP: tailscaleIP),
-            scheme: localConfig?.url.scheme ?? self.resolveGatewayScheme(root: root, env: env),
+            scheme: self.resolveGatewayScheme(root: root, env: env),
             bindMode: bindMode,
             remoteTransport: remoteResolution.transport,
             directRemoteURL: remoteResolution.directURL,
@@ -920,7 +936,7 @@ extension GatewayEndpointStore {
         case "tailnet":
             tailscaleIP ?? "127.0.0.1"
         case "custom":
-            customBindHost ?? "127.0.0.1"
+            customBindHost ?? ""
         default:
             "127.0.0.1"
         }
@@ -944,9 +960,9 @@ extension GatewayEndpointStore {
                 "Use distinct ports for gateway.port and gateway.remote.url, then retry."
         }
         if let conflict {
-            throw NSError(domain: "Gateway", code: 1, userInfo: [NSLocalizedDescriptionKey: conflict])
+            throw LocalPortConflict(message: conflict)
         }
-        return self.localEndpoint(
+        return try self.localEndpoint(
             config: self.localConfig(
                 root: root,
                 env: ProcessInfo.processInfo.environment,
@@ -977,7 +993,7 @@ extension GatewayEndpointStore {
         env: [String: String],
         launchdSnapshot: LaunchAgentPlistSnapshot?,
         tailscaleIP: String?,
-        port: Int) -> GatewayConnection.Config
+        port: Int) throws -> GatewayConnection.Config
     {
         let bind = self.resolveGatewayBindMode(root: root, env: env)
         let customBindHost = self.resolveGatewayCustomBindHost(root: root)
@@ -996,10 +1012,27 @@ extension GatewayEndpointStore {
         }
         let token = credential(.token)
         let password = credential(.password)
-        return (
-            url: URL(string: "\(scheme)://\(host):\(port)")!,
+        return try (
+            url: self.localGatewayURL(scheme: scheme, host: host, port: port, bindMode: bind),
             token: token,
             password: password)
+    }
+
+    private static func localGatewayURL(scheme: String, host: String, port: Int, bindMode: String?) throws -> URL {
+        // Match Gateway custom-bind validation; bracketing IPv6 would advertise an unsupported route.
+        if bindMode == "custom", IPv4Address(host) == nil {
+            throw self.endpointError(
+                "gateway.customBindHost must be a valid IPv4 address when gateway.bind=custom. " +
+                    "Correct the configuration and retry.")
+        }
+        var components = URLComponents()
+        components.scheme = scheme
+        components.host = host
+        components.port = port
+        guard let url = components.url else {
+            throw self.endpointError("Invalid local Gateway endpoint. Correct the Gateway configuration and retry.")
+        }
+        return url
     }
 
     private static func normalizeDashboardPath(_ rawPath: String?) -> String {
@@ -1032,6 +1065,7 @@ extension GatewayEndpointStore {
         for config: GatewayConnection.Config,
         mode: AppState.ConnectionMode,
         localBasePath: String? = nil,
+        remoteBasePath: String? = nil,
         authToken: String? = nil) throws -> URL
     {
         guard var components = URLComponents(url: config.url, resolvingAgainstBaseURL: false) else {
@@ -1055,7 +1089,8 @@ extension GatewayEndpointStore {
             let fallbackPath = localBasePath ?? self.localControlUiBasePath()
             components.path = self.normalizeDashboardPath(fallbackPath)
         } else {
-            components.path = "/"
+            // Tunnels and bare host:port URLs carry no mount; the connected Gateway advertises it.
+            components.path = self.normalizeDashboardPath(remoteBasePath)
         }
 
         let tokenCandidate = authToken ?? config.token
@@ -1114,9 +1149,9 @@ extension GatewayEndpointStore {
         root: [String: Any],
         env: [String: String],
         launchdSnapshot: LaunchAgentPlistSnapshot? = nil,
-        tailscaleIP: String? = nil) -> GatewayConnection.Config
+        tailscaleIP: String? = nil) throws -> GatewayConnection.Config
     {
-        self.localConfig(
+        try self.localConfig(
             root: root,
             env: env,
             launchdSnapshot: launchdSnapshot,

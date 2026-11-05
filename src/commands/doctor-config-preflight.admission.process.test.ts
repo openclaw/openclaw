@@ -360,7 +360,13 @@ it.each<[string, AdmissionCase]>([
           }
         }
       } else if (!canonicalIdentity) {
-        expect(manifest(stateDir)).toEqual(before);
+        const after = manifest(stateDir);
+        const wal = path.relative(stateDir, `${databasePath}-wal`);
+        if (!(wal in before) && wal in after) {
+          expect(fs.statSync(`${databasePath}-wal`).size).toBe(0);
+          delete after[wal];
+        }
+        expect(after).toEqual(before);
         expect(schemaMetadata(databasePath)).toEqual(schemaBefore);
       }
     } finally {

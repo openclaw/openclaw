@@ -3,6 +3,7 @@ import type { ChatImageRenditionWidth } from "../../../src/shared/chat-image-ren
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { fetchControlUiResource } from "../app/browser-http.ts";
 import { isSameOriginGateway } from "../app/gateway-control-ui-reload.ts";
+import { isHttpArtifactDownloadUrl } from "./artifact-download-url.ts";
 import type { GatewayBrowserClient } from "./gateway.ts";
 import type { ArtifactDownloadResult } from "./types.ts";
 
@@ -20,20 +21,6 @@ type ArtifactDownloadParams = {
   variant?: "full" | "thumbnail";
   previewWidth?: ChatImageRenditionWidth;
 };
-
-export function isHttpArtifactDownloadUrl(url: string, resourceBasePath = ""): boolean {
-  try {
-    const parsed = new URL(url, globalThis.location.origin);
-    const prefix = `${normalizeBasePath(resourceBasePath)}${ARTIFACT_DOWNLOAD_PATH}`;
-    return (
-      parsed.origin === globalThis.location.origin &&
-      parsed.pathname.startsWith(prefix) &&
-      /^[^/]+\/[^/]+$/u.test(parsed.pathname.slice(prefix.length))
-    );
-  } catch {
-    return false;
-  }
-}
 
 export async function downloadArtifact(
   state: ArtifactDownloadHost,

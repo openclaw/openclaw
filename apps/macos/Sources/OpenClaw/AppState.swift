@@ -68,6 +68,9 @@ final class AppState {
         state: self, environment: self.voiceEnvironment)
     @ObservationIgnored let bundleLocationAllowsPersistentIntegration: Bool
     @ObservationIgnored private var isHydratingLaunchAtLogin = false
+    @ObservationIgnored private let launchAtLoginManager: LaunchAgentManager?
+    @ObservationIgnored private var launchAtLoginTask: Task<Void, Error>?
+    private(set) var launchAtLoginError: String?
     private var isInitializing = true
     private var isApplyingGatewayConfig = false
     private enum GatewayConfigSyncState: Equatable {
@@ -111,8 +114,24 @@ final class AppState {
                 isEnabling: self.launchAtLogin,
                 bundleLocationAllowsPersistentIntegration: self.bundleLocationAllowsPersistentIntegration)
             else { return }
-            self.ifNotPreview {
-                LaunchAgentManager.shared.set(enabled: self.launchAtLogin, bundlePath: Bundle.main.bundlePath)
+            guard let manager = self.launchAtLoginManager else { return }
+            let previous = oldValue
+            self.launchAtLoginError = nil
+            var failure: String?
+            let operation = manager.set(
+                enabled: self.launchAtLogin, bundlePath: Bundle.main.bundlePath)
+            { [weak self] enabled, error in
+                failure = error
+                guard let self else { return }
+                self.hydrateLaunchAtLogin(enabled ?? previous)
+                self.launchAtLoginError = error
+                NotificationCenter.default.post(name: .openclawDeviceSettingsChanged, object: nil)
+            }
+            self.launchAtLoginTask = Task { @MainActor in
+                _ = await operation.value
+                if let failure {
+                    throw NSError(domain: "OpenClaw", code: 1, userInfo: [NSLocalizedDescriptionKey: failure])
+                }
             }
         }
     }
@@ -443,10 +462,12 @@ final class AppState {
         gatewayConfigSaver: @escaping ([String: Any], Bool) -> Bool = {
             OpenClawConfigFile.saveDict($0, allowGatewayModeRemoval: $1)
         },
-        voiceEnvironment: AppVoiceRuntime.Environment = .live)
+        voiceEnvironment: AppVoiceRuntime.Environment = .live,
+        launchAtLoginManager: LaunchAgentManager? = nil)
     {
         let isPreview = preview || ProcessInfo.processInfo.isRunningTests
         self.isPreview = isPreview
+        self.launchAtLoginManager = launchAtLoginManager ?? (isPreview ? nil : LaunchAgentManager.shared)
         self.bundleLocationAllowsPersistentIntegration =
             !AppProfile.current.isActive &&
             (isPreview || ApplicationRelocator.currentBundleAllowsPersistentIntegration())
@@ -543,8 +564,8 @@ final class AppState {
         self.activeComputerPresenceEnabled = Self.resolveActiveComputerPresenceEnabled()
         self.peekabooBridgeEnabled = AppLaunchRuntimePlan.current.resolvePeekabooBridgeEnabled(
             AppDefaults.standard.object(forKey: peekabooBridgeEnabledKey) as? Bool ?? true)
-        if !self.isPreview, !AppProfile.current.isActive {
-            LaunchAgentManager.shared.loadStatus { [weak self] current in
+        if !self.isPreview, !AppProfile.current.isActive, let manager = self.launchAtLoginManager {
+            manager.loadStatus { [weak self] current in
                 self?.hydrateLaunchAtLogin(current)
             }
         } else if !self.isPreview, AppProfile.current.isActive {
@@ -573,6 +594,13 @@ final class AppState {
         self.isHydratingLaunchAtLogin = true
         self.launchAtLogin = enabled
         self.isHydratingLaunchAtLogin = false
+    }
+
+    func setLaunchAtLogin(_ enabled: Bool) -> Task<Void, Error> {
+        // Reserve this choice with the launch-agent owner before handing its reply
+        // back to the bridge. Later choices must not wait for launchctl to finish.
+        self.launchAtLogin = enabled
+        return self.launchAtLoginTask ?? Task {}
     }
 
     @MainActor

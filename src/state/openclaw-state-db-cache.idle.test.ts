@@ -8,6 +8,7 @@ import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-asyn
 import {
   borrowOpenClawStateDatabaseForAsyncRead,
   openClawStateDatabaseCache as cache,
+  prepareOpenClawStateCachedRead,
   retainOpenClawStateDatabase,
   retainOpenClawStateDatabaseForIdle,
   retainOpenClawStateDatabaseForIndependentRead,
@@ -133,13 +134,18 @@ it.each([
   }
 });
 
-it("defers idle close while a native transaction is active", () => {
-  const database = fixture().open();
+it("defers idle close for a native transaction, not prepared fact checks", () => {
+  const { pathname, open } = fixture();
+  const database = open();
+  const read = prepareOpenClawStateCachedRead(pathname);
   database.db.exec("BEGIN");
   vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS);
   expect(database.db).toMatchObject({ isOpen: true, isTransaction: true });
   database.db.exec("ROLLBACK");
-  advance(database, SQLITE_IDLE_HANDLE_TTL_MS, false);
+  advance(database, SQLITE_IDLE_HANDLE_TTL_MS - 1, true);
+  expect(read()).toBe(database);
+  advance(database, 1, false);
+  expect(read()).toBeUndefined();
 });
 
 it.each(["native", "maintenance"] as const)(

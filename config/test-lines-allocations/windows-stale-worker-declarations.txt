@@ -1,0 +1,2 @@
+# Keep the stale-source fixture compiler limited to its SQLite behavior while retaining declaration metadata.
+17

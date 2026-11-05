@@ -147,16 +147,16 @@ suite.define(() => {
           page.locator(".model-providers__defaults openclaw-select-picker").first(),
           "qwen3-8b-instruct",
         );
-        await button(selectedModel, "Test connection: LM Studio").click();
+        await button(selectedModel, "Test access: LM Studio").click();
         await selectedModel
           .locator(".model-providers__probe-summary")
-          .getByText("Connection failed", { exact: true })
+          .getByText("Access failed", { exact: true })
           .waitFor();
         await expectText(
           selectedModel.locator(".model-providers__probe"),
           "The connection probe failed.",
         );
-        await button(selectedModel, "Test connection: LM Studio").waitFor();
+        await button(selectedModel, "Test access: LM Studio").waitFor();
         await expectRequestCounts(gateway, { [rpc.prepare]: 0, [rpc.activate]: 0 });
 
         await page.setViewportSize({ height: 844, width: 390 });

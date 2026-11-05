@@ -55,7 +55,12 @@ const readSessions = "SELECT * FROM meeting_transcript_sessions ORDER BY session
 const expectedStarts = retainedStarts
   .map(([session_id, started_at, started_at_ms]) => ({ session_id, started_at, started_at_ms }))
   .toSorted((a, b) => a.session_id.localeCompare(b.session_id));
-const backupTables = ["config_machine_state", "meeting_transcript_sessions", "schema_meta"];
+const historicalBackupTables = [
+  "config_machine_state",
+  "meeting_transcript_sessions",
+  "schema_meta",
+];
+const backupTables = [...historicalBackupTables, "worker_environments"];
 const chronologyMigration = {
   kind: "state" as const,
   foundVersion: CHRONOLOGY_VERSION - 1,
@@ -181,8 +186,8 @@ it("restores a historical chronology archive without performing unrelated repair
   db.exec("DROP INDEX idx_acp_replay_sessions_updated;");
   const originalSessions = readRows(db, readSessions);
   const migration = { ...chronologyMigration, path: pathname };
-  const tables = backupTables;
-  expect(backupScope(migration)).toEqual(tables);
+  // This archive predates the image import; restore its recorded scope, not today's scope.
+  const tables = historicalBackupTables;
   await withMaintenance((maintenance) =>
     preserveScope(db, tables, async () => {
       await createScopedMigrationSnapshot({

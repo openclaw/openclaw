@@ -209,6 +209,17 @@ describe("checked-in release-tooling waivers", () => {
     );
   });
 
+  it("grants the Kova leaf only for the operator-named version", () => {
+    const failed = (key: string) =>
+      child(key, {
+        conclusion: "failure",
+        jobs: [job("Kova mock provider performance", 1)],
+        status: "completed",
+      });
+    expect(terminalPolicyPass(failed("productPerformance"), "2026.11.1")).toBe(true);
+    expect(terminalPolicyPass(failed("productPerformance"), "2026.11.2")).toBe(false);
+  });
+
   it("does not accept a waived leaf without its required aggregate", async () => {
     grant();
     const observed = await observe([job(LIVE_JOB, 1)]);

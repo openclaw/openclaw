@@ -253,8 +253,8 @@ struct GatewayEndpointStoreTests {
         ["gateway": ["auth": [key: value]]]
     }
 
-    private func makeStore(
-        sourceSnapshot: @escaping @Sendable () async -> GatewayEndpointStore.SourceSnapshot,
+    func makeStore(
+        sourceSnapshot: @escaping @Sendable () async throws -> GatewayEndpointStore.SourceSnapshot,
         token: @escaping @Sendable () -> String? = { nil },
         remoteRouteIfRunning: @escaping @Sendable () async -> RemoteTunnelManager.Route? = { nil },
         remoteRouteIsCurrent: @escaping @Sendable (RemoteTunnelManager.Route) async -> Bool = { _ in true },
@@ -391,6 +391,27 @@ struct GatewayEndpointStoreTests {
             mode: mode,
             localBasePath: localBasePath,
             authToken: authToken)
+    }
+
+    @Test(arguments: ["token", "password"], [false, true])
+    func `local credentials prefer config while remote credentials retain env overrides`(
+        credential: String,
+        isRemote: Bool) throws
+    {
+        let kind = try #require(GatewayEndpointStore.Credential(rawValue: credential))
+        let root: [String: Any] = [
+            "gateway": [isRemote ? "remote" : "auth": [credential: "  configured-secret  "]],
+        ]
+        let resolved = GatewayEndpointStore.resolveGatewayCredential(
+            kind,
+            isRemote: isRemote,
+            root: root,
+            env: ["OPENCLAW_GATEWAY_\(credential.uppercased())": "stale-environment-secret"],
+            launchdSnapshot: self.makeLaunchAgentSnapshot(
+                token: "service-token",
+                password: "service-password"))
+
+        #expect(resolved == (isRemote ? "stale-environment-secret" : "configured-secret"))
     }
 
     @Test func `resolve gateway token prefers env and falls back to launchd`() {
@@ -1369,7 +1390,7 @@ extension GatewayEndpointStoreTests {
         #expect(host == "192.168.1.10")
     }
 
-    @Test func `local config uses local gateway auth and host resolution`() {
+    @Test func `local config uses local gateway auth and host resolution`() throws {
         let snapshot = self.makeLaunchAgentSnapshot(
             env: [:],
             token: "launchd-token",
@@ -1385,7 +1406,7 @@ extension GatewayEndpointStoreTests {
             ],
         ]
 
-        let config = GatewayEndpointStore._testLocalConfig(
+        let config = try GatewayEndpointStore._testLocalConfig(
             root: root,
             env: [:],
             launchdSnapshot: snapshot,

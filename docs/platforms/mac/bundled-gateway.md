@@ -445,7 +445,23 @@ For troubleshooting, runtime builds live under
 The app retains the current and previous builds for recovery and removes older
 unused builds only after a successful health check.
 
+### Service permissions after an update
+
+App-managed Bun services use a stable executable path,
+`<state>/runtime/service/bun`, to preserve Messages Automation permission across
+updates. The first move to this path, including migration from Node, requires
+Automation approval once.
+
+Replacing an ad-hoc or source-built Bun can also reset Full Disk Access, even
+if System Settings still shows it enabled. Grant access again for
+`<state>/runtime/service/bun`.
+
 ### Local authentication
+
+Local connections prefer configured `gateway.auth.token` or
+`gateway.auth.password` credentials over the app's environment variables,
+matching Gateway startup. Environment credentials are fallbacks when no
+configured credential resolves. Remote connections keep environment overrides.
 
 If token authentication is selected or implicit and no credentials exist in
 config or the child environment, the app saves a token before starting its
@@ -456,9 +472,14 @@ primary. See [Gateway configuration](/gateway/config-gateway).
 
 ### Credential recovery
 
-Normal credential migrations run automatically. Existing private keys are
-preserved; migration failure does not silently replace them. Unsupported or
-inconsistent state requires Doctor recovery.
+Credential and local runtime-pin migrations run before the app selects its
+Gateway runtime. Existing private keys and explicit pins are preserved;
+a migration conflict stops startup and shows recovery guidance.
+
+After an in-place app update, the app stops a previous build's app-managed
+Gateway before preparing credentials and installing the updated service.
+Normal migrations complete automatically; unsupported or inconsistent state
+requires Doctor recovery.
 
 For storage, migration, and rollback details, see
 [local client credentials](/reference/database-schemas/versioning#local-client-credentials).
