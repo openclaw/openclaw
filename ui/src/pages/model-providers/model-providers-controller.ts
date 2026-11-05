@@ -98,13 +98,13 @@ export function createModelProviders(
       supplemental.adoptCoreData(client, data);
     },
     onCatalogComplete: (result) => {
-      if (state.data) {
-        state.data = {
-          ...state.data,
-          providerOutcomes: result.providerOutcomes ?? [],
-          catalogError: null,
-        };
-      }
+      state.data &&= {
+        ...state.data,
+        providerOutcomes: result.providerOutcomes ?? [],
+        pendingProviders: result.pendingProviders ?? [],
+        catalogRequestFailed: false,
+        catalogError: null,
+      };
     },
   });
   const refreshPolicy = new UsageRefreshPolicy({

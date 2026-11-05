@@ -7,16 +7,18 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/environments.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import type { ImageGenerationProvider } from "../image-generation/provider-types.js";
-import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
+import type { MediaUnderstandingProvider } from "../media-understanding/provider-types.js";
 import type { MusicGenerationProvider } from "../music-generation/provider-types.js";
 import type { SpawnResult } from "../process/exec.js";
 import type {
-  RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderConfiguredContext,
-  RealtimeTranscriptionProviderId,
   RealtimeTranscriptionProviderResolveConfigContext,
-  RealtimeTranscriptionSession,
   RealtimeTranscriptionSessionCreateRequest,
+} from "../realtime-transcription/provider-contexts.js";
+import type {
+  RealtimeTranscriptionProviderConfig,
+  RealtimeTranscriptionProviderId,
+  RealtimeTranscriptionSession,
 } from "../realtime-transcription/provider-types.js";
 import type {
   RealtimeVoiceBridge,
@@ -443,7 +445,7 @@ export type WorkerProvider = {
         inspectPreparedWorkspace?: (transport: {
           runScript: (script: string, signal: AbortSignal) => Promise<string>;
         }) => Promise<void>;
-        /** Bound to this provision attempt; retained callbacks reject after it closes. */
+        /** Bound to this preparation attempt; retained callbacks reject after it closes. */
         prepare: (transport: {
           runScript: (script: string, signal: AbortSignal) => Promise<string>;
           /** Render using this provider command's remaining budget before repository code runs. */
@@ -474,6 +476,15 @@ export type WorkerProvider = {
       };
     },
   ) => Promise<WorkerLease>;
+  /**
+   * Refresh an available, unbound enrolled worker through the same project preparation owner.
+   * Never allocate, capture, or enroll. Honor project authority and settle commands on abort.
+   * Core publishes the refreshed prepared workspace before binding it to a session.
+   */
+  refreshPreparedProject?: (
+    lease: { leaseId: string; profile: WorkerProfile },
+    project: NonNullable<NonNullable<Parameters<WorkerProvider["provision"]>[2]>["project"]>,
+  ) => Promise<void>;
   /** Provider-owned transport for repository lifecycle commands on an enrolled lease. */
   runSetupCommand?: (
     lease: { leaseId: string; profile: WorkerProfile },

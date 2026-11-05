@@ -10,12 +10,11 @@ import {
   expectDefined,
   installMockGateway,
   chatMessage,
+  waitForTranscriptScrollIdle as waitForProgressThreadIdle,
 } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
-import {
-  openProgressHomeDock,
-  waitForProgressScrollIdle as waitForProgressThreadIdle,
-} from "./session-progress-home.test-support.ts";
+import { openProgressHomeDock } from "./session-progress-home.test-support.ts";
+import { captureTopVisibleVirtualRow } from "./virtual-row-anchor.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const height = (card: Locator) => card.evaluate((el) => el.getBoundingClientRect().height);
@@ -130,7 +129,8 @@ suite.define(() => {
           if ((await card.getAttribute("open")) !== null) {
             await card.locator("summary").click();
           }
-          const readerTop = await thread.evaluate((el) => el.scrollTop);
+          await waitForProgressThreadIdle(thread);
+          const reader = await captureTopVisibleVirtualRow(thread);
           await gateway.emitGatewayEvent("chat", {
             sessionKey,
             runId,
@@ -148,7 +148,9 @@ suite.define(() => {
           await expect.poll(() => card.textContent()).toContain("Updated findings.");
           await waitForProgressThreadIdle(thread);
           expect(await card.getAttribute("open")).toBeNull();
-          expect(await thread.evaluate((el) => el.scrollTop)).toBe(readerTop);
+          const streamedReader = await captureTopVisibleVirtualRow(thread);
+          expect(streamedReader.key).toBe(reader.key);
+          expect(Math.abs(streamedReader.viewportTop - reader.viewportTop)).toBeLessThanOrEqual(2);
           await gateway.emitChatFinal({ sessionKey, runId, text: "Complete." });
           await expect.poll(() => thread.textContent()).toContain("Complete.");
           expect(await card.getAttribute("open")).toBeNull();
@@ -160,7 +162,11 @@ suite.define(() => {
             );
             await card.locator(".session-progress-card__step").last().scrollIntoViewIfNeeded();
             expect(await body.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
-            expect(await thread.evaluate((el) => el.scrollTop)).toBe(readerTop);
+            const disclosedReader = await captureTopVisibleVirtualRow(thread);
+            expect(disclosedReader.key).toBe(reader.key);
+            expect(Math.abs(disclosedReader.viewportTop - reader.viewportTop)).toBeLessThanOrEqual(
+              2,
+            );
             await card.locator("summary").press(key);
             await expect.poll(() => card.getAttribute("open")).toBeNull();
           }

@@ -152,6 +152,11 @@ on:
         required: false
         default: ""
         type: string
+      npm_preflight_use_github_hosted_runners:
+        description: Run npm artifact preflight jobs on GitHub-hosted ubuntu-24.04 instead of Blacksmith
+        required: false
+        default: false
+        type: boolean
 permissions:
   actions: write
   contents: read
@@ -1513,6 +1518,7 @@ jobs:
               args=(-f stage="$stage" -f dispatch_id="$dispatch_id" -f source_sha="$TARGET_SHA" -f release_tag="$RELEASE_TAG" -f preflight_phase="$PREFLIGHT_PHASE")
               if [[ "$stage" == "npm" ]]; then
                 args+=(-f npm_dist_tag="$NPM_DIST_TAG" -f release_candidate_branch="$RELEASE_CANDIDATE_BRANCH")
+                args+=(-f npm_preflight_use_github_hosted_runners="$NPM_PREFLIGHT_USE_GITHUB_HOSTED_RUNNERS")
               elif [[ "$stage" == "candidate" ]]; then
                 args+=(-f request_json="$CANDIDATE_REQUEST_JSON" -f prepared_npm_bundle_json="$PREPARED_NPM_BUNDLE_JSON")
               fi
@@ -1909,6 +1915,7 @@ jobs:
       RELEASE_TAG: ${{ needs.resolve_target.outputs.release_tag }}
       NPM_DIST_TAG: ${{ needs.resolve_target.outputs.npm_dist_tag }}
       RELEASE_CANDIDATE_BRANCH: ${{ needs.resolve_target.outputs.release_candidate_branch }}
+      NPM_PREFLIGHT_USE_GITHUB_HOSTED_RUNNERS: ${{ inputs.npm_preflight_use_github_hosted_runners }}
       PREFLIGHT_PHASE: ${{ inputs.rerun_group == 'all' && 'all' || 'prepare' }}
       CHILD_WORKFLOW_REF: ${{ github.ref_name }}
       PARENT_WORKFLOW_SHA: ${{ github.sha }}
@@ -2021,6 +2028,10 @@ jobs:
       CHILD_WORKFLOW_REF: ${{ github.ref_name }}
       PARENT_WORKFLOW_SHA: ${{ github.sha }}
       DISPATCH_ID: full-release-validation-${{ github.run_id }}-1-plugin-npm-preflight
+      # The normal publish route repacks with the admitted publisher tooling P;
+      # the preflight child packs with this run's tooling.
+      PUBLISHER_SHA: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission.workflowSha || '' }}
+      PUBLICATION_ROUTE: ${{ fromJSON(needs.resolve_target.outputs.publication_selection_json || '{}').route || '' }}
     steps:
       - name: Retain original plugin npm artifact descriptor
         id: reused
@@ -2033,6 +2044,62 @@ jobs:
         id: dispatch
         if: github.run_attempt == 1 && env.PUBLICATION_ARTIFACTS_REUSED != 'true'
         run: *full_release_child_dispatch
+
+      # While the child runs, pack and scan as Plugin NPM Release will: candidate
+      # source at the root, P's tooling, scripts, and inventory at .release-tooling.
+      # A P-only bundler or inventory drift then fails here instead of at publish.
+      - name: Checkout target source for publisher scan
+        if: &publisher_tooling_scan env.PUBLISHER_SHA != '' && env.PUBLISHER_SHA != github.sha && env.PUBLICATION_ROUTE == 'normal'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Checkout publisher tooling
+        if: *publisher_tooling_scan
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.PUBLISHER_SHA }}
+          path: .release-tooling
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment for publisher tooling scan
+        if: *publisher_tooling_scan
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+
+      - name: Install publisher tooling dependencies
+        if: *publisher_tooling_scan
+        working-directory: .release-tooling
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
+      - name: Scan plugin npm packs with publisher tooling
+        if: *publisher_tooling_scan
+        env:
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
+        run: |
+          set -euo pipefail
+          if [[ ! -f .release-tooling/scripts/check-plugin-npm-security-scan.mts ]]; then
+            echo "::warning::Publisher tooling ${PUBLISHER_SHA} predates this scan; Plugin NPM Release scans at publish."
+            exit 0
+          fi
+          plan_args=(--selection-mode "$PLUGIN_PUBLISH_SCOPE")
+          [[ -z "$PLUGINS" ]] || plan_args+=(--plugins "$PLUGINS")
+          [[ "$NPM_DIST_TAG" != extended-stable ]] || plan_args+=(--npm-dist-tag "$NPM_DIST_TAG")
+          node --import tsx .release-tooling/scripts/plugin-npm-release-plan.ts "${plan_args[@]}" > "$RUNNER_TEMP/plugin-npm-publisher-plan.json"
+          echo "Packing with publisher tooling ${PUBLISHER_SHA}."
+          node --import tsx .release-tooling/scripts/check-plugin-npm-security-scan.mts \
+            --tooling-root .release-tooling \
+            --plan "$RUNNER_TEMP/plugin-npm-publisher-plan.json"
 
       - name: Resolve and seal exact plugin npm artifact descriptor
         id: prepared

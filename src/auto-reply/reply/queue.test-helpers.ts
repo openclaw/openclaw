@@ -6,8 +6,6 @@ import type { FollowupRun, QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import type { InternalFollowupRun } from "./queue/types.js";
 
-const slackRoute = { originatingChannel: "slack", originatingTo: "channel:A" };
-
 export function createQueueTestRun(
   params: Pick<FollowupRun, "prompt"> & Partial<Omit<FollowupRun, "run">>,
   execution: Partial<FollowupRun["run"]> = {},
@@ -98,16 +96,6 @@ export function enqueueTestRun(
   runOverrides?: Partial<FollowupRun["run"]>,
 ) {
   return enqueueFollowupRun(key, createQueueTestRun(params, runOverrides), settings);
-}
-
-export function enqueueSlackRun(
-  key: string,
-  settings: QueueSettings,
-  prompt: string,
-  run: Partial<FollowupRun["run"]>,
-  route: Partial<Parameters<typeof createQueueTestRun>[0]> = {},
-) {
-  return enqueueTestRun(key, { prompt, ...slackRoute, ...route }, settings, run);
 }
 
 /** Synthetic preparation owner: the callback has not entered a model/tool effect. */

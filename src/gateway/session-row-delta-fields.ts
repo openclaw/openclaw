@@ -26,20 +26,28 @@ function hashJson(encoded: string | undefined): bigint | undefined {
   if (encoded === undefined) {
     return undefined;
   }
-  // Seven ASCII characters plus a leading sentinel fit exactly in a JS number.
+  // Nine ASCII characters plus a leading sentinel fit in 64 bits. Build the
+  // first seven in an exact JS number, then append the remaining fourteen bits.
   // Negative integers retain no text and cannot collide with unsigned SHA fingerprints.
-  if (encoded.length <= 7) {
+  if (encoded.length <= 9) {
     let packed = 1;
+    let tail = 0;
     for (let i = 0; i < encoded.length; i++) {
       const code = encoded.charCodeAt(i);
       if (code > 127) {
         packed = 0;
         break;
       }
-      packed = packed * 128 + code;
+      if (i < 7) {
+        packed = packed * 128 + code;
+      } else {
+        tail = tail * 128 + code;
+      }
     }
     if (packed) {
-      return -BigInt(packed);
+      return encoded.length <= 7
+        ? -BigInt(packed)
+        : -((BigInt(packed) << BigInt(7 * (encoded.length - 7))) | BigInt(tail));
     }
   }
   // Accepted: a 64-bit collision can omit a changed field, ~2^-64 per comparison.

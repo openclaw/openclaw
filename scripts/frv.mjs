@@ -28,6 +28,7 @@ import {
   composeReleaseAttemptJobs,
   composeReleaseChildAttemptEvidence,
   formatReleaseStateOutcome,
+  GHOST_JOBS_ADVICE,
   isReleaseGhArtifactMissingError,
   isReleaseGhServerError,
   MAX_RELEASE_ARTIFACT_BYTES,
@@ -1962,7 +1963,8 @@ function duplicateJobNames(jobs) {
   return [...duplicates].toSorted((left, right) => left.localeCompare(right));
 }
 
-// A 5xx rerun storm can leave duplicate queued jobs without runners in the new attempt.
+// Any rerun request (single-job or batched) can leave duplicate queued jobs without
+// runners in the new attempt; such an attempt can never seal.
 async function verifyRerunAttemptJobs(child, runAttempt, client, operationDeadline) {
   const deadline = Math.min(
     operationDeadline,
@@ -1979,7 +1981,7 @@ async function verifyRerunAttemptJobs(child, runAttempt, client, operationDeadli
     if (remaining <= 0) {
       throw new Error(
         duplicates.length > 0
-          ? `${child.key} run ${child.runId} attempt ${runAttempt} is unsealable and holds duplicate jobs: ${duplicates.join(", ")}; cancel that attempt and start a fresh all-group FRV`
+          ? `${child.key} run ${child.runId} attempt ${runAttempt} is unsealable and holds duplicate jobs: ${duplicates.join(", ")}; ${GHOST_JOBS_ADVICE}`
           : `${child.key} run ${child.runId} attempt ${runAttempt} exposed no jobs; inspect it before another rerun`,
       );
     }
@@ -2034,6 +2036,10 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
       return run;
     },
   };
+  const repositoryOption =
+    client.repository && client.repository !== DEFAULT_REPOSITORY
+      ? ` --repo ${client.repository}`
+      : "";
   const initial = await preflightContinuation(
     plan,
     rootRunId,
@@ -2244,10 +2250,6 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
       }
       if (options.noFollow) {
         const receipt = reruns.at(-1);
-        const repositoryOption =
-          client.repository && client.repository !== DEFAULT_REPOSITORY
-            ? ` --repo ${client.repository}`
-            : "";
         return {
           action: "rerun-accepted",
           continueCommand: `pnpm frv continue --failed --run ${rootRunId}${repositoryOption}`,
@@ -2258,6 +2260,15 @@ export async function continueFailed(plan, rootRunId, reader, options = {}) {
         };
       }
       continue;
+    }
+    // One invocation reruns a child once; report a repeat failure now instead of
+    // idling until unrelated siblings settle. The budget is re-derived from attempts.
+    const failedAgain = status.failed.find((child) => ownedAttempts.has(child.runId));
+    if (failedAgain) {
+      const used = failedAgain.effectiveRunAttempt - failedAgain.plannedRunAttempt + 1;
+      throw new Error(
+        `child ${failedAgain.key} failed again on attempt ${failedAgain.effectiveRunAttempt}; rerun budget remaining ${Math.max(0, DEFAULT_CHILD_MAX_ATTEMPTS - used)}; rerun pnpm frv continue --failed --run ${rootRunId}${repositoryOption} to retry a confirmed flake, otherwise start a fresh all-group FRV`,
+      );
     }
     if (status.active.length === 0 && !pendingArtifactProducers) {
       break;
@@ -3620,11 +3631,12 @@ async function pollRelease(state, client, pending, observation, readOptions) {
           }
         }
         const duplicates = duplicateJobNames(jobs);
-        // Attempts briefly list overlapping jobs while GitHub materializes them.
+        // Attempts briefly list overlapping jobs while GitHub materializes them; only a
+        // final attempt that still holds duplicates is unsealable ghost-job evidence.
         if (duplicates.length > 0 && (final || pending.has(scanned))) {
           report(
-            `duplicates:${runId}:${attempt}`,
-            `${child.key} run ${runId} attempt ${attempt} holds duplicate jobs: ${duplicates.join(", ")}`,
+            `duplicates:${runId}:${attempt}${final ? ":final" : ""}`,
+            `${child.key} run ${runId} attempt ${attempt} holds duplicate jobs: ${duplicates.join(", ")}; ${final ? GHOST_JOBS_ADVICE : "they may still settle; recheck before rerunning"}`,
             run.html_url,
           );
         }

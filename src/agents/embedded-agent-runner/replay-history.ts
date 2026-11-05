@@ -739,6 +739,7 @@ export async function validateReplayTurns(
   params: ProviderReplayHookParams & {
     messages: AgentMessage[];
     policy?: TranscriptPolicy;
+    preserveUserTurns?: boolean;
   },
 ): Promise<AgentMessage[]> {
   const policy = resolveReplayPolicy(params);
@@ -763,6 +764,7 @@ export async function validateReplayTurns(
   return policy.validateAnthropicTurns
     ? validateAnthropicTurns(validatedGemini, {
         mergeConsecutiveTurns: shouldMergeConsecutiveTurns(policy, params.modelApi),
+        mergeConsecutiveUserTurns: !params.preserveUserTurns,
       })
     : validatedGemini;
 }

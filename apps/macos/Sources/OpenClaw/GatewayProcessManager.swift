@@ -245,12 +245,20 @@ final class GatewayProcessManager {
             do {
                 _ = try GatewayEndpointStore.localEndpoint(
                     hostingBesideRemotePrimary: self.hostsLocalGatewayWithRemotePrimary)
-            } catch {
+            } catch let error as GatewayEndpointStore.LocalPortConflict {
                 let conflict = error.localizedDescription
                 if self.desiredActive { self.stop() }
                 self.desiredActive = false
                 self.recordProfilePortConflict(conflict)
                 Task { await GatewayEndpointStore.shared.setLocalUnavailableReason(conflict) }
+                return
+            } catch {
+                // Configuration can recover from a file edit. Only an ownership
+                // conflict may latch endpoint unavailability and withdraw activation intent.
+                if self.desiredActive { self.stop(preservingActivationIntent: true) }
+                self.desiredActive = true
+                self.fail(error.localizedDescription)
+                Task { await GatewayEndpointStore.shared.refresh() }
                 return
             }
         }

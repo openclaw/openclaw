@@ -19,6 +19,7 @@ import { listDirectoryTreeStrict } from "./directory-walk.js";
 import * as diskSpace from "./disk-space.js";
 import * as fileDescriptor from "./file-descriptor.js";
 import * as sqliteIntegrity from "./sqlite-integrity.js";
+import * as readOnlyLocation from "./sqlite-readonly-location.js";
 import * as sqliteSource from "./sqlite-snapshot-source.js";
 import * as sqliteSnapshot from "./sqlite-snapshot.js";
 import * as inspection from "./update-candidate-state.inspection.js";
@@ -82,6 +83,20 @@ async function retainedWal(file: string, sql: string) {
   }
   await Promise.all(files.map((target, index) => fs.writeFile(target, bytes[index]!)));
   return { files, bytes };
+}
+
+// Another process acts on the source and exits without closing, as a crashed or busy peer would.
+function runSqlitePeer(file: string, readOnly: boolean, sql = "") {
+  const script = `
+    import { DatabaseSync } from 'node:sqlite';
+    const db = new DatabaseSync(process.argv[1], { readOnly: ${readOnly} });
+    db.exec(${JSON.stringify(sql)});
+    db.prepare('SELECT rowid,value FROM payload ORDER BY rowid').all();
+    process.exit(0);`;
+  const probe = spawnSync(resolveTestNodeExecPath(), ["--input-type=module", "-e", script, file], {
+    encoding: "utf8",
+  });
+  expect(probe.status, probe.stderr).toBe(0);
 }
 
 async function fixture(externalAgents = false) {
@@ -280,24 +295,11 @@ it.each([
         if (phase !== "pre-migration database backup" || source !== f.shared) {
           return;
         }
-        const probe = spawnSync(
-          resolveTestNodeExecPath(),
-          [
-            "--input-type=module",
-            "-e",
-            `
-        import { DatabaseSync } from 'node:sqlite';
-        const db = new DatabaseSync(process.argv[1], { readOnly: ${reader} });
-        ${reader ? "" : "db.exec(\"INSERT INTO payload VALUES ('external write')\");"}
-        ${activity === "checkpoint-writer" ? "db.exec('PRAGMA wal_checkpoint(TRUNCATE)');" : ""}
-        db.prepare('SELECT rowid,value FROM payload ORDER BY rowid').all();
-        process.exit(0);
-      `,
-            f.shared,
-          ],
-          { encoding: "utf8" },
+        runSqlitePeer(
+          f.shared,
+          reader,
+          `${reader ? "" : "INSERT INTO payload VALUES ('external write');"}${activity === "checkpoint-writer" ? "PRAGMA wal_checkpoint(TRUNCATE);" : ""}`,
         );
-        expect(probe.status, probe.stderr).toBe(0);
       },
     });
     if (!reader) {
@@ -410,6 +412,45 @@ it("keeps the verified digest when a snapshot is replaced before backup metadata
   expect(await fs.readFile(backup.databases[0]!.snapshotPath)).not.toEqual(published);
 });
 
+it.each(["opens", "commits"] as const)(
+  "keeps automatic restoration only when a reader %s between the generation reads",
+  async (activity) => {
+    const f = await fixture();
+    {
+      // A closed WAL database keeps no index until its next connection opens.
+      using database = new DatabaseSync(f.shared);
+      database.exec("PRAGMA journal_mode=WAL");
+    }
+    await expectMissing(`${f.shared}-shm`);
+    const opens = activity === "opens";
+    const images = vi.spyOn(readOnlyLocation, "prepareSqliteReadOnlyLocationSyncInProcess");
+    const backup = await f.capture({
+      onProgress: ({ phase, path: source }) => {
+        if (phase === "pre-migration database backup" && source === f.shared) {
+          runSqlitePeer(
+            f.shared,
+            opens,
+            opens ? "" : "INSERT INTO payload VALUES ('external write')",
+          );
+        }
+      },
+    });
+    // One private image serves the before read; only a real write costs a second one.
+    expect(images).toHaveBeenCalledTimes(opens ? 1 : 2);
+    await expectSnapshot(backup.databases[0]!);
+    // The reader's zero-commit index is equivalent to the closed generation recorded.
+    const now = generationReads.readUpdateDatabaseGenerationPair([f.shared]);
+    expect(backup.sourceGenerations[f.shared]).toBe(
+      opens ? now.emptyReaderAlternates[f.shared] : undefined,
+    );
+    expect(backup.warnings).toEqual(
+      opens
+        ? []
+        : [`Database changed during capture; its snapshot requires manual recovery: ${f.shared}`],
+    );
+  },
+);
+
 it.each(["path", "owner"] as const)(
   "still refuses a changed database %s after discovery",
   async (change) => {
@@ -506,7 +547,7 @@ async function originalCaptureFixture(externalAgents = false) {
 
   // Only declaration producers are synthetic; acquisition, copying, revalidation,
   // manifest parsing, and publication all use their production owners.
-  const registry = await import("../plugins/doctor-contract-registry.js");
+  const registry = await import("../plugins/doctor-contract-preparation.js");
   vi.spyOn(registry, "preparePluginDoctorMigrationBackupResources").mockResolvedValue({
     resources: [
       { path: plugin, kind: "directory" },

@@ -11,8 +11,10 @@ import {
   sessionEntryCommitGuardOptions,
   type SessionSourceAssertion,
 } from "../../../config/sessions/session-source-authority.js";
+import { isOwnedTranscriptPayload } from "../../../config/sessions/transcript-json.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import { freezeJsonSnapshot } from "../../../shared/immutable-data.js";
+import { shouldMergeConsecutiveTurns } from "../../embedded-agent-helpers/turns.js";
 import { prepareHarnessContextEnginePrompt } from "../../harness/context-engine-lifecycle.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
@@ -115,7 +117,13 @@ export async function prepareEmbeddedAttemptHistory(
     });
     input.setup.prepStages.mark("history-sanitize");
     cacheTrace?.recordStage("session:sanitized", { messages: prior });
-    const validated = await validateReplayTurns({ ...replayContext(), messages: prior });
+    // Keep each keyed user row intact until prompt() has resolved the current turn.
+    // The stream boundary merges projected rows for providers requiring alternation.
+    const validated = await validateReplayTurns({
+      ...replayContext(),
+      messages: prior,
+      preserveUserTurns: true,
+    });
     input.setup.prepStages.mark("history-validation");
 
     if (
@@ -214,6 +222,11 @@ export async function prepareEmbeddedAttemptHistory(
             peerId: attempt.conversationRoutePeerId,
             chatType: attempt.chatType,
           }),
+          {
+            groupConsecutiveUserTurns:
+              transcriptPolicy.validateAnthropicTurns &&
+              shouldMergeConsecutiveTurns(transcriptPolicy, attempt.model.api),
+          },
         ),
         attempt.model,
         {
@@ -259,9 +272,9 @@ export async function prepareEmbeddedAttemptHistory(
     warn: (message) => log.warn(message),
   });
   input.setup.prepStages.mark("context-engine");
-  // Restored history stays writable through preparation; published replies are complete.
+  // Transcript admission already seals retained replies; restored or replaced replies still need it.
   for (const message of messages) {
-    if (message.role === "assistant") {
+    if (message.role === "assistant" && !isOwnedTranscriptPayload(message)) {
       freezeJsonSnapshot(message);
     }
   }

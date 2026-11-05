@@ -21,6 +21,10 @@ fi
 
 set -euo pipefail
 
+# Distros with user private groups (Ubuntu, Fedora) default to umask 002; the
+# installed runtime must not be group-writable or owned-path checks refuse it.
+umask go-w
+
 # BEGIN GENERATED UPDATE NETWORK BUDGET
 # Source: src/infra/update-network-budget.ts; regenerate: node scripts/generate-update-network-budget.mjs
 UPDATE_NETWORK_TIMEOUT_SECONDS=300
@@ -161,6 +165,7 @@ FAQ: https://docs.openclaw.ai/start/faq
   --npm                               Shortcut for --install-method npm
   --git, --github                     Shortcut for --install-method git
   --git-dir, --dir <path>             Checkout directory (default: ~/openclaw, or \$OPENCLAW_HOME/openclaw)
+  --no-git-update                     Skip rebasing local main (Git fetches can still occur)
   --version <ver>                     OpenClaw version (default: latest)
   --compatible-with <ver>             Refuse a CLI that cannot modify config written by <ver>
   --node-version <ver>                Node version (default: 24.22.1)
@@ -908,17 +913,20 @@ install_node() {
     link_node_runtime_paths "$system_node" "$system_npm"
     installed_version="$("$(node_bin)" -v)"
     emit_json step name node status ok method system version "$installed_version"
+    warn_node_security_patch "$installed_version"
     return
   fi
 
   if [[ "$os" == "linux" ]] && command -v apk >/dev/null 2>&1 && is_musl_linux; then
     install_alpine_node
+    warn_node_security_patch "$("$(node_bin)" -v)"
     return
   fi
 
   if linked_node_is_usable; then
     ln -sfn "$dir" "${PREFIX}/tools/node"
     emit_json step name node status skip path "$dir"
+    warn_node_security_patch "$("$(node_bin)" -v)"
     return
   fi
 
@@ -965,6 +973,7 @@ install_node() {
   # Existing CLI wrappers use this alias; activate only a runtime that can start.
   ln -sfn "$dir" "${PREFIX}/tools/node"
   emit_json step name node status ok version "$NODE_VERSION"
+  warn_node_security_patch "$("$(node_bin)" -v)"
 }
 
 ensure_pnpm() {

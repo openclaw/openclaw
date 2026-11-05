@@ -65,8 +65,11 @@ additive change. v1-draft accepts only `ed25519`.
   fingerprint"): a verifier that pinned only fp(R) must still be able to check R's signature.
 - There is no certificate chain. A statement signed by an owner device is checked against
   the claw's **current owner devices** (its allowlist), which only the Gateway holds.
-- `sig` is unpadded base64url. Unknown envelope or body fields are rejected in v1-draft
-  (an envelope that still carries a `chain` member is malformed).
+- `sig` is unpadded base64url. Unknown envelope or body fields are rejected (an envelope
+  that still carries a `chain` member is malformed); a new signed field needs a new envelope
+  version.
+- `v` selects the schema and the signing domain. A well-formed `v` this build does not
+  implement is refused as `unsupported_version`, not `malformed` (versioning.md).
 - Timestamps are unix **seconds** (integers).
 
 ## Statement types
@@ -150,6 +153,23 @@ nothing else. There are no certificate chains and no list of revoked keys.
   one member browser; `remove` removes a member. The Gateway disconnects the removed keys and
   invalidates their device tokens. Nothing is remembered: a later Revocation of a key the
   claw no longer lists changes nothing.
+- **A revocation covers what its signer saw.** A Revocation names its `claw_id` and the
+  membership `seq` its signer last saw (the snapshot's seq; it may not be ahead of the claw's,
+  `seq_conflict`). Every listed key records the seq at which it was listed (`listed_seq`, and
+  per peer key on owner devices); listing a key that is still listed anywhere at the claw keeps
+  its earliest seq, so re-adding or copying it never puts it out of reach. A
+  Revocation removes a target only if it was listed at or before the Revocation's seq; the
+  devices the target approved go with it whenever they were listed. A key listed again after
+  that seq is a new approval the signer never saw: replaying the captured bytes is refused
+  with `seq_conflict` and changes nothing, and stopping the replay needs no list of past
+  revocations. To remove the new listing, sign a new Revocation at the current seq.
+- **Invites expire.** An InviteCap may expire at most a week after the Gateway registers it
+  (`MAX_INVITE_LIFETIME_SECONDS`, `limit_reached`), one that already expired is refused
+  (`expired`), and a claw keeps at most 100 invites (`MAX_INVITES`, `limit_reached`). An
+  invite record is deleted once its cap expired (plus the 300 seconds of clock skew) unless a
+  redemption is still pending on it: registration and redemption already refuse an expired
+  cap, so nothing is left to replay. Removing an owner device also deletes the open invites
+  it registered (`created_by`).
 - **Inactivity.** The Gateway records `last_seen` per owner device and per member browser
   whenever the tunnel admits it (at most once an hour). Owner devices unused for 90 days and
   member browsers unused for 30 days are dropped (Gateway config
@@ -244,6 +264,9 @@ node --import ./scripts/tsx.mjs -e 'const { buildStatementVectors } = await impo
   certificate cannot exceed its approver's caps.
 - No certificate chains or revocation lists: each claw keeps an allowlist (see The allowlist
   model); bindings are signed by R only.
+- Revocation carries `claw_id` and `seq` and covers only keys listed at or before that seq, so
+  a replayed revocation cannot remove a key that was approved again.
+- An InviteCap lasts at most a week, and a claw keeps at most 100 invites.
 - Owner devices are added at a claw with `MembershipChange { op: "add_owner_device", cert }`;
   a pending redemption is declined with `{ op: "deny_invite", invite_id }`.
 - MembershipChange.seq is a compare-and-set on the Gateway's seq.

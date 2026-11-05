@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { readGlobalSingleton } from "../shared/global-singleton.js";
 import { createPublicSessionRepresentationCache } from "./control-ui-public-session-cache.js";
 
 const sessionKey = "agent:main:public-example";
@@ -31,6 +32,13 @@ describe("public transcript representation cache", () => {
   });
 
   it("cannot restore content from work that crossed revocation, rewrite, or shutdown", () => {
+    const listeners = readGlobalSingleton(
+      Symbol.for("openclaw.internalSessionTranscriptListeners"),
+    );
+    if (!(listeners instanceof Set)) {
+      throw new Error("Transcript listener registry is unavailable");
+    }
+    const baseline = listeners.size;
     const cache = createCache();
     const pending = cache.begin("page", sessionKey, "transcript");
     sessionChanges.emit({ sessionKey });
@@ -40,6 +48,7 @@ describe("public transcript representation cache", () => {
     expect(cache.get("page")).toBe(replacement);
     const closing = cache.begin("next", sessionKey, "transcript");
     cache.dispose();
+    expect(listeners.size).toBe(baseline);
     expect(closing.complete("Must not return")).toBeUndefined();
     expect(cache.get("page")).toBeUndefined();
   });

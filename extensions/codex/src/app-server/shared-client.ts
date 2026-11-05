@@ -74,7 +74,6 @@ import {
   createCodexAppServerStartupLifetime,
   getCurrentSharedClientEntry,
   getOrCreateSharedClientEntry,
-  closeSharedClientEntryIfUnclaimed,
   getSharedCodexAppServerClientState,
   ownCodexStartup,
   trackIsolatedCodexAppServerClient,
@@ -92,6 +91,7 @@ import {
 import { CodexAdoptedThreadActiveError } from "./thread-lifecycle-errors.js";
 
 export {
+  clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
   retireSharedCodexAppServerClientIfCurrent,
   retainSharedCodexAppServerClientByInstanceId,
 } from "./shared-client-lifecycle.js";
@@ -1077,17 +1077,5 @@ export async function clearSharedCodexAppServerClientAndWait(
     [SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER]?: () => Promise<void>;
   }
 )[SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER] = clearSharedCodexAppServerClientAndWait;
-
-export function clearSharedCodexAppServerClientIfCurrentAndUnclaimed(
-  client: CodexAppServerClient | undefined,
-): { found: boolean; closed: boolean; activeLeases: number; pendingAcquires: number } {
-  const entry = getCurrentSharedClientEntry(client);
-  return {
-    found: entry !== undefined,
-    closed: entry ? closeSharedClientEntryIfUnclaimed(entry) : false,
-    activeLeases: entry?.activeLeases ?? 0,
-    pendingAcquires: entry?.pendingAcquires ?? 0,
-  };
-}
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -115,8 +115,8 @@ Quick start follows this path:
 
 1. Choose **Quick start** after the one-line security pointer.
 2. Detect configured models, API-key environment variables, supported local AI
-   CLIs, and already installed tool-capable models from reachable Ollama or LM
-   Studio servers on the Gateway host. This read-only pass never downloads a
+   CLIs, and tool-capable models already loaded in reachable Ollama or LM Studio
+   servers on the Gateway host. This read-only pass never downloads a
    model. Pi and OpenCode installs may also be reported for context when they
    cannot serve as the reusable inference route. Gemini CLI and Antigravity are
    not offered as detected setup routes.
