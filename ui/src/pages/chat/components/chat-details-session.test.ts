@@ -83,7 +83,15 @@ it("hides only the authenticated viewer's complete self-only desktop People sect
     participantCount: 1,
   };
   await select(onlySelf, false);
-  await select({ ...onlySelf, participantCount: 2 }, false);
+  await select({ ...onlySelf, participantCount: 2 }, true);
+  await select(
+    {
+      ...onlySelf,
+      participants: [self, { identity: { type: "profile", id: "blair" }, label: "Blair" }],
+    },
+    true,
+  );
+  await select({ participantCount: 1, participants: [], owner: { actor } }, false);
   await select(
     { ...onlySelf, owner: { actor: { type: "human", id: "pending", label: "Pending owner" } } },
     false,

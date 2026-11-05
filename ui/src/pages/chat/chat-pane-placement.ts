@@ -7,6 +7,7 @@ import {
   sessionPlacementActionReason,
   sessionPlacementRetry,
 } from "../../components/session-placement-action.ts";
+import { isCloudWorkerPlacementState } from "../../components/session-row-badge-presentation.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
 import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
@@ -19,6 +20,24 @@ registerSessionOrganizationSharedEnglish();
 registerNewSessionRuntimeEnglish();
 
 registerSessionPlacementEnglish();
+
+/** Shared placement facts for native machine chrome and deferred Details availability. */
+export function readChatMachinePlacement(session: GatewaySessionRow | undefined) {
+  const placement = session?.placement;
+  const placementState = placement?.state ?? "local";
+  const workerPlacement =
+    placement && placement.state !== "local" && placement.state !== "requested"
+      ? placement
+      : undefined;
+  return {
+    placementState,
+    workerPlacement,
+    showPlacementMenu: Boolean(
+      session &&
+      (isCloudWorkerPlacementState(placementState) || repositorySessionNeedsWorker(session)),
+    ),
+  };
+}
 
 type ChatPanePlacementComposerState =
   | { kind: "ready" }

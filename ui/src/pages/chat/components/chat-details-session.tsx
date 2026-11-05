@@ -1,12 +1,10 @@
 import { For, Show, createMemo, createSignal, createStore, lazy, onSettled } from "solid-js";
-import type { SessionParticipant } from "../../../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuHandle } from "../../../components/solid/menu.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerSessionProgressEnglish } from "../../../i18n/locales/en-session-progress.ts";
-import { sessionParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
 import { projectGateway } from "../../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -16,11 +14,21 @@ import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-b
 import { ProcessesPanelData } from "../processes-panel-data.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "../session-cache.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
+import {
+  detailsSessionFacts,
+  hasDetailsPeople,
+  readDetailsPeople,
+} from "./chat-details-availability.ts";
 import { ChatDetailsBackground } from "./chat-details-background.tsx";
 import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
 import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
 import { ChatDetailsPeopleSummary } from "./chat-details-people.tsx";
+import {
+  ChatDetailsDesktopPresence,
+  ChatDetailsPresence,
+  type DetailsAutomationAvailability,
+} from "./chat-details-presence.tsx";
 import { ChatDetailsProcesses } from "./chat-details-processes.tsx";
 import { ChatDetailsProgress } from "./chat-details-progress.tsx";
 import type {
@@ -31,6 +39,7 @@ import type {
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { getChatOutputsCount, hasChatDesktopOutputs } from "./chat-outputs-data.ts";
 import { isProcessesPresentationReady } from "./chat-processes-presentation.ts";
+import { hasChatPublishedPullRequests } from "./chat-pull-requests.ts";
 import { ChatPullRequests, type ChatPullRequestsProps } from "./chat-pull-requests.tsx";
 import { syncSessionPanelInputs, useSessionPanel } from "./chat-session-panel.tsx";
 import { ChatSummaryAutomations } from "./chat-summary-automations.tsx";
@@ -209,11 +218,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
               ? props.props?.desktopDisclosures?.expanded["pull-requests"]
               : undefined) ?? pullRequestsOpen();
           const active = () => props.presented;
-          const session = createMemo(() => {
-            const selected = props.props?.selectedSession;
-            const cached = !props.props?.sessionFactsReady && props.props?.cachedDetails?.session;
-            return selected && cached ? { ...selected, ...cached } : selected;
-          });
+          const session = createMemo(() => detailsSessionFacts(props.props));
           const creatorName = () => session()?.createdActor?.label || session()?.createdActor?.id;
           const owner = () => session()?.owner?.actor;
           const OwnerAttribution = () => (
@@ -224,49 +229,17 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
               </span>
             </div>
           );
-          const people = () => session()?.expandedParticipants ?? session()?.participants ?? [];
-          const count = () => session()?.participantCount ?? people().length;
-          // The Gateway omits the count when the owner-excluded participant list is empty.
-          const partialPeople = () => count() > people().length;
-          const desktopPeople = createMemo(() => {
-            const union = new Map<string, SessionParticipant>();
-            const actors = [owner(), session()?.createdActor];
-            for (const person of [...actors, ...people()]) {
-              if (!person?.identity) {
-                continue;
-              }
-              const key = sessionParticipantIdentityKey(person.identity);
-              const previous = union.get(key);
-              union.set(key, {
-                identity: person.identity,
-                label: person.label ?? previous?.label,
-                avatarUrl: person.avatarUrl ?? previous?.avatarUrl,
-              });
-            }
-            return [...union.values()];
-          });
+          const peopleState = createMemo(() => readDetailsPeople(session()));
+          const people = () => peopleState().participants;
+          const count = () => peopleState().count;
+          const partialPeople = () => peopleState().partial;
+          const desktopPeople = () => peopleState().people;
           const showPeople = () => {
             const selfUser = gateway?.read().snapshot.selfUser;
-            // Undefined is unresolved; null is an admitted profileless connection.
-            // Do not reveal a potentially self-only section until viewer identity resolves.
-            if (gateway && selfUser !== null && !selfUser?.identity) {
-              return false;
-            }
-            // Missing participants or actor identities are not evidence that the viewer is alone.
-            if (
-              partialPeople() ||
-              [owner(), session()?.createdActor].some((actor) => actor && !actor.identity)
-            ) {
-              return true;
-            }
-            const viewer = selfUser?.identity;
-            return (
-              !viewer ||
-              desktopPeople().some(
-                (person) =>
-                  person.identity.type !== viewer.type || person.identity.id !== viewer.id,
-              )
-            );
+            return hasDetailsPeople(peopleState(), {
+              pending: Boolean(gateway && selfUser !== null && !selfUser?.identity),
+              identity: selfUser?.identity,
+            });
           };
           const outputs = createMemo<ChatDetailsOutputs | null>(() => {
             const snapshot = props.props?.outputs;
@@ -460,12 +433,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                 >
                   {(presentation) => (
                     <>
-                      <Show
-                        when={
-                          showPeople() &&
-                          (desktopPeople().length > 0 || count() > 0 || creatorName() || owner())
-                        }
-                      >
+                      <Show when={showPeople()}>
                         <ChatDetailsDesktopSection
                           section="people"
                           title={presentation().peopleLabel}
@@ -526,12 +494,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                 </Show>
                 <Show when={pullRequests()}>
                   {(requests) => (
-                    <Show
-                      when={
-                        requests().pullRequests.length > 0 ||
-                        requests().publication?.result?.status === "published"
-                      }
-                    >
+                    <Show when={hasChatPublishedPullRequests(requests())}>
                       <div class="chat-details__group chat-details__changes">
                         <Show
                           when={!props.desktop}
@@ -656,40 +619,47 @@ export type ChatDetailsDesktopCompositionProps = Omit<Props, "desktop"> & {
   progressMenuRef?: (menu: MenuHandle) => void;
   onHideProgress?: () => void;
   onContentChange?: (hasContent: boolean) => void;
+  availabilityIdentity?: unknown;
+  onAutomationAvailability?: (fact: DetailsAutomationAvailability) => void;
 };
 
 /** Desktop entry point: one scroll body and the native Progress owner after Outputs. */
 export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositionProps) {
   const [scrollport, setScrollport] = createSignal<HTMLDivElement>();
   return (
-    <ChatDetailsDesktopBody
-      presented={props.presented}
-      onScrollPortRef={setScrollport}
+    <ChatDetailsPresence
       onContentChange={props.onContentChange}
+      identity={props.availabilityIdentity}
+      onAutomationAvailability={props.onAutomationAvailability}
     >
-      <ChatDetailsSession
-        props={props.props}
-        presented={props.presented}
-        dismissed={props.dismissed}
-        scrollport={scrollport()}
-        desktop
-      />
-      <Show when={props.props?.progressCard}>
-        <ChatDetailsProgress
-          desktop
+      <ChatDetailsDesktopBody presented={props.presented} onScrollPortRef={setScrollport}>
+        <ChatDetailsSession
           props={props.props}
           presented={props.presented}
-          menuRef={props.progressMenuRef}
-          onHideProgress={props.onHideProgress}
+          dismissed={props.dismissed}
+          scrollport={scrollport()}
+          desktop
         />
-      </Show>
-      <Show when={!props.props?.progressCard && props.props?.progressCardError === "access-denied"}>
-        <div class="chat-details__muted" data-details-group="progress" role="status">
-          {t("sessionProgressCard.widgetAccessDenied")}
-        </div>
-      </Show>
-      {/* Keep the automation slot after Progress while its inventory revalidates. */}
-      <DetailsAutomations props={props.props} presented={props.presented} desktop />
-    </ChatDetailsDesktopBody>
+        <Show when={props.props?.progressCard}>
+          <ChatDetailsProgress
+            desktop
+            props={props.props}
+            presented={props.presented}
+            menuRef={props.progressMenuRef}
+            onHideProgress={props.onHideProgress}
+          />
+        </Show>
+        <Show
+          when={!props.props?.progressCard && props.props?.progressCardError === "access-denied"}
+        >
+          <div class="chat-details__muted" data-details-group="progress" role="status">
+            <ChatDetailsDesktopPresence />
+            {t("sessionProgressCard.widgetAccessDenied")}
+          </div>
+        </Show>
+        {/* Keep the automation slot after Progress while its inventory revalidates. */}
+        <DetailsAutomations props={props.props} presented={props.presented} desktop />
+      </ChatDetailsDesktopBody>
+    </ChatDetailsPresence>
   );
 }

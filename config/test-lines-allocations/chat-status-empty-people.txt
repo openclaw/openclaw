@@ -1,0 +1,5 @@
+# Exact +537 net regression lines versus the PR base 8345610b869b807.
+# Covers unresolved/failed viewer identity, owner-driven desktop section presence,
+# pre-paint dock geometry at 400/820/1280px, and the rendered Control UI RPC flow.
+# Redundant empty desktop lifecycle cases are consolidated into one table.
+537

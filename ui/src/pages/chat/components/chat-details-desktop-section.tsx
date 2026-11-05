@@ -4,6 +4,7 @@ import { animateDetailsSection } from "../../../components/details-section-motio
 import { Icon } from "../../../components/solid/icon.tsx";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
+import { registerDetailsDesktopSection } from "./chat-details-presence.tsx";
 import type { ChatDetailsDesktopSectionId } from "./chat-details-types.ts";
 import "../../../styles/chat/details-desktop.css";
 
@@ -181,6 +182,7 @@ export function ChatDetailsDesktopSection(props: {
   metadata?: JSX.Element;
   children: JSX.Element;
 }) {
+  registerDetailsDesktopSection();
   // Closed sections need only their heading; retain content after its first reveal.
   const [contentMounted] = createSignal((previous = false) => previous || props.expanded);
   const reveal = createDetailsDesktopReveal(

@@ -8,14 +8,16 @@ import {
   repositorySessionNeedsWorker,
   sessionPlacementRetry,
 } from "../../../components/session-placement-action.ts";
-import { isCloudWorkerPlacementState } from "../../../components/session-row-badge-presentation.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuEntry } from "../../../components/solid/menu.tsx";
 import { registerSessionMachineEnglish } from "../../../i18n/locales/en-session-machine.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { resolveChatPaneWorkerPresentation } from "../chat-pane-placement.ts";
+import {
+  readChatMachinePlacement,
+  resolveChatPaneWorkerPresentation,
+} from "../chat-pane-placement.ts";
 
 registerEnglishCatalog(registerSessionMachineEnglish);
 
@@ -40,17 +42,14 @@ export function createChatMachinePresentation(props: ChatPanePlacementProps) {
   return createMemo(() => {
     const session = props.session;
     const placement = session?.placement;
-    const placementState = placement?.state ?? "local";
+    const { placementState, workerPlacement, showPlacementMenu } =
+      readChatMachinePlacement(session);
     const dispatchRequired = repositorySessionNeedsWorker(session);
     if (!session) {
       return null;
     }
     const placementMove = session.placementMove;
     const retry = sessionPlacementRetry(session);
-    const workerPlacement =
-      placement && placement.state !== "local" && placement.state !== "requested"
-        ? placement
-        : undefined;
     const providerId = workerPlacement?.providerId;
     const profileId = workerPlacement?.profileId;
     const environmentId = workerPlacement?.environmentId;
@@ -107,7 +106,7 @@ export function createChatMachinePresentation(props: ChatPanePlacementProps) {
     const machineIcon: IconName =
       runner?.kind === "device" || placementState === "local" ? "monitor" : "cloud";
     return {
-      showPlacementMenu: isCloudWorkerPlacementState(placementState) || dispatchRequired,
+      showPlacementMenu,
       machineName:
         props.machineName ||
         environmentId ||

@@ -7,68 +7,88 @@ import { controlUiSessionUrl, createChatFlowE2eSuite } from "./chat-flow.test-su
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
-  it("keeps self-only People and empty desktop status hidden through delayed viewer resolution", async () => {
-    const sessionKey = "agent:main:sidebar-cleanup";
-    const identity = { type: "profile", id: "profile-alex" };
-    const actor = { type: "human", id: "profile-alex", identity, label: "Alex Morgan" };
-    const { page, gateway } = await chatFixture(
-      suite,
-      {
-        sessionKey,
-        sessions: [
-          {
-            key: sessionKey,
-            kind: "direct",
-            label: "Sidebar cleanup",
-            updatedAt: Date.now(),
-            owner: { actor },
-            createdActor: actor,
-            participants: [{ identity, label: "Alex Morgan" }],
-            participantCount: 1,
+  it.each(["self-only", "multiple", "partial"] as const)(
+    "preserves conclusive People during viewer hydration (%s)",
+    async (people) => {
+      const sessionKey = "agent:main:sidebar-cleanup";
+      const identity = { type: "profile", id: "profile-alex" };
+      const actor = { type: "human", id: "profile-alex", identity, label: "Alex Morgan" };
+      const { page, gateway } = await chatFixture(
+        suite,
+        {
+          sessionKey,
+          sessions: [
+            {
+              key: sessionKey,
+              kind: "direct",
+              label: "Sidebar cleanup",
+              updatedAt: Date.now(),
+              owner: { actor },
+              createdActor: actor,
+              participants:
+                people === "multiple"
+                  ? [{ identity: { type: "profile", id: "profile-blair" }, label: "Blair Chen" }]
+                  : [{ identity, label: "Alex Morgan" }],
+              participantCount: people === "partial" ? 2 : 1,
+            },
+          ],
+          historyMessages: [
+            timedText(
+              "user",
+              "Please simplify the session sidebar and keep the conversation focused.",
+            ),
+            timedText(
+              "assistant",
+              "I will keep session details available when there is something useful to show.",
+            ),
+          ],
+          deferredMethods: ["users.self"],
+          methodResponses: {
+            "users.self": { profile: { id: "profile-alex", name: "Alex Morgan" } },
           },
-        ],
-        historyMessages: [
-          timedText(
-            "user",
-            "Please simplify the session sidebar and keep the conversation focused.",
-          ),
-          timedText(
-            "assistant",
-            "I will keep session details available when there is something useful to show.",
-          ),
-        ],
-        deferredMethods: ["users.self"],
-        methodResponses: { "users.self": { profile: { id: "profile-alex", name: "Alex Morgan" } } },
-      },
-      { viewport: { width: 1500, height: 920 }, colorScheme: "dark" },
-    );
-    await page.setViewportSize({ width: 1700, height: 1000 });
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-    await page
-      .getByText("Please simplify the session sidebar and keep the conversation focused.", {
-        exact: true,
-      })
-      .waitFor();
-    await gateway.waitForRequest("users.self");
-    const details = page.locator(".chat-details[data-desktop]");
-    await details.waitFor({ state: "attached" });
-    const proofDir = process.env.OPENCLAW_STATUS_PROOF_DIR;
-    if (proofDir) {
-      await fs.mkdir(proofDir, { recursive: true });
-      await page.screenshot({ path: path.join(proofDir, "identity-pending.png"), fullPage: true });
-    }
-    const pendingPeople = await details.locator('[data-details-group="people"]').count();
-    await gateway.resolveDeferred("users.self", {
-      profile: { id: "profile-alex", name: "Alex Morgan", createdAt: 1, updatedAt: 1 },
-    });
-    await page.waitForTimeout(250);
-    if (proofDir) {
-      await page.screenshot({ path: path.join(proofDir, "self-only-ready.png"), fullPage: true });
-    }
-    expect(pendingPeople).toBe(0);
-    expect(await details.locator('[data-details-group="people"]').count()).toBe(0);
-    expect(await details.getAttribute("role")).not.toBe("complementary");
-  });
+        },
+        { viewport: { width: 1500, height: 920 }, colorScheme: "dark" },
+      );
+      await page.setViewportSize({ width: 1700, height: 1000 });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await page
+        .getByText("Please simplify the session sidebar and keep the conversation focused.", {
+          exact: true,
+        })
+        .waitFor();
+      await gateway.waitForRequest("users.self");
+      const details = page.locator(".chat-details[data-desktop]");
+      await details.waitFor({ state: "attached" });
+      const proofDir = process.env.OPENCLAW_STATUS_PROOF_DIR;
+      if (proofDir) {
+        await fs.mkdir(proofDir, { recursive: true });
+        await page.screenshot({
+          path: path.join(proofDir, `${people}-pending.png`),
+          fullPage: true,
+        });
+      }
+      const pendingPeople = await details.locator('[data-details-group="people"]').count();
+      if (people === "self-only") {
+        await gateway.resolveDeferred("users.self", {
+          profile: { id: "profile-alex", name: "Alex Morgan", createdAt: 1, updatedAt: 1 },
+        });
+      } else {
+        await gateway.rejectDeferred("users.self", {
+          code: "UNAVAILABLE",
+          message: "Viewer profile unavailable",
+        });
+      }
+      await page.waitForTimeout(250);
+      if (proofDir) {
+        await page.screenshot({ path: path.join(proofDir, `${people}-ready.png`), fullPage: true });
+      }
+      expect(pendingPeople).toBe(people === "self-only" ? 0 : 1);
+      expect(await details.locator('[data-details-group="people"]').count()).toBe(
+        people === "self-only" ? 0 : 1,
+      );
+      expect((await details.getAttribute("role")) === "complementary").toBe(people !== "self-only");
+    },
+  );
   it("omits the desktop status surface for a conversation with no visible sections", async () => {
     const sessionKey = "agent:main:empty-status";
     const { page } = await chatFixture(suite, {

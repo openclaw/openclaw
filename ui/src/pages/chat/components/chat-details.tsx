@@ -20,6 +20,8 @@ import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import type { MobileDetailsBindings } from "../chat-details-mobile-host-content.tsx";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
+import { hasDetailsContent } from "./chat-details-availability.ts";
+import { createDetailsAvailabilityProjection } from "./chat-details-presence.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import "../../../styles/chat/details.css";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
@@ -137,15 +139,25 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         props.mobileHost.destination.area === "details" &&
         (!props.mobileHost.destination.page || Boolean(props.mobileHost.destination.page.details))
       : intent() === "open" || (intent() === "auto" && canDock()));
-  const [hasContent, setHasContent] = createSignal(false);
-  const opened = () => requested() && (!desktop() || hasContent());
+  const detailsAvailability = createDetailsAvailabilityProjection(
+    presentation,
+    () => props.chat?.pullRequestsGateway,
+    desktop,
+  );
+  // Lazy owners can report zero mounted rows before consuming already-admitted data.
+  const opened = () =>
+    requested() &&
+    (!desktop() ||
+      hasDetailsContent(props.chat, detailsAvailability.available()) ||
+      detailsAvailability.hasContent() === true);
   const outputsDemand = createMemo(() =>
     desktop() && requested() && props.chat?.outputs ? props.chat.retainOutputs : undefined,
   );
-  // Mount cached chrome with the transcript; retain disclosure state while closed.
+  // Partial cache receipts are already warm. Mount their owners with the transcript;
+  // those owners still decide content and current read access.
   const cachedReady = () =>
-    props.chat?.cachedDetails?.subagents !== undefined &&
-    props.chat.cachedDetails.automations !== undefined;
+    props.chat?.cachedDetails?.subagents !== undefined ||
+    props.chat?.cachedDetails?.automations !== undefined;
   const [sessionOpened] = createSignal<boolean>(
     (previous) =>
       previous ||
@@ -704,7 +716,9 @@ export function ChatDetails(props: ChatDetailsViewProps) {
                   <ChatDetailsDesktopComposition
                     props={props.chat}
                     presented={requested()}
-                    onContentChange={setHasContent}
+                    onContentChange={detailsAvailability.onContentChange}
+                    availabilityIdentity={detailsAvailability.identity()}
+                    onAutomationAvailability={detailsAvailability.report}
                     dismissed={intent() === "closed"}
                     progressMenuRef={(menu) => {
                       progressMenu = menu;
