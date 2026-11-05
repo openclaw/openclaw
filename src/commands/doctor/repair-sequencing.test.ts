@@ -147,7 +147,7 @@ describe("doctor repair sequencing", () => {
       ["warning-notes", "warning-notes.codex-routes"],
     ],
     ["computer-use", { computerUse: { enabled: true } }, []],
-    ["service-tier", {}, ["pending-changes", "change-notes"]],
+    ["service-tier", {}, ["pending-changes"]],
     ["uncertain-retirement", {}, ["model-repair-warnings"]],
   ])("proves retirement-only from recorded work: %s", async (kind, config, blockers) => {
     hasDeferredRetirement.mockReturnValue(true);
