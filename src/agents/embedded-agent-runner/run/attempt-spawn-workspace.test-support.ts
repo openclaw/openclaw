@@ -310,10 +310,9 @@ vi.mock("../../../infra/net/undici-global-dispatcher.js", () => ({
     hoisted.ensureGlobalUndiciDispatcherStreamTimeoutsMock,
 }));
 
-vi.mock("../../../tts/tts-settings.js", () => ({
-  buildTtsSystemPromptHint: () => undefined,
-  resolveModelOverridePolicy: () => undefined,
-  setTtsMachinePrefsPathResolver: () => undefined,
+vi.mock("../../../tts/tts-settings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../tts/tts-settings.js")>()),
+  buildTtsSystemPromptHintAsync: async () => undefined,
 }));
 
 vi.mock("../../bootstrap-files.js", async (importOriginal) => ({
@@ -390,13 +389,6 @@ vi.mock("../wait-for-idle-before-flush.js", () => ({
 vi.mock("./images.js", () => ({
   detectAndLoadPromptImages: hoisted.detectAndLoadPromptImagesMock,
   hydratePromptMediaMessages: async (messages: AgentMessage[]) => messages,
-}));
-
-// mock-isolation: Workspace tests supply runtime facts without host discovery.
-vi.mock("../../system-prompt-params.js", () => ({
-  buildSystemPromptParams: () => ({
-    runtimeInfo: {},
-  }),
 }));
 
 vi.mock("../../system-prompt-config.js", async (importOriginal) => ({

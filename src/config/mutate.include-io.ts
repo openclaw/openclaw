@@ -29,6 +29,7 @@ import {
 } from "./io.write-safety.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
+import { preparePluginCohortConfigPublication } from "./plugin-cohort-publication.js";
 import type { ConfigFileSnapshot } from "./types.js";
 import { rejectConfigNonFiniteNumbers } from "./value-tree.js";
 import { createConfigWriteAuthorityGuard } from "./write-authority.js";
@@ -203,6 +204,7 @@ export async function writeRootBoundJsonFile(params: {
   deferredPluginMigrations?: readonly DeferredPluginMigration[];
   configPath: string;
   includePath: string;
+  includeBoundaryPath?: readonly string[];
   allowedRoots: readonly string[];
   expectedTargetPath: string;
   value: unknown;
@@ -308,6 +310,25 @@ export async function writeRootBoundJsonFile(params: {
       durable: true,
     });
     await params.beforeCommit?.();
+    preparePluginCohortConfigPublication(
+      {
+        rootConfigPath: params.configPath,
+        filePath: params.includePath,
+        targetPath: targetAtCommit.absolutePath,
+        pathSnapshot: pathProof.snapshot,
+        beforeRaw: currentRaw,
+        afterRaw: content,
+        ...(params.includeBoundaryPath
+          ? {
+              include: {
+                boundaryPath: [...params.includeBoundaryPath],
+                includePath: params.includePath,
+              },
+            }
+          : {}),
+      },
+      writeGuard.assertCurrent,
+    );
     writeGuard.assertCurrent();
     const publish = () => {
       params.assertBeforePublish?.();

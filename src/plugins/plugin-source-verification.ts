@@ -11,4 +11,6 @@ export function readPluginSourceDirectory(source: string, originalSource = true)
 export type PluginCapturedSourceFact = {
   contentHash: string;
   sizeBytes: number;
+  /** Normalized private file mode when the capture retains complete source facts. */
+  mode?: number;
 };

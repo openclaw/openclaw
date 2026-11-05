@@ -1,27 +1,119 @@
 import { expect, it, vi } from "vitest";
 import { t } from "../../i18n/index.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
-import { createAgentViewTestProps } from "./agents-view.test-helpers.ts";
-import { Agents } from "./view.tsx";
+import { AgentsPageMenu } from "./agents-page-menu.tsx";
 
-it("announces Copy ID feedback in a status region", async () => {
+const showToast = vi.hoisted(() => vi.fn());
+vi.mock("../../lib/toast.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/toast.ts")>()),
+  showToast,
+}));
+
+function menuProps() {
+  return {
+    agentId: "alpha",
+    defaultLabel: "Set default",
+    defaultDisabled: false,
+    pinLabel: "Pin",
+    showPhoneActions: false,
+    createLabel: "New agent",
+    createDisabled: false,
+    onCreate: vi.fn(),
+    refreshLabel: "Refresh",
+    refreshDisabled: false,
+    onSetDefault: vi.fn(),
+    onTogglePinned: vi.fn(),
+    onRefresh: vi.fn(),
+  };
+}
+
+const openItems = (container: HTMLElement) => {
+  container.querySelector<HTMLButtonElement>(".agents-page-menu__trigger")!.click();
+  return [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')];
+};
+
+it("copies the agent ID from the page menu and confirms with a toast", async () => {
   const writeText = vi.fn(async (_text: string) => undefined);
   vi.stubGlobal("navigator", { clipboard: { writeText } });
   const container = document.body.appendChild(document.createElement("div"));
-  const view = mountSolid(Agents, createAgentViewTestProps(), container);
+  const view = mountSolid(AgentsPageMenu, menuProps(), container);
   try {
-    const copyId = [...container.querySelectorAll("button")].find(
-      (button) => button.textContent?.trim() === t("agents.copyId"),
+    await vi.waitFor(() => expect(openItems(container).length).toBeGreaterThan(0));
+    [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+      .find((item) => item.textContent?.trim() === t("agents.copyId"))!
+      .click();
+    await vi.waitFor(() =>
+      expect(showToast).toHaveBeenCalledWith({ severity: "success", message: t("common.copied") }),
     );
-    copyId?.click();
-    await vi.waitFor(() => {
-      const statuses = [...container.querySelectorAll('.agents-toolbar-actions [role="status"]')];
-      expect(statuses.map((status) => status.textContent)).toContain(t("common.copied"));
-    });
-    expect(writeText).toHaveBeenCalledOnce();
+    expect(writeText).toHaveBeenCalledWith("alpha");
   } finally {
     view.dispose();
     container.remove();
     vi.unstubAllGlobals();
+  }
+});
+
+it("leads with New agent and adds Refresh on the phone", async () => {
+  const onCreate = vi.fn();
+  const container = document.body.appendChild(document.createElement("div"));
+  const view = mountSolid(
+    AgentsPageMenu,
+    { ...menuProps(), showPhoneActions: true, onCreate },
+    container,
+  );
+  try {
+    await vi.waitFor(() => {
+      const labels = openItems(container).map((item) => item.textContent?.trim());
+      expect(labels[0]).toBe("New agent");
+      expect(labels).toContain("Refresh");
+    });
+    document.querySelector<HTMLElement>('[role="menuitem"]')!.click();
+    await vi.waitFor(() => expect(onCreate).toHaveBeenCalledOnce());
+  } finally {
+    view.dispose();
+    container.remove();
+  }
+});
+
+it("keeps the recovery reason on a denied New agent", async () => {
+  const onCreate = vi.fn();
+  const container = document.body.appendChild(document.createElement("div"));
+  const view = mountSolid(
+    AgentsPageMenu,
+    {
+      ...menuProps(),
+      showPhoneActions: true,
+      createDisabled: true,
+      createDisabledReason: "Reconnect with operator.admin",
+      onCreate,
+    },
+    container,
+  );
+  try {
+    await vi.waitFor(() => {
+      const first = openItems(container)[0];
+      expect(first?.textContent).toContain("Reconnect with operator.admin");
+    });
+    document.querySelector<HTMLElement>('[role="menuitem"]')!.click();
+    expect(onCreate).not.toHaveBeenCalled();
+  } finally {
+    view.dispose();
+    container.remove();
+  }
+});
+
+it("leaves New agent and Refresh out of the desktop menu", async () => {
+  const container = document.body.appendChild(document.createElement("div"));
+  const view = mountSolid(AgentsPageMenu, menuProps(), container);
+  try {
+    await vi.waitFor(() => {
+      const labels = openItems(container).map((item) => item.textContent?.trim());
+      expect(labels.length).toBeGreaterThan(0);
+      expect(labels).not.toContain("New agent");
+      expect(labels).not.toContain("Refresh");
+    });
+  } finally {
+    view.dispose();
+    container.remove();
   }
 });

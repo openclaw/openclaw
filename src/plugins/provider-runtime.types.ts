@@ -96,6 +96,8 @@ export type ProviderPrepareRuntimeAuthContext = ProviderPreferRuntimeResolvedMod
   apiKey: string;
   authMode: string;
   profileId?: string;
+  /** Cancel caller-owned exchanges when the run stops or its auth budget expires. */
+  signal?: AbortSignal;
 };
 
 /** Transport identity available to every inference capability, without invented chat limits. */
@@ -168,6 +170,8 @@ export type ProviderResolveUsageAuthContext = {
 
 export type ProviderUsageAuthToken = {
   token: string;
+  /** Auth-store profile that supplied this credential, when known. */
+  authProfileId?: string;
   /** Provider-owned grant family used to authorize the usage endpoint. */
   authFlow?: string;
   accountId?: string;

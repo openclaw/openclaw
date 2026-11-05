@@ -1095,10 +1095,10 @@ private actor LocalFixtureChatStore {
             ]
         }
         if ProcessInfo.processInfo.arguments.contains("--openclaw-anthropic-work-chunks-fixture") {
-            return self.workChunkSeedMessages(now: now)
+            return self.anthropicWorkChunkMessages(now: now)
         }
         if ProcessInfo.processInfo.arguments.contains("--openclaw-step-labels-fixture") {
-            return self.stepLabelSeedMessages(now: now)
+            return self.stepLabelMessages(now: now)
         }
         if ProcessInfo.processInfo.arguments.contains("--openclaw-long-chat-fixture") {
             return [
@@ -1140,7 +1140,7 @@ private actor LocalFixtureChatStore {
         }
     }
 
-    private static func workChunkSeedMessages(now: Double) -> [OpenClawChatMessage] {
+    private static func anthropicWorkChunkMessages(now: Double) -> [OpenClawChatMessage] {
         // Synthetic Anthropic-style envelopes: narration and tool_use share each
         // assistant message; tool results separate the two narration boundaries.
         [
@@ -1197,7 +1197,7 @@ private actor LocalFixtureChatStore {
         ]
     }
 
-    private static func stepLabelSeedMessages(now: Double) -> [OpenClawChatMessage] {
+    private static func stepLabelMessages(now: Double) -> [OpenClawChatMessage] {
         [
             self.message(
                 role: "user",

@@ -15,103 +15,105 @@ openclaw-new-session-page,
   width: 100%;
 }
 
-/* Opposite end of the fixed shell-control rail: new-thread privacy belongs to
-   the page, not to the message being composed. */
+/* Opposite end of the fixed shell-control rail: new-thread privacy (Draft and
+   Incognito) belongs to the page, not to the message being composed. */
 .new-session-page__incognito-rail {
+  --shell-chrome-control-size: var(--rail-header-action-size);
+  --shell-chrome-control-border: 1px solid transparent;
+  --shell-chrome-control-background: transparent;
+  --shell-chrome-control-shadow: none;
+  --shell-chrome-control-backdrop: none;
+
   position: absolute;
   top: 10px;
   right: 10px;
   z-index: 45;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 :where(html:not(.openclaw-native-macos, .openclaw-native-desktop)) .shell:not(.shell--mobile-nav) {
   .new-session-page__incognito-rail {
-    top: calc((var(--rail-header-height) - 40px) / 2);
+    /* Centers on the session header row (.chat-pane__header's desktop min-height). */
+    top: calc((var(--rail-header-height) - var(--space-1) - var(--rail-header-action-size)) / 2);
   }
 }
 
-.new-session-page__draft-toggle {
+/* A new draft has no session title; keep its header's accessible group name. */
+.new-session-page .mobile-header__title-row {
   display: none;
 }
 
-:is(
-  .new-session-page__draft-toggle,
-  .new-session-page__incognito-toggle
-).shell-chrome-controls__button {
-  width: 40px;
-  height: 40px;
-  border-color: color-mix(in srgb, var(--text-strong) 12%, transparent);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--panel) 94%, transparent);
-  corner-shape: superellipse(1.5);
+/* Chat's phone header holds these controls, so the page has nothing to clear. */
+.new-session-page--chat-header .new-session-page__scroll {
+  padding-top: 0;
 }
 
-:is(
-    .new-session-page__draft-toggle,
-    .new-session-page__incognito-toggle
-  ).shell-chrome-controls__button:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--text-strong) 18%, transparent);
-  background: color-mix(in srgb, var(--text-strong) 7%, var(--panel));
-}
-
-:is(
-    .new-session-page__draft-toggle,
-    .new-session-page__incognito-toggle
-  ).shell-chrome-controls__button
-  svg {
-  width: 19px;
-  height: 19px;
-}
-
-:is(.new-session-page__draft-toggle--active, .new-session-page__incognito-toggle--active),
-:is(.new-session-page__draft-toggle--active, .new-session-page__incognito-toggle--active):hover:not(
-    :disabled
-  ) {
-  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
-  background: color-mix(in srgb, var(--accent) 18%, var(--bg-elevated));
+/* The capsule's on state is the icon alone. */
+.shell
+  .new-session-page
+  .mobile-header__capsule
+  :is(.new-session-page__draft-toggle--active, .new-session-page__incognito-toggle--active),
+.shell
+  .new-session-page
+  .mobile-header__capsule
+  :is(
+    .new-session-page__draft-toggle--active,
+    .new-session-page__incognito-toggle--active
+  ):hover:not(:disabled) {
+  background: transparent;
   color: var(--accent);
 }
 
-.new-session-page__incognito-toggle--active.shell-chrome-controls__button {
-  width: auto;
-  padding-inline: 10px;
-  gap: 7px;
+.new-session-page
+  .mobile-header__capsule
+  :is(.new-session-page__draft-toggle, .new-session-page__incognito-toggle):disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
 }
 
-.new-session-page__incognito-toggle-label {
+/* Ghost actions matching the session header's top-right controls (.chat-details-toggle). */
+.new-session-page__incognito-rail .shell-chrome-controls__button {
+  border-radius: calc(8px * var(--openclaw-corner-radius-scale));
+  corner-shape: superellipse(1.5);
+  color: var(--rail-header-action-color);
+}
+
+.new-session-page__incognito-rail .shell-chrome-controls__button:hover:not(:disabled) {
+  background: var(--session-header-control-hover-bg);
+}
+
+.new-session-page__incognito-rail .shell-chrome-controls__button svg {
+  width: var(--rail-header-action-glyph-size);
+  height: var(--rail-header-action-glyph-size);
+  stroke-width: 1.6;
+}
+
+.new-session-page__incognito-rail
+  :is(.new-session-page__draft-toggle--active, .new-session-page__incognito-toggle--active) {
+  width: auto;
+  padding-inline: 8px;
+  gap: 6px;
+  background: var(--session-header-control-surface);
+  color: var(--session-header-control-active-color);
+}
+
+.new-session-page__incognito-rail
+  :is(
+    .new-session-page__draft-toggle--active,
+    .new-session-page__incognito-toggle--active
+  ):hover:not(:disabled) {
+  background: var(--session-header-control-active-hover-bg);
+  color: var(--session-header-control-active-color);
+}
+
+:is(.new-session-page__draft-toggle-label, .new-session-page__incognito-toggle-label) {
   font-size: 12px;
-  font-weight: 600;
 }
 
 html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__incognito-rail {
   top: var(--openclaw-native-titlebar-height, 52px);
-}
-
-@media (max-width: 560px) {
-  .new-session-page__incognito-rail {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .new-session-page__draft-toggle {
-    display: inline-flex;
-  }
-
-  .new-session-page__draft-toggle--active.shell-chrome-controls__button {
-    width: auto;
-    padding-inline: 10px;
-    gap: 7px;
-  }
-
-  .new-session-page__draft-toggle-label {
-    font-size: 12px;
-    font-weight: 600;
-  }
-
-  .new-session-page__composer .new-session-page__visibility--draft {
-    display: none;
-  }
 }
 
 /* Mirrors .chat-thread: the top inset doubles as the native macOS titlebar
@@ -133,7 +135,6 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   width: 100%;
   max-width: none;
   min-height: auto;
-  box-sizing: border-box;
   margin: 0 auto auto;
 }
 
@@ -193,7 +194,6 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   display: flex;
   align-items: center;
   gap: 8px;
-  box-sizing: border-box;
   width: calc(100% - 36px);
   max-height: 0;
   max-width: var(--chat-thread-max-width, 48rem);
@@ -250,89 +250,6 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   }
 }
 
-/* Sits after the model and reasoning pickers: the footer row reads as the
-   settings for the next turn, and how the session is recorded is the last of
-   them, not the first thing between "+" and the model. The model control claims
-   order 3 in chat/composer.css, so this follows it.
-   Box, type and rhythm come from the composer's chip family tokens rather than
-   numbers of its own: this control is a peer of the pickers beside it, and it
-   used to announce itself as a different component — smaller text, shorter box,
-   pill corners and a muted foreground against their 13px squared-off chips. The
-   fallbacks keep it sane if it is ever rendered outside a composer. */
-.new-session-page__visibility {
-  display: inline-flex;
-  align-items: center;
-  order: 4;
-  gap: var(--chat-composer-chip-gap, 6px);
-  min-height: var(--chat-composer-chip-height, 30px);
-  padding-block: 0;
-  padding-inline: var(--chat-composer-chip-padding-inline, 8px);
-  border: 0;
-  border-radius: var(--radius-full);
-  background: transparent;
-  color: var(--chat-composer-secondary, var(--muted));
-  font: inherit;
-  font-size: var(--chat-composer-chip-text, 13px);
-  line-height: 1.35;
-  cursor: var(--cursor-action);
-}
-
-/* Draft belongs with the attachment and permission controls. On pointer-first
-   layouts it stays quiet until the footer is explored; touch layouts keep the
-   action reachable because they have no persistent hover state. */
-@media (hover: hover) and (pointer: fine) {
-  .new-session-page__composer
-    .agent-chat__composer-lead
-    .new-session-page__visibility--draft:not(.new-session-page__visibility--active) {
-    opacity: 0;
-    pointer-events: none;
-    visibility: hidden;
-    transition:
-      opacity 120ms var(--ease-out),
-      visibility 0s linear 160ms;
-  }
-
-  .new-session-page__composer
-    .agent-chat__composer-footer:is(:hover, :focus-within)
-    .agent-chat__composer-lead
-    .new-session-page__visibility--draft:not(.new-session-page__visibility--active) {
-    opacity: 1;
-    pointer-events: auto;
-    visibility: visible;
-    transition-delay: 0s;
-  }
-}
-
-.new-session-page__visibility:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--text) 7%, transparent);
-  color: var(--text-strong);
-}
-
-/* Active mode must read as toggled-on even while hovered: hover on an
-   inactive pill already shows a neutral fill, so active gets an accent
-   tint to stay distinguishable under the cursor. */
-.new-session-page__visibility--active,
-.new-session-page__visibility--active:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-  color: var(--accent);
-}
-
-.new-session-page__visibility:disabled {
-  cursor: default;
-  opacity: 0.5;
-}
-
-/* The mark has to be a block: left inline it sits on the label's baseline, which
-   parks it about 2px above the row's axis while every sibling control is centred
-   on its own box. Blocking it lets the wrapper collapse to the icon so the
-   button's `align-items: center` puts it on the same line as the label. */
-.new-session-page__visibility svg {
-  display: block;
-  width: var(--chat-composer-chip-icon, 14px);
-  height: var(--chat-composer-chip-icon, 14px);
-  stroke-width: 1.7px;
-}
-
 /* Placement stays separate from the welcome identity. Shared pickers retain
    their own popup, selection, and disabled-state behavior. */
 .new-session-page__triggers {
@@ -346,7 +263,6 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   max-width: var(--chat-thread-max-width);
   margin: 0 auto;
   padding: 0;
-  box-sizing: border-box;
 }
 
 span.new-session-page__select {
@@ -628,9 +544,6 @@ span.new-session-page__select {
 .session-group-defaults__mode-dropdown > .session-group-defaults__mode-menu {
   width: min(100cqw, calc(100vw - 48px));
   padding: var(--menu-padding);
-  border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
-  box-shadow: var(--shadow-md);
   color: var(--text);
 }
 
@@ -677,21 +590,15 @@ span.new-session-page__select {
 .oc-popover.new-session-page__select,
 .oc-popover.new-session-page__branch-popup {
   padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
 }
 
 .oc-popover.new-session-page__select {
   --oc-overlay-max-width: min(320px, calc(100vw - 24px));
-  --oc-overlay-distance: 8px;
 
-  min-width: min(224px, var(--oc-overlay-available-width, 100%));
+  min-width: min(220px, var(--oc-overlay-available-width, 100%));
 }
 
 .oc-popover.new-session-page__branch-popup {
-  --oc-overlay-distance: 0px;
-
   width: anchor-size(width);
 }
 
@@ -708,32 +615,6 @@ span.new-session-page__select {
   .new-session-page__picker-root
   > .new-session-page__menu-title:not(:first-child) {
   margin-top: var(--space-2);
-}
-
-.new-session-page__project-search {
-  display: block;
-  padding: 4px 8px 6px;
-}
-
-.new-session-page__project-search input {
-  width: 100%;
-  padding: 6px 8px;
-  background: var(--bg);
-  font: inherit;
-}
-
-.new-session-page__project-search input,
-.new-session-page__menu-field input {
-  min-width: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  font-size: 12px;
-  outline: none;
-}
-
-.new-session-page__project-search input:focus-visible {
-  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
 }
 
 .new-session-page__project-status,
@@ -767,8 +648,14 @@ span.new-session-page__select {
 
 .new-session-page__menu-field input {
   flex: 1 1 auto;
+  min-width: 0;
   padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
 }
 
 .new-session-page__menu-field input:focus-visible {
@@ -864,39 +751,10 @@ span.new-session-page__select {
   overflow: hidden;
 }
 
-.new-session-page__environment-search {
-  background: var(--bg-hover);
-  margin-bottom: var(--space-1);
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
-  color: var(--muted);
-  border-radius: var(--menu-item-radius);
-}
-
-.new-session-page__environment-search svg,
 .new-session-page__connect-device svg {
   display: block;
   width: 14px;
   height: 14px;
-}
-
-.new-session-page__environment-search input {
-  width: 100%;
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  font-size: var(--control-ui-text-sm);
-  outline: none;
-}
-
-.new-session-page__environment-search input::placeholder {
-  color: var(--muted);
 }
 
 .new-session-page__environment-list {
@@ -962,17 +820,8 @@ span.new-session-page__select {
   --openclaw-modal-width: 480px;
 }
 
-.connect-machine-dialog__card {
-  padding: 18px;
-}
-
-.connect-machine-dialog__card h2,
-.connect-machine-dialog__card p {
+.connect-machine-dialog p {
   margin-block: 0;
-}
-
-.connect-machine-dialog__body {
-  margin-top: 16px;
 }
 
 .connect-machine-dialog__status,
@@ -980,10 +829,6 @@ span.new-session-page__select {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
-}
-
-.connect-machine-dialog__hint {
-  margin-top: 8px;
 }
 
 .connect-machine-dialog .login-gate__command {
@@ -1163,7 +1008,6 @@ span.new-session-page__select {
   max-width: min(48rem, calc(100% - 36px));
   margin: 4px auto 2px;
   padding: 10px 12px;
-  box-sizing: border-box;
   text-align: left;
   box-shadow: 0 8px 24px color-mix(in srgb, var(--danger) 8%, transparent);
 }
@@ -1228,20 +1072,21 @@ span.new-session-page__select {
     padding: 52px 0 0;
   }
 
+  /* Dock the draft at the bottom like the chat composer: the welcome fills the
+     page and the identity centers in the space above the draft. Auto margins
+     yield to content when a short viewport or a long draft needs the space. */
   .new-session-page .agent-chat__welcome {
+    flex: 1 0 auto;
     min-height: auto;
-    margin-block: auto;
-    padding: 24px 0;
+    margin-block: 0;
+    padding: 24px 0 0;
   }
 
-  /* Center the whole composition, not the introduction alone. Auto margins
-     yield to content when a short viewport or a long draft needs the space. */
   .new-session-page .agent-chat__welcome-identity {
     flex-direction: column;
     gap: 12px;
-    box-sizing: border-box;
     width: 100%;
-    margin-block: 0;
+    margin-block: auto;
     padding-inline: var(--chat-mobile-edge-inset);
     text-align: center;
   }
@@ -1277,6 +1122,9 @@ span.new-session-page__select {
   }
 
   .new-session-page__composer {
+    /* Matches .agent-chat__composer-shell[data-mobile-composer="true"]. */
+    --chat-composer-bottom-gap: 10px;
+
     /* Keep privacy context above the writing surface, never below it. */
     order: 1;
   }
@@ -1306,7 +1154,7 @@ span.new-session-page__select {
    keyboard shrinks the shell. Use the page's actual available canvas instead. */
 @container new-session (max-width: 932px) and (max-height: 500px) {
   .new-session-page .agent-chat__welcome {
-    padding-block: 8px;
+    padding-block: 8px 0;
   }
 
   .new-session-page__draft {
@@ -1336,17 +1184,20 @@ span.new-session-page__select {
   .new-session-page .agent-chat__hint {
     display: none;
   }
-}
 
-@container chat-composer (max-width: 480px) {
-  .new-session-page__composer .new-session-page__visibility {
-    flex: 0 0 var(--chat-composer-control-size);
-    width: var(--chat-composer-control-size);
-    padding-inline: 0;
-    justify-content: center;
+  /* No room for a hint here, so the status line floats under the name instead
+     of adding a row to the identity. */
+  .new-session-page .agent-chat__welcome-identity-copy {
+    position: relative;
   }
 
-  .new-session-page__composer .new-session-page__visibility-label {
+  .new-session-page--incognito .agent-chat__hint {
+    position: absolute;
+    top: 100%;
+    display: block;
+  }
+
+  .new-session-page--incognito .new-session-page__welcome-hint-text {
     display: none;
   }
 }
@@ -1603,7 +1454,6 @@ span.new-session-page__select {
 }
 
 .new-session-page__cloud-config-card {
-  --openclaw-tooltip-background-color: var(--bg-elevated);
   --openclaw-tooltip-max-width: min(510px, calc(100vw - 24px));
 }
 
@@ -1651,6 +1501,14 @@ span.new-session-page__select {
 .new-session-page__environment-detail-trigger {
   display: flex;
   align-items: center;
+}
+
+/* Tooltips add no box, so a row's gap lands on the box inside them. */
+.new-session-page__environment-details + .session-menu__item,
+:is(.session-menu__item, .new-session-page__environment-details)
+  + .new-session-page__environment-details
+  > :is(.session-menu__item, .new-session-page__environment-detail-trigger) {
+  margin-block-start: var(--menu-item-gap);
 }
 
 .new-session-page__environment-detail-trigger > .session-menu__item {
@@ -1701,4 +1559,93 @@ span.new-session-page__select {
 
 .new-session-page__fixed-machine span:last-child {
   color: var(--muted);
+}
+
+/* Docked layout only: the hint's slot says Incognito is on and keeps the note a
+   tap away, so turning Incognito on or off moves nothing on the page. */
+.new-session-page__incognito-status {
+  display: none;
+}
+
+.oc-popover.new-session-page__incognito-note {
+  width: min(320px, calc(100vw - 32px));
+  padding: 12px 14px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.45;
+  text-align: start;
+  white-space: normal;
+}
+
+.new-session-page__incognito-note p {
+  margin: 0;
+}
+
+.new-session-page__incognito-note p + p {
+  margin-top: 8px;
+  color: var(--muted);
+}
+
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .new-session-page__incognito-rail .new-session-page__incognito-toggle--active {
+    width: var(--shell-chrome-control-size);
+    padding-inline: 0;
+  }
+
+  .new-session-page__incognito-toggle-label {
+    display: none;
+  }
+
+  /* Still announced as a status; the note itself lives in the popover. */
+  .new-session-page__incognito-notice--visible {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .new-session-page__welcome-hint {
+    display: grid;
+    justify-items: center;
+  }
+
+  .new-session-page__welcome-hint > * {
+    grid-area: 1 / 1;
+  }
+
+  .new-session-page--incognito .new-session-page__welcome-hint-text {
+    visibility: hidden;
+  }
+
+  .new-session-page--incognito .new-session-page__incognito-status {
+    display: inline-flex;
+    align-items: center;
+    align-self: center;
+    gap: 5px;
+    min-height: 32px;
+    margin-block: -8px;
+    padding: 0 6px;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    touch-action: manipulation;
+  }
+
+  .new-session-page__incognito-status svg {
+    width: 14px;
+    height: 14px;
+  }
+}
+
+/* The identity sits in a row here, off-center, so the note keeps its distance from the edge. */
+@container new-session (max-width: 932px) and (max-height: 500px) {
+  .oc-popover.new-session-page__incognito-note {
+    width: min(280px, calc(100vw - 48px));
+  }
 }

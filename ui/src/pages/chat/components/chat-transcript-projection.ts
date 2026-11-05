@@ -34,6 +34,7 @@ import {
   resolveTranscriptAvatarPlacement,
   resolveTranscriptParticipants,
 } from "./chat-transcript-identity.ts";
+import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 import {
   expandReplyTargetWork,
@@ -124,14 +125,15 @@ export function projectChatTranscript(
     replyLocalPerson: localParticipantIdentityKey(props.userId),
     searchOpen: search.open,
     searchQuery: search.query,
-    messageRecovery:
-      searchFiltering && props.loadFullAssistantMessage
-        ? {
-            messages: expandedAssistantMessages,
-            revision: recovery.revision,
-            agentId: props.fullMessageAgentId,
-          }
-        : undefined,
+    messageRecovery: searchFiltering
+      ? {
+          messages: expandedAssistantMessages,
+          revision: recovery.revision,
+          agentId: props.fullMessageAgentId,
+          displayFacts: props.displayFacts,
+          canFetchFullMessage: Boolean(props.loadFullAssistantMessage),
+        }
+      : undefined,
   } satisfies Parameters<typeof buildCachedChatItems>[0];
   const { snapshot, live, resolveLiveStream } = createTranscriptStreamSource(
     chatItemsInput,
@@ -286,6 +288,7 @@ export function projectChatTranscript(
     runActive: props.runActive,
     asyncQuestions,
     onOpenWorkspaceFile: props.onOpenWorkspaceFile,
+    onFindWorkspaceFile: props.onFindWorkspaceFile,
     onPermissionRetry: props.onPermissionRetry,
     mediaOwner: props.mediaOwner,
     mediaReadAllowed: props.mediaReadAllowed,
@@ -294,7 +297,7 @@ export function projectChatTranscript(
     connectionEpoch: props.connectionEpoch,
     assistantAttachmentAuthToken: props.assistantAttachmentAuthToken ?? null,
     resolveArtifactDownload: props.resolveArtifactDownload,
-    getTurnVideoMessages: (key) => state.transcriptRenderContext.turnVideoMessages?.get(key),
+    getTurnMediaMessages: (key) => state.transcriptRenderContext.turnMediaMessages?.get(key),
     onRequestOpenImage: props.onRequestOpenImage,
     onOpenImage: props.onOpenImage,
     onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
@@ -452,8 +455,6 @@ export function projectChatTranscript(
     getExpansionStateVersion(expandedUserMessages),
     expandedAssistantMessages,
     recovery.revision,
-    // The host minute poll requests an update; this key crosses row guard() memoization.
-    Math.floor(Date.now() / 60_000),
     props.latestBrowserTabs,
     props.sessionKey,
     // Invalidate settled rows when spawn metadata arrives, not on activity/title patches.
@@ -591,10 +592,11 @@ export function projectChatTranscript(
             basePath: props.basePath,
             sessionPublicOrigin: props.sessionPublicOrigin,
             streamOptions: streamGroupOptions,
+            workPreviews,
             renderGroupOptions,
             isWorkExpanded: (key) => expandedToolCards.get(key) ?? false,
             onToggleWork: toggleToolCardExpanded,
-            turnRecap: recapForGroup(item.key),
+            turnRecap: recapForGroup(item.fragment?.source.key ?? item.key),
           },
         };
       }
@@ -630,7 +632,7 @@ export function projectChatTranscript(
       afterMessageId ? messageRowKeysById.get(afterMessageId) : afterMessageId,
     );
   }
-  if (turnRecap !== null && !recapAttached && !isEmpty && !showLoadingSkeleton) {
+  if (turnRecap?.outputTokens != null && !recapAttached && !isEmpty && !showLoadingSkeleton) {
     appendContent("turn-recap", { kind: "recap", recap: turnRecap });
   }
   if (subagents.wait && !subagents.placedWait && !searchFiltering) {
@@ -650,7 +652,7 @@ export function projectChatTranscript(
     });
   }
   const transcriptRows = projectTranscriptRows(rows, workPreviews, contentRows);
-  state.transcriptRenderContext.turnVideoMessages = snapshot.turnVideoMessages;
+  state.transcriptRenderContext.turnMediaMessages = snapshot.turnMediaMessages;
   state.transcriptRenderContext.onSetReply = props.onSetReply;
   state.transcriptRenderContext.onOpenReply = (replyToId) => {
     // Search removes rows from the index, not from loaded history. Resolve the
@@ -693,6 +695,12 @@ export function projectChatTranscript(
     }
     props.replyMessageAccess?.open(replyToId);
   };
+  // Range-only renders reuse this projection; a new projection refreshes the
+  // renderer for changed permissions, locale, content, or other presentation.
+  const renderRow = (row: TranscriptRow<SystemEventRenderItem>) =>
+    row.kind === "item"
+      ? renderItem(row.key === liveItem?.key ? liveItem : row.item)
+      : (contentRows.find((content) => content.key === row.key)?.content ?? row.content);
   return {
     isDirectThread,
     positionIndex: showLoadingSkeleton
@@ -710,10 +718,7 @@ export function projectChatTranscript(
     renderRows: (overlay: JSX.Element = null, header: TranscriptHeader | null = null) =>
       transcript.render(
         transcriptRows,
-        (row) =>
-          row.kind === "item"
-            ? renderItem(row.key === liveItem?.key ? liveItem : row.item)
-            : (contentRows.find((content) => content.key === row.key)?.content ?? row.content),
+        renderRow,
         latestTranscriptAnnouncement(collapsedItems, liveItem),
         props.announceTranscript !== false && !search.open && !props.loading,
         overlay,

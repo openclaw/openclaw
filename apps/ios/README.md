@@ -50,7 +50,7 @@ visible while muted.
 ## Exact Xcode Manual Deploy Flow
 
 1. Prereqs:
-   - Xcode 26.x or newer with the iOS and watchOS SDKs
+   - Xcode 27.1 or newer with the iOS and watchOS SDKs
    - `pnpm`
    - `xcodegen`
    - The pinned [Watch Rust toolchain](#watch-companion-build-requirements)
@@ -129,7 +129,7 @@ normal **Enable Standalone Voice → Talk on Watch → Start** flow; see
 
 Prereqs:
 
-- Xcode 26.x
+- Xcode 27.1 or newer
 - `pnpm`
 - `xcodegen`
 - The pinned [Watch Rust toolchain](#watch-companion-build-requirements)

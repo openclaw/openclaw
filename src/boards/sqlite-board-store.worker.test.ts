@@ -384,7 +384,7 @@ it.each([
     await closeOpenClawAgentDatabasesAsync();
     expect(database.db.isOpen).toBe(false);
     using publication = vi
-      .spyOn(workerStore, "openOpenClawAgentSqliteWorkerStore")
+      .spyOn(workerStore, "openOpenClawAgentSqliteWorkerStoreV2")
       .mockImplementation(() => {
         throw new Error("Board read acquired a write-capable publication");
       });

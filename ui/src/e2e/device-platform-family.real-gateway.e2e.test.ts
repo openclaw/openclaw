@@ -263,20 +263,18 @@ suite.define(() => {
               await confirmation.waitFor();
               await confirmation.getByRole("button", { name: /^Switch to / }).click();
               await expect.poll(() => deviceId).not.toBe("");
-              const row = page.locator(".device-entry", {
-                has: page.locator(`dd[title="${deviceId}"]`),
-              });
+              const row = page.locator(`.device-entry[data-device-id="${deviceId}"]`);
               await row.waitFor();
               await expect
-                .poll(() => readText(row.locator(".device-entry__status")))
-                .toBe("connected");
+                .poll(() => readText(row.locator(":scope > summary .device-entry__status")))
+                .toBe("Connected");
               await Promise.all(pendingApprovals);
               const paired = (await listDevicePairing()).paired.find(
                 (entry) => entry.deviceId === deviceId,
               );
               const first = {
                 paired: pairedFacts(paired),
-                meta: await readText(row.locator(".device-entry__body > .settings-row__desc")),
+                meta: await readText(row.locator(":scope > summary .device-entry__meta")),
                 connect: connects[0],
                 presence: [...presence],
               };
@@ -300,11 +298,14 @@ suite.define(() => {
               await expect.poll(() => connects.length).toBeGreaterThan(beforeCount);
               await row.waitFor();
               await expect
-                .poll(() => readText(row.locator(".device-entry__status")))
-                .toBe("connected");
+                .poll(() => readText(row.locator(":scope > summary .device-entry__status")))
+                .toBe("Connected");
               const afterList = await listDevicePairing();
               const after = afterList.paired.find((entry) => entry.deviceId === deviceId);
-              const meta = await readText(row.locator(".device-entry__body > .settings-row__desc"));
+              const meta = await readText(row.locator(":scope > summary .device-entry__meta"));
+              const platform = await readText(
+                row.locator(":scope > summary .device-entry__part").first(),
+              );
               if (captureUiProof) {
                 await row.screenshot({
                   path: path.join(suite.artifactDir, `${item.name}-after-reload.png`),
@@ -333,11 +334,9 @@ suite.define(() => {
                 );
                 expect(after?.deviceFamily).toBeUndefined();
               }
-              const orphanRow = page.locator(".device-entry", {
-                has: page.locator(`dd[title="${orphan.deviceId}"]`),
-              });
+              const orphanRow = page.locator(`.device-entry[data-device-id="${orphan.deviceId}"]`);
               expect(
-                await readText(orphanRow.locator(".device-entry__body > .settings-row__desc")),
+                await readText(orphanRow.locator(":scope > summary .device-entry__meta")),
               ).toContain("MacIntel");
               observations.push({
                 name: item.name,
@@ -358,8 +357,19 @@ suite.define(() => {
                 JSON.stringify(observations, null, 2),
               );
               if (item === cases.at(-1)) {
-                await orphanRow.locator(".device-entry__menu-trigger").click();
-                await orphanRow.locator('[role="menuitem"][data-value="remove"]').click();
+                // An older pairing lives inside the row of the machine it belongs to.
+                const closedOwner = page.locator(
+                  `details.device-entry:not([open]):has([data-device-id="${orphan.deviceId}"]) > summary`,
+                );
+                if ((await closedOwner.count()) > 0) {
+                  await closedOwner.click();
+                }
+                await orphanRow.locator(":scope > summary").click();
+                await orphanRow
+                  .locator(
+                    ':scope > .device-entry__body > .device-entry__actions > [data-device-action="remove"]',
+                  )
+                  .click();
                 await page
                   .locator("openclaw-modal-dialog")
                   .last()
@@ -439,7 +449,7 @@ suite.define(() => {
                 );
                 await rejectDevicePairing(request.requestId);
               }
-              expect(meta.split(" · ")[0], item.name).toBe(item.label);
+              expect(platform.trim(), item.name).toBe(item.label);
               expect(
                 connects.every((frame) => frame.client.deviceFamily === item.family),
                 item.name,

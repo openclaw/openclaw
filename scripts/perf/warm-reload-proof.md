@@ -37,6 +37,77 @@ child directory and retains failed attempts. Output must therefore be under
 For a small smoke run, use `--route chat --reloads 1`. `--route dashboard` selects
 the other route. Default coverage is **one cold navigation and eleven warm
 reloads per route**, each route in an independent initially empty browser context.
+
+For transcript late-paint attribution, add `--transcript-late-paint`. Both targets
+are archived dashboard-key sessions, opened through slug + full-UUID references
+in their respective chat and dashboard namespaces. They are pinned, and the
+transcript includes extended nested lists, bold text, code, tables, and links.
+The synthetic operator uses Involving me, category
+grouping, Created sorting, five collapsed categories, always-visible empty groups,
+and no previews; the catalog has 97 groups and 102 section-order entries. This
+mode records complete-message text hashes and heights, plus read-only IndexedDB
+request start/completion times and whether an exact snapshot read found a record,
+without recording cache keys or contents.
+`firstTranscriptDomMs` records visible text on either transcript placement,
+independently of a dashboard occupying the main region. These are DOM and I/O
+milestones; filmstrip inspection still owns paint claims.
+
+For tall dashboard-side transcript anchoring, add `--dashboard-end-anchor` with
+`--transcript-late-paint`. This uses a 1720 × 1515 viewport, a saved 320 px side
+column, 33 short exchanges ending in a roughly 4.5k-character prose reply with
+collapsed tool activity, and twelve trailing hidden custom messages. Per-frame
+`transcriptGeometry` records scroll distance from the end, pane width/height,
+last assistant row height, and bottom paragraph intersection. The final paragraph
+has its own Element Timing marker, `bottomParagraphPaintMs`. Join the geometry
+samples to the inspected first transcript PNG; DOM sampling alone does not prove
+the first painted scroll position. Runtime code is unchanged by this diagnostic.
+
+Add `--dashboard-pane-chrome` to give the
+dashboard its own archived conversation with 160 trailing tool exchanges,
+so the loaded transcript window contains activity groups and an earlier-history
+boundary rather than assistant prose. `paneChrome.frames` records identity-action
+children, versions-button geometry, boundary text/geometry, and message/activity
+counts from navigation through settle. The dashboard retains its generated peer
+owner, outside the operator's Involving me roster. Its unpinned activity is seven
+days old, below the bounded agent-roster window, so its session menu arrives after
+cached header admission. The chat target remains archived.
+With plugin activation, the dashboard also contains a native Workboard summary
+and one synthetic backlog card, created through the existing Gateway RPCs.
+
+For active-session composer proof, add `--active-targets` with `--transcript-late-paint`.
+Targets stay unarchived with a fresh, versioned 1,800-token context total and 96,000-token
+limit. `contextRingFrames` retains changed composer/ring display samples, and
+`firstComposerDomHasFinalRing` requires the final ring label and dial at opacity one
+in the first visible composer DOM sample. Inspect the correlated compositor frame
+and its predecessor before claiming first-paint presence.
+
+For plugin-publication attribution, add `--plugin-activation`. This enables bundled
+Workboard and two isolated native modules: a neutral CSS theme with a header
+accessory, and a board-like module that awaits two lazy chunks before registering
+a page, navigation, panel, accessory, widget, and unselected transcript replacement.
+Bundled assets use `/assets/plugins/`; synthetic native assets use
+`/__openclaw__/plugins/control-ui/`. The fixture does not copy installed plugins,
+private styles, or stored surface selections. Before interpreting results, verify
+successful asset responses from both routes, complete `pluginStates` with zero
+errors, and the expected contribution counts. `pluginMarks` records synthetic
+module milestones; `pluginsCompleteMs` records registry completion.
+`transcriptTextPaintMs` records a paragraph reported by Largest Contentful Paint,
+which may be absent when another element remains the largest paint candidate.
+Use the compositor filmstrip for missing text-paint observations.
+
+Run this mode twice for the two visit sequences. The default repeats reloads.
+Adding `--reload-after-navigation` leaves the app, removes only the synthetic
+target's transcript snapshot and metadata, opens a fresh `/new` document, and
+navigates internally to the target. It reloads after a four-second first visit;
+sidebar snapshots and operator settings survive. The fixed visit duration is
+workload, not a cache-readiness condition. Each warm run records the target's
+cache inventory and elapsed visit time before capture. This tests short-visit
+persistence rather than a return visit to an already-persisted transcript. The
+initial cold capture remains separate from these independently reset visits.
+
+For separate attribution, add `--cpu-profile --reloads 1` to save a Chrome timeline
+and V8 CPU profile for each warm capture. Profiled timings are not comparison results.
+
 The default `--admission signed-in` installs a random HttpOnly session cookie in
 Chromium for the owned loopback proxy. The proxy checks that cookie for HTTP and
 WebSocket requests, strips client-supplied identity/forwarding/scope headers, and
@@ -63,6 +134,12 @@ window before starting warm reloads. A read-only cache inventory verifies that a
 owned transcript snapshot exists for the exact route; otherwise warm proof stops.
 Its inventory also records the serialized target-record bytes before warm captures
 so baseline/candidate storage growth can be compared outside measurement.
+The sidebar uses a nondefault agent, the involving-me filter, category grouping
+with 97 groups, created ordering, five collapsed groups, hidden empty groups,
+disabled previews, personal pins, and eight expanded parents with retained children.
+Both target conversations are archived dashboard sessions; the chat arm uses
+`/chat/<agent>/dashboard/<id>`. Per-frame sidebar diagnostics and the
+saved sidebar record's size distinguish cache admission from live handoff.
 Cold captures therefore show default Details
 visibility; warm chat captures show the last visit's Details state. Dashboard keeps
 its native closed Details state. The current router uses `/dashboard/...` for the

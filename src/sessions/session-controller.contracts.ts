@@ -218,6 +218,11 @@ export type ReplyOperation = {
   /** A steered input joined this operation; any earlier source answer predates it. */
   markSteeredInputAccepted(params: { inboundAudio: boolean }): void;
   markSourceReplyDelivered(): void;
+  /**
+   * Observe the moment a final message-tool send answers this turn's source, while the
+   * run continues. Channel progress UI retires here instead of rendering below the answer.
+   */
+  onSourceReplyDelivered(listener: () => void): () => void;
   /** Freeze the complete caller policy before a concrete backend attempt attaches. */
   /** @deprecated Use bindToolAuthoritySnapshotAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   bindToolAuthoritySnapshot(snapshot: ReplyToolAuthoritySnapshot): void;
@@ -544,7 +549,6 @@ export type SessionControllerInput = {
     predecessor: Promise<boolean>;
     settled: Promise<boolean>;
     settle(accepted: boolean): void;
-    accepted?: boolean;
     admitted?: boolean;
   };
   claim?: SessionControllerMailboxClaim;
@@ -575,6 +579,8 @@ export type SessionControllerMailboxClaim = {
   retryBeforeExecution?: boolean;
 };
 
+type FollowupSummaryEntry = { source: FollowupRun; line: string };
+
 /** All runnable inputs, including direct native producers, share this ordered owner. */
 export type SessionControllerMailbox = {
   readonly key: string;
@@ -599,14 +605,11 @@ export type SessionControllerMailbox = {
   cap: number;
   dropPolicy: "old" | "new" | "summarize";
   droppedCount: number;
-  summaryLines: string[];
-  summarySources: FollowupRun[];
+  summaryEntries: FollowupSummaryEntry[];
   activeSummarySources: Set<FollowupRun>;
   summaryElisions: Array<{
     contextKey: string;
-    count: number;
-    sources: FollowupRun[];
-    summaryLines: string[];
+    entries: FollowupSummaryEntry[];
     sourceRefs: Map<FollowupRun, FollowupRun>;
   }>;
   lastRun?: FollowupRun["run"];
@@ -641,6 +644,7 @@ export type SessionControllerSourceAdapter = {
 export type SessionControllerSourceInjection = {
   admit(): Promise<boolean>;
   accepted(accepted: boolean): void;
+  /** Authoritative final custody; only proven withdrawal can undo native acceptance. */
   finish(consumed: boolean): void;
 };
 

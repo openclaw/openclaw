@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build, type InlineConfig, type UserConfig } from "tsdown";
@@ -25,9 +24,10 @@ import {
 } from "../../scripts/lib/standalone-source-module-urls.mjs";
 import { copyStaticExtensionAssets } from "../../scripts/lib/static-extension-assets.mts";
 import { openRootFileSync } from "../../src/infra/boundary-file-read.js";
+import { createTempDirTracker } from "../helpers/temp-dir.js";
 import { writeJsonFile } from "../helpers/temp-repo.js";
 
-const roots: string[] = [];
+const tempDirs = createTempDirTracker();
 const formats: Array<"esm" | "cjs"> = ["esm", "cjs"];
 const helperContents = `import fs from "node:fs";
 export function readBuildInfo(): string {
@@ -37,14 +37,11 @@ export function readBuildInfo(): string {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  for (const root of roots.splice(0)) {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+  tempDirs.cleanup();
 });
 
 function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-module-urls-"));
-  roots.push(root);
+  const root = tempDirs.make("openclaw-module-urls-");
   const sourceRoot = path.join(root, "source");
   const write = (relative: string, contents: string) => {
     const filename = path.join(sourceRoot, relative);

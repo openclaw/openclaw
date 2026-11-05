@@ -10,6 +10,7 @@ import { readSqliteDatabaseIntegrityVerification } from "../infra/sqlite-databas
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import { tryInspectSqliteReadOnlyInProcess } from "../infra/sqlite-readonly-inspection.js";
 import { withSqliteSourceReadDatabase } from "../infra/sqlite-source-handle.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { readExistingAgentSchemaMeta } from "./openclaw-agent-db-metadata.js";
 import { withFreshOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-open.js";
 import { readAgentDatabaseSchemaVersion } from "./openclaw-agent-db-schema-read.js";
@@ -62,6 +63,13 @@ async function inspectRequest(request: InspectionRequest): Promise<void> {
           { timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
         );
         readSqliteIntegrityFileIdentity(snapshot.pathname, snapshot.identity);
+      } else if (input.purpose === "runtime") {
+        inspection = withSqliteSourceReadDatabase(
+          input.pathname,
+          "source",
+          (database) => runSqliteReadSnapshotSync(database, () => inspect(database)),
+          { timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
+        );
       } else {
         inspection = tryInspectSqliteReadOnlyInProcess(input.pathname, inspect)?.value;
       }
@@ -137,7 +145,7 @@ async function inspectRequest(request: InspectionRequest): Promise<void> {
       readSqliteIntegrityFileIdentity(snapshot.pathname, snapshot.identity);
     } else {
       inspection = tryInspectSqliteReadOnlyInProcess(input.pathname, inspect, {
-        allowClosedWal: readVerification() !== undefined,
+        allowClosedWal: input.allowClosedWal || readVerification() !== undefined,
       })?.value;
     }
     send({

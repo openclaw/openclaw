@@ -4,6 +4,7 @@ import { registerModalSurface } from "../../components/overlay-registry.ts";
 import { t } from "../../i18n/index.ts";
 import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { createMediaQueryList } from "../../test-helpers/media-query.ts";
+import { restoreChatApiAttachments } from "../chat/attachment-restoration.ts";
 import * as attachmentInputs from "../chat/components/chat-attachment-inputs.tsx";
 import type { ChatDetailPanel } from "../chat/components/chat-sidebar-view-types.ts";
 import { DirectDictationControl } from "../chat/composer-direct-dictation.ts";
@@ -232,6 +233,7 @@ describe("new session draft route ownership", () => {
           () => dictating,
         );
       }
+      const inputs = vi.spyOn(attachmentInputs, "ChatAttachmentInputs");
       const page = await mount(routeData("research"));
       await enterMessage(page, "Review the attachment");
       const original = "# Original pasted content\n  preserve indentation 漢字 😀\n".repeat(50);
@@ -239,12 +241,17 @@ describe("new session draft route ownership", () => {
         .fn<typeof fetch>()
         .mockImplementation(async () => new Response(original));
       vi.stubGlobal("fetch", fetchMock);
-      const paste = new Event("paste", { bubbles: true, cancelable: true });
-      Object.defineProperty(paste, "clipboardData", {
-        value: { items: [], getData: () => original },
-      });
-      page.querySelector("textarea")?.dispatchEvent(paste);
-      expect(paste.defaultPrevented).toBe(true);
+      // Retained drafts can still contain paste attachments created by earlier clients.
+      inputs.mock.calls.at(-1)![0].onAttachmentsChange!(
+        restoreChatApiAttachments([
+          {
+            mimeType: "text/plain",
+            fileName: "pasted-text-1.txt",
+            origin: "paste",
+            content: Buffer.from(original).toString("base64"),
+          },
+        ]),
+      );
       await settle(page);
       await vi.dynamicImportSettled();
       await expect

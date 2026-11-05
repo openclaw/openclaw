@@ -89,6 +89,7 @@ function renderFrame(
         frame: input.kind === "group" ? { ...completedFrame, parts: [input] } : input,
         options: {
           streamOptions: {},
+          workPreviews: new Map(),
           renderGroupOptions: () => ({ showReasoning: true, ...options }),
           isWorkExpanded: () => true,
           onToggleWork: () => {},
@@ -209,6 +210,38 @@ it.each([
         { path, ...owner },
       ]),
     );
+  },
+);
+
+it.each([
+  { senderSession: undefined, available: true },
+  { senderSession: mainSession, available: true },
+  { senderSession: { sessionKey, agentId: "research" }, available: false },
+  { senderSession: { sessionKey: mainSession.sessionKey, agentId: "research" }, available: false },
+])(
+  "keeps Files search in its owning session ($senderSession)",
+  async ({ senderSession, available }) => {
+    const onFindWorkspaceFile = vi.fn();
+    renderGroup(
+      createGroup(senderSession, {
+        phase: "final_answer",
+        content: [
+          {
+            type: "attachment_error",
+            attachment: { code: "file-too-large", kind: "document", label: "orders-large.zip" },
+          },
+        ],
+      }),
+      { sessionKey: mainSession.sessionKey, agentId: "main", onFindWorkspaceFile },
+    );
+    await vi.dynamicImportSettled();
+    await vi.waitFor(() => expect(container.textContent).toContain("Too large to attach."));
+    const find = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Find in Files",
+    );
+    expect(Boolean(find)).toBe(available);
+    find?.click();
+    expect(onFindWorkspaceFile).toHaveBeenCalledTimes(available ? 1 : 0);
   },
 );
 

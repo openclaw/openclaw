@@ -31,6 +31,7 @@ import { createCodingToolsGatewayCaller } from "./agent-tools.caller.js";
 import {
   captureLocalBrowserLoopbackConfig,
   createLocalBrowserLoopbackPreparation,
+  projectAgentToolsExecPolicy,
 } from "./agent-tools.execution-policy.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { captureChildToolAllowlist } from "./agent-tools.inheritance.js";
@@ -82,7 +83,6 @@ import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
 import { resolveSandboxFileIdentity } from "./sandbox/file-mutation-identity.js";
 import { createEmbeddedMessageInvocationPolicy } from "./scheduled-message-invocation.js";
 import { resolveScheduledToolCallerContext } from "./scheduled-tool-policy.js";
-import { projectEffectiveExecPolicy } from "./session-permission-exec-mode.js";
 import { resolveSessionPlacementComputer } from "./session-placement-computer.js";
 import { withLegacySessionCapabilityRead } from "./subagents/spawn/subagent-session-store-legacy.js";
 import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
@@ -232,11 +232,11 @@ function* assembleOpenClawCodingTools(
   };
   options?.recordToolPrepStage?.("workspace-policy");
   const scheduledExecTarget = options?.scheduledToolPolicy?.execTarget;
-  const effectiveExecPolicy = projectEffectiveExecPolicy({
-    base: execConfig,
-    overrides: options?.exec,
-    permissionPolicy: sessionPermissionPolicy,
-    scheduledExecTarget,
+  const effectiveExecPolicy = projectAgentToolsExecPolicy({
+    options,
+    execConfig,
+    agentId,
+    model: capabilityProfile.model,
   });
   const browserLoopback = createLocalBrowserLoopbackPreparation({
     options,
@@ -301,6 +301,7 @@ function* assembleOpenClawCodingTools(
             }),
             messageProvider: options?.messageProvider,
             currentChannelId: options?.currentChannelId,
+            currentMessagingTarget: options?.currentMessagingTarget,
             currentThreadTs: options?.currentThreadTs,
             channelContext: options?.channelContext,
             accountId: options?.agentAccountId,
@@ -324,12 +325,10 @@ function* assembleOpenClawCodingTools(
         })
       : [];
   const sessionToolAccess = prepareSessionPortalToolAccess({
+    ...options,
     sessionKey: executionSessionKey,
     agentId: executionAgentId,
-    sessionId: options?.sessionId,
-    senderIsOwner: options?.senderIsOwner,
     sandboxed: Boolean(sandbox),
-    runId: options?.runId,
     cronSelfRemoveOnlyJobId,
   });
   const { sessionPortalTarget, cronCreatorAuthorityResolver } = sessionToolAccess;
@@ -380,6 +379,10 @@ function* assembleOpenClawCodingTools(
     sandboxed: Boolean(sandbox),
     pluginToolAllowlist,
     pluginToolDenylist,
+    // Only the grant's owner reaches tool construction; the grant itself stays in the allowlist.
+    ...(runtimePluginToolGrant
+      ? { runtimePluginToolOwnerId: runtimePluginToolGrant.pluginId }
+      : {}),
     disableMessageTool: options?.disableMessageTool || options?.swarmCollector,
     requesterAgentIdOverride: executionAgentId,
   };
@@ -585,6 +588,7 @@ function* assembleOpenClawCodingTools(
         ? completeTurnTools(messageInvocationPolicy.filter(capabilityProfile, undefined, "session"))
         : undefined,
     ownerOnlyDenied: new Set(ownerOnlyCoreToolDenylist),
+    ownerToolCurrentAssertion: sessionToolAccess.ownerToolCurrentAssertion,
     hostSystemTurn: isHostSystemTurn(options ?? {}),
   });
   assertMemoryFlushPersistenceToolAvailable(authorizedTools, options?.memoryFlushTools);

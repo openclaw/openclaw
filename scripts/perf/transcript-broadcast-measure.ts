@@ -56,6 +56,9 @@
 // in turn-start-timeline.json. Observed clocks precede batched IPC; completed reservation
 // intervals can be reconstructed from elapsed/queue/execution times (rounded to ms).
 // blocking* labels describe the holder seen at enqueue, not every preceding queued job.
+// --resume-existing-turns reopens the same fixture/session keys after a process restart,
+// without resets or warmup. Seed once without it; reuse the same port and sandbox image.
+// Round zero measures the first concurrent turns; later rounds are the warm control.
 // Add --worktree-tool-churn to memory-soak --stress-tools --mixed-rpc to give each
 // foreground session its own managed worktree, read/grep its README, and cycle list searches.
 // This mode keeps a fixed viewer set instead of adding reconnect churn.
@@ -149,6 +152,8 @@ import {
 } from "../lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
+import { startGitHubVolumeFixture } from "./github-volume-fixture.ts";
+import { attachGitHubVolumeUi } from "./github-volume-ui.ts";
 import { TEAM_STRESS_PLUGIN_IDS } from "./team-shape-stress-fixture.ts";
 import { createTeamStressFanoutReceipts } from "./team-shape-stress-receipts.ts";
 import { observeTurnStartReceipt, type TurnStartSample } from "./turn-start-report.ts";
@@ -198,6 +203,7 @@ const { values } = parseArgs({
     "sandbox-turn-timeout-ms": { type: "string" },
     "cold-session-rounds": { type: "string", default: "0" },
     "turn-start-phases": { type: "boolean", default: false },
+    "resume-existing-turns": { type: "boolean", default: false },
     "turn-start-workspace-mutations": { type: "boolean", default: false },
     "turn-start-rich-context": { type: "boolean", default: false },
     "turn-start-advance-origin": { type: "boolean", default: false },
@@ -228,6 +234,10 @@ const { values } = parseArgs({
     "dashboard-rpc": { type: "boolean", default: false },
     "github-options-connected": { type: "boolean", default: false },
     "github-options-observe": { type: "boolean", default: false },
+    "github-volume-observe": { type: "boolean", default: false },
+    "github-volume-owner": { type: "string" },
+    "github-volume-forks": { type: "boolean", default: false },
+    "github-volume-no-etags": { type: "boolean", default: false },
     "github-observation-owner": { type: "string" },
     "github-availability-owner": { type: "string" },
     "github-state-handlers": { type: "string" },
@@ -307,6 +317,24 @@ if (!values["state-dir"]) {
 }
 if (values["worker-heap-snapshot"] && !values["worker-retained-heap"]) {
   throw new Error("--worker-heap-snapshot requires --worker-retained-heap");
+}
+if (
+  values["github-volume-observe"] &&
+  (!values["github-options-connected"] ||
+    !values["dashboard-rpc"] ||
+    path.resolve(values.entry) !== path.resolve("src/entry.ts"))
+) {
+  throw new Error(
+    "GitHub volume observation requires connected dashboard RPCs and --entry src/entry.ts",
+  );
+}
+if (
+  (values["github-volume-owner"] ||
+    values["github-volume-forks"] ||
+    values["github-volume-no-etags"]) &&
+  !values["github-volume-observe"]
+) {
+  throw new Error("GitHub volume fixture options require --github-volume-observe");
 }
 if (values["worker-baseline-dir"] && path.resolve(values.entry) !== path.resolve("src/entry.ts")) {
   throw new Error("--worker-baseline-dir requires --entry src/entry.ts");
@@ -727,6 +755,14 @@ if (values["turn-start-phases"] && scenario !== "chat.send") {
 }
 if (values["turn-start-phases"] && (!values["stress-tools"] || exactClients < 2)) {
   throw new Error("--turn-start-phases requires --stress-tools and --exact-clients >= 2");
+}
+if (
+  values["resume-existing-turns"] &&
+  (!values["turn-start-phases"] || !values["sandbox-image"] || coldSessionRounds || historyTurns)
+) {
+  throw new Error(
+    "--resume-existing-turns requires warm sandbox turn-start phases without history seeding",
+  );
 }
 let measuredPhaseRound: number | undefined;
 const turnStartPhases: Array<Record<string, unknown>> = [];
@@ -1585,8 +1621,36 @@ type GitHubFixtureRequest = {
   delayMs: number;
   status: number;
   accountRevision?: number;
+  caller?: string;
+  bodyBytes?: number;
 };
 const githubFixtureRequests: GitHubFixtureRequest[] = [];
+const githubUnexpectedRoutes: string[] = [];
+let githubVolumeOwner: { path: string; sha256: string } | undefined;
+const githubVolumeUi = new Map<number, Awaited<ReturnType<typeof attachGitHubVolumeUi>>>();
+const githubVolumeUiCalls: Awaited<ReturnType<typeof attachGitHubVolumeUi>>["calls"][] = [];
+const githubVolumeFixture = values["github-volume-observe"]
+  ? await startGitHubVolumeFixture({
+      forkCandidates: values["github-volume-forks"],
+      validators: !values["github-volume-no-etags"],
+      onIssue: () => {
+        dashboardFixtureRequests++;
+      },
+      onUnexpected: (route) => {
+        githubUnexpectedRoutes.push(route);
+      },
+      onRequest: (request) => {
+        githubFixtureRequests.push({
+          ...request,
+          phase: capturingColdSetup
+            ? "setup/preflight"
+            : measuring
+              ? "measurement"
+              : "outside-measurement",
+        });
+      },
+    })
+  : undefined;
 const githubOptionsObservations: Array<{
   phase: GitHubFixtureRequest["phase"];
   sessionKey: string;
@@ -3348,6 +3412,12 @@ const env = {
         GIT_CONFIG_VALUE_0: "never",
       }
     : {}),
+  ...(values["github-volume-owner"]
+    ? { OPENCLAW_BENCH_GITHUB_VOLUME_OWNER: path.resolve(values["github-volume-owner"]) }
+    : {}),
+  ...(githubVolumeFixture
+    ? { OPENCLAW_BENCH_GITHUB_VOLUME_PORT: String(githubVolumeFixture.port) }
+    : {}),
   OPENCLAW_PROFILE: values["default-state-dir"] ? "default" : `team-shape-${port}`,
   OPENCLAW_SYSTEMD_UNIT: `openclaw-gateway-team-shape-${port}`,
   ...(values["prep-trace"] ? { OPENCLAW_LOG_LEVEL: "trace" } : {}),
@@ -3407,6 +3477,14 @@ function launch(args: string[], name: string, extraEnv: NodeJS.ProcessEnv = {}, 
   child.on("message", (message: unknown) => {
     if (
       isRecord(message) &&
+      message.channel === "github-volume-owner" &&
+      typeof message.path === "string" &&
+      typeof message.sha256 === "string"
+    ) {
+      githubVolumeOwner = { path: message.path, sha256: message.sha256 };
+    }
+    if (
+      isRecord(message) &&
       message.channel === "github-options-stage" &&
       typeof message.request === "number" &&
       typeof message.phase === "string" &&
@@ -3461,6 +3539,8 @@ function launch(args: string[], name: string, extraEnv: NodeJS.ProcessEnv = {}, 
         durationMs: message.durationMs,
         delayMs: message.delayMs,
         status: message.status,
+        ...(typeof message.caller === "string" ? { caller: message.caller } : {}),
+        ...(typeof message.bodyBytes === "number" ? { bodyBytes: message.bodyBytes } : {}),
         ...(typeof message.accountRevision === "number"
           ? { accountRevision: message.accountRevision }
           : {}),
@@ -3595,6 +3675,26 @@ function bindConnectedOptionsWorktree(target: (typeof diffTargets)[number], crea
   const worktree = readManagedWorktree(created);
   target.worktree = worktree;
   target.original = readFileSync(path.join(worktree, "README.md"), "utf8");
+  if (values["github-volume-forks"]) {
+    const git = (args: string[]) => {
+      const result = spawnSync("git", ["-C", worktree, ...args], { encoding: "utf8" });
+      if (result.status !== 0) {
+        throw new Error(`Synthetic fork setup failed: ${result.stderr}`);
+      }
+      return result.stdout.trim();
+    };
+    const branch = git(["branch", "--show-current"]);
+    if (!branch || branch === "main") {
+      throw new Error("Fork measurement requires a managed feature branch");
+    }
+    for (const [remote, repo] of [
+      ["fixture-first", "repo-one"],
+      ["fixture-second", "repo-two"],
+    ]) {
+      git(["config", `remote.${remote}.url`, `https://github.com/fixture-fork/${repo}.git`]);
+      git(["update-ref", `refs/remotes/${remote}/${branch}`, "HEAD"]);
+    }
+  }
 }
 const dashboardRpcShapes = values["dashboard-rpc"]
   ? [
@@ -5262,6 +5362,7 @@ async function connectClient(index: number) {
         }
       : {}),
     onEvent: (event) => {
+      githubVolumeUi.get(index)?.emit(event);
       lastSubscriberEventAt = performance.now();
       lastSubscriberEventName = event.event;
       if (
@@ -5444,12 +5545,21 @@ async function connectClient(index: number) {
   if (measuring) {
     handshakeLatenciesMs.push(handshakeElapsedMs);
   }
+  if (values["github-volume-observe"]) {
+    githubVolumeUi.get(index)?.stop();
+    const bridge = attachGitHubVolumeUi(client, hello, parentKey);
+    githubVolumeUi.set(index, bridge);
+    githubVolumeUiCalls.push(bridge.calls);
+  }
   return client;
 }
 let cleanupPromise: Promise<void> | undefined;
 function cleanup() {
   return (cleanupPromise ??= (async () => {
     closing = true;
+    for (const bridge of githubVolumeUi.values()) {
+      bridge.stop();
+    }
     if (values["exec-io-storm"]) {
       writeFileSync(path.join(output, "agent-exec-io.stop"), "stop\n");
     }
@@ -5476,6 +5586,7 @@ function cleanup() {
       children.map((child) => stopChild(child, { teardownGraceMs: 10_000, killGraceMs: 2000 })),
     );
     await Promise.all(childLogs.map((log) => finished(log)));
+    await githubVolumeFixture?.close();
     mock.closeAllConnections();
     if (mock.listening) {
       await new Promise<void>((resolve, reject) => {
@@ -5498,6 +5609,17 @@ for (const [signal, exitCode] of [
 try {
   await assertPortAvailable(port);
   await assertPortAvailable(mockPort);
+  if (values["team-stress"]) {
+    // Each built revision owns fixture upgrades, before readiness and measurement.
+    const doctor = launch([values.entry, "doctor", "--fix", "--non-interactive"], "doctor", {
+      OPENCLAW_SUPERVISOR_MODE: "external",
+      OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+    });
+    const [code, signal] = await once(doctor, "close");
+    if (code !== 0) {
+      throw new Error(`Fixture Doctor exited ${code ?? signal}; inspect ${output}/doctor.log`);
+    }
+  }
   await new Promise<void>((resolve, reject) => {
     mock.once("error", reject);
     mock.listen(mockPort, "127.0.0.1", resolve);
@@ -5547,7 +5669,14 @@ try {
       ...(values["worker-retained-heap"] || values["worker-baseline-dir"]
         ? ["--import", "./scripts/perf/worker-retained-heap-preload.ts"]
         : []),
-      ...(values["dashboard-rpc"] ? ["--import", dashboardPreload] : []),
+      ...(values["dashboard-rpc"]
+        ? [
+            "--import",
+            values["github-volume-observe"]
+              ? "./scripts/perf/github-volume-preload.ts"
+              : dashboardPreload,
+          ]
+        : []),
       ...(values["github-options-observe"]
         ? ["--import", "./scripts/perf/github-options-measure-preload.ts"]
         : []),
@@ -5603,7 +5732,7 @@ try {
   await delay(10_000);
   for (let index = 0; index < clientCount; index++) {
     const client = await connectClient(index);
-    if (index === 0) {
+    if (index === 0 && !values["resume-existing-turns"]) {
       // Keep the full parent chain present, including the ordinary default main-session link.
       await rpc(client, "sessions.create", {
         key: "agent:main:main",
@@ -5677,6 +5806,14 @@ try {
           worktreeToolRoots.set(keyIndex + 1, worktree);
         }
         await rpc(client, "sessions.reset", { key });
+      }
+    }
+    if (index === 0 && values["resume-existing-turns"]) {
+      for (const key of keys) {
+        const existing = await rpc(client, "sessions.describe", { key });
+        if (!isRecord(existing) || !isRecord(existing.session) || !existing.session.worktree) {
+          throw new Error(`Resume measurement requires an existing managed worktree: ${key}`);
+        }
       }
     }
     await rpc(client, "sessions.subscribe", {});
@@ -6408,7 +6545,11 @@ try {
     }
   }
   // Equal warmup work keeps paired runs at the same retained-history boundary.
-  const warmupRoundCount = soakScenario ? Math.max(1, Math.ceil(warmupMs / roundIntervalMs)) : 1;
+  const warmupRoundCount = values["resume-existing-turns"]
+    ? 0
+    : soakScenario
+      ? Math.max(1, Math.ceil(warmupMs / roundIntervalMs))
+      : 1;
   for (let round = 0; round < warmupRoundCount; round++) {
     // Warm runtime imports on the parent, leaving all measured sessions untouched.
     if (idleScenario) {
@@ -7797,6 +7938,7 @@ try {
   const wholeSoakCpu = wholeSoakCpuBefore
     ? measureGatewayCpuUsage(wholeSoakCpuBefore, await readGatewayCpuUsage(gateway))
     : undefined;
+  const measurementEndedAt = Date.now();
   if (values["team-stress"]) {
     teamStressTelemetryActive = false;
     flushTeamStressRpcMinute();
@@ -7822,6 +7964,33 @@ try {
   }
   if (values["dashboard-rpc"] && dashboardFixtureRequests === 0) {
     throw new Error("Dashboard GitHub preview never reached the synthetic transport");
+  }
+  if (githubUnexpectedRoutes.length > 0) {
+    throw new Error(`Unmodeled GitHub routes: ${githubUnexpectedRoutes.join(", ")}`);
+  }
+  if (values["github-volume-observe"] && !githubVolumeOwner) {
+    throw new Error("GitHub volume workload did not load its selected PR owner");
+  }
+  const githubVolumeUiSnapshots = [...githubVolumeUi.values()].map((bridge) => bridge.snapshot());
+  const githubVolumeUiObservedCalls = githubVolumeUiCalls.flat();
+  if (
+    values["github-volume-observe"] &&
+    (githubVolumeUiObservedCalls.length === 0 ||
+      githubVolumeUiObservedCalls.some((call) => !call.ok))
+  ) {
+    throw new Error("GitHub volume UI subscription failed");
+  }
+  if (
+    values["github-volume-forks"] &&
+    (githubVolumeUiSnapshots.length === 0 ||
+      !githubFixtureRequests.some((request) =>
+        decodeURIComponent(request.route).includes("head=fixture-fork:"),
+      ) ||
+      !githubVolumeUiSnapshots.every((snapshot) =>
+        snapshot?.pullRequests.some((pull) => pull.number === 17),
+      ))
+  ) {
+    throw new Error("GitHub volume workload did not discover and deliver the synthetic fork PR");
   }
   if (
     values["github-options-observe"] &&
@@ -8173,6 +8342,7 @@ try {
         }
       : {}),
     defaultStateDir: values["default-state-dir"],
+    resumeExistingTurns: values["resume-existing-turns"],
     verifyHistoryReplay,
     revision: values.revision ?? null,
     operationsPerRound: turnScenario ? sessionCount : operations,
@@ -8237,6 +8407,16 @@ try {
           dashboardRpc: {
             methods: dashboardRpcShapes.map(({ method }) => method),
             dashboardFixtureRequests,
+            githubVolumeObserved: values["github-volume-observe"],
+            githubVolumeForks: values["github-volume-forks"],
+            githubVolumeEtags: !values["github-volume-no-etags"],
+            githubVolumeOwner,
+            ...(values["github-volume-observe"]
+              ? {
+                  githubVolumeUiCalls: githubVolumeUiObservedCalls,
+                  githubVolumeUiSnapshots,
+                }
+              : {}),
             ...(values["github-options-observe"]
               ? {
                   githubObservation: {
@@ -8359,6 +8539,7 @@ try {
     streamStartAllocations: values["stream-start-allocations"],
     activeWorkDiagnostics: values["active-work-diagnostics"],
     measurementStartedAt,
+    measurementEndedAt,
     ...(env.OPENCLAW_PERF_MEDIA_IO || env.OPENCLAW_PERF_FSYNC_DELAY_MS
       ? {
           fsyncProbe: {

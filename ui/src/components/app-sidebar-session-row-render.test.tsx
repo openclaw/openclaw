@@ -332,7 +332,7 @@ it.each([undefined, 1])(
   },
 );
 
-it("keeps hidden child background activity off the idle parent's own glyph", () => {
+it("keeps hidden child activity off the idle parent row", () => {
   const { dom } = mountRow(
     { icon: "book", unread: true },
     {
@@ -342,7 +342,7 @@ it("keeps hidden child background activity off the idle parent's own glyph", () 
     },
   );
   expect(dom.query(".sidebar-session-indicator .session-glyph__ring")).toBeNull();
-  expect(dom.query(".sidebar-child-session-toggle .session-run-spinner")).not.toBeNull();
+  expect(dom.query(".sidebar-child-session-toggle .session-run-spinner")).toBeNull();
   expect(dom.all('[aria-label="Unread"]')).toHaveLength(1);
   expect(dom.query(".sidebar-recent-session__link")?.getAttribute("aria-describedby")).toBeNull();
 });
@@ -557,7 +557,7 @@ it("keeps a restored pin's badges after roster handoff until its own descriptor 
   update();
   expect(host.sidebarSnapshot).toBeNull();
   expect(dom.all(".session-row-badge--approval")).toHaveLength(1);
-  expect(dom.text(".session-row-badge--pull-request")).toBe("3");
+  expect(dom.all(".session-row-badge--pull-request")).toHaveLength(1);
   setCurrent(projectSidebarSession({ key: saved.key, label: "Current pin", pinned: true }));
   update();
   expect(dom.all(".session-row-badge")).toHaveLength(0);

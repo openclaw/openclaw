@@ -202,6 +202,8 @@ export type ActiveNativeHookRelayRegistrationHandle = NativeHookRelayRegistratio
 };
 
 export type OwnedNativeHookRelayRegistrationHandle = ActiveNativeHookRelayRegistrationHandle & {
+  /** Bind native foreground callbacks to the accepted turn of this run. */
+  bindForegroundTurn: (threadId: string, turnId: string) => void;
   /** Explicitly expose only this registration through the token-scoped HTTP callback. */
   enableRemoteCallback: () => { token: string };
   /** Strict policy preparation and direct publication result. */
@@ -304,6 +306,7 @@ export type NativeHookRelayExecutionAdmission = Readonly<{
 }>;
 
 export type NativeHookRelayOwnerOptions = {
+  requireForegroundTurn?: boolean;
   retention?: NativeHookRelayRetention;
   approvalHost?: NativeHookRelayRegistration["approvalHost"];
   executionAdmission?: NativeHookRelayExecutionAdmission;
@@ -321,7 +324,8 @@ export type OwnedNativeHookRelayParams = RegisterNativeHookRelayParams &
 
 export type RelayLifetime = {
   foregroundOpen: boolean;
-  foregroundToken: symbol;
+  /** Null requires turn acceptance; undefined preserves public registration semantics. */
+  foregroundTurn?: { threadId: string; turnId: string } | null;
   policyReady: Promise<void>;
   /** Process-local monotonic expiry used only by the in-process rearm timer. */
   expiresAtMonotonicMs?: number;

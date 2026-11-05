@@ -104,6 +104,40 @@ Existing format-1 SQLite snapshots remain readable. See
 [Database engines](/reference/database-engines#anchors-and-backups) for matched
 restore and update-recovery behavior.
 
+## Local companion checkpoints
+
+Activated Codex plugins omit the managed agent-home `codex-home/logs_2.sqlite`
+diagnostic store and its `-wal`, `-shm`, and `-journal` companions from these
+checkpoints. Codex recreates this log store; old diagnostic history is not
+restored. Codex state databases, credentials, and session rollouts remain
+included. Full archives and same-name files outside that declared managed home
+keep their existing behavior.
+
+Use `openclaw backup create --local-companion --verify` for a local restart
+checkpoint when all portable database families use PostgreSQL. It archives local
+files, fixed-local SQLite databases (including client credentials), and PostgreSQL
+anchors without exporting PostgreSQL rows. Capture still reads PostgreSQL metadata
+to discover registered stores; verification and restore inspect the captured
+anchors offline and do not contact PostgreSQL. `--only-config` cannot be combined
+with this profile.
+
+Use `openclaw backup restore <archive> --target <dir> --local-companion` to require
+this profile and refuse ordinary backups before extraction. The same flag works
+with `--from <location>`. Without the flag, restore still honors the archive
+profile; a companion never imports PostgreSQL rows.
+
+This profile is **not disaster recovery**. Local files roll back, but PostgreSQL
+rows do not. Restore preserves the same store identities and namespaces, and
+rebinds the copied local credentials to the restored shared anchor. Stop the
+Gateway before activating the restored tree, keep the corresponding PostgreSQL
+database available, and run `openclaw doctor` after activation. Do not run the
+original and restored installation concurrently with the same credentials.
+
+Checkpoints refuse remaining legacy audit migration inputs and PostgreSQL export
+directories. Finish the legacy audit migration or move old exports outside the
+backup sources before retrying. Ordinary backups continue to include PostgreSQL
+exports and restore them into fresh namespaces for disaster recovery.
+
 ## Notes
 
 - The archive embeds a schema-version-1 `manifest.json` with the resolved source paths and archive layout. Additive ownership metadata records configured agent ids and roots, including agent roots already covered by another asset; existing archive layout and older archives remain supported. New archives also record the current-layout SQLite snapshots captured at creation; standalone verification rejects missing or mismatched inventory entries. Legacy archives without this inventory remain readable, but verification reports `sqliteInventoryVerified: false` because complete database coverage cannot be established. An empty inventory means no current-layout databases were captured (for example, a config-only export), not a full database recovery point.
@@ -609,6 +643,11 @@ retaining complete table dumps in memory. Restores still require space for the
 materialized Git files and the private SQLite staging copy; verification does
 not write a second set of table dumps.
 
+Local Git content commands allow one second per MiB, with a two-minute minimum
+and a 24-hour maximum. Creation sizes this deadline from the refreshed artifacts;
+restore and verification use each blob's committed size. Metadata commands and
+remote pushes keep their existing deadlines.
+
 ## Schedule backups
 
 Provision one Gateway-owned automation per mode. Choose `--to <location>` for
@@ -620,6 +659,11 @@ openclaw backup enable --repository ~/Backups/openclaw-git --every 24h --push
 ```
 
 The interval defaults to `24h` when `--every` is omitted. An explicitly empty or whitespace-only interval is rejected before a schedule is created or updated.
+
+Managed backup runs have a 24-hour execution budget. To apply it to an existing
+schedule, run `openclaw backup enable` again with the same mode and target.
+Re-enabling replaces the command payload, including any manual timeout or
+environment overrides set with `cron edit`; reapply those overrides afterwards.
 
 Offsite schedules accept `--namespace <name>`, `--claim-namespace`, `--no-include-workspace`, and
 `--keep-daily`, `--keep-weekly`, and `--keep-monthly`. They use the same archive,
@@ -748,6 +792,15 @@ pending or recovering allocations and live worktrees under a previous
 `worktreeRoot`. Only recorded checkout paths are excluded; neighboring files and
 paths from removed registrations remain eligible. Config, credentials, and
 agent databases nested inside an excluded checkout remain included.
+
+Use `--exclude-worktree-templates` to omit registered, regenerable worktree
+template generations without excluding live checkouts, Git metadata, or
+uncommitted edits. It applies to recorded templates under current, previous,
+and custom worktree roots, not every directory named `.templates`. Unregistered
+paths remain included. Config, credentials, workspaces, agent directories, and
+plugin-included resources nested inside a template remain protected. The dry-run
+plan and archive manifest report existing omitted templates as `regenerable`.
+This flag does not delete or modify local templates.
 
 `--only-config` skips state, agent, credentials-directory, workspace, and
 plugin-resource discovery and archives only the active config file path.
@@ -914,6 +967,19 @@ the underlying error; rerun the backup command. A changed directory identity is
 still rejected.
 Scratch observed by the scan that disappears before cleanup is recorded as
 already reclaimed, without a warning or a claim that this pass removed it.
+
+Archive verification uses the same lifetime token for its private database spool,
+including verification of local and offsite archives. Verification removes its
+spool when it finishes and fails if cleanup cannot finish. A forced termination
+can leave owned scratch for `openclaw doctor --fix` to reclaim after the verifier
+exits. Verification does not sweep other scratch directories or remove the input
+archive. Older `openclaw-backup-verify-*` directories have no lifetime token and
+are not adopted by this cleanup.
+
+Once the archive's database inventory and verified global registry establish the
+required payloads, verification removes other speculative candidates from its
+spool. This reduces retained temporary data during later database checks, without
+reducing the initial archive scan or its peak temporary-space requirement.
 
 `openclaw doctor` reports scratch in the active temporary directory and recorded
 archive destination directories. When no backup ledger exists, recorded-location

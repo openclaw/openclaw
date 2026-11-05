@@ -58,6 +58,7 @@ export type PluginDiagnosticCode =
   | "dashboard-declaration-invalid"
   | "explicit-config-plugin-selection"
   | "plugin-state-migration"
+  | "plugin-source-snapshot-invalid"
   | "plugin-verification"
   | "sdk-incompatible"
   | "workspace-scope-omitted";
@@ -323,6 +324,8 @@ export type PluginManifestControlUi = {
   entry: string;
   /** Stylesheets in the same asset directory, loaded before activation. */
   styles?: string[];
+  /** SVG used for this plugin's side-panel picker entries and tabs, relative to its root. */
+  panelIcon?: string;
   /** Omission retains ordinary runtime activation. */
   activation?: "settings-only";
   settingsViews?: import("../../packages/gateway-protocol/src/plugin-control-ui-settings.js").ControlUiSettingsPlacement[];
@@ -400,6 +403,8 @@ export type PluginManifestBackupResource = {
   disposition: "include" | "regenerable";
   scope: "state" | "agent";
   relativePath: string;
+  /** Limit a regenerable exclusion to local restart checkpoints. */
+  profile?: "local-companion";
   /** Shared-state databases retained under this state-scoped resource. */
   databaseFamily?: "state";
 };
@@ -539,8 +544,16 @@ export type PluginManifest = {
   /** Static MCP servers contributed while this plugin is enabled. */
   mcpServers?: Record<string, PluginManifestMcpServer>;
   skills?: string[];
+  /**
+   * One folder of learned skills per agent, named by this single path segment under the
+   * agent's state folder. Skill loading reads it at the learned tier, between bundled and
+   * managed skills, without loading plugin runtime.
+   */
+  agentSkillsDir?: string;
   name?: string;
   description?: string;
+  /** Up to three author-written starter prompts; display and insertion preserve this text. */
+  recommendedPrompts?: string[];
   /** Optional presentation hints for plugin catalog surfaces. */
   catalog?: PluginManifestCatalog;
   version?: string;

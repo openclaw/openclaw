@@ -58,7 +58,13 @@ export function ChatModelAccountSectionView(
                   <button
                     ref={search?.rowRef(() => `account:${option().value}`)}
                     id={search?.optionId(`account:${option().value}`)}
-                    class="chat-controls__inline-select-option chat-controls__model-option"
+                    class={[
+                      "chat-controls__inline-select-option chat-controls__model-option",
+                      {
+                        "chat-controls__inline-select-option--selected":
+                          option().value === props.currentValue,
+                      },
+                    ]}
                     type="button"
                     role="option"
                     aria-selected={option().value === props.currentValue ? "true" : "false"}

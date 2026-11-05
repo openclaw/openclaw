@@ -10,7 +10,10 @@ export async function runSqliteIntegrityOperationInWorker<T>(
     busyTimeoutMs: number;
     signal: AbortSignal;
     beforeResume: () => void;
-    repairIntegrityError?: (check: SqliteIntegrityCheck, error: unknown) => boolean;
+    repairIntegrityError?: (
+      check: SqliteIntegrityCheck,
+      error: unknown,
+    ) => boolean | Promise<boolean>;
   },
 ): Promise<T | undefined> {
   const signal = resolveSqliteInspectionSignal(options.signal) ?? options.signal;
@@ -30,7 +33,12 @@ export async function runSqliteIntegrityOperationInWorker<T>(
           signal,
           undefined,
           step.value.timing,
-          { check: step.value.check, tables: step.value.tables, ftsSchemas: step.value.ftsSchemas },
+          {
+            check: step.value.check,
+            schemaOnly: step.value.schemaOnly,
+            tables: step.value.tables,
+            ftsSchemas: step.value.ftsSchemas,
+          },
         );
       } catch (error) {
         failure = { error };
@@ -43,7 +51,7 @@ export async function runSqliteIntegrityOperationInWorker<T>(
       if (failure && options.repairIntegrityError) {
         const original = failure.error;
         try {
-          if (options.repairIntegrityError(step.value, original)) {
+          if (await options.repairIntegrityError(step.value, original)) {
             failure = undefined;
           }
         } catch (repairError) {
@@ -52,6 +60,7 @@ export async function runSqliteIntegrityOperationInWorker<T>(
             original.message += ` Startup FTS repair failed: ${String(repairError)}`;
           }
         }
+        beforeResume();
       }
       step = failure ? operation.throw(failure.error) : operation.next();
     }
