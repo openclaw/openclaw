@@ -115,7 +115,9 @@ it("recovers rich-text-only presentation as plain text instead of losing the rep
       },
     ]),
   ).toBeUndefined();
-  expect(recoverText([{ text: "   ", presentation: { blocks: [{ type: "text", text: "styled" }] } }])).toBeUndefined();
+  expect(
+    recoverText([{ text: "   ", presentation: { blocks: [{ type: "text", text: "styled" }] } }]),
+  ).toBeUndefined();
 });
 
 it("refuses presentation buttons/selects without the deprecated interactive field", () => {
@@ -131,7 +133,9 @@ it("refuses presentation buttons/selects without the deprecated interactive fiel
     recoverText([
       {
         text: "Choose",
-        presentation: { blocks: [{ type: "select", placeholder: "Choose", options: [{ label: "A" }] }] },
+        presentation: {
+          blocks: [{ type: "select", placeholder: "Choose", options: [{ label: "A" }] }],
+        },
       },
     ]),
   ).toBeUndefined();
@@ -143,7 +147,14 @@ it("mirrors chart/table substance into recovery without an authored fallback", (
       {
         text: "Quarterly results",
         presentation: {
-          blocks: [{ type: "table", caption: "Sales", headers: ["Region", "Total"], rows: [["North", 10]] }],
+          blocks: [
+            {
+              type: "table",
+              caption: "Sales",
+              headers: ["Region", "Total"],
+              rows: [["North", 10]],
+            },
+          ],
         },
       },
     ]),
@@ -153,7 +164,14 @@ it("mirrors chart/table substance into recovery without an authored fallback", (
       {
         text: "Shares",
         presentation: {
-          blocks: [{ type: "chart", chartType: "pie", title: "Split", segments: [{ label: "A", value: 1 }] }],
+          blocks: [
+            {
+              type: "chart",
+              chartType: "pie",
+              title: "Split",
+              segments: [{ label: "A", value: 1 }],
+            },
+          ],
         },
       },
     ]),
@@ -167,7 +185,10 @@ it("preserves presentation titles, text, and context during recovery", () => {
         text: "Summary",
         presentation: {
           title: "Report",
-          blocks: [{ type: "text", text: "Actual answer" }, { type: "context", text: "Context note" }],
+          blocks: [
+            { type: "text", text: "Actual answer" },
+            { type: "context", text: "Context note" },
+          ],
         },
       },
     ]),
@@ -179,13 +200,20 @@ it("does not duplicate presentation content already present in text", () => {
     recoverText([{ text: "Answer", presentation: { blocks: [{ type: "text", text: "Answer" }] } }]),
   ).toBe("Answer");
   expect(
-    recoverText([{ text: "Intro\n\nAnswer", presentation: { blocks: [{ type: "text", text: "Answer" }] } }]),
+    recoverText([
+      { text: "Intro\n\nAnswer", presentation: { blocks: [{ type: "text", text: "Answer" }] } },
+    ]),
   ).toBe("Intro\n\nAnswer");
 });
 
 it("keeps presentation MEDIA directive lines transport-only", () => {
   expect(
-    recoverText([{ text: "Example", presentation: { blocks: [{ type: "text", text: "MEDIA:/tmp/example.png" }] } }]),
+    recoverText([
+      {
+        text: "Example",
+        presentation: { blocks: [{ type: "text", text: "MEDIA:/tmp/example.png" }] },
+      },
+    ]),
   ).toBeUndefined();
 });
 
@@ -196,7 +224,14 @@ it("trusts text as complete with an authored fallback presentation", () => {
         text: "North: 10",
         presentationTextMode: "fallback",
         presentation: {
-          blocks: [{ type: "table", caption: "Sales", headers: ["Region", "Total"], rows: [["North", 10]] }],
+          blocks: [
+            {
+              type: "table",
+              caption: "Sales",
+              headers: ["Region", "Total"],
+              rows: [["North", 10]],
+            },
+          ],
         },
       },
     ]),
