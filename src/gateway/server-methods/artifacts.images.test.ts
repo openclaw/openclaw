@@ -193,7 +193,17 @@ describe("bounded Activity image discovery", () => {
       let first: ArtifactsListResult;
       try {
         first = page(await list());
-        expect(page(await list({ type: undefined, limit: undefined })).artifacts).toEqual([]);
+        const catalog = page(await list({ type: undefined, limit: undefined })).artifacts;
+        expect(catalog.map(({ type, title, download }) => [type, title, download.mode])).toEqual([
+          ["file", "attachment 1", "bytes"],
+          ["audio", "attachment 3", "bytes"],
+          ["image", "upload-0.png", "bytes"],
+          ["image", "upload-1.png", "bytes"],
+          ["image", "upload-2.png", "bytes"],
+          ["image", "upload-3.png", "bytes"],
+          ["image", "upload-4.png", "bytes"],
+          ["image", "attachment 9", "unsupported"],
+        ]);
         expect(reads.queries.filter((sql) => /\btranscript_events\b/i.test(sql))).toEqual([]);
       } finally {
         reads.restore();

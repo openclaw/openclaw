@@ -1,4 +1,4 @@
-import { X509Certificate } from "node:crypto";
+import { createHash, X509Certificate } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { Agent, fetch } from "undici";
 import { expect, test, vi } from "vitest";
@@ -12,6 +12,7 @@ import { captureRuntimeConfigAsyncReader } from "../config/io.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { saveMediaBuffer } from "../media/store.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import type { GatewayClient } from "./client.js";
@@ -27,7 +28,7 @@ const fileFixture = (title: string, bytes: Buffer, sizeBytes?: number) => ({
   mimeType: "application/octet-stream",
 });
 
-test("downloads inline artifacts over authenticated WSS and HTTPS with live ticket authority", async () => {
+test("downloads inline and inbound artifacts over WSS and HTTPS with live ticket authority", async () => {
   await withOpenClawTestState(
     {
       label: "artifact-https-download",
@@ -88,7 +89,38 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
           },
         },
       ];
-      const events = transcript();
+      const inboundBytes = Buffer.from("Synthetic inbound upload: authorized readers only.\n");
+      const inbound = await saveMediaBuffer(
+        inboundBytes,
+        "text/plain",
+        "inbound",
+        inboundBytes.length,
+        "Review notes.txt",
+      );
+      const events = [
+        ...transcript(),
+        {
+          type: "message",
+          id: "inbound-artifact",
+          parentId: "inline-artifacts",
+          timestamp,
+          message: {
+            role: "user",
+            content: "Review the attached notes.",
+            __openclaw: {
+              media: [
+                {
+                  url: `media://inbound/${inbound.id}`,
+                  contentType: "text/plain",
+                  kind: "document",
+                  fileName: "Review notes.txt",
+                  sizeBytes: inboundBytes.length,
+                },
+              ],
+            },
+          },
+        },
+      ];
       let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
       let dispatcher: Agent | undefined;
       const clients: GatewayClient[] = [];
@@ -262,8 +294,73 @@ test("downloads inline artifacts over authenticated WSS and HTTPS with live tick
             "removing the artifact from its transcript revokes its download",
           ).toBe(404);
           await replaceTranscriptEvents(scope, events);
-          const beforeDisconnect = await ticket();
-          await client.stopAndWait();
+          const inboundQuery = { sessionKey };
+          const uploads = await client.request<ArtifactsListResult>("artifacts.list", inboundQuery);
+          expect(uploads.artifacts).toHaveLength(fixtures.length + 1);
+          const upload = uploads.artifacts.find(
+            (artifact) => artifact.title === "Review notes.txt",
+          );
+          expect(upload).toBeDefined();
+          const uploadId = upload!.id;
+          const uploadGrant = await client.request<ArtifactsDownloadResult>("artifacts.download", {
+            ...inboundQuery,
+            artifactId: uploadId,
+            transport: "http",
+          });
+          const allowed = await request(uploadGrant.url!);
+          expect(allowed.status).toBe(200);
+          expect(allowed.bytes).toEqual(inboundBytes);
+          await expect(
+            underscoped.request("artifacts.download", {
+              ...inboundQuery,
+              artifactId: uploadId,
+              transport: "http",
+            }),
+          ).rejects.toThrow("missing scope: operator.read");
+          const withoutGrant = await request(uploadGrant.url!.replace(/[^/]+$/, "missing"));
+          expect(withoutGrant.status).toBe(404);
+          expect(withoutGrant.bytes.toString()).toBe("Not Found");
+          const admin = await connect("administrator", ["operator.admin"]);
+          const device = loadOrCreateDeviceIdentity({
+            path: state.statePath("reader", "client", "credentials.sqlite"),
+          });
+          await admin.request("device.token.revoke", {
+            deviceId: device.deviceId,
+            role: "operator",
+          });
+          // Reuse the exact URL issued before revocation; a new denied RPC is insufficient.
+          const revoked = await request(uploadGrant.url!);
+          expect(revoked.status).toBe(404);
+          expect(revoked.bytes.toString()).toBe("Not Found");
+          console.log(
+            JSON.stringify({
+              proof: "inbound-artifact-authority",
+              transport: "real WSS/HTTPS",
+              fixture: "synthetic",
+              expectedBytes: inboundBytes.length,
+              expectedSha256: createHash("sha256").update(inboundBytes).digest("hex"),
+              allowed: {
+                status: allowed.status,
+                bytes: allowed.bytes.length,
+                sha256: createHash("sha256").update(allowed.bytes).digest("hex"),
+              },
+              forbidden: {
+                rpc: "missing scope: operator.read",
+                httpWithoutGrant: withoutGrant.status,
+                response: withoutGrant.bytes.toString(),
+                uploadBytesDelivered: 0,
+              },
+              revocation: {
+                method: "device.token.revoke",
+                originalGrantReused: true,
+                status: revoked.status,
+                response: revoked.bytes.toString(),
+                uploadBytesDelivered: 0,
+              },
+            }),
+          );
+          const beforeDisconnect = await downloadArtifact(download.artifact.id, "http", admin);
+          await admin.stopAndWait();
           expect((await request(beforeDisconnect.url!)).status).toBe(404);
         },
         async () => {

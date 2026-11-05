@@ -1,2 +1,2 @@
-# Reuse artifact authorization/HTTP fixtures for inbound custody and verify captured media roots.
-110
+# Reuse artifact fixtures for inbound custody, catalog consumers, captured roots, and real HTTPS revocation.
+217
