@@ -81,24 +81,6 @@ export class BoardWidgetBridgeOwner {
     this.options.ticket = ticket;
   }
 
-  // The native route skips WebKit's popup blocker, so it keeps that blocker's
-  // rules: the dashboard and this widget's own sandbox frame must both hold
-  // live user activation, and each open spends it. Activation reaches that
-  // frame only from input inside this widget, so code that took the wrapper's
-  // port cannot open links on input elsewhere, and one gesture opens one link.
-  private async openNativeLink(url: string, isCurrent?: () => boolean): Promise<boolean> {
-    if (!navigator.userActivation?.isActive) {
-      return false;
-    }
-    const widgetActivated = await this.options.widgetActivated();
-    // Widget retirement or a Gateway reconnect during the query revokes the
-    // request. The native receiver cannot tell, so neither opener may run.
-    if (isCurrent?.() === false) {
-      throw new Error("widget link request is no longer current");
-    }
-    return widgetActivated && consumeUserActivation() && postNativeExternalLink(url);
-  }
-
   private async emitState(payload: unknown): Promise<unknown> {
     const serialized = JSON.stringify(payload);
     if (serialized === undefined) {
@@ -170,7 +152,17 @@ export class BoardWidgetBridgeOwner {
         }
         // Native refusal is terminal; only bridge absence selects the browser.
         if (hasNativeExternalLink()) {
-          if (!(await this.openNativeLink(url, options.isCurrent))) {
+          // Both the dashboard and this widget must hold live activation. The
+          // widget-specific query excludes input elsewhere; consumption makes
+          // each gesture single-use, even though native posting skips WebKit's
+          // popup blocker.
+          const activated =
+            navigator.userActivation?.isActive && (await this.options.widgetActivated());
+          // Retirement or reconnect during the query revokes this request.
+          if (options.isCurrent?.() === false) {
+            throw new Error("widget link request is no longer current");
+          }
+          if (!activated || !consumeUserActivation() || !postNativeExternalLink(url)) {
             throw new Error("widget link could not be opened");
           }
         } else {
