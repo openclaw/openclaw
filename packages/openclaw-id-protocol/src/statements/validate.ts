@@ -8,6 +8,7 @@ import {
   isRandomId,
   isSha256Hex,
 } from "../keys.js";
+import { checkVersion, SUPPORTED_STATEMENT_VERSIONS, type StatementVersion } from "../version.js";
 import {
   MEMBER_ROLES,
   MEMBERSHIP_OPS,
@@ -108,7 +109,8 @@ function list(check: Check, minLength = 0): Check {
   };
 }
 
-// An object with exactly these members. Unknown members are rejected in v1-draft.
+// An object with exactly these members. Unknown members are rejected: a new signed field
+// needs a new envelope version (docs/versioning.md, "Unknown fields").
 function object(shape: Record<string, Check>): Check {
   return (value, path) => {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -157,10 +159,10 @@ const ownerDeviceCertBody = object({
   root_epoch: rootEpoch,
 });
 
-// Envelope check for one statement type.
-function envelope(type: StatementType, body: Check): Check {
+// Envelope check for one statement type under one envelope version.
+function envelope(type: StatementType, version: StatementVersion, body: Check): Check {
   return object({
-    v: predicate((v) => v === 1, "expected 1"),
+    v: predicate((v) => v === version, `expected ${version}`),
     type: oneOf([type]),
     body,
     signer: ed25519Key,
@@ -172,7 +174,8 @@ function envelope(type: StatementType, body: Check): Check {
   });
 }
 
-const BODIES: Record<StatementType, Check> = {
+// Body schemas of envelope version 1.
+const V1_BODIES: Record<StatementType, Check> = {
   OwnerDeviceCert: ownerDeviceCertBody,
   ServerBinding: object({
     claw_id: clawId,
@@ -213,7 +216,8 @@ const BODIES: Record<StatementType, Check> = {
       revoke_device: object({ op: oneOf(["revoke_device"]), peer_key: irohKey }),
       add_owner_device: object({
         op: oneOf(["add_owner_device"]),
-        cert: (value, path) => envelope("OwnerDeviceCert", ownerDeviceCertBody)(value, path),
+        // A v1 MembershipChange carries a v1 certificate.
+        cert: (value, path) => envelope("OwnerDeviceCert", 1, ownerDeviceCertBody)(value, path),
       }),
       deny_invite: object({ op: oneOf(["deny_invite"]), invite_id: randomId }),
     } satisfies Record<(typeof MEMBERSHIP_OPS)[number], Check>),
@@ -248,10 +252,16 @@ const BODIES: Record<StatementType, Check> = {
   }),
 };
 
-/** Result of {@link parseStatement}. */
+// Body schemas per envelope version. Every supported version has its own complete table.
+const BODIES: Record<StatementVersion, Record<StatementType, Check>> = { 1: V1_BODIES };
+
+/**
+ * Result of {@link parseStatement}. `unsupported_version` is a well-formed envelope version
+ * this build does not implement; callers report it as "update required", not as tampering.
+ */
 export type ParseResult<T extends StatementType> =
   | { ok: true; statement: SignedStatement<T> }
-  | { ok: false; code: "malformed"; detail: string };
+  | { ok: false; code: "malformed" | "unsupported_version"; detail: string };
 
 /**
  * Validates an untrusted value as a signed statement, optionally of an expected type.
@@ -261,6 +271,20 @@ export function parseStatement<T extends StatementType = StatementType>(
   value: unknown,
   expectedType?: T,
 ): ParseResult<T> {
+  // The version is checked first: a later version may add statement types this build does
+  // not know, and those are unsupported, not malformed.
+  // SAFETY: optional member read; primitives and null yield undefined.
+  const version = checkVersion((value as { v?: unknown } | null)?.v, SUPPORTED_STATEMENT_VERSIONS);
+  if (version.kind === "malformed") {
+    return { ok: false, code: "malformed", detail: "$.v: expected envelope version" };
+  }
+  if (version.kind === "unsupported") {
+    return {
+      ok: false,
+      code: "unsupported_version",
+      detail: `$.v: envelope version ${version.version} is not supported`,
+    };
+  }
   // SAFETY: optional member read; primitives and null yield undefined or a non-string type.
   const type = (value as { type?: unknown } | null)?.type;
   // SAFETY: widening a literal tuple to its element supertype only for the membership test.
@@ -273,7 +297,7 @@ export function parseStatement<T extends StatementType = StatementType>(
   // SAFETY: `type` was checked against STATEMENT_TYPES above.
   const statementType = type as StatementType;
   try {
-    envelope(statementType, BODIES[statementType])(value, "$");
+    envelope(statementType, version.version, BODIES[version.version][statementType])(value, "$");
   } catch (error) {
     if (error instanceof SchemaError) {
       return { ok: false, code: "malformed", detail: error.message };

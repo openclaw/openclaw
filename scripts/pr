@@ -1428,6 +1428,9 @@ Usage:
   scripts/pr workspace <PR>
     Report physical checkout/artifact paths before review-init; no PR state changes.
   scripts/pr gc [--pr <number>] [--dry-run]
+  scripts/pr gc --pr <number> --finalized-task <codex-thread-id> --expected-head <sha>
+    [--worktree <path>] [--artifact <directory> ...] [--known-thread <id> ...]
+    [--codex-socket <path>] [--dry-run]
   scripts/pr lock-recover <PR> <OWNER_OID> --confirmed-no-running-tools
   scripts/pr tooling-recover <PR> <plan> --plan-sha256 <SHA256> --confirmed-quiescent
   scripts/pr dependency-cache-recover <plan> --plan-sha256 <SHA256> --confirmed-operator-recovery
@@ -1596,7 +1599,8 @@ main() {
       return
       ;;
     gc)
-      local gc_dry_run=false gc_pr=""
+      local gc_dry_run=false gc_pr="" gc_worktree="" gc_head="" gc_task="" gc_socket=""
+      local gc_artifacts=() gc_threads=()
       while [ "$#" -gt 0 ]; do
         case "$1" in
           --dry-run)
@@ -1609,9 +1613,28 @@ main() {
             gc_pr="$2"
             shift 2
             ;;
+          --worktree | --expected-head | --finalized-task | --codex-socket)
+            [ "$#" -ge 2 ] && [ -n "$2" ] || { usage; exit 2; }
+            case "$1" in
+              --worktree) [ -z "$gc_worktree" ] || { usage; exit 2; }; gc_worktree="$2" ;;
+              --expected-head) [ -z "$gc_head" ] && [[ "$2" =~ ^[0-9a-f]{40}$ ]] || { usage; exit 2; }; gc_head="$2" ;;
+              --finalized-task) [ -z "$gc_task" ] || { usage; exit 2; }; gc_task="$2" ;;
+              --codex-socket) [ -z "$gc_socket" ] || { usage; exit 2; }; gc_socket="$2" ;;
+            esac
+            shift 2
+            ;;
+          --artifact | --known-thread)
+            [ "$#" -ge 2 ] && [ -n "$2" ] || { usage; exit 2; }
+            if [ "$1" = --artifact ]; then gc_artifacts+=("$2"); else gc_threads+=("$2"); fi
+            shift 2
+            ;;
           *) usage; exit 2 ;;
         esac
       done
+      if [ -n "$gc_task$gc_worktree$gc_head$gc_socket" ] || [ "${#gc_artifacts[@]}" -gt 0 ] || [ "${#gc_threads[@]}" -gt 0 ]; then
+        [ -n "$gc_task" ] && [ -n "$gc_pr" ] && [ -n "$gc_head" ] &&
+          { [ -n "$gc_worktree" ] || [ "${#gc_artifacts[@]}" -gt 0 ]; } || { usage; exit 2; }
+      fi
       ;;
     tooling-recover | review-transition-recover)
       [ "$#" -eq 5 ] && is_canonical_pr_number "$1" && [ "$3" = --plan-sha256 ] &&
@@ -1801,7 +1824,12 @@ main() {
       list_pr_worktrees
       ;;
     gc)
-      gc_pr_worktrees "$gc_dry_run" "$gc_pr"
+      if [ -n "$gc_task" ]; then
+        gc_finalized_task "$gc_dry_run" "$gc_pr" "$gc_worktree" "$gc_head" "$gc_task" "$gc_socket" \
+          "${#gc_threads[@]}" ${gc_threads[@]+"${gc_threads[@]}"} ${gc_artifacts[@]+"${gc_artifacts[@]}"}
+      else
+        gc_pr_worktrees "$gc_dry_run" "$gc_pr"
+      fi
       ;;
     review-init)
       local pr="${1-}"
