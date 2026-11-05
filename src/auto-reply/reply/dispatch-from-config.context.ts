@@ -12,6 +12,7 @@ import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { retainGatheredAcpBinding } from "../../infra/outbound/acp-binding-authority.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding-metadata.js";
 import {
@@ -164,14 +165,25 @@ export async function resolveBoundAcpDispatchSessionKey(params: {
     );
   }
   const currentTargetSessionKey = normalizeOptionalString(currentBinding?.targetSessionKey);
-  return currentBinding &&
+  const boundSessionKey =
+    currentBinding &&
     currentTargetSessionKey &&
     isAcpSessionKey(currentTargetSessionKey) &&
     !isPluginOwnedSessionBindingRecord(currentBinding)
-    ? preparedRoute
-      ? normalizeOptionalString(params.ctx.SessionKey)
-      : currentTargetSessionKey
-    : undefined;
+      ? preparedRoute
+        ? normalizeOptionalString(params.ctx.SessionKey)
+        : currentTargetSessionKey
+      : undefined;
+  if (boundSessionKey) {
+    // Delivery re-checks this exact binding; it must not re-resolve and mistake a later removal for "never bound".
+    retainGatheredAcpBinding(params.ctx, {
+      bindingId,
+      boundAt,
+      targetSessionKey: boundTargetSessionKey,
+      conversation: scope,
+    });
+  }
+  return boundSessionKey;
 }
 
 export async function resolveDispatchResetAdmission(params: {

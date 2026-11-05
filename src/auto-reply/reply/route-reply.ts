@@ -10,6 +10,7 @@ import type { SessionDeliveryGeneration } from "../../config/sessions/session-de
 import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { AcpConversationBindingAuthority } from "../../infra/outbound/acp-binding-authority.types.js";
 import {
   isOutboundDeliveryError,
   PlatformMessageNotDispatchedError,
@@ -96,6 +97,8 @@ type RouteReplyParams = {
   /** Private producer authority revalidated at the final outbound adapter handoff. */
   assertCurrent?: () => void;
   beforeDeliver?: () => Promise<void>;
+  /** ACP binding authority that durable recovery re-checks before replaying this send. */
+  acpBindingAuthority?: AcpConversationBindingAuthority;
 };
 
 type RouteReplyResult = {
@@ -333,6 +336,7 @@ async function routeReplyOperation(
       session: outboundSession,
       signal: abortSignal,
       onPlatformSendDispatch: params.beforeDeliver,
+      ...(params.acpBindingAuthority ? { acpBindingAuthority: params.acpBindingAuthority } : {}),
       assertDirectAdapterHandoff: params.assertCurrent,
       ...(params.assertCurrent ? { deliveryRetryOwner: "caller" as const } : {}),
       ...(params.deliveryIntentId

@@ -16,6 +16,7 @@ import type {
   DeliveryQueueCompletionRetention,
   DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
+import type { AcpConversationBindingAuthority } from "./acp-binding-authority.types.js";
 import type { QueuedDeliveryOwner } from "./deliver-queue-state.js";
 import type {
   OutboundDeliveryQueuePolicy,
@@ -156,6 +157,8 @@ type OutboundChannelContext = {
   abortSignal?: AbortSignal;
   mediaAccess?: OutboundMediaAccess;
   gatewayClientScopes?: readonly string[];
+  /** @internal ACP binding authority persisted for recovery-time revalidation. */
+  acpBindingAuthority?: AcpConversationBindingAuthority;
   conversationReadOrigin?: "delegated" | "direct-operator";
   /** @internal Opaque durable intent id forwarded to provider reconciliation hooks. */
   deliveryQueueId?: string;

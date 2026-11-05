@@ -81,6 +81,7 @@ it.each([
   ["lifecycle-change", { lifecycleRevision: "after-gather" }, false],
   ["parent-change", { spawnedBy: undefined }, false],
   ["parent-added", { parentSessionKey: "agent:work:parent" }, true],
+  ["bound-conversation", {}, false],
   [
     "replacement-parent",
     {
@@ -173,7 +174,12 @@ it.each([
         await expect(prepareDispatchDelivery(gathered.state)).rejects.toThrow("fixed-store");
         return;
       }
-      const prepared = await prepareDispatchDelivery(gathered.state);
+      // A parent-linked child bound to the visible conversation answers in it.
+      const prepared = await prepareDispatchDelivery(
+        scenario === "bound-conversation"
+          ? { ...gathered.state, boundAcpDispatchSessionKey: scope.sessionKey }
+          : gathered.state,
+      );
       expect(prepared.suppressAcpChildUserDelivery).toBe(suppressed);
     } finally {
       dispatcher.markComplete();

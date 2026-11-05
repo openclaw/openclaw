@@ -25,6 +25,7 @@ export function projectQueuedDeliveryOptions(params: QueuedDeliveryPayload) {
     session: params.session,
     transcriptProvenance: params.transcriptProvenance,
     gatewayClientScopes: params.gatewayClientScopes,
+    ...(params.acpBindingAuthority ? { acpBindingAuthority: params.acpBindingAuthority } : {}),
     preparedMessageId: params.preparedMessageId,
   };
 }
