@@ -37,6 +37,7 @@ const PRIVATE_SESSION_ENTRY_KEYS = [
   "lastRunId",
   "lifecycleRunId",
   "resumeAfterRestart",
+  "operatorSources",
   "mainRestartRecovery",
   "pendingProjectGitUrl",
   "pendingWorktree",

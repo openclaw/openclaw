@@ -1,6 +1,7 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { FastMode, ModelsProbeResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
@@ -217,7 +218,11 @@ export function modelProviderConfigMutationBlockedReason(
     return t("modelProviders.readOnly.disconnected");
   }
   if (context.runtimeConfig.canPatch !== true) {
-    return t("modelProviders.readOnly.adminRequired");
+    return t(
+      hasOperatorAdminAccess(snapshot.hello?.auth ?? null)
+        ? "modelProviders.configUnavailable"
+        : "modelProviders.readOnly.adminRequired",
+    );
   }
   const config = context.runtimeConfig.state;
   if (!snapshot.client || config.client !== snapshot.client || !currentConfigObject(config)) {
@@ -227,7 +232,9 @@ export function modelProviderConfigMutationBlockedReason(
 }
 
 export function modelProviderErrorMessage(error: unknown): string {
-  return formatUiError(error, t("modelProviders.requestFailed"));
+  const summary = t("modelProviders.requestFailed");
+  const detail = formatUiError(error, summary);
+  return detail === summary ? summary : `${summary} ${detail}`;
 }
 
 export async function modelProviderMutationWarnings(

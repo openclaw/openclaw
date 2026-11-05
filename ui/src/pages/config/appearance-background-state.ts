@@ -508,11 +508,8 @@ export function createAppearanceBackground(
       });
       metadata = { ...scope, revision: metadataRevision, snapshot: result };
       application.theme.refresh();
-      return t(
-        file
-          ? "configView.appearance.background.saved"
-          : "configView.appearance.background.removed",
-      );
+      // The selected image is already visible; no duplicate success notice.
+      return null;
     } catch (error) {
       if (isCurrent()) {
         throw error;

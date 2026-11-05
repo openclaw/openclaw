@@ -19,6 +19,7 @@ import {
   type SessionEntryCreateWithTranscriptOptions,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntryCreationOperation } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import { SessionEntryCreationNotCommittedError } from "../config/sessions/session-creation-operation.js";
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
 import { buildSessionParentLink } from "../config/sessions/session-entry-lineage.js";
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
@@ -29,6 +30,7 @@ import {
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 import {
   isIncognitoSessionKey,
   normalizeAgentId,
@@ -55,7 +57,10 @@ import {
   createSessionAccessProgramValidation,
   refreshSessionPatchQueuedSelection,
 } from "./server-methods/sessions-patch-model-selection.js";
-import { completeGatewaySessionCreation } from "./session-create-completion.js";
+import {
+  completeGatewaySessionCreation,
+  rollbackAtomicGatewaySessionCreation,
+} from "./session-create-completion.js";
 import {
   buildSessionCreateSettingsPatch,
   prepareSessionCreatePermissionSelection,
@@ -125,16 +130,47 @@ import {
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 import { projectSessionsPatchEntry } from "./sessions-patch.js";
 
-export function createGatewaySession(
+export class SessionCreationNotCommittedError extends Error {
+  constructor(cause: unknown) {
+    super("session creation failed before write admission", { cause });
+  }
+}
+
+export async function createGatewaySession(
   params: CreateGatewaySessionParams,
 ): Promise<CreateGatewaySessionResult> {
-  return withSessionCreateAdmission(params, createGatewaySessionInScope);
+  let storageStarted = false;
+  const catalogInitialization = params.initialCatalogContinuation && params.atomicInitialization;
+  try {
+    const result = await withSessionCreateAdmission(params, (admitted, agentId, generatedKey) =>
+      createGatewaySessionInScope(admitted, agentId, generatedKey, () => {
+        storageStarted = true;
+      }),
+    );
+    return !result.ok && !storageStarted && catalogInitialization
+      ? { ...result, initializationNotCommitted: true }
+      : result;
+  } catch (error) {
+    // Unknown writer outcomes never authorize retry. Before writer admission, no
+    // destination commit was possible; preserve the original denial as the cause.
+    if (
+      catalogInitialization &&
+      !hasSqliteWorkerOutcomeUnknown(error) &&
+      (!storageStarted || error instanceof SessionEntryCreationNotCommittedError)
+    ) {
+      throw new SessionCreationNotCommittedError(
+        error instanceof SessionEntryCreationNotCommittedError ? error.cause : error,
+      );
+    }
+    throw error;
+  }
 }
 
 async function createGatewaySessionInScope(
   params: CreateGatewaySessionParams,
   agentId: string,
   generatedKey?: string,
+  startStorage?: () => void,
 ): Promise<CreateGatewaySessionResult> {
   const { personalAccountDefaults, onPhase } = params;
   let operatorAuthority: AdmittedRunOperatorAuthority | undefined;
@@ -390,6 +426,9 @@ async function createGatewaySessionInScope(
   }
 
   let createdContext: CreatedGatewaySession | undefined;
+  let atomicTarget:
+    | { session: CreatedGatewaySession; expectedEntry: InternalSessionEntry }
+    | undefined;
   let createdNewEntry = false;
   let preparedLifecycle: PreparedGatewaySessionLifecycle | undefined;
   let lifecyclePreparationCommitted = false;
@@ -617,6 +656,7 @@ async function createGatewaySessionInScope(
     const loadModelCatalog = params.loadGatewayModelCatalogSnapshot;
     let preparedModelCatalog: ModelCatalogSnapshot | undefined;
     onPhase?.("snapshot");
+    startStorage?.();
     const created = await createSessionEntryWithTranscript<ErrorShape>(
       {
         agentId: target.agentId,
@@ -831,6 +871,17 @@ async function createGatewaySessionInScope(
           ...(params.initialEntry?.pluginExtensions !== undefined
             ? { pluginExtensions: structuredClone(params.initialEntry.pluginExtensions) }
             : {}),
+          // Ordinary catalog handoffs retain logical origin without taking plugin runtime ownership.
+          ...(createdNewEntry && params.initialCatalogContinuation
+            ? {
+                pluginExtensions: {
+                  ...params.initialEntry?.pluginExtensions,
+                  [params.initialCatalogContinuation.catalogId]: {
+                    catalogContinuation: structuredClone(params.initialCatalogContinuation),
+                  },
+                },
+              }
+            : {}),
           // Spawn lineage is declared, never inferred: spawn-owned creations pass
           // spawnDepth explicitly; everything else (operator chats, forks, harness
           // and plugin sessions) persists as a depth-0 root. Reused entries keep
@@ -948,6 +999,9 @@ async function createGatewaySessionInScope(
       },
       {
         onPhase,
+        ...(params.initialCatalogContinuation && params.atomicInitialization
+          ? { certifyNotCommitted: true as const }
+          : {}),
         creationOperation: params.creationOperation,
         label,
         ...(params.initialEntry
@@ -976,9 +1030,21 @@ async function createGatewaySessionInScope(
           : {}),
         afterCommitted: params.afterSessionCommitted,
         onLifecycleCommitted: (entry) => {
-          onPhase?.("publication");
           lifecyclePreparationCommitted = true;
           createdTargetCommitted = true;
+          if (createdNewEntry && params.atomicInitialization) {
+            atomicTarget = {
+              session: {
+                key: target.canonicalKey,
+                agentId: target.agentId,
+                storePath: target.storePath,
+                entry: projectPublicSessionEntry(entry),
+                isNew: true,
+              },
+              expectedEntry: structuredClone(entry),
+            };
+          }
+          onPhase?.("publication");
           if (createdNewEntry) {
             params.onCreatedSessionCommitted?.({
               key: target.canonicalKey,
@@ -998,7 +1064,10 @@ async function createGatewaySessionInScope(
       throw error;
     });
     if (!created.ok) {
-      return sessionCreationFailure(created);
+      const failure = sessionCreationFailure(created);
+      return params.initialCatalogContinuation && params.atomicInitialization
+        ? { ...failure, initializationNotCommitted: true }
+        : failure;
     }
     onPhase?.("effects");
     createdContext = {
@@ -1109,7 +1178,22 @@ async function createGatewaySessionInScope(
       return result;
     }
     onPhase?.("initialTurn");
-    return await completeGatewaySessionCreation(params, result, createdContext, commitGuard);
+    return await completeGatewaySessionCreation(
+      params,
+      result,
+      createdContext,
+      commitGuard,
+      atomicTarget?.expectedEntry,
+    );
+  } catch (error) {
+    if (atomicTarget) {
+      return rollbackAtomicGatewaySessionCreation(
+        atomicTarget.session,
+        atomicTarget.expectedEntry,
+        error,
+      );
+    }
+    throw error;
   } finally {
     releaseRuntimeSelection?.();
   }
