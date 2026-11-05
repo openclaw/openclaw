@@ -217,8 +217,30 @@ enables collection only for the sampled `unit-fast` invocations described above.
 Other configs and native Bun-test execution do not emit these pilot exports.
 Missing observations must never be interpreted as passing or irrelevant tests.
 
-Keep rollout in shadow mode until representative full-run audits establish
+Keep historical graph and learned selection in shadow mode until representative full-run audits establish
 failure recall, graph completeness, and net savings including collection cost.
+
+### Qualified Markdown skipping pilot
+
+Canonical pull requests in aggressive selection mode can omit nine qualified
+Markdown tests from the conventional directory fallback. This applies only when
+every changed path is a Markdown source module. Explicit owners, changed tests,
+import consumers, policy checks and smoke tests retain their existing selection.
+The stateful table test is outside this pilot. Scheduled, main and release runs
+retain their existing full coverage.
+
+`config/ci-adaptive-markdown.json` records reviewed input fingerprints. The
+selector uses its existing import graph to hash each test's current transitive
+workspace inputs, plus the shared test configuration and dependency lock inputs.
+Missing, changed or symlinked inputs retain the test. A new import changes the
+importing module's fingerprint; an unqualified test is never omitted. This is
+unchanged-input reuse, not a learned prediction or historical graph fallback.
+
+The PR summary lists actual omissions after all selection rules are combined.
+Set repository variable `OPENCLAW_CI_NODE_SELECTION=full` to disable the pilot
+along with aggressive selection. Refresh fingerprints only after reviewing the
+changed input closure and repeating full-versus-selected Node/Bun proof, including
+an injected regression. A successful provider call does not qualify a test.
 
 ## Plan in shadow mode
 
