@@ -689,59 +689,8 @@ describe("release:stable CLI", () => {
   });
 
   it("reports a pending publication approval with exit 1 and no mutation", () => {
-    const state = publishState(true);
-    state.publish.publishRunId = "301";
-    state.publish.dispatchedAt = state.startedAt;
-    const release = fixture(state);
-    const parent = {
-      id: 301,
-      run_attempt: 3,
-      path: ".github/workflows/openclaw-release-publish.yml",
-      head_branch: state.validate.toolingTag,
-      head_sha: TOOLING_SHA,
-      repository: { full_name: REPOSITORY },
-      event: "workflow_dispatch",
-      actor: { login: "release-test" },
-      status: "in_progress",
-      conclusion: null,
-      html_url: "https://github.com/openclaw/openclaw/actions/runs/301",
-    };
-    const plugin = {
-      id: 701,
-      run_attempt: 1,
-      path: ".github/workflows/plugin-npm-release.yml",
-      head_branch: state.validate.toolingTag,
-      head_sha: TOOLING_SHA,
-      repository: { full_name: REPOSITORY },
-      event: "workflow_dispatch",
-      actor: { login: "github-actions[bot]" },
-      display_title: `Plugin NPM Release [default] ${CUT_SHA}`,
-      created_at: state.startedAt,
-      status: "waiting",
-      conclusion: null,
-      html_url: "https://github.com/openclaw/openclaw/actions/runs/701",
-    };
-    const result = release.run(
-      [
-        jsonStep("gh", ["api", `repos/${REPOSITORY}/actions/runs/301`], parent),
-        jsonStep("gh", ["api", "*"], { workflow_runs: [plugin] }),
-        jsonStep("gh", ["api", `repos/${REPOSITORY}/actions/runs/701`], plugin),
-        jsonStep("gh", ["api", `repos/${REPOSITORY}/actions/runs/301/pending_deployments`], []),
-        jsonStep(
-          "gh",
-          ["api", `repos/${REPOSITORY}/actions/runs/701/pending_deployments`],
-          [
-            {
-              environment: { id: 81, name: "npm-release" },
-              current_user_can_approve: false,
-            },
-          ],
-        ),
-        jsonStep("gh", ["api", "*"], { workflow_runs: [plugin] }),
-        jsonStep("gh", ["api", `repos/${REPOSITORY}/actions/runs/301`], parent),
-      ],
-      ["--watch", "--once", "--json"],
-    );
+    const { state, release, observe } = publicationWatchFixture(true);
+    const result = observe();
     expect(result.status, result.output).toBe(1);
     const snapshot = JSON.parse(result.stdout);
     expect(snapshot).toMatchObject({
@@ -762,50 +711,8 @@ describe("release:stable CLI", () => {
   });
 
   it("returns exit 0 after the observed publication tree succeeds", () => {
-    const state = publishState(true);
-    state.publish.publishRunId = "301";
-    state.publish.dispatchedAt = state.startedAt;
-    const release = fixture(state);
-    const parent = {
-      id: 301,
-      run_attempt: 3,
-      path: ".github/workflows/openclaw-release-publish.yml",
-      head_branch: state.validate.toolingTag,
-      head_sha: TOOLING_SHA,
-      repository: { full_name: REPOSITORY },
-      event: "workflow_dispatch",
-      actor: { login: "release-test" },
-      status: "completed",
-      conclusion: "success",
-      html_url: "https://github.com/openclaw/openclaw/actions/runs/301",
-    };
-    const plugin = {
-      id: 701,
-      run_attempt: 1,
-      path: ".github/workflows/plugin-npm-release.yml",
-      head_branch: state.validate.toolingTag,
-      head_sha: TOOLING_SHA,
-      repository: { full_name: REPOSITORY },
-      event: "workflow_dispatch",
-      actor: { login: "github-actions[bot]" },
-      display_title: `Plugin NPM Release [default] ${CUT_SHA}`,
-      created_at: state.startedAt,
-      status: "completed",
-      conclusion: "success",
-      html_url: "https://github.com/openclaw/openclaw/actions/runs/701",
-    };
-    const result = release.run(
-      [
-        jsonStep("gh", ["api", `repos/${REPOSITORY}/actions/runs/301`], parent),
-        jsonStep("gh", ["api", "*"], { workflow_runs: [plugin] }),
-        jsonStep("gh", ["api", `repos/${REPOSITORY}/actions/runs/701`], plugin),
-        jsonStep("gh", ["api", `repos/${REPOSITORY}/actions/runs/301/pending_deployments`], []),
-        jsonStep("gh", ["api", `repos/${REPOSITORY}/actions/runs/701/pending_deployments`], []),
-        jsonStep("gh", ["api", "*"], { workflow_runs: [plugin] }),
-        jsonStep("gh", ["api", `repos/${REPOSITORY}/actions/runs/301`], parent),
-      ],
-      ["--watch", "--once", "--json"],
-    );
+    const { observe } = publicationWatchFixture();
+    const result = observe();
     expect(result.status, result.output).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({
       contractVersion: 1,
@@ -818,38 +725,7 @@ describe("release:stable CLI", () => {
   it.each(["failure", "neutral", "skipped"])(
     "reports a detached publication child with conclusion %s as exit 1",
     (conclusion) => {
-      const state = publishState(true);
-      state.publish.publishRunId = "301";
-      state.publish.dispatchedAt = state.startedAt;
-      const release = fixture(state);
-      const parent = {
-        id: 301,
-        run_attempt: 3,
-        path: ".github/workflows/openclaw-release-publish.yml",
-        head_branch: state.validate.toolingTag,
-        head_sha: TOOLING_SHA,
-        repository: { full_name: REPOSITORY },
-        event: "workflow_dispatch",
-        actor: { login: "release-test" },
-        status: "completed",
-        conclusion: "success",
-        html_url: "https://github.com/openclaw/openclaw/actions/runs/301",
-      };
-      const plugin = {
-        id: 701,
-        run_attempt: 1,
-        path: ".github/workflows/plugin-npm-release.yml",
-        head_branch: state.validate.toolingTag,
-        head_sha: TOOLING_SHA,
-        repository: { full_name: REPOSITORY },
-        event: "workflow_dispatch",
-        actor: { login: "github-actions[bot]" },
-        display_title: `Plugin NPM Release [default] ${CUT_SHA}`,
-        created_at: state.startedAt,
-        status: "completed",
-        conclusion: "success",
-        html_url: "https://github.com/openclaw/openclaw/actions/runs/701",
-      };
+      const { plugin, observe } = publicationWatchFixture();
       const clawhub = {
         ...plugin,
         id: 702,
@@ -858,20 +734,7 @@ describe("release:stable CLI", () => {
         conclusion,
         html_url: "https://github.com/openclaw/openclaw/actions/runs/702",
       };
-      const result = release.run(
-        [
-          jsonStep("gh", ["api", `repos/${REPOSITORY}/actions/runs/301`], parent),
-          jsonStep("gh", ["api", "*"], { workflow_runs: [plugin, clawhub] }),
-          jsonStep("gh", ["api", `repos/${REPOSITORY}/actions/runs/701`], plugin),
-          jsonStep("gh", ["api", `repos/${REPOSITORY}/actions/runs/702`], clawhub),
-          jsonStep("gh", ["api", `repos/${REPOSITORY}/actions/runs/301/pending_deployments`], []),
-          jsonStep("gh", ["api", `repos/${REPOSITORY}/actions/runs/701/pending_deployments`], []),
-          jsonStep("gh", ["api", `repos/${REPOSITORY}/actions/runs/702/pending_deployments`], []),
-          jsonStep("gh", ["api", "*"], { workflow_runs: [plugin, clawhub] }),
-          jsonStep("gh", ["api", `repos/${REPOSITORY}/actions/runs/301`], parent),
-        ],
-        ["--watch", "--once"],
-      );
+      const result = observe([plugin, clawhub], false);
       expect(result.status, result.output).toBe(1);
       expect(result.stdout).toContain(
         `failed publication run: .github/workflows/plugin-clawhub-release.yml run=702 conclusion=${conclusion}`,
