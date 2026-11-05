@@ -689,6 +689,7 @@ function other(lineageCompletion: typeof lineageWriter) {
     const wrapperPath = path.resolve("scripts/pr");
     const wrapper = fs.readFileSync(wrapperPath, "utf8");
     const expected = [
+      "recoverDependencyCache",
       "claimCreatedAnchor",
       "collectUnusedDependencyCaches",
       "dependencyCacheRoot",
@@ -714,6 +715,20 @@ function other(lineageCompletion: typeof lineageWriter) {
     expect(compile(replaceFixture(wrapper, "dependencyCacheRoot, ", ""))).toEqual(
       expected.filter((name) => name !== "dependencyCacheRoot"),
     );
+    expect(
+      compile(
+        replaceFixture(
+          wrapper,
+          "const { recoverDependencyCache }",
+          "const { dependencyCacheRoot: recoverDependencyCache }",
+        ),
+      ),
+    ).toEqual([
+      "dependencyCacheRoot",
+      ...expected.filter(
+        (name) => name !== "recoverDependencyCache" && name !== "dependencyCacheRoot",
+      ),
+    ]);
     for (const disconnected of [
       replaceFixture(wrapper, '"$pr_bootstrap_root/scripts/pr-lib/cache-lifetime.mjs"', '""'),
       replaceFixture(wrapper, "pathToFileURL(process.argv[6])", "pathToFileURL(process.argv[5])"),
@@ -724,7 +739,35 @@ function other(lineageCompletion: typeof lineageWriter) {
         '  # node --input-type=module - "$1"',
       ),
     ]) {
-      expect(compile(disconnected)).toEqual([]);
+      expect(compile(disconnected)).toEqual(["recoverDependencyCache"]);
+    }
+    for (const disconnected of [
+      replaceFixture(wrapper, '"$script_parent_dir/pr-lib/cache-lifetime.mjs"', '""'),
+      replaceFixture(
+        wrapper,
+        "const { recoverDependencyCache } = await import(pathToFileURL(process.argv[2]))",
+        "const { recoverDependencyCache } = await import(pathToFileURL(process.argv[3]))",
+      ),
+      replaceFixture(
+        wrapper,
+        "const { recoverDependencyCache }",
+        "// const { recoverDependencyCache }",
+      ),
+      replaceFixture(
+        wrapper,
+        `<<'EOF_CACHE_RECOVERY'\nimport { pathToFileURL } from "node:url";`,
+        `<<'EOF_CACHE_RECOVERY'\n// import { pathToFileURL } from "node:url";`,
+      ),
+      replaceFixture(
+        wrapper,
+        '  node --input-type=module - "$script_parent_dir/pr-lib/cache-lifetime.mjs"',
+        '  # node --input-type=module - "$script_parent_dir/pr-lib/cache-lifetime.mjs"',
+      ),
+      replaceFixture(wrapper, "\nEOF_CACHE_RECOVERY\n", "\nEOF_OTHER\n"),
+    ]) {
+      expect(compile(disconnected)).toEqual(
+        expected.filter((name) => name !== "recoverDependencyCache"),
+      );
     }
   });
 

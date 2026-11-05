@@ -290,12 +290,35 @@ function emittedSelfNamedImportNames(source) {
 }
 
 function prToolingNamedImportEdges(source) {
+  const edges = new Map();
+  const recovery = source.match(
+    /^[ \t]*node[ \t]+--input-type=module[ \t]+-[ \t]+"\$script_parent_dir\/(pr-lib\/[A-Za-z0-9_.-]+\.mjs)"(?:[ \t]+"[^"\r\n]*")+[ \t]+<<'EOF_CACHE_RECOVERY'\r?\n([\s\S]*?)^EOF_CACHE_RECOVERY$/mu,
+  );
+  if (
+    recovery &&
+    /^[ \t]*import\s*\{\s*pathToFileURL\s*\}\s*from\s*["']node:url["'];[ \t]*$/mu.test(recovery[2])
+  ) {
+    const names = new Set();
+    for (const [, bindings] of recovery[2].matchAll(
+      /^[ \t]*const\s*\{([^{}]+)\}\s*=\s*await\s+import\(\s*pathToFileURL\(\s*process\.argv\[2\]\s*\)\s*\)\s*;/gmu,
+    )) {
+      for (const binding of bindings.split(",")) {
+        const name = binding.trim().split(/\s*:\s*/u)[0];
+        if (/^[A-Za-z_$][\w$]*$/u.test(name)) {
+          names.add(name);
+        }
+      }
+    }
+    if (names.size > 0) {
+      edges.set(path.resolve("scripts", recovery[1]), names);
+    }
+  }
+
   // The wrapper supplies quoted argv to this specific stdin module. Keep the
   // import and its path argument attached to the same live heredoc launch.
   const tooling = source.match(
     /^[ \t]*node[ \t]+--input-type=module[ \t]+-[ \t]+((?:"[^"\r\n]*"[ \t]+)+)<<'EOF_TOOLING'\r?\n([\s\S]*?)^EOF_TOOLING$/mu,
   );
-  const edges = new Map();
   if (!tooling) {
     return edges;
   }
