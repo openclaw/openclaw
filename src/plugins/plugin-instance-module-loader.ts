@@ -20,12 +20,19 @@ import {
   capturePluginGenerationArtifact,
   type PluginGenerationArtifact,
 } from "./plugin-generation-artifact.js";
+import { capturePluginSnapshotGeneration } from "./plugin-generation-capture.js";
 import { getPluginGenerationMetrics } from "./plugin-generation-metrics.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import {
   registerPluginInstanceModuleResolver,
   retainedNativeEsmOwners,
 } from "./plugin-instance-module-resolver.js";
+import {
+  createPluginInstanceSourceBuilder,
+  createSourceOutputLookup,
+  disposeModuleSources,
+  type SourceBuilds,
+} from "./plugin-instance-module-sources.js";
 import { getPluginInstanceOwner } from "./plugin-instance-scope.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import {
@@ -35,12 +42,10 @@ import {
 import { bindNativePluginInstanceModuleLoader } from "./plugin-native-module-loader.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
 import { bindSharedPluginModuleLoader } from "./plugin-shared-module-loader.js";
-import {
-  buildPluginTypeScriptSource,
-  PLUGIN_SOURCE_RESOLVE_PREFIX,
-  type PluginSourceFile,
-  type PluginSourceLoadMode,
-} from "./plugin-source-build.js";
+import { buildPluginSnapshotBunSource } from "./plugin-snapshot-bun-source.js";
+import { PluginSnapshotDependencyError } from "./plugin-snapshot-dependency-error.js";
+import { pluginSnapshotModuleFacade } from "./plugin-snapshot-module-facade.js";
+import { PLUGIN_SOURCE_RESOLVE_PREFIX } from "./plugin-source-build.js";
 import { inspectPluginTypeScriptExecutionFacts } from "./plugin-source-references.js";
 import { captureBundledPluginStateOperationModules } from "./plugin-state-operation-module-loader.js";
 import { bindPluginStateOperationModuleSource } from "./plugin-state-operation-source.js";
@@ -49,7 +54,6 @@ import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.j
 import { preparePluginLoaderAliases, isPluginSdkAliasSpecifier } from "./sdk-alias.js";
 import { recordPluginSdkDeprecatedImport } from "./sdk-deprecated-imports.js";
 
-type SourceBuilds = Map<string, ReturnType<typeof buildPluginTypeScriptSource>>;
 type RetainedNativeEsm = {
   artifact?: PluginGenerationArtifact;
   builds: SourceBuilds;
@@ -183,33 +187,6 @@ function retainedNativeEsmOwner(retained: RetainedNativeEsm) {
   throw new Error("Plugin native ESM capture has no live workspace owner for this load");
 }
 
-function createSourceOutputLookup(builds: SourceBuilds) {
-  const sourceForOutput = (filename: string): PluginSourceFile => {
-    for (const build of builds.values()) {
-      const source = build.sourceForOutput(filename);
-      if (source) {
-        return source;
-      }
-    }
-    return { source: filename };
-  };
-  return {
-    sourceForOutput,
-    moduleSource: (filename: string) => {
-      const entry = sourceForOutput(filename);
-      return entry.generated ? filename : entry.source;
-    },
-  };
-}
-
-function disposeModuleSources(builds: SourceBuilds, artifact?: PluginGenerationArtifact) {
-  for (const build of builds.values()) {
-    build.dispose();
-  }
-  builds.clear();
-  return artifact?.disposeAsync();
-}
-
 function ownsNativeEsmResolution(
   retained: RetainedNativeEsm,
   instance: PluginInstanceModuleLoaderParams["instance"],
@@ -295,13 +272,21 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     artifact =
       reusedArtifact ??
       params.preparedArtifact?.artifact ??
-      capturePluginGenerationArtifact(
-        params.rootDir,
-        params.standalone ? params.source : undefined,
-        retained ? retainedNativeEsmExecution(retained) : (run) => params.instance.run(run),
-        moduleSource,
-        params.nativeRecovery,
-      );
+      (params.frozenSource
+        ? capturePluginSnapshotGeneration(
+            params.frozenSource,
+            params.source,
+            retained ? retainedNativeEsmExecution(retained) : (run) => params.instance.run(run),
+            moduleSource,
+            params.nativeRecovery,
+          )
+        : capturePluginGenerationArtifact(
+            params.rootDir,
+            params.standalone ? params.source : undefined,
+            retained ? retainedNativeEsmExecution(retained) : (run) => params.instance.run(run),
+            moduleSource,
+            params.nativeRecovery,
+          ));
     if (
       params.expectedSourceDigest !== undefined &&
       artifact.sourceDigest !== params.expectedSourceDigest
@@ -365,6 +350,8 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
   if (aliases.packageRoot && !reusedArtifact) {
     artifact.linkHost(aliases.packageRoot);
   }
+  const facade = pluginSnapshotModuleFacade(artifact, aliases.sdkRoots, aliases.resolveAlias);
+  const moduleFacade = facade?.filename;
   bindPluginStateOperationModuleSource({ ...params, artifact });
   installOpenClawPluginSdkNativeResolver({
     moduleUrl: import.meta.url,
@@ -374,14 +361,24 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     pluginSdkResolution: params.pluginSdkResolution,
   });
   if (!useNodeModuleHooks()) {
+    let bunSourceBuild = sourceBuilds.get(artifact.rootDir);
+    if (facade && !bunSourceBuild) {
+      bunSourceBuild = buildPluginSnapshotBunSource(
+        artifact.rootDir,
+        facade.filename,
+        facade.helpers,
+      );
+      sourceBuilds.set(artifact.rootDir, bunSourceBuild);
+    }
     const capturedSource = artifact.resolve(params.source);
     artifact.prepareModule(capturedSource);
+    const inspectionSource = artifact.frozenSource ? capturedSource : params.source;
     const bunSourceFacts =
       process.versions.bun && isPluginSourceModulePath(params.source)
         ? inspectPluginTypeScriptExecutionFacts(
-            params.source,
-            fs.readFileSync(params.source, "utf8"),
-            createJiti(params.source, { fsCache: false, moduleCache: false, tryNative: false }),
+            inspectionSource,
+            fs.readFileSync(inspectionSource, "utf8"),
+            createJiti(inspectionSource, { fsCache: false, moduleCache: false, tryNative: false }),
           )
         : undefined;
     for (const { specifier } of bunSourceFacts?.staticImports ?? []) {
@@ -421,6 +418,10 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
         ownsResolution: retained
           ? () => ownsNativeEsmResolution(retained, params.instance)
           : undefined,
+        moduleFacade,
+        moduleHelpers: facade?.helpers,
+        moduleSource,
+        prepareSource: bunSourceBuild?.resolve,
       },
       cache,
       artifact,
@@ -446,24 +447,9 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
   const tsconfigPaths = entryPaths.resolver.options.tsconfigPaths;
   const demandedModules = new Map<string, { url: string } | { error: unknown }>();
   let resolvingPaths = false;
-  const prepareSource = (
-    filename: string,
-    mode?: PluginSourceLoadMode,
-    nativeFormat?: string | null,
-  ) => {
-    const root = artifact.moduleRoot(filename);
-    if (!root) {
-      return filename;
-    }
-    return params.instance.run(() => {
-      let build = sourceBuilds.get(root);
-      if (!build) {
-        build = buildPluginTypeScriptSource(root);
-        sourceBuilds.set(root, build);
-      }
-      return build.resolve(filename, mode, nativeFormat);
-    });
-  };
+  const prepareSource = createPluginInstanceSourceBuilder(artifact, sourceBuilds, (run) =>
+    params.instance.run(run),
+  );
   // Captured sources and compiled outputs share this instance's private namespace.
   const boundaryUrl = pathToFileURL(artifact.boundaryRoot + path.sep).href;
   const unregister = registerPluginInstanceModuleResolver(boundaryUrl, {
@@ -480,6 +466,14 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
         : undefined;
       const parentSource = parentEntry?.source;
       const parentRoot = parentSource && artifact.moduleRoot(parentSource);
+      if (
+        moduleFacade &&
+        ((parentRoot && (specifier === "module" || specifier === "node:module")) ||
+          specifier === moduleFacade ||
+          specifier === pathToFileURL(moduleFacade).href)
+      ) {
+        return { shortCircuit: true, url: pathToFileURL(moduleFacade).href };
+      }
       const resolverSource =
         parentEntry?.generated && parentSource && artifact.sourceForCaptured(parentSource);
       // Generated helpers forward Jiti-only resolver options through this instance's owner.
@@ -510,6 +504,12 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
             parentURL: pathToFileURL(parentSource),
             ...query,
           });
+          if (value.startsWith("file:")) {
+            const filename = fileURLToPath(value);
+            if (!aliases.sdkRoots.some((root) => isPathInside(root, filename))) {
+              artifact.assertFrozenModule?.(filename);
+            }
+          }
           return {
             shortCircuit: true,
             url: "data:application/json," + encodeURIComponent(JSON.stringify({ value })),
@@ -659,12 +659,23 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
         recordPluginSdkDeprecatedImport(params.instance.pluginId, specifier);
       }
       if (
+        parentRoot &&
+        artifact.frozenSource &&
+        !resolved.url.startsWith("file:") &&
+        !isBuiltin(resolved.url)
+      ) {
+        throw new PluginSnapshotDependencyError(resolved.url);
+      }
+      if (
         (parentRoot && resolved.url.startsWith("file:")) ||
         resolved.url.startsWith(boundaryUrl)
       ) {
         const resolvedFilename = fileURLToPath(resolved.url);
         const entry = sourceForOutput(resolvedFilename);
         const filename = entry.generated ? resolvedFilename : entry.source;
+        if (parentRoot && !aliases.sdkRoots.some((root) => isPathInside(root, resolvedFilename))) {
+          artifact.assertFrozenModule?.(entry.source);
+        }
         const attributes = resolved.importAttributes ?? context.importAttributes;
         if (
           filename.endsWith(".json") &&

@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import path from "node:path";
 import { describeRootFileOpenFailure } from "../infra/boundary-file-read.js";
 import { resolveRealpathOrAbsolute } from "../infra/boundary-path.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
@@ -12,6 +11,7 @@ import {
   resolvePluginCandidateInstallOwner,
 } from "./candidate-install-owner.js";
 import { capabilityCatalogFamilies, resolvePluginCapabilityCatalog } from "./capability-catalog.js";
+import { resolveCliMetadataEntrySource } from "./cli-metadata-source.js";
 import { resolveMemorySlotDecision } from "./config-state.js";
 import {
   PluginDashboardDeclarationError,
@@ -62,6 +62,7 @@ import {
   prefersBuiltPluginArtifacts,
 } from "./plugin-runtime-artifact-selection.js";
 import { getPluginSetupModuleLoader } from "./plugin-setup-module.js";
+import { isManagedPluginSnapshotSource } from "./plugin-source-snapshot-options.js";
 import type { createPluginRegistry, PluginRecord } from "./registry.js";
 import {
   clearActiveDegradedPlugin,
@@ -504,11 +505,14 @@ export function* loadRuntimePluginCandidate(params: {
         )
       : run();
   try {
+    const installOwner = resolvePluginCandidateInstallOwner(candidate);
+    const installRecord = installOwner ? context.installRecords[installOwner] : undefined;
     const moduleOwner = {
       record,
       rootDir: moduleRoot,
       registry,
       standalone: manifestRecord.manifestPath === candidate.source,
+      managedSourceSnapshot: installRecord ? isManagedPluginSnapshotSource(installRecord) : false,
       immutableInstallIdentity: resolveImmutableInstallIdentity(
         candidate.origin,
         resolvePluginCandidateInstallOwner(candidate),
@@ -723,16 +727,4 @@ export function* loadRuntimePluginCandidate(params: {
           ] as const)),
     ]);
   }
-}
-
-function resolveCliMetadataEntrySource(rootDir: string, source: string): string | null {
-  for (const directory of new Set([rootDir, path.dirname(source)])) {
-    for (const extension of [".ts", ".js", ".mjs", ".cjs"]) {
-      const candidate = path.join(directory, `cli-metadata${extension}`);
-      if (fs.existsSync(candidate)) {
-        return candidate;
-      }
-    }
-  }
-  return null;
 }

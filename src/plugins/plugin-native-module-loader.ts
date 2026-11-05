@@ -16,6 +16,7 @@ import type { PluginModuleLoaderOwner } from "./plugin-instance.types.js";
 import { getPluginBunConditions } from "./plugin-native-resolution.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { resolvePluginNativeAliasForParent } from "./plugin-sdk-native-resolver.js";
+import { PluginSnapshotDependencyError } from "./plugin-snapshot-dependency-error.js";
 import { resolvePluginPackageMapTarget } from "./plugin-source-references.js";
 import { isPluginSdkAliasSpecifier } from "./sdk-alias.js";
 import { recordPluginSdkDeprecatedImport } from "./sdk-deprecated-imports.js";
@@ -28,6 +29,10 @@ export function bindNativePluginInstanceModuleLoader(
     origin: PluginOrigin;
     bindModuleLoader: PluginModuleLoaderOwner["bindModuleLoader"];
     ownsResolution?: () => boolean;
+    moduleFacade?: string;
+    moduleHelpers?: string;
+    moduleSource?: (filename: string) => string;
+    prepareSource?: (filename: string) => string;
   },
   cache: PluginCache,
   artifact: PluginGenerationArtifact,
@@ -57,7 +62,7 @@ export function bindNativePluginInstanceModuleLoader(
               if (params.ownsResolution && !params.ownsResolution()) {
                 return undefined;
               }
-              if (!artifact.sourceForCaptured(request)) {
+              if (!artifact.sourceForCaptured(params.moduleSource?.(request) ?? request)) {
                 return undefined;
               }
               const extension = path.extname(request).toLowerCase();
@@ -83,7 +88,8 @@ export function bindNativePluginInstanceModuleLoader(
             },
           }
         : {}),
-      prepare(request, parent, kind) {
+      prepare(request, requestedParent, kind) {
+        const parent = params.moduleSource?.(requestedParent) ?? requestedParent;
         if (params.ownsResolution && !params.ownsResolution()) {
           return undefined;
         }
@@ -97,6 +103,19 @@ export function bindNativePluginInstanceModuleLoader(
         }
         // Resolved URLs and built relative imports retain the selected host SDK's identity.
         const original = artifact.sourceForCaptured(parent);
+        if (
+          original &&
+          params.moduleFacade &&
+          (request === "module" || request === "node:module" || request === params.moduleFacade)
+        ) {
+          return params.moduleFacade;
+        }
+        if (original && request === params.moduleHelpers) {
+          return params.moduleHelpers;
+        }
+        if (isBuiltin(request)) {
+          return undefined;
+        }
         const sdkTarget = hostSdkTarget(request, original);
         if (sdkTarget) {
           return sdkTarget === request ? undefined : sdkTarget;
@@ -111,6 +130,7 @@ export function bindNativePluginInstanceModuleLoader(
           const facts = artifact.moduleFacts(parent);
           if (
             kind === "import-statement" &&
+            !artifact.frozenSource &&
             facts?.staticImports &&
             !facts.staticImports.has(request)
           ) {
@@ -162,7 +182,10 @@ export function bindNativePluginInstanceModuleLoader(
                       capturedUrl.search || capturedUrl.hash ? capturedUrl.href : capturedTarget;
                   }
                 }
-              } catch {
+              } catch (error) {
+                if (error instanceof PluginSnapshotDependencyError) {
+                  throw error;
+                }
                 // Native resolution owns the final error when the request remains unavailable.
               }
             }
@@ -175,7 +198,21 @@ export function bindNativePluginInstanceModuleLoader(
               : source === request
                 ? request
                 : undefined;
+          if (!target && artifact.frozenSource) {
+            const selected = bun?.resolveSync?.(request, path.dirname(parent));
+            if (!selected) {
+              throw new PluginSnapshotDependencyError(request);
+            }
+            artifact.assertFrozenModule?.(selected);
+            target = artifact.captureResolvedModule(selected);
+            if (!target) {
+              throw new PluginSnapshotDependencyError(selected);
+            }
+          }
           if (target) {
+            artifact.assertFrozenModule?.(
+              target.startsWith("file:") ? fileURLToPath(target) : target,
+            );
             artifact.prepareModule(target.startsWith("file:") ? fileURLToPath(target) : target);
           }
           if (original) {
@@ -183,7 +220,16 @@ export function bindNativePluginInstanceModuleLoader(
               target?.startsWith("file:") ? fileURLToPath(target) : (target ?? source),
             );
           }
-          return target;
+          if (!target || !params.prepareSource) {
+            return target;
+          }
+          const url = target.startsWith("file:") ? new URL(target) : undefined;
+          const prepared = params.prepareSource(url ? fileURLToPath(url) : target);
+          if (url) {
+            url.pathname = pathToFileURL(prepared).pathname;
+            return url.href;
+          }
+          return prepared;
         });
       },
       resolve(request, parent, resolve) {
@@ -191,6 +237,13 @@ export function bindNativePluginInstanceModuleLoader(
           return undefined;
         }
         const original = artifact.sourceForCaptured(parent);
+        if (
+          original &&
+          params.moduleFacade &&
+          (request === "module" || request === "node:module" || request === params.moduleFacade)
+        ) {
+          return params.moduleFacade;
+        }
         if (!original || isBuiltin(request)) {
           return undefined;
         }
@@ -226,7 +279,11 @@ export function bindNativePluginInstanceModuleLoader(
               if (hostSdkTarget(selected)) {
                 return selected;
               }
+              artifact.assertFrozenModule?.(selected);
               const captured = artifact.captureResolvedModule(selected);
+              if (!captured && artifact.frozenSource) {
+                throw new PluginSnapshotDependencyError(selected);
+              }
               if (captured) {
                 artifact.prepareModule(captured);
                 artifact.prepareNativeScopes();
@@ -238,6 +295,9 @@ export function bindNativePluginInstanceModuleLoader(
               "module-sync",
               "require",
             ]);
+            if (artifact.frozenSource && (!captured || !("target" in captured))) {
+              throw new PluginSnapshotDependencyError(request);
+            }
             return captured && "target" in captured ? fileURLToPath(captured.target) : undefined;
           }),
         );
@@ -256,7 +316,7 @@ export function bindNativePluginInstanceModuleLoader(
         if (prepareEntryNativeScopes) {
           artifact.prepareNativeScopes(captured);
         }
-        return loader(toSafeImportPath(captured));
+        return loader(toSafeImportPath(params.prepareSource?.(captured) ?? captured));
       }),
     artifact.hasSource,
   );

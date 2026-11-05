@@ -2859,7 +2859,6 @@
 ["src/cli/plugin-registry.test.ts","../plugins/runtime/load-context.js","ca206ca199c2d4d2b2eeae89d06d6d7fa98935b30b8378848e0d0d70131ddcf8",1]
 ["src/cli/plugin-registry.test.ts","../plugins/runtime/load-context.resolve.js","b892678c01e56ca6063a03d804f6c450ecbe37d04f2c52a9cf645303556f0a0d",1]
 ["src/cli/plugins-cli-test-helpers.ts","../hooks/install.js","3e0d9211e2e5c26bb519fad4633c8e88290569a1bbb94091a99eefb795a33e32",1]
-["src/cli/plugins-cli-test-helpers.ts","../hooks/update.js","29f32fe2a4b31e82f42ff326976d5e375ca00b8f1d8ddf346955892f81f5ba9b",1]
 ["src/cli/plugins-cli-test-helpers.ts","../infra/clawhub-packages.js","83a1e5f4754aa9b278c51e976a93d1e25e349b22ff8069013fb18c87db451ff7",1]
 ["src/cli/plugins-cli-test-helpers.ts","../plugins/clawhub.js","efc518c52608c43b72c9bd4f171515b7101f2f9ff001e5f44a658ea9ca4398a3",1]
 ["src/cli/plugins-cli-test-helpers.ts","../plugins/enable.js","7925697e012dec0df38c0c47604d8af17eb88adeb3b51be908a275ce7ede682c",1]

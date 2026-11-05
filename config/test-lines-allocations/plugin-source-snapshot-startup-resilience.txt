@@ -1,0 +1,2 @@
+# Keep successful guarded startup available when optional lazy snapshot capture or publication fails.
+38

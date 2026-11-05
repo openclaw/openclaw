@@ -181,6 +181,7 @@ export function createPluginModuleLoader(options: {
     standalone?: boolean;
     /** Installer-proven identity when the plugin source cannot change in place. */
     immutableInstallIdentity?: string;
+    managedSourceSnapshot?: boolean;
   };
   // Only uncached inspections of immutable installs may share evaluated code.
   const inspection = (owner: Owner) =>
@@ -224,8 +225,8 @@ export function createPluginModuleLoader(options: {
     });
   return Object.assign(load, {
     async prepare(modulePath: string, owner: Owner): Promise<void> {
-      // Compute workers already own retained native-ESM source captures. Keep their
-      // inline acquisition path so a prepared artifact cannot compete with that owner.
+      // Mutable compute-worker sources keep inline acquisition. Managed sources
+      // still enter the persistent owner before binding their native-ESM capture.
       // An inspection that joins a retained native ESM artifact binds it synchronously;
       // acquiring another worker capture would only be discarded.
       const retained = () =>
@@ -237,7 +238,11 @@ export function createPluginModuleLoader(options: {
           pluginSdkResolution: captured.pluginSdkResolution,
           registry: owner.registry,
         });
-      if (!isMainThread || getPluginInstance(owner.record) || retained()) {
+      if (
+        (!isMainThread && !owner.managedSourceSnapshot) ||
+        getPluginInstance(owner.record) ||
+        retained()
+      ) {
         return;
       }
       await withPluginCache(cache, async () => {
@@ -252,18 +257,35 @@ export function createPluginModuleLoader(options: {
           return;
         }
         const { preparePluginGenerationArtifact } = await import("./plugin-generation-worker.js");
-        const preparedArtifact = await preparePluginGenerationArtifact(
-          bundledCapture ?? {
-            rootDir: owner.rootDir,
-            source: modulePath,
-            standalone: owner.standalone,
-          },
-        );
+        const preparedArtifact = bundledCapture
+          ? {
+              ...(await preparePluginGenerationArtifact(bundledCapture)),
+              assertCurrent: async () => {},
+            }
+          : await (
+              await import("./plugin-source-snapshot-runtime.js")
+            ).prepareInstalledPluginGenerationArtifact({
+              pluginId: owner.record.id,
+              rootDir: owner.rootDir,
+              source: modulePath,
+              standalone: owner.standalone,
+              onWarning: (message, source) => {
+                process.emitWarning(message);
+                owner.registry.diagnostics.push({
+                  level: "warn",
+                  pluginId: owner.record.id,
+                  source,
+                  message,
+                  code: "plugin-source-snapshot-invalid",
+                });
+              },
+            });
         if (cache.retirement || isPluginRegistryRetired(owner.registry)) {
           await preparedArtifact.artifact.disposeAsync();
           throw new PluginInventoryRetiredError();
         }
         try {
+          await preparedArtifact.assertCurrent();
           // Reentrant loading may have installed this exact owner while acquisition
           // yielded, or a concurrent inspection retained the same native ESM artifact.
           // Never replace its module identity with a second capture.

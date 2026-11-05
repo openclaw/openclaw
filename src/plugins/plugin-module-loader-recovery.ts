@@ -4,6 +4,7 @@ import type {
   PluginGenerationArtifact,
 } from "./plugin-generation-artifact.js";
 import type { PluginRecoverySource } from "./plugin-generation-source-lookup.js";
+import type { PluginFrozenSourceSnapshot } from "./plugin-generation-source.types.js";
 import type {
   PluginModuleLoaderOwner,
   PluginModuleLoaderRecovery,
@@ -24,6 +25,7 @@ export type PluginInstanceModuleLoaderParams = {
   createHostModuleLoader?: () => PluginModuleLoader;
   recoverySourceMap?: (source: string) => string;
   nativeRecovery?: PluginNativeRecovery;
+  frozenSource?: PluginFrozenSourceSnapshot;
   /**
    * Installer-proven identity of an immutable install, set only when the owner registry
    * is an uncached inspection. Loads with the same identity may share evaluated code.
@@ -79,6 +81,7 @@ function createSourceModuleRecovery(
         pluginSdkResolution: facts.pluginSdkResolution,
         recoverySourceMap: createRecoverySourceMap(recovery.resolve, facts.recoverySourceMap),
         nativeRecovery: recovery.native,
+        frozenSource: recovery.frozenSource,
       });
       instance.sourceDigest = facts.sourceDigest;
     },
