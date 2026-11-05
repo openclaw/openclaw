@@ -290,9 +290,16 @@ until their dependent enforcement changes land.
   dispatch `rerun_group=all`.
 - Rerun a failed or timed out test job only after the lead records its
   real-blocker-or-flake decision (see the maintainer skill's shared release
-  boundaries). A flake gets at most two recorded reruns on the same Release SHA
-  plus a fix-in-parallel issue or PR on `main`; never a re-cut, tooling change,
-  or new FRV. New dispatches reject `known_flaky_jobs_json`.
+  boundaries). Call it a flake only when the same job or failure signature has
+  passed on the same Release SHA. Before rerunning, read the failure's own
+  diagnostics, inspect same-SHA attempts, and compare the failing paths against
+  the candidate delta and recent `main` history; a fix on `main` is not present
+  on the frozen candidate until ancestry or patch equivalence proves it. An
+  identical signature repeated on the same or another candidate is deterministic
+  until a named mechanism and fix prove otherwise. A flake gets at most two
+  recorded reruns on the same Release SHA plus a fix-in-parallel issue or PR on
+  `main`; never a re-cut, tooling change, or new FRV. New dispatches reject
+  `known_flaky_jobs_json`.
 - For a supported parent, `pnpm frv rerun --run <parent-run-id> --job
   "<child-key>:<exact job name>"` reruns one executed terminal job using its accepted
   Actions job ID. Get the child key and exact name from `frv status --json`.
@@ -873,9 +880,17 @@ run-ID-cached bytes first.
    them in a clean-home CLI probe, never as a substitute for a required
    Anthropic API-key lane.
 5. For live-cache failures, inspect whether it is missing/invalid key, empty text, provider refusal, timeout, or baseline miss. Do not weaken release gates without clear provider evidence.
-6. Decide blocker or flake for each failed test before editing. Track a fix for
-   flakes on `main`; every selected job must still pass before publication.
-   Classify blockers further:
+6. Decide blocker or flake for each failed test before editing. A flake requires
+   a passing occurrence of the same job or signature on this exact Release SHA.
+   First preserve the failing diagnostics, inspect every same-SHA attempt, and
+   run `git log <previous-release-tag>..<release-sha> -- <failing paths>` for
+   the candidate delta and `git log <release-sha>..origin/main -- <failing paths>`
+   for main-only changes. If `main` contains a repair absent from the frozen
+   candidate, treat the failure as a blocker and backport or supersede; do not
+   rerun it as inherited success. A signature repeated on another candidate is
+   deterministic until a named mechanism and fix prove otherwise. Track a fix
+   for genuine flakes on `main`; every selected job must still pass before
+   publication. Classify blockers further:
    - confirmed product/code failure: fix the release branch, freeze a new Code
      SHA, and invalidate product evidence
    - qualification harness/contract defect: repair the candidate closure and

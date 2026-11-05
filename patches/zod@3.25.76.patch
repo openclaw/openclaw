@@ -1,0 +1,69 @@
+diff --git a/src/v3/types.ts b/src/v3/types.ts
+--- a/src/v3/types.ts
++++ b/src/v3/types.ts
+@@ -2264,4 +2264,5 @@
+           message: def.exactLength.message,
+         });
++        if (tooBig) return INVALID;
+         status.dirty();
+       }
+@@ -2292,5 +2293,5 @@
+           message: def.maxLength.message,
+         });
+-        status.dirty();
++        return INVALID;
+       }
+     }
+@@ -3724,5 +3725,5 @@
+           message: def.maxSize.message,
+         });
+-        status.dirty();
++        return INVALID;
+       }
+     }
+diff --git a/v3/types.js b/v3/types.js
+--- a/v3/types.js
++++ b/v3/types.js
+@@ -1770,4 +1770,5 @@
+                     message: def.exactLength.message,
+                 });
++                if (tooBig) return INVALID;
+                 status.dirty();
+             }
+@@ -1796,5 +1797,5 @@
+                     message: def.maxLength.message,
+                 });
+-                status.dirty();
++                return INVALID;
+             }
+         }
+@@ -2815,5 +2816,5 @@
+                     message: def.maxSize.message,
+                 });
+-                status.dirty();
++                return INVALID;
+             }
+         }
+diff --git a/v3/types.cjs b/v3/types.cjs
+--- a/v3/types.cjs
++++ b/v3/types.cjs
+@@ -1791,4 +1791,5 @@
+                     message: def.exactLength.message,
+                 });
++                if (tooBig) return parseUtil_js_1.INVALID;
+                 status.dirty();
+             }
+@@ -1817,5 +1818,5 @@
+                     message: def.maxLength.message,
+                 });
+-                status.dirty();
++                return parseUtil_js_1.INVALID;
+             }
+         }
+@@ -2844,5 +2845,5 @@
+                     message: def.maxSize.message,
+                 });
+-                status.dirty();
++                return parseUtil_js_1.INVALID;
+             }
+         }

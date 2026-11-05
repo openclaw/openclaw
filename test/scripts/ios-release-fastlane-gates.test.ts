@@ -726,11 +726,23 @@ end
 def repo_root
   "/fixture"
 end
+module Open3
+  def self.capture3(command, *args)
+    raise "unexpected external command: #{command}" unless command == "/usr/libexec/PlistBuddy"
+    [File.read(args.last), "", Struct.new(:success?).new(true)]
+  end
+end
 def sh(*arguments, **options)
   command = arguments.last
+  return JSON.generate({ APP_STORE_APP_IDENTIFIER => {}, "fixture.capture.debug" => {} }) if command.include?("simctl listapps")
+  if arguments[0, 3] == ["xcrun", "simctl", "uninstall"]
+    @uninstalls << arguments.drop(3)
+    return
+  end
   @calls += 1
   raise "settings lookup" if command.include?("showBuildSettings")
   raise "rebooted simulator" if command.include?("simctl")
+  raise "missing test selection" unless command.include?("-only-testing:OpenClawUITests/OpenClawSnapshotUITests/fixture-test")
   raise "not using built products" unless command.include?("test-without-building")
   parts = Shellwords.split(command)
   @xcode_arguments = parts.drop(parts.index("xcodebuild") + 1)
@@ -1459,8 +1471,25 @@ puts JSON.generate(results)
 require "json"
 require "tmpdir"
 require "fileutils"
+require "open3"
+require "stringio"
 require "time"
 require ARGV.fetch(0)
+module Open3
+  def self.popen2(*arguments, **options)
+    output = case arguments.last
+    when "hw.logicalcpu" then "12"
+    when "hw.memsize" then "34359738368"
+    when "vm.loadavg" then "{ 1.0 2.0 3.0 }"
+    when "pcpu=,rss=,comm=" then "5.2 1024 /private/PRIVATE-PATH/OpenClawUITests-Runner\\n1.0 10 /private/PRIVATE-PATH/OtherApp\\n"
+    else "Mach Virtual Memory Statistics: (page size of 16384 bytes)\\nPages free: 42.\\nSwapouts: 3.\\n"
+    end
+    process = Object.new
+    def process.join(*); true; end
+    def process.value; Struct.new(:success?).new(true); end
+    yield StringIO.new, StringIO.new(output), process
+  end
+end
 class << Dir
   alias fixture_glob []
   def [](*patterns)
@@ -1513,6 +1542,13 @@ end
         {
           phase: "capture",
           outcome: "failed",
+          before: {
+            hardware: { logicalCpuCount: 12, memoryBytes: 34359738368 },
+            loadAverage: [1, 2, 3],
+            memoryPageBytes: 16384,
+            memoryPages: { "Pages free": 42, Swapouts: 3 },
+            processes: [{ name: "OpenClawUITests-Runner", cpuPercent: 5.2, rssKiB: 1024 }],
+          },
           startup: {
             testCaseStarts: 0,
             instrumentsConnectionTimeout: true,

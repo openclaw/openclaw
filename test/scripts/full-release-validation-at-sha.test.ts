@@ -682,6 +682,25 @@ describe("full-release-validation-at-sha", () => {
     ).toHaveLength(4);
   });
 
+  it("keeps waiting while the exact run is queued before its witness upload", () => {
+    const queued = { conclusion: null, status: "queued" };
+    const fixture = createDispatchFixture({
+      parentRunStates: [
+        ...Array.from({ length: 6 }, () => queued),
+        { conclusion: "success", status: "completed" },
+      ],
+      witnessMissingReads: 6,
+    });
+    const result = fixture.run();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain("dispatch=pending-witness: run 123 (queued)");
+    expect(fixture.readWaits()).toEqual([30_000, 60_000, 120_000, 120_000, 120_000, 120_000]);
+    expect(fixture.record()).toMatchObject({
+      phase: "observed",
+      run: { id: 123, attempt: 1 },
+    });
+  });
+
   it("delivers the complete wire body through a private, bounded, short-lived payload", () => {
     const fixture = createDispatchFixture();
     const value = "spaces 'quotes' \"double\" = & ? $() `command`\n\u00e9\u65e5\u672c";
@@ -1520,13 +1539,31 @@ describe("full-release-validation-at-sha", () => {
       ],
     });
     const result = fixture.run();
-    expectDispatchFailure(result, "blocked_diagnostics_running");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Full Release Validation remains active:");
+    expect(result.stdout).toContain("Continue with: pnpm frv watch --run 123");
     expect(fixture.readWaits()).toEqual([120_000]);
     const calls = fixture.calls();
     expect(calls.filter((args) => args[0] === "run" && args[1] === "download")).toHaveLength(1);
     expect(calls.some((args) => args.includes("cancel") || args.includes("watch"))).toBe(false);
     expect(fixture.refs()).toHaveLength(1);
   });
+
+  it.each(["failure", "cancelled"])(
+    "keeps terminal %s authoritative over retained diagnostic-pending evidence",
+    (conclusion) => {
+      const fixture = createDispatchFixture({
+        parentRunStates: [
+          { conclusion, status: "completed", decisionState: "blocked_diagnostics_running" },
+        ],
+      });
+      const result = fixture.run();
+      expectDispatchFailure(result, `Full Release Validation concluded ${conclusion}`);
+      expect(result.stdout).not.toContain("remains active");
+      expect(fixture.readWaits()).toEqual([]);
+      expect(fixture.refs()).toHaveLength(1);
+    },
+  );
 
   it("does not redownload a validated decision or adopt a newer parent attempt", () => {
     const fixture = createDispatchFixture({

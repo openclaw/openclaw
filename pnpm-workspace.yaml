@@ -170,6 +170,8 @@ packageExtensions:
         optional: true
 
 patchedDependencies:
+  "@discord/embedded-app-sdk@2.5.0": patches/@discord__embedded-app-sdk@2.5.0.patch
+  "zod@3.25.76": patches/zod@3.25.76.patch
   "apache-arrow@21.2.0": patches/apache-arrow@21.2.0.patch
   "@shinyoshiaki/binary-data@0.6.1": patches/@shinyoshiaki__binary-data@0.6.1.patch
   "@openclaw/crabline@0.1.30": patches/@openclaw__crabline@0.1.30.patch

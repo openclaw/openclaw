@@ -51,6 +51,7 @@ import {
 } from "./openclaw-npm-extended-stable-release.mjs";
 import {
   PluginSdkApiAcknowledgementError,
+  findPluginSdkApiReleaseNoteOmissions,
   validatePluginSdkApiReleaseEvidence,
 } from "./plugin-sdk-api-release-evidence.mjs";
 import { runReleasePublishPreflight } from "./release-publish-preflight.mts";
@@ -2178,12 +2179,13 @@ async function main() {
   if (androidVersionCheck) {
     console.log(androidVersionCheck.message);
   }
-  const { releaseNotesCheck, releaseNotesProvenance } = validateCandidateChangelog({
-    rootDir: targetRoot,
-    repository: options.repo,
-    tag: options.tag,
-    targetSha,
-  });
+  const { releaseNotesCheck, releaseNotesProvenance, releaseNotesText } =
+    validateCandidateChangelog({
+      rootDir: targetRoot,
+      repository: options.repo,
+      tag: options.tag,
+      targetSha,
+    });
   const windowsNodeSourceRelease = options.windowsNodeTag
     ? await validateWindowsSourceRelease(options.windowsNodeTag)
     : undefined;
@@ -2411,6 +2413,18 @@ async function main() {
       throw formatPluginSdkApiAcknowledgementFailure(error, report);
     }
     throw error;
+  }
+  const releaseNoteOmissions = findPluginSdkApiReleaseNoteOmissions({
+    evidence: npmManifest.pluginSdkApi,
+    npmDistTag: options.npmDistTag,
+    releaseNotes: releaseNotesText,
+  });
+  if (releaseNoteOmissions.missing.length > 0) {
+    console.warn(
+      `Warning: release notes do not name removed Plugin SDK APIs: ${releaseNoteOmissions.missing
+        .map((reference) => `\`${reference}\``)
+        .join(", ")}`,
+    );
   }
   localGeneratedCheck ??= runLocalGeneratedCheckIfNeeded(options);
   // Only exact historical producers retain local, non-authoritative planning.

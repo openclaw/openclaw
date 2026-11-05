@@ -51,13 +51,15 @@ it.each([
   { published: true, latest: "2026.9.7", decision: "superseded", route: "npm-readback" },
 ])("seals registry decision $decision without acknowledging the SDK evidence", async (row) => {
   const input = row.coreBeta ? fixture("beta", "openclaw") : fixture();
-  const fetchImpl = async () =>
-    row.bootstrap
+  const fetchImpl = async (resource: string | URL | Request) =>
+    (resource instanceof Request ? resource.url : resource.toString()).endsWith("/" + version)
       ? new Response("{}", { status: 404 })
-      : Response.json({
-          versions: { "2026.9.5": {}, ...(row.published ? { [version]: {} } : {}) },
-          "dist-tags": { latest: row.latest, beta: row.latest },
-        });
+      : row.bootstrap
+        ? new Response("{}", { status: 404 })
+        : Response.json({
+            versions: { "2026.9.5": {}, ...(row.published ? { [version]: {} } : {}) },
+            "dist-tags": { latest: row.latest, beta: row.latest },
+          });
   const sealed = await seal(input, fetchImpl);
   expect(sealed).toMatchObject({
     pluginSdkApiAcknowledgement: "",
@@ -113,7 +115,8 @@ it.each([
   if (mode === "npm-source") {
     input.npmManifest.releaseSha = "d".repeat(40);
   }
-  const fetchImpl = async () =>
+  const fetchImpl = async (resource: string | URL | Request) =>
+    (resource instanceof Request ? resource.url : resource.toString()).endsWith("/" + version) ||
     mode === "missing-core"
       ? new Response("{}", { status: 404 })
       : Response.json({ versions: {}, "dist-tags": {} });

@@ -76,7 +76,7 @@ const DEFAULT_CHILD_MAX_ATTEMPTS = 2;
 const PLAN_ARTIFACT_PROPAGATION_MS = 2 * 60_000;
 const PLAN_FILENAME = "full-release-execution-plan.json";
 const USAGE =
-  "usage: pnpm frv <status|watch|cancel|continue|rerun|verify> --run <id> [--failed [--wait-for-seal] | --job <child>:<name> | --child <key|run-id> [--max-attempts <n>]] | pnpm frv prioritize --restore <record>";
+  "usage: pnpm frv <status|watch|cancel|continue|rerun|verify> --run <id> [--failed [--wait-for-seal] | --job <child>:<name> [--no-follow] | --child <key|run-id> [--max-attempts <n>]] | pnpm frv logs --job <job-id> [--grep <text>] | pnpm frv prioritize --restore <record>";
 const PACIFIC_TIME_FORMAT = new Intl.DateTimeFormat("en-US", {
   timeZone: "America/Los_Angeles",
   year: "numeric",
@@ -164,6 +164,8 @@ function parseArgs(argv) {
       options.job = requiredValue(argv[++index], "--job");
     } else if (argument === "--child") {
       options.child = requiredValue(argv[++index], "--child");
+    } else if (argument === "--grep") {
+      options.grep = requiredValue(argv[++index], "--grep");
     } else if (argument === "--max-attempts") {
       options.maxAttempts = positiveInteger(argv[++index], "--max-attempts");
     } else if (argument === "--state") {
@@ -189,7 +191,9 @@ function parseArgs(argv) {
     }
   }
   if (
-    !["cancel", "continue", "prioritize", "rerun", "status", "verify", "watch"].includes(command)
+    !["cancel", "continue", "logs", "prioritize", "rerun", "status", "verify", "watch"].includes(
+      command,
+    )
   ) {
     throw new Error(USAGE);
   }
@@ -197,14 +201,17 @@ function parseArgs(argv) {
     throw new Error("--force is valid only with cancel");
   }
   const restoring = command === "prioritize";
+  const readingLogs = command === "logs";
   if (restoring && options.restore === undefined) {
     // Release validation no longer pauses PR CI; only historical records remain.
     throw new Error("prioritize --run is retired; use prioritize --restore <record>");
   }
-  if (restoring ? options.runId !== "" : !/^[1-9][0-9]*$/u.test(options.runId)) {
-    throw new Error(
-      restoring ? "--restore does not take --run" : "--run must be a positive decimal",
-    );
+  if (restoring || readingLogs) {
+    if (options.runId !== "") {
+      throw new Error(`${command} does not take --run`);
+    }
+  } else if (!/^[1-9][0-9]*$/u.test(options.runId)) {
+    throw new Error("--run must be a positive decimal");
   }
   if (options.restore !== undefined && !restoring) {
     throw new Error("--restore is valid only with prioritize");
@@ -228,8 +235,16 @@ function parseArgs(argv) {
     if (options.job !== undefined) {
       parseJobSelector(options.job);
     }
+  } else if (readingLogs) {
+    positiveInteger(options.job, "--job");
+    if (options.child !== undefined) {
+      throw new Error("--child is valid only with rerun");
+    }
   } else if (options.job !== undefined || options.child !== undefined) {
-    throw new Error("--job and --child are valid only with rerun");
+    throw new Error("--job and --child are valid only with rerun or logs");
+  }
+  if (options.grep !== undefined && !readingLogs) {
+    throw new Error("--grep is valid only with logs");
   }
   if (options.maxAttempts !== undefined && options.child === undefined) {
     throw new Error("--max-attempts is valid only with rerun --child");
@@ -3664,6 +3679,19 @@ async function main() {
     return;
   }
   const client = createClient(options.repository);
+  if (options.command === "logs") {
+    const log = stripVTControlCharacters(
+      await client.getJobLog(positiveInteger(options.job, "--job")),
+    );
+    const output = options.grep
+      ? log
+          .split("\n")
+          .filter((line) => line.includes(options.grep))
+          .join("\n")
+      : log;
+    process.stdout.write(`${output}${output.endsWith("\n") ? "" : "\n"}`);
+    return;
+  }
   if (options.command === "cancel") {
     const { cancelReleaseTree } = await import("./frv-cancellation.mjs");
     const result = await cancelReleaseTree(options.runId, client, options);

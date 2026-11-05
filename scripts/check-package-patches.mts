@@ -10,6 +10,9 @@ import { pnpmLockfileDocuments } from "./lib/pnpm-lockfile-documents.mjs";
 import { runAsScript } from "./lib/ts-guard-utils.mts";
 
 const ALLOWED_PATCHED_DEPENDENCIES = new Map([
+  ["@discord/embedded-app-sdk@2.5.0", "patches/@discord__embedded-app-sdk@2.5.0.patch"],
+  ["zod@3.25.76", "patches/zod@3.25.76.patch"],
+
   ["@homebridge/ciao@1.3.12", "patches/@homebridge__ciao@1.3.12.patch"],
   ["proper-lockfile@4.1.2", "patches/proper-lockfile@4.1.2.patch"],
   ["@clawdbot/lobster@2026.9.16", "patches/@clawdbot__lobster@2026.9.16.patch"],

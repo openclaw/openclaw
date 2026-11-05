@@ -86,6 +86,8 @@ function runPublishBranchPolicy(prelude: string, env: Record<string, string>, cw
       RELEASE_CANDIDATE_BRANCH: "",
       SOURCE_REF: "a".repeat(40),
       NPM_DIST_TAG: "default",
+      PUBLISH_SCOPE: "selected",
+      RELEASE_PLUGINS: "@openclaw/example",
       ...env,
     },
   });

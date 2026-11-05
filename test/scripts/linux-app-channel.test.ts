@@ -16,6 +16,7 @@ const channel = "linux-stable";
 const publicKey = Buffer.from("fixture public key\n").toString("base64");
 const signature = Buffer.from("fixture signature\n").toString("base64");
 const toolingSha = "b".repeat(40);
+const builderSha = "e".repeat(40);
 const toolingRef = `release-publish/${toolingSha.slice(0, 12)}-42`;
 const mutationActions = new Set(["upload", "DELETE", "PATCH", "create", "edit"]);
 const appimageName = "OpenClaw-2026.9.3-amd64.AppImage";
@@ -227,7 +228,7 @@ const releaseResponse = (owner) => {
 };
 const workflowRun = (id, prefix, fields) => ({
   id, run_attempt: state.authority[prefix + "Attempt"],
-  repository: { full_name: "openclaw/openclaw" }, head_sha: "b".repeat(40),
+  repository: { full_name: "openclaw/openclaw" }, head_sha: prefix === "writer" ? state.authority.writerSha : "b".repeat(40),
   status: state.authority[prefix + "Status"], conclusion: state.authority[prefix + "Conclusion"],
   ...fields,
 });
@@ -469,6 +470,7 @@ function makeAuthority(workflowRef: string, desktop: boolean, conclusion: string
     requestTag: tag,
     requestAttempt: 1,
     desktop,
+    writerSha: toolingSha,
     writerAttempt: 1,
     writerStatus: "in_progress",
     writerConclusion: conclusion,
@@ -594,6 +596,7 @@ function fixture(
       "finalize-core": "openclaw-release-publish",
     }[mode];
     Object.assign(current.authority, {
+      writerSha: publishing ? builderSha : toolingSha,
       writerRef: ref,
       writerFullRef: fullRef,
       writerPath: `.github/workflows/${workflowName}.yml`,
@@ -607,7 +610,7 @@ function fixture(
       "workflow-ref": ref,
       "workflow-full-ref": fullRef,
       ...(publishing
-        ? { "request-run-id": "43", "request-run-attempt": "1" }
+        ? { "builder-sha": builderSha, "request-run-id": "43", "request-run-attempt": "1" }
         : {
             "release-publish-run-id": "42",
             "release-publish-run-attempt": "1",

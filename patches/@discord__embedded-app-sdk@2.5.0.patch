@@ -1,0 +1,58 @@
+diff --git a/output/lib/zod/lib/index.mjs b/output/lib/zod/lib/index.mjs
+--- a/output/lib/zod/lib/index.mjs
++++ b/output/lib/zod/lib/index.mjs
+@@ -2184,6 +2184,7 @@
+                     exact: true,
+                     message: def.exactLength.message,
+                 });
++                if (tooBig) return INVALID;
+                 status.dirty();
+             }
+         }
+@@ -2210,7 +2211,7 @@
+                     exact: false,
+                     message: def.maxLength.message,
+                 });
+-                status.dirty();
++                return INVALID;
+             }
+         }
+         if (ctx.common.async) {
+@@ -3232,7 +3233,7 @@
+                     exact: false,
+                     message: def.maxSize.message,
+                 });
+-                status.dirty();
++                return INVALID;
+             }
+         }
+         const valueType = this._def.valueType;
+diff --git a/output/lib/zod/lib/index.cjs b/output/lib/zod/lib/index.cjs
+--- a/output/lib/zod/lib/index.cjs
++++ b/output/lib/zod/lib/index.cjs
+@@ -2188,6 +2188,7 @@
+                     exact: true,
+                     message: def.exactLength.message,
+                 });
++                if (tooBig) return INVALID;
+                 status.dirty();
+             }
+         }
+@@ -2214,7 +2215,7 @@
+                     exact: false,
+                     message: def.maxLength.message,
+                 });
+-                status.dirty();
++                return INVALID;
+             }
+         }
+         if (ctx.common.async) {
+@@ -3236,7 +3237,7 @@
+                     exact: false,
+                     message: def.maxSize.message,
+                 });
+-                status.dirty();
++                return INVALID;
+             }
+         }
+         const valueType = this._def.valueType;

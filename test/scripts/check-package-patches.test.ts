@@ -35,6 +35,9 @@ function makeRepo() {
 
 it("allows approved pnpm patches together", () => {
   const approvedPatches = [
+    ["@discord/embedded-app-sdk@2.5.0", "patches/@discord__embedded-app-sdk@2.5.0.patch"],
+    ["zod@3.25.76", "patches/zod@3.25.76.patch"],
+
     ["@homebridge/ciao@1.3.12", "patches/@homebridge__ciao@1.3.12.patch"],
     ["proper-lockfile@4.1.2", "patches/proper-lockfile@4.1.2.patch"],
     ["@clawdbot/lobster@2026.9.16", "patches/@clawdbot__lobster@2026.9.16.patch"],
@@ -67,6 +70,10 @@ it("allows approved pnpm patches together", () => {
 
 it.each([
   ["left-pad@1.3.0", "patches/left-pad@1.3.0.patch"],
+  ["zod@3.25.77", "patches/zod@3.25.77.patch"],
+  ["zod@4.0.0", "patches/zod@4.0.0.patch"],
+  ["zod@3.25.76", "patches/zod@3.25.76-other.patch"],
+  ["@discord/embedded-app-sdk@2.5.1", "patches/@discord__embedded-app-sdk@2.5.1.patch"],
   ["matrix-js-sdk@42.4.1", "patches/matrix-js-sdk@42.4.1.patch"],
   ["matrix-js-sdk@43.0.0", "patches/matrix-js-sdk@43.0.0-other.patch"],
 ])("rejects unapproved workspace patch %s -> %s", (specifier, patchPath) => {

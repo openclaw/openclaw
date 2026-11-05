@@ -83,7 +83,13 @@ describe("release publication state", () => {
     async (latest, beta, versions, message, published) => {
       vi.stubGlobal(
         "fetch",
-        vi.fn(async () => registry("@openclaw/example", versions, distTags(latest, beta))),
+        vi.fn(async (input) =>
+          String(input).endsWith("/" + version)
+            ? versions.includes(version)
+              ? Response.json({ name: "@openclaw/example", version })
+              : new Response("not found", { status: 404 })
+            : registry("@openclaw/example", versions, distTags(latest, beta)),
+        ),
       );
       const result = await observeReleaseNpmState(pluginOptions);
       expectGate(result.gates, {

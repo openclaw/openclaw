@@ -5,6 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import {
   evaluateReleaseBootstrapGate,
   evaluateReleasePublishGates,
+  evaluateStableRollbackDrill,
 } from "../../scripts/lib/release-publish-gates.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { expectGate } from "./release-publish.test-support.js";
@@ -204,3 +205,19 @@ it.each([false, true])(
     }
   },
 );
+
+it.each([
+  [76, "PASS"],
+  [77, "WARN"],
+  [90, "WARN"],
+  [91, "FAIL"],
+] as const)("checks rollback drill day %s as %s", (days, status) => {
+  const gates = evaluateStableRollbackDrill({
+    nowMs: Date.parse("2026-06-01T00:00:00.000Z") + days * 86_400_000,
+    rollbackDrillDate: "2026-06-01",
+    rollbackDrillId: "synthetic-drill",
+  });
+  expect(gates.find((gate) => gate.id === "stable-closeout.rollback-drill-date")?.status).toBe(
+    status,
+  );
+});
