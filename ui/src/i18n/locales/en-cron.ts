@@ -333,6 +333,8 @@ const enCron = {
     },
     jobState: {
       nextRelative: "Next {at}",
+      waiting: "Waiting: {reason} since {since}",
+      waitingWarning: "Warning: admission deferred {count} times",
     },
     runEntry: {
       tokens: "{count} Tokens",
@@ -350,7 +352,6 @@ const enCron = {
       transcriptUnavailable:
         "Couldn’t identify this conversation. Refresh the activity history and try again.",
       next: "Next {rel}",
-      due: "Due {rel}",
     },
     events: {
       label: "Event",

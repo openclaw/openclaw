@@ -1794,7 +1794,27 @@ Dir.mktmpdir("openclaw-screenshot-diagnostics-") do |root|
   rescue => failure
     error = failure.message
   end
-  puts JSON.generate({ events: JSON.parse(saved), error: error })
+  container = File.join(root, "container")
+  FileUtils.mkdir_p(File.join(container, "tmp"))
+  FileUtils.mkdir_p(File.join(root, "bin"))
+  xcrun = File.join(root, "bin", "xcrun")
+  File.write(xcrun, "#!/bin/sh\\nprintf '%s\\\\n' '#{container}'\\n")
+  File.chmod(0700, xcrun)
+  ENV["PATH"] = File.join(root, "bin") + File::PATH_SEPARATOR + ENV.fetch("PATH")
+  trace = File.join(container, "tmp", "mermaid-renderer.log")
+  File.write(trace, '{"event":"watchdog-expired","phase":"loading"}')
+  retained = File.join(root, "retained.log")
+  diagnostics.retain_mermaid_trace("owned-simulator", "fixture.app", retained)
+  first_trace = JSON.parse(File.read(retained))
+  File.write(trace, (File.read(trace) + "\\n") * 2000 + '{"event":"finished-timed-out"}')
+  diagnostics.retain_mermaid_trace("owned-simulator", "fixture.app", retained)
+  tail = File.readlines(retained).map { |line| JSON.parse(line) }
+  File.write(xcrun, "#!/bin/sh\\nexit 1\\n")
+  unavailable = File.join(root, "unavailable.log")
+  diagnostics.retain_mermaid_trace("owned-simulator", "fixture.app", unavailable)
+  puts JSON.generate({ events: JSON.parse(saved), error: error, trace: first_trace,
+    tailOutcome: tail.last, boundedTrace: File.size(retained) <= 65536,
+    unavailableTrace: File.exist?(unavailable) })
 end
 `;
     const helper = path.join(path.dirname(fastfilePath), "screenshot_diagnostics.rb");
@@ -1803,6 +1823,10 @@ end
     expect(result.stdout).not.toContain("PRIVATE-");
     expect(JSON.parse(result.stdout)).toMatchObject({
       error: "original capture failed",
+      trace: { event: "watchdog-expired", phase: "loading" },
+      tailOutcome: { event: "finished-timed-out" },
+      boundedTrace: true,
+      unavailableTrace: false,
       events: [
         {
           phase: "capture",

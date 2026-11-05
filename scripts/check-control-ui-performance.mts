@@ -49,10 +49,11 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // First-visit co-location improves Sessions/Cron by 7–8%, accepting 205 B in Chat.
-  // Measured 1,280,999 B plus the existing 64 B build-variance headroom.
-  chatBootJsGzipBytes: 1_281_063,
-  newBootJsGzipBytes: 797_395,
+  // Patrick approved the Templates Quiver artwork budget in #193153 (2026-11-04).
+  // Exact-base Chat/New measure 1,286,700/799,877 B; retain 192 B headroom.
+  // Only these route byte caps change; request and global variance limits stay fixed.
+  chatBootJsGzipBytes: 1_286_892,
+  newBootJsGzipBytes: 800_069,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).

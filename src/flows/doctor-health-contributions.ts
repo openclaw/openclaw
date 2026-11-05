@@ -66,7 +66,7 @@ async function reportDeferredLegacyState(ctx: DoctorHealthFlowContext): Promise<
     cfg: ctx.cfg,
     doctorOnlyStateMigrations: true,
     ...(ctx.env ? { env: ctx.env } : {}),
-    legacySessionSurfaces: prepareLegacySessionSurfaces({ config: ctx.cfg }),
+    legacySessionSurfaces: await prepareLegacySessionSurfaces({ config: ctx.cfg }),
   });
   const pendingDetails = [
     ...legacyState.warnings.map((warning) => (warning.startsWith("- ") ? warning : `- ${warning}`)),
@@ -229,7 +229,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
     const { detectLegacyStateMigrations, runLegacyStateMigrations } =
       await import("../infra/state-migrations.doctor.js");
     const { prepareLegacySessionSurfaces } = await import("../plugins/legacy-session-surfaces.js");
-    const legacySessionSurfaces = prepareLegacySessionSurfaces({ config: ctx.cfg });
+    const legacySessionSurfaces = await prepareLegacySessionSurfaces({ config: ctx.cfg });
     const legacyState = await detectLegacyStateMigrations({
       cfg: ctx.cfg,
       ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
