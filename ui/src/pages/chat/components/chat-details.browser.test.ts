@@ -26,6 +26,57 @@ const card: ProgressCard = {
   ],
 };
 const mounted: HTMLElement[] = [];
+
+it("keeps an explicitly requested empty desktop overlay hidden until content arrives", async () => {
+  await page.viewport(1000, 900);
+  const view = await fixture(
+    props({ progressCard: undefined, detailsWorkspace: undefined }),
+    700,
+    false,
+    "desktop",
+  );
+  await expect.poll(() => view.controller).toBeDefined();
+  view.open(view.trigger);
+  await expect.poll(() => view.panel.querySelector(".chat-details-desktop-body")).not.toBeNull();
+  await expect.poll(() => view.panel.hidden).toBe(true);
+  expect(view.panel.matches(":popover-open")).toBe(false);
+  view.updateChat({ progressCard: card });
+  await expect.poll(() => view.panel.hidden).toBe(false);
+  expect(view.panel.inert).toBe(false);
+  expect(view.panel.getAttribute("role")).toBe("dialog");
+  view.updateChat({ progressCard: undefined });
+  await expect.poll(() => view.panel.hidden).toBe(true);
+  expect(view.panel.inert).toBe(true);
+});
+
+it("hides the entire empty desktop status panel and follows asynchronous section arrivals", async () => {
+  await page.viewport(1700, 900);
+  const view = await fixture(
+    props({ progressCard: undefined, detailsWorkspace: undefined }),
+    1400,
+    false,
+    "desktop",
+  );
+  await expect.poll(() => view.panel.querySelector(".chat-details-desktop-body")).not.toBeNull();
+  await expect.poll(() => view.panel.getAttribute("role") === "complementary").toBe(false);
+  expect(view.panel.matches(":popover-open")).toBe(false);
+  expect(view.panel.inert).toBe(true);
+
+  view.updateChat({ progressCard: card });
+  await expect.poll(() => view.panel.getAttribute("role") === "complementary").toBe(true);
+  view.updateChat({ progressCard: undefined });
+  await expect.poll(() => view.panel.getAttribute("role") === "complementary").toBe(false);
+
+  view.updateChat({ progressCardError: "access-denied" });
+  await expect.poll(() => view.panel.getAttribute("role") === "complementary").toBe(true);
+  view.updateChat({ progressCardError: undefined });
+  await expect.poll(() => view.panel.getAttribute("role") === "complementary").toBe(false);
+
+  view.updateChat({
+    detailsWorkspace: { root: "/workspace/details", label: "details", branch: "fix/sidebar" },
+  });
+  await expect.poll(() => view.panel.getAttribute("role") === "complementary").toBe(true);
+});
 function props(overrides: Partial<ChatDetailsProps> = {}): ChatDetailsProps {
   return {
     sessionKey: card.sessionKey,
@@ -106,6 +157,9 @@ async function fixture(
     updateChat: (patch: Partial<ChatDetailsProps>) =>
       update({ chat: { ...current().chat!, ...patch } }),
     open: (source: HTMLElement) => details?.open(source),
+    get controller() {
+      return details;
+    },
     frame,
     pane,
     footer,
@@ -199,10 +253,12 @@ describe("chat Details presentation", () => {
           nativePresentation,
           true,
         );
-        expect(panel.hidden).toBe(false);
-        expect(getComputedStyle(conversation).right).toBe(
-          nativePresentation === "desktop" ? "313px" : "300px",
-        );
+        expect(panel.hidden).toBe(nativePresentation === "desktop");
+        if (nativePresentation === "desktop") {
+          expect(conversation.style.right).not.toBe("313px");
+        } else {
+          expect(getComputedStyle(conversation).right).toBe("300px");
+        }
         if (nativePresentation === "desktop") {
           expect(panel.querySelector(".chat-details-session")).toBeNull();
         }
@@ -225,11 +281,9 @@ describe("chat Details presentation", () => {
         "desktop",
         true,
       );
-      await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
-      expect(panel.getAttribute("role")).toBe("complementary");
-      expect(conversation.getBoundingClientRect().right).toBeLessThanOrEqual(
-        panel.getBoundingClientRect().left,
-      );
+      await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+      expect(panel.hidden).toBe(true);
+      expect(conversation.style.right).not.toBe("313px");
       expect(panel.querySelector(".chat-details-session")).toBeNull();
 
       if (release === "transcript paint") {

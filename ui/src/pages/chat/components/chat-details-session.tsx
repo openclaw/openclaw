@@ -245,17 +245,27 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
             }
             return [...union.values()];
           });
-          const selfOnlyPeople = () => {
-            const viewer = gateway?.read().snapshot.selfUser?.identity;
-            const associatedPeople = desktopPeople();
+          const showPeople = () => {
+            const selfUser = gateway?.read().snapshot.selfUser;
+            // Undefined is unresolved; null is an admitted profileless connection.
+            // Do not reveal a potentially self-only section until viewer identity resolves.
+            if (gateway && selfUser !== null && !selfUser?.identity) {
+              return false;
+            }
+            // Missing participants or actor identities are not evidence that the viewer is alone.
+            if (
+              partialPeople() ||
+              [owner(), session()?.createdActor].some((actor) => actor && !actor.identity)
+            ) {
+              return true;
+            }
+            const viewer = selfUser?.identity;
             return (
-              viewer &&
-              props.props?.sessionFactsReady &&
-              !partialPeople() &&
-              [owner(), session()?.createdActor].every((actor) => !actor || actor.identity) &&
-              associatedPeople.length === 1 &&
-              associatedPeople[0]!.identity.type === viewer.type &&
-              associatedPeople[0]!.identity.id === viewer.id
+              !viewer ||
+              desktopPeople().some(
+                (person) =>
+                  person.identity.type !== viewer.type || person.identity.id !== viewer.id,
+              )
             );
           };
           const outputs = createMemo<ChatDetailsOutputs | null>(() => {
@@ -452,7 +462,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                     <>
                       <Show
                         when={
-                          !selfOnlyPeople() &&
+                          showPeople() &&
                           (desktopPeople().length > 0 || count() > 0 || creatorName() || owner())
                         }
                       >
@@ -645,13 +655,18 @@ export type ChatDetailsDesktopCompositionProps = Omit<Props, "desktop"> & {
   /** The native host keeps ownership of top-layer menus and Undo/focus behavior. */
   progressMenuRef?: (menu: MenuHandle) => void;
   onHideProgress?: () => void;
+  onContentChange?: (hasContent: boolean) => void;
 };
 
 /** Desktop entry point: one scroll body and the native Progress owner after Outputs. */
 export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositionProps) {
   const [scrollport, setScrollport] = createSignal<HTMLDivElement>();
   return (
-    <ChatDetailsDesktopBody presented={props.presented} onScrollPortRef={setScrollport}>
+    <ChatDetailsDesktopBody
+      presented={props.presented}
+      onScrollPortRef={setScrollport}
+      onContentChange={props.onContentChange}
+    >
       <ChatDetailsSession
         props={props.props}
         presented={props.presented}
@@ -669,7 +684,7 @@ export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositi
         />
       </Show>
       <Show when={!props.props?.progressCard && props.props?.progressCardError === "access-denied"}>
-        <div class="chat-details__muted" role="status">
+        <div class="chat-details__muted" data-details-group="progress" role="status">
           {t("sessionProgressCard.widgetAccessDenied")}
         </div>
       </Show>

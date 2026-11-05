@@ -59,6 +59,7 @@ it("hides only the authenticated viewer's complete self-only desktop People sect
   const element = await mount(
     {
       sessionFactsReady: true,
+      desktopDisclosures: { expanded: { people: true }, onExpandedChange: vi.fn() },
       desktopPresentation: {
         peopleLabel: "People",
         outputsLabel: "Outputs",
@@ -81,7 +82,13 @@ it("hides only the authenticated viewer's complete self-only desktop People sect
     participants: [self],
     participantCount: 1,
   };
-  await select(onlySelf, true);
+  await select(onlySelf, false);
+  await select({ ...onlySelf, participantCount: 2 }, false);
+  await select(
+    { ...onlySelf, owner: { actor: { type: "human", id: "pending", label: "Pending owner" } } },
+    false,
+  );
+  await select(onlySelf, false);
   publish({
     ...gateway.snapshot,
     selfUser: {
@@ -123,15 +130,42 @@ it("hides only the authenticated viewer's complete self-only desktop People sect
     },
   ]) {
     await select(facts, true);
+    if (facts.participantCount === 2) {
+      await waitForSolid(() => expect(section()?.textContent).toContain("1 more participants"));
+    }
   }
   await select(onlySelf, false);
   await updateDetails(element, { sessionFactsReady: false });
-  expect(section()).not.toBeNull();
+  expect(section()).toBeNull();
   await updateDetails(element, { sessionFactsReady: true });
   expect(section()).toBeNull();
   publish({ ...gateway.snapshot, selfUser: { id: "alex", name: "Alex" } });
-  await waitForSolid(() => expect(section()).not.toBeNull());
+  await waitForSolid(() => expect(section()).toBeNull());
   publish({ ...gateway.snapshot, selfUser: undefined });
+  await waitForSolid(() => expect(section()).toBeNull());
+  // A session switch must not turn unresolved viewer identity into visible People.
+  const switchedKey = "agent:main:switched";
+  await updateDetails(element, {
+    sessionKey: switchedKey,
+    selectedSession: { key: switchedKey, kind: "direct", ...onlySelf },
+    sessionFactsReady: false,
+  });
+  expect(section()).toBeNull();
+  await updateDetails(element, { sessionFactsReady: true });
+  expect(section()).toBeNull();
+  publish({ ...gateway.snapshot, selfUser: null });
+  await waitForSolid(() => expect(section()).not.toBeNull());
+  publish({ ...gateway.snapshot, selfUser: { id: "native-alex", identity: self.identity } });
+  await waitForSolid(() => expect(section()).toBeNull());
+  await updateDetails(element, {
+    selectedSession: {
+      key: switchedKey,
+      kind: "direct",
+      ...onlySelf,
+      participants: [self, other],
+      participantCount: 2,
+    },
+  });
   await waitForSolid(() => expect(section()).not.toBeNull());
 });
 it("omits empty linked-work disclosures and opens arriving pull requests", async () => {

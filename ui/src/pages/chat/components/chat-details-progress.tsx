@@ -68,7 +68,9 @@ export function ChatDetailsProgress(props: Props) {
     return progress && write ? { write, progress } : undefined;
   });
   return (
-    <openclaw-chat-details-progress>
+    <openclaw-chat-details-progress
+      data-details-group={props.desktop && props.props?.progressCard ? "progress" : undefined}
+    >
       <Show when={receipt()} keyed>
         {(value) => {
           onSettled(() => value.write({ progress: value.progress }));

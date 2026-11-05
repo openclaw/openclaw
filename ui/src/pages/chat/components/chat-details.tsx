@@ -129,7 +129,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
   };
   const [wideEnough, setWideEnough] = createSignal(false);
   const canDock = () => !isMobile() && isConversationAnchor() && wideEnough();
-  const opened = () =>
+  const requested = () =>
     isPresented() &&
     (props.mobileHost
       ? (props.mobileHost.open || props.mobileHost.exiting) &&
@@ -137,8 +137,10 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         props.mobileHost.destination.area === "details" &&
         (!props.mobileHost.destination.page || Boolean(props.mobileHost.destination.page.details))
       : intent() === "open" || (intent() === "auto" && canDock()));
+  const [hasContent, setHasContent] = createSignal(false);
+  const opened = () => requested() && (!desktop() || hasContent());
   const outputsDemand = createMemo(() =>
-    desktop() && opened() && props.chat?.outputs ? props.chat.retainOutputs : undefined,
+    desktop() && requested() && props.chat?.outputs ? props.chat.retainOutputs : undefined,
   );
   // Mount cached chrome with the transcript; retain disclosure state while closed.
   const cachedReady = () =>
@@ -147,7 +149,8 @@ export function ChatDetails(props: ChatDetailsViewProps) {
   const [sessionOpened] = createSignal<boolean>(
     (previous) =>
       previous ||
-      (opened() && (!props.contentPending || cachedReady() || intent() === "open" || !desktop())),
+      (requested() &&
+        (!props.contentPending || cachedReady() || intent() === "open" || !desktop())),
   );
   const docked = () => opened() && canDock();
   const surface = document.createElement("div");
@@ -700,7 +703,8 @@ export function ChatDetails(props: ChatDetailsViewProps) {
                 <SessionContent>
                   <ChatDetailsDesktopComposition
                     props={props.chat}
-                    presented={isPresented() && opened()}
+                    presented={requested()}
+                    onContentChange={setHasContent}
                     dismissed={intent() === "closed"}
                     progressMenuRef={(menu) => {
                       progressMenu = menu;
