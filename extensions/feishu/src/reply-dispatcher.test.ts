@@ -630,7 +630,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(card).toContain("&lt;at id=ou_other&gt;&lt;/at&gt;");
     expect(delivered).toMatchObject({ visibleReplySent: true });
   });
-
   it("does not repeat fallback prose inside its native controls card", async () => {
     useNonStreamingAutoAccount();
     const { options } = createDispatcherHarness();
@@ -645,7 +644,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(card.split('"Deny"')).toHaveLength(2);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
-
   it("keeps oversized block controls visible alongside voice media before the streaming final", async () => {
     useStreamingBlockAccount();
     sendMediaFeishuMock.mockResolvedValueOnce({ messageId: "om_voice" });
@@ -800,7 +798,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expectNoStaticReply();
     expect(stream(0).discard).toHaveBeenCalledOnce();
   });
-
   it("retains the original preview receipt and media after failed cleanup", async () => {
     const obsoleteText = "```text\naccepted preview remains visible\n```";
     sendMediaFeishuMock.mockResolvedValue({ messageId: "om-block-media" });
@@ -939,7 +936,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMediaFeishuMock).not.toHaveBeenCalled();
   });
-
   it("sends complete chunked blocks to the DM target", async () => {
     useNonStreamingBlockAccount();
     const runtime = getFeishuRuntimeMock();
@@ -1075,6 +1071,12 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     ["fence ls", ["~~~\u2028\n```", null, "~~~\u2028\n```\n~~~\nD"], ["~~~\u2028\n```", "D"]],
     ["partial msg", ["A.", 2, "A. B.", true, false, "A. B. C."], ["A.\n\nA. B.", "A. B. C."]],
     ["partial held", ["A.", 2, "A. B.", true, "A. B. C.", false], ["A.\n\nA. B.", "A. B. C."]],
+    ["fence sep", ["~~~\n\u2028~~", null, "~~~\n\u2028~~~\nD"], ["~~~\n\u2028~~", "~~~\n~\nD"]],
+    ["fence cr end", ["~~~\nx\n", null, "~~~\nx\nf\r~~~\nD"], ["~~~\nx\n", "~~~\nf\r~~~\nD"]],
+    ["fence cr drop", ["~~~\nx\n", null, "~~~\nx\n~~~\rD\nE"], ["~~~\nx\n", "D\nE"]],
+    ["fence sol", ["~~~\n~~~\r```a", null, "~~~\n~~~\r```a`b\nD"], ["~~~\n~~~\r```a", "`b\nD"]],
+    ["fence eot", ["~~~\na\n~~~x", null, "~~~\na\n~~~xy"], ["~~~\na\n~~~x", "~~~\ny"]],
+    ["partial base", ["A. B.", "A", 2, "B.", true, false, "B. C."], ["A\n\nB.", "B. C."]],
   ] as const)("streams %s", async (name, events, cards) => {
     useStreamingBlockAccount();
     const { result, options } = createDispatcherHarness();
@@ -1098,7 +1100,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         stream(0).closeWithResult.mockImplementationOnce(close.wait);
         await Promise.race([options.onIdle?.(), close.started]);
       } else if (event === false) {
-        const content = name === "cut" ? "    a\n" : "A.";
+        const content = name === "cut" ? "    a\n" : name === "partial base" ? "A. B." : "A.";
         const shown = { visibleReplySent: true, content, finalTextAccepted: false };
         close.reject(streamingFailure(new Error("no"), shown));
         await expect(options.onIdle?.()).rejects.toThrow("no");
@@ -1241,7 +1243,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     await expect(result.ensureNoVisibleReplyFallback("accepted-no-id")).resolves.toBe(false);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
-
   it("retains accepted chunk content when a later receipt is lost", async () => {
     useNonStreamingAutoAccount();
     const runtime = getFeishuRuntimeMock();
@@ -1260,7 +1261,6 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(error).toMatchObject(partialDelivery("firstsecond", ["om-first"]));
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
   });
-
   it.each(["media failure", "idle"])(
     "retains an accepted fallback prefix after %s",
     async (trigger) => {
