@@ -53,6 +53,7 @@ import {
   activityByRef,
   activityByRunId,
   embeddedRunIndex,
+  resetDiagnosticSessionActivityPruneState,
   resolveSessionActivity,
   sessionRefs,
   touchSessionActivity,
@@ -712,6 +713,7 @@ export function stopDiagnosticRunActivityTracking(): void {
   activityByRef.clear();
   activityByRunId.clear();
   activeDiagnosticOwners.clear();
+  resetDiagnosticSessionActivityPruneState();
   embeddedRunSequence = 0;
 }
 
