@@ -117,7 +117,8 @@ it.each([
   "$mode: $cleanup cleanup with readError=$readError",
   async (scenario) => {
     const { mode } = scenario;
-    const fixture = path.join(root, `${scenario.cleanup}-${scenario.readError}`);
+    // Exercise JSONL backslash escaping even on POSIX hosts.
+    const fixture = path.join(root, `${scenario.cleanup}-${scenario.readError}`, "native\\path");
     const stateDir = path.join(fixture, "source");
     const source = path.join(stateDir, "state", "openclaw.sqlite");
     const cache = path.join(fixture, "cache");
@@ -246,7 +247,19 @@ it.each([
       expect(recorded?.detail?.length).toBeLessThanOrEqual(300);
     }
     const logged = fsSync.existsSync(log) ? await fs.readFile(log, "utf8") : "";
-    expect(logged.includes(attempts[0]!.directory)).toBe(scenario.cleanup !== "healthy");
+    const records = logged
+      .split("\n")
+      .filter(Boolean)
+      .map((line): unknown => JSON.parse(line));
+    const cleanupWarning = expect.objectContaining({
+      "1": expect.objectContaining({ path: attempts[0]!.directory }),
+      message: expect.stringContaining("SQLite read-only snapshot cleanup failed"),
+    });
+    if (scenario.cleanup === "healthy") {
+      expect(records).not.toContainEqual(cleanupWarning);
+    } else {
+      expect(records).toContainEqual(cleanupWarning);
+    }
   },
   30_000,
 );
