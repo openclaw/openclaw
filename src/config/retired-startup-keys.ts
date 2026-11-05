@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+
 // Keys third-party supervisors keep writing after OpenClaw retired them.
 // Doctor already deletes these. Gateway startup has to ignore them too, or a
 // rewritten openclaw.json exits with InvalidConfigError before it can listen.
@@ -6,10 +8,6 @@ const RETIRED_STARTUP_PATHS = [
   ["meta", "lastTouchedAt"],
   ["gateway", "controlUi", "allowInsecureAuth"],
 ] as const;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function deletePath(owner: Record<string, unknown>, path: readonly string[]): boolean {
   const [key, ...rest] = path;
@@ -40,7 +38,11 @@ export function stripRetiredStartupKeys(config: unknown): boolean {
     changed = deletePath(config, path) || changed;
   }
   const plugins = config.plugins;
-  if (isRecord(plugins) && isRecord(plugins.installs) && Object.keys(plugins.installs).length === 0) {
+  if (
+    isRecord(plugins) &&
+    isRecord(plugins.installs) &&
+    Object.keys(plugins.installs).length === 0
+  ) {
     delete plugins.installs;
     if (Object.keys(plugins).length === 0) {
       delete config.plugins;
