@@ -357,7 +357,7 @@ it("propagates a rejected pump wrapper without spinning idle or stop waits", asy
     monitor.start();
 
     await expect(monitor.waitForIdle()).rejects.toBe(rejection);
-    await expect(monitor.stop()).rejects.toBe(rejection);
+    await expect(monitor.stop()).resolves.toBeUndefined();
   });
 });
 
