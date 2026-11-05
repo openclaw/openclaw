@@ -1,18 +1,12 @@
-import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import { McpServer } from "@modelcontextprotocol/server";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred, nextEventLoopTurn } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { startMcpHttpFixture } from "../../agents/agent-bundle-mcp-lifecycle.test-support.js";
 import { createMcpClientElicitationHandler } from "../../agents/mcp-client-elicitation.js";
-import { createMemorySessionActorOwner } from "../../config/sessions/session-actor-memory.js";
-import {
-  getSessionActorStorageBinding,
-  runWithSessionActorStorage,
-} from "../../config/sessions/session-actor-storage-binding.js";
 import {
   NODE_MCP_ELICITATION_CAPABILITY,
   NODE_MCP_TOOLS_CALL_COMMAND,
@@ -22,20 +16,12 @@ import { coerceNodeInvokePayload } from "../../node-host/invoke-payload.js";
 import { handleInvoke } from "../../node-host/invoke.js";
 import { startNodeHostMcpManager } from "../../node-host/mcp.js";
 import { createNodeWorkerMcpTurn } from "../../node-host/node-worker-mcp.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { createWorkerLocalMcpClient } from "../../worker/worker-local-mcp.js";
 import { createWorkerLaunchDescriptorForTest } from "../../worker/worker-process.test-support.js";
-import {
-  createSessionEventSubscriberRegistry,
-  createSessionMessageSubscriberRegistry,
-} from "../server-chat-state.js";
-import { buildNodeEventContext, runtimeMocks } from "../server-node-events.test-support.js";
-import { createGatewayNodeSessionRuntime } from "../server-node-session-runtime.js";
-import type { GatewayWsClient } from "../server/ws-types.js";
 import { nodeEventHandlers } from "./nodes.event.js";
+import { NodeEventHarness } from "./nodes.event.test-support.js";
 import { handleNodeInvokeResult } from "./nodes.handlers.invoke-result.js";
 import { expectNodeReply, invokeNodeRequest } from "./nodes.invoke.test-support.js";
-import { createWorkerSupervisorNodeClient } from "./nodes.runner-inventory.test-support.js";
 import {
   adminRequestClient,
   callQuestionRpc,
@@ -43,7 +29,6 @@ import {
   manager as questions,
   requestParams,
 } from "./question.test-support.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const { recordHostStatsMock } = vi.hoisted(() => ({ recordHostStatsMock: vi.fn() }));
 vi.mock("../../infra/device-pairing-node.js", () => ({
@@ -79,212 +64,6 @@ it("keeps the accepted event result independent of persistence", async () => {
   await persistence.promise.catch(() => undefined);
   expect(respond).toHaveBeenCalledExactlyOnceWith(true, result, undefined);
 });
-it.each([
-  { message: "x".repeat(20_001), reason: "message_too_large", handled: false },
-  { message: "x".repeat(20_000), reason: "accepted", handled: true },
-  {
-    message: "read this",
-    attachments: [
-      { type: "file", mimeType: "application/pdf", fileName: "a.pdf", content: "JVBERi0=" },
-    ],
-    reason: "invalid_attachments",
-    handled: false,
-  },
-])("reports agent request admission through node.event ($reason)", async (scenario) => {
-  const { parseMessageWithAttachments } =
-    await vi.importActual<typeof import("../chat-attachments.js")>("../chat-attachments.js");
-  runtimeMocks.parseMessageWithAttachments.mockImplementation(parseMessageWithAttachments);
-  runtimeMocks.persistInboundImagesForTranscript.mockResolvedValue({
-    entries: [],
-    omission: "none",
-  });
-  runtimeMocks.upsertSessionEntryCore.mockImplementation(async (_scope, patch) => patch);
-  const work = createDeferred();
-  runtimeMocks.agentCommandFromIngress.mockReset().mockReturnValue(work.promise);
-  const h = new NodeEventHarness();
-  Object.assign(h.context, buildNodeEventContext(), { logGateway: { warn: h.warn } });
-  const client = h.register("share-connection", "share-node", "openclaw-ios", "ios");
-  try {
-    const respond = await h.send(
-      client,
-      {
-        message: scenario.message,
-        sessionKey: "agent:main:share-admission",
-        attachments: scenario.attachments,
-      },
-      "agent.request",
-    );
-    expect(respond).toHaveBeenCalledExactlyOnceWith(
-      true,
-      {
-        ok: true,
-        event: "agent.request",
-        handled: scenario.handled,
-        reason: scenario.reason,
-      },
-      undefined,
-    );
-    if (scenario.handled) {
-      expect(runtimeMocks.agentCommandFromIngress).toHaveBeenCalledOnce();
-      expect(runtimeMocks.agentCommandFromIngress.mock.calls[0]?.[0]).toMatchObject({
-        message: scenario.message,
-      });
-    } else {
-      expect(runtimeMocks.agentCommandFromIngress).not.toHaveBeenCalled();
-    }
-  } finally {
-    work.resolve();
-  }
-});
-
-it("admits an incognito share before the agent finishes and retains its actor custody", async () => {
-  const sessionKey = "agent:main:dashboard:incognito-share-admission";
-  const location = {
-    agentId: "main",
-    path: resolveIncognitoOpenClawAgentSqlitePath({
-      agentId: "main",
-      env: { OPENCLAW_STATE_DIR: "/synthetic-share-state" },
-    }),
-  };
-  const owner = createMemorySessionActorOwner(location);
-  onTestFinished(() => owner.close());
-  const authority = { assertCurrent() {}, authorize() {} };
-  const actor = await owner.acquire(
-    { database: owner.identity, sessionKey },
-    {
-      assertCurrent() {},
-      assertReadable() {},
-    },
-  );
-  onTestFinished(() => actor.release());
-  assert(actor.storage);
-  await actor.storage.mutate(
-    {
-      type: "session.entry.create",
-      input: {
-        entry: { sessionId: "private-share", updatedAt: 1, incognito: true },
-      },
-    },
-    authority,
-  );
-  runtimeMocks.persistInboundImagesForTranscript.mockResolvedValue({
-    entries: [],
-    omission: "none",
-  });
-  runtimeMocks.upsertSessionEntryCore.mockImplementation(async (_scope, patch) => patch);
-  const work = createDeferred();
-  const dispatched = createDeferred();
-  runtimeMocks.agentCommandFromIngress.mockReset().mockImplementation(async () => {
-    dispatched.resolve();
-    await work.promise;
-    // Resume after the admission response, through the binding inherited by accepted work.
-    const retained = getSessionActorStorageBinding({ sessionKey });
-    assert(retained);
-    const result = await retained.actor.storage.mutate(
-      {
-        type: "session.entry.patch",
-        input: { operation: { kind: "fields", patch: { label: "Written after admission" } } },
-      },
-      retained.authority,
-    );
-    expect(result.kind).toBe("committed");
-  });
-  const h = new NodeEventHarness();
-  Object.assign(h.context, buildNodeEventContext());
-  const client = h.register("private-share-connection");
-  const respond = vi.fn();
-  const params = { event: "agent.request", payload: { sessionKey, message: "private share" } };
-  let finished = false;
-  const done = runWithSessionActorStorage({ actor, authority, ...location }, async () =>
-    nodeEventHandlers["node.event"]!({
-      req: { type: "req", id: "private-share", method: "node.event", params },
-      params,
-      context: h.context,
-      client,
-      respond,
-      isWebchatConnect: () => false,
-    }),
-  ).then(() => {
-    finished = true;
-  });
-  try {
-    await dispatched.promise;
-    await nextEventLoopTurn();
-    expect(respond).toHaveBeenCalledExactlyOnceWith(
-      true,
-      {
-        ok: true,
-        event: "agent.request",
-        handled: true,
-        reason: "accepted",
-      },
-      undefined,
-    );
-    expect(finished).toBe(false);
-  } finally {
-    work.resolve();
-    await done;
-    expect(
-      actor.storage.readCurrent({ type: "session.entry.read", input: { sessionKey } }, authority),
-    ).toMatchObject({ sessionId: "private-share", label: "Written after admission" });
-  }
-  expect(respond).toHaveBeenCalledTimes(1);
-});
-
-class NodeEventHarness {
-  binding = { identity: "identity-1", generation: "generation-1" };
-  resolvePairing = vi.fn(async () => this.binding);
-  broadcast = vi.fn();
-  warn = vi.fn();
-  runtime = createGatewayNodeSessionRuntime({
-    broadcast: this.broadcast,
-    resolveCurrentPairingState: this.resolvePairing,
-    isPairingStateCurrent: () => true,
-    sessionEventSubscribers: createSessionEventSubscriberRegistry(),
-    sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-  });
-  context = {
-    ...this.runtime,
-    broadcast: this.broadcast,
-    logGateway: { warn: this.warn },
-  } as unknown as GatewayRequestHandlerOptions["context"];
-  nodeRegistry = this.runtime.nodeRegistry;
-  register(connId: string, nodeId = "node-1", clientId = "openclaw-macos", platform = "darwin") {
-    const client = createWorkerSupervisorNodeClient(connId);
-    Object.assign(client.connect, {
-      role: "node",
-      scopes: [],
-      commands: [],
-      device: { id: nodeId },
-    });
-    Object.assign(client.connect.client, { id: clientId, platform });
-    this.nodeRegistry.register(client, {
-      pairingIdentity: this.binding.identity,
-      pairingGeneration: this.binding.generation,
-    });
-    onTestFinished(() => {
-      this.nodeRegistry.unregister(connId);
-    });
-    return client;
-  }
-  send(client: GatewayWsClient, payload: unknown, event = "node.desktop.availability") {
-    return invokeNodeRequest(
-      nodeEventHandlers["node.event"]!,
-      this.context,
-      client,
-      "node.event",
-      { event, payload },
-      "desktop-state",
-    );
-  }
-  changes = () =>
-    this.broadcast.mock.calls
-      .filter(([event]) => event === "node.runnerInventory.changed")
-      .map(([, payload]) => payload);
-  node = () => this.nodeRegistry.get("node-1");
-  active = () => this.nodeRegistry.getActiveNode();
-}
-
 const mcpQuestionCases = [
   ["Gateway", "granted"],
   ["Gateway", "grant retired"],
