@@ -300,18 +300,15 @@ it.each([
 );
 
 it("retains App attachment receipts without changing model text and binds them to retries", async () => {
-  const appContext = [
-    {
-      title: "Helmet shell",
-      uri: "shell://specimens/helmet",
-      icon: "https://example.test/shell.png",
-    },
-  ];
+  const attachment = {
+    title: "Helmet shell",
+    uri: "shell://specimens/helmet",
+    icon: "https://example.test/shell.png",
+  };
+  const appContext = [attachment];
   const value = await normalizeValue({ message: "Describe this shell.", appContext });
   expect(value.appContext).toEqual(appContext);
-  const reordered = [
-    { icon: appContext[0].icon, uri: appContext[0].uri, title: appContext[0].title },
-  ];
+  const reordered = [{ icon: attachment.icon, uri: attachment.uri, title: attachment.title }];
   expect(
     (await normalizeValue({ message: "Describe this shell.", appContext: reordered }))
       .requestIdentity,
