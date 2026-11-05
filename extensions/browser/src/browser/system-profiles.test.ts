@@ -117,13 +117,10 @@ function createManagedProfileFixture() {
 }
 
 function expectSnapshotScratchRemoved() {
-  const cacheRoot = path.join(profileMocks.tempRoot, "openclaw");
-  const namespaces = fs.readdirSync(cacheRoot);
-  expect(namespaces).toHaveLength(1);
+  const root = path.join(profileMocks.tempRoot, "openclaw");
   // SQLite retains the installation namespace after disposing each snapshot.
-  for (const namespace of namespaces) {
-    expect(fs.readdirSync(path.join(cacheRoot, namespace))).toEqual([]);
-  }
+  const contents = fs.readdirSync(root).map((name) => fs.readdirSync(path.join(root, name)));
+  expect(contents).toEqual([[]]);
 }
 
 beforeEach(() => {
