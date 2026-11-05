@@ -1782,18 +1782,8 @@ class TalkModeManagerTest {
           }
         }
       val pipe = ParcelFileDescriptor.createPipe()
-      val type = Class.forName("ai.openclaw.app.voice.PushToTalkAudioSource")
-      val source =
-        type
-          .getDeclaredConstructor(
-            ParcelFileDescriptor::class.java,
-            ParcelFileDescriptor.AutoCloseOutputStream::class.java,
-            AudioRecord::class.java,
-          ).also { it.isAccessible = true }
-          .newInstance(pipe[0], ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]), recorder)
-      val finish = type.getDeclaredMethod("finishFromPump").also { it.isAccessible = true }
-      val close = type.getDeclaredMethod("close").also { it.isAccessible = true }
-      val finishing = async(Dispatchers.Default) { finish.invoke(source) }
+      val source = SpeechRecognitionAudioSource(pipe[0], ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]), recorder)
+      val finishing = async(Dispatchers.Default) { source.finishFromPump() }
       val closeStarted = CompletableDeferred<Unit>()
       var closing: kotlinx.coroutines.Deferred<*>? = null
       try {
@@ -1801,7 +1791,7 @@ class TalkModeManagerTest {
         closing =
           async(Dispatchers.Default) {
             closeStarted.complete(Unit)
-            close.invoke(source)
+            source.close()
           }
         closeStarted.await()
         assertNull(
@@ -1814,7 +1804,7 @@ class TalkModeManagerTest {
       } finally {
         finishRelease.countDown()
         finishing.await()
-        closing?.await() ?: close.invoke(source)
+        closing?.await() ?: source.close()
       }
       assertEquals(AudioRecord.STATE_UNINITIALIZED, recorder.state)
     }

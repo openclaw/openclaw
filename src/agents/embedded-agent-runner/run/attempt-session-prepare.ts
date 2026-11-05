@@ -587,10 +587,9 @@ export async function prepareEmbeddedAttemptSessionManager(
       ? await openSessionAfterProjectionRecovery({
           open: openSessionManager,
           target: input.sessionTarget,
-          timeoutMs: attempt.timeoutMs,
+          attempt,
           signal: openSignal,
           assertCurrent: input.assertCurrent,
-          replyOperation: attempt.replyOperation,
         })
       : undefined;
   const unguardedSessionManager =

@@ -116,9 +116,7 @@ describe("sessions.usage result cache and owner attribution", () => {
     );
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  afterEach(() => vi.useRealTimers().restoreAllMocks());
 
   it.each(["detail", "overview"] as const)(
     "%s usage follows invited membership and drops a revoked source",
@@ -366,6 +364,8 @@ describe("sessions.usage result cache and owner attribution", () => {
   });
 
   it("shares population facts across pages and filters until an owner publishes new usage", async () => {
+    // Keep snapshot reuse independent of worker scheduling and the request deadline.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const entries = Array.from({ length: 60 }, (_, index) => ({
       sessionId: `page-${index + 1}`,
       updatedAt: index + 1,

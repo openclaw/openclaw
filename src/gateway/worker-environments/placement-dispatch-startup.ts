@@ -1,5 +1,6 @@
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { workerWorkspaceDurabilitySchema } from "../../plugins/worker-retention.js";
 import { DEVICE_FOLDER_MANIFEST_REF } from "../../worker/device-folder.js";
 import {
   sameWorkerBuild,
@@ -30,6 +31,7 @@ import type {
   WorkerPlacementAuthorization,
   WorkerPlacementDispatchRequest,
 } from "./service-contract.js";
+import { requireWorkerProfile } from "./service-validation.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
@@ -203,6 +205,7 @@ export function createWorkerPlacementDispatchStartup(options: {
     signal?: AbortSignal;
     admittedNode?: WorkerNodePlacementAdmission;
     markPhase?: (phase: string) => void;
+    retainCredentialCleanup?: (revoke: () => Promise<void>) => void;
   }): Promise<WorkerActiveDispatchPlacement> => {
     if (params.placement.state !== "provisioning") {
       throw new Error("Worker dispatch continuation requires a provisioning placement");
@@ -334,6 +337,8 @@ export function createWorkerPlacementDispatchStartup(options: {
         assertAttachmentCurrent();
         requireAttachedEnvironment();
       };
+      const profileAllowsSetup =
+        requireWorkerProfile(params.environment.profileSnapshot.settings).runSetupScript !== false;
       const preparation = readWorkerProjectPreparation(params.environment.profileSnapshot.project);
       let lifecycleHomeDir: string | undefined;
       let assertPreparedBindingCurrent: (() => void) | undefined;
@@ -349,6 +354,8 @@ export function createWorkerPlacementDispatchStartup(options: {
           sessionKey: request.sessionKey,
           preparationKey: preparation.key,
           cacheKey: preparation.cacheKey,
+          readNativeCredential: request.readNativeCredential,
+          retainCredentialCleanup: params.retainCredentialCleanup,
           signal: params.signal,
           assertCurrent: assertSyncOwner,
         });
@@ -370,6 +377,11 @@ export function createWorkerPlacementDispatchStartup(options: {
           };
         }
       }
+      // Prepared source authority must survive checkpoint loading and every later worker command.
+      const assertWorkspaceCurrent = () => {
+        assertSyncOwner();
+        assertPreparedBindingCurrent?.();
+      };
       params.markPhase?.("repositoryStartup");
       const synced =
         params.workspace.kind === "device-folder"
@@ -378,13 +390,15 @@ export function createWorkerPlacementDispatchStartup(options: {
               sessionId: request.sessionId,
               sessionKey: request.sessionKey,
               generation: placement.generation,
-              authorize: assertSyncOwner,
+              authorize: assertWorkspaceCurrent,
             })
           : params.workspace.kind === "repository"
             ? await syncSessionRepositoryWorkspace({
                 markPhase: params.markPhase,
                 repository: params.workspace.repository,
                 preparedRepository,
+                readNativeCredential: request.readNativeCredential,
+                retainCredentialCleanup: params.retainCredentialCleanup,
                 tunnel,
                 sessionId: request.sessionId,
                 sessionKey: request.sessionKey,
@@ -392,7 +406,8 @@ export function createWorkerPlacementDispatchStartup(options: {
                 generation: placement.generation,
                 gitAuthor,
                 runSetupScript: request.runSetupScript,
-                assertCurrent: assertSyncOwner,
+                setupDisabled: !profileAllowsSetup,
+                assertCurrent: assertWorkspaceCurrent,
               })
             : await tunnel.syncWorkspace({
                 source: {
@@ -404,7 +419,7 @@ export function createWorkerPlacementDispatchStartup(options: {
                 sessionKey: request.sessionKey,
                 generation: placement.generation,
                 ...(gitAuthor ? { gitAuthor } : {}),
-                authorize: assertSyncOwner,
+                authorize: assertWorkspaceCurrent,
               });
       if (
         (params.workspace.kind === "device-folder") !==
@@ -414,9 +429,9 @@ export function createWorkerPlacementDispatchStartup(options: {
           "Workspace preparation returned a mismatched device-folder manifest marker",
         );
       }
-      assertSyncOwner();
+      assertWorkspaceCurrent();
       const runProjectLifecycleCommand = environments.runProjectLifecycleCommand;
-      if (preparation?.recipe && preparation.runSetupScript !== false) {
+      if (preparation?.recipe && preparation.runSetupScript !== false && profileAllowsSetup) {
         params.markPhase?.("lifecycleCommands");
         await runWorkerProjectLifecycle({
           recipe: preparation.recipe,
@@ -430,10 +445,7 @@ export function createWorkerPlacementDispatchStartup(options: {
           // A completed activation is the existing durable witness. An interrupted
           // first binding retries declared setup; commands should be idempotent.
           postCreate: params.environment.lastActivatedAtMs === null,
-          assertCurrent: () => {
-            assertSyncOwner();
-            assertPreparedBindingCurrent?.();
-          },
+          assertCurrent: assertWorkspaceCurrent,
           signal: params.signal,
         });
       }
@@ -479,6 +491,12 @@ export function createWorkerPlacementDispatchStartup(options: {
             to: "active",
             expectedGeneration: startingPlacement.generation,
             patch: { activeOwnerEpoch: ownerEpoch },
+            ...(workerWorkspaceDurabilitySchema
+              .optional()
+              .parse(params.environment.profileSnapshot.workspaceDurability)?.mode ===
+              "retained-disk" && params.workspace.kind === "repository"
+              ? { repositoryDiskWorkspaceId: params.workspace.repository.workspaceId }
+              : {}),
           },
           () => {
             assertActivationCurrent();
@@ -509,7 +527,9 @@ export function createWorkerPlacementDispatchStartup(options: {
         // Maintenance scheduling cannot overturn a durable placement activation.
       }
       try {
-        environments.schedulePreparedRefill(provisioned.environmentId);
+        if (!params.environment.retention) {
+          environments.schedulePreparedRefill(provisioned.environmentId);
+        }
       } catch {
         // Capacity maintenance cannot overturn a durable activation.
       }

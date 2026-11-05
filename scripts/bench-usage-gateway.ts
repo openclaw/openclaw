@@ -11,6 +11,7 @@ import { parseArgs } from "node:util";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import {
   chromium,
+  webkit,
   type Browser,
   type BrowserContext,
   type CDPSession,
@@ -25,13 +26,14 @@ import {
   prepareColdLoadTraceEvent,
   summarizeCpuProfile,
 } from "./lib/control-ui-cold-load-trace.ts";
+import { startEngineMeasurement, type ControlUiEngine } from "./lib/control-ui-engine-metrics.ts";
 import {
   clipInteractionCpuProfile,
   summarizeInteractionTrace,
 } from "./lib/control-ui-interaction-trace.ts";
 import {
   measureRendererProcessMetrics,
-  readControlUiPerformanceMetrics as metrics,
+  readControlUiPerformanceMetrics,
   readRendererProcessSnapshot,
 } from "./lib/control-ui-renderer-metrics.ts";
 import { stopGatewayGracefully } from "./lib/gateway-bench-child.ts";
@@ -48,6 +50,7 @@ import {
   waitForInitialProbe,
 } from "./lib/gateway-bench-runtime.ts";
 import { hasUnjoinedWork, runManagedCommand } from "./lib/managed-child-process.mts";
+import { TSDOWN_PACKAGE_OUTPUT_ROOTS } from "./lib/tsdown-output-roots.mts";
 import type { UsageBenchFixture } from "./lib/usage-bench-child.ts";
 import { startUsageRttProxy } from "./lib/usage-bench-rtt.ts";
 
@@ -60,6 +63,9 @@ const { values } = parseArgs({
     out: { type: "string" },
     pairs: { type: "string", default: "20" },
     "warm-cpu": { type: "string" },
+    engine: { type: "string", default: "chromium" },
+    screenshots: { type: "boolean", default: false },
+    "profile-last-pair": { type: "boolean", default: false },
     "warm-sequence": { type: "boolean", default: false },
     sessions: { type: "string", default: "12000" },
     smoke: { type: "boolean", default: false },
@@ -75,13 +81,22 @@ const { values } = parseArgs({
 });
 if (values.help) {
   console.log(
-    "Usage: node --import ./scripts/tsx.mjs scripts/bench-usage-gateway.ts --base <checkout> --head <checkout> --ui <frozen-build> --out <new-directory> [--head-ui <frozen-candidate-build>] [--sessions 12000] [--pairs 20] [--warm-cpu 1|4] [--warm-sequence] [--smoke | --cold | --cold-backend [--cold-pairs 20] | --diagnostic | --structure [--structure-rtt 0|100] [--trace-adverse]]",
+    "Usage: node --import ./scripts/tsx.mjs scripts/bench-usage-gateway.ts --base <checkout> --head <checkout> --ui <frozen-build> --out <new-directory> [--head-ui <frozen-candidate-build>] [--sessions 12000] [--pairs 20] [--engine chromium|webkit] [--warm-cpu 1|4] [--warm-sequence] [--screenshots] [--profile-last-pair] [--smoke | --cold | --cold-backend [--cold-pairs 20] | --diagnostic | --structure [--structure-rtt 0|100] [--trace-adverse]]",
   );
   process.exit(0);
 }
 for (const key of ["base", "head", "ui", "out"] as const) {
   assert(values[key], `Missing --${key}`);
 }
+assert(
+  values.engine === "chromium" || values.engine === "webkit",
+  "--engine must be chromium or webkit",
+);
+const engine: ControlUiEngine = values.engine;
+assert(
+  engine === "chromium" || (!values.structure && !values["warm-sequence"]),
+  "--structure and --warm-sequence require Chromium CDP",
+);
 const base = path.resolve(values.base!);
 const head = path.resolve(values.head!);
 const ui = path.resolve(values.ui!);
@@ -96,6 +111,8 @@ const helperFiles = [
   "lib/control-ui-renderer-metrics.ts",
   "lib/control-ui-cold-load-trace.ts",
   "lib/control-ui-interaction-trace.ts",
+  "lib/control-ui-engine-metrics.ts",
+  "lib/tsdown-output-roots.mts",
 ];
 const helperHashes = async () =>
   Object.fromEntries(
@@ -105,6 +122,7 @@ const helperHashes = async () =>
   );
 const pairs = Number(values.pairs);
 const population = Number(values.sessions);
+const fixtureEndDate = new Date().toISOString().slice(0, 10);
 const warmSetup =
   !values.cold && !values["cold-backend"] && !values.diagnostic && !values.structure;
 const MANAGED_CHILD_TIMEOUT_MS = 30 * 60_000;
@@ -121,10 +139,8 @@ const warmCpu = values["warm-cpu"] === undefined ? undefined : Number(values["wa
 if (warmCpu !== undefined) {
   assert(values["warm-cpu"] === "1" || values["warm-cpu"] === "4", "--warm-cpu must be 1 or 4");
   assert(
-    ![values.smoke, values.cold, values["cold-backend"], values.diagnostic, values.structure].some(
-      Boolean,
-    ),
-    "--warm-cpu only selects ordinary warm filter runs",
+    ![values.smoke, values.cold, values["cold-backend"]].some(Boolean),
+    "--warm-cpu selects warm filters or diagnostic/structure attribution",
   );
 }
 if (values["warm-sequence"]) {
@@ -136,6 +152,22 @@ if (values["warm-sequence"]) {
     "--warm-sequence requires untraced ordinary warm filters",
   );
 }
+assert(
+  !values["profile-last-pair"] ||
+    ![
+      values.smoke,
+      values.cold,
+      values["cold-backend"],
+      values.diagnostic,
+      values.structure,
+      values["warm-sequence"],
+    ].some(Boolean),
+  "--profile-last-pair requires ordinary warm filters",
+);
+assert(
+  engine === "chromium" || warmCpu === undefined || warmCpu === 1,
+  "WebKit has no CPU-throttling control; use native CPU (--warm-cpu 1)",
+);
 const coldPairs = values["cold-pairs"] === undefined ? undefined : Number(values["cold-pairs"]);
 if (coldPairs !== undefined) {
   assert(values["cold-backend"], "--cold-pairs requires --cold-backend");
@@ -169,10 +201,10 @@ type PreparedFixture = {
 type PageEntry = {
   owner: Owner;
   browser: Browser;
-  processSession: CDPSession;
+  processSession: CDPSession | undefined;
   context: BrowserContext;
   page: Page;
-  cdp: CDPSession;
+  cdp: CDPSession | undefined;
   proxy: Awaited<ReturnType<typeof startUsageRttProxy>> | undefined;
   usage: ReturnType<typeof observeUsage>;
   wire?: ReturnType<typeof observeWire>;
@@ -261,7 +293,24 @@ async function inspectBuild(root: string) {
       ].map(async (file) => [file, await hashFile(path.join(root, file))]),
     ),
   );
-  return { root, source, entry, buildInfo, files, preloads, dist: await hashInstall(dist) };
+  const packages = Object.fromEntries(
+    await Promise.all(
+      TSDOWN_PACKAGE_OUTPUT_ROOTS.map(async (directory) => [
+        directory,
+        await hashInstall(path.join(root, directory)),
+      ]),
+    ),
+  );
+  return {
+    root,
+    source,
+    entry,
+    buildInfo,
+    files,
+    preloads,
+    packages,
+    dist: await hashInstall(dist),
+  };
 }
 
 async function prepareFixture(
@@ -354,7 +403,12 @@ async function prepareFixture(
       claim = await acquireGatewayE2ePortBlock();
       await writeFile(
         setup,
-        JSON.stringify({ uiRoot: roleUiBuilds[role].root, sessions: population, port: claim.port }),
+        JSON.stringify({
+          uiRoot: roleUiBuilds[role].root,
+          sessions: population,
+          port: claim.port,
+          endDate: fixtureEndDate,
+        }),
       );
       const seeded = Promise.withResolvers<UsageBenchFixture>();
       const seedStarted = performance.now();
@@ -368,8 +422,8 @@ async function prepareFixture(
           setup,
         ],
         env: {
+          // The artifact volume need not be a secure temp root. Preserve the system TMPDIR.
           ...createGatewayBenchEnv(directory, "", { startupTrace: false }),
-          TMPDIR: directory,
           NODE_DISABLE_COMPILE_CACHE: "1",
           OPENCLAW_USAGE_BENCH_TOKEN: token,
         },
@@ -471,7 +525,6 @@ async function prepareFixture(
               startupTrace: false,
               caseEnv: {
                 OPENCLAW_STATE_DIR: ready.stateDir,
-                TMPDIR: directory,
                 NODE_DISABLE_COMPILE_CACHE: "1",
                 OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
                 OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
@@ -790,10 +843,19 @@ async function startUsageStructure(entry: PageEntry) {
   };
 }
 
+async function metrics(cdp: CDPSession | undefined) {
+  if (engine === "webkit") {
+    return undefined;
+  }
+  assert(cdp, "Chromium metrics require a CDP session");
+  return readControlUiPerformanceMetrics(cdp);
+}
+
 /** Attribution-only retained counters; forced GC never belongs to a timed action. */
-async function browserRetention(cdp: CDPSession) {
+async function browserRetention(cdp: CDPSession | undefined) {
+  assert(cdp, "Forced-GC attribution requires Chromium CDP");
   await cdp.send("HeapProfiler.collectGarbage");
-  const snapshot = await metrics(cdp);
+  const snapshot = await readControlUiPerformanceMetrics(cdp);
   const dom = await cdp.send("Memory.getDOMCounters");
   return {
     atMs: performance.now(),
@@ -862,7 +924,11 @@ async function settled(page: Page, count: number, diagnostic = false) {
     diagnostic,
   );
 }
-async function rendererProbe(cdp: CDPSession) {
+async function rendererProbe(cdp: CDPSession | undefined) {
+  if (engine === "webkit") {
+    return undefined;
+  }
+  assert(cdp, "Chromium renderer metrics require a CDP session");
   const startedMs = performance.now();
   const processes = await readRendererProcessSnapshot(cdp);
   return { startedMs, finishedMs: performance.now(), processes };
@@ -873,6 +939,10 @@ function browserResources(
   metricsBefore: Awaited<ReturnType<typeof metrics>>,
   metricsAfter: Awaited<ReturnType<typeof metrics>>,
 ) {
+  if (engine === "webkit") {
+    return null;
+  }
+  assert(before && after && metricsBefore && metricsAfter, "Complete Chromium resource snapshots");
   assert(Number.isFinite(metricsBefore.JSHeapUsedSize), "Valid initial browser heap");
   assert(Number.isFinite(metricsAfter.JSHeapUsedSize), "Valid final browser heap");
   return {
@@ -890,6 +960,10 @@ function measureBrowserCpu(
   before: Awaited<ReturnType<typeof metrics>>,
   after: Awaited<ReturnType<typeof metrics>>,
 ) {
+  if (engine === "webkit") {
+    return null;
+  }
+  assert(before && after, "Complete Chromium document snapshots");
   return Object.fromEntries(
     ["ThreadTime", "TaskDuration", "ScriptDuration", "LayoutDuration", "RecalcStyleDuration"].map(
       (key) => {
@@ -914,6 +988,36 @@ function measureBrowserCpu(
 /** Attribution only: keep raw events and the wider process-probe interval. */
 async function startUsageDiagnostic(entry: PageEntry, prefix: string) {
   const { cdp, page } = entry;
+  if (engine === "webkit") {
+    const measurement = await startEngineMeasurement(page, "webkit", { trace: true });
+    entry.finishDiagnostic = async () => {
+      entry.finishDiagnostic = undefined;
+      const result = await measurement.stop();
+      assert(result.timeline, "WebKit diagnostic must include Timeline records");
+      assert(result.profile, "WebKit diagnostic must include ScriptProfiler data");
+      await Promise.all([
+        writeFile(path.join(out, `${prefix}.webkit-trace.json`), JSON.stringify(result.timeline)),
+        writeFile(path.join(out, `${prefix}.webkit-profile.json`), JSON.stringify(result.profile)),
+        writeFile(
+          path.join(out, `${prefix}.attribution.json`),
+          JSON.stringify(
+            {
+              diagnosticOnly: true,
+              engine,
+              metrics: result.metrics,
+              limitation:
+                "WebKit Timeline/ScriptProfiler intervals are elapsed wall time, not CPU. This trace includes automation and the metric-probe boundary; use separate untraced runs for timing acceptance.",
+            },
+            null,
+            2,
+          ),
+        ),
+      ]);
+    };
+    await page.evaluate(() => performance.mark("usage:probe-start"));
+    return;
+  }
+  assert(cdp, "Chromium diagnostics require a CDP session");
   const events: unknown[] = [];
   const collect = ({ value }: { value: unknown[] }) => events.push(...value);
   cdp.on("Tracing.dataCollected", collect);
@@ -1307,15 +1411,18 @@ try {
       }
     }
   }
-  for (const cpu of values["cold-backend"]
+  const cpuRates = values["cold-backend"]
     ? []
-    : values.cold || values.diagnostic || values.structure || values["warm-sequence"]
+    : engine === "webkit" || values.cold || values["warm-sequence"]
       ? [1]
-      : values.smoke
-        ? [4]
-        : warmCpu === undefined
-          ? [1, 4]
-          : [warmCpu]) {
+      : warmCpu !== undefined
+        ? [warmCpu]
+        : values.diagnostic || values.structure
+          ? [1]
+          : values.smoke
+            ? [4]
+            : [1, 4];
+  for (const cpu of cpuRates) {
     for (const rtt of values.cold
       ? [0]
       : values.structure
@@ -1328,12 +1435,15 @@ try {
         for (const owner of owners) {
           activeStep = { role: owner.role, phase: "browser-setup", cpu, rtt };
           // Process metrics include every renderer in this browser, so each role owns one.
-          const browser = await chromium.launch({
-            headless: true,
-            ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
-              ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH }
-              : {}),
-          });
+          const browser =
+            engine === "webkit"
+              ? await webkit.launch({ headless: true })
+              : await chromium.launch({
+                  headless: true,
+                  ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
+                    ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH }
+                    : {}),
+                });
           browsers.add(browser);
           const context = await browser.newContext({
             viewport: { width: 1440, height: 900 },
@@ -1345,10 +1455,11 @@ try {
           const entry: PageEntry = {
             owner,
             browser,
-            processSession: await browser.newBrowserCDPSession(),
+            processSession:
+              engine === "chromium" ? await browser.newBrowserCDPSession() : undefined,
             context,
             page,
-            cdp: await context.newCDPSession(page),
+            cdp: engine === "chromium" ? await context.newCDPSession(page) : undefined,
             proxy: undefined,
             usage: observeUsage(page),
             wire: values.structure ? observeWire(page) : undefined,
@@ -1357,15 +1468,17 @@ try {
           entry.proxy = rtt ? await startUsageRttProxy(owner.ready.port, 50) : undefined;
           const { cdp, proxy } = entry;
           page.setDefaultTimeout(60_000);
-          await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpu });
-          await cdp.send("Performance.enable", { timeDomain: "threadTicks" });
+          if (cdp) {
+            await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpu });
+            await cdp.send("Performance.enable", { timeDomain: "threadTicks" });
+          }
           await page.addInitScript(() =>
             localStorage.setItem(
               "openclaw:control-ui:community-invite:v2",
               JSON.stringify({ dismissedAtMs: 1770000000000 }),
             ),
           );
-          if (values.structure) {
+          if (values.structure || values["profile-last-pair"]) {
             await page.addInitScript("globalThis.__name = (fn) => fn");
           }
           if (values.diagnostic || values.structure) {
@@ -1457,6 +1570,7 @@ try {
           samples.push({
             role: owner.role,
             phase: "default-readiness",
+            engine,
             cpu,
             rtt,
             wallMs: defaultWallMs,
@@ -1473,7 +1587,10 @@ try {
             gatewayCpu: measureGatewayCpuUsage(defaultCpuBefore, defaultCpuAfter),
             // Document counters reset across goto; whole-renderer CPU keeps the cold interval.
             browserCpuMs: null,
-            browserCpuUnavailableReason: "Document counters reset across navigation",
+            browserCpuUnavailableReason:
+              engine === "webkit"
+                ? "WebKit has no untraced document CPU counters"
+                : "Document counters reset across navigation",
             dispatches: (await owner.snapshot()).slice(defaultDispatchBefore),
             response: defaultResponse,
             load: os.loadavg(),
@@ -1500,6 +1617,7 @@ try {
           samples.push({
             role: owner.role,
             phase: "population-range",
+            engine,
             cpu,
             rtt,
             wallMs: coldWallMs,
@@ -1569,8 +1687,8 @@ try {
         const sequenceBefore = new Map<
           PageEntry,
           {
-            renderer: Awaited<ReturnType<typeof rendererProbe>>;
-            document: Awaited<ReturnType<typeof metrics>>;
+            renderer: NonNullable<Awaited<ReturnType<typeof rendererProbe>>>;
+            document: NonNullable<Awaited<ReturnType<typeof metrics>>>;
             load: number[];
           }
         >();
@@ -1578,6 +1696,9 @@ try {
           const rendererOwners = new Map<number, string>();
           for (const entry of pages) {
             const renderer = await rendererProbe(entry.processSession);
+            assert(renderer, "Sequence metrics require Chromium CDP");
+            const document = await metrics(entry.cdp);
+            assert(document, "Sequence metrics require Chromium CDP");
             for (const { id } of renderer.processes) {
               assert(
                 !rendererOwners.has(id),
@@ -1587,7 +1708,7 @@ try {
             }
             sequenceBefore.set(entry, {
               renderer,
-              document: await metrics(entry.cdp),
+              document,
               load: os.loadavg(),
             });
           }
@@ -1600,7 +1721,7 @@ try {
               ? 3
               : values.smoke
                 ? 2
-                : pairs * 2;
+                : pairs * 2 + (values["profile-last-pair"] ? 2 : 0);
         for (let iteration = 0; iteration < iterations; iteration++) {
           const pair = Math.floor(iteration / 2);
           const order = pair % 2 ? pages.toReversed() : pages;
@@ -1625,14 +1746,16 @@ try {
                   : undefined;
             const retainedBefore =
               condition === "gc-conditioned" ? await browserRetention(cdp) : undefined;
-            const diagnostic = (values.diagnostic && iteration === 2) || condition !== undefined;
+            const profiledPair = values["profile-last-pair"] && iteration >= pairs * 2;
+            const diagnostic =
+              (values.diagnostic && iteration === 2) || profiledPair || condition !== undefined;
             if (diagnostic) {
               await startUsageDiagnostic(
                 entry,
                 `${owner.role}-${cpu}x-${rtt}ms-${model.endsWith("00-end") ? "model00" : "model01"}${condition ? `-${condition}` : ""}`,
               );
             }
-            if (condition) {
+            if (condition || profiledPair) {
               await startUsageStructure(entry);
             }
             const wireStart = entry.wire?.length;
@@ -1678,8 +1801,10 @@ try {
             samples.push({
               role: owner.role,
               phase: "filter",
+              engine,
               diagnostic,
-              ...(condition ? { condition, structure, retainedBefore, retainedAfter } : {}),
+              ...(condition ? { condition, retainedBefore, retainedAfter } : {}),
+              ...(structure === undefined ? {} : { structure }),
               ...(entry.wire ? { wireStart, wireEnd } : {}),
               pair,
               cpu,
@@ -1700,6 +1825,12 @@ try {
               load: os.loadavg(),
             });
             await writeFile(path.join(out, "samples.json"), JSON.stringify(samples, null, 2));
+            if (values.screenshots && pair === 0) {
+              await page.screenshot({
+                path: path.join(out, `${owner.role}-${engine}-${cpu}x-${rtt}ms-${model}.png`),
+                fullPage: true,
+              });
+            }
           }
         }
         if (values["warm-sequence"]) {
@@ -1717,6 +1848,7 @@ try {
             assert.equal(actions.length, iterations);
             sequences.push({
               role: entry.owner.role,
+              engine,
               cpu,
               rtt,
               pairs,
@@ -1733,6 +1865,26 @@ try {
               loadAfter: os.loadavg(),
             });
             await writeFile(path.join(out, "sequences.json"), JSON.stringify(sequences, null, 2));
+          }
+        }
+        if (values.screenshots && rtt === 0) {
+          // Internal app scrolling hides lower panels from a full-page screenshot.
+          // Capture them only after the complete timed sequence, before disposal.
+          for (const { owner, page } of pages) {
+            const prefix = `${owner.role}-${engine}-${cpu}x`;
+            for (const [name, selector] of [
+              ["overview", ".usage-overview-card"],
+              ["cost-windows", ".usage-summary-strip--windows"],
+              ["sessions", ".sessions-card"],
+            ] as const) {
+              await page
+                .locator(selector)
+                .screenshot({ path: path.join(out, `${prefix}-${name}.png`) });
+            }
+            await page.setViewportSize({ width: 390, height: 900 });
+            await page.locator(".sessions-card").screenshot({
+              path: path.join(out, `${prefix}-sessions-mobile.png`),
+            });
           }
         }
         for (const { owner } of pages) {
@@ -1789,7 +1941,7 @@ try {
           }
           for (const cdp of [entry.processSession, entry.cdp]) {
             try {
-              await cdp.detach();
+              await cdp?.detach();
             } catch (error) {
               failures.push(`${entry.owner.role} CDP cleanup: ${errorText(error)}`);
             }
@@ -1884,6 +2036,9 @@ try {
     JSON.stringify(
       {
         failures,
+        engine,
+        cpuThrottling:
+          engine === "chromium" ? "CDP renderer throttling" : "unavailable; native CPU",
         lastStep: activeStep,
         preparationSamples: preparations.length,
         samples: samples.length,
@@ -1904,6 +2059,7 @@ try {
                   : "warm",
         coldPairs: coldPairs ?? null,
         ...(values["warm-sequence"] ? { sequenceObservations: sequences.length } : {}),
+        ...(values["profile-last-pair"] ? { profiledPairsPerQuery: 1 } : {}),
         ...(warmCpu === undefined ? {} : { warmCpu }),
         pairsPerQuery:
           values.cold || values["cold-backend"]
@@ -1920,8 +2076,11 @@ try {
         limitations: values["cold-backend"]
           ? `Backend-only at native CPU and localhost: the first sessions.usage RPC requests the full 180 days with the browser's specific-UTC date mode and ordinary overview/sort options; no preceding browser/default-range request. Exactly one Gateway is alive at a time, including startup and drain. Startup backfill remains enabled. Every partial response is retained; successful Usage publications trigger coalesced re-reads within one unchanged 60-second deadline. First-response and complete-ready wall/CPU metrics are separate, and every request retains its CPU snapshots and aggregation dispatches. ${coldPairs === undefined ? "One fresh triple, fixed A/H/C order, not repeated qualification." : `${coldPairs} serial A/H/C triples; seed-once pristine snapshots restored at the exact original absolute path only after process-tree drain. Every role keeps its port/token and launches a fresh compiled process per triple. File bytes and symlink targets match the pre-Gateway snapshot; filesystem cache is not cold.`} Worker CPU snapshots include newly observed or retired workers without claiming complete interval coverage. Resources follow the response with main-only forced GC and asynchronously cached worker heaps. No browser measurements.`
           : values.structure
-            ? `Structural attribution only, native CPU and ${structureRtt}ms added RTT. Each role warms model00/model01, traces a natural model00 return, resets model01 outside the traced action, then traces a model00 return after forced browser GC. The second trace has forced-GC heap/DOM counters before and after, outside timing. Passive mutation counts and local node IDs contain no DOM text or attributes; metadata-only wire records contain no payloads. Instrumented timing is not acceptance evidence. Preserve earlier warm and cold regressions.`
-            : "Backend runs at native CPU; 1x/4x applies only to Chromium. Non-navigation browser metrics use threadTicks; default-readiness document CPU is unavailable because navigation resets those counters. Each role owns an isolated browser. Whole-renderer CPU and RSS probes bracket each action; their recorded bounds include collection overhead outside wall/main-thread intervals. Heap and RSS are sampled endpoints, not retained heap, peaks, or GPU memory. " +
+            ? `Structural attribution only, ${warmCpu ?? 1}x Chromium CPU and ${structureRtt}ms added RTT. Each role warms model00/model01, traces a natural model00 return, resets model01 outside the traced action, then traces a model00 return after forced browser GC. The second trace has forced-GC heap/DOM counters before and after, outside timing. Passive mutation counts and local node IDs contain no DOM text or attributes; metadata-only wire records contain no payloads. Instrumented timing is not acceptance evidence. Preserve earlier warm and cold regressions.`
+            : (engine === "webkit"
+                ? "WebKit runs at native CPU only; no 4x throttling is applied or implied. Untraced browser CPU, heap and process-resource counters are unavailable and recorded as null. Diagnostic Timeline/ScriptProfiler intervals use monotonic wall time, not CPU; sampled CPU utilization is not action CPU. "
+                : "Backend runs at native CPU; 1x/4x applies only to Chromium. Non-navigation browser metrics use threadTicks; default-readiness document CPU is unavailable because navigation resets those counters. Whole-renderer CPU and RSS probes bracket each action; their recorded bounds include collection overhead outside wall/main-thread intervals. Heap and RSS are sampled endpoints, not retained heap, peaks, or GPU memory. ") +
+              "Each role owns an isolated headless browser. " +
               (headUi === ui
                 ? "Same frozen UI for all roles. "
                 : "The head uses --head-ui; both controls use --ui. Per-role build hashes are recorded in helper-sources.json. ") +
@@ -1934,6 +2093,12 @@ try {
                 : "Gateway reused across CPU/RTT cells; default/readiness and population-range phases are not independent cold-process samples.") +
               (values.diagnostic
                 ? " Traced actions are attribution only, never timing acceptance."
+                : "") +
+              (values["profile-last-pair"]
+                ? " After the requested untraced pairs, one additional pair profiles both models at the same CPU/RTT, with mutation counts and local node identities but no forced GC. These rows have diagnostic=true and must be excluded from timing acceptance."
+                : "") +
+              (values.screenshots
+                ? " First-pair model screenshots are captured after action timing, resource probes and trace shutdown."
                 : "") +
               (values["warm-sequence"]
                 ? " One additional renderer/document interval spans all repeated filters and their intervening ordinary idle time for each role at 1x/100ms, preserving every action sample. It includes measurement overhead and background work; it ends at the ordinary settled outcome without forcing or waiting for GC. Heap deltas are net endpoints, not total allocations or retained memory."

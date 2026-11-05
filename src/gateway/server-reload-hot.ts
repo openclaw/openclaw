@@ -27,6 +27,7 @@ import type { GatewayHotReloadApplication } from "./config-reload-status.types.j
 import { commitHookTransformMappingReload } from "./hooks-mapping.js";
 import { resolveHooksConfig } from "./hooks.js";
 import type { GatewayCronExitWatcherHandoff } from "./server-cron-contract.js";
+import { reconcileOrphanedMemoryDreamingJobs } from "./server-cron-memory-dreaming-jobs.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
 import { reviveAgentDatabasesAfterConfigCommit } from "./server-reload-agent-databases.js";
@@ -103,6 +104,7 @@ export function createGatewayReloadHandlers(
         mrReload.refreshModelRuntimeAfterHotReload({
           config,
           agentIds: modelRuntime.agentIds,
+          preservePluginGenerations: modelRuntime.scope.preservePluginGenerations,
           pluginMetadataSnapshot: params.getPluginMetadataSnapshot?.(),
           ...(isPublicationCurrent ? { isPublicationCurrent } : {}),
         }),
@@ -381,7 +383,11 @@ export function createGatewayReloadHandlers(
         preparedModelRuntimeReplacementGateId,
         err ?? new Error(`prepared model runtime replacement stopped during ${surface}`),
       );
-      if (plan.pluginLifecycle && !reloadPlanNeedsRecovery(remainingPlan)) {
+      if (
+        plan.pluginLifecycle &&
+        !reloadPlanNeedsRecovery(remainingPlan) &&
+        !(err instanceof PluginRuntimeApplicationError && err.details.runtimeRestorationFailed)
+      ) {
         throw new PluginRuntimeApplicationError(
           `Plugin runtime application failed during ${surface}: ${formatErrorMessage(err)}`,
           {
@@ -523,6 +529,15 @@ export function createGatewayReloadHandlers(
       }
       try {
         if (
+          !runtimeCommitted &&
+          error instanceof PluginRuntimeApplicationError &&
+          error.details.runtimeRestorationFailed &&
+          isReloadOwnerActive()
+        ) {
+          // Preserve the failed operation while the existing restart owner restores reply dispatch.
+          scheduleRecoveryRestart("model/reply runtime restoration", error);
+        }
+        if (
           runtimeCommitted &&
           error instanceof PluginRuntimeApplicationError &&
           error.details.committed &&
@@ -594,6 +609,22 @@ export function createGatewayReloadHandlers(
         return "applied-restart-required";
       } finally {
         await reloadRetainedPluginServices();
+      }
+
+      if (plan.reloadPlugins) {
+        const cleanupConfig = getRuntimeConfig();
+        const cleanupRegistry = params.getPluginRegistry();
+        await reconcileOrphanedMemoryDreamingJobs({
+          cron: nextState.cronState.cron,
+          cfg: cleanupConfig,
+          logger: params.logReload,
+          manifestRegistry: params.getPluginMetadataSnapshot?.()?.manifestRegistry,
+          isCurrent: () =>
+            ownsCron() &&
+            isReloadOwnerActive() &&
+            cleanupConfig === getRuntimeConfig() &&
+            cleanupRegistry === params.getPluginRegistry(),
+        });
       }
 
       if (plan.disposeMcpRuntimes) {

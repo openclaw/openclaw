@@ -137,9 +137,9 @@ describe("update-cli", () => {
       status: "warning",
       reason: "post-plugin-doctor-execution-failed",
     });
-    expect(result.pluginUpdate.warnings?.at(-1)?.message).toContain("doctor process failed");
-    expect(result.pluginUpdate.warnings?.at(-1)?.message).toContain("doctor diagnostic output");
-    expect(result.pluginUpdate.warnings?.at(-1)?.message).not.toContain("long-argv-prefix");
+    const message = result.pluginUpdate.warnings?.at(-1)?.message;
+    expect(message).toMatch(/^[^\n]*update repair`[^]*process failed[^]*diagnostic output/u);
+    expect(message).not.toContain("long-argv-prefix");
   });
 
   registerForegroundFailureRecoveryTests({
@@ -277,7 +277,17 @@ describe("update-cli", () => {
         reason: "preflight-node-runtime-incompatible",
       });
       expect(packageInstallCommandCall()?.[0]).toBeUndefined();
-      expectNoSideEffects(recoverNode, mocks.serviceStop);
+      expectNoSideEffects(mocks.serviceStop);
+      if (capability === "writable") {
+        expect(recoverNode).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            engine: ">=26.12.1",
+            recovery: { env: expect.any(Object) },
+          }),
+        );
+      } else {
+        expect(recoverNode).not.toHaveBeenCalled();
+      }
       expect((await mocks.serviceReadCommand(process.env)).programArguments[0]).toBe(serviceNode);
       expect(await installedVersion(fixture.root)).toBe("2026.5.18");
     },

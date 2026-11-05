@@ -63,39 +63,39 @@ describe("offline node bootstrap", () => {
       fs.access(path.join(installed, "node-runtime-dependencies")),
     ).rejects.toHaveProperty("code", "ENOENT");
   });
-  it("runs nested registry versions and plugin-owned dependencies despite a Gateway dev shadow", async () => {
+  it("runs nested builtin-name package versions and plugin-owned dependencies despite a Gateway dev shadow", async () => {
     const { root, packageRoot, sourcePackage, options } = await fixture();
     await write(packageRoot, "package.json", {
       ...sourcePackage,
       dependencies: {
         ...sourcePackage.dependencies,
         "registry-runtime": "1.0.0",
-        "shared-runtime": "2.0.0",
+        string_decoder: "2.0.0",
       },
     });
     await write(packageRoot, "node_modules/registry-runtime/package.json", {
       name: "registry-runtime",
       version: "1.0.0",
       main: "index.js",
-      dependencies: { "shared-runtime": "1.0.0" },
+      dependencies: { string_decoder: "1.0.0" },
     });
     await write(
       packageRoot,
       "node_modules/registry-runtime/index.js",
-      'module.exports = require("shared-runtime");',
+      'module.exports = require("string_decoder/");',
     );
     for (const [prefix, dependencyVersion] of [
       ["", "2.0.0"],
       ["registry-runtime/node_modules/", "1.0.0"],
     ]) {
-      await write(packageRoot, `node_modules/${prefix}shared-runtime/package.json`, {
-        name: "shared-runtime",
+      await write(packageRoot, `node_modules/${prefix}string_decoder/package.json`, {
+        name: "string_decoder",
         version: dependencyVersion,
         main: "index.js",
       });
       await write(
         packageRoot,
-        `node_modules/${prefix}shared-runtime/index.js`,
+        `node_modules/${prefix}string_decoder/index.js`,
         `module.exports = "${dependencyVersion}";`,
       );
     }
@@ -113,7 +113,7 @@ describe("offline node bootstrap", () => {
     await write(
       packageRoot,
       "dist/entry.js",
-      'import nested from "registry-runtime"; import root from "shared-runtime"; import { answer } from "./extensions/remote-runtime/index.js"; console.log(nested + ":" + root + ":" + answer);',
+      'import nested from "registry-runtime"; import root from "string_decoder/index.js"; import { answer } from "./extensions/remote-runtime/index.js"; console.log(nested + ":" + root + ":" + answer);',
     );
     const artifact = await createProvider({ ...options, install: "bundle" }).prepare();
     const installed = path.join(root, "directly-extracted");

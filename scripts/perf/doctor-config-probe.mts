@@ -18,6 +18,7 @@ const fd = fs.openSync(path.join(root, 'process-' + process.pid + '-' + wt.threa
 function record(event) {
   fs.writeSync(fd, JSON.stringify({ time: Date.now(), monotonicMs: performance.now(),
     cpu: process.threadCpuUsage(), processCpu: wt.isMainThread ? process.cpuUsage() : undefined,
+    maxRssKiB: wt.isMainThread ? process.resourceUsage().maxRSS : undefined,
     pid: process.pid, threadId: wt.threadId, ...event }) + '\n');
 }
 record({ type: 'start', ppid: process.ppid, mainThread: wt.isMainThread, argv: process.argv });

@@ -63,8 +63,8 @@ it("retains cached channels through retry and retires feedback with the connecti
     );
   });
   const refresh = () =>
-    Array.from(mounted.container.querySelectorAll<HTMLButtonElement>("button")).find((button) =>
-      button.textContent?.trim().startsWith("Refresh"),
+    Array.from(mounted.container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.getAttribute("aria-label") === "Refresh",
     )!;
   const row = Array.from(mounted.container.querySelectorAll(".settings-row")).find(
     (candidate) => candidate.querySelector(".settings-row__title")?.textContent === "Discord",
@@ -73,7 +73,7 @@ it("retains cached channels through retry and retires feedback with the connecti
     waitForSolid(() => {
       expect(refresh().disabled).toBe(busy);
       if (busy) {
-        expect(refresh().textContent).toContain("Refreshing");
+        expect(refresh().getAttribute("aria-busy")).toBe("true");
       }
       expect(mounted.container.querySelector(".callout.danger")?.textContent ?? null).toBe(error);
       expect(mounted.container.contains(row!)).toBe(title !== null);

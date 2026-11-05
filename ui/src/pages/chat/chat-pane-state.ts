@@ -1,3 +1,4 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
@@ -20,14 +21,25 @@ registerChatSessionEnglish();
 export function createChatPaneRunRecoveryActions(
   state: Pick<
     ChatPageHost,
-    "sessionKey" | "connected" | "chatRunId" | "chatSending" | "handleSendChat"
+    | "sessionKey"
+    | "connected"
+    | "chatRunId"
+    | "chatSending"
+    | "handleSendChat"
+    | "chatMessages"
+    | "chatMessage"
+    | "chatAttachments"
+    | "chatMentions"
+    | "chatReplyTarget"
+    | "chatGoalDraftMode"
   >,
   options: {
     canSend: boolean;
     isCurrent: () => boolean;
     latestFailedRunId: () => string | undefined;
+    onRewindMessage?: ChatProps["onRewindMessage"];
   },
-): Pick<ChatProps, "onRetryRun"> {
+): Pick<ChatProps, "onRetryRun" | "failedMessageEditSource"> {
   const sessionKey = state.sessionKey;
   const ownsFailure = (runId: string) =>
     options.isCurrent() &&
@@ -36,7 +48,19 @@ export function createChatPaneRunRecoveryActions(
     !state.chatRunId &&
     !state.chatSending &&
     options.latestFailedRunId() === runId;
+  const failedRunId = options.latestFailedRunId();
+  const rewind = options.onRewindMessage;
   return {
+    failedMessageEditSource:
+      rewind && failedRunId
+        ? {
+            state,
+            runId: failedRunId,
+            isCurrent: () => ownsFailure(failedRunId),
+            readIdentity: readSessionMessageIdentity,
+            rewind,
+          }
+        : undefined,
     onRetryRun: options.canSend
       ? (runId) => {
           if (ownsFailure(runId)) {
