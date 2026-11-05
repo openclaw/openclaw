@@ -145,9 +145,9 @@ describe("composer camera capture", () => {
   });
 
   it.each([
-    ["NotFoundError", "No camera was found", "Upload photo"],
-    ["SecurityError", "Camera access was denied", "Use device camera"],
-    ["NotReadableError", "The camera could not start", "Use device camera"],
+    ["NotFoundError", "Couldn’t find a camera", "Upload photo"],
+    ["SecurityError", "Couldn’t access your camera", "Use device camera"],
+    ["NotReadableError", "Couldn’t start your camera", "Use device camera"],
   ])("reports %s and offers explicit recovery through %s (%s)", async (name, copy, action) => {
     getUserMedia.mockRejectedValue(new DOMException("camera error", name));
     await show();

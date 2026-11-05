@@ -150,7 +150,9 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   const color = createMemo(() => normalizeSessionColorValue(session().color ?? ""));
   const archived = createMemo(() => session().archived === true);
   const pinnable = createMemo(() => session().pinnable);
-  const hasChildren = createMemo(() => session().childSessionKeys.length > 0);
+  const childCount = createMemo(
+    () => session().snapshot?.childCount ?? session().childSessionKeys.length,
+  );
   const groupWriteAccess = createMemo(() =>
     host().readSessionMutationAccess({
       method: "sessions.groups.put",
@@ -295,16 +297,12 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           </span>
         </span>
       </a>
-      <Show when={hasChildren()}>
+      <Show when={childCount() > 0}>
         <button
-          class={[
-            "sidebar-child-session-toggle",
-            {
-              "sidebar-child-session-toggle--running": session().runningChildCount > 0,
-            },
-          ]}
+          class="sidebar-child-session-toggle"
           type="button"
           ref={(element) => (controls.children = element)}
+          disabled={Boolean(session().snapshot)}
           data-child-session-toggle={session().key}
           aria-expanded={childrenExpanded() ? "true" : "false"}
           aria-label={t(
@@ -312,33 +310,22 @@ function renderRecentSessionRow(params: RecentSessionParams) {
               ? "sessionsView.hideChildSessions"
               : "sessionsView.showChildSessions",
             {
-              count: String(session().childSessionKeys.length),
+              count: String(childCount()),
               session: label(),
             },
           )}
-          aria-description={
-            !childrenExpanded() && session().runningChildCount > 0
-              ? t("sessionsView.activeRun")
-              : undefined
-          }
           onClick={() => host().toggleSessionChildren(actionSession())}
         >
           <span class="sidebar-child-session-toggle__icon" aria-hidden="true">
-            <Show
-              when={!childrenExpanded() && session().runningChildCount > 0}
-              fallback={<Icon name={childrenExpanded() ? "chevronDown" : "chevronRight"} />}
-            >
-              <span class="session-run-spinner" />
-            </Show>
+            <Icon name={childrenExpanded() ? "chevronDown" : "chevronRight"} />
           </span>
-          <span class="sidebar-child-session-toggle__count">
-            {session().childSessionKeys.length}
-          </span>
+          <span class="sidebar-child-session-toggle__count">{childCount()}</span>
         </button>
       </Show>
       <span class="sidebar-recent-session__aside session-row-aside">
         <span class="session-row-actions">
-          <Show when={pinnable()}>
+          {/* Cached pin geometry is display-only; actions still require the live row. */}
+          <Show when={session().snapshot ? session().snapshot?.pinnable !== false : pinnable()}>
             <button
               class="session-action session-action--pin"
               ref={(element) => (controls.pin = element)}
@@ -346,6 +333,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
               type="button"
               title={pinLabel()}
               aria-label={pinLabel()}
+              disabled={!pinnable()}
               onClick={() => host().toggleSessionPin(actionSession())}
             >
               <Icon name="pin" />

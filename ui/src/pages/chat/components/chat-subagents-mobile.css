@@ -70,14 +70,14 @@
 
 .chat-subagents-mobile__list {
   --subagent-row-surface: color-mix(in srgb, var(--popover) 95%, var(--text) 5%);
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   background: var(--subagent-row-surface);
 }
 
 .chat-subagents-mobile__open::after {
   position: absolute;
   inset: 0;
-  border-radius: 14px;
+  border-radius: var(--radius-lg);
   content: "";
 }
 
@@ -250,7 +250,7 @@
 }
 
 .chat-subagents-mobile__header .chat-subagents-mobile__stop {
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: transparent;
 }
 
@@ -275,7 +275,7 @@
 }
 
 .chat-subagents-mobile__back:hover {
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--bg-hover);
   color: var(--text);
 }

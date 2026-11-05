@@ -7,7 +7,7 @@ import {
 import type { DeferredSessionTranscriptReadOperations } from "./deferred-plugin-session-source-recovery.worker-contract.js";
 import type { immutableInstallReadOperations } from "./package-update-activation-immutable.js";
 import type { pageCacheReadOperations } from "./sqlite-page-cache.worker.js";
-import type { SqliteReadOnlyOperationContext } from "./sqlite-readonly-operation-types.js";
+import type { SqliteReadOnlyOperationExecutionContext } from "./sqlite-readonly-operation-types.js";
 
 export type SqliteReadOnlyOperations = WorkerOperations<
   typeof immutableInstallReadOperations &
@@ -17,19 +17,9 @@ export type SqliteReadOnlyOperations = WorkerOperations<
   DeferredSessionTranscriptReadOperations &
   AgentDeletionSessionStoreAbsentReadOperations;
 
-const sqliteReadOnlyOperationProcessLifecycle = {
-  // This read can borrow host-side schema maintenance. The pooled child transport
-  // has process-lifetime admission, so its native exit is the release boundary.
-  "startupMetadata.readCurrent": "retire-after-result",
-} as const satisfies Partial<Record<keyof SqliteReadOnlyOperations, "retire-after-result">>;
-
-export function sqliteReadOnlyOperationRequiresProcessRetirement(type: string): boolean {
-  return type in sqliteReadOnlyOperationProcessLifecycle;
-}
-
 export const sqliteReadOnlyOperations = createWorkerOperationRegistry<
   SqliteReadOnlyOperations,
-  SqliteReadOnlyOperationContext
+  SqliteReadOnlyOperationExecutionContext
 >({
   startupMetadata: () =>
     import("../state/startup-metadata-live-read.worker.js").then(

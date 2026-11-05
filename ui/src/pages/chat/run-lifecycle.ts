@@ -28,6 +28,7 @@ import {
   type PendingChatAbort,
 } from "./chat-abort-request.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { setChatQueuePaused } from "./chat-queue-pause.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { formatConnectError } from "./connect-error.ts";
@@ -312,7 +313,7 @@ async function abortChatRun(state: ChatAbortRunState, intent?: ChatAbortIntent, 
   const captured = intent ?? currentChatAbortIntent(state, client);
   // Session cancellation still answers to the run that owned the Stop action.
   const target = scope ? currentChatAbortIntent(state, client, scope) : captured;
-  const result = await requestChatAbort(client, target);
+  const result = await requestChatAbort(client, { ...target, userInitiated: true });
   return settleChatAbortResponse(state, captured, result);
 }
 
@@ -372,10 +373,12 @@ export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boole
 }
 
 export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptions): Promise<void> {
-  chatOutboxOwner(host).admissions.cancelRequests(
-    host,
-    resolveUiConversationIdentity(host, host.sessionKey),
-  );
+  const scope = resolveUiConversationIdentity(host, host.sessionKey);
+  chatOutboxOwner(host).admissions.cancelRequests(host, scope);
+  // Park before the request: the aborted terminal event can beat its response and
+  // would otherwise send the next queued row. A failed Stop leaves the rows parked
+  // behind a visible Resume, which is the recoverable side to err on.
+  setChatQueuePaused(host, true, scope);
   const disconnectedIntent =
     !host.connected && host.client ? currentChatAbortIntent(host, host.client) : null;
   const pendingAbort =

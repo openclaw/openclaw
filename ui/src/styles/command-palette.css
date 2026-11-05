@@ -107,7 +107,7 @@
   gap: 12px;
   margin: 2px 0;
   padding: 10px 12px;
-  border-radius: var(--radius-md);
+  border-radius: var(--menu-item-radius);
   font-size: 14px;
   transition: background var(--duration-fast) ease;
 }
@@ -345,6 +345,12 @@
   border-top: 1px solid var(--border);
   font-size: 12px;
   color: var(--muted);
+}
+
+.cmd-palette__archive-note {
+  margin-inline-end: auto;
+  font-size: 11px;
+  line-height: 16px;
 }
 
 .cmd-palette__hint {

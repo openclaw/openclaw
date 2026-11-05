@@ -14,7 +14,7 @@ import { resolvePluginSourceCapturesDirectory } from "./plugin-source-capture-pa
 import {
   acquirePluginSourceSnapshot,
   pluginSourceSnapshotClosureDigest,
-  publishPluginSourceSnapshot,
+  stagePluginSourceSnapshot,
 } from "./plugin-source-snapshot-artifact.js";
 import { pluginProcessRuntimeEntrypoints } from "./process-runtime.test-support.js";
 
@@ -44,16 +44,16 @@ it("reclaims an interrupted snapshot publisher only after its token releases", a
       "--input-type=module",
       "-e",
       `import { capturePluginSourceSnapshot } from ${JSON.stringify(capture.href)};
-     import { publishPluginSourceSnapshot, pluginSourceSnapshotClosureDigest } from ${JSON.stringify(artifact.href)};
+     import { stagePluginSourceSnapshot, pluginSourceSnapshotClosureDigest } from ${JSON.stringify(artifact.href)};
      process.stdin.resume();
      process.env.OPENCLAW_STATE_DIR = process.argv[1];
      const capture = capturePluginSourceSnapshot(process.argv[2]);
      let checks = 0;
-     await publishPluginSourceSnapshot({stateDir: process.argv[1], capture,
+     await stagePluginSourceSnapshot({stateDir: process.argv[1], capture,
        binding: {installRecordHash:"record", contentDigest:capture.sourceDigest,
          dependencyClosureDigest:pluginSourceSnapshotClosureDigest(capture), buildResolutionDigest:"options"},
        assertCurrent: async () => { if (++checks === 2) { process.stdout.write("staged\\n"); await new Promise(() => {}); } }
-     });`,
+     }).then((staged) => staged.publish());`,
       stateDir,
       source,
     ],
@@ -128,7 +128,7 @@ it("never acquires a staging namespace even with a complete valid receipt", asyn
     capturePluginSourceSnapshot(source),
   );
   try {
-    const published = await publishPluginSourceSnapshot({
+    const published = await stagePluginSourceSnapshot({
       stateDir,
       capture,
       binding: {
@@ -138,7 +138,7 @@ it("never acquires a staging namespace even with a complete valid receipt", asyn
         buildResolutionDigest: "options",
       },
       assertCurrent() {},
-    });
+    }).then((staged) => staged.publish());
     const stage = path.join(path.dirname(published.artifact.path), "snapshot-v1-staging-complete");
     fs.renameSync(published.artifact.path, stage);
     const descriptor = {

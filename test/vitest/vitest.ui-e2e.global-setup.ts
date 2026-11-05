@@ -59,6 +59,12 @@ export default async function setup(project: TestProject) {
   // sibling projects whose setup borrowed the endpoint. A browser crash fails
   // its connected suites; the CI harness does not retry or relaunch it.
   if (browser) {
+    // launchServer retains browser logs internally, so forward crash diagnostics.
+    const browserProcess = browser.process();
+    browserProcess.stderr?.pipe(process.stderr, { end: false });
+    browserProcess.once("exit", (code, signal) => {
+      console.error(`[ui-e2e] Chromium exited (code=${code}, signal=${signal})`);
+    });
     project.vitest.onClose(() => browser.close());
   }
   root.provide("controlUiE2eChromium", {

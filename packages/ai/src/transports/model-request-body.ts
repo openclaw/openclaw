@@ -1,4 +1,26 @@
 const REQUEST_BODY = Symbol("modelRequestBody");
+const payloadObservers = new WeakMap<object, { wrapped?: object; isObserver?: () => boolean }>();
+
+/** Input observers may patch request settings; caller hooks still require editable input. */
+export function markModelPayloadObserver<T extends object>(
+  observer: T,
+  wrapped?: object,
+  isObserver?: () => boolean,
+): T {
+  // Session handlers can change after policy wrappers have been composed.
+  payloadObservers.set(observer, { wrapped, isObserver });
+  return observer;
+}
+
+export function hasMutableModelPayloadHook(hook: object | undefined): boolean {
+  if (hook === undefined) {
+    return false;
+  }
+  const observer = payloadObservers.get(hook);
+  return (
+    !observer || observer.isObserver?.() === false || hasMutableModelPayloadHook(observer.wrapped)
+  );
+}
 
 export type EncodedModelRequestBody = { body: Uint8Array<ArrayBuffer>; stream: boolean };
 

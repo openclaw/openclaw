@@ -1,4 +1,5 @@
 import {
+  execFileSync,
   spawn,
   spawnSync,
   type ChildProcess,
@@ -32,6 +33,7 @@ import {
 import { withinTest } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeFixtureFiles as writeFiles } from "./z0632-fixtures.test-support.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
 const procSafeRoot = fs.realpathSync(
@@ -51,14 +53,6 @@ beforeAll(async () => {
 afterAll(async () => {
   await receipts.close();
 });
-
-function writeFiles(root: string, files: Record<string, string>): void {
-  for (const [file, bytes] of Object.entries(files)) {
-    const destination = path.join(root, file);
-    fs.mkdirSync(path.dirname(destination), { recursive: true });
-    fs.writeFileSync(destination, bytes);
-  }
-}
 
 let uiFixtureSources: string[] | undefined;
 function copyUiFixture(root: string, extra: string[] = []): void {
@@ -298,6 +292,30 @@ async function withUiProcessCleanup(
 }
 
 describe("scripts/ui", () => {
+  it("reads the UI checkout's HEAD when launched outside it", () => {
+    const root = fs.realpathSync(tempDirs.make("openclaw-ui-git-identity-"));
+    copyUiFixture(root);
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" });
+    git("init", "-q");
+    git("config", "user.name", "OpenClaw Tests");
+    git("config", "user.email", "openclaw-tests@example.invalid");
+    git("-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "fixture");
+    const commit = git("rev-parse", "HEAD").trim();
+    const modules = path.join(root, "ui/node_modules");
+    for (const name of ["vite", "dompurify"]) {
+      writeUiPackageBin(modules, name, "console.log(process.env.GIT_COMMIT);\n");
+    }
+    const result = runNode(
+      tempDirs.make("openclaw-ui-outside-"),
+      [path.join(root, "scripts/ui.js"), "build", "--help"],
+      {
+        env: mergeProcessEnv([process.env, { GIT_COMMIT: undefined, GIT_SHA: undefined }]),
+      },
+    );
+    expectExit(result);
+    expect(result.stdout.trim()).toBe(commit);
+  });
+
   it.each([
     ["standalone rebuild", "a", false, true],
     ["different source revision", "b", false, false],

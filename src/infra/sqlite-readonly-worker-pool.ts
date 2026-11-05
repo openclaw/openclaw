@@ -5,7 +5,7 @@ import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { getSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { throwSettledAggregate } from "./error-graph-internal.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
-import { sqliteReadOnlyOperationRequiresProcessRetirement } from "./sqlite-readonly-operation-registry.js";
+import { sqliteReadOnlyOperationRequiresProcessRetirement } from "./sqlite-readonly-operation-lifecycle.js";
 import {
   readOnlyWorkerScope,
   type SqliteReadOnlyWorkerScope,

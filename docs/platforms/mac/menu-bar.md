@@ -81,6 +81,7 @@ Manual Cron refreshes and successful job changes supersede older reads. An in-fl
 - The root menu shows one "Context" row with a session count/status. That row opens a submenu (`MenuSessionsInjector`).
 - The submenu header shows the active session count for the last 24 hours.
 - Each session row keeps its token bar, age, preview, thinking/verbose toggle, reset, compact, and delete actions.
+- Recent-message previews reload when the menu reopens, reusing fresh cached messages for up to 30 seconds. Closing the menu cancels pending preview loads; reopening retries them without reconnecting the Gateway.
 - Loading, disconnected, and session-load error messages render inside the Context submenu.
 - Usage and cost sections stay root-level below Context so they remain glanceable without opening the submenu.
 

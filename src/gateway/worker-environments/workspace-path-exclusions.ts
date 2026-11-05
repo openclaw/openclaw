@@ -25,8 +25,11 @@ const DERIVED_WORKSPACE_ROOT_PATHS = [
   ".cache/openclaw/bun",
   ".cache/ms-playwright",
   ".local/share/pnpm/store",
+  "artifacts/task-environment/local/share/pnpm/store",
   // pnpm falls back here for projects beneath the protected .openclaw self-bind.
   PNPM_FALLBACK_STORE_ROOT_PATH,
+  // Managed binary installers keep re-downloadable tools beneath the state directory.
+  ".openclaw/tools",
   ".artifacts/vitest-workers",
   ".artifacts/vitest-worker-cache",
   ".artifacts/vitest-shard-timings.json",

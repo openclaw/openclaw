@@ -135,14 +135,14 @@ export async function loadProviderUsageSummary(
               },
             },
           });
-          return (
-            snapshot ?? {
-              provider: auth.provider,
-              displayName: providerUsageLabel(auth.provider) ?? auth.provider,
-              windows: [],
-              error: "Unsupported provider",
-            }
-          );
+          return snapshot
+            ? { ...snapshot, authProfileId: auth.authProfileId }
+            : {
+                provider: auth.provider,
+                displayName: providerUsageLabel(auth.provider) ?? auth.provider,
+                windows: [],
+                error: "Unsupported provider",
+              };
         }),
       timeoutMs,
       failureSnapshot(provider, "Timeout"),

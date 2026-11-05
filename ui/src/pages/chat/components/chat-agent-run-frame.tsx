@@ -189,6 +189,8 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
     senderLabel: firstAssistant?.senderLabel,
     replyToSender: firstAssistant?.replyToSender ?? streamRun?.replyToSender,
     replyToMessage: firstAssistant?.replyToMessage ?? streamRun?.replyToMessage,
+    replyPreviousMessageId:
+      firstAssistant?.replyPreviousMessageId ?? streamRun?.replyPreviousMessageId,
     replyShared: firstAssistant?.replyShared,
     replyTurnSource: firstAssistant?.replyTurnSource,
     replyCurrentSource: firstAssistant?.replyCurrentSource,
@@ -201,7 +203,10 @@ function prepareFrame(frame: AgentRunFrameRenderItem, opts: AgentRunFrameOptions
     runId: frame.runId,
   };
   const frameReplyLine = resolveGroupReplyLine(
-    (actionOwner && groups.find((group) => group.messages.includes(actionOwner))) || shell,
+    {
+      ...((actionOwner && groups.find((group) => group.messages.includes(actionOwner))) || shell),
+      replyPreviousMessageId: shell.replyPreviousMessageId,
+    },
     opts.renderGroupOptions(shell).resolveReplyPreview,
     groups.flatMap((group) => group.messages),
   );
@@ -269,7 +274,7 @@ function RunFrame(props: FrameProps) {
       (part) => part.kind === "work-group" && part.replyRunId === props.frame.runId,
     );
     // The recap retains this run's terminal timing after the session moves on.
-    // Handoffs have no work summary: their request-wide timing stays in the recap.
+    // Run duration appears only on the Worked summary; turns without one show no timing.
     if (!recap || work?.kind !== "work-group") {
       return undefined;
     }
@@ -398,7 +403,6 @@ function RunFrame(props: FrameProps) {
         frameReplyLine: state().frameReplyLine,
         frameActionOwner: state().actionOwner,
         turnRecap: props.options.turnRecap,
-        hideTurnRecapDuration: timedWork() !== undefined,
       }}
     />
   );

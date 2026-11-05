@@ -539,7 +539,7 @@ it.each([
   },
 );
 
-it("retains the imported profile and model-access choice after direct refresh fails", async () => {
+it("retains the imported profile and allows its models after direct refresh fails", async () => {
   const profileId = "openai:imported";
   currentConfig = {
     agents: {
@@ -552,26 +552,19 @@ it("retains the imported profile and model-access choice after direct refresh fa
     mode: "oauth",
     configUpdated: false,
   });
-  const onModelAccessRequested = vi.fn();
   const result = await loginFlow({
     refreshAfterLogin: async () => {
       throw new Error("Auth publication failed.");
     },
-    onModelAccessRequested,
   });
   expect(result).toMatchObject({
     authRefresh: "gateway-rejected",
     profiles: [{ profileId, provider: "openai", mode: "oauth" }],
+    modelAccess: { message: expect.stringContaining("Added openai/* to allowed models.") },
   });
-  expect(onModelAccessRequested).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({
-      provider: "openai",
-      policy: { path: "agents.defaults.modelPolicy.allow", refs: ["other/current"] },
-    }),
-  );
   expect(currentConfig.agents?.defaults).toEqual({
     model: "other/current",
-    modelPolicy: { allow: ["other/current"] },
+    modelPolicy: { allow: ["other/current", "openai/*"] },
   });
 });
 

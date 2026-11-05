@@ -248,6 +248,9 @@ When automatic compilation is enabled, source synchronization for status and
 wiki tools checks for a valid externally published cache before rebuilding a
 missing in-process snapshot. An unchanged vault reuses that publication;
 changed imports, missing indexes, or an invalid cache still require compilation.
+Explicit compilation retains a valid cached publication when both the source
+identity and compiled output are unchanged. Changed sources or output, missing
+rows, and corrupt rows still produce a replacement publication.
 ChatGPT import rollback records post-import edits before compile and keeps
 their recovery paths in plugin state, so an interrupted rollback can reconcile
 the recovery directory and report the same preserved pages on retry. Target

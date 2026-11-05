@@ -124,14 +124,15 @@ export function projectChatTranscript(
     replyLocalPerson: localParticipantIdentityKey(props.userId),
     searchOpen: search.open,
     searchQuery: search.query,
-    messageRecovery:
-      searchFiltering && props.loadFullAssistantMessage
-        ? {
-            messages: expandedAssistantMessages,
-            revision: recovery.revision,
-            agentId: props.fullMessageAgentId,
-          }
-        : undefined,
+    messageRecovery: searchFiltering
+      ? {
+          messages: expandedAssistantMessages,
+          revision: recovery.revision,
+          agentId: props.fullMessageAgentId,
+          displayFacts: props.displayFacts,
+          canFetchFullMessage: Boolean(props.loadFullAssistantMessage),
+        }
+      : undefined,
   } satisfies Parameters<typeof buildCachedChatItems>[0];
   const { snapshot, live, resolveLiveStream } = createTranscriptStreamSource(
     chatItemsInput,
@@ -631,7 +632,7 @@ export function projectChatTranscript(
       afterMessageId ? messageRowKeysById.get(afterMessageId) : afterMessageId,
     );
   }
-  if (turnRecap !== null && !recapAttached && !isEmpty && !showLoadingSkeleton) {
+  if (turnRecap?.outputTokens != null && !recapAttached && !isEmpty && !showLoadingSkeleton) {
     appendContent("turn-recap", { kind: "recap", recap: turnRecap });
   }
   if (subagents.wait && !subagents.placedWait && !searchFiltering) {
