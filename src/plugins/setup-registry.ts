@@ -40,6 +40,7 @@ import {
 import {
   getPluginSetupModuleLoader,
   preparePluginSetupModuleLoader,
+  PluginSetupPreparationRequiredError,
   withPluginSetupPreparation,
 } from "./plugin-setup-module.js";
 import { matchesProviderPluginRef } from "./provider-registry-shared.js";
@@ -371,6 +372,9 @@ function registerSetupRecord(record: PluginManifestRecord): SetupRecordRegistrat
     moduleLoader = getPluginSetupModuleLoader(record, setupSource, setupArtifact.rootDir);
     mod = moduleLoader(setupSource) as OpenClawPluginModule;
   } catch (error) {
+    if (error instanceof PluginSetupPreparationRequiredError) {
+      throw error;
+    }
     // A broken setup entry silently removes the plugin's providers/CLI
     // backends/migrations from onboarding; record why instead of vanishing.
     registration.diagnostics.push({
@@ -698,15 +702,13 @@ export const resolvePluginSetupRegistryAsync = withPluginSetupCache(async functi
   });
 });
 
-export const runPluginSetupConfigMigrations = withPluginSetupCache(function (params: {
-  config: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): {
+export const runPluginSetupConfigMigrations = withPluginSetupCache(async function (
+  params: PluginSetupConfigParams,
+): Promise<{
   config: OpenClawConfig;
   changes: string[];
   warnings?: string[];
-} {
+}> {
   const loadPaths = params.config.plugins?.load?.paths ?? [];
   const warning = findUninspectedPluginDiagnostic(
     discoverConfiguredPluginLoadPaths({ loadPaths, env: params.env }).diagnostics,
@@ -716,9 +718,10 @@ export const runPluginSetupConfigMigrations = withPluginSetupCache(function (par
     return { config: params.config, changes: [] };
   }
   const pluginIds = resolveRelevantSetupMigrationPluginIds(params);
+  const registry = await resolvePluginSetupRegistryAsync({ ...params, pluginIds });
   return applyPluginDoctorCompatibilitySequence(
     params.config,
-    resolvePluginSetupRegistry({ ...params, pluginIds }).configMigrations.map((entry) => ({
+    registry.configMigrations.map((entry) => ({
       pluginId: entry.pluginId,
       normalizeCompatibilityConfig: ({ cfg }) => entry.migrate(cfg) ?? { config: cfg, changes: [] },
     })),

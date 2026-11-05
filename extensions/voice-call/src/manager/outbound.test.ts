@@ -71,7 +71,10 @@ function connected<P extends object>(
   overrides: Partial<CallRecord> = {},
 ) {
   const call = createCall(overrides);
-  return { call, ctx: { ...createContext(call), provider, config } };
+  return {
+    call,
+    ctx: { ...createContext(call), provider, config: { streaming: { enabled: false }, ...config } },
+  };
 }
 
 function dial<T extends object>(config: T, name = "twilio", providerCallId = "provider-1") {

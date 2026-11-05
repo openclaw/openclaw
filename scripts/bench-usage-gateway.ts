@@ -870,6 +870,7 @@ async function waitForResponse(
   after: number,
   query: string,
   expectedSessions?: number,
+  requestedRange?: { startDate: string; endDate: string },
 ) {
   const deadline = performance.now() + 60_000;
   while (performance.now() < deadline) {
@@ -879,7 +880,9 @@ async function waitForResponse(
         (row) =>
           row.query === query &&
           !row.partial &&
-          (expectedSessions === undefined || row.sessions === expectedSessions),
+          (expectedSessions === undefined || row.sessions === expectedSessions) &&
+          (requestedRange === undefined ||
+            (row.startDate === requestedRange.startDate && row.endDate === requestedRange.endDate)),
       );
     if (response) {
       assert.equal(response.ok, true, "actual sessions.usage response");
@@ -1607,7 +1610,16 @@ try {
           await dates.last().press("Tab");
           await dates.first().fill(owner.ready.startDate);
           await dates.first().press("Tab");
-          const coldResponse = await waitForResponse(responses, coldRequestsBefore, "", population);
+          const coldResponse = await waitForResponse(
+            responses,
+            coldRequestsBefore,
+            "",
+            population,
+            {
+              startDate: owner.ready.startDate,
+              endDate: owner.ready.endDate,
+            },
+          );
           assert.equal(coldResponse.tokens, owner.ready.allTokens);
           await settled(page, population);
           const coldWallMs = performance.now() - coldStarted;

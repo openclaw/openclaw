@@ -635,11 +635,7 @@ jobs:
   validate_selected_ref:
     runs-on: &linux_runner_small >-
       ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
-      toJSON(inputs.runner_group), toJSON(!inputs.use_github_hosted_runners && github.repository ==
-      'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404'
-      || 'ubuntu-24.04'))) || (!inputs.use_github_hosted_runners && github.repository ==
-      'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404'
-      || 'ubuntu-24.04') }}
+      toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 30
     outputs:
       test_bun_artifact_id: ${{ steps.test_bun_artifact.outputs.artifact-id }}
