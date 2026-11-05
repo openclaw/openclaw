@@ -19,6 +19,7 @@ export class TranscriptInitialRange {
   private tailRows: number;
   private rows: readonly TranscriptRow[] = [];
   private hasRetainedRows = false;
+  private hasPrewarmRows = false;
   // Completed text rows have no widget custody. Retain their keyed DOM while
   // keeping inactive rows outside the visible range's flow.
   readonly preparedRowKeys = new Set<string>();
@@ -118,7 +119,15 @@ export class TranscriptInitialRange {
   presentation(rows: readonly TranscriptRow[]) {
     if (this.rows !== rows) {
       this.rows = rows;
-      this.hasRetainedRows = rows.some((row) => row.retainDom);
+      this.hasRetainedRows = false;
+      this.hasPrewarmRows = false;
+      for (const row of rows) {
+        this.hasPrewarmRows ||= Boolean(row.prewarm || row.retainDom);
+        if (row.retainDom) {
+          this.hasRetainedRows = true;
+          break;
+        }
+      }
     }
     this.retainViewportRows();
     return {
@@ -356,7 +365,8 @@ export class TranscriptInitialRange {
   private queuePreparation(materialize = false, afterFrame = false): void {
     if (
       this.cancelPreparation ||
-      !this.hasRetainedRows ||
+      !this.hasPrewarmRows ||
+      (!this.hasRetainedRows && this.rows.at(-1)?.streaming) ||
       this.preparingEnd ||
       this.pending ||
       this.tailRows > 0 ||
@@ -365,13 +375,14 @@ export class TranscriptInitialRange {
       return;
     }
     const materializeRow = materialize && !this.preparingRowKey;
-    const idlePrewarmLimit = this.scrollSample.time
-      ? IDLE_PREWARM_ROW_LIMIT
-      : INITIAL_PREWARM_ROW_LIMIT;
+    const idlePrewarmLimit =
+      this.scrollSample.time && this.hasRetainedRows
+        ? IDLE_PREWARM_ROW_LIMIT
+        : INITIAL_PREWARM_ROW_LIMIT;
     const idleRange = this.virtualizer().range;
     if (
       idleRange &&
-      (this.viewportOnly || this.idleMeasureStep > PREPARED_ROW_LIMIT) &&
+      (this.viewportOnly || !this.hasRetainedRows || this.idleMeasureStep > PREPARED_ROW_LIMIT) &&
       performance.now() - this.scrollSample.time >= 100
     ) {
       const sampledDirection = this.scrollSample.direction;
@@ -399,7 +410,8 @@ export class TranscriptInitialRange {
       const range = virtualizer.range;
       if (
         this.preparingEnd ||
-        !this.hasRetainedRows ||
+        !this.hasPrewarmRows ||
+        (!this.hasRetainedRows && this.rows.at(-1)?.streaming) ||
         !this.canPrepare() ||
         !range ||
         !virtualizer.scrollElement ||
@@ -464,7 +476,8 @@ export class TranscriptInitialRange {
             : range.startIndex;
       const rendered = new Set(virtualizer.getVirtualItems().map((row) => row.key));
       // Before reader navigation, keep warming out of the native scroll geometry.
-      const nearGeometryPending = !this.viewportOnly && this.idleMeasureStep <= PREPARED_ROW_LIMIT;
+      const nearGeometryPending =
+        this.hasRetainedRows && !this.viewportOnly && this.idleMeasureStep <= PREPARED_ROW_LIMIT;
       if (prewarm && !moving) {
         // Measure nearby prepared rows before spending idle slices on distant HTML.
         const warmLimit = nearGeometryPending ? PREPARED_ROW_LIMIT : idlePrewarmLimit;
@@ -481,8 +494,10 @@ export class TranscriptInitialRange {
           if (!row) {
             break;
           }
-          const mode = this.idleStep <= PREPARED_ROW_LIMIT ? "fragment" : "idle-html";
-          if (!rendered.has(row.key) && this.prewarmRow) {
+          // Ordinary rows warm data only; retaining their trees doubled mixed-session DOM.
+          const mode =
+            row.retainDom && this.idleStep <= PREPARED_ROW_LIMIT ? "fragment" : "idle-html";
+          if (!rendered.has(row.key) && (row.prewarm || row.retainDom) && this.prewarmRow) {
             const warmed = this.prewarmRow(index, mode);
             if (warmed === undefined) {
               queueNext();
@@ -557,9 +572,13 @@ export class TranscriptInitialRange {
           preparedCandidate ??= row.key;
         }
         // Distant HTML must not evict the nearby fragments needed by the next scroll.
-        const mode = arrivingViewport || step <= 8 ? "fragment" : "html";
+        const mode = row.retainDom && (arrivingViewport || step <= 8) ? "fragment" : "html";
         const warm = () =>
-          prewarm && moving && !rendered.has(row.key) && this.prewarmRow
+          prewarm &&
+          moving &&
+          (row.prewarm || row.retainDom) &&
+          !rendered.has(row.key) &&
+          this.prewarmRow
             ? this.prewarmRow(index, mode)
             : false;
         for (let warming = warm(); warming !== false; warming = warm()) {
@@ -661,6 +680,7 @@ export class TranscriptInitialRange {
   releaseRows(): void {
     this.rows = [];
     this.hasRetainedRows = false;
+    this.hasPrewarmRows = false;
   }
 
   disconnect(): void {

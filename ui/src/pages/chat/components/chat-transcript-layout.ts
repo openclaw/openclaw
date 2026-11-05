@@ -12,6 +12,8 @@ export type TranscriptContent = GuardedTranscriptItem | JSX.Element;
 export type TranscriptRow<T = unknown> = {
   estimatedSize?: number;
   retainDom?: boolean;
+  /** Native message content supports data-only Markdown preparation. */
+  prewarm?: boolean;
   streaming?: boolean;
 } & (
   | { kind: "item"; key: string; item: T; revision?: string }

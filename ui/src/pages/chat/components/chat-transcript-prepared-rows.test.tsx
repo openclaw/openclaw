@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { toSanitizedMarkdownContent } from "../../../components/markdown.ts";
 import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
@@ -100,11 +101,16 @@ async function transcriptFixture(
     item: index,
     estimatedSize: index === 0 && plainFirstRow ? undefined : 100,
     retainDom: ordinary !== true && !(index === 0 && plainFirstRow) && index % retainStride === 0,
+    prewarm: Boolean(ordinary),
   }));
   const groups = ordinary
     ? rows.map((_, index) =>
         createMessageGroup(
-          { role: "assistant", content: `Idle ordinary message ${index}`, timestamp: index },
+          {
+            role: "assistant",
+            content: `${ordinary === true ? `Unretained ${viewportHeight}` : "Idle"} ordinary message ${index}`,
+            timestamp: index,
+          },
           "assistant",
           completedFrame
             ? {
@@ -425,25 +431,24 @@ it("warms an embedded widget's caption without mounting the widget", () => {
 });
 
 it.each([600, 1400])(
-  "keeps ordinary sessions cold outside the viewport (%i px)",
+  "warms ordinary HTML without retaining offscreen DOM (%i px)",
   async (height) => {
     const view = await transcriptFixture(0, true, false, true, height);
-    const rendered = view.renderRow.mock.calls.length;
     const elements = view.container.querySelectorAll(".chat-virtual-row").length;
     for (let turn = 0; turn < 160; turn++) {
       await view.idle(10, 1);
       await view.frame(2, false);
     }
-    expect(view.renderRow.mock.calls).toHaveLength(rendered);
+    expect(prewarmGroupedMessage(view.groups[96]!.messages[0]!.message, {}, "html")).toBe(false);
     expect(view.container.querySelectorAll(".chat-virtual-row")).toHaveLength(elements);
     expect(view.container.querySelector("[data-prepared-row]")).toBeNull();
 
     await view.scrollTo(96);
-    expect(view.container.textContent).toContain("Idle ordinary message 96");
-    const afterScroll = view.renderRow.mock.calls.length;
+    expect(view.container.textContent).toContain(`Unretained ${height} ordinary message 96`);
+    const afterScroll = view.container.querySelectorAll(".chat-virtual-row").length;
     await view.idle();
     await view.frame(2, false);
-    expect(view.renderRow.mock.calls).toHaveLength(afterScroll);
+    expect(view.container.querySelectorAll(".chat-virtual-row")).toHaveLength(afterScroll);
     expect(view.container.querySelector("[data-prepared-row]")).toBeNull();
   },
 );
@@ -460,6 +465,29 @@ it("budgets large jumps and cancels queued scroll warming when hidden", async ()
   const rendered = view.renderRow.mock.calls.length;
   await view.task();
   expect(view.renderRow.mock.calls).toHaveLength(rendered);
+});
+
+it("keeps ordinary neighbors as HTML beside retained rows", async () => {
+  const view = await transcriptFixture(0, true, false, "retained", 600, false, 256);
+  const message = view.groups[7]!.messages[0]!.message;
+  const content = "**Ordinary neighbor beside a retained row**";
+  Object.assign(message!, { content });
+  for (let turn = 0; turn < 160; turn++) {
+    await view.idle(10, 1);
+    await view.frame(2, false);
+  }
+  expect(prewarmGroupedMessage(message, {}, "html")).toBe(false);
+  expect(
+    typeof toSanitizedMarkdownContent(content, {
+      assistantTranscriptRoleHeaders: true,
+      codeBlockChrome: "copy",
+      codeBlockInteraction: "interactive",
+      fileLinks: true,
+      sessionLinks: true,
+      tableInteractions: "enabled",
+    }),
+  ).toBe("string");
+  expect(view.container.querySelector('[data-virtual-row-key="fragment:7"]')).toBeNull();
 });
 
 it("keeps warming in the reader's direction through opposite size compensation", async () => {

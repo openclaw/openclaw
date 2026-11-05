@@ -409,7 +409,7 @@ export function projectTranscriptIndex(
             : rowItem.kind === "group"
               ? estimateMessageGroupSize(rowItem)
               : undefined;
-        rows.push({ ...row(rowItem), estimatedSize, retainDom });
+        rows.push({ ...row(rowItem), estimatedSize, retainDom, prewarm: rowItem.kind === "group" });
       }
       if (item.kind === "work-group" && expandedToolCards.get(item.key)) {
         for (const group of item.groups) {
