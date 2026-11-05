@@ -116,7 +116,7 @@ async function persistPreparedGatewaySessionLifecycleEvent(
     sessionEntry.entry.endedAt === undefined &&
     sessionEntry.entry.abortedLastRun !== true
   ) {
-    // Admission already committed the running marker. Live events carry backend
+    // Fresh plain-input admission already committed the marker. Live events carry backend
     // timing until settlement persists it; yielded runs still need a resume write.
     return;
   }

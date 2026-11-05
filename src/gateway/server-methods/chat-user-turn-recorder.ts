@@ -13,6 +13,7 @@ import {
   prepareSessionSourceAuthority,
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
+import type { SessionTranscriptTurnLifecyclePatch } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
 import {
   measureDiagnosticsTimelineSpan,
   observeDiagnosticsTimelinePhases,
@@ -49,6 +50,7 @@ import type { GatewayClient } from "./shared-types.js";
 
 export type GatewayChatUserTurnPersist = (options?: {
   contextFreeCommand?: true;
+  sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
 }) => ReturnType<UserTurnTranscriptRecorder["persistFallback"]>;
 
 type GatewayChatUserTurnController = {
@@ -247,7 +249,7 @@ export function createGatewayChatUserTurnController(params: {
         config: session.cfg,
       };
     },
-    // Input custody records activity; only runtime lifecycle events mark a run as started.
+    // Commands record activity only; fresh plain input overrides this at its commit boundary.
     ...((admission.localInputAdmission || params.commitInitialInput) && !progressRefresh
       ? { sessionLifecyclePatch: { lastInteractionAt: params.startedAt } }
       : {}),
@@ -380,7 +382,7 @@ export function createGatewayChatUserTurnController(params: {
     }
     const persisted = await measureDiagnosticsTimelineSpan(
       "gateway.chat_send.persist_user_transcript",
-      () => recorder.persistFallback(),
+      () => recorder.persistFallback({ sessionLifecyclePatch: options?.sessionLifecyclePatch }),
       {
         phase: "agent-turn",
         config: session.cfg,
