@@ -484,7 +484,7 @@ it.for([
             expect(last.role).toBe("assistant");
             const text = last.content?.map((part) => part.text ?? "").join("") ?? "";
             expect(text).toContain(
-              "PR preparation could not continue this conversation automatically: Session event was abandoned before execution",
+              "PR preparation could not continue this conversation automatically.",
             );
             expect(text).toContain('"status":"prepared"');
           } else {

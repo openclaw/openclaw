@@ -3,7 +3,6 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import * as agents from "../../agents/agent-lifecycle-registry.js";
 import type { GitHubCredentialReader } from "../../agents/github-credential-reader.js";
-import { resolveConfiguredGitHubToolIdentity } from "../../agents/github-tool-identity.js";
 import { resolveGitRepositoryPaths } from "../../agents/worktrees/git.js";
 import { normalizeCapabilityProviderId } from "../../plugins/provider-registry-shared.js";
 import type { WorkerExecutionMode, WorkerProfile, WorkerProvider } from "../../plugins/types.js";
@@ -24,7 +23,10 @@ import {
   prepareWorkerRetentionPolicy,
   requireAdmittedWorkerRetentionPolicy,
 } from "./provider-retention-policy.js";
-import { prepareRepositoryWorkerProjectSource } from "./repository-project-admission.js";
+import {
+  isRepositoryWorkerProjectOwnerCurrent,
+  prepareRepositoryWorkerProjectSource,
+} from "./repository-project-admission.js";
 import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import * as validation from "./service-validation.js";
@@ -448,34 +450,10 @@ export function createWorkerProviderIntent(options: WorkerProviderIntentOptions)
     ) {
       return invalid("configured profile changed");
     }
-    const isSourceOwnerCurrent = () => {
-      const sourceConfig = options.getConfig();
-      if (project && "source" in project) {
-        const { agent, identity } = project.source.owner;
-        const agentIdentity = resolveConfiguredGitHubToolIdentity({
-          config: sourceConfig,
-          agentId: agent.agentId,
-          scope: "agent",
-        });
-        const systemIdentity = resolveConfiguredGitHubToolIdentity({
-          config: sourceConfig,
-          agentId: agent.agentId,
-          scope: "system",
-        });
-        const selected = agentIdentity ?? systemIdentity;
-        const selectedSource = agentIdentity ? "agent-override" : "system-configured";
-        if (
-          selected
-            ? identity.source !== selectedSource ||
-              !("profileId" in identity) ||
-              identity.profileId !== selected.profileId
-            : identity.source !== "anonymous" && identity.source !== "system-detected"
-        ) {
-          return false;
-        }
-      }
-      return true;
-    };
+    const isSourceOwnerCurrent = () =>
+      !project ||
+      !("source" in project) ||
+      isRepositoryWorkerProjectOwnerCurrent(project, options.getConfig());
     if (!isSourceOwnerCurrent()) {
       return invalid("repository owner changed");
     }

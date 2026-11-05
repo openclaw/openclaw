@@ -91,6 +91,12 @@ current access and repository identity at the supplied boundaries. The host
 retains the selected source and pinned commit through dispatch, restart, and
 Gateway recovery.
 
+Prepared-worker retention uses the source's optional `worker.isIdentityCurrent`
+callback for its saved identity key, not native GitHub account selection. The
+callback is a local selection check and must not acquire credentials or remote
+access. Sources without it do not retain prepared workers; source retirement or
+an identity change makes existing preparations ineligible for reuse.
+
 Worker preparation and checkout can receive an optional `readCredential` capability
 from the admitted dispatch owner. It retains its current-actor assertion and
 admission operation; a plugin must not replace required dispatch admission with

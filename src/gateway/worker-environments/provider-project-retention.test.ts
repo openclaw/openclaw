@@ -1,22 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
+import { createRepositorySourceFixture } from "../../plugins/repository-source.test-support.js";
 import { createWorkerPreparationIdentity } from "./preparation-identity.js";
 import { readWorkerPreparation } from "./preparation-identity.schema.js";
 import { PRESENCE_REPOSITORY, usePreparedPoolFixture } from "./prepared-pool.test-support.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
 import { prepareWorkerProviderProject } from "./provider-project-preparation.js";
+import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 import { workerProjectSeedKey } from "./workspace-git-base.js";
 
 const sourceAdmission = vi.hoisted(() =>
   vi.fn<typeof import("./repository-project-admission.js").prepareRepositoryWorkerProjectSource>(),
 );
-vi.mock("./repository-project-admission.js", () => ({
+vi.mock("./repository-project-admission.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./repository-project-admission.js")>()),
   prepareRepositoryWorkerProjectSource: sourceAdmission,
 }));
 
 describe("prepared project retention compatibility", () => {
   const fixture = usePreparedPoolFixture();
 
-  async function setup() {
+  async function setup(source?: RepositoryWorkerProjectSnapshot["source"]) {
     sourceAdmission
       .mockReset()
       .mockRejectedValue(new Error("Retention must not access the repository"));
@@ -25,6 +28,9 @@ describe("prepared project retention compatibility", () => {
     const { target, artifacts } = readWorkerPreparation(fixture.profile())!;
     fixture.provider.resolvePreparationTarget = () => target;
     const project = structuredClone(PRESENCE_REPOSITORY);
+    if (source) {
+      project.source = source;
+    }
     const profileSnapshot = { settings: {}, install: "bundle", executionMode: "worker-turn" };
     const preparation = createWorkerPreparationIdentity({
       namespace: "gateway",
@@ -164,6 +170,58 @@ describe("prepared project retention compatibility", () => {
       }),
     ).toThrow("not owned by this lifecycle");
   });
+
+  it.each(["identity selection", "plugin retirement"])(
+    "retains plugin preparations independently of native GitHub selection until %s",
+    async (change) => {
+      let identityKey = "selected-reader";
+      const source = createRepositorySourceFixture({
+        id: "remote",
+        resolve: (url) => ({ url, name: "project" }),
+        prepare: async () => {
+          throw new Error("Retention must not materialize the repository");
+        },
+        worker: {
+          isIdentityCurrent: ({ agentId, identityKey: selected }) =>
+            agentId === "main" && selected === identityKey,
+          prepare: async () => {
+            throw new Error("Retention must not acquire repository access");
+          },
+          checkout: async () => {
+            throw new Error("Retention must not checkout the repository");
+          },
+        },
+      });
+      const { record, preparation, owner, prepareNodeArtifacts } = await setup({
+        kind: "repository",
+        url: "https://git.example/team/subgroup/project",
+        repositorySourceId: source.id,
+        repositoryId: "repository_fixture",
+        owner: {
+          agent: { agentId: "main", provenance: null },
+          identity: { source: "plugin", key: identityKey },
+        },
+      });
+      fixture.config.tools = { github: { kind: "oauth", profileId: `ghp_${"a".repeat(32)}` } };
+      await source.run(async () => {
+        const retained = await owner.prepareRetention(record, preparation, fixture.abort.signal);
+        expect(retained).toBeDefined();
+        expect(retained!.isCurrent()).toBe(true);
+        if (change === "identity selection") {
+          identityKey = "replacement-reader";
+        } else {
+          await source.instance.dispose();
+        }
+        expect(retained!.isCurrent()).toBe(false);
+        prepareNodeArtifacts.mockClear();
+        expect(
+          await owner.prepareRetention(record, preparation, fixture.abort.signal),
+        ).toBeUndefined();
+        expect(prepareNodeArtifacts).not.toHaveBeenCalled();
+        expect(sourceAdmission).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it.each(["provider", "target", "owner selection", "agent deletion"])(
     "rejects %s drift on the next retention pass without external source authority",
