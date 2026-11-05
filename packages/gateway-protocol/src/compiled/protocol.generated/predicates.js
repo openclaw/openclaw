@@ -1162,11 +1162,11 @@ var External = [
     /(^kind$|^argv$|^cwd$|^env$|^input$|^timeoutSeconds$|^noOutputTimeoutSeconds$|^outputMaxBytes$|^toolsAllow$|^toolsAllowIsDefault$)/u,
     /(^kind$|^script$|^timeoutSeconds$|^toolBudget$|^toolsAllow$|^toolsAllowIsDefault$)/u,
     /(^mode$|^channel$|^threadId$|^accountId$|^bestEffort$|^failureDestination$|^target$|^directPolicy$|^to$)/u,
-    /(^channel$|^to$|^mode$|^accountId$)/u,
+    /(^threadId$|^channel$|^to$|^mode$|^accountId$)/u,
     /(^mode$|^channel$|^threadId$|^accountId$|^bestEffort$|^failureDestination$|^target$|^directPolicy$|^completionDestination$|^to$)/u,
     /(^mode$|^to$)/u,
     /(^mode$|^channel$|^threadId$|^accountId$|^bestEffort$|^failureDestination$|^to$)/u,
-    /(^after$|^channel$|^to$|^cooldownMs$|^includeSkipped$|^mode$|^accountId$)/u,
+    /(^threadId$|^after$|^channel$|^to$|^cooldownMs$|^includeSkipped$|^mode$|^accountId$)/u,
     /(^id$|^patch$|^expectedConfigRevision$)/u,
     /(^ownerProfileId$|^name$|^displayName$|^agentId$|^sessionKey$|^description$|^enabled$|^deleteAfterRun$|^schedule$|^pacing$|^activeHours$|^idleOnly$|^trigger$|^sessionTarget$|^wakeMode$|^payload$|^delivery$|^failureAlert$|^state$)/u,
     /\S/u,
@@ -1178,9 +1178,9 @@ var External = [
     /(^kind$|^argv$|^cwd$|^env$|^input$|^timeoutSeconds$|^noOutputTimeoutSeconds$|^outputMaxBytes$|^toolsAllow$|^toolsAllowIsDefault$)/u,
     /(^kind$|^script$|^timeoutSeconds$|^toolBudget$|^toolsAllow$|^toolsAllowIsDefault$)/u,
     /(^mode$|^target$|^directPolicy$|^channel$|^threadId$|^accountId$|^bestEffort$|^failureDestination$|^completionDestination$|^to$)/u,
-    /(^channel$|^to$|^mode$|^accountId$)/u,
+    /(^threadId$|^channel$|^to$|^mode$|^accountId$)/u,
     /(^mode$|^to$)/u,
-    /(^after$|^channel$|^to$|^cooldownMs$|^includeSkipped$|^mode$|^accountId$)/u,
+    /(^threadId$|^after$|^channel$|^to$|^cooldownMs$|^includeSkipped$|^mode$|^accountId$)/u,
     /(^nextRunAtMs$|^runningAtMs$|^lastRunAtMs$|^lastRunStatus$|^lastStatus$|^lastError$|^lastErrorReason$|^lastDurationMs$|^consecutiveErrors$|^consecutiveSkipped$|^lastDelivered$|^lastDeliveryStatus$|^lastDeliveryError$|^lastFailureNotificationDelivered$|^lastFailureNotificationDeliveryStatus$|^lastFailureNotificationDeliveryError$|^lastFailureAlertAtMs$|^lastTriggerEvalAtMs$|^triggerEvalCount$|^lastTriggerFireAtMs$|^triggerState$|^streamStatus$|^streamError$|^streamConsecutiveFailures$|^streamRestartExhausted$|^streamDroppedBatches$|^streamCoalescedBatches$|^streamLastStartedAtMs$|^streamLastExitAtMs$)/u,
     /(^jobId$|^patch$|^expectedConfigRevision$)/u,
     /(^id$|^expectedConfigRevision$)/u,
@@ -10925,6 +10925,7 @@ var External = [
     Object.getOwnPropertyNames(value).every(
       (unique_1046, unique_1047) => External[539].test(unique_1046) || check_2(value[unique_1046]),
     ) &&
+    (value.threadId === void 0 || !("threadId" in value) || check_904(value.threadId)) &&
     (value.channel === void 0 || !("channel" in value) || check_1633(value.channel)) &&
     (value.to === void 0 || !("to" in value) || check_567(value.to)) &&
     (value.mode === void 0 || !("mode" in value) || check_1636(value.mode)) &&
@@ -10995,6 +10996,7 @@ var External = [
     Object.getOwnPropertyNames(value).every(
       (unique_1054, unique_1055) => External[543].test(unique_1054) || check_2(value[unique_1054]),
     ) &&
+    (value.threadId === void 0 || !("threadId" in value) || check_904(value.threadId)) &&
     (value.after === void 0 || !("after" in value) || check_488(value.after)) &&
     (value.channel === void 0 || !("channel" in value) || check_1633(value.channel)) &&
     (value.to === void 0 || !("to" in value) || check_567(value.to)) &&
@@ -11242,6 +11244,7 @@ var External = [
     Object.getOwnPropertyNames(value).every(
       (unique_1076, unique_1077) => External[555].test(unique_1076) || check_2(value[unique_1076]),
     ) &&
+    (value.threadId === void 0 || !("threadId" in value) || check_1108(value.threadId)) &&
     (value.channel === void 0 || !("channel" in value) || check_1677(value.channel)) &&
     (value.to === void 0 || !("to" in value) || check_1681(value.to)) &&
     (value.mode === void 0 || !("mode" in value) || check_1682(value.mode)) &&
@@ -11268,6 +11271,7 @@ var External = [
     Object.getOwnPropertyNames(value).every(
       (unique_1080, unique_1081) => External[557].test(unique_1080) || check_2(value[unique_1080]),
     ) &&
+    (value.threadId === void 0 || !("threadId" in value) || check_1108(value.threadId)) &&
     (value.after === void 0 || !("after" in value) || check_1687(value.after)) &&
     (value.channel === void 0 || !("channel" in value) || check_1677(value.channel)) &&
     (value.to === void 0 || !("to" in value) || check_1681(value.to)) &&

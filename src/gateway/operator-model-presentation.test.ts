@@ -1,14 +1,78 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { ModelChoice } from "../../packages/gateway-protocol/src/index.js";
 import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   modelSelectionPoliciesMatch,
   prepareOperatorModelPolicyPresentation,
 } from "./operator-model-presentation.js";
+
+it.each([false, true])(
+  "disables unsupported selected and alternative runtimes for the requester (Access-only=%s)",
+  (accessOnly) => {
+    const previous = captureActivePluginRegistrySnapshot();
+    onTestFinished(() => restoreActivePluginRegistrySnapshot(previous));
+    const registry = createEmptyPluginRegistry();
+    for (const exact of [false, true]) {
+      registry.agentHarnesses.push({
+        pluginId: "fixture",
+        source: "fixture",
+        harness: {
+          id: exact ? "exact-fixture" : "unsupported-fixture",
+          label: "Fixture",
+          nativeModelPolicySupport: exact ? "exact" : undefined,
+          supports: () => ({ supported: true }),
+          runAttempt: vi.fn(),
+        },
+      });
+    }
+    setActivePluginRegistry(registry);
+    const presentation = prepareOperatorModelPolicyPresentation({
+      cfg: {},
+      ...(accessOnly ? { rolePolicy: {} } : { policy: { models: [], allows: () => true } }),
+    })!;
+    const runtime = (id: string) => ({
+      agentRuntime: { id, label: id, source: "model" as const },
+      available: true,
+    });
+    const model: ModelChoice = {
+      provider: "fixture",
+      id: "model",
+      name: "Fixture",
+      ...runtime("unsupported-fixture"),
+      runtimeChoices: [
+        runtime("unsupported-fixture"),
+        runtime("exact-fixture"),
+        runtime("openclaw"),
+      ],
+    };
+    const result = presentation.forAgent("main").catalog({ models: [model] }).models[0];
+    expect(result).toMatchObject({ available: false, unavailableReason: "unsupported-runtime" });
+    expect(result?.runtimeChoices).toMatchObject([
+      { available: false, unavailableReason: "unsupported-runtime" },
+      { available: true },
+      { available: true },
+    ]);
+    expect(model.available).toBe(true);
+    expect(model.runtimeChoices?.every((choice) => choice.available)).toBe(true);
+    expect(prepareOperatorModelPolicyPresentation({ cfg: {} })).toBeUndefined();
+    const granted = prepareOperatorModelPolicyPresentation({
+      cfg: {},
+      rolePolicy: { accessPrograms: { cyber: ["daybreak_blue", "daybreak_red"] } },
+    })!;
+    expect(granted.forAgent("main").catalog({ models: [model] }).models[0]?.available).toBe(true);
+  },
+);
 
 it("reuses row redactions before copying while evaluating current model visibility", () => {
   let visible = false;

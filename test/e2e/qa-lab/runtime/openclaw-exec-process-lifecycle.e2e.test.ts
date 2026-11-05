@@ -10,7 +10,6 @@ import {
   fullGatewayExec,
   nodeCommand,
 } from "../../../../src/agents/bash-tools.lifecycle.test-support.js";
-import * as childMemory from "../../../../src/process/child-memory.js";
 import { withinTest } from "../../../helpers/promise.js";
 import { isProcessPresent } from "../../../scripts/run-process.test-support.js";
 
@@ -82,15 +81,11 @@ async function pollTerminal(action: ProcessAction, sessionId: string) {
   return terminal;
 }
 
-test.for([
-  { topology: "plain", memoryLimitBytes: undefined },
-  { topology: "memory-bounded", memoryLimitBytes: 512 * 1024 * 1024 },
-])(
-  "$topology exec reports the command PID and joins cancellation",
+test(
+  "exec reports the command PID and joins cancellation with shared memory protection",
   { timeout: 30_000 },
-  async ({ memoryLimitBytes }, { signal, onTestFinished }) => {
+  async ({ signal, onTestFinished }) => {
     vi.stubEnv("OPENCLAW_SERVICE_MARKER", "");
-    vi.spyOn(childMemory, "resolveHostExecMemoryLimit").mockReturnValue(memoryLimitBytes);
     resetProcessRegistryForTests();
     const scopeKey = `agent:qa:exec-lifecycle-${process.pid}`;
     const execTool = createExecTool({

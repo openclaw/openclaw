@@ -1,63 +1,111 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { globSync } from "tinyglobby";
 import { afterEach, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it("retains shared transform inputs while excluding membership inventories and the keyed E2E factory", () => {
-  const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
-  const step = action.runs.steps.find(
-    (candidate: { name: string }) => candidate.name === "Resolve Vitest transform cache generation",
-  );
-  const patternSource = step.run.match(/hashFiles\(([^)]*)\)/u)?.[1];
-  if (!patternSource) {
-    throw new Error("Transform cache generation has no hashFiles patterns");
-  }
-  const patterns = [...patternSource.matchAll(/'([^']+)'/gu)].map((match) => match[1]!);
-  const included = [
-    "pnpm-lock.yaml",
-    "pnpm-workspace.yaml",
-    "package.json",
-    "packages/example/package.json",
-    "packages/example/tsconfig.json",
-    "vitest.config.ts",
-    "ui/vitest.config.ts",
-    "ui/vitest.node.config.ts",
-    "scripts/control-ui-parity/vitest.config.ts",
-    "scripts/control-ui-retention/vitest.config.ts",
-    "test/vitest/vitest.shared.config.ts",
-    "test/vitest/vitest.worker-artifacts.ts",
-    "test/vitest/vitest.performance-config.ts",
-    "test/vitest/vitest.ui-e2e-prebuilt.config.ts",
-    "test/vitest/nested/vitest.ui-e2e.config.ts",
-    "test/vitest/vitest.ui-e2e.setup.ts",
-    "test/vitest/vitest.ui-e2e.bundled.global-setup.ts",
-    "test/vitest/vitest.channel-paths.mjs",
-    "test/vitest/nested/vitest.database-worker-core-paths.mjs",
-    "test/vitest/nested/vitest.unit-fast-paths.mjs",
-    "src/state/schema.sql",
-  ];
-  const excluded = [
-    "test/vitest/vitest.database-worker-core-paths.mjs",
-    "test/vitest/vitest.extension-database-workers-paths.mjs",
-    "test/vitest/vitest.ui-e2e.config.ts",
-    "test/vitest/vitest.unit-fast-paths.mjs",
-    "node_modules/example/package.json",
-    ".ci-harness/package.json",
-    "docs/example.md",
-  ];
-  const root = tempDirs.make("openclaw-transform-generation-");
-  for (const file of [...included, ...excluded]) {
-    const target = path.join(root, file);
-    mkdirSync(path.dirname(target), { recursive: true });
-    writeFileSync(target, "fixture\n");
-  }
-  expect(globSync(patterns, { cwd: root, dot: true }).toSorted()).toEqual(included.toSorted());
-});
+it.skipIf(process.platform === "win32")(
+  "preserves the transform generation through the setup action",
+  () => {
+    const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
+    const step = action.runs.steps.find(
+      (candidate: { name: string }) =>
+        candidate.name === "Resolve Vitest transform cache generation",
+    );
+    const included = [
+      "pnpm-lock.yaml",
+      "pnpm-workspace.yaml",
+      "package.json",
+      "packages/example/package.json",
+      "packages/example/tsconfig.json",
+      "vitest.config.ts",
+      "ui/vitest.config.ts",
+      "ui/vitest.node.config.ts",
+      "scripts/control-ui-parity/vitest.config.ts",
+      "scripts/control-ui-retention/vitest.config.ts",
+      "test/vitest/vitest.shared.config.ts",
+      "test/vitest/vitest.worker-artifacts.ts",
+      "test/vitest/vitest.performance-config.ts",
+      "test/vitest/vitest.ui-e2e-prebuilt.config.ts",
+      "test/vitest/nested/vitest.ui-e2e.config.ts",
+      "test/vitest/vitest.ui-e2e.setup.ts",
+      "test/vitest/vitest.ui-e2e.bundled.global-setup.ts",
+      "test/vitest/vitest.channel-paths.mjs",
+      "test/vitest/nested/vitest.database-worker-core-paths.mjs",
+      "test/vitest/nested/vitest.unit-fast-paths.mjs",
+      "src/state/schema.sql",
+      ".hidden/tsconfig.json",
+      ".git/custom/package.json",
+      ".ci-harness-source/package.json",
+      "nested/.ci-harness/package.json",
+      "nested/package.json/descendant",
+      "tsconfig.directory.json/descendant",
+      "src/state/directory.sql/descendant",
+    ];
+    const excluded = [
+      "test/vitest/vitest.database-worker-core-paths.mjs",
+      "test/vitest/vitest.extension-database-workers-paths.mjs",
+      "test/vitest/vitest.ui-e2e.config.ts",
+      "test/vitest/vitest.unit-fast-paths.mjs",
+      "node_modules/example/package.json",
+      ".ci-harness/package.json",
+      ".ci-harness/tsconfig.json",
+      "nested/node_modules/example/tsconfig.json",
+      "src/state/nested/other.sql",
+      "docs/example.md",
+    ];
+    const root = tempDirs.make("openclaw-transform-generation-");
+    const output = path.join(root, "output");
+    const fingerprint = () => {
+      const result = spawnSync("/bin/bash", ["-e", "-c", step.run], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH,
+          GITHUB_ACTION_PATH: path.resolve(".github/actions/setup-node-env"),
+          GITHUB_OUTPUT: output,
+        },
+      });
+      if (result.status === 0) {
+        return readFileSync(output, "utf8").trim().split("\n").at(-1)!.slice("value=".length);
+      }
+      throw new Error(result.stderr);
+    };
+    expect(fingerprint()).toBe("");
+    for (const file of [...included, ...excluded]) {
+      const target = path.join(root, file);
+      mkdirSync(path.dirname(target), { recursive: true });
+      writeFileSync(target, `${JSON.stringify({ file })}\n`);
+    }
+    const expected = () => {
+      const hash = createHash("sha256");
+      for (const file of included.toSorted()) {
+        hash.update(
+          createHash("sha256")
+            .update(readFileSync(path.join(root, file)))
+            .digest(),
+        );
+      }
+      return hash.digest("hex");
+    };
+    const generation = expected();
+    expect(fingerprint()).toBe(generation);
+    writeFileSync(path.join(root, ".ci-harness/package.json"), '{"changed":true}');
+    expect(fingerprint()).toBe(generation);
+    writeFileSync(path.join(root, "src/state/schema.sql"), "CREATE TABLE fixture (id TEXT);");
+    expect(fingerprint()).toBe(expected());
+    symlinkSync("src/state/schema.sql", path.join(root, "tsconfig.alias.json"));
+    included.push("tsconfig.alias.json");
+    symlinkSync("packages", path.join(root, "tsconfig.link.json"));
+    expect(fingerprint()).toBe(expected());
+    symlinkSync("missing", path.join(root, "tsconfig.broken.json"));
+    expect(fingerprint).toThrow();
+  },
+);
 
 it.skipIf(process.platform === "win32")(
   "reports archive restoration separately from local generation retention",

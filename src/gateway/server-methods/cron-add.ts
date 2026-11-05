@@ -172,7 +172,11 @@ export const cronAddHandler: GatewayRequestHandler = async ({
       runtimeAuthority !== undefined,
     );
     await assertCronDoesNotTargetAgentHarness(jobCreate, cfg);
-    await assertValidCronCreateDelivery(cfg, jobCreate);
+    await assertValidCronCreateDelivery(
+      cfg,
+      { ...jobCreate, createdActor: creatorOptions.createdActor },
+      context.cron.getDefaultAgentId(),
+    );
   } catch (err) {
     creatorOptions?.disposeInferenceAuthorization?.();
     respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
@@ -185,7 +189,11 @@ export const cronAddHandler: GatewayRequestHandler = async ({
   try {
     deliveryPreview = await resolveCronDeliveryPreview({
       ...previewContext,
-      job: { ...jobCreate, sourceConversation: creatorOptions.sourceConversation },
+      job: {
+        ...jobCreate,
+        sourceConversation: creatorOptions.sourceConversation,
+        createdActor: creatorOptions.createdActor,
+      },
     });
     const streamSandbox = execPolicy?.sandboxContext
       ? (() => {
@@ -275,13 +283,21 @@ export const cronAddHandler: GatewayRequestHandler = async ({
   });
   respond(
     true,
-    cronAddResultReadView({
-      result,
-      deliveryPreview:
-        "job" in result && !result.created
-          ? await resolveCronDeliveryPreview({ ...previewContext, job })
-          : deliveryPreview,
-    }),
+    {
+      ...cronAddResultReadView({
+        result,
+        deliveryPreview:
+          "job" in result && !result.created
+            ? await resolveCronDeliveryPreview({ ...previewContext, job })
+            : deliveryPreview,
+      }),
+      ...(creatorOptions?.operatorSourceUnavailable && !job.operatorSource
+        ? {
+            warning:
+              "This automation cannot retain the initiating operator grant. Protected operator actions require an interactive turn; its ingress owner must support principal recovery to run them unattended.",
+          }
+        : {}),
+    },
     undefined,
   );
 };
