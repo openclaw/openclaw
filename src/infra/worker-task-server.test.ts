@@ -284,27 +284,36 @@ it("retires a cancelled task's snapshot copy unless a live reader still holds it
   const settle = async (control: { throwIfCancelled(): void }) => {
     const allocate = () => {
       const directory = staging.createSqliteSnapshotStagingDirectorySync(root);
-      // A child process writes the copy, so retiring it asks the host for its facts.
-      const copy = new DatabaseSync(path.join(directory, "database.sqlite"));
+      // A child writes the copy in its own nested staging directory, then exits.
+      const child = staging.createSqliteSnapshotStagingTokenSync(directory);
+      const copy = new DatabaseSync(path.join(child.directory, "database.sqlite"));
       copy.exec("CREATE TABLE copied(value)");
       copy.close();
-      return directory;
+      child.release();
+      return { directory, copy: path.join(child.directory, "database.sqlite") };
     };
     const [held, idle] = [allocate(), allocate()];
-    const releaseReader = staging.acquireSqliteSnapshotReadToken(held);
+    const releaseReader = staging.acquireSqliteSnapshotReadToken(held.directory);
     cancelWorkerNativeSections(new Int32Array(sections));
     expect(() => control.throwIfCancelled()).toThrow("worker task cancelled");
-    const removed = [await removeTempDirectoryAsync(idle), await removeTempDirectoryAsync(held)];
-    expect(fs.readdirSync(root)).toEqual([path.basename(held)]);
-    expect(fs.existsSync(path.join(held, "database.sqlite"))).toBe(true);
+    // Cleanup may reclaim the child's directory, but cancelled work mints no new owner.
+    expect(() => staging.createSqliteSnapshotStagingDirectorySync(root)).toThrow(/cancelled/u);
+    const removed = [
+      await removeTempDirectoryAsync(idle.directory),
+      await removeTempDirectoryAsync(held.directory),
+    ];
+    expect(fs.readdirSync(root)).toEqual([path.basename(held.directory)]);
+    expect(fs.existsSync(held.copy)).toBe(true);
     releaseReader();
-    return [...removed, await removeTempDirectoryAsync(held)];
+    return [...removed, await removeTempDirectoryAsync(held.directory)];
   };
   serveOwnedWorkerTasks((_input, _channel, control) =>
     settle(control).then(settled.resolve, settled.reject),
   );
-  void task(1, taskContext(admission.port), false, sections);
+  const result = task(1, taskContext(admission.port), false, sections);
   expect(await settled.promise).toEqual([true, false, true]);
+  await result;
+  expect(admission.exchanges).toHaveBeenCalled();
   expect(fs.readdirSync(root)).toEqual([]);
 });
 

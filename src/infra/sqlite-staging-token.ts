@@ -30,9 +30,11 @@ export function acquireSqliteStagingToken(
   mode: "create" | "read" | "reclaim",
   options: { allowMissing?: boolean } = {},
 ): SqliteStagingToken {
-  // Cancelled work still releases or retires its private lock instead of leaving the copy behind.
+  // Cancelled work still reclaims, releases or retires private locks instead of
+  // leaving copies behind, but it never mints a new staging owner.
   const settle = withSqliteDatabaseAdmissionSettlement;
-  const token = settle(() => acquireStagingToken(directory, mode, options));
+  const acquire = () => acquireStagingToken(directory, mode, options);
+  const token = mode === "create" ? acquire() : settle(acquire);
   const settled: SqliteStagingToken = Object.assign(
     (retiring?: boolean) => settle(() => token(retiring)),
     {
