@@ -790,10 +790,9 @@ describe("followup queue collect routing", () => {
 
     const queue = getExistingFollowupQueue(key);
     expect(accepted).toEqual([true, true, true, true, true, true, true]);
-    expect(queue?.summaryElisions.map((entry) => entry.sources.at(-1)?.originatingTo)).toEqual([
-      "channel:B",
-      "channel:A",
-    ]);
+    expect(
+      queue?.summaryElisions.map((entry) => entry.entries.at(-1)?.source.originatingTo),
+    ).toEqual(["channel:B", "channel:A"]);
     expect(queue?.items.map((item) => item.originatingTo)).toEqual([
       "channel:B",
       "channel:survivor",
@@ -823,9 +822,9 @@ describe("followup queue collect routing", () => {
     }
 
     const queue = getExistingFollowupQueue(key);
-    expect(queue?.summaryElisions.flatMap((entry) => entry.sources)).toHaveLength(2);
+    expect(queue?.summaryElisions.flatMap((entry) => entry.entries)).toHaveLength(2);
     expect(
-      queue?.summaryElisions.flatMap((entry) => entry.sources.map((source) => source.prompt)),
+      queue?.summaryElisions.flatMap((entry) => entry.entries.map(({ source }) => source.prompt)),
     ).toEqual(["message 2", "message 3"]);
     await Promise.all(
       queue!.entries
@@ -1281,7 +1280,7 @@ describe("followup queue collect routing", () => {
     expect(getExistingFollowupQueue(key)?.items.map((item) => item.prompt)).toEqual([
       "priority retry",
     ]);
-    expect(getExistingFollowupQueue(key)?.summarySources).toHaveLength(0);
+    expect(getExistingFollowupQueue(key)?.summaryEntries).toHaveLength(0);
   });
 
   it("does not advance debounce stamp when overflow rejects an incoming message", () => {
@@ -1331,8 +1330,7 @@ describe("followup queue collect routing", () => {
       "normal one",
       "normal two",
     ]);
-    expect(getExistingFollowupQueue(key)?.summarySources).toHaveLength(0);
-    expect(getExistingFollowupQueue(key)?.summaryLines).toHaveLength(0);
+    expect(getExistingFollowupQueue(key)?.summaryEntries).toHaveLength(0);
   });
 
   it("drains protected priority followups before overflow summaries", async () => {
@@ -1874,13 +1872,13 @@ describe("followup queue collect routing", () => {
       }
     };
     q.add({
-      ...createRun({ prompt: "dropped ambient" }),
+      ...createRun({ prompt: "dropped ambient" }, { terminalReplyExpectation: "required" }),
       deliveryCorrelations: [{ begin: summaryBegin }],
       currentInboundEventKind: "room_event",
       currentInboundContext: { text: "dropped context" },
     });
     q.add({
-      ...createRun({ prompt: "live ambient" }),
+      ...createRun({ prompt: "live ambient" }, { terminalReplyExpectation: "required" }),
       currentInboundEventKind: "room_event",
       currentInboundAudio: true,
       currentInboundContext: { text: "live context" },
@@ -2394,7 +2392,7 @@ describe("followup queue collect routing", () => {
       q.done.resolve();
     };
     q.add({
-      ...createRun({ prompt: "dropped ambient" }),
+      ...createRun({ prompt: "dropped ambient" }, { terminalReplyExpectation: "required" }),
       currentInboundEventKind: "room_event",
       currentInboundContext: { text: "dropped context" },
       turnAdoptionLifecycle: { onAdopted: async () => {}, onSettled: onComplete },
@@ -2406,11 +2404,13 @@ describe("followup queue collect routing", () => {
       setTimeout(resolve, 10);
     });
     expect(onComplete).not.toHaveBeenCalled();
-    expect(getExistingFollowupQueue(q.key)?.summarySources).toHaveLength(1);
-    expect(getExistingFollowupQueue(q.key)?.summarySources[0]?.currentInboundEventKind).toBe(
+    expect(getExistingFollowupQueue(q.key)?.summaryEntries).toHaveLength(1);
+    expect(getExistingFollowupQueue(q.key)?.summaryEntries[0]?.source.currentInboundEventKind).toBe(
       "room_event",
     );
-    expect(getExistingFollowupQueue(q.key)?.summarySources[0]?.turnAdoptionLifecycle).toBeDefined();
+    expect(
+      getExistingFollowupQueue(q.key)?.summaryEntries[0]?.source.turnAdoptionLifecycle,
+    ).toBeDefined();
     expect(q.calls[0]?.currentInboundContext).toEqual({ text: "dropped context" });
 
     releaseRetry.resolve();

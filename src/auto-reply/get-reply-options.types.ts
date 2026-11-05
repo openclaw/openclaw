@@ -451,6 +451,8 @@ export type GetReplyOptions = {
     provider: string;
     model: string;
     thinkLevel: string | undefined;
+    agentRuntime?: string;
+    cliExecution?: boolean;
   }) => void;
   /**
    * Controls whether normal assistant replies are automatically delivered to

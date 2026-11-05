@@ -169,6 +169,27 @@ Complete any transaction created by the former controller using its original
 installed closure before adopting this version. Its edge-specific journals and
 rehearsal artifacts are not inputs to the generic update path.
 
+## Explicit operator recovery
+
+`--operator-restart-current SHA PID START_TICKS` recovers an unresponsive Gateway
+on its current sealed release under the canonical lock. It requires three direct
+HTTP timeouts with no response, retains generation and protected-state checks,
+and records operator intent and verified recovery. It does not promote a release
+or promise preservation of in-memory work.
+
+The system unit must use `KillMode=control-group` or `KillMode=mixed`,
+`SendSIGKILL=yes`, and a bounded `TimeoutStopUSec`. Both modes apply the final
+kill to all remaining processes in the cgroup. The shipped `mixed` policy first
+signals only the Gateway, allowing it to drain its children; systemd kills the
+remaining processes after the Gateway exits or the stop timeout expires.
+`KillMode=process`/`none`, disabled final killing, and infinite timeouts remain
+refused. See [systemd.kill](https://www.freedesktop.org/software/systemd/man/latest/systemd.kill.html).
+
+Adopt the complete reviewed controller closure using the procedure below before
+using this recovery with `mixed`. No service-unit edit, daemon reload, or Gateway
+restart is part of controller adoption. Any subsequent operator recovery requires
+its own incident authorization and coordinated restart window.
+
 ## Installed closure
 
 Install from one reviewed, merged OpenClaw commit. These four files are one

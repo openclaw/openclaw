@@ -17,6 +17,7 @@ import {
   createCrabboxNodeEnrollmentSetup,
   type CrabboxWorkerNodeEnrollment,
 } from "./crabbox-worker-node-enrollment.js";
+import { createCrabboxNodeResumer } from "./crabbox-worker-node-resume.js";
 import {
   assertAwsWorkerHasNoInstanceProfile,
   assertHetznerDesktopHasManagedCoordinator,
@@ -690,6 +691,7 @@ export function createCrabboxWorkerProvider(
     supportsCleanupAcceptance: true,
     provisionBeforeInstallation: true,
     requiresNodeEnrollment: true,
+    resumeNode: createCrabboxNodeResumer({ resolveBinary, signal: providerAbort.signal }),
     supportsProjectPreparation: supportsCrabboxProjectPreparation,
     resolvePreparedIdleTimeoutMs: resolveCrabboxPreparedIdleTimeoutMs,
     resolvePreparationTarget: resolveCrabboxPreparationTarget,

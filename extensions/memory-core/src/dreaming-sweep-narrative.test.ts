@@ -188,6 +188,7 @@ async function createSweep(
       subagent: {
         complete,
         forkSession: unexpectedSessionCall,
+        runForkedTurn: unexpectedSessionCall,
         run: unexpectedSessionCall,
         waitForRun: unexpectedSessionCall,
         getSessionMessages: unexpectedSessionCall,

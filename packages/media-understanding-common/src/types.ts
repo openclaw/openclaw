@@ -80,3 +80,43 @@ export type MediaUnderstandingDecision = {
   attachmentProcessing?: Record<number, MediaAttachmentProcessing>;
   nativeVisionActive?: boolean;
 };
+
+type MediaUnderstandingTextResult = {
+  text: string;
+  model?: string;
+};
+
+export type AudioTranscriptionResult = MediaUnderstandingTextResult;
+
+export type VideoDescriptionResult = MediaUnderstandingTextResult;
+
+export type ImagesDescriptionInput = {
+  buffer: Buffer;
+  fileName: string;
+  mime?: string;
+};
+
+export type ImageDescriptionResult = MediaUnderstandingTextResult;
+
+export type ImagesDescriptionResult = ImageDescriptionResult;
+
+export type StructuredExtractionTextInput = {
+  type: "text";
+  text: string;
+};
+
+export type StructuredExtractionImageInput = ImagesDescriptionInput & {
+  type: "image";
+};
+
+export type StructuredExtractionInput =
+  | StructuredExtractionTextInput
+  | StructuredExtractionImageInput;
+
+export type StructuredExtractionResult = {
+  text: string;
+  parsed?: unknown;
+  model?: string;
+  provider?: string;
+  contentType?: "json" | "text";
+};
