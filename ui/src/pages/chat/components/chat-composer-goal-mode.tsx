@@ -2,7 +2,6 @@ import type { SessionGoal } from "../../../api/types.ts";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
 import type { ChatGoalDraftMode } from "../../../lib/chat/chat-types.ts";
 import type { SlashCommandDef } from "../../../lib/chat/commands.ts";
-import { chatGoalDraftObjective } from "../../../lib/chat/goal-draft.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { isChatGoalCreationDraft } from "../chat-goals.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
@@ -43,7 +42,7 @@ export function createGoalComposer(readProps: () => ChatComposerProps, state: Ch
     clearMode(current);
     focus();
   };
-  const begin = (goal?: SessionGoal) => {
+  const begin = (goal?: SessionGoal, commandObjective?: string) => {
     const props = readProps();
     if (!props.onGoalSubmit || !props.onGoalDraftModeChange || pendingNow(liveMode(props))) {
       return false;
@@ -51,47 +50,74 @@ export function createGoalComposer(readProps: () => ChatComposerProps, state: Ch
     const previousDraft = state.composerTextarea?.value ?? props.getDraft?.() ?? props.draft;
     props.onGoalDraftModeChange({
       ...(props.currentSessionId ? { sessionId: props.currentSessionId } : {}),
-      ...(goal ? { action: "edit", goalId: goal.id, previousDraft } : { action: "start" }),
+      ...(goal
+        ? { action: "edit", goalId: goal.id, previousDraft }
+        : { action: "start", ...(commandObjective !== undefined ? { fromCommand: true } : {}) }),
     });
     state.slashMenu.reset();
     state.skillMenu.reset();
-    replaceDraft(goal?.objective ?? "");
+    const textarea = state.composerTextarea;
+    const selection =
+      commandObjective !== undefined && textarea
+        ? {
+            start: textarea.selectionStart,
+            end: textarea.selectionEnd,
+            direction: textarea.selectionDirection,
+          }
+        : null;
+    replaceDraft(goal?.objective ?? commandObjective ?? "");
+    if (selection && textarea && commandObjective !== undefined) {
+      const consumed = previousDraft.length - commandObjective.length;
+      textarea.setSelectionRange(
+        Math.max(0, selection.start - consumed),
+        Math.max(0, selection.end - consumed),
+        selection.direction,
+      );
+    }
+    focus();
+    return true;
+  };
+  const restoreCommand = () => {
+    const props = readProps();
+    const current = liveMode(props);
+    if (
+      current?.action !== "start" ||
+      !current.fromCommand ||
+      !props.onGoalDraftModeChange ||
+      pendingNow(current)
+    ) {
+      return false;
+    }
+    props.onGoalDraftModeChange(null);
+    replaceDraft("/goal ");
+    state.composerTextarea?.setSelectionRange(6, 6);
     focus();
     return true;
   };
   const activateDraft = (draft: string, submitting = false) => {
     const props = readProps();
     const current = liveMode(props);
-    if (
-      !props.connected ||
-      !props.canSend ||
-      !props.onGoalSubmit ||
-      !props.onGoalDraftModeChange ||
-      pendingNow(current)
-    ) {
-      return false;
-    }
-    if (current && !(current.action === "start" && current.commandDraft)) {
-      return false;
-    }
-    if (isChatGoalCreationDraft(draft)) {
-      if (!current) {
-        props.onGoalDraftModeChange({
-          ...(props.currentSessionId ? { sessionId: props.currentSessionId } : {}),
-          action: "start",
-          commandDraft: true,
-        });
-        state.slashMenu.reset();
-        state.skillMenu.reset();
-      }
-      // Presentation only: preserve the native value, selection and undo history.
+    if (pendingNow(current)) {
       return false;
     }
     if (current) {
-      props.onGoalDraftModeChange(null);
+      // Initial empty starters stay open: only a later native edit reaches this branch.
+      if (!submitting && draft.length === 0) {
+        restoreCommand();
+      }
+      return false;
+    }
+    if (!props.connected || !props.canSend || !props.onGoalSubmit || !props.onGoalDraftModeChange) {
+      return false;
+    }
+    if (isChatGoalCreationDraft(draft)) {
+      const objective = draft.replace(/^\s*\/goal\s+(?:(?:start|set|create)\s)?/iu, "");
+      const activated = begin(undefined, objective);
+      // A populated command entered with Send submits on that same action.
+      return activated && !objective.trim();
     }
     return submitting && /^\s*\/goal(?:\s+(?:start|set|create))?\s*$/iu.test(draft)
-      ? begin()
+      ? begin(undefined, "")
       : false;
   };
   return {
@@ -119,14 +145,12 @@ export function createGoalComposer(readProps: () => ChatComposerProps, state: Ch
       return begin();
     },
     cancel,
-    canSubmit: (draft: string) =>
-      Boolean(chatGoalDraftObjective(liveMode(readProps()), draft).trim()),
+    restoreCommand,
     async submit(submissionAction?: Event) {
       const props = readProps();
       const current = liveMode(props);
       const key = composerDraftKey(props);
-      const draft = state.composerTextarea?.value ?? props.getDraft?.() ?? props.draft;
-      const objective = chatGoalDraftObjective(current, draft);
+      const objective = state.composerTextarea?.value ?? props.getDraft?.() ?? props.draft;
       if (!current || !props.onGoalSubmit || !objective.trim()) {
         return;
       }

@@ -247,7 +247,6 @@ export function createChatComposerContext(
     (!props.submitDisabledReason || (!goalComposer.active && canSubmitBeforeChatHistory(draft))) &&
     !(getMentions().length > 0 && (mentionsUnsupported || draft.trimStart().startsWith("/"))) &&
     !goalComposer.pending &&
-    (!goalComposer.active || goalComposer.canSubmit(draft)) &&
     state.dictation?.locksComposer !== true &&
     !(state.skillMenu.state.skillMenuOpen && state.skillMenu.state.skillCommandRefreshPending) &&
     (props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0) === 0 &&

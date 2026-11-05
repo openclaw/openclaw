@@ -261,13 +261,20 @@ it.each(["land it", "l", "ship it", "statuspage", "Startling objective"])(
     const textarea = view.textarea();
     const draft = "/goal " + objective;
     input(draft);
-    expect(state.chatGoalDraftMode).toEqual({ action: "start", commandDraft: true });
-    expect(textarea.value).toBe(draft);
-    expect(textarea.selectionStart).toBe(draft.length);
+    expect(state.chatGoalDraftMode).toEqual({ action: "start", fromCommand: true });
+    expect(textarea.value).toBe(objective);
+    expect(textarea.selectionStart).toBe(objective.length);
+    input("");
+    expect(state.chatGoalDraftMode).toBeNull();
+    expect(textarea.value).toBe("/goal ");
+    expect(textarea.selectionStart).toBe(6);
     input("/goal sta");
     expect(state.chatGoalDraftMode).toBeNull();
     expect(view.textarea()).toBe(textarea);
     expect(textarea.value).toBe("/goal sta");
+    input("/goal land it");
+    expect(textarea.value).toBe("land it");
+    expect(state.chatGoalDraftMode).toEqual({ action: "start", fromCommand: true });
   },
 );
 
@@ -304,7 +311,7 @@ it.each([
 });
 
 it.each(["/goal ", "/goal start ", "/goal set ", "/goal create "])(
-  "submits %sobjective immediately without consuming the raw draft",
+  "submits %sobjective immediately and retains the literal objective after failed admission",
   (prefix) => {
     const onGoalSubmit = vi.fn(() => Promise.resolve(false));
     const { view, input, enter } = mountOwnedComposer({ onGoalSubmit });
@@ -315,19 +322,35 @@ it.each(["/goal ", "/goal start ", "/goal set ", "/goal create "])(
       { action: "start", objective: "land it  " },
       expect.any(KeyboardEvent),
     );
-    expect(view.textarea().value).toBe(draft);
+    expect(view.textarea().value).toBe("land it  ");
   },
 );
 
-it.each(["start", "set", "create"])("opens an empty objective on Enter for /goal %s", (action) => {
-  const onGoalSubmit = vi.fn(async () => true);
-  const { state, view, input, enter } = mountOwnedComposer({ onGoalSubmit });
-  input("/goal " + action);
-  enter();
-  expect(state.chatGoalDraftMode).toEqual({ action: "start" });
-  expect(view.textarea().value).toBe("");
-  expect(onGoalSubmit).not.toHaveBeenCalled();
-});
+it.each(["start", "set", "create", "start ", "set ", "create "])(
+  "keeps /goal %s initially empty until a deletion gesture restores command entry",
+  (action) => {
+    const onGoalSubmit = vi.fn(async () => true);
+    const { state, view, input, enter } = mountOwnedComposer({ onGoalSubmit });
+    input("/goal " + action);
+    enter();
+    expect(state.chatGoalDraftMode).toEqual({ action: "start", fromCommand: true });
+    expect(view.textarea().value).toBe("");
+    flush();
+    enter();
+    expect(state.chatGoalDraftMode).toEqual({ action: "start", fromCommand: true });
+    expect(onGoalSubmit).not.toHaveBeenCalled();
+    view.textarea().dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: action.startsWith("set") ? "Delete" : "Backspace",
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(state.chatGoalDraftMode).toBeNull();
+    expect(view.textarea().value).toBe("/goal ");
+    expect(view.textarea().selectionStart).toBe(6);
+  },
+);
 
 it("starts a goal and admits only one same-turn submit", async () => {
   const result = createDeferred<boolean>();
@@ -335,16 +358,16 @@ it("starts a goal and admits only one same-turn submit", async () => {
   const { state, view, input, enter } = mountOwnedComposer({ onGoalSubmit });
   input("/goal start ");
   flush();
-  expect(state.chatGoalDraftMode).toEqual({ action: "start", commandDraft: true });
+  expect(state.chatGoalDraftMode).toEqual({ action: "start", fromCommand: true });
   await waitForSolid(() => expect(view.goal()).not.toBeNull());
-  expect(view.textarea().value).toBe("/goal start ");
+  expect(view.textarea().value).toBe("");
   expect(findPrimaryButton(view.container).disabled).toBe(true);
-  input("/goal start Keep every literal space  ");
+  input("Keep every literal space  ");
   flush();
   enter();
   enter();
   view.goal()!.querySelector<HTMLButtonElement>("button")!.click();
-  expect(state.chatGoalDraftMode).toEqual({ action: "start", commandDraft: true });
+  expect(state.chatGoalDraftMode).toEqual({ action: "start", fromCommand: true });
   expect(onGoalSubmit).toHaveBeenCalledExactlyOnceWith(
     { action: "start", objective: "Keep every literal space  " },
     expect.any(KeyboardEvent),

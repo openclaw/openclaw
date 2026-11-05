@@ -17,7 +17,6 @@ import type {
   ChatGoalMutationAction,
   ChatGoalRecovery,
 } from "../../lib/chat/chat-types.ts";
-import { chatGoalDraftObjective } from "../../lib/chat/goal-draft.ts";
 import {
   goalOperationExpired,
   goalOperationScopePrefix,
@@ -391,8 +390,8 @@ export async function submitChatGoalDraft(
       objective: draft.objective,
     });
   }
-  // Keep the original draft for admission cleanup and failed-send recovery.
-  if (chatGoalDraftObjective(host.chatGoalDraftMode, host.chatMessage) !== draft.objective) {
+  // Goal mode owns a literal objective; normal admission owns cleanup and recovery.
+  if (host.chatMessage !== draft.objective) {
     return false;
   }
   return Boolean(

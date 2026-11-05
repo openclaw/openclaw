@@ -251,18 +251,26 @@ command, also opens Goal mode. Sending bare `/goal` opens the composer instead
 of adding a command to the conversation. An empty objective cannot be submitted.
 
 Shorthand typing opens Goal mode immediately once the objective cannot be a
-supported subcommand: `/goal l` is enough. Valid command prefixes such as
-`/goal sta` keep command completion. This transition is reversible: edit back
-to a valid command prefix to return to command mode. The original command draft,
-selection, and native undo/redo history are preserved; pasted creation commands
-use the same mode. Enter submits the objective immediately, without a timer.
-Explicit management commands such as `/goal status` remain commands.
+supported subcommand: `/goal l` is enough. The command prefix is consumed, so
+`/goal land it` shows only `land it` in the Goal box. Explicit creation starters
+consume the action word too: `/goal start` followed by a space opens an initially
+empty Goal box that stays open while you begin typing.
+
+Deleting the entire command-origin objective returns to command mode with
+`/goal` and a following space repopulated, with the caret at the end. Backspace or Delete in an
+already-empty command-origin Goal box does the same. Valid command prefixes
+such as `/goal sta` keep completion; typing an unambiguous objective enters Goal
+mode again. Complete pasted creation commands follow the same path. Enter
+submits the literal objective immediately, without a timer, and empty objectives
+are never submitted. Explicit management commands such as `/goal status` remain
+commands.
 
 The composer shows a Goal label and an objective prompt so you can see what
-Send will do. When opened from the picker, the objective is literal text: words
-such as `clear` and text such as `/stop` do not become commands. Escape or
-Cancel leaves the draft text unchanged; a shorthand draft still contains its
-`/goal` command prefix.
+Send will do. Once in Goal mode, the objective is literal text: words such as
+`clear` and text such as `/stop` do not become commands. Picker-opened
+creation and existing-Goal editing stay in their own modes when emptied.
+Escape or Cancel leaves the current objective as a normal chat draft; canceling
+an existing-Goal edit restores its borrowed conversation draft.
 
 Starting a Goal saves the Goal and its user turn together with the operation
 receipt before acknowledging Send. A failed admission leaves the draft intact and
