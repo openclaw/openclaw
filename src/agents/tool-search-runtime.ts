@@ -151,14 +151,20 @@ async function validateCatalogSchemaValue(
   }
 }
 
+function isToolParameters(
+  value: unknown,
+): value is Parameters<typeof validateToolArguments>[0]["parameters"] {
+  return isRecord(value);
+}
+
 function coerceCatalogInput(entry: ToolSearchCatalogEntry, input: unknown): unknown {
   const parameters = resolveAgentToolExecutionSchema(entry.tool, entry.parameters);
-  if (!isRecord(input) || !isRecord(parameters)) {
+  if (!isRecord(input) || !isToolParameters(parameters)) {
     return input;
   }
   try {
     return validateToolArguments(
-      { name: entry.name, description: entry.description, parameters: parameters as never },
+      { name: entry.name, description: entry.description, parameters },
       { type: "toolCall", id: entry.id, name: entry.name, arguments: input },
     );
   } catch {
