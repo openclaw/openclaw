@@ -18,12 +18,12 @@ struct NodesMenuHeadlessPlatformTests {
 
     @Test func `labels a legacy single-version node host by platform`() throws {
         let cases: [(String, String)] = [
-            ("macos", "core 2026.10.9"),
-            ("darwin", "core 2026.10.9"),
-            ("windows", "core 2026.10.9"),
-            ("ios", "ui 2026.10.9"),
-            ("iPadOS 18.2", "ui 2026.10.9"),
-            ("macOS 26.0", "ui 2026.10.9"),
+            ("macos", "core v2026.10.9"),
+            ("darwin", "core v2026.10.9"),
+            ("windows", "core v2026.10.9"),
+            ("ios", "ui v2026.10.9"),
+            ("iPadOS 18.2", "ui v2026.10.9"),
+            ("macOS 26.0", "ui v2026.10.9"),
         ]
         for (platform, expected) in cases {
             #expect(NodeMenuEntryFormatter.detailRightVersion(try Self.node(platform)) == expected)
