@@ -202,7 +202,13 @@ export default definePluginEntry({
         });
       }),
     );
-    api.on("agent_end", (event, context) => lifecycleSync.onAgentEnd(event, context));
+    api.agent.events.registerAgentEventSubscription({
+      id: "workboard-run-settlement",
+      streams: ["lifecycle"],
+      phases: ["end", "error"],
+      payload: "metadata",
+      handle: (event) => lifecycleSync.onRunSettled(event),
+    });
     api.registerTool(
       (context) =>
         guardWorkboardToolsForWorkspaceAccess(

@@ -103,7 +103,15 @@ function registerGeneration(
     });
   };
   return Object.assign(
-    { cleanup: retire, start, ...mocks, expectCall, expectCards, agentEnd },
+    {
+      cleanup: retire,
+      start,
+      ...mocks,
+      expectCall,
+      expectCards,
+      agentEnd,
+      subscriptions: captured.agentEventSubscriptions,
+    },
     {
       tools: () =>
         registerTool.mock.calls.flatMap(
@@ -199,75 +207,57 @@ it.each(["internal", "injected"] as const)(
 );
 
 it.each([
-  { success: true, fallback: false, staleRun: undefined },
-  { success: false, fallback: false, staleRun: undefined },
-  { success: true, fallback: true, staleRun: undefined },
-  { success: true, fallback: false, staleRun: "event" },
-  { success: true, fallback: false, staleRun: "context" },
+  { phase: "end", extra: {}, expected: "review" },
+  { phase: "error", extra: {}, expected: "blocked" },
+  {
+    phase: "end",
+    extra: { aborted: true, yielded: true, livenessState: "paused", stopReason: "end_turn" },
+    expected: "blocked",
+  },
+  { phase: "end", extra: { timeoutPhase: "provider" }, expected: "blocked" },
 ])(
-  "settles a linked card after agent_end ($success, fallback=$fallback, staleRun=$staleRun)",
-  ({ success, fallback, staleRun }) =>
-    withStateDirEnv("workboard-deferred-agent-end-", async () => {
+  "settles the linked card from the owner's $phase outcome ($expected)",
+  ({ phase, extra, expected }) =>
+    withStateDirEnv("workboard-settled-run-", async () => {
       vi.useFakeTimers();
       onTestFinished(() => void vi.useRealTimers());
       await using store = openStore();
-      const sessionKey = "agent:worker:subagent:workboard-delayed";
-      const runId = "run-current";
+      const sessionKey = "agent:worker:subagent:workboard-settled";
       const card = await store.create({
-        title: "Delayed worker",
+        title: "Worker",
         status: "running",
         sessionKey,
-        ...(staleRun ? { runId } : {}),
+        runId: "current",
       });
-      const settledAt = Date.now() + (fallback ? 650 : 1_000);
-      await using prepared = registerGeneration();
-      await using generation = registerGeneration((api) =>
-        plugin.register({
-          ...api,
-          runtime: {
-            ...api.runtime,
-            gateway: {
-              ...api.runtime.gateway,
-              isAvailable: async () => true,
-              // The Gateway request contract lets the caller select the response type.
-              request: async <T>() =>
-                ({
-                  session: {
-                    key: sessionKey,
-                    status: "running",
-                    hasActiveRun: Date.now() < settledAt,
-                    updatedAt: card.updatedAt + 1,
-                  },
-                }) as T,
-            },
-          },
-        }),
-      );
+      await using generation = registerGeneration();
       await generation.start();
-      if (fallback) {
-        await prepared.agentEnd({ messages: [], success: false }, { sessionKey });
-        await vi.advanceTimersByTimeAsync(500);
-      }
-      await prepared.agentEnd(
-        { messages: [], success },
-        { sessionKey, ...(staleRun ? { runId } : {}) },
-      );
-      if (staleRun) {
-        await vi.advanceTimersByTimeAsync(500);
-        await prepared.agentEnd(
-          { messages: [], success: false, ...(staleRun === "event" ? { runId: "run-old" } : {}) },
-          { sessionKey, runId: staleRun === "event" ? runId : "run-old" },
-        );
-      }
-      await vi.waitFor(
-        async () => {
-          expect((await store.get(card.id))?.status).toBe(success ? "review" : "blocked");
-        },
-        { timeout: 5_000, interval: 100 },
-      );
-      if (success) {
-        expect((await store.get(card.id))?.metadata?.failureCount).toBeUndefined();
-      }
+      const emit = async (data: Record<string, unknown>, runId = "current") => {
+        for (const subscription of generation.subscriptions) {
+          await subscription.handle(
+            { stream: "lifecycle", runId, sessionKey, seq: 1, ts: card.updatedAt + 1, data },
+            {
+              getRunContext: () => undefined,
+              setRunContext: () => {},
+              clearRunContext: () => {},
+            },
+          );
+        }
+      };
+      // Attempt hooks and retryable failures cannot settle the logical run.
+      await generation.agentEnd({ messages: [], success: false }, { sessionKey, runId: "current" });
+      await emit({ phase: "error" });
+      await emit({
+        phase: "end",
+        executionSettled: true,
+        yielded: true,
+        livenessState: "paused",
+        stopReason: "end_turn",
+      });
+      await emit({ phase: "end", executionSettled: true }, "old");
+      expect((await store.get(card.id))?.status).toBe("running");
+      // No session read or elapsed-time window: the owner publishes the final fact.
+      await emit({ phase, executionSettled: true, ...extra });
+      expect((await store.get(card.id))?.status).toBe(expected);
       expect(generation.warn).not.toHaveBeenCalled();
     }),
 );

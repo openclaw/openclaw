@@ -1,5 +1,9 @@
 import { AsyncResource } from "node:async_hooks";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
+import {
+  isAgentLifecycleYieldedWaiting,
+  resolveAgentRunLifecycleTerminalFacts,
+} from "openclaw/plugin-sdk/agent-lifecycle";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -18,8 +22,6 @@ import type { WorkboardStore } from "./store.js";
 
 const WORKBOARD_LIFECYCLE_SWEEP_MS = 60_000;
 const WORKBOARD_STALE_SESSION_MS = 30 * 60 * 1000;
-// 100ms doubling through 1.6s: about 3.1s of re-reads, well short of the 60s sweep.
-const AGENT_END_RETRY_MAX_DELAY_MS = 1_600;
 const WORKBOARD_SESSION_LOOKUP_LIMIT = 2;
 const WORKBOARD_WORKTREE_CLEANUP_SWEEP_LIMIT = 32;
 // Prepared hook generations route to the active service, never a worker's
@@ -27,14 +29,14 @@ const WORKBOARD_WORKTREE_CLEANUP_SWEEP_LIMIT = 32;
 const workboardLifecycleGatewayState = resolveGlobalSingleton<{
   ready: boolean;
   abortSignal?: AbortSignal;
-  onAgentEnd?: WorkboardAgentEndHandler;
+  onRunSettled?: WorkboardRunSettledHandler;
 }>(
   Symbol.for("openclaw.workboard.lifecycleGatewayState"),
   () => ({ ready: false }),
   (state) => {
     state.ready = false;
     state.abortSignal = undefined;
-    state.onAgentEnd = undefined;
+    state.onRunSettled = undefined;
   },
 );
 
@@ -86,25 +88,16 @@ type WorkboardLifecycleMatchHandler = (input: {
   sessionKey?: string;
 }) => Promise<void>;
 
-type WorkboardAgentEndEvent = { runId?: string; success: boolean };
-type WorkboardAgentEndContext = { runId?: string; sessionKey?: string };
-type WorkboardAgentEndHandler = (
-  event: WorkboardAgentEndEvent,
-  context: WorkboardAgentEndContext,
-) => Promise<void>;
-
-type PendingAgentEnd = {
-  key: string;
-  event: WorkboardAgentEndEvent;
-  context: WorkboardAgentEndContext & { sessionKey: string };
-  timer?: ReturnType<typeof setTimeout>;
-};
+type WorkboardRunEvent = Parameters<
+  Parameters<OpenClawPluginApi["agent"]["events"]["registerAgentEventSubscription"]>[0]["handle"]
+>[0];
+type WorkboardRunSettledHandler = (event: WorkboardRunEvent) => Promise<void>;
 
 type WorkboardLifecycleService = OpenClawPluginService & {
   stop: () => void;
   onGatewayStart: (abortSignal?: AbortSignal) => void;
   onGatewayStop: () => void;
-  onAgentEnd: WorkboardAgentEndHandler;
+  onRunSettled: WorkboardRunSettledHandler;
 };
 
 function needsWorkboardLifecycleReconciliation(card: WorkboardCard, now: number): boolean {
@@ -143,10 +136,14 @@ async function syncWorkboardLifecycleEvent(params: {
   observation: WorkboardLifecycleObservation;
   now: number;
   onMatched?: WorkboardLifecycleMatchHandler;
+  isCurrent?: () => boolean;
 }): Promise<{ cards: readonly WorkboardCard[]; count: number }> {
   const cards = (await params.store.list()).filter(
     (card) => !card.metadata?.archivedAt && workboardCardMatchesLifecycleLink(card, params.source),
   );
+  if (params.isCurrent && !params.isCurrent()) {
+    return { cards: [], count: 0 };
+  }
   const updates = Promise.all(
     cards.map(async (card) => {
       return await params.store.syncLifecycle(card.id, {
@@ -216,56 +213,37 @@ export async function syncWorkboardSubagentEnded(params: {
   return synced.count;
 }
 
-export async function syncWorkboardAgentEnded(params: {
+export async function syncWorkboardRunSettled(params: {
   store: WorkboardStore;
-  event: WorkboardAgentEndEvent;
-  context: WorkboardAgentEndContext;
-  now?: number;
-  allowIdleRunningTerminal?: boolean;
-  onSessionActive?: () => void;
-  readSessions: WorkboardLifecycleSessionReader;
+  event: WorkboardRunEvent;
+  isCurrent?: () => boolean;
   onMatched?: WorkboardLifecycleMatchHandler;
 }): Promise<number> {
-  const now = params.now ?? Date.now();
-  if (!params.context.sessionKey) {
+  const { event } = params;
+  const phase = event.data.phase;
+  // The execution owner publishes this only after fallback settles. Attempt hooks
+  // and yielded parents are not completion facts; never infer completion from idleness.
+  if (
+    event.stream !== "lifecycle" ||
+    (phase !== "end" && phase !== "error") ||
+    event.data.executionSettled !== true ||
+    isAgentLifecycleYieldedWaiting(event.data) ||
+    !event.sessionKey
+  ) {
     return 0;
   }
-  // An attempt can finish before fallback settles, even with success=true.
-  // Wait for the session owner to establish inactivity before using the attempt's
-  // outcome when its retained status is still running.
-  const snapshot = await params.readSessions({
-    sessionKey: params.context.sessionKey,
-  });
-  const session = snapshot.sessions.find((entry) => entry.key === params.context.sessionKey);
-  if (!session) {
-    return 0;
-  }
-  const observation =
-    params.allowIdleRunningTerminal &&
-    session.status === "running" &&
-    session.hasActiveRun === false
-      ? {
-          state:
-            params.event.success && !session.abortedLastRun
-              ? ("succeeded" as const)
-              : ("failed" as const),
-          sourceUpdatedAt: session.updatedAt ?? now,
-        }
-      : lifecycleFromSession(session, now);
-  if (observation.state !== "succeeded" && observation.state !== "failed") {
-    params.onSessionActive?.();
-    return 0;
-  }
+  const outcome = resolveAgentRunLifecycleTerminalFacts({ phase, data: event.data });
   return (
     await syncWorkboardLifecycleEvent({
       store: params.store,
-      source: {
-        sessionKey: params.context.sessionKey,
-        runId: params.event.runId ?? params.context.runId,
+      source: { sessionKey: event.sessionKey, runId: event.runId },
+      observation: {
+        state: outcome.status === "ok" ? "succeeded" : "failed",
+        sourceUpdatedAt: event.ts,
       },
-      observation,
-      now,
-      ...(params.onMatched ? { onMatched: params.onMatched } : {}),
+      now: event.ts,
+      onMatched: params.onMatched,
+      isCurrent: params.isCurrent,
     })
   ).count;
 }
@@ -435,8 +413,7 @@ export function createWorkboardLifecycleService(params: {
   let begin: (() => void) | undefined;
   let removeDrainListener: (() => void) | undefined;
   let cleanupCursor = 0;
-  let handleAgentEnd: WorkboardAgentEndHandler | undefined;
-  const pendingAgentEnds = new Map<string, PendingAgentEnd>();
+  let handleRunSettled: WorkboardRunSettledHandler | undefined;
   const cleanupWorktrees = async (
     cards: readonly WorkboardCard[],
     warn: (message: string) => void,
@@ -462,14 +439,10 @@ export function createWorkboardLifecycleService(params: {
     }
   };
   const stop = () => {
-    if (workboardLifecycleGatewayState.onAgentEnd === handleAgentEnd) {
-      workboardLifecycleGatewayState.onAgentEnd = undefined;
+    if (workboardLifecycleGatewayState.onRunSettled === handleRunSettled) {
+      workboardLifecycleGatewayState.onRunSettled = undefined;
     }
-    handleAgentEnd = undefined;
-    for (const pending of pendingAgentEnds.values()) {
-      clearTimeout(pending.timer);
-    }
-    pendingAgentEnds.clear();
+    handleRunSettled = undefined;
     removeDrainListener?.();
     removeDrainListener = undefined;
     generation += 1;
@@ -500,8 +473,8 @@ export function createWorkboardLifecycleService(params: {
   };
   return {
     id: "workboard-lifecycle-sync",
-    async onAgentEnd(event, context) {
-      await workboardLifecycleGatewayState.onAgentEnd?.(event, context);
+    async onRunSettled(event) {
+      await workboardLifecycleGatewayState.onRunSettled?.(event);
     },
     start(ctx) {
       const owner = ++generation;
@@ -624,93 +597,16 @@ export function createWorkboardLifecycleService(params: {
         }
       };
       const isCurrent = () =>
-        generation === owner && workboardLifecycleGatewayState.onAgentEnd === handleAgentEnd;
-      const isPending = (pending: PendingAgentEnd) =>
-        isCurrent() && pendingAgentEnds.get(pending.key) === pending;
-      const syncAgentEnd = (
-        pending: PendingAgentEnd,
-        delayed: boolean,
-        onSessionActive?: () => void,
-      ) =>
-        syncWorkboardAgentEnded({
-          store: params.store,
-          event: pending.event,
-          context: pending.context,
-          readSessions: async (options) => {
-            const snapshot = await readSessions(options);
-            return isPending(pending) ? snapshot : { sessions: [], complete: false };
-          },
-          allowIdleRunningTerminal: delayed,
-          onMatched,
-          onSessionActive,
-        });
-      // A later fallback attempt for the same run replaces the earlier outcome before inactivity
-      // can settle the card. Prepared hook generations still use this service owner.
-      const retryAgentEnd = AsyncResource.bind((pending: PendingAgentEnd, delayMs = 100) => {
-        pending.timer = setTimeout(() => {
-          pending.timer = undefined;
-          if (!isPending(pending)) {
-            return;
-          }
-          let sessionActive = false;
-          void params.store
-            .runOperation(async () => {
-              const matched = await syncAgentEnd(pending, true, () => {
-                sessionActive = true;
-              });
-              if (matched > 0 && isPending(pending)) {
-                await cleanupWorktrees(await params.store.list(), (message) =>
-                  ctx.logger.warn(message),
-                );
-              }
-            })
-            .catch((error: unknown) => {
-              if (isPending(pending)) {
-                ctx.logger.warn(`workboard agent-end retry failed: ${String(error)}`);
-              }
-            })
-            .finally(() => {
-              if (!isPending(pending)) {
-                return;
-              }
-              if (sessionActive && delayMs < AGENT_END_RETRY_MAX_DELAY_MS) {
-                retryAgentEnd(pending, delayMs * 2);
-              } else {
-                pendingAgentEnds.delete(pending.key);
-              }
-            });
-        }, delayMs);
-        pending.timer.unref?.();
-      });
-      handleAgentEnd = AsyncResource.bind(async (event, context) => {
-        if (!isCurrent() || !context.sessionKey) {
+        generation === owner && workboardLifecycleGatewayState.onRunSettled === handleRunSettled;
+      handleRunSettled = AsyncResource.bind(async (event) => {
+        if (!isCurrent()) {
           return;
         }
-        const key = JSON.stringify([context.sessionKey, event.runId ?? context.runId]);
-        clearTimeout(pendingAgentEnds.get(key)?.timer);
-        const pending: PendingAgentEnd = {
-          key,
-          event,
-          context: { ...context, sessionKey: context.sessionKey },
-        };
-        pendingAgentEnds.set(key, pending);
-        try {
-          const matched = await params.store.runOperation(() => syncAgentEnd(pending, false));
-          if (isPending(pending)) {
-            if (matched === 0) {
-              retryAgentEnd(pending);
-            } else {
-              pendingAgentEnds.delete(key);
-            }
-          }
-        } catch (error) {
-          if (isPending(pending)) {
-            pendingAgentEnds.delete(key);
-          }
-          throw error;
-        }
+        await params.store.runOperation(() =>
+          syncWorkboardRunSettled({ store: params.store, event, isCurrent, onMatched }),
+        );
       });
-      workboardLifecycleGatewayState.onAgentEnd = handleAgentEnd;
+      workboardLifecycleGatewayState.onRunSettled = handleRunSettled;
       begin = () => {
         if (generation !== owner || begun) {
           return;

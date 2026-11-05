@@ -689,12 +689,12 @@ If an active linked session stops reporting recent activity, Workboard marks the
 
 Lifecycle writes are owned by the Gateway-side Workboard plugin, so they do
 not depend on an open browser tab. Subagent completion hooks persist terminal
-outcomes immediately. Agent attempt hooks consult the linked session state:
-finishing a model attempt does not move a card into `review` or `blocked` while
-its run is still active. If the session is still settling, the active service
-re-reads it with a short backoff for about three seconds; once it is inactive,
-the card reflects the latest finished attempt. A later fallback attempt for the same run replaces
-the earlier pending outcome; delayed hooks from another run cannot cancel its retries. Service retirement cancels these retries.
+outcomes immediately. For ordinary agent runs, Workboard consumes the execution
+owner's settled lifecycle event and final outcome, not the attempt-level
+`agent_end` hook or a timed session re-read. Intermediate fallback attempts and
+yielded turns leave the card running. Success moves the matching run to `review`;
+failure, cancellation, or timeout moves it to `blocked`. Events for an older
+linked run cannot settle a newer run, and retired services discard queued events.
 A recovery sweep runs once per minute and reads only the
 sessions linked to active cards, sharing each read across cards with the same link.
 Settled cards stop polling unless they retain pending lifecycle state. Provisional

@@ -1,2 +1,2 @@
-82
-# Registered-plugin delayed completion, fallback/run isolation, and stale-service proof.
+55
+# Settled-run subscription, owner publication, cancellation/yield, and retired-service regressions.
