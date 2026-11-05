@@ -1,6 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
-import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { getRequesterProfile } from "../auto-reply/requester-profile.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -11,6 +10,7 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { prepareSqliteScope } from "../config/sessions/session-accessor.sqlite-scope.js";
+import type { DurableQuestion } from "../config/sessions/session-questions.types.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { setDisplayName, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -20,7 +20,6 @@ import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createMentionInbox } from "./mention-inbox.js";
 import { readMentionInbox } from "./mention-inbox.test-support.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
-import { handleChatSend } from "./server-methods/chat-send-handler.js";
 import {
   setClientProfile,
   useBrowserFollowupFixture,
@@ -226,8 +225,28 @@ it("publishes a retained human mention once as its freshly admitted queued princ
 });
 
 it("preserves independent accepted senders in FIFO order without a generic resume for a question-owned source", async () => {
+  // Keep case-only owners behind the existing fixture's execution-boundary mock setup.
+  const [
+    sessionEvents,
+    { handleChatSend },
+    { executeSessionQuestionOperation },
+    { readDatabasePathIdentitySync },
+  ] = await Promise.all([
+    import("../auto-reply/reply/session-event-handoff.js"),
+    import("./server-methods/chat-send-handler.js"),
+    import("../config/sessions/session-questions.js"),
+    import("../infra/sqlite-worker-identity.js"),
+  ]);
   const { fixture: createdFixture, profile: firstProfile } = await createFixture();
   await using fixture = createdFixture;
+  const initial = loadSessionEntry(fixture.scope);
+  if (!initial) {
+    throw new Error("Question fixture requires its canonical session entry");
+  }
+  await replaceSessionEntry(fixture.scope, {
+    ...initial,
+    lifecycleRevision: "question-queue-generation",
+  });
   const secondProfile = ensureProfileForEmail("question-queue-second@example.test");
   setDisplayName(secondProfile.id, "Second queued author");
   fixture.params.message = "First independently accepted input.";
@@ -261,6 +280,54 @@ it("preserves independent accepted senders in FIFO order without a generic resum
     ...entry,
     lifecycleRunId: "question-source",
     resumeAfterRestart: { queuedInputIds: retained.queuedInputIds },
+  });
+  const target = await prepareSqliteScope(fixture.scope);
+  if (!target.path) {
+    throw new Error("Question fixture requires its exact existing database");
+  }
+  const identity = readDatabasePathIdentitySync(target.path);
+  const question: DurableQuestion = {
+    record: {
+      id: "q1",
+      agentId: "main",
+      sessionKey: fixture.scope.sessionKey,
+      runId: "question-source",
+      questions: [
+        {
+          questionId: "choice",
+          header: "Choice",
+          question: "Choose a path",
+          options: [{ label: "A" }, { label: "B" }],
+        },
+      ],
+      createdAtMs: Date.now(),
+      expiresAtMs: Date.now() + 60_000,
+      status: "pending",
+    },
+    sessionKey: fixture.scope.sessionKey,
+    sessionId: entry.sessionId,
+    lifecycleRevision: entry.lifecycleRevision,
+    provenance: { issuer: "operator", sourceRunId: "question-source" },
+    sessionBinding: {
+      agentId: "main",
+      sessionKey: fixture.scope.sessionKey,
+      sessionId: entry.sessionId,
+      lifecycleRevision: entry.lifecycleRevision,
+      storePath: fixture.scope.storePath,
+      databasePath: target.path,
+      databaseIdentity: {
+        identity: identity.key.slice("file:".length),
+        birthtime: identity.birthtime,
+      },
+    },
+    continuation: { status: "pending" },
+  };
+  await executeSessionQuestionOperation(
+    { ...fixture.scope, assertCurrent() {} },
+    { kind: "register", question },
+  );
+  expect(loadSessionEntry(fixture.scope)).toMatchObject({
+    lifecycleRunId: "question-source",
     durableQuestionOwners: [
       {
         questionId: "q1",
