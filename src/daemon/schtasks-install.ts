@@ -513,16 +513,23 @@ export async function installScheduledTask(
     // The caller's definition transaction owns rollback and native lifecycle recovery.
     return install();
   }
-  return withGatewayServiceInstallationRecovery(
-    install,
-    async () => {
-      if (!recovery || !restoreTask) {
-        return false;
-      }
-      return restoreTask.restore(recovery, activationAttempted);
-    },
-    { beforeRecovery: args.beforeRecovery },
-  ).catch((error: unknown) => {
+  // The caller's recovery hook waits for task recovery to stop the replacement and settle
+  // its processes; as with the shared wrapper, a failing hook never skips native recovery.
+  return withGatewayServiceInstallationRecovery(install, async () => {
+    if (!recovery || !restoreTask) {
+      return false;
+    }
+    let hookFailure: { error: unknown } | undefined;
+    const restored = await restoreTask.restore(recovery, activationAttempted, async () => {
+      await args.beforeRecovery?.().catch((error: unknown) => {
+        hookFailure = { error };
+      });
+    });
+    if (hookFailure) {
+      throw hookFailure.error;
+    }
+    return restored;
+  }).catch((error: unknown) => {
     if (
       (error instanceof GatewayServiceAuthorityError && error.outcome === "recovery-pending") ||
       error instanceof AggregateError

@@ -805,3 +805,47 @@ it.each([
     expect(args.warn).not.toHaveBeenCalled();
   }
 });
+
+it("runs the caller's recovery hook once the replacement has stopped, before the previous task runs", async () => {
+  const { args } = await fixture(true);
+  let running = true;
+  let enabled = true;
+  native.probe.mockImplementation(() => ({
+    status: "found",
+    state: running ? 4 : enabled ? 3 : 1,
+    enabled,
+  }));
+  native.runtime.mockImplementation(async () => ({ status: running ? "running" : "stopped" }));
+  native.stop.mockImplementation(async (params) => {
+    params.onProcessStopped?.();
+    running = false;
+    params.onEndMutation?.();
+    return false;
+  });
+  const events: string[] = [];
+  const execute = native.exec.getMockImplementation()!;
+  native.exec.mockImplementation(async (command) => {
+    if (command[0] === "/End" || command[0] === "/Run") {
+      events.push(command[0]);
+      running = command[0] === "/Run";
+    }
+    if (command.includes("/DISABLE")) {
+      enabled = false;
+    }
+    if (command.includes("/ENABLE")) {
+      enabled = true;
+    }
+    return execute(command);
+  });
+  native.run.mockRejectedValueOnce(new Error("Synthetic activation failure"));
+
+  await expect(
+    installScheduledTask({
+      ...args,
+      beforeRecovery: async () => {
+        events.push(running || enabled ? "hook before settlement" : "hook");
+      },
+    }),
+  ).rejects.toThrow("Synthetic activation failure");
+  expect(events).toEqual(["/End", "hook", "/Run"]);
+});
