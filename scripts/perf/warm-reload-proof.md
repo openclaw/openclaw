@@ -83,13 +83,16 @@ and its predecessor before claiming first-paint presence.
 
 Add `--composer-controls` to select the bundled Anthropic model's nondefault
 200K window and High effort through the real session owner. This uses synthetic
-credentials and makes no model request. The same per-frame samples include each
+credentials and the static catalog with live refresh disabled; it makes no model
+request. The same per-frame samples include each
 composer group's x/width and text so a late badge or effort replacement stays
 visible in the attribution data. Use `--active-targets` for active chat and omit
 it for the archived secondary; the dashboard route retains the same controls.
 Preparation opens the real model picker once to load its on-demand catalog, then
 requires the selected label, window badge, High effort and persisted composer
 snapshot before active warm captures. Merely seeing transcript rows is insufficient.
+`gatewayEvents` records only event names, arrival times and bytes, including the
+connect-time `models.snapshot`, alongside the RPC response timeline.
 
 For plugin-publication attribution, add `--plugin-activation`. This enables bundled
 Workboard and two isolated native modules: a neutral CSS theme with a header

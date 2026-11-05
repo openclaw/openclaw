@@ -383,6 +383,7 @@ async function captureReload(
     }
   };
   const http: Array<{ url: string; status: number; type: string; atMs: number }> = [];
+  const gatewayEvents: Array<{ event: string; atMs: number; bytes: number }> = [];
   const requests = new Map<string, { method: string; atMs: number; bytes: number }>();
   const rpc: Array<{
     method: string;
@@ -435,7 +436,16 @@ async function captureReload(
     }
   };
   const onReceived = (event: { response: { payloadData: string } }) => {
-    const frame: { type?: string; id?: string } = JSON.parse(event.response.payloadData);
+    const frame: { type?: string; id?: string; event?: string } = JSON.parse(
+      event.response.payloadData,
+    );
+    if (frame.type === "event" && frame.event) {
+      gatewayEvents.push({
+        event: frame.event,
+        atMs: Date.now(),
+        bytes: Buffer.byteLength(event.response.payloadData),
+      });
+    }
     const row = frame.id ? requests.get(frame.id) : undefined;
     if (frame.type === "res" && row) {
       Object.assign(row, {
@@ -544,6 +554,9 @@ async function captureReload(
     }
     for (const response of http) {
       response.atMs -= probe.timeOrigin;
+    }
+    for (const event of gatewayEvents) {
+      event.atMs -= probe.timeOrigin;
     }
     for (const request of rpc) {
       request.atMs -= probe.timeOrigin;
@@ -660,6 +673,7 @@ async function captureReload(
         visual.lastVisualChangeMs !== null &&
         probe.capturedUntilMs - visual.lastVisualChangeMs < 1000,
       rpc,
+      gatewayEvents,
       http,
       errors,
       outputDir,

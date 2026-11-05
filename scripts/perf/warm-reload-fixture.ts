@@ -363,10 +363,9 @@ export async function seedWarmReloadFixture(options: WarmReloadFixtureOptions) {
     if (options.composerControls) {
       config.plugins.allow!.push("anthropic");
       config.plugins.entries!.anthropic = { enabled: true };
+      // A mock endpoint would withdraw the catalog's window and thinking facts.
       config.models.providers!.anthropic = {
-        baseUrl: mock.baseUrl,
         apiKey: "synthetic-loopback-provider-key",
-        api: "anthropic-messages",
         models: [],
       };
       config.agents.defaults!.modelPolicy = { allow: ["openai/*", "anthropic/*"] };
