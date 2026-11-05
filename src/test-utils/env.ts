@@ -116,13 +116,7 @@ export function captureFullEnv() {
           deleteTestEnvValue(key);
         }
       }
-      for (const [key, value] of Object.entries(snapshot)) {
-        if (value === undefined) {
-          deleteTestEnvValue(key);
-        } else {
-          setTestEnvValue(key, value);
-        }
-      }
+      applyEnvValues(snapshot);
     },
   };
 }
