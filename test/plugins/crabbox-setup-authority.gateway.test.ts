@@ -3,12 +3,12 @@ import path from "node:path";
 import { inspect as inspectError } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { stopCrabboxLease } from "../../extensions/crabbox/src/crabbox-worker-command.js";
-import { parseCrabboxProfile } from "../../extensions/crabbox/src/crabbox-worker-profile.js";
 import {
   createCrabboxProvisionAuthority,
+  parseCrabboxProfile,
   runProvisionSetup,
-} from "../../extensions/crabbox/src/crabbox-worker-provision-commands.js";
+  stopCrabboxLease,
+} from "../../extensions/crabbox/test-api.js";
 import * as projectPreparation from "../../src/gateway/worker-environments/project-preparation.js";
 import {
   beforeSettlement,
