@@ -3,9 +3,9 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
+import { withSqliteDatabaseAdmissionSettlement } from "./sqlite-database-admission-wait.js";
 import { retireSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
 import { withSqliteNativeOpen } from "./sqlite-error-diagnostics.js";
-import { withSqliteDatabaseAdmissionSettlement } from "./sqlite-worker-database-admission-relay.js";
 
 export const SQLITE_STAGING_TOKEN_FILES = [
   "owner.sqlite",

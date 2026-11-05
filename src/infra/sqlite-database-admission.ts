@@ -37,11 +37,11 @@ import {
   quickIntegrityVerificationKey,
   SqliteDatabaseCleanCloseSeals,
 } from "./sqlite-database-admission-seal.js";
+import { withSqliteDatabaseAdmissionSettlement } from "./sqlite-database-admission-wait.js";
 import { createSqliteDatabaseWriteReceipts } from "./sqlite-database-write-receipts.js";
 import { getSqliteNativeAdmissionFacts } from "./sqlite-native-admission.js";
 import { hasSqlitePostCommitScope, stageSqliteTransactionState } from "./sqlite-post-commit.js";
 import { sqliteSchemaOwners } from "./sqlite-schema-scope.js";
-import { withSqliteDatabaseAdmissionSettlement } from "./sqlite-worker-database-admission-relay.js";
 import type { DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
 export {
