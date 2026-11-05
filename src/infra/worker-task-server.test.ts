@@ -333,7 +333,9 @@ it("retires a task's snapshot copy after its admission budget lapses", async () 
   const { root, staging, allocate, remove } = await snapshotFixture("expired-snapshot-");
   const deadline = Date.now() + 60_000;
   vi.useFakeTimers({ toFake: ["Date"] });
-  onTestFinished(() => vi.useRealTimers());
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
   const settled = createDeferred<boolean>();
   serveOwnedWorkerTasks(async () => {
     const { directory } = allocate();
