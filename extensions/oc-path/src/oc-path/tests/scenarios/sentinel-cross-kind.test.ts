@@ -14,6 +14,9 @@ describe("sentinel guard cross-kind", () => {
     [`[{"prefix${REDACTED_SENTINEL}suffix":1}]`, `/0/prefix${REDACTED_SENTINEL}suffix`],
   ])("refuses new sentinel content before mutation: %s", (raw, suffix) => {
     const value = parseJsonc(raw).root;
+    if (!value) {
+      throw new Error("Expected a parsed JSON fixture");
+    }
     for (const operation of ["set", "insert"] as const) {
       const ast = parseJsonc('{ "x": "ok" }');
       expect(() =>
